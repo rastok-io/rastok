@@ -11,7 +11,7 @@ the contract and parser/compiler interludes recorded under item 2.
 M1.4 has been normatively rebased by D-2026-08-18-1 before public release.
 The executable P0–P3 named-`partition` / `per` draft is not the target source
 or package contract; its mechanisms are being realigned behind Node-owned
-`instances.key`, independent `lifetime`, Node-private state, and hierarchical
+`instance.key`, independent `lifetime`, Node-private state, and hierarchical
 logical addresses. Its valid-program/golden evidence remains evidence, not a
 compatibility promise.
 R3 executes those hierarchical addresses through producer-sealed instance
@@ -334,7 +334,7 @@ step touches `vm.rs` once.
    [M1.3 backlog](m1.3-type-system-backlog.md).
 4. **Node instances, keys, lifetime, and Closing** — any Graph, Operator, or
    Connector may select a canonical address once at its boundary through
-   `instances.key`; absence means singleton. `lifetime` is independent, so
+   `instance.key`; absence means singleton. `lifetime` is independent, so
    keyed/unkeyed and persistent/temporal combinations are all expressible.
    Mutable `var` state is private to its declaring Node; Graph `val` context
    remains lexical. The producer journals each hierarchical target address
@@ -415,8 +415,19 @@ step touches `vm.rs` once.
    over all three HTTP versions; H6 executes complete-message Sessions over
    all three WebSocket handshakes; H7 closes static assembly and portability
    evidence. See the [exit report](m1.6-exit-report.md).
-8. **The Loop aspect** — the bounded-iteration primitive, alive on a
-   graph.
+8. **M1.7 — the `Loop` NodeAspect** — first land the common Node taxonomy:
+   declaration keyword → `node::Kind`, one implicit/explicit
+   `node::Type`, then zero or more `node::Aspect` values. `App` is a Graph
+   type; `Loop` and `Saga` are aspects; Reducer/Aggregator/Window/Joiner/
+   Router/Dispatch/Fanout remain ordinary guide patterns. L0 also makes the
+   source owner attribute singular (`instance = { key = ... }`) while
+   preserving the historical identity domain. L1–L7 then freeze and execute
+   one bounded continuation protocol: categorical aspect transport, a
+   journal-folded run and `l:next` chain, Graph traversal with ordinary pure
+   Operator work, typed Connector retry, dated re-entry, Closing/recovery model checks, and
+   final identity/portability evidence. The checker remains fail-closed at
+   every unfinished gate. Ordered work and exit criteria live in the
+   [M1.7 backlog](m1.7-loop-backlog.md).
 9. **Cost counters** — the `cost` map (stdlib §6.4) accumulated
     from the journal; a subscriber, not a core dependency.
 10. **`--watch`** — the HTML+SSE mini-visualization, strictly a

@@ -9,12 +9,12 @@
 
 use crate::compiler::hir::{
     AttrValue, Attribute, ClosingPolicy, Const, Direction, Edge, EdgeTarget, EmitValue, Endpoint,
-    EndpointOwner, FieldWrite, Graph, Handler, Hir, InstanceLifetime, InstancePolicy, Node,
-    NodeRole, Statement, Val, Var,
+    EndpointOwner, FieldWrite, Graph, Handler, Hir, InstanceLifetime, InstancePolicy, LoopDelay,
+    LoopSpec, Node, NodeSemantics, Statement, Val, Var,
 };
 use crate::compiler::syntax::{
     Attribute as SynAttribute, BaseType, ConnectorDecl, EdgeDecl, EdgeEndpoint, ExprSource,
-    GraphDecl, GraphItem, OperatorDecl, OperatorItem, PortRef, ScalarType,
+    GraphDecl, GraphItem, Name, OperatorDecl, OperatorItem, PortRef, ScalarType,
     Statement as SynStatement, StructBody, StructEntry, SyntaxTree, TopDecl, Trigger as SynTrigger,
     TypeRef, ValDecl, Value as SynValue, VarDecl,
 };
@@ -103,6 +103,9 @@ enum TypeRefusal {
 pub const E_EXPR: Code = Code::new("E-EXPR");
 /// Diagnostic for grammar admitted but outside the executable subset.
 pub const E_CHECK_DEFERRED: Code = Code::new("E-CHECK-DEFERRED");
+/// Diagnostic for a Node type/aspect annotation that is unknown, ordered
+/// incorrectly, duplicated, or incompatible with the declaration kind.
+pub const E_NODE_ANNOTATION: Code = Code::new("E-NODE-ANNOTATION");
 /// Diagnostic for a connector type without a Driver in this build.
 pub const E_CONNECTOR_UNAVAILABLE: Code = Code::new("E-CONNECTOR-UNAVAILABLE");
 /// Diagnostic for an attribute violating its contract sheet.
@@ -123,9 +126,11 @@ pub const E_PORT_CONFLICT: Code = Code::new("E-PORT-CONFLICT");
 /// emission, an injection, or the two ends of an edge disagreeing.
 pub const E_PORT_TYPE: Code = Code::new("E-PORT-TYPE");
 
-/// A Node's `instances` or `lifetime` attribute is malformed, duplicated, or
+/// A Node's `instance` or `lifetime` attribute is malformed, duplicated, or
 /// has no canonical instance-key type.
 pub const E_INSTANCE: Code = Code::new("E-INSTANCE");
+/// A Loop aspect attribute or finite-recursion contract is malformed.
+pub const E_LOOP: Code = Code::new("E-LOOP");
 
 /// A braced value mixing ordinary data fields with reserved envelope
 /// roots — the classification is one or the other, never a silent
@@ -180,7 +185,10 @@ pub fn check(
         for decl in &tree.decls {
             if let TopDecl::Graph(graph) = decl {
                 let is_app = graph.annotation.as_ref().is_some_and(|annotation| {
-                    annotation.symbols.iter().any(|symbol| symbol.text == "App")
+                    annotation
+                        .symbols
+                        .first()
+                        .is_some_and(|symbol| symbol.text == "App")
                 });
                 if is_app {
                     apps.push(graph);
@@ -472,6 +480,178 @@ impl Checker<'_, '_> {
             .with_span(span)
             .with_field("construct", construct),
         );
+    }
+
+    fn node_annotation_refusal(&mut self, symbol: &Name, detail: impl Into<String>) {
+        let detail = detail.into();
+        self.bag.push(
+            Diagnostic::new(E_NODE_ANNOTATION, Phase::Check, detail.clone())
+                .with_span(symbol.span)
+                .with_field("name", symbol.text.clone())
+                .with_field("detail", detail),
+        );
+    }
+
+    fn graph_annotation(
+        &mut self,
+        decl: &GraphDecl,
+        is_root: bool,
+    ) -> (node::Type, Vec<node::Aspect>) {
+        let symbols = decl
+            .annotation
+            .as_ref()
+            .map_or(&[][..], |annotation| annotation.symbols.as_slice());
+        let mut next = 0;
+        let ty = match symbols.first() {
+            Some(symbol) if symbol.text == "App" => {
+                next = 1;
+                if !is_root {
+                    self.node_annotation_refusal(
+                        symbol,
+                        "`App` is the deployed unit's unique root type; a nested graph has type `Graph`",
+                    );
+                    node::Type::Graph
+                } else {
+                    node::Type::App
+                }
+            }
+            Some(symbol) if symbol.text == "Graph" => {
+                next = 1;
+                node::Type::Graph
+            }
+            Some(symbol) if node::Aspect::from_source_name(&symbol.text).is_none() => {
+                next = 1;
+                self.node_annotation_refusal(
+                    symbol,
+                    format!(
+                        "`{}` is not a Graph NodeType or a known NodeAspect",
+                        symbol.text
+                    ),
+                );
+                node::Type::Graph
+            }
+            Some(_) | None => node::Type::Graph,
+        };
+        let aspects = self.graph_aspects(&symbols[next..]);
+        (ty, aspects)
+    }
+
+    fn graph_aspects(&mut self, symbols: &[Name]) -> Vec<node::Aspect> {
+        let mut aspects = Vec::new();
+        for symbol in symbols {
+            let Some(aspect) = node::Aspect::from_source_name(&symbol.text) else {
+                let detail = if matches!(symbol.text.as_str(), "App" | "Graph") {
+                    "a NodeType must be the first annotation, before every NodeAspect".to_string()
+                } else {
+                    format!("`{}` is not a known Graph NodeAspect", symbol.text)
+                };
+                self.node_annotation_refusal(symbol, detail);
+                continue;
+            };
+            if aspects.contains(&aspect) {
+                self.node_annotation_refusal(
+                    symbol,
+                    format!("the `{aspect}` NodeAspect is declared twice"),
+                );
+                continue;
+            }
+            aspects.push(aspect);
+            if aspect == node::Aspect::Saga {
+                self.deferred("the Saga NodeAspect", symbol.span);
+            }
+        }
+        aspects.sort();
+        aspects
+    }
+
+    fn operator_annotation(&mut self, decl: &OperatorDecl) -> Vec<node::Aspect> {
+        let symbols = decl
+            .annotation
+            .as_ref()
+            .map_or(&[][..], |annotation| annotation.symbols.as_slice());
+        let mut next = 0;
+        if let Some(symbol) = symbols.first() {
+            if symbol.text == "Operator" {
+                next = 1;
+            } else if node::Aspect::from_source_name(&symbol.text).is_none() {
+                next = 1;
+                let detail = if matches!(
+                    symbol.text.as_str(),
+                    "Reducer" | "Aggregator" | "Window" | "Joiner" | "Router"
+                ) {
+                    format!(
+                        "`{}` is an Operator pattern, not a NodeType; write the ordinary `var`, `instance`, `lifetime`, join, and emission primitives it abbreviates",
+                        symbol.text
+                    )
+                } else {
+                    format!(
+                        "`{}` is not the `Operator` NodeType or a known NodeAspect",
+                        symbol.text
+                    )
+                };
+                self.node_annotation_refusal(symbol, detail);
+            }
+        }
+        let mut seen = Vec::new();
+        for symbol in &symbols[next..] {
+            let Some(aspect) = node::Aspect::from_source_name(&symbol.text) else {
+                let detail = if symbol.text == "Operator" {
+                    "a NodeType must be the first annotation, before every NodeAspect".to_string()
+                } else {
+                    format!("`{}` is not a known Operator NodeAspect", symbol.text)
+                };
+                self.node_annotation_refusal(symbol, detail);
+                continue;
+            };
+            if seen.contains(&aspect) {
+                self.node_annotation_refusal(
+                    symbol,
+                    format!("the `{aspect}` NodeAspect is declared twice"),
+                );
+                continue;
+            }
+            seen.push(aspect);
+            self.node_annotation_refusal(
+                symbol,
+                match aspect {
+                    node::Aspect::Loop => "the M1.7 `Loop` NodeAspect belongs to a Graph; wrap the Operator in that Graph",
+                    node::Aspect::Saga => "the `Saga` NodeAspect belongs to a Graph; an Operator cannot own a compensation workflow",
+                },
+            );
+        }
+        Vec::new()
+    }
+
+    fn connector_aspects(&mut self, symbols: &[Name]) -> Vec<node::Aspect> {
+        let mut seen = Vec::new();
+        for symbol in symbols {
+            let Some(aspect) = node::Aspect::from_source_name(&symbol.text) else {
+                self.node_annotation_refusal(
+                    symbol,
+                    format!("`{}` is not a known Connector NodeAspect", symbol.text),
+                );
+                continue;
+            };
+            if seen.contains(&aspect) {
+                self.node_annotation_refusal(
+                    symbol,
+                    format!("the `{aspect}` NodeAspect is declared twice"),
+                );
+                continue;
+            }
+            seen.push(aspect);
+            match aspect {
+                node::Aspect::Loop => self.node_annotation_refusal(
+                    symbol,
+                    "the M1.7 `Loop` NodeAspect belongs to a Graph; put the Connector inside that Graph",
+                ),
+                node::Aspect::Saga => self.node_annotation_refusal(
+                    symbol,
+                    "the `Saga` NodeAspect belongs to a Graph; put the Connector inside that Graph",
+                ),
+            }
+        }
+        Vec::new()
     }
 
     /// Compiles one Rastok expression span, adapting native diagnostics onto the
@@ -1430,21 +1610,18 @@ impl Checker<'_, '_> {
         is_root: bool,
     ) -> Graph {
         self.guard_binding_name(&decl.name, "a graph");
-        if let Some(annotation) = &decl.annotation {
-            for symbol in &annotation.symbols {
-                if !is_root || symbol.text != "App" {
-                    self.deferred("a graph annotation other than App", symbol.span);
-                }
-            }
-        }
+        let (ty, aspects) = self.graph_annotation(decl, is_root);
         if decl.removed_per.is_some() {
             self.instance_refusal(
                 decl.span,
-                "`per` was the unpublished partition-binding syntax; write `instances = { key = <expr> }` inside the Graph",
+                "`per` was the unpublished partition-binding syntax; write `instance = { key = <expr> }` inside the Graph",
             );
         }
         let mut graph = Graph {
             name: decl.name.text.clone(),
+            ty,
+            aspects,
+            loop_spec: None,
             path: path.clone(),
             boundary: Vec::new(),
             vals: Vec::new(),
@@ -1604,7 +1781,7 @@ impl Checker<'_, '_> {
                 GraphItem::Edge(edge) => edges.push(edge),
                 GraphItem::RemovedPartition(partition) => self.instance_refusal(
                     partition.span,
-                    "`partition` was unpublished syntax; declare `instances` and `lifetime` on the Node that owns them",
+                    "`partition` was unpublished syntax; declare `instance` and `lifetime` on the Node that owns them",
                 ),
                 GraphItem::Graph(nested) => {
                     let mut segments = path.segments().to_vec();
@@ -1628,7 +1805,7 @@ impl Checker<'_, '_> {
                 }
                 GraphItem::Defaults(_) => self.deferred("a defaults block", decl.span),
                 GraphItem::Attribute(attribute) => {
-                    if !is_common_node_attribute(attribute) {
+                    if !is_common_node_attribute(attribute) && !is_loop_attribute(attribute) {
                         self.deferred("a graph attribute", attribute.span);
                     }
                 }
@@ -1636,6 +1813,7 @@ impl Checker<'_, '_> {
                 GraphItem::Error(_) => {}
             }
         }
+        graph.loop_spec = self.loop_declaration(decl, &graph, &signature, &consts);
         for edge in edges {
             let Some(resolved) = self.edge(edge, &graph) else {
                 continue;
@@ -1679,19 +1857,15 @@ impl Checker<'_, '_> {
         let Some(target) = graph.nodes.iter().find(|node| &node.path == path) else {
             return false;
         };
-        let NodeRole::Connector {
-            contract_id,
-            attributes,
-            ..
-        } = &target.role
-        else {
+        let NodeSemantics::Connector { attributes, .. } = &target.semantics else {
             return false;
         };
-        let ack = contract_id == crate::connector::HTTP_SERVER_CONNECTOR_ID
-            && attributes.iter().any(|attribute| {
-                attribute.name == "mode"
-                    && matches!(&attribute.value, AttrValue::Word(word) if word == "ack")
-            });
+        let ack = target.connector_contract_id().is_some_and(|contract| {
+            contract.as_str() == crate::connector::HTTP_SERVER_CONNECTOR_ID
+        }) && attributes.iter().any(|attribute| {
+            attribute.name == "mode"
+                && matches!(&attribute.value, AttrValue::Word(word) if word == "ack")
+        });
         if !ack {
             return false;
         }
@@ -1847,8 +2021,8 @@ impl Checker<'_, '_> {
                 )
             {
                 let target_is_inbound_boundary = matches!(
-                    &graph.nodes[to].role,
-                    NodeRole::Connector {
+                    &graph.nodes[to].semantics,
+                    NodeSemantics::Connector {
                         roles,
                         exchange,
                         ..
@@ -1978,6 +2152,353 @@ impl Checker<'_, '_> {
         }
     }
 
+    /// Checks the source half of the first Loop gate while lowering remains
+    /// fail-closed. Keeping this here, beside instance attributes, gives every
+    /// qualified spelling one owner and prevents generic graph-attribute
+    /// deferrals from becoming a second interpretation.
+    fn loop_declaration(
+        &mut self,
+        decl: &GraphDecl,
+        graph: &Graph,
+        signature: &expr::Signature,
+        consts: &BTreeMap<String, crate::value::Value>,
+    ) -> Option<LoopSpec> {
+        let attributes: Vec<_> = decl
+            .body
+            .iter()
+            .filter_map(|item| match item {
+                GraphItem::Attribute(attribute) if is_loop_attribute(attribute) => Some(attribute),
+                _ => None,
+            })
+            .collect();
+        let owns_loop = graph.aspects.contains(&node::Aspect::Loop);
+        if attributes.is_empty() {
+            if owns_loop {
+                self.loop_refusal(
+                    decl.span,
+                    "a `: Loop` Graph requires `Loop.fuel`, or a discharged `Loop.measure` proof in the later theorem gate",
+                );
+            }
+            return None;
+        }
+        if !owns_loop {
+            for attribute in attributes {
+                self.loop_refusal(
+                    attribute.span,
+                    "a `Loop.*` attribute requires the Graph's `: Loop` NodeAspect",
+                );
+            }
+            return None;
+        }
+
+        let mut fuel = None;
+        let mut delay = None;
+        let mut invariant = None;
+        let mut measure = None;
+        let mut unsupported = None;
+        let mut invalid = false;
+        for attribute in attributes {
+            let name = match attribute.target.segments.as_slice() {
+                [owner, name] if owner.text == "Loop" => name.text.as_str(),
+                [name]
+                    if matches!(
+                        name.text.as_str(),
+                        "fuel" | "delay" | "invariant" | "measure" | "jitter"
+                    ) =>
+                {
+                    self.loop_refusal(
+                        attribute.span,
+                        &format!(
+                            "`{}` is aspect-owned; write `Loop.{}`",
+                            name.text, name.text
+                        ),
+                    );
+                    invalid = true;
+                    continue;
+                }
+                [name] => name.text.as_str(),
+                _ => {
+                    self.loop_refusal(
+                        attribute.span,
+                        "Loop attributes have exactly one qualified name, such as `Loop.fuel`",
+                    );
+                    invalid = true;
+                    continue;
+                }
+            };
+            let target = match name {
+                "fuel" => &mut fuel,
+                "delay" => &mut delay,
+                "invariant" => &mut invariant,
+                "measure" => &mut measure,
+                "jitter" => {
+                    if unsupported
+                        .replace(("Loop.jitter", attribute.span))
+                        .is_some()
+                    {
+                        self.loop_refusal(attribute.span, "`Loop.jitter` is declared twice");
+                        invalid = true;
+                    }
+                    continue;
+                }
+                "variant" => {
+                    self.loop_refusal(
+                        attribute.span,
+                        "`Loop.variant` was removed; use finite `Loop.fuel` now, or theorem-tier `Loop.measure`",
+                    );
+                    invalid = true;
+                    continue;
+                }
+                "backoff" => {
+                    self.loop_refusal(
+                        attribute.span,
+                        "`Loop.backoff` was removed; write `Loop.delay = { ... }`",
+                    );
+                    invalid = true;
+                    continue;
+                }
+                "limit" | "max_steps" => {
+                    self.loop_refusal(
+                        attribute.span,
+                        &format!("`{name}` was removed; write `Loop.fuel`"),
+                    );
+                    invalid = true;
+                    continue;
+                }
+                "decreases" => {
+                    self.loop_refusal(
+                        attribute.span,
+                        "`Loop.decreases` was removed; Rocq-compatible termination vocabulary uses `Loop.measure`",
+                    );
+                    invalid = true;
+                    continue;
+                }
+                "until" => {
+                    self.loop_refusal(
+                        attribute.span,
+                        "`until` was removed; terminal paths emit `out`, while recursive paths emit `next`",
+                    );
+                    invalid = true;
+                    continue;
+                }
+                "initial" | "source" | "value" => {
+                    self.loop_refusal(
+                        attribute.span,
+                        &format!(
+                            "`{name}` was removed; iteration state enters through `in` and is available as `Loop.state`"
+                        ),
+                    );
+                    invalid = true;
+                    continue;
+                }
+                other => {
+                    self.loop_refusal(
+                        attribute.span,
+                        &format!(
+                            "unknown Loop attribute `{other}`; expected fuel, delay, invariant, or measure"
+                        ),
+                    );
+                    invalid = true;
+                    continue;
+                }
+            };
+            if target.replace(attribute).is_some() {
+                self.loop_refusal(attribute.span, &format!("`Loop.{name}` is declared twice"));
+                invalid = true;
+            }
+        }
+        if invalid {
+            return None;
+        }
+        if invariant.is_some() && measure.is_none() {
+            self.loop_refusal(
+                invariant.map_or(decl.span, |attribute| attribute.span),
+                "`Loop.invariant` accompanies a `Loop.measure` proof",
+            );
+            return None;
+        }
+        if let Some((construct, span)) = unsupported {
+            self.deferred(construct, span);
+            return None;
+        }
+        if measure.is_some() {
+            self.deferred("the Loop measure proof certificate", decl.span);
+            return None;
+        }
+        let Some(fuel) = fuel else {
+            self.loop_refusal(
+                decl.span,
+                "a `: Loop` Graph requires positive `Loop.fuel` until a `Loop.measure` proof is discharged",
+            );
+            return None;
+        };
+        let fuel = self.loop_fuel(fuel, signature, consts)?;
+        let delay = match delay {
+            Some(attribute) => Some(self.loop_delay(attribute, signature, consts)?),
+            None => None,
+        };
+        self.deferred("the Loop categorical plan/runtime protocol", decl.span);
+        Some(LoopSpec { fuel, delay })
+    }
+
+    fn loop_fuel(
+        &mut self,
+        attribute: &SynAttribute,
+        signature: &expr::Signature,
+        consts: &BTreeMap<String, crate::value::Value>,
+    ) -> Option<Const> {
+        if matches!(attribute.value, SynValue::Error(_)) {
+            return None;
+        }
+        let tree = self.typed_value_tree(
+            &attribute.value,
+            signature,
+            None,
+            attribute.span,
+            "Loop.fuel",
+        )?;
+        let constant = self.reduce_constant(tree, attribute.span, consts)?;
+        if matches!(
+            constant.value,
+            crate::value::Value::Int(value) if value > 0
+        ) || matches!(
+            constant.value,
+            crate::value::Value::Uint(value) if value > 0
+        ) {
+            Some(constant)
+        } else {
+            self.loop_refusal(attribute.span, "`Loop.fuel` must be a positive integer");
+            None
+        }
+    }
+
+    fn loop_delay(
+        &mut self,
+        attribute: &SynAttribute,
+        signature: &expr::Signature,
+        consts: &BTreeMap<String, crate::value::Value>,
+    ) -> Option<LoopDelay> {
+        let SynValue::Braced(body) = &attribute.value else {
+            self.loop_refusal(
+                attribute.span,
+                "`Loop.delay` must be a composite with a `kind` field",
+            );
+            return None;
+        };
+        let mut fields: BTreeMap<String, (&SynValue, Span)> = BTreeMap::new();
+        for entry in &body.entries {
+            let StructEntry::Field { key, value } = entry else {
+                self.loop_refusal(
+                    attribute.span,
+                    "`Loop.delay` admits fields, not nested configuration blocks",
+                );
+                return None;
+            };
+            if key.segments.len() != 1 {
+                self.loop_refusal(key.span, "Loop.delay fields are single names");
+                return None;
+            }
+            let name = key.segments[0].text.clone();
+            if fields.insert(name.clone(), (value, key.span)).is_some() {
+                self.loop_refusal(key.span, &format!("`Loop.delay.{name}` is declared twice"));
+                return None;
+            }
+        }
+        let Some((kind, kind_span)) = fields.remove("kind") else {
+            self.loop_refusal(attribute.span, "`Loop.delay` requires exactly one `kind`");
+            return None;
+        };
+        let SynValue::Expr(kind) = kind else {
+            self.loop_refusal(kind_span, "`Loop.delay.kind` is a bare choice word");
+            return None;
+        };
+        if !is_bare_word(&kind.text) {
+            self.loop_refusal(kind.span, "`Loop.delay.kind` is a bare choice word");
+            return None;
+        }
+        let delay = {
+            let mut duration = |name: &str| {
+                let Some((value, span)) = fields.remove(name) else {
+                    self.loop_refusal(
+                        attribute.span,
+                        &format!("`Loop.delay(kind = {})` requires `{name}`", kind.text),
+                    );
+                    return None;
+                };
+                let tree = self.typed_value_tree(
+                    value,
+                    signature,
+                    Some(&DataType::DURATION),
+                    span,
+                    &format!("Loop.delay.{name}"),
+                )?;
+                let constant = self.reduce_constant(tree, span, consts)?;
+                match constant.value {
+                    crate::value::Value::Duration(nanos) if nanos > 0 => Some(constant),
+                    _ => {
+                        self.loop_refusal(
+                            span,
+                            &format!("`Loop.delay.{name}` must be a positive duration"),
+                        );
+                        None
+                    }
+                }
+            };
+            match kind.text.as_str() {
+                "fixed" => LoopDelay::Fixed {
+                    after: duration("after")?,
+                },
+                "exponential" => {
+                    let first = duration("first")?;
+                    let ceiling = duration("ceiling")?;
+                    let (
+                        crate::value::Value::Duration(first_nanos),
+                        crate::value::Value::Duration(ceiling_nanos),
+                    ) = (&first.value, &ceiling.value)
+                    else {
+                        return None;
+                    };
+                    if ceiling_nanos < first_nanos {
+                        self.loop_refusal(
+                            attribute.span,
+                            "`Loop.delay.ceiling` must be no smaller than `Loop.delay.first`",
+                        );
+                        return None;
+                    }
+                    LoopDelay::Exponential { first, ceiling }
+                }
+                other => {
+                    self.loop_refusal(
+                        kind.span,
+                        &format!(
+                            "unknown Loop.delay kind `{other}`; expected fixed or exponential"
+                        ),
+                    );
+                    return None;
+                }
+            }
+        };
+        if let Some((unexpected, (_, span))) = fields.into_iter().next() {
+            self.loop_refusal(
+                span,
+                &format!(
+                    "`Loop.delay(kind = {})` has no `{unexpected}` field",
+                    kind.text
+                ),
+            );
+            return None;
+        }
+        Some(delay)
+    }
+
+    fn loop_refusal(&mut self, span: Span, detail: &str) {
+        self.bag.push(
+            Diagnostic::new(E_LOOP, Phase::Check, detail)
+                .with_span(span)
+                .with_field("detail", detail),
+        );
+    }
+
     fn queue_instance_attributes<'source>(
         &mut self,
         owner: InstanceOwner,
@@ -1986,7 +2507,7 @@ impl Checker<'_, '_> {
         consts: &BTreeMap<String, crate::value::Value>,
         span: Span,
     ) {
-        let mut instances = None;
+        let mut instance = None;
         let mut lifetime = None;
         let mut closing = None;
         for attribute in attributes {
@@ -2003,8 +2524,14 @@ impl Checker<'_, '_> {
                 continue;
             }
             match name {
-                "instances" if instances.replace(attribute).is_some() => {
-                    self.instance_refusal(attribute.span, "`instances` is declared twice");
+                "instances" => {
+                    self.instance_refusal(
+                        attribute.span,
+                        "`instances` was superseded; write the singular `instance = { key = <expr> }`",
+                    );
+                }
+                "instance" if instance.replace(attribute).is_some() => {
+                    self.instance_refusal(attribute.span, "`instance` is declared twice");
                 }
                 "lifetime" if lifetime.replace(attribute).is_some() => {
                     self.instance_refusal(attribute.span, "`lifetime` is declared twice");
@@ -2016,7 +2543,7 @@ impl Checker<'_, '_> {
             }
         }
 
-        let key = match instances {
+        let key = match instance {
             Some(attribute) => match self.instance_key_source(attribute) {
                 Some(key) => Some(key),
                 None => return,
@@ -2111,7 +2638,7 @@ impl Checker<'_, '_> {
         let SynValue::Braced(body) = &attribute.value else {
             self.instance_refusal(
                 attribute.span,
-                "`instances` must be a composite attribute: `instances = { key = <expr> }`",
+                "`instance` must be a composite attribute: `instance = { key = <expr> }`",
             );
             return None;
         };
@@ -2120,19 +2647,19 @@ impl Checker<'_, '_> {
             let StructEntry::Field { key: field, value } = entry else {
                 self.instance_refusal(
                     attribute.span,
-                    "`instances` admits only the field `key = <expr>`",
+                    "`instance` admits only the field `key = <expr>`",
                 );
                 return None;
             };
             if field.segments.len() != 1 || field.segments[0].text != "key" {
                 self.instance_refusal(
                     field.span,
-                    "`instances` admits only the field `key = <expr>`",
+                    "`instance` admits only the field `key = <expr>`",
                 );
                 return None;
             }
             if key.replace(value.clone()).is_some() {
-                self.instance_refusal(field.span, "`instances.key` is declared twice");
+                self.instance_refusal(field.span, "`instance.key` is declared twice");
                 return None;
             }
         }
@@ -2142,7 +2669,7 @@ impl Checker<'_, '_> {
             None => {
                 self.instance_refusal(
                     attribute.span,
-                    "`instances` requires exactly one `key` expression",
+                    "`instance` requires exactly one `key` expression",
                 );
                 None
             }
@@ -2342,7 +2869,7 @@ impl Checker<'_, '_> {
                         &signature,
                         None,
                         pending.span,
-                        "instances.key",
+                        "instance.key",
                     ) else {
                         continue;
                     };
@@ -2355,7 +2882,7 @@ impl Checker<'_, '_> {
                                 &signature_for(input.clone()),
                                 None,
                                 pending.span,
-                                "instances.key",
+                                "instance.key",
                             ) else {
                                 continue 'pending;
                             };
@@ -2568,7 +3095,7 @@ impl Checker<'_, '_> {
                 AttrValue::Expr { site, tree }
             };
             if let Some(node) = node_at_path_mut(graph, &pending.node)
-                && let NodeRole::Connector { attributes, .. } = &mut node.role
+                && let NodeSemantics::Connector { attributes, .. } = &mut node.semantics
             {
                 attributes.push(Attribute {
                     name: pending.name,
@@ -2690,18 +3217,16 @@ impl Checker<'_, '_> {
         if decl.removed_per.is_some() {
             self.instance_refusal(
                 decl.span,
-                "`per` was unpublished syntax; write `instances = { key = <expr> }` inside the Operator",
+                "`per` was unpublished syntax; write `instance = { key = <expr> }` inside the Operator",
             );
         }
-        if let Some(annotation) = &decl.annotation {
-            for symbol in &annotation.symbols {
-                self.deferred("an operator alias or aspect", symbol.span);
-            }
-        }
+        let aspects = self.operator_annotation(decl);
         let path = self.node_path(owner, &decl.name.text, decl.name.span)?;
         let mut node = Node {
             path,
-            role: NodeRole::Operator,
+            ty: node::Type::Operator,
+            aspects,
+            semantics: NodeSemantics::Operator,
             vals: Vec::new(),
             vars: Vec::new(),
             ports: Vec::new(),
@@ -2732,26 +3257,80 @@ impl Checker<'_, '_> {
         if decl.removed_per.is_some() {
             self.instance_refusal(
                 decl.span,
-                "`per` was unpublished syntax; write `instances = { key = <expr> }` inside the Connector",
+                "`per` was unpublished syntax; write `instance = { key = <expr> }` inside the Connector",
             );
         }
         let mut symbols = decl.annotation.symbols.iter();
-        let trait_name = symbols
-            .next()
-            .map(|symbol| symbol.text.clone())
-            .unwrap_or_else(|| unreachable!("the parser mandates a connector annotation"));
-        for aspect in symbols {
-            self.deferred("a connector aspect", aspect.span);
+        let type_symbol = symbols.next()?;
+        if node::Aspect::from_source_name(&type_symbol.text).is_some()
+            || matches!(type_symbol.text.as_str(), "App" | "Graph" | "Operator")
+        {
+            self.node_annotation_refusal(
+                type_symbol,
+                "a Connector requires its exact Connector NodeType first, before every NodeAspect",
+            );
+            return None;
         }
+        let (contract_id, roles, exchange) = match self.registry.connector(&type_symbol.text) {
+            contract::Availability::Available(contract) => {
+                let contract_id = match crate::connector::ConnectorId::parse(contract.id) {
+                    Ok(contract_id) => contract_id,
+                    Err(error) => {
+                        self.bag.push(
+                            Diagnostic::new(
+                                E_CONNECTOR_UNAVAILABLE,
+                                Phase::Check,
+                                format!(
+                                    "the `{}` contract carries an invalid semantic id: {error}",
+                                    type_symbol.text
+                                ),
+                            )
+                            .with_span(type_symbol.span)
+                            .with_field("type", type_symbol.text.clone())
+                            .with_field("detail", error.to_string()),
+                        );
+                        return None;
+                    }
+                };
+                (contract_id, contract.roles, contract.exchange)
+            }
+            contract::Availability::Declared => {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_CONNECTOR_UNAVAILABLE,
+                        Phase::Check,
+                        format!(
+                            "`{}` is declared in the catalogue; its Driver is not in this build",
+                            type_symbol.text
+                        ),
+                    )
+                    .with_span(type_symbol.span)
+                    .with_field("type", type_symbol.text.clone()),
+                );
+                return None;
+            }
+            contract::Availability::Unknown => {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_CONNECTOR_UNAVAILABLE,
+                        Phase::Check,
+                        format!("`{}` is not a known Connector NodeType", type_symbol.text),
+                    )
+                    .with_span(type_symbol.span)
+                    .with_field("type", type_symbol.text.clone()),
+                );
+                return None;
+            }
+        };
+        let aspects = self.connector_aspects(symbols.as_slice());
         let path = self.node_path(owner, &decl.name.text, decl.name.span)?;
         let mut node = Node {
             path,
-            role: NodeRole::Connector {
-                // Recovery value only: `contract()` replaces it with the
-                // canonical id before a successful HIR can be lowered.
-                contract_id: trait_name,
-                roles: crate::connector::ConnectorRoles::Outbound,
-                exchange: crate::connector::ConnectorExchange::Call,
+            ty: node::Type::Connector(contract_id),
+            aspects,
+            semantics: NodeSemantics::Connector {
+                roles,
+                exchange,
                 attributes: Vec::new(),
             },
             vals: Vec::new(),
@@ -2783,48 +3362,25 @@ impl Checker<'_, '_> {
     /// canonicalization, so omission and the exact spelling of a
     /// default are one identity.
     fn contract(&mut self, node: &mut Node, decl: &ConnectorDecl) {
-        let symbol = &decl.annotation.symbols[0];
-        let contract = match self.registry.connector(&symbol.text) {
-            contract::Availability::Available(contract) => contract,
-            contract::Availability::Declared => {
-                self.bag.push(
-                    Diagnostic::new(
-                        E_CONNECTOR_UNAVAILABLE,
-                        Phase::Check,
-                        format!(
-                            "`{}` is declared in the catalogue; its Driver is not in this build",
-                            symbol.text
-                        ),
-                    )
-                    .with_span(symbol.span)
-                    .with_field("type", symbol.text.clone()),
-                );
-                return;
-            }
-            contract::Availability::Unknown => {
-                self.bag.push(
-                    Diagnostic::new(
-                        E_CONNECTOR_UNAVAILABLE,
-                        Phase::Check,
-                        format!("`{}` is not a known connector type", symbol.text),
-                    )
-                    .with_span(symbol.span)
-                    .with_field("type", symbol.text.clone()),
-                );
-                return;
-            }
+        let Some(contract_id) = node.connector_contract_id() else {
+            self.node_annotation_refusal(
+                &decl.annotation.symbols[0],
+                "a Connector declaration did not resolve to a Connector NodeType",
+            );
+            return;
         };
-        if let NodeRole::Connector {
-            contract_id,
-            roles,
-            exchange,
-            ..
-        } = &mut node.role
-        {
-            *contract_id = contract.id.to_string();
-            *roles = contract.roles;
-            *exchange = contract.exchange;
-        }
+        let Some(contract) = self.registry.connector_by_id(contract_id) else {
+            self.bag.push(
+                Diagnostic::new(
+                    E_CONNECTOR_UNAVAILABLE,
+                    Phase::Check,
+                    format!("the `{contract_id}` contract is absent from this compiler registry"),
+                )
+                .with_span(decl.annotation.symbols[0].span)
+                .with_field("type", contract_id.to_string()),
+            );
+            return;
+        };
         // Name, direction and sink policy do not depend on attribute
         // values. Materialize that part immediately so a bad selector or
         // attribute keeps its one truthful diagnostic instead of causing
@@ -3233,7 +3789,7 @@ impl Checker<'_, '_> {
                 });
             }
         }
-        if let NodeRole::Connector { attributes, .. } = &mut node.role {
+        if let NodeSemantics::Connector { attributes, .. } = &mut node.semantics {
             attributes.extend(injected);
         }
         let effective_words: BTreeMap<String, String> = node
@@ -3303,10 +3859,8 @@ impl Checker<'_, '_> {
         node: &Node,
         name: &str,
     ) -> Option<(contract::ValueDomain, crate::plan::EvaluationSite)> {
-        let source_name = node.connector_contract_id()?;
-        let contract::Availability::Available(sheet) = self.registry.connector(source_name) else {
-            return None;
-        };
+        let contract_id = node.connector_contract_id()?;
+        let sheet = self.registry.connector_by_id(contract_id)?;
         let mut matches = sheet
             .common
             .iter()
@@ -3460,7 +4014,7 @@ impl Checker<'_, '_> {
                             });
                     } else if let Some(checked) =
                         self.attribute_value(&attribute.value, &signature, &consts, attribute.span)
-                        && let NodeRole::Connector { attributes, .. } = &mut node.role
+                        && let NodeSemantics::Connector { attributes, .. } = &mut node.semantics
                     {
                         attributes.push(Attribute {
                             name,
@@ -4297,7 +4851,7 @@ impl Checker<'_, '_> {
                 crate::compiler::syntax::Guard::By(expr) => {
                     self.instance_refusal(
                         expr.span,
-                        "join `by` was removed; put the correlation expression in `instances = { key = ... }` on this Operator",
+                        "join `by` was removed; put the correlation expression in `instance = { key = ... }` on this Operator",
                     );
                 }
                 crate::compiler::syntax::Guard::Having(expr) => {
@@ -7024,11 +7578,36 @@ fn edge_display(edge: &Edge) -> String {
 
 fn common_node_attribute_name(attribute: &SynAttribute) -> Option<&str> {
     let name = attribute.target.segments.first()?.text.as_str();
-    matches!(name, "instances" | "lifetime" | "closing").then_some(name)
+    matches!(name, "instance" | "instances" | "lifetime" | "closing").then_some(name)
 }
 
 fn is_common_node_attribute(attribute: &SynAttribute) -> bool {
     common_node_attribute_name(attribute).is_some()
+}
+
+fn is_loop_attribute(attribute: &SynAttribute) -> bool {
+    let Some(first) = attribute.target.segments.first() else {
+        return false;
+    };
+    first.text == "Loop"
+        || (attribute.target.segments.len() == 1
+            && matches!(
+                first.text.as_str(),
+                "fuel"
+                    | "delay"
+                    | "invariant"
+                    | "measure"
+                    | "jitter"
+                    | "variant"
+                    | "backoff"
+                    | "initial"
+                    | "source"
+                    | "value"
+                    | "until"
+                    | "limit"
+                    | "max_steps"
+                    | "decreases"
+            ))
 }
 
 fn is_bare_word(text: &str) -> bool {
@@ -7131,7 +7710,7 @@ fn remap_graph_assets(graph: &mut Graph, remap: &[u32]) {
         if let Some(policy) = &mut node.instance {
             instance(policy, remap);
         }
-        if let NodeRole::Connector { attributes, .. } = &mut node.role {
+        if let NodeSemantics::Connector { attributes, .. } = &mut node.semantics {
             for attribute in attributes {
                 match &mut attribute.value {
                     AttrValue::Const(constant) => expr(&mut constant.tree.root, remap),
@@ -7583,12 +8162,15 @@ graph m0_probe : App {
     fn the_m0_probe_checks_into_hir() {
         let hir = check_clean(M0_PROBE);
         assert_eq!(hir.app.name, "m0_probe");
+        assert_eq!(hir.app.ty, node::Type::App);
+        assert!(hir.app.aspects.is_empty());
         assert_eq!(hir.app.vals[0].name, "greeting");
         assert_eq!(hir.app.nodes.len(), 2);
         let echo = &hir.app.nodes[0];
-        assert_eq!(echo.category(), node::Kind::Connector);
+        assert_eq!(echo.kind(), node::Kind::Connector);
         assert_eq!(
-            echo.connector_contract_id(),
+            echo.connector_contract_id()
+                .map(|contract| contract.as_str()),
             Some(crate::connector::PROCESS_CONNECTOR_ID)
         );
         // The EFFECTIVE sheet (D-2026-08-12-1): the five written
@@ -7609,7 +8191,7 @@ graph m0_probe : App {
             crate::value::Value::Text(String::from("cat"))
         );
         let shout = &hir.app.nodes[1];
-        assert_eq!(shout.category(), node::Kind::Operator);
+        assert_eq!(shout.kind(), node::Kind::Operator);
         assert_eq!(shout.vars[0].ty, DataType::INT);
         let handler = &shout.handlers[0];
         assert_eq!(
@@ -7626,6 +8208,221 @@ graph m0_probe : App {
             panic!("expected a whole-data expression");
         };
         assert!(matches!(&tree.root, expr::Expr::Path(path) if path == &["data", "text"]));
+    }
+
+    #[test]
+    fn implicit_and_explicit_default_node_types_are_one_program() {
+        let implicit = r#"
+graph app : App {
+  input in: text
+  output out: text
+  operator relay {
+    input in: text
+    output out: text
+    on in { out = . }
+  }
+  . -> relay -> .
+}
+"#;
+        let explicit = implicit.replace("operator relay {", "operator relay : Operator {");
+        let implicit = check_clean(implicit);
+        let explicit = check_clean(&explicit);
+        assert_eq!(implicit.app.nodes[0].ty, node::Type::Operator);
+        assert_eq!(explicit.app.nodes[0].ty, node::Type::Operator);
+        assert_eq!(
+            crate::compiler::lower::semantic_hash(&implicit),
+            crate::compiler::lower::semantic_hash(&explicit)
+        );
+
+        let implicit_graph = r#"
+graph app : App {
+  input in: text
+  output out: text
+  graph child {
+    input in: text
+    output out: text
+    operator relay { on in { out = . } }
+    . -> relay -> .
+  }
+  . -> child -> .
+}
+"#;
+        let explicit_graph = implicit_graph.replace("graph child {", "graph child : Graph {");
+        let implicit_graph = check_clean(implicit_graph);
+        let explicit_graph = check_clean(&explicit_graph);
+        assert_eq!(implicit_graph.app.graphs[0].ty, node::Type::Graph);
+        assert_eq!(explicit_graph.app.graphs[0].ty, node::Type::Graph);
+        assert_eq!(
+            crate::compiler::lower::semantic_hash(&implicit_graph),
+            crate::compiler::lower::semantic_hash(&explicit_graph)
+        );
+    }
+
+    #[test]
+    fn aspects_are_classified_but_cannot_outrun_their_runtime_gate() {
+        let source = r#"
+graph app : App {
+  graph retry : Loop {
+    input in: text
+    output out: text
+    Loop.fuel = 3
+    operator relay { on in { out = . } }
+    . -> relay -> .
+  }
+  . -> retry -> .
+}
+"#;
+        let (hir, bag) = check_source(source);
+        let hir = hir.expect("the recoverable HIR keeps the classified annotation");
+        assert_eq!(hir.app.graphs[0].ty, node::Type::Graph);
+        assert_eq!(hir.app.graphs[0].aspects, vec![node::Aspect::Loop]);
+        let spec = hir.app.graphs[0]
+            .loop_spec
+            .as_ref()
+            .expect("the source half of Loop is checked before its plan gate");
+        assert_eq!(spec.fuel.value, crate::value::Value::Int(3));
+        assert!(spec.delay.is_none());
+        assert_eq!(diagnostic_codes(&bag), vec![E_CHECK_DEFERRED]);
+    }
+
+    #[test]
+    fn loop_source_contract_is_closed_and_kept_behind_one_gate() {
+        let source = r#"
+graph app : App {
+  graph retry : Loop {
+    input in: text
+    output out: text
+    val attempts = 4
+    Loop.fuel = attempts
+    Loop.delay = {
+      kind = exponential
+      first = duration("100ms")
+      ceiling = duration("5s")
+    }
+    operator relay { on in { out = . } }
+    . -> relay -> .
+  }
+  . -> retry -> .
+}
+"#;
+        let (hir, bag) = check_source(source);
+        assert_eq!(diagnostic_codes(&bag), vec![E_CHECK_DEFERRED]);
+        let spec = hir
+            .expect("a fail-closed Loop keeps its checked source contract")
+            .app
+            .graphs[0]
+            .loop_spec
+            .clone()
+            .expect("LoopSpec");
+        assert_eq!(spec.fuel.value, crate::value::Value::Int(4));
+        let LoopDelay::Exponential { first, ceiling } = spec.delay.expect("delay") else {
+            panic!("expected exponential delay");
+        };
+        assert_eq!(first.value, crate::value::Value::Duration(100_000_000));
+        assert_eq!(ceiling.value, crate::value::Value::Duration(5_000_000_000));
+    }
+
+    #[test]
+    fn removed_or_misplaced_loop_attributes_have_one_owner() {
+        let cases = [
+            (
+                "graph retry : Loop { Loop.variant = { kind = measure } }",
+                "Loop.variant` was removed",
+            ),
+            (
+                "graph retry : Loop { max_steps = 3 }",
+                "max_steps` was removed",
+            ),
+            (
+                "graph retry : Loop { until = data.done }",
+                "terminal paths emit `out`",
+            ),
+            ("graph retry : Loop { fuel = 3 }", "write `Loop.fuel`"),
+            (
+                "graph retry { Loop.fuel = 3 }",
+                "requires the Graph's `: Loop`",
+            ),
+            (
+                "graph retry : Loop { Loop.fuel = 0 }",
+                "must be a positive integer",
+            ),
+            (
+                "graph retry : Loop { Loop.fuel = 3; Loop.delay = { kind = exponential; first = duration(\"2s\"); ceiling = duration(\"1s\") } }",
+                "ceiling` must be no smaller",
+            ),
+        ];
+        for (declaration, expected) in cases {
+            let source = format!("graph app : App {{ {declaration} }}");
+            let (_, bag) = check_source(&source);
+            assert_eq!(diagnostic_codes(&bag), vec![E_LOOP], "{source}: {bag:#?}");
+            assert!(bag.diagnostics()[0].message().contains(expected));
+        }
+    }
+
+    #[test]
+    fn node_types_and_aspects_have_one_ordered_compatibility_gate() {
+        let cases = [
+            (
+                "operator o : Loop + Operator { on in { out = . } }",
+                "NodeType must be the first annotation",
+            ),
+            (
+                "operator o : Saga { on in { out = . } }",
+                "Saga` NodeAspect belongs to a Graph",
+            ),
+            (
+                "operator o : Loop { on in { out = . } }",
+                "Loop` NodeAspect belongs to a Graph",
+            ),
+            (
+                "operator o : Reducer { on in { out = . } }",
+                "Operator pattern, not a NodeType",
+            ),
+        ];
+        for (declaration, expected) in cases {
+            let source = format!("graph app : App {{ {declaration} . -> o -> . }}");
+            let (_, bag) = check_source(&source);
+            assert!(
+                bag.diagnostics().iter().any(|diagnostic| {
+                    diagnostic.code() == E_NODE_ANNOTATION
+                        && diagnostic.message().contains(expected)
+                }),
+                "{source}: {bag:#?}"
+            );
+        }
+
+        let source = r#"
+graph app : App {
+  connector c : Loop { }
+}
+"#;
+        let (_, bag) = check_source(source);
+        assert_eq!(diagnostic_codes(&bag), vec![E_NODE_ANNOTATION]);
+        assert!(
+            bag.diagnostics()[0]
+                .message()
+                .contains("requires its exact Connector NodeType first")
+        );
+
+        let source = r#"
+graph app : App {
+  connector c : Process + Loop {
+    command = "echo"
+    args = ["ok"]
+    codec = lines
+    effect = idempotent
+    behavior = deterministic
+    max_output = 1024
+  }
+}
+"#;
+        let (_, bag) = check_source(source);
+        assert!(bag.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code() == E_NODE_ANNOTATION
+                && diagnostic
+                    .message()
+                    .contains("Loop` NodeAspect belongs to a Graph")
+        }));
     }
 
     #[test]
@@ -7910,11 +8707,11 @@ graph g : App {
         assert!(bag.diagnostics()[0].message().contains("catalogue"));
         let unknown = "graph g : App {\n  connector d : Postgres { }\n  . -> d -> .\n}\n";
         let (_, bag) = check_source(unknown);
-        assert!(
-            bag.diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.message().contains("not a known connector type"))
-        );
+        assert!(bag.diagnostics().iter().any(|diagnostic| {
+            diagnostic
+                .message()
+                .contains("not a known Connector NodeType")
+        }));
     }
 
     #[test]
@@ -8387,14 +9184,14 @@ graph session_echo : App {
     fn key_and_lifetime_are_orthogonal_in_all_four_combinations() {
         let policies = [
             ("", false, "persistent"),
-            ("instances = { key = data }", true, "persistent"),
+            ("instance = { key = data }", true, "persistent"),
             (
                 "lifetime = { kind = idle ; after = duration(\"30s\") }",
                 false,
                 "idle",
             ),
             (
-                "instances = { key = data }\n    lifetime = { kind = idle ; after = duration(\"30s\") }",
+                "instance = { key = data }\n    lifetime = { kind = idle ; after = duration(\"30s\") }",
                 true,
                 "idle",
             ),
@@ -8444,10 +9241,10 @@ graph session_echo : App {
 graph g : App {
   input in: text
   output out: text
-  instances = { key = data }
+  instance = { key = data }
 
   connector shell : Process {
-    instances = { key = data }
+    instance = { key = data }
     lifetime = { kind = idle ; after = duration("5m") }
     command = "cat"
     codec = lines
@@ -8577,7 +9374,7 @@ graph g : App {
     input a: struct { tenant: text, amount: int }
     input b: struct { tenant: text, note: text }
     output out: text
-    instances = { key = data.tenant }
+    instance = { key = data.tenant }
     on a { out = data.tenant }
     on b { out = data.tenant }
   }
@@ -8604,7 +9401,7 @@ graph g : App {
   operator relay {
     input in: text
     output out: text
-    instances = { key = { request = meta.sys.id ; tenant = data } }
+    instance = { key = { request = meta.sys.id ; tenant = data } }
     on in { out = . }
   }
   . -> relay -> .
@@ -8623,8 +9420,8 @@ graph g : App {
     #[test]
     fn instance_sheets_refuse_malformed_values_before_lowering() {
         let cases = [
-            ("instances = {}", "requires exactly one `key`"),
-            ("instances = { key = 1 ; key = 2 }", "declared twice"),
+            ("instance = {}", "requires exactly one `key`"),
+            ("instance = { key = 1 ; key = 2 }", "declared twice"),
             (
                 "lifetime = { kind = idle ; after = duration(\"0s\") }",
                 "must be positive",
@@ -8643,7 +9440,7 @@ graph g : App {
                 "closing = { drain_for = duration(\"1s\") ; settle_for = duration(\"1s\") ; magic = 1 }",
                 "has no `magic` field",
             ),
-            ("instances = { key = data }", "canonical scalar/enum leaves"),
+            ("instance = { key = data }", "canonical scalar/enum leaves"),
         ];
         for (attribute, expected) in cases {
             let source = format!(
@@ -8667,6 +9464,11 @@ graph g : App {
                 "named partition",
                 "graph g : App { partition p { key = 1 ; lifetime = persistent } operator o { on in { out = . } } . -> o -> . }",
                 "`partition`",
+            ),
+            (
+                "plural instance attribute",
+                "graph g : App { operator o { instances = { key = data } ; on in { out = . } } . -> o -> . }",
+                "`instances` was superseded",
             ),
             (
                 "Graph per",

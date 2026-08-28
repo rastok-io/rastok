@@ -5,7 +5,7 @@
 > regions; the superseded bare spellings are not a compatibility
 > surface. Frontends whose compiler is not in this build remain admitted
 > by their registered framer and refuse with named `E-CHECK-DEFERRED`.
-> The current parser/checker uses the Node attributes `instances` and
+> The current parser/checker uses the Node attributes `instance` and
 > `lifetime`; the superseded `partition` / `per` draft is not a compatibility
 > surface. `persistent`, `idle`, `fixed`, `single_pass`, and processing-time
 > `tumbling` execute on Graph and Node owners. The exact bounded `closing`
@@ -62,8 +62,8 @@ Rules :
   Tagged INITIALIZERS (`on_crash { … }`, `measure { … }`,
   `exponential { … }`) remain dead: a plain struct plus the attribute's
   name suffices, and a former discriminant is a closed-choice FIELD
-  (`Loop.backoff = { curve = exponential, … }`).
-- **Dotted attribute names are owner qualification ONLY** (`Loop.backoff`, `Saga.timeout`, `HttpClient.timeout`) — never a patch path into a composite value.
+  (`Loop.delay = { kind = exponential, … }`).
+- **Dotted attribute names are owner qualification ONLY** (`Loop.delay`, `Saga.timeout`, `HttpClient.timeout`) — never a patch path into a composite value.
 - **The host grammar is LL(1) after left-factoring the identifier
   prefixes** (D-2026-08-13-1): classification observes the form (one
   raw significant byte, or one peeked token) without irreversible
@@ -101,8 +101,8 @@ connector codex : Process {        // type annotation with ":"
 
 ## Single composite concept : `graph` — and the `: App` entry point
 
-The `app` and `compose` keywords are not part of the grammar. A graph role
-marks the deployment entry point instead.
+The `app` and `compose` keywords are not part of the grammar. The `App`
+NodeType marks the deployment entry point instead.
 
 There is **one** keyword for composite units. No `pipeline`, `flow`,
 `session`, `template` — and no `app` :
@@ -116,7 +116,7 @@ graph teams_gateway : App {          // the DEPLOYMENT ENTRY POINT — exactly o
   }
 
   graph sessions {                   // a graph DECLARES → it IS a composite Node
-    instances = { key = meta.app.session_key }
+    instance = { key = meta.app.session_key }
     lifetime  = { kind = idle ; after = duration("2h") }
     closing   = { drain_for = duration("30s") ; settle_for = duration("5s") }
     connector codex : Process { mode = service ; command = "codex" ; args = ["app-server"]
@@ -148,8 +148,8 @@ The rules :
   whose name matches the App's ; each `simulation` names its closed graph
   explicitly (`on app` today — sub-graph targets are deferred, E-SIM-TARGET)
   ([simulation-semantics.md](simulation-semantics.md) §2, Boundaries).
-- **`: App` is a graph ROLE** (the third annotation category beside traits
-  and aspects) : it marks the deployment entry point. A deployed unit has
+- **`: App` is the root Graph NodeType** : it marks the deployment entry
+  point. A deployed unit has
   **exactly one** `: App` graph (0 or ≥2 = build error). App-level concerns —
   `durability` and retention overrides — are its attributes
   and body. `app` is no longer a keyword; it survives as a **pre-bound
@@ -166,7 +166,7 @@ The rules :
   Operator or Connector. A declared graph that is never wired = dead-code
   warning (the unfed-input family).
 - **Instance addressing is uniform** : any Operator, Connector, or Graph may
-  carry `instances = { key = <expr> }`. `lifetime` is a separate common
+  carry `instance = { key = <expr> }`. `lifetime` is a separate common
   attribute. Physical capacity, spawn, placement, shard, and Worker policy do
   not enter this semantic sheet.
 - **Identity guard** : the `: App` graph is the composition **root** ;
@@ -174,11 +174,11 @@ The rules :
   **excluded** ([envelope.md §2](envelope.md)).
 - **Reuse note** : instantiating one graph *type* at several sites is
   deferred. If introduced, it can use
-  `graph <name> : <GraphType>` — the annotation slot and the symbol
-  classifier already accommodate it. `compose` and `app` are
+  `graph <name> : <GraphType>` — the NodeType slot already accommodates it.
+  `compose` and `app` are
   reserved-but-not-used.
 
-## Vocabulary : Node, Operator, Connector, Graph, inputs/outputs, state
+## Vocabulary : Node kind, Node type, Node aspect, ports, and state
 
 Rastok recognizes exactly **three families of node** ([WHITEPAPER.md §2](../../WHITEPAPER.md)) :
 
@@ -186,19 +186,22 @@ Rastok recognizes exactly **three families of node** ([WHITEPAPER.md §2](../../
 - **Connector** — same graph shape as Operator, but it is allowed to talk to an external system (HTTP, processes, files, databases, clocks, brokers, etc.). Its external configuration is expressed as flat attributes and typed ports, not as mandatory subsections.
 - **Graph** — composite Node. Its body declares Nodes and edges ; the graph declaration itself is the instance wired by name.
 
-A concrete Node is declared with `operator`, `connector`, or `graph`. By
-convention formal implementation types end in `-Operator`, `-Connector`, or
-the canonical `Graph` type :
+A concrete Node is declared with `operator`, `connector`, or `graph`. The
+declaration keyword fixes its `node::Kind`; the annotation selects one
+effective `node::Type` and then zero or more `node::Aspect` values. Ordinary
+Graphs and Operators use their implicit canonical type. Connector types are
+explicit exact contract names:
 
 ```rastok
-JaqOperator, WasmOperator, ReducerOperator,
-HttpClient, HttpServerConnector, ProcessConnector,
-File, Postgres, Kafka, Clock, MCPConnector, Graph, …
+Graph, App, Operator, Jaq, Wasm,
+HttpClient, HttpServer, Process, File, Postgres, Kafka, Clock, …
 ```
 
-The stdlib exposes shorter aliases for everyday writing : `Jaq`, `Reducer`, `Aggregator`, `HttpClient`, `Process`, `File`, etc. They desugar to the formal type names.
-
-Every other concept (Reducer, Aggregator, Window, Joiner) is just an Operator parameterized along independent axes : presence of Node-local `var` state, optional `instances.key`, optional `lifetime`, and the handler trigger (`on <port>` vs the `on (a, b)` join). See [Operator parameterization](#operator-parameterization-state--instances--lifetime--transaction) below.
+A real alternate pure implementation such as `Jaq` or `Wasm` may be an
+Operator NodeType. `Reducer`, `Aggregator`, `Window`, `Joiner`, `Router`, and
+`Dispatch` are guide names for visible primitive combinations, never hidden
+NodeTypes. See [Operator parameterization](#operator-parameterization-state--instance--lifetime--transaction)
+below and [aspects.md](aspects.md).
 
 The word **Processor** is not part of the canonical vocabulary. Runtime traits
 such as `Reader`, `Transformer`, and `Writer` may exist in an implementation,
@@ -209,11 +212,16 @@ external configuration.
 Supporting concepts :
 
 - **Node** — any element of a graph : Operator, Connector, or Graph.
+- **Node kind** — the structural family selected by the declaration keyword.
+- **Node type** — exactly one implementation/contract compatible with that
+  kind (`App`, `Operator`, `Process`, …).
+- **Node aspect** — zero or more compatible orchestration protocols such as
+  `Loop` or `Saga`; an aspect never replaces the NodeType.
 - **input / output** — typed envelope endpoints declared with `input` /
   `output` inside a Node body or inferred from handler/wiring use (including
   the conventional `in` / `out` / `err` spellings). Connected to other Nodes
   via DAG edges.
-- **instance addressing** — a Node's optional `instances.key` expression.
+- **instance addressing** — a Node's optional `instance.key` expression.
   It selects the logical mailbox/state instance for an entering envelope and
   is recorded before producer commit. It is not an edge or shared-state name.
 - **external configuration** — (Connector only) attributes such as URL,
@@ -287,9 +295,9 @@ be restated through `custom_headers`.
 A Graph is a Node, so it declares its own addressing exactly like an Operator
 or Connector:
 
-- **`graph X { … }`** without `instances` → one singleton inside each
+- **`graph X { … }`** without `instance.key` → one singleton inside each
   enclosing Graph instance;
-- **`graph X { instances = { key = … }; … }`** → one logical instance per
+- **`graph X { instance = { key = … }; … }`** → one logical instance per
   canonical selected key.
 
 Keying is intrinsic to the definition, not re-decided at each edge. Lifetime
@@ -305,7 +313,7 @@ family, not a special construct :
 
 ```rastok
 graph sessions {
-  instances = { key = meta.app.session_key }
+  instance = { key = meta.app.session_key }
   lifetime  = { kind = idle ; after = duration("2h") }
   closing   = { drain_for = duration("30s") ; settle_for = duration("5s") }
 
@@ -352,7 +360,7 @@ graph teams_inbound {
 ```
 
 A declared Graph is a Node instance. Its logical cardinality comes from its
-own optional `instances` attribute and its temporal behavior from `lifetime`.
+own optional `instance` attribute and its temporal behavior from `lifetime`.
 Capacity, spawn strategy, placement, Worker count, and shard assignment are
 physical deployment policy and are not inferred as source semantics.
 
@@ -395,36 +403,32 @@ Braces and names carry ALL the semantics — indentation carries none.
   resolved `UnwiredPolicy` of every output (`require_wire`, `journal`,
   `bubble(port)`, or explicit discard with `-> nothing`).
 
-## Operator parameterization : state + instances + lifetime + transaction
+## Operator parameterization : state + instance + lifetime + transaction
 
 Per [WHITEPAPER.md §2.3](../../WHITEPAPER.md), what informal vocabulary called
-"Reducer", "Aggregator", "Window", and "Joiner" are the same Operator
-parameterized along four orthogonal axes:
+“Reducer”, “Aggregator”, “Window”, and “Joiner” are guide names for the same
+Operator parameterized along four orthogonal axes. They are not aliases or
+NodeTypes:
 
 | Axis | Values | Effect |
 |---|---|---|
 | `var` state | absent / typed `S` | Node-local state |
-| `instances` | absent / one canonical key expression | singleton / keyed addresses |
+| `instance` | absent / one canonical key expression | singleton / keyed addresses |
 | `lifetime` | absent / one profile | persistent / temporal instances |
 | handler trigger | `on <port>` / `on (a, b)` | ordinary transaction / join |
 
-The named archetype aliases map mechanically to combinations of these axes :
+The named archetypes map mechanically to combinations of these axes:
 
 | Alias          | Equivalent Operator parameterization                                       |
 |----------------|----------------------------------------------------------------------------|
-| Pure transform | no `var`, no `instances` |
-| Reducer | `var S`, no `instances` |
-| Aggregator | `var S`, `instances.key = K` |
-| Window | `var S`, optional `instances.key`, temporal `lifetime` |
-| Joiner | optional `var S`, optional `instances.key`, `on (a, b)` bounded as required |
+| Pure transform | no `var`, no `instance.key` |
+| Reducer | `var S`, no `instance.key` |
+| Aggregator | `var S`, `instance.key = K` |
+| Window | `var S`, optional `instance.key`, temporal `lifetime` |
+| Joiner | optional `var S`, optional `instance.key`, `on (a, b)` bounded as required |
 
-These names are kept in the stdlib **as aliases** for the corresponding `Operator + parameters` combinations. The compiler lowers them all to the same underlying trait. Example aliases :
-
-```
-alias Jaq        = JaqOperator
-alias Reducer    = JaqOperator                 // alias used when state is present
-alias Aggregator = JaqOperator                 // alias used when state + instances are present
-```
+These names do not appear in the type annotation. The compiler sees the
+ordinary Operator, state, instance policy, lifetime, and handler form directly.
 
 Less frequent patterns (filter-with-dedup, buffer-by-size, rate-limit, debouncer, memoize-cache, …) are expressed as the appropriate Operator parameterization plus jaq logic — they do not need their own DSL keyword.
 
@@ -435,7 +439,7 @@ State is **read-modify-write, imperatively, within a transaction**. A persistent
 ```rastok
 operator counter {
   var count: int = 0                          // default 0 on first transaction
-  // no `instances` → one Node-local singleton cell in the enclosing scope
+  // no `instance.key` → one Node-local singleton cell in the enclosing scope
 
   on msg {
     count = count + 1                         // Rastok expression; later reads see the new value
@@ -451,16 +455,23 @@ ordinary expressions. Structural reshaping may use tagged frontends
 
 **Emitting** : a braced value is classified ONCE by its top-level roots (D-2026-08-09-1). With only the reserved roots `data` and `meta` it is the ENVELOPE form : `out = { meta.app.count = count }` inherits the input envelope (meta + data) and patches the listed fields, and a whole-`data` assignment makes the data fresh. With no reserved root, `out = { total = n }` builds a fresh data record (a `struct`), keeping the input's heritable metadata per the uniform propagation rule (D-2026-08-10-2 ; `content_type` excluded — D-2026-08-10-4). Mixing the two refuses with `E-BRACE-MIXED` — business fields named `data` or `meta` take the explicit escape `data = { … }`. `out = .` re-emits the input envelope unchanged ; `out = nothing` emits nothing on that port this transaction. There is no `previous(x)` operator — a transaction reads the previous transaction's committed state at its start, then proceeds imperatively. The synchronous-dataflow `pre` of Lustre/SCADE applies at the **inter-transaction** boundary (each transaction is one cycle), not inside a transaction. Wall-clock time enters only through a `Clock` observed via `on <clock_port>` (see [WHITEPAPER.md §5](../../WHITEPAPER.md)).
 
-## Dynamic dispatch primitives (Router, Dispatch)
+## Dynamic routing and keyed dispatch
 
-The graph topology is statically declared (DAG, no cycles, every edge visible in source). Dynamism is recovered through two primitives, each of which preserves static analyzability : *what* happens at runtime is dynamic, *where* it can possibly happen is statically declared.
+The graph topology is statically declared (DAG, no cycles, every edge visible
+in source). Two common patterns recover bounded dynamism without introducing
+another NodeType:
 
-| Primitive  | Selection mode                    | Topology contract                                  |
+| Pattern  | Selection mode                    | Topology contract                                  |
 |------------|-----------------------------------|----------------------------------------------------|
 | **Router** | Runtime choice 1-of-N or list-of-N | All N output ports are declared statically         |
-| **Dispatch** | Keyed sub-graph instantiation | The sub-graph type and `instances.key` expression are declared statically |
+| **Dispatch** | Keyed sub-graph instantiation | The sub-graph type and `instance.key` expression are declared statically |
 
-These are the only sanctioned ways to express runtime decisions about destination. A node that "decides who to message" outside of these primitives is rejected by the validator. This is what keeps the topology analyzable, the path coverage finite, and LLM-driven graph generation tractable.
+`Dispatch` is already ordinary keyed Graph execution. `Router` is only a guide
+name for conditional emissions from an Operator to statically declared output
+ports. The generic conditional multi-output statement remains a named source
+gate; `operator x : Router` refuses rather than conjuring a privileged runtime
+family. Whatever spelling lands must keep every possible destination in the
+static port/edge table.
 
 ### Boundary sugar `.` and `.foo` for graph wiring
 
@@ -512,20 +523,9 @@ operator notify {
 }
 ```
 
-This subsumes the `Fanout` alias entirely and composes naturally with conditional logic (broadcast only some envelopes, not others) without needing an upstream `Router` to split the cases.
-
-The "switch on a value" pattern (forward an envelope to one of a declared set of targets based on a field value) is expressed as a degenerate `Router` whose selector returns that field :
-
-```rastok
-operator forward : Router {
-  select = jq! { .meta.app.target }
-}
-forward.a -> a_handler
-forward.b -> b_handler
-forward.c -> c_handler
-```
-
-The detailed syntax for each primitive is documented in the existing sections on multi-port nodes ([Router](#port-naming-and-default-edges)) and composed graphs ([Dispatch](#graph-composability)).
+This subsumes a separate `Fanout` type entirely. A future conditional form
+will use the same ordinary emissions and declared ports; it will not add a
+Router-specific selector contract.
 
 ## Instances and lifetime in the DSL
 
@@ -534,7 +534,7 @@ surface uses ordinary composite attributes on the Node that owns the behavior:
 
 ```rastok
 operator session_counter {
-  instances = {
+  instance = {
     key = meta.app.session_id
   }
 
@@ -562,7 +562,7 @@ list of bindings:
 
 ```rastok
 operator user_workspace_quota {
-  instances = {
+  instance = {
     key = {
       user = meta.app.user_id
       workspace = meta.app.workspace_id
@@ -574,7 +574,7 @@ operator user_workspace_quota {
 }
 ```
 
-No `instances` means one singleton Node instance. No `lifetime` means
+No `instance.key` means one singleton Node instance. No `lifetime` means
 persistent. The admitted lifetime sheet is:
 
 ```rastok
@@ -604,14 +604,14 @@ sheet; elsewhere it is optional. Bare `stop` in a handler closes that current
 owner generation after the handler transaction commits. A target operand and
 `stop` inside `on stop` both refuse.
 
-`instances`, `lifetime`, `closing`, `kind`, `key`, `after`, `every`,
+`instance`, `lifetime`, `closing`, `kind`, `key`, `after`, `every`,
 `drain_for`, and `settle_for` are contract
 attribute/field names, not structural keywords. The parser sees the ordinary
 `attribute = value` production; the checker judges the closed common Node
 sheet. `meta.sys` remains read-only but is readable by the key expression.
 Only immutable `val`s from enclosing scopes are visible while selecting an
 address; the owner's own body has not been entered yet. `instance.key` is
-well-typed only for an owner that declares `instances.key` and never resolves
+well-typed only for an owner that declares `instance.key` and never resolves
 to an ancestor key.
 
 There are no stdlib instance names. Reuse comes from expressions and types,
@@ -644,8 +644,8 @@ No `Reader`, `Writer`, or `Endpoint` suffix is needed in the DSL :
 Rust implementation structs may use explicit names (`FileReader`,
 `JsonRpcWriter`, etc.). The NodeRegistry exposes suffix-free DSL type names
 and chooses the runtime halves from the node's ports and Connector attributes.
-Role and duplex behavior are properties of ports and traits, not of the
-user-facing node type.
+Direction and duplex behavior are properties of ports and Connector
+contracts, not a second user-facing classification.
 
 ## Port naming and default edges
 
@@ -684,18 +684,19 @@ codex.err      -> logs.in
 codex.exit     -> lifecycle.in
 ```
 
-Multi-port nodes (`Router`, `Aggregator`, ...) expose additional named ports
+Multi-port Operators (including the routing and aggregation patterns) expose additional named ports
 via the same `.<name>` syntax — no separate `ports { ... }` declaration block
 needed :
 
 ```rastok
-operator route : Router {
-  select = jq! {
-    if .data.kind == "invoice" then ["audit", "invoice"]
-    elif .data.kind == "refund" then "refund"
-    else []
-    end
-  }
+operator route {
+  input in: variant
+  output audit: variant
+  output invoice: variant
+  output refund: variant
+
+  // The general conditional-emission statement is a named source gate.
+  // Once landed, this ordinary Operator will emit to a selected subset.
 }
 
 route.audit   -> audit_log.in
@@ -703,42 +704,19 @@ route.invoice -> invoice_handler.in
 route.refund  -> refund_handler.in
 ```
 
-The available port names come from the node contract (`Router` documents what `select` outputs and how it maps to ports). A `Router` selector may return :
-
-- a string : one route (`"refund"`)
-- an array of strings : fan-out to several routes (`["audit", "invoice"]`)
-- an empty array : explicit drop
-
-The envelope is never transformed by `Router`; every selected route receives
-the same envelope. If several upstream edges target the same input port, the
+The possible destinations come from these declared outputs and their visible
+edges. If several upstream edges target the same input port, the
 runtime treats that as an implicit funnel / fan-in into the port. That default
 merge carries no guard or ordering policy. A guarded fan-in such as "wait for
 `a`, `b` and `c` for the same key before emitting" is expressed by an
 `on (a, b, c)` join handler (§2.3), bounded by `last` (and optionally
 `within`) — not the default funnel.
 
-`Aggregator` is the stateful counterpart for keyed folds : fragments arrive
+The Aggregator pattern is the stateful counterpart for keyed folds: fragments arrive
 on a declared input such as `.delta`, flush signals arrive on `.flush`,
 and the aggregate is emitted on a declared output such as `.aggregate`.
 
-The explicit `Router` node is the canonical form. The parser may also accept
-an inline sugar for local routing :
-
-```rastok
-codex.out -> route jq! {
-  if .meta.app.method == "item/agentMessage/delta" then ["aggregate", "typing"]
-  elif .meta.app.method == "turn/completed" then "flush"
-  else []
-  end
-} {
-  aggregate -> aggregate_reply.delta
-  typing    -> typing_feedback.in
-  flush     -> aggregate_reply.flush
-}
-```
-
-This desugars to an anonymous `Router` plus normal edges. A future structural
-pattern form can share the same lowering :
+One possible future structural sugar is:
 
 ```rastok
 codex.out -> {
@@ -747,6 +725,10 @@ codex.out -> {
   _                                               -> nothing
 }
 ```
+
+It can lower to an anonymous ordinary Operator plus normal edges only after
+the generic conditional-emission contract is fixed. It is not accepted by the
+current grammar.
 
 ## Edges
 
@@ -929,7 +911,7 @@ Writing two arrows in opposite directions gives a compile error. Express the sam
 
 | Need | Pattern |
 |---|---|
-| Retry after a selected outcome | The `: Loop` aspect on the Connector, with an explicit handler/guard over the connector's typed outcome port (for Process, `exit`) — see [loop.md](loop.md) |
+| Retry after a selected outcome | A `graph … : Loop` containing the Connector, with an explicit handler/guard over the connector's typed outcome port (for Process, `exit`) — see [loop.md](loop.md) |
 | DLQ + replay | Failed → `Memory`; operations tooling reads a bounded snapshot, then injects selected values as roots of a new run |
 | Iterative refinement, fixed N | Static unfolding : `step -> step -> step` |
 | Iterative refinement, dynamic N | the bounded `: Loop` aspect |
@@ -1165,15 +1147,15 @@ does not claim implementation or release status.
 | `Clock` | Connector node (mockable clock) | specified in the initial stdlib catalog |
 | `Calendar` | Source Connector | civil time (cron+tz / at) — see stdlib.md ; `Clock` = physical time |
 | `Memory` | bounded in-process store | initial catalog; append and snapshot-read contract in stdlib.md |
-| `Jaq` | Operator alias (jq — document guest over structured values) | specified in the initial stdlib catalog |
-| `Sql` | Operator alias (SQL guest over the table view of `array<struct>`) | planned guest; not in the initial executable slice |
-| `Reducer` | Stateful Operator alias (`var`, optionally with `instances.key`) | specified in the initial stdlib catalog |
-| `Aggregator` | Stateful Operator alias (`var` + keyed instances) | specified ; window contracts remain deferred |
-| `Window` | `Aggregator` with a finite `lifetime` | specified surface ; sliding/event-time contracts remain deferred |
-| `Joiner` | Operator with an `on (a, b)` join handler | specified |
-| `Router` | Multi-route Operator | specified ; route lowering must preserve the static topology contract |
-| `Fanout` | not part of the surface | broadcast is the atomic multi-emit statement `(a, b, c) = x` ; see [Dynamic dispatch primitives](#dynamic-dispatch-primitives-router-dispatch) |
-| `Dispatch` | Keyed sub-graph composition | specified ; key expression and lifecycle rules are normative |
+| `Jaq` | future Operator NodeType (jq guest over structured values) | frontend is registered; full Operator engine remains deferred |
+| `Sql` | future Operator NodeType (SQL guest over the table view of `array<struct>`) | planned guest; not in the initial executable slice |
+| Reducer pattern | ordinary Operator with `var`, optionally keyed | executable without an annotation |
+| Aggregator pattern | Reducer with `instance.key` | executable without an annotation |
+| Window pattern | stateful owner with a finite `lifetime` | processing-time profiles executable; sliding/event-time deferred |
+| Joiner pattern | Operator with an `on (a, b)` join handler | executable without an annotation |
+| Router pattern | conditional emission to declared output ports | generic conditional-emission source form remains deferred; `: Router` refuses |
+| Fanout pattern | atomic multi-emit statement `(a, b, c) = x` | executable; no NodeType |
+| Dispatch pattern | Graph carrying `instance.key` | executable; no NodeType |
 | `Saga` (aspect) | Saga aspect — opt-in scoping for long-running compensation-based workflows (model in [`effects-and-sagas.md`](effects-and-sagas.md), generic mechanism in [`aspects.md`](aspects.md)) | grammar specified; runtime manager requires effective `durability >= local` |
 | `Loop` (aspect) | Loop aspect — bounded tail-recursive iteration (retry / convergent / counted), spec in [`loop.md`](loop.md) | grammar specified ; runtime support is deferred |
 | `-> nothing` | Discard sink (built-in) | not a node — `nothing` as an edge target ; non-blocking drain |
@@ -1293,12 +1275,13 @@ Required Rust extensions for the parser to land :
 
 | Term | Meaning |
 |---|---|
-| `graph` | Graph declaration keyword. Compiles to the Rust `Graph` type. |
-| Operator | Family of Nodes whose computation is internal to the graph. May be pure or stateful. Concrete types end in `-Operator` (`JaqOperator`, `WasmOperator`, …). |
-| Connector | Family of Nodes that talk to an external system. Same shape as Operator plus boundary attributes (URL/path/command, `codec`, protocol, timeout, auth). Concrete types end in `-Connector` (`HttpClient`, `ProcessConnector`, …). |
-| Operator parameterization | Four orthogonal choices — Node-local `var` state, optional `instances.key`, optional `lifetime`, and the handler trigger (`on <port>` vs the `on (a, b)` join) — that cover the named patterns (Reducer, Aggregator, Window, Joiner). See [Operator parameterization](#operator-parameterization--state--instances--lifetime--transaction). |
-| Stdlib aliases | Short names exposed by the stdlib for frequent Operator parameterizations : `Jaq`, `Reducer`, `Aggregator`, `Window`, `Joiner`, `HttpClient`, `Process`, etc. The compiler resolves them to configurations of the primitive `operator` or to native `Connector` types. |
-| Dynamic primitives | The two runtime-decision nodes : Router, Dispatch. They preserve topology staticity. Broadcast is the inline `(a, b, c) = x` statement. See [Dynamic dispatch primitives](#dynamic-dispatch-primitives-router-dispatch). |
+| `graph` | Graph declaration keyword; fixes `node::Kind::Graph`. |
+| Operator | Node kind whose computation is internal to the graph; its default NodeType is `Operator`. |
+| Connector | Node kind that talks to an external system; its exact contract id determines the mandatory NodeType. |
+| NodeType | The one effective implementation/contract compatible with a Node kind (`App`, `Operator`, `Process`, …). |
+| NodeAspect | An optional orthogonal orchestration protocol (`Loop`, `Saga`), never a replacement NodeType. |
+| Operator parameterization | Four orthogonal choices — Node-local `var`, optional `instance.key`, optional `lifetime`, and ordinary/join handler — covering the Reducer/Aggregator/Window/Joiner guide patterns. |
+| Dynamic patterns | Router = conditional ordinary emissions; Dispatch = keyed Graph; Fanout = atomic multi-emit. None is a NodeType. |
 | Instance | One logical execution context of a Node owner. Its address is the owner path plus the outer-to-inner stack of keyed instance frames. A singleton owner has no local key frame. See [instances.md](instances.md). |
 | Lifetime | The policy that says when an instance closes. It is independent from key selection: keyed and singleton owners may both be persistent or finite-lived. |
 | State read-modify-write | **Imperative within a transaction.** `x` (bare in DSL, or `$x` inside `jq! { … }`) starts at the value the previous transaction committed (or the default); assignments mutate it in place, so later reads see the new value (RHS = Rastok expression; no `++`-style shortcuts). The transaction commits atomically at its end. The Lustre `pre` is *inter-transaction*, not intra. |
@@ -1311,7 +1294,7 @@ Required Rust extensions for the parser to land :
 | Endpoint | Connector that owns an external resource address/lifecycle and declares explicit envelope ports. |
 | `scenario` | one executable case inside a `simulation` : a fixture (the scripted world-half of the journal) + expectations. See simulation-semantics.md. |
 | `mock` | scenario/simulation-level stand-in for a calling Connector — its body is ordinary handler grammar (+ `after`). Replaces the Driver, not the bookkeeping. |
-| Multi-tenancy | Expressed by a keyed owner (`instances = { key = … }`). The runtime materializes one logical instance per canonical key and may assign each keyed boundary to an independent virtual shard. Environmental isolation and physical placement remain outside this grammar. |
+| Multi-tenancy | Expressed by a keyed owner (`instance = { key = … }`). The runtime materializes one logical instance per canonical key and may assign each keyed boundary to an independent virtual shard. Environmental isolation and physical placement remain outside this grammar. |
 
 ## Formal grammar
 
@@ -1495,24 +1478,19 @@ top_decl          ::= graph_decl                       // incl. the one `: App` 
 // A graph instantiates by declaration and wires by name ; the entry point is
 // the `: App`-annotated graph ; `app` is a pre-bound identifier for it.
 
-graph_decl        ::= "graph" IDENT ( ":" type_annotation )? "{" graph_body "}"    // declaration = instantiation; common Node attributes carry instances/lifetime
+graph_decl        ::= "graph" IDENT ( ":" node_annotation )? "{" graph_body "}"    // declaration = instantiation; common Node attributes carry instance/lifetime
 
-operator_decl     ::= "operator" IDENT ( ":" type_annotation )? operator_body
-connector_decl    ::= "connector" IDENT ":" type_annotation operator_body
+operator_decl     ::= "operator" IDENT ( ":" node_annotation )? operator_body
+connector_decl    ::= "connector" IDENT ":" node_annotation operator_body
 
-// `type_annotation` is a `+`-joined list of stdlib symbols. Each symbol is
-// classified by the type checker as a *trait* (Connector NativeType or Operator
-// stdlib alias), an *aspect* (Saga, Loop — see aspects.md), or a *role*
-// (`App` — graph-only, marks the deployment entry point). Rules :
-//   - Connector : exactly one trait (MANDATORY — an external boundary is explicit),
-//     zero or more aspects. No implicit type.
-//   - Operator  : implicit canonical type `Operator` ; at most one stdlib alias,
-//     zero or more aspects (`operator auth {}` ≡ `operator auth : Operator {}`).
-//   - Graph     : implicit canonical type `Graph`, optionally specialized by the
-//     role `App` and/or aspects (`graph g {}` ≡ `graph g : Graph {}`).
-//   - Same name twice in the list = compile error ; at most one role.
-// Convention : trait/role first, aspects after.
-type_annotation   ::= IDENT ( "+" IDENT )*
+// `node_annotation` is one optional NodeType FIRST, then NodeAspects.
+// The checker owns classification and compatibility (aspects.md):
+//   - Connector: one mandatory exact contract NodeType, then aspects.
+//   - Operator: implicit/explicit `Operator` (or a registered pure engine), then aspects.
+//   - Graph: implicit/explicit `Graph`, unique root `App`, then aspects.
+// Duplicate, unknown, misordered, or incompatible symbols refuse as
+// E-NODE-ANNOTATION. Known but unimplemented aspects refuse by their named gate.
+node_annotation   ::= IDENT ( "+" IDENT )*
 
 operator_body     ::= "{" ( port_decl | val_decl | var_decl
                           | handler_decl | attribute )* "}"
@@ -1524,17 +1502,20 @@ graph_body        ::= ( port_decl | operator_decl | connector_decl
                        | defaults_block
                        | graph_decl                            // graphs NEST (effects-and-sagas §7.2)
                        | attribute                             // aspect attributes : Saga.timeout = duration("10m"), name = …
-                       | handler_decl )*                        // graph-level handlers (including Loop base cases)
+                       | handler_decl )*                        // graph-level handlers; Loop decisions are ordinary `next` / `out` emissions
 
 type_decl         ::= "type" IDENT "=" type_ref                   // TOP-LEVEL only ; one namespace per unit ; duplicates refuse ;
                                                                   //   recursion refuses (v1) ; budgets: depth ≤ MAX_NESTING, expanded
                                                                   //   tree ≤ 4096 nodes, ≤ 256 fields/struct, ≤ 64 KiB (D-2026-08-10-8)
 
-// A Node carrying `: Loop` must have exactly one qualified attribute:
-//   Loop.variant = { kind = measure, initial = 5, next = value - 1, until = value <= 0 }
-// This uses the ordinary `attribute` and `braced_value` productions
-// (D-2026-08-12-1 — the discriminant is a closed-choice field). Semantic
-// validation of the fields and bounds is specified in loop.md §2/§8.
+// A Graph carrying `: Loop` uses ordinary qualified attributes:
+//   Loop.fuel = 5
+//   Loop.delay = { kind = exponential; first = duration("100ms");
+//                  ceiling = duration("5s") }
+// `Loop.invariant` and `Loop.measure` are theorem positions and remain
+// fail-closed until their proof-certificate gate lands. `Loop.jitter` is
+// reserved. Semantic validation, the contributed `next`/`expired` ports and
+// the removal of `Loop.variant`/`Loop.backoff` are specified in loop.md.
 
 port_decl         ::= ( "input" | "output" ) IDENT ( ":" type_ref )?  // source annotation OPTIONAL; every validated port has an effective type
                     // in / out / err are conventional spellings and use this same model; only used/declared rows materialize in the resolved plan.
@@ -1547,20 +1528,18 @@ port_decl         ::= ( "input" | "output" ) IDENT ( ":" type_ref )?  // source 
 val_decl          ::= "val" IDENT ( ":" type_ref )? "=" value        // immutable, scope by position
 var_decl          ::= "var" IDENT ":" type_ref ( "=" value )?        // mutable state owned by this Node; never inherited by child Nodes
 
-handler_decl      ::= "on" trigger guard_clause* handler_body?
-                    // handler_body is OPTIONAL :
-                    // a BODY-LESS handler is the Loop BASE-CASE declaration
-                    // (`on exit where data is Exited` — loop.md §3) ; compile rule :
-                    // body-less handlers are legal ONLY on nodes carrying `: Loop`.
-                    // The ITERATING case carries a body, possibly empty :
-                    // `on exit where data is TimeoutExpired { }`.
+handler_decl      ::= "on" trigger guard_clause* handler_body
+                    // A handler always has a body. Loop has no body-less base-case
+                    // declaration: every reachable traversal emits exactly one of
+                    // `next` or `out`. The parser retains the removed body-less form
+                    // only as a recovery node so the checker can issue one migration.
 trigger           ::= "start"
                     | "stop"
                     | "compensate"                                   // compensation event on a `compensable` Connector — see effects-and-sagas.md
-                    | IDENT "." ( "start" | "stop" )                 // ASPECT-QUALIFIED lifecycle : on Loop.start { … } —
-                                                                     //   bare start/stop bind to the NODE ; the aspect qualifies (aspects.md §6)
                     | "(" IDENT ( "," IDENT )* ")"                   // join : presence of all named ports
                     | IDENT                                          // single port
+                    // The parser consumes removed `Aspect.start` / `Aspect.stop`
+                    // triggers for a named migration; they are not productions.
 guard_clause      ::= "where" expr                                   // content predicate (Tier 1 = 1 port, Tier 2 = ≥2)
                     | "having" expr                                  // aggregate predicate (quorum, e.g. count(p) >= k) — parsed, named-deferred in R6
                     | "within" expr                                  // join time window (optional ; positive constant duration)
@@ -1568,8 +1547,7 @@ guard_clause      ::= "where" expr                                   // content 
                     // Join ports are distinct declared inputs. Their source order fixes bindings and identity.
                     // A bounded join declares `output expired: union { JoinExpired {} }` exactly in R6.
                     // Join expressions use `<port>.data` / `<port>.meta`; bare `data` and `out = .` refuse.
-                    // `by` is removed: another correlation domain is another `instances.key` owner.
-                    // A `where` clause on any selected outcome input may define the Loop base case when the enclosing node carries `: Loop` — see loop.md §3.
+                    // `by` is removed: another correlation domain is another `instance.key` owner.
 handler_body      ::= "{" ( val_decl | statement )* "}"
 statement         ::= "(" lvalue ( "," lvalue )* ")" "=" tuple_or_broadcast   // atomic multi-emit — `(` decides ; tuple = explicit per-port ; broadcast = same value everywhere (`Fanout` is not a surface alias)
                     | "stop"                                          // close the current Node instance after this transaction commits
@@ -1596,7 +1574,7 @@ assignment_tail   ::= ( ":" type_ref )? "=" value                     // the con
                     // parenthesized expression value is legal only in a VALUE position.
                     // A malformed multi-emit recovers forward at the statement
                     // boundary — no tentative parse, syntactic predicate, or rewind.
-path_tail         ::= ( "." ( IDENT | TYPE_KW | LITERAL_KW ) )*       // the dotted walk shared by lvalues and expression prefixes ; reserved segments after a dot permit qualified names such as Loop.variant and stdlib ports such as store.read
+path_tail         ::= ( "." ( IDENT | TYPE_KW | LITERAL_KW ) )*       // the dotted walk shared by lvalues and expression prefixes ; reserved segments after a dot permit qualified names such as Loop.fuel and stdlib ports such as store.read
 lvalue            ::= IDENT path_tail                                 // assignment target: port, var, or dotted writable meta/data path — meta.sys is read-only, never an lvalue
 tuple_or_broadcast ::= "(" value ( "," value )* ")"                    // explicit tuple — one value per lvalue, counts must match
                     | value                                            // broadcast — same value to every lvalue
@@ -1638,7 +1616,7 @@ tagged_case       ::= IDENT ( "{" ( field_decl ( ","? field_decl )* )? "}" )?
 field_name        ::= IDENT | TYPE_KW                                 // field NAMES may reuse type words (`text: text`,
                                                                       //   `kind: text`) — position disambiguates
 
-attribute         ::= lvalue "=" value                               // dots = owner qualification ONLY (Loop.backoff = …)
+attribute         ::= lvalue "=" value                               // dots = owner qualification ONLY (Loop.delay = …)
 struct_body       ::= ( attr_entry ( ","? attr_entry )* )?
 attr_entry        ::= lvalue "=" value                               // dotted key for an assignment (meta.app.label = … ; meta.sys is read-only)
 // sub_block (IDENT "{" struct_body "}") is a DEAD form (D-2026-08-12-1):
@@ -1967,7 +1945,7 @@ parser never needs to peek further than one token.
 | `graph_body` | `{` | `edge_decl` (branch_source) |
 | `graph_body` | `graph` / `operator` / `connector` / `val` / `var` / edge starts | the matching declaration (graphs nest; a Graph `var` remains private to the Graph's own handlers) |
 | `graph_body` | `input` / `output` | `port_decl` |
-| `graph_body` | `on` | `handler_decl` (graph-level — Loop base cases) |
+| `graph_body` | `on` | `handler_decl` (graph-level handler) |
 | `graph_body` | `graph` | nested `graph_decl` |
 | `graph_body` | IDENT (dotted ok) — next is `=` | `attribute` (`Saga.timeout = duration("10m")`, `name = …`) |
 | `operator_body` | `input` / `output` | `port_decl` |
@@ -2010,7 +1988,7 @@ symbol of lookahead after the IDENT is consumed. The parser never needs to
   use `name!`; a bare `name` remains an identifier. `@` is unallocated
   and may later introduce schema classification, not guest dispatch.
 - **Separators are Scala-style, scoped by bracket.** Inside a **`{ }` block**
-  (node body, composite attribute such as `instances`/`lifetime`, struct), a newline
+  (node body, composite attribute such as `instance`/`lifetime`, struct), a newline
   terminates each statement / attribute and **`;` is the optional same-line
   separator** (`{ kind = idle ; after = duration("2h") }`). Inside **`( … )`** (compact
   values and argument lists) items are separated by **`,`**

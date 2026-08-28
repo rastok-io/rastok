@@ -39,7 +39,7 @@ narrowing and type domain are not described as upstream CEL behavior.
 
 `instance` is a reserved contextual root, like `data` and `meta`. Its
 currently admitted member is `instance.key`, available only while checking or
-running a Node that declares `instances.key`. It denotes that owner's local
+running a Node that declares `instance.key`. It denotes that owner's local
 selected key; it never searches an ancestor and never becomes null. An
 enclosing Graph passes such context to descendants through an immutable
 lexical `val`.

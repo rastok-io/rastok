@@ -15,7 +15,7 @@ use crate::boundary::{
     OutputOverflowReason, ProcessExit, RequestPreparation, Response, SchedulerCompletion,
 };
 use crate::envelope::{Data, Envelope, Value};
-use crate::plan::{AttrSetting, NodeKind};
+use crate::plan::{AttrSetting, NodeExecution};
 use std::io::Read;
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -133,7 +133,7 @@ impl ProcessRequestBindings {
                     reason: ProcessSettingsError::Unresolved("connector binding path"),
                 });
             };
-            let NodeKind::Connector(spec) = &node.kind else {
+            let NodeExecution::Connector(spec) = &node.execution else {
                 return Err(ProcessBindError {
                     node: path.clone(),
                     reason: ProcessSettingsError::Unresolved("connector binding kind"),

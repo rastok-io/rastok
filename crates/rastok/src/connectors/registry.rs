@@ -1476,9 +1476,9 @@ graph mixed : App {
         .expect("the routing probe compiles");
         let mut raw = compilation.plan.plan().clone();
         for planned in &mut raw.nodes {
-            let Some(spec) = (match &mut planned.kind {
-                crate::plan::NodeKind::Connector(spec) => Some(spec),
-                crate::plan::NodeKind::Operator => None,
+            let Some(spec) = (match &mut planned.execution {
+                crate::plan::NodeExecution::Connector(spec) => Some(spec),
+                crate::plan::NodeExecution::Operator => None,
             }) else {
                 continue;
             };
@@ -1507,7 +1507,7 @@ graph mixed : App {
             .iter_mut()
             .find(|planned| planned.path.to_string() == "first")
             .expect("the first connector exists");
-        let crate::plan::NodeKind::Connector(spec) = &mut first.kind else {
+        let crate::plan::NodeExecution::Connector(spec) = &mut first.execution else {
             panic!("the first node is a connector")
         };
         spec.exchange = ConnectorExchange::Session;
@@ -1539,7 +1539,7 @@ graph inbound : App {
             .iter_mut()
             .find(|planned| planned.path.to_string() == "source")
             .expect("the source connector exists");
-        let crate::plan::NodeKind::Connector(spec) = &mut source.kind else {
+        let crate::plan::NodeExecution::Connector(spec) = &mut source.execution else {
             panic!("the source node is a connector")
         };
         spec.contract = ConnectorId::parse("test/event-source@1").unwrap();
@@ -2180,7 +2180,7 @@ graph api : App {
   connector server : HttpServer {
     listen = "127.0.0.1:8080"
     codec = text
-    instances = { key = data }
+    instance = { key = data }
   }
   operator relay { input in: text ; on in { out = "response" } }
   server -> relay -> .
@@ -2210,7 +2210,7 @@ graph api : App {
             .nodes
             .get_mut(server_slot.index())
             .expect("the server node exists");
-        let crate::plan::NodeKind::Connector(spec) = &mut server.kind else {
+        let crate::plan::NodeExecution::Connector(spec) = &mut server.execution else {
             panic!("the server node is a connector")
         };
         spec.contract = ConnectorId::parse("test/inbound-call@1").unwrap();

@@ -436,11 +436,14 @@ impl ExecutionPlan {
     }
 }
 
-/// What a planned node is — the valid states, and only those: an
-/// operator never carries a connector spec, a connector never lacks
-/// one.
+/// Executable payload carried by one planned node.
+///
+/// This is deliberately not the semantic [`node::Kind`]. Graphs live in the
+/// owner table rather than the executable-node table; an executable Operator
+/// carries no extra payload, while an executable Connector must carry its
+/// exact contract specification.
 #[derive(Debug, Clone, PartialEq)]
-pub enum NodeKind {
+pub enum NodeExecution {
     /// Pure graph-internal computation.
     Operator,
     /// External-effect Driver under a contract sheet.
@@ -452,8 +455,8 @@ pub enum NodeKind {
 pub struct Node {
     /// Root-relative address — id-recipe material.
     pub path: node::Path,
-    /// What the node is.
-    pub kind: NodeKind,
+    /// Family-specific executable payload.
+    pub execution: NodeExecution,
     /// The node's materialized port table, in canonical order. Every resolved
     /// Connector contract row is present and typed; Operator rows record
     /// source/inferred constraints. The total effective types, including
@@ -468,12 +471,30 @@ pub struct Node {
 }
 
 impl Node {
+    /// The node's structural semantic kind.
+    #[must_use]
+    pub const fn kind(&self) -> node::Kind {
+        match self.execution {
+            NodeExecution::Operator => node::Kind::Operator,
+            NodeExecution::Connector(_) => node::Kind::Connector,
+        }
+    }
+
+    /// The node's effective semantic type.
+    #[must_use]
+    pub fn ty(&self) -> node::Type {
+        match &self.execution {
+            NodeExecution::Operator => node::Type::Operator,
+            NodeExecution::Connector(spec) => node::Type::Connector(spec.contract.clone()),
+        }
+    }
+
     /// The connector configuration, when the node is a connector.
     #[must_use]
     pub fn connector(&self) -> Option<&ConnectorSpec> {
-        match &self.kind {
-            NodeKind::Connector(spec) => Some(spec),
-            NodeKind::Operator => None,
+        match &self.execution {
+            NodeExecution::Connector(spec) => Some(spec),
+            NodeExecution::Operator => None,
         }
     }
 }

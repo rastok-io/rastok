@@ -118,7 +118,7 @@ fn bare_operator_plan() -> ExecutionPlan {
         ],
         nodes: vec![plan::Node {
             path: rastok::node::Path::new(["worker"]).unwrap(),
-            kind: plan::NodeKind::Operator,
+            execution: plan::NodeExecution::Operator,
             ports: vec![],
             vars: vec![],
             owner: plan::OwnerSlot::new(1),
@@ -736,9 +736,9 @@ fn a_dynamic_attribute_cannot_claim_a_later_phase_for_a_literal() {
         .iter_mut()
         .find(|node| node.path.to_string() == "shell")
         .expect("the Process node");
-    let spec = match &mut shell.kind {
-        plan::NodeKind::Connector(spec) => spec,
-        plan::NodeKind::Operator => panic!("shell is a connector"),
+    let spec = match &mut shell.execution {
+        plan::NodeExecution::Connector(spec) => spec,
+        plan::NodeExecution::Operator => panic!("shell is a connector"),
     };
     let (_, command) = spec
         .attributes
@@ -770,9 +770,9 @@ fn a_dynamic_attribute_requires_a_registry_free_contract_authority() {
         .iter_mut()
         .find(|node| node.path.to_string() == "shell")
         .expect("the connector node");
-    let spec = match &mut shell.kind {
-        plan::NodeKind::Connector(spec) => spec,
-        plan::NodeKind::Operator => panic!("shell is a connector"),
+    let spec = match &mut shell.execution {
+        plan::NodeExecution::Connector(spec) => spec,
+        plan::NodeExecution::Operator => panic!("shell is a connector"),
     };
     spec.contract = rastok::connector::ConnectorId::parse("test/custom@1").unwrap();
     spec.attributes = vec![(
@@ -822,9 +822,9 @@ fn instance_values_and_authorized_connector_settings_share_one_phase_judge() {
         .iter_mut()
         .find(|node| node.path.to_string() == "shell")
         .expect("the Process node");
-    let spec = match &mut shell.kind {
-        plan::NodeKind::Connector(spec) => spec,
-        plan::NodeKind::Operator => panic!("shell is a connector"),
+    let spec = match &mut shell.execution {
+        plan::NodeExecution::Connector(spec) => spec,
+        plan::NodeExecution::Operator => panic!("shell is a connector"),
     };
     let (_, command) = spec
         .attributes
@@ -994,7 +994,7 @@ fn a_process_plan_cannot_omit_the_effective_err_codec() {
         .iter_mut()
         .find(|node| node.path.to_string() == "shell")
         .expect("the Process node");
-    let rastok::plan::NodeKind::Connector(shell) = &mut shell.kind else {
+    let rastok::plan::NodeExecution::Connector(shell) = &mut shell.execution else {
         panic!("the Process spec");
     };
     shell.attributes.retain(|(name, _)| name != "err_codec");
@@ -1277,7 +1277,7 @@ fn a_duplicated_connector_attribute_refuses() {
         .iter_mut()
         .find(|node| node.path.to_string() == "shell")
         .expect("the connector");
-    let rastok::plan::NodeKind::Connector(spec) = &mut shell.kind else {
+    let rastok::plan::NodeExecution::Connector(spec) = &mut shell.execution else {
         panic!("a connector");
     };
     let first = spec.attributes[0].clone();
@@ -2092,7 +2092,7 @@ fn attribute_name() -> String {
         .iter()
         .find(|node| node.path.to_string() == "shell")
         .expect("the connector");
-    let rastok::plan::NodeKind::Connector(spec) = &shell.kind else {
+    let rastok::plan::NodeExecution::Connector(spec) = &shell.execution else {
         panic!("a connector");
     };
     spec.attributes[0].0.clone()

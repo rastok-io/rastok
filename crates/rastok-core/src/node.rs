@@ -14,6 +14,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
+use crate::connector::ConnectorId;
 use crate::datatype::{DataType, StructType, TaggedCase, TaggedUnionType, TypeError};
 
 /// Error returned when a name would break the vocabulary's structural
@@ -186,6 +187,114 @@ impl fmt::Display for Kind {
             Self::Connector => "connector",
             Self::Graph => "graph",
         })
+    }
+}
+
+/// One node's effective semantic type.
+///
+/// [`Kind`] fixes the declaration's structural family. `Type` fixes the
+/// contract within that family. Graph and Operator have canonical defaults;
+/// a Connector always names its exact versioned contract.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Type {
+    /// Ordinary composite graph.
+    Graph,
+    /// The deployed unit's unique root graph.
+    App,
+    /// Ordinary pure graph-internal operator.
+    Operator,
+    /// External boundary under the given versioned contract.
+    Connector(ConnectorId),
+}
+
+impl Type {
+    /// The only node kind that may carry this type.
+    #[must_use]
+    pub const fn kind(&self) -> Kind {
+        match self {
+            Self::Graph | Self::App => Kind::Graph,
+            Self::Operator => Kind::Operator,
+            Self::Connector(_) => Kind::Connector,
+        }
+    }
+}
+
+impl fmt::Display for Type {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Graph => formatter.write_str("Graph"),
+            Self::App => formatter.write_str("App"),
+            Self::Operator => formatter.write_str("Operator"),
+            Self::Connector(contract) => contract.fmt(formatter),
+        }
+    }
+}
+
+/// Closed stdlib aspect vocabulary.
+///
+/// An aspect never replaces a [`Type`]. It adds a separately validated
+/// orchestration protocol to a node that already has one effective type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Aspect {
+    /// Finite temporal recursion over one Graph boundary.
+    Loop,
+    /// Journal-folded compensation workflow.
+    Saga,
+}
+
+impl Aspect {
+    /// Resolves one exact source spelling.
+    #[must_use]
+    pub const fn from_source_name(name: &str) -> Option<Self> {
+        match name.as_bytes() {
+            b"Loop" => Some(Self::Loop),
+            b"Saga" => Some(Self::Saga),
+            _ => None,
+        }
+    }
+
+    /// The canonical source spelling.
+    #[must_use]
+    pub const fn source_name(self) -> &'static str {
+        match self {
+            Self::Loop => "Loop",
+            Self::Saga => "Saga",
+        }
+    }
+}
+
+impl fmt::Display for Aspect {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.source_name())
+    }
+}
+
+#[cfg(test)]
+mod taxonomy_tests {
+    use super::{Aspect, Kind, Type};
+    use crate::connector::ConnectorId;
+
+    #[test]
+    fn every_node_type_has_one_structural_kind() {
+        let connector = ConnectorId::parse("rastok/process@1").expect("canonical connector id");
+        let cases = [
+            (Type::Graph, Kind::Graph),
+            (Type::App, Kind::Graph),
+            (Type::Operator, Kind::Operator),
+            (Type::Connector(connector), Kind::Connector),
+        ];
+        for (ty, expected) in cases {
+            assert_eq!(ty.kind(), expected);
+        }
+    }
+
+    #[test]
+    fn aspect_source_names_are_closed_and_canonical() {
+        for aspect in [Aspect::Loop, Aspect::Saga] {
+            assert_eq!(Aspect::from_source_name(aspect.source_name()), Some(aspect));
+        }
+        assert_eq!(Aspect::from_source_name("Effect"), None);
+        assert_eq!(Aspect::from_source_name("loop"), None);
     }
 }
 

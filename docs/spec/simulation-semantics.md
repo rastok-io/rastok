@@ -166,7 +166,7 @@ orders.out = { meta.ext.user_id = "alice", data = { kind = "message" } }
 
 // MOCK = a scripted stand-in whose body is HANDLER grammar — nothing new
 mock bank {
-  on in where meta.sys.iter_count == 0 {
+  on in where data.attempt == 0 {
     after duration("12s")                                       // ← the ONE addition : dated emission
     out = { data = { status = "charged" } }
   }
@@ -228,9 +228,10 @@ is `.` (`out = .`).
   atomically, exactly like the real boundary.
 - **Deterministic and stateless** : a mock is a pure function of the
   request envelope ; `after <duration>` joins the dated-events queue (swept
-  by `advance`) ; `meta.sys.iter_count` covers retry branching (sim 3). A
-  per-mock invocation counter is a noted open point, admitted only if a real
-  case demands it.
+  by `advance`). A Loop that needs distinct scripted attempts carries the
+  attempt in its explicit `next` state (sim 3); there is no hidden mock or
+  `meta.sys` counter. A per-mock invocation counter remains an open point,
+  admitted only if a real case demands it.
 - Sources need no mock (the fixture injects) ; only calling Connectors do.
 
 ### 5.2 Expectations
@@ -387,7 +388,7 @@ outcome surface of an app is **statically enumerable** :
   bounded-Closing cancellation has its typed `OutcomeUnknown` case (an
   `irreversible` is always keyed and resolves by recall), every `compensable`
   its failing-compensation case,
-  every retry Loop its `LoopExhausted`, every saga its `rollback_failed` ;
+  every retry Loop its `LoopExpired`, every saga its `rollback_failed` ;
 - the expression checker already emits its **residual obligations** (bare
   `meta.app` reads, `.orValue()` branches, fallible narrows).
 
@@ -398,7 +399,7 @@ So the compiler can print the checklist, and the simulator can score it :
    23 enumerated cases · 14 covered by a scenario · 9 silent :
      hold       : OutcomeUnknown        — no scenario   (compensable, no key)
      settle     : JoinExpired           — no scenario
-     pay        : LoopExhausted         — no scenario   (retry Loop)
+     pay        : LoopExpired           — no scenario   (retry Loop)
      …
 ```
 

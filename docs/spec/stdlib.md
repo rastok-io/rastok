@@ -24,13 +24,13 @@ promise — so that the compiler, the simulator, the coverage checklist and the
 future runtime all read the same contract?**
 
 
-## 1. The Connector contract — ten mandatory cases
+## 1. The Connector NodeType contract — ten mandatory cases
 
-Every Connector trait is specified by the same template. No case is
+Every Connector NodeType is specified by the same template. No case is
 optional — a Connector whose contract leaves a case blank is not spec'd:
 
 Every admitted sheet also has one canonical versioned `ConnectorId` and a
-closed required Driver-role fact. The source-facing trait name is ergonomic
+closed required Driver-role fact. The source-facing NodeType name is ergonomic
 syntax; the id and effective roles are the semantic facts transported by the
 plan. Physical crates, features, libraries, Hosts and Workers are never
 contract identity.
@@ -40,12 +40,12 @@ contract identity.
 | 1 | **Role** | what it bridges (a protocol, a process, time) |
 | 2 | **Direction** | inbound source / outbound caller / both / sink |
 | 3 | **Ports** | `in`/`out`/`err`/`exit` conventions + extras, with types |
-| 4 | **`effect`** | pre-declared by the trait, or per-instance (dev-declared) |
+| 4 | **`effect`** | pre-declared by the contract, or per-instance (dev-declared) |
 | 5 | **`behavior`** | deterministic / probabilistic — §2; pre-declared or per-instance |
 | 6 | **Attributes** | the config surface with a contract-declared latest evaluation site (plan, boot, instance, or invocation); checking chooses the earliest legal actual site and transports it; `env()`/`secret()` are boot-only, while `timeout`/`on_timeout`/`restart` apply where calls/instances exist |
 | 7 | **Correlator** | what one invocation or session is in its protocol, and how messages/answers find it (execution-model §6.1: the Connector matches) |
 | 8 | **Outcome coverage** | the finite typed cases each output may emit and the completion rule the future `rastok simulate --coverage` enumerates |
-| 9 | **Instances** | singleton / `instances.key` (each resource run may have a `run_id`) / per-invocation or per-session; Node-instance closing policy and each exchange's terminal exit |
+| 9 | **Instances** | singleton / `instance.key` (each resource run may have a `run_id`) / per-invocation or per-session; Node-instance closing policy and each exchange's terminal exit |
 | 10 | **Journal & sim** | which records it writes (INBOUND w/ `inbound_seq`; OUTBOUND open-closed); how it is mocked/injected |
 
 Case 8 deserves the emphasis: coverage must enumerate the cases a
@@ -68,8 +68,8 @@ individual terminal exits. An invocation correlates zero or more output
 frames with one `exit`; a session correlates messages in both directions with
 one session `exit`, never one exit per message (D-2026-08-25-1).
 
-**Naming rule**: stdlib traits carry **no suffix** — the keyword already says
-it (`connector c: Clock`). Applies to all future traits too (`Postgres`,
+**Naming rule**: stdlib Connector NodeTypes carry **no suffix** — the keyword already says
+it (`connector c: Clock`). Applies to all future contract types too (`Postgres`,
 `S3`, …).
 
 
@@ -93,7 +93,7 @@ external system's semantic function** —
                                        (a distribution is sampled)
 ```
 
-- **Pre-declared** where the trait imposes it: `Clock`, `Calendar`,
+- **Pre-declared** where the Connector NodeType imposes it: `Clock`, `Calendar`,
   `Memory`, `HttpServer` = `deterministic`.
 - **Per-instance, mandatory** on `HttpClient` and `Process` (only the dev
   knows who answers). Forgetting it = compile refusal, like `effect`.
@@ -206,7 +206,7 @@ request.
 | Attributes | required invocation `url: text`; invocation `method: text = "GET"`, optional typed `headers`, open `custom_headers`, `auth_bearer`, `idempotency_key`; required plan `codec`; plan `max_body: ByteSize = "8MiB"` bounds request and response bodies; required positive instance `timeout`; optional instance `tls_ca`, plus paired `tls_certificate`/`tls_private_key`; ordered plan `versions = ["http/3", "http/2", "http/1.1"]`; `zero_rtt = disabled` |
 | Correlator | protocol-native: HTTP request ↔ response |
 | Outcome cases | `Completed { status: int }`, `DnsFailed`, `ConnectFailed`, `TlsFailed`, `ProtocolFailed`, `TimeoutExpired`, `BodyTooLarge { limit: uint }`, `DecodeFailed`, `OutcomeUnknown` |
-| Instances | singleton by default; the common Node attribute `instances.key` may key the Connector |
+| Instances | singleton by default; the common Node attribute `instance.key` may key the Connector |
 | Journal / sim | method, resolved URL, canonical headers, exact body and idempotency material seal before OUTBOUND open; the family Lab twin scripts only the post-open outcome |
 
 The hosted H4 Driver attempts declared versions in order, skipping backends
@@ -358,7 +358,7 @@ truncated bytes never presented as the whole. Every observed exit emits
 compile error here. `timeout` = the whole-run budget; `on_timeout = kill`
 **forced** (bypassing a detached run is meaningless). `restart` is likewise
 a compile error on a job (re-running a possibly-irreversible one-shot is a
-graph decision — a Loop — never a supervisor reflex). `instances.key` still
+graph decision — a Loop — never a supervisor reflex). `instance.key` still
 orders one customer's conversions serially — it shares nothing. The safe
 default: zero hidden shared state.
 
@@ -397,7 +397,7 @@ matches an open call are its response (OUTBOUND closed, emitted on `out`,
 trigger `p:in`, parent = the request); non-matching lines are **spontaneous
 events** — INBOUND roots (the Process is also a source: codex
 notifications). Without `correlate`: pure streams (in = stdin sink, out =
-stdout source, no calls, no per-call timeout). `instances.key` = one logical
+stdout source, no calls, no per-call timeout). `instance.key` = one logical
 Node instance per canonical key (a codex per session), each with its `run_id`,
 terminal envelope and `restart` policy; without `instances` = the explicit
 shared singleton. Lazy
@@ -453,7 +453,7 @@ relative — vs calendar time — civil, absolute.)*
 | Attributes | `cap = <n>` (default 10 000 — bounded **by construction**), `overflow = evict_oldest (default, evictions journaled) \| reject` |
 | Correlator | each delivery to `in` or `read` is one operation; a read also completes with an `out` snapshot, and every operation has exactly one ordinary typed exit |
 | Outcome cases | every admitted append or read emits exactly one `MemoryExit`: `Completed` (with an `out` snapshot for a read), or `CapacityExceeded` when `overflow = reject` |
-| Instances | one store per declared Node instance and therefore per canonical key when the declaration uses `instances.key` |
+| Instances | one store per declared Node instance and therefore per canonical key when the declaration uses `instance.key` |
 | Journal / sim | content is Node state, recovered by folding appends and evictions at the Node's effective durability scope; reads and their snapshots are journaled and deterministic |
 
 `Memory` stores the incoming `data` value, not a magical copy of the whole
@@ -570,7 +570,7 @@ orphan write, discarded-and-journaled without misrouting or a second exit.
 | Attributes | required instance `url: text` and positive `handshake_timeout: duration`; required plan `codec`; plan `max_message: ByteSize = "8MiB"`, ordered `versions = ["http/3", "http/2", "http/1.1"]`, `zero_rtt = disabled`; optional instance typed `headers`, open `custom_headers`, `auth_bearer`, `subprotocols: array<text>`, `tls_ca`, and paired certificate/key bytes |
 | Correlator | v1 permits at most one live remote session per logical Node instance; no message-level request/reply correlation is invented |
 | Outcome cases | the same closed `WebSocketExit` authority as the server; an opening failure is the sole terminal of the attempted session |
-| Instances | singleton by default; `instances.key` creates independent client sessions; input after a terminal opens the successor session under explicit lifecycle policy |
+| Instances | singleton by default; `instance.key` creates independent client sessions; input after a terminal opens the successor session under explicit lifecycle policy |
 | Journal / sim | open and each write are journal-before-effect; ambiguous writes are not blindly replayed; Lab scripts peer messages and terminal races |
 
 Reconnection is not a Driver retry. A graph may route selected exit cases
@@ -578,38 +578,43 @@ through `Loop` to open a new session and may retransmit only under its
 application acknowledgement/idempotency protocol. The Driver never promises
 that a transport-level write means the peer application processed a message.
 
-## 4. Standard vocabulary over core Operator semantics
+## 4. Guide patterns over core Operator semantics
 
-These names expose common patterns without adding a second execution model:
+These names describe common patterns without adding a second execution model
+or another NodeType:
 
 | Name | Canonical core form |
 |---|---|
 | `Router` | one pure selector and a finite set of statically declared output ports |
 | `Reducer` | an Operator with Node-local `var` state |
-| `Aggregator` | a Reducer with `instances.key` |
+| `Aggregator` | a Reducer with `instance.key` |
 | `Joiner` | a multi-input handler using the ordinary join and bound rules |
-| `Dispatch` | the runtime role of a Graph carrying `instances.key` |
-| `Jaq` | a pure Operator whose computation is a pinned `jq! { ... }` guest program |
+| `Dispatch` | a Graph carrying `instance.key` |
+| `Jaq` | a future pure Operator NodeType whose computation is a pinned `jq! { ... }` guest program |
 
-They are deterministic by construction. Their names may improve diagnostics
-and generated diagrams, but the semantics below reduce to the same handlers,
-instance addresses, Node-local state, and edges as any other Operator or Graph.
+The pattern names may improve prose and generated diagrams, but they are not
+legal annotations. Their semantics are the visible handlers, instance
+addresses, Node-local state, ports, and edges of an ordinary Operator or Graph.
 
 ```rastok
-operator route : Router {
-  select = data.kind
+operator route {
+  input in: variant
+  output approval: variant
+  output rejection: variant
+  // Conditional emission to these declared ports is a named future source
+  // gate; `: Router` is deliberately refused as a pseudo-type.
 }
 
 route.approval -> accept
 route.rejection -> decline
 ```
 
-The selector returns one declared port name, or a list of declared names for
-a bounded multicast. An undeclared result is a typed routing error.
+The future generic conditional-emission form must select only declared ports;
+an undeclared destination can never become a runtime string lookup.
 
 ```rastok
-operator total : Reducer {
-  instances = { key = meta.app.account_id }
+operator total {
+  instance = { key = meta.app.account_id }
   var amount: decimal(18, 2) = 0
 
   on in {
@@ -619,14 +624,14 @@ operator total : Reducer {
 }
 ```
 
-`Reducer` adds no fold callback abstraction: state changes remain visible in
-the handler.
+The Reducer pattern adds no fold callback abstraction: state changes remain
+visible in the handler.
 
 ```rastok
 type JoinExpiry = union { JoinExpired {} }
 
-operator decide : Joiner {
-  instances = { key = meta.app.request_id }
+operator decide {
+  instance = { key = meta.app.request_id }
   lifetime = { kind = idle ; after = duration("48h") }
   output expired: JoinExpiry
 
@@ -645,11 +650,11 @@ operator decide : Joiner {
 The ordinary R6 join rules define correlation, bounds, and expiry. A bounded
 join declares the exact one-case `JoinExpiry` output shown above; retained
 facts leave through that ordinary typed port rather than disappearing. A
-`Joiner` cannot hide an unbounded buffer.
+The Joiner pattern cannot hide an unbounded buffer.
 
 ```rastok
 graph conversation {
-  instances = { key = meta.app.session_id }
+  instance = { key = meta.app.session_id }
   . -> classify -> answer -> .
 }
 ```
@@ -666,8 +671,9 @@ operator normalize : Jaq {
 }
 ```
 
-`Jaq` is available only when the jq guest is installed and pinned. It remains
-subject to the pure guest contract in §5.
+`Jaq` becomes an Operator NodeType only when its guest engine, contract,
+transport, and validation gate land. The `jq!` frontend alone does not imply
+that NodeType. It remains subject to the pure guest contract in §5.
 
 ## 5. The pure guest-program contract — six clauses
 
@@ -762,13 +768,13 @@ The surface reserves the following mapping:
 - **Prompt confidentiality**: internal prompts are hidden from the
   *caller* (a tool exposes its contract, not its insides) — never from
   *audit* (the journal sees everything). The onion rule.
-- **`McpClient` / `McpServer` are deferred first-class traits**. Plain REST
-  needs no dedicated trait; it lives in `HttpClient`/`HttpServer`.
+- **`McpClient` / `McpServer` are deferred first-class Connector NodeTypes**.
+  Plain REST needs no dedicated type; it lives in `HttpClient`/`HttpServer`.
 
 
 ## 8. Non-goals of this doc (deferred, with homes)
 
-- **Additional Connector traits**: `Postgres`, `Kafka`, `S3`, … —
+- **Additional Connector NodeTypes**: `Postgres`, `Kafka`, `S3`, … —
   same template, no suffixes. Their order follows executable use cases;
   runtime durability does not depend on an application Connector.
 - **`seeded`** behavior value.

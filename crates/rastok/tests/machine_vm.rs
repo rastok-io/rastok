@@ -554,7 +554,7 @@ fn a_graph_key_is_selected_once_and_metadata_rewrites_cannot_migrate_it() {
 graph rooted : App {
   input in: int
   output out: int
-  instances = { key = meta.sys.id }
+  instance = { key = meta.sys.id }
 
   operator first {
     input in: int
@@ -629,10 +629,10 @@ fn nested_graph_and_node_keys_form_one_state_address() {
 graph nested : App {
   input in: struct { tenant: text, user: int }
   output out: int
-  instances = { key = data.tenant }
+  instance = { key = data.tenant }
 
   operator counter {
-    instances = { key = data.user }
+    instance = { key = data.user }
     input in: struct { tenant: text, user: int }
     output out: int
     var count: int = 0
@@ -681,7 +681,7 @@ graph nested : App {
   graph sessions {
     input in: text
     output out: text
-    instances = { key = data }
+    instance = { key = data }
 
     operator greet {
       input in: text
@@ -1093,7 +1093,7 @@ graph keyed_join : App {
   output expired: JoinExpiry
 
   operator pair {
-    instances = { key = data }
+    instance = { key = data }
     input left: int
     input right: int
     output out: int
@@ -1408,7 +1408,7 @@ graph dynamic_binding : App {
         .iter_mut()
         .find(|node| node.path.to_string() == "shell")
         .expect("the Process node exists");
-    let rastok::plan::NodeKind::Connector(spec) = &mut shell.kind else {
+    let rastok::plan::NodeExecution::Connector(spec) = &mut shell.execution else {
         panic!("shell is a connector")
     };
     let (_, command) = spec
@@ -1461,7 +1461,7 @@ fn a_failed_instance_bundle_commits_no_ingress_start_or_effect() {
 graph failing_bundle : App {
   input in: int
   output out: int
-  instances = { key = data }
+  instance = { key = data }
 
   operator relay {
     input in: int
@@ -1518,7 +1518,7 @@ graph keyed : App {
   output out: int
 
   operator counter {
-    instances = { key = data }
+    instance = { key = data }
     input in: int
     output out: int
     var count: int = 0
@@ -1529,7 +1529,7 @@ graph keyed : App {
   }
 
   operator sink {
-    instances = { key = data }
+    instance = { key = data }
     input in: int
     output out: int
     on in { out = . }
@@ -1647,7 +1647,7 @@ graph lifecycle : App {
   output stopped: int
 
   operator counter {
-    instances = { key = data }
+    instance = { key = data }
     lifetime = { kind = idle ; after = duration("1s") }
     input in: int
     output out: int
@@ -1814,7 +1814,7 @@ graph nested_lifetimes : App {
   output exit
 
   connector shell : Process {
-    instances = { key = data }
+    instance = { key = data }
     lifetime = { kind = idle ; after = duration("1s") }
     closing = { drain_for = duration("1s") ; settle_for = duration("1s") }
     mode = job
@@ -1906,7 +1906,7 @@ graph draining : App {
     behavior = deterministic
   }
   operator collect {
-    instances = { key = data }
+    instance = { key = data }
     on in { out = . }
   }
 
@@ -2448,7 +2448,7 @@ graph keyed_fixed : App {
   input in: int
   output out: int
   operator relay {
-    instances = { key = data }
+    instance = { key = data }
     lifetime = { kind = fixed ; after = duration("1s") }
     on in { out = . }
   }

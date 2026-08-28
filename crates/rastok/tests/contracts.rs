@@ -304,9 +304,9 @@ fn forged_http_client_error(
 }
 
 fn connector_mut(node: &mut rastok::plan::Node) -> &mut rastok::plan::ConnectorSpec {
-    match &mut node.kind {
-        rastok::plan::NodeKind::Connector(spec) => spec,
-        rastok::plan::NodeKind::Operator => panic!("the test selected a connector"),
+    match &mut node.execution {
+        rastok::plan::NodeExecution::Connector(spec) => spec,
+        rastok::plan::NodeExecution::Operator => panic!("the test selected a connector"),
     }
 }
 
@@ -1007,7 +1007,7 @@ fn a_forged_file_sheet_never_becomes_a_valid_plan() {
     let source = file_graph("    mode = read\n    path = \"artifact.bin\"");
     let compilation = compile_one(&source).expect("the File read contract checks");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
-    let rastok::plan::NodeKind::Connector(spec) = &mut plan.nodes[0].kind else {
+    let rastok::plan::NodeExecution::Connector(spec) = &mut plan.nodes[0].execution else {
         panic!("the compiled node is the File connector")
     };
     spec.attributes.retain(|(name, _)| name != "path");
@@ -1024,7 +1024,7 @@ fn a_forged_file_sheet_never_becomes_a_valid_plan() {
     let dynamic = file_graph("    mode = read\n    path = data as text");
     let compilation = compile_one(&dynamic).expect("the dynamic File path checks");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
-    let rastok::plan::NodeKind::Connector(spec) = &mut plan.nodes[0].kind else {
+    let rastok::plan::NodeExecution::Connector(spec) = &mut plan.nodes[0].execution else {
         panic!("the compiled node is the File connector")
     };
     let Some(rastok::plan::AttrSetting::Expr { site, .. }) = spec
@@ -1408,7 +1408,7 @@ fn process_plan_error(mutate: impl Fn(&mut rastok::plan::ConnectorSpec)) -> Stri
     let compilation = compile_one(&process_graph(FULL)).expect("valid");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
-        if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
+        if let rastok::plan::NodeExecution::Connector(spec) = &mut node.execution {
             mutate(spec);
         }
     }
@@ -1479,7 +1479,9 @@ fn an_unreachable_process_still_carries_one_valid_sheet() {
         u32::try_from(
             plan.nodes
                 .iter()
-                .position(|node| matches!(node.kind, rastok::plan::NodeKind::Connector(_)))
+                .position(|node| {
+                    matches!(node.execution, rastok::plan::NodeExecution::Connector(_))
+                })
                 .expect("the Process exists"),
         )
         .expect("the plan is small"),
@@ -1491,7 +1493,7 @@ fn an_unreachable_process_still_carries_one_valid_sheet() {
     });
     plan.boundary.retain(|port| port.port.name() != "in");
     for node in &mut plan.nodes {
-        if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
+        if let rastok::plan::NodeExecution::Connector(spec) = &mut node.execution {
             for (name, setting) in &mut spec.attributes {
                 if name == "command" {
                     *setting = rastok::plan::AttrSetting::Value(rastok::value::Value::Int(3));
@@ -1514,7 +1516,7 @@ fn a_forged_process_cannot_smuggle_an_unknown_attribute() {
     let compilation = compile_one(&process_graph(FULL)).expect("valid");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
-        if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
+        if let rastok::plan::NodeExecution::Connector(spec) = &mut node.execution {
             spec.attributes.push((
                 String::from("mystery"),
                 rastok::plan::AttrSetting::Value(rastok::value::Value::Text(String::from(
@@ -1542,7 +1544,7 @@ fn the_global_binder_requires_callable_connectors_but_skips_pure_outbound_source
     let compilation = compile_one(&process_graph(FULL)).expect("valid");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
-        if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
+        if let rastok::plan::NodeExecution::Connector(spec) = &mut node.execution {
             spec.contract = rastok::connector::ConnectorId::parse("test/custom@1").unwrap();
             node.ports = vec![
                 rastok::plan::PortDecl {
@@ -1591,7 +1593,9 @@ fn the_global_binder_requires_callable_connectors_but_skips_pure_outbound_source
         u32::try_from(
             plan.nodes
                 .iter()
-                .position(|node| matches!(&node.kind, rastok::plan::NodeKind::Connector(_)))
+                .position(|node| {
+                    matches!(&node.execution, rastok::plan::NodeExecution::Connector(_))
+                })
                 .expect("the connector exists"),
         )
         .expect("a small plan"),
@@ -1611,7 +1615,7 @@ fn the_global_binder_requires_callable_connectors_but_skips_pure_outbound_source
     let compilation = compile_one(&process_graph(FULL)).expect("valid");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
-        if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
+        if let rastok::plan::NodeExecution::Connector(spec) = &mut node.execution {
             for (name, setting) in &mut spec.attributes {
                 if name == "codec" {
                     *setting = rastok::plan::AttrSetting::Word(String::from("bogus"));
@@ -1636,7 +1640,7 @@ fn an_effectless_callee_never_validates() {
     let compilation = compile_one(&process_graph(FULL)).expect("valid");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
-        if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
+        if let rastok::plan::NodeExecution::Connector(spec) = &mut node.execution {
             spec.effect = rastok::node::Effect::None;
         }
     }
@@ -1654,7 +1658,7 @@ fn a_delivery_target_requires_outbound_or_an_inbound_call_response_role() {
     let compilation = compile_one(&process_graph(FULL)).expect("valid");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
-        if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
+        if let rastok::plan::NodeExecution::Connector(spec) = &mut node.execution {
             spec.contract = rastok::connector::ConnectorId::parse("test/inbound-only@1")
                 .expect("the test id is canonical");
             spec.roles = rastok::connector::ConnectorRoles::Inbound;
@@ -1672,7 +1676,7 @@ fn a_forged_event_cannot_claim_an_outbound_effect_role() {
     let compilation = compile_one(&process_graph(FULL)).expect("valid");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
-        if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
+        if let rastok::plan::NodeExecution::Connector(spec) = &mut node.execution {
             spec.contract = rastok::connector::ConnectorId::parse("test/outbound-event@1")
                 .expect("the test id is canonical");
             spec.exchange = rastok::connector::ConnectorExchange::Event;
@@ -1968,7 +1972,7 @@ fn constant_process_cwd_and_env_are_effective_plan_attributes() {
         .iter()
         .find(|node| node.path.to_string() == "shell")
         .expect("the Process node");
-    let rastok::plan::NodeKind::Connector(spec) = &shell.kind else {
+    let rastok::plan::NodeExecution::Connector(spec) = &shell.execution else {
         panic!("the Process node remains a connector")
     };
     assert_eq!(

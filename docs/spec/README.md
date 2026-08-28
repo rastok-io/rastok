@@ -70,7 +70,7 @@ six Connectors and guest languages) →
 | [stdlib.md](stdlib.md) | Connector contracts, the six initial Connectors, `behavior`, pure guest programs, observability, MCP |
 | [effects-and-sagas.md](effects-and-sagas.md) | effect classes, `on compensate`, the Saga aspect |
 | [aspects.md](aspects.md) | the `: T1 + T2` mechanism, admission tests, qualified names |
-| [loop.md](loop.md) | `Loop.variant`, bounded iteration, retry, and theorem mapping |
+| [loop.md](loop.md) | Graph-level finite temporal recursion, fuel, delay, `l:next`, and termination proofs |
 | [identity.md](identity.md) | semantic hash, `graph_version` allocation and manifest, canonical record form |
 | [diagnostics.md](diagnostics.md) | diagnostic-code registry, stability contract, lazy assignment |
 

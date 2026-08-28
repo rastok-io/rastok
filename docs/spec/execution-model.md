@@ -121,7 +121,7 @@ It does not promise order across addresses, even though one deterministic pump
 makes an order reproducible in that implementation.
 
 An edge crossing a keyed owner is decided before its producer commits. The
-`instances.key` expression sees the complete immutable entering envelope —
+`instance.key` expression sees the complete immutable entering envelope —
 including `meta.sys` — and immutable values from enclosing lexical scopes.
 The owner body is entered only after address selection, so its own `val`s
 cannot participate. The producer reserves destination capacity and records
@@ -304,7 +304,7 @@ Concretely, the supervision plane maintains **one queue of dated events** :
 | per-call timeout | a Connector's `timeout` (§6) | `TimeoutExpired` on the contract's typed call-exit port (`exit` for Process) |
 | join eviction | a join's `within` / `last` (§7) | `JoinExpired` on the Operator's declared typed expiry output (conventionally `expired`) |
 | instance lifetime expiry | `lifetime = { … }` | the instance's `on stop` sequence (parent = **the envelope that armed the deadline** — last admission for `idle`, creator for `fixed`, creating admission for its tumbling box) |
-| loop backoff delay | `Loop.backoff` ([loop.md](loop.md) §4) | the re-injected call (trigger `l:next`) |
+| Loop re-entry delay | `Loop.delay` ([loop.md](loop.md) §5) | the next iteration-state envelope (trigger `l:next`, same Loop run and instance generation) |
 | saga completion budget | `Saga.timeout` ([effects-and-sagas.md](effects-and-sagas.md)) | a transaction of the `: Saga` node — trigger `l:timeout`, parent = the instance-creating envelope; emits `SagaExpired` on the ordinary typed `Saga.exit` output and the instance enters `rolling_back` |
 
 In production the queue is driven by wall-clock ; in simulation, by the
@@ -401,23 +401,24 @@ the conservative default stays `bypass`.
 
 ### 6.5 Attribute-name collisions — the qualified form
 
-`Saga` already owns a `timeout` (its completion budget). When a trait and an
-aspect (or two aspects) declare the same attribute name on one node, the
+`Saga` already owns a `timeout` (its completion budget). When a NodeType and an
+aspect (or two aspects) declare the same attribute name in one lexical scope, the
 **unqualified name is a compile error (ambiguous)** and the **dotted qualified
 form disambiguates** — reusing the existing attribute-namespace grammar
 (`jwt.cache_ttl`), zero new syntax :
 
 ```rastok
-connector pay : HttpClient + Saga {
-  timeout            = duration("5s")     // 💥 compile : ambiguous — both declare `timeout`
-  HttpClient.timeout = duration("5s")     // ✓ the per-call budget
-  Saga.timeout       = duration("30s")    // ✓ the saga completion budget
+graph payment : Saga {
+  Saga.timeout = duration("30s")          // saga completion budget
+  connector pay : HttpClient {
+    timeout = duration("5s")              // Connector call budget
+  }
 }
 ```
 
-The rule is symmetric (either side can be qualified) ; the common
-no-collision case stays terse. The general namespace and collision rules are
-defined in [aspects.md](aspects.md) §6.
+`Saga` is Graph-only, so this common pair is naturally disambiguated by
+lexical ownership. Same-Node aspect collisions remain fail-closed; the common
+rules are defined in [aspects.md](aspects.md) §7.
 
 ### 6.6 Session supervision (executable through M1.6 H6)
 
@@ -667,9 +668,9 @@ only on empty mailboxes, and byte-identical per-address traces across runs.
   the `l:` trigger registry, parent rules.
 - [effects-and-sagas.md](effects-and-sagas.md) — `Saga.timeout` (the
   completion budget this doc's §6.5 disambiguates), compensation triggers.
-- [loop.md](loop.md) — `Loop.backoff`
-  delays as dated events ; `variant`/`until` (data-driven, orthogonal to
-  wall-clock supervision).
+- [loop.md](loop.md) — `Loop.delay` as a dated event; finite fuel and a
+  checked `measure` are data-driven termination witnesses orthogonal to
+  wall-clock supervision.
 - [aspects.md](aspects.md) — §6 conflict rule as applied by §6.5.
 - [grammar.md](grammar.md) — `timeout` / `on_timeout`
   attributes, qualified dotted attributes.

@@ -23,11 +23,11 @@
 
 // -----------------------------------------------------------------------------
 // Composable Codex session.
-// Keyed by its own `instances.key` → one logical Graph instance per session.
+// Keyed by its own `instance.key` → one logical Graph instance per session.
 // -----------------------------------------------------------------------------
 
 graph sessions {
-  instances = { key = meta.app.session_key }
+  instance = { key = meta.app.session_key }
   lifetime = { kind = idle; after = duration("2h") }
   // One Graph instance per canonical session key. Capacity and placement are
   // deployment policy rather than logical attributes.
@@ -160,7 +160,7 @@ graph teams_inbound : App {
   }
 
   operator aggregate_reply {
-    instances = {
+    instance = {
       key = data.?params.?turn.?id.orValue(
         data.?params.?turnId.orValue(meta.app.session_key))
     }
@@ -237,35 +237,42 @@ graph teams_inbound : App {
     }
   }
 
-  connector teams_out : HttpClient + Loop {
-    base_url = env("TEAMS_SERVICE_URL")
-    path = "/v3/conversations/" + meta.app.conversation_id + "/activities"   // per-call Rastok expression
-    method = "POST"
-    codec = json
-    protocol = "teams_activity"
-    effect = irreversible
-    behavior = deterministic
-    idempotency_key = meta.app.delivery_id
+  graph teams_delivery : Loop {
+    input in: variant
+    output out: variant
+    Loop.fuel = 3
+    Loop.delay = {
+      kind = exponential
+      first = duration("200ms")
+      ceiling = duration("5s")
+    }
 
-    rate_limit = "10/s per meta.app.session_key"
-    // retry = the Loop aspect
-    Loop.variant = {
-      kind = measure
-      initial = 3
-      next = value - 1
-      until = value <= 0
+    connector teams_out : HttpClient {
+      base_url = env("TEAMS_SERVICE_URL")
+      path = "/v3/conversations/" + meta.app.conversation_id + "/activities"
+      method = "POST"
+      codec = json
+      protocol = "teams_activity"
+      effect = irreversible
+      behavior = deterministic
+      idempotency_key = meta.app.delivery_id
+      timeout = duration("10s")
+      rate_limit = "10/s per meta.app.session_key"
+      auth = {
+        scheme = oauth2_client_credentials
+        token_endpoint = "https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token"
+        client_id = env("TEAMS_BOT_APP_ID")
+        client_secret = env("TEAMS_BOT_PASSWORD")
+        scope = "https://api.botframework.com/.default"
+        refresh_before = duration("10m")
+      }
     }
-    Loop.backoff = { curve = exponential, initial = duration("200ms") }
-    on status where data is ConnectFailed { }
-    auth = {
-      scheme = oauth2_client_credentials
-      token_endpoint = "https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token"
-      client_id = env("TEAMS_BOT_APP_ID")
-      client_secret = env("TEAMS_BOT_PASSWORD")
-      scope = "https://api.botframework.com/.default"
-      refresh_before = duration("10m")
+
+    . -> teams_out
+    on teams_out.out { out = data }
+    on teams_out.exit where data is ConnectFailed {
+      next = Loop.state.data
     }
-    // teams_out.in (input) / teams_out.out (output)
   }
 
   operator delivery_dispatch {
@@ -296,11 +303,12 @@ graph teams_inbound : App {
   route_codex_out.delta        -> aggregate_reply.delta
   route_codex_out.flush        -> aggregate_reply.flush
 
-  typing_feedback.out   -> teams_out.in
+  typing_feedback.out   -> teams_delivery.in
   aggregate_reply.out   -> to_teams.in
-  to_teams.out          -> teams_out.in
+  to_teams.out          -> teams_delivery.in
 
-  teams_out.out             -> delivery_dispatch.in
+  teams_delivery.out        -> delivery_dispatch.in
+  teams_delivery.expired    -> dlq.in
   delivery_dispatch.delivered   -> nothing
   delivery_dispatch.failed      -> dlq.in
 }
@@ -314,7 +322,7 @@ lab teams_inbound {
   simulation teams_gateway on app {
 
     // The world, shared by the scenarios : codex is scripted per scenario ;
-    // teams_out must be covered wherever it is called (an uncovered call fails loudly).
+    // The nested HTTP Driver must be covered wherever it is called.
 
     scenario plain_message "user sends a plain Teams message" {
       mock sessions.codex {
@@ -326,7 +334,7 @@ lab teams_inbound {
           }
         }
       }
-      mock teams_out {
+      mock teams_delivery.teams_out {
         on in { out = { delivered = true } }   // a data record: fresh data, metadata kept
       }
 
@@ -343,7 +351,7 @@ lab teams_inbound {
       }
 
       expect "turn/start"     sessions.codex.in where (data.method == "turn/start" && data.params.prompt == "Bonjour")
-      expect "Teams activity" teams_out.in where (
+      expect "Teams activity" teams_delivery.teams_out.in where (
         data.type == "message" && data.text.contains("Bonjour"))
     }
 
@@ -365,7 +373,7 @@ lab teams_inbound {
           }
         }
       }
-      mock teams_out {
+      mock teams_delivery.teams_out {
         on in { out = { delivered = true } }
       }
 
@@ -377,7 +385,7 @@ lab teams_inbound {
         conversation = { id = "conv-1" }
         channelData = { tenant = { id = "tenant-x" } }
       }
-      expect "adaptive card" teams_out.in where (
+      expect "adaptive card" teams_delivery.teams_out.in where (
          data.attachments[0].contentType == "application/vnd.microsoft.card.adaptive")
 
       teams_in.out = {
@@ -390,7 +398,7 @@ lab teams_inbound {
       }
       expect "peer response reaches codex" sessions.codex.in where (
          meta.app.kind == "jsonrpc.peer_response" && meta.app.rpc_id == "42" && data.decision == "approve")
-      expect "final message" teams_out.in where data.text.matches("completed|done")
+      expect "final message" teams_delivery.teams_out.in where data.text.matches("completed|done")
     }
 
     scenario dlq_on_delivery_failure "a Teams API failure lands in the DLQ, loudly" {
@@ -403,7 +411,7 @@ lab teams_inbound {
           }
         }
       }
-      mock teams_out {
+      mock teams_delivery.teams_out {
         on in { out = { delivered = false, status = 503 } }    // the partner fails
       }
 
@@ -416,7 +424,7 @@ lab teams_inbound {
         channelData = { tenant = { id = "tenant-x" } }
       }
 
-      expect "delivery attempted" teams_out.in where data.type == "message"
+      expect "delivery attempted" teams_delivery.teams_out.in where data.type == "message"
       expect "failed delivery in DLQ" dlq.in     where data.delivered == false
     }
 

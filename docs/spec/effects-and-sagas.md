@@ -1,7 +1,7 @@
 # Effects and Sagas
 
 > **Status:** normative — under review.
-> Companion to [aspects.md](aspects.md) (generic mechanism for trait + aspect
+> Companion to [aspects.md](aspects.md) (generic NodeType + NodeAspect
 > composition), [loop.md](loop.md) (the `Loop` aspect for retry / iteration),
 > and [delivery-semantics.md](delivery-semantics.md). This doc covers
 > the **effect classification** of Connectors and the **Saga aspect** that
@@ -152,7 +152,7 @@ connector void_authorization : HttpClient { effect = idempotent ; … }
 ```
 
 Forward envelopes and compensation envelopes share the same `in`/`out` ports;
-the saga manager tags them via `meta.sys` so downstream routing (Router, etc.)
+the saga manager tags them via `meta.sys` so downstream conditional emissions
 can distinguish them when needed.
 
 
@@ -184,38 +184,45 @@ can distinguish them when needed.
 
 ### 3.3 Bounded retry on compensation — the Loop aspect
 
-When a compensation may transiently fail (network blip, downstream
-restart), wrap the Connector in a `Loop` aspect — the same mechanism
-used for forward retry :
+When a compensation may transiently fail (network blip, downstream restart),
+put the call inside a `Loop` Graph — the same mechanism used for forward
+retry:
 
 ```rastok
-connector reserve : Postgres + Loop {        // inside a `: Saga` graph
-  query   = "INSERT ..."
-  effect  = compensable
-  behavior = deterministic
-  idempotency_key = meta.app.order_id + "/reserve"
-  Loop.variant = {
-    kind = measure
-    initial = 5
-    next = value - 1
-    until = value <= 0
+graph reserve_with_retry : Loop {             // inside a `: Saga` graph
+  input in: Reservation
+  output out: ReservationResult
+  Loop.fuel = 5
+  Loop.delay = {
+    kind = exponential
+    first = duration("200ms")
+    ceiling = duration("5s")
   }
-  Loop.backoff = { curve = exponential, initial = duration("200ms") }
-  on exit where data is ConnectFailed { }  // explicit iterating outcome
-  on compensate {
+
+  connector reserve : Postgres {
+    query   = "INSERT ..."
+    effect  = compensable
+    behavior = deterministic
+    idempotency_key = meta.app.order_id + "/reserve"
+    on compensate {
     idempotency_key = meta.app.order_id + "/unreserve"   // its OWN operation
     query = "DELETE ..."
+    }
   }
+
+  . -> reserve
+  on reserve.out  { out = data }
+  on reserve.exit where data is ConnectFailed { next = Loop.state.data }
 }
 ```
 
-The Loop policy applies to **both** the forward call and the
-compensation handler — the same retry/backoff settings cover both
-directions. A contract does not attach a universal `transient` bit;
-the graph names the exact exit cases or protocol status codes its policy repeats.
+The forward and compensation operations are distinct Loop runs and may use
+distinct fuel/delay policies; they do not inherit policy merely because they
+share a Connector declaration. A contract does not attach a universal
+`transient` bit: each surrounding Graph names the exact exit cases or protocol
+status codes it repeats.
 
-When two distinct policies are required, delegate the compensation to
-its own Loop-wrapped Connector — see [loop.md §7.1](loop.md#71-same-node-composition).
+The complete Graph-level retry contract is in [loop.md](loop.md).
 
 An inline `retry = { curve = exponential, … }` attribute is not legal inside
 `on compensate { … }`: it would duplicate `Loop` for the same semantics.
@@ -348,7 +355,7 @@ The saga manager is **not** drawn as edges in the `.rkg` file. It is a runtime
 mechanism declared *implicitly* by :
 
 - per-Connector : `effect = compensable` + `on compensate { … }`
-- per-scope     : `: Saga` aspect on a graph (or any node)
+- per-scope     : `: Saga` aspect on a Graph
 
 It runs alongside the instance scheduler and the provenance chain. All three
 share the same property : **statically declared, runtime-orchestrated, no
@@ -357,9 +364,9 @@ hidden magic**.
 | Layer | Declared by | Runtime mechanism |
 |---|---|---|
 | Provenance | the journal (`durability = local` for single-host recovery ; `global` for cross-host/audit reach) | the causal records + `join_inputs` (delivery-semantics §6) |
-| Node instance | optional `instances.key` + `lifetime` | addressed mailbox + FIFO + one active transaction per instance |
+| Node instance | optional `instance.key` + `lifetime` | addressed mailbox + FIFO + one active transaction per instance |
 | **Saga manager** | `: Saga` aspect + `effect = compensable` | provenance walker + compensation dispatcher |
-| **Loop manager** | `: Loop` aspect | re-injection scheduler + iteration counter + measure checker |
+| **Loop manager** | `: Loop` Graph aspect | per-root journal fold + fuel + `l:next` scheduler |
 
 
 ### 5.1 Workflow on a selected rollback outcome
@@ -372,7 +379,7 @@ rollback reason. For example:
 
 ```rastok
 pay.exit -> Saga.rollback when data is PaymentDeclined
-settle.Loop.exit -> Saga.rollback when data is LoopExhausted
+settle.expired -> Saga.rollback
 ```
 
 The aspect's output type is an ordinary tagged union:
@@ -397,9 +404,9 @@ name `err` nor an unwired port has hidden Saga semantics.
 0. THE TRIGGER : an envelope reaches `Saga.rollback` through an explicit
    edge, or the saga's own completion budget expires (`Saga.timeout` — a
    transaction of the saga node, trigger `l:timeout`, parent = the
-   instance-creating envelope). A Loop may therefore route
-   `LoopExhausted { calls, last_outcome }`; an ordinary successful outcome
-   takes no such edge. Guard narrowing is checked before the plan validates.
+   instance-creating envelope). A Loop may therefore route its typed
+   `LoopExpired { last_state }`; an ordinary successful result takes no such
+   edge. Guard narrowing is checked before the plan validates.
 1. The intercepted saga enters rolling_back.
 2. Its sealed compensable steps are compensated in REVERSE order, read from
    the journal fold : each compensation = a sequential transaction of the
@@ -480,7 +487,7 @@ provenance, and all of them queryable / alertable :
                   ┌──────────┴────────────┐
                   │                       │
             all compensations      ≥ 1 compensation
-            succeed                exhausts its Loop variant
+            succeed                exhausts its Loop fuel
                   │                       │
                   ▼                       ▼
          ┌─────────────┐         ┌──────────────────┐
@@ -496,7 +503,7 @@ provenance, and all of them queryable / alertable :
 | `committed` | exited `: Saga` scope successfully | yes | nothing |
 | `rolling_back` | downstream failed, compensations in progress | yes | observe |
 | `rolled_back` | all compensations succeeded — the saga emits `SagaRolledBack { saga_id }` on `Saga.exit` | yes | nothing |
-| `rollback_failed` | at least one compensation exhausted its `Loop` variant (`LoopExhausted`) — the saga emits `SagaRollbackFailed { saga_id, step }` on `Saga.exit` | yes | **manual review required** |
+| `rollback_failed` | at least one compensation Loop emitted `LoopExpired` — the saga emits `SagaRollbackFailed { saga_id, step }` on `Saga.exit` | yes | **manual review required** |
 
 The crucial point is `rollback_failed` : it is a **first-class terminal state**,
 durable, observable, alertable. The runtime never silently drops a failed
@@ -567,7 +574,7 @@ fixed by the normative contracts.
    commits" is a more powerful but significantly more complex model — out of
    scope for the current contract, revisitable if a concrete use case arises.
 
-3. **Interaction between `saga_timeout` and per-step `Loop` variant.** If a step's
+3. **Interaction between `saga_timeout` and per-step `Loop` fuel.** If a step's
    Loop calls would exceed the remaining saga timeout, should the runtime
    abort the step early to free the saga manager for rollback, or let the
    step finish ? *Current reco:* abort early.

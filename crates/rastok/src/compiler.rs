@@ -74,7 +74,10 @@ pub fn app_source_index(sources: &[&str], registry: &contract::ContractCatalog) 
             matches!(decl, TopDecl::Graph(graph) if graph
                 .annotation
                 .as_ref()
-                .is_some_and(|annotation| annotation.symbols.iter().any(|symbol| symbol.text == "App")))
+                .is_some_and(|annotation| annotation
+                    .symbols
+                    .first()
+                    .is_some_and(|symbol| symbol.text == "App")))
         });
         if declares_app {
             return Some(index);
@@ -345,7 +348,7 @@ graph inferred_instance : App {
   input in: int
   output out: int
   operator relay {
-    instances = { key = data }
+    instance = { key = data }
     on in { out = . }
   }
   . -> relay -> .
@@ -375,7 +378,7 @@ graph inferred_instance : App {
 graph g : App {
   input in: text
   connector shell : Process {
-    instances = { key = data }
+    instance = { key = data }
     lifetime = { kind = idle ; after = duration("1s") }
     command = "cat"
     codec = lines
@@ -403,7 +406,7 @@ graph inferred_composite : App {
   input in: struct { tenant: text, order: long }
   output out: struct { tenant: text, order: long }
   operator relay {
-    instances = { key = { payload = data } }
+    instance = { key = { payload = data } }
     on in { out = . }
   }
   . -> relay -> .
@@ -430,7 +433,7 @@ graph inferred_composite : App {
         let keyed_graph = r#"
 graph keyed_graph : App {
   input in: text
-  instances = { key = data }
+  instance = { key = data }
   operator relay { on in { out = . } }
   . -> relay -> nothing
 }
@@ -473,7 +476,7 @@ graph dynamic_instance : App {
   input in: variant
   output out: variant
   operator relay {
-    instances = { key = data }
+    instance = { key = data }
     on in { out = . }
   }
   . -> relay -> .
@@ -500,7 +503,7 @@ graph conflicting_instance : App {
   input beta: text
   output out: int
   operator relay {
-    instances = { key = data }
+    instance = { key = data }
     input a: int
     input b: text
     output out: int

@@ -55,7 +55,7 @@ exist? Scope, order, and evidence:
 The repository opens publicly with this milestone (15 October 2026).
 
 - Multiport execution, then the constructs that stand on it: Node-owned
-  logical instances (`instances.key`), orthogonal lifetime and bounded
+  logical instances (`instance.key`), orthogonal lifetime and bounded
   Closing of open invocations, followed by bounded joins.
 - A JSON/JSONL codec chain across the boundaries.
 - M1.3 resets the payload foundation: one Rastok-owned logical type and
@@ -87,7 +87,7 @@ The repository opens publicly with this milestone (15 October 2026).
   P0–P3 named-`partition` / `per` implementation is superseded as a source and
   transport model, while its canonical-key, pre-commit routing, mailbox,
   cursor and lifecycle proofs remain reusable. D-2026-08-18-1 replaces it
-  with Node-owned `instances.key`, independent `lifetime`, Node-private
+  with Node-owned `instance.key`, independent `lifetime`, Node-private
   `var`, hierarchical logical addresses, and independently shardable keyed
   boundaries. The ordered R0–R7 gates in the
   [M1.4 instance backlog](docs/architecture/m1.4-instances-backlog.md) now
@@ -181,8 +181,19 @@ The repository opens publicly with this milestone (15 October 2026).
   project-wide `--resolve-open-api` generated-source workflow. Its categorical
   v12 package move is isolated from the later H5/H6 physical execution, which
   introduced no further package-format move.
-- Governed retry: the `Loop` aspect, driven by an explicitly selected
-  typed exit case rather than a privileged error channel.
+- M1.7 makes `Loop` the first executable NodeAspect. L0 and the normative L1
+  contract are landed: `node::{Kind, Type, Aspect}` are separate,
+  Reducer/Router remain patterns, source spelling is singular
+  `instance = { key = ... }`, and positive `Loop.fuel` plus closed
+  `Loop.delay` are checked into fail-closed recovery HIR without an identity
+  move. The remaining L2–L7 gates make one Graph boundary decide `next XOR out`,
+  add categorical aspect transport, build the per-root Loop journal fold over
+  finite `fuel` and `l:next`, date optional `delay`, begin checked
+  `invariant`/`measure` proofs, model-check Closing/recovery in the Lab, and
+  close identity, no-std and QEMU evidence. Operator work and Connector calls
+  remain ordinary children of the Loop Graph; no privileged `err`/`exit`
+  spelling determines policy. See the
+  [ordered M1.7 backlog](docs/architecture/m1.7-loop-backlog.md).
 - Per-flow cost counters, carried by the journal.
 - A live view of the running graph, fed by the journal.
 - A guided example gallery seeded by the benchmark's reference

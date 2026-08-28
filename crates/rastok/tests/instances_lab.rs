@@ -36,12 +36,12 @@ graph instances : App {
   graph sessions {
     input in: struct { tenant: text, user: int }
     output out: int
-    instances = { key = data.tenant }
+    instance = { key = data.tenant }
 
     operator counter {
       input in: struct { tenant: text, user: int }
       output out: int
-      instances = { key = data.user }
+      instance = { key = data.user }
       var visits: int = 0
       on in { visits = visits + 1 ; out = visits }
     }
@@ -191,7 +191,7 @@ graph joined : App {
   output expired: JoinExpiry
 
   operator pair {
-    instances = { key = data }
+    instance = { key = data }
     input left: int
     input right: int
     output out: int
@@ -430,7 +430,7 @@ graph invalid : App {{
   operator relay {{
     input in: struct {{ tenant: text }}
     output out: struct {{ tenant: text }}
-    instances = {{ key = {key} }}
+    instance = {{ key = {key} }}
     on in {{ out = . }}
   }}
   . -> relay -> .

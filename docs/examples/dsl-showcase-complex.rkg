@@ -63,7 +63,7 @@ graph agent_gateway : App {
   }
 
   operator enrich_and_gate {
-    instances = { key = meta.app.user_id }
+    instance = { key = meta.app.user_id }
     lifetime = { kind = persistent }
 
     var total_tokens_used: int = 0

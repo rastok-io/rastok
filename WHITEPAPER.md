@@ -243,8 +243,9 @@ exists.
 
 For example, begin with an LLM Connector that classifies support
 requests. The journal records its answers, latency, and cost. If refund
-requests become a stable rule, move that case into a typed Router and
-keep the LLM only as a fallback for ambiguous requests. Replay the Lab
+requests become a stable rule, move that case into a typed Operator with
+statically declared outputs and keep the LLM only as a fallback for ambiguous
+requests. Replay the Lab
 scenarios and compare their traces before deploying the change. Each
 iteration shrinks the probabilistic surface — and the token bill —
 without a rewrite. Simulations check declared behavior; proving stronger
@@ -327,7 +328,7 @@ graph expense_approval : App {                     // `: App` marks the deployme
   }
 
   operator decide {                                // one logical instance per expense
-    instances = { key = meta.ext.request_id }
+    instance = { key = meta.ext.request_id }
     lifetime = { kind = idle ; after = duration("72h") }
 
     output approval
@@ -415,7 +416,7 @@ The message of this example: **two independent events may arrive in any
 order; Rastok correlates them by key, separates approval from rejection,
 and bounds the wait.** Note what is already visible:
 
-- **Stateful correlation is the model, not plumbing.** `instances.key`
+- **Stateful correlation is the model, not plumbing.** `instance.key`
   selects the Operator instance; the join `on (request, decision)` matches
   the two legs of the *same* expense automatically, whatever the arrival
   order.
@@ -464,7 +465,7 @@ agent), with bounded concurrency and per-session lifetime. Abridged from
 
 ```rastok
 graph sessions {                       // declaration = instantiation
-  instances = { key = meta.ext.session_key }
+  instance = { key = meta.ext.session_key }
   lifetime  = { kind = idle ; after = duration("2h") }
   val cwd = "/workspace/" + instance.key           // immutable instance context
 
@@ -533,9 +534,9 @@ lab agent_gateway {
 The rule this example makes visible: **declaring is placing, key selection is
 cardinality, wiring is naming.** A `graph` is a Node like any other —
 `sessions` is declared once and wired by name. Because it has
-`instances.key`, the runtime materializes one graph instance for each
+`instance.key`, the runtime materializes one graph instance for each
 distinct session key. Every child Node belongs to that graph instance.
-A child with its own `instances.key` adds an independently shardable address
+A child with its own `instance.key` adds an independently shardable address
 frame; a child without one has one singleton instance inside its parent Graph
 instance. Live-cardinality caps and placement remain deployment policy rather
 than source semantics.
@@ -804,13 +805,22 @@ Every Node, regardless of family, shares one declarative skeleton:
 <family> <name> [: <annotation>] { <body> }
 
 family     : operator | connector | graph        (a graph instantiates by DECLARATION
-                                                   and wires by name ; the `: App` role
+                                                   and wires by name ; the `: App` type
                                                    marks the deployment entry graph ;
                                                    mock, simulation-only, mirrors the
                                                    same skeleton as a stand-in)
-annotation : trait/role + aspects — optional on operator/graph (implicit canonical
-             types `Operator` / `Graph`), MANDATORY on connector (a boundary is explicit)
+annotation : [NodeType] [ + NodeAspect ... ] — the type, when written, is first;
+             ordinary Operators/Graphs default to `Operator`/`Graph`, while a
+             Connector's exact contract type is mandatory
 ```
+
+These are three different facts. The declaration keyword fixes the structural
+**kind** (`Graph`, `Operator`, or `Connector`). Every Node has exactly one
+effective **type** (`App`, `Graph`, `Operator`, or an exact Connector contract
+such as `HttpClient`). It may additionally carry zero or more orthogonal
+**aspects** such as `Loop` or `Saga`. An aspect changes orchestration; it never
+stands in for the Node's type. The implementation vocabulary is
+`node::{Kind, Type, Aspect}`.
 
 The port-declaration keywords are **`input`** and **`output`**; the names
 **`in`**, **`out`** and **`err`** are conventional, non-reserved spellings
@@ -825,13 +835,13 @@ the additional `exit` output carries the tagged `ProcessExit`
 non-zero exit is an `Exited` fact; graph policy decides what it means.
 
 ```rastok
-operator <name> [: <trait + aspects>] {
+operator <name> [: <NodeType> + <NodeAspect> ...] {
   input  <port> [: <type>]   // source annotation optional; effective type mandatory after validation
   output <port> [: <type>]   // a single-in/out node just uses the defaults
 
   var <field>: <type> [= <default>]    // optional state fields
 
-  instances = { key = <expr> }         // optional; absence = singleton
+  instance = { key = <expr> }         // optional; absence = singleton
   lifetime  = { kind = <profile> ... } // optional; absence = persistent
 
   on start            { ... }          // logical instance starts lazily
@@ -855,8 +865,8 @@ A sub-graph is a Node too: **its declaration is its instance owner**. It is
 wired by name and may select keyed instances exactly like any other Node:
 
 ```
-graph <name> [: App | <aspects>] {
-  instances = { key = <expr> }         // optional; one Graph instance per key
+graph <name> [: <GraphType> + <NodeAspect> ...] {
+  instance = { key = <expr> }         // optional; one Graph instance per key
   lifetime  = { kind = idle ; after = duration("2h") }
   val <field> = "..." + instance.key + "..."      // immutable instance context
   ...                                  // operators / connectors / sub-graphs / wiring
@@ -865,7 +875,7 @@ graph <name> [: App | <aspects>] {
 
 Three categories of section:
 
-- **Declarative interface** (`input`, `output`, `var`, `instances`,
+- **Declarative interface** (`input`, `output`, `var`, `instance`,
   `lifetime`). **Ports
   are implicit**: `on <name>` declares an input, an assignment
   `<name> = …` declares an output, and `in`/`out`/`err` have conventional
@@ -873,7 +883,7 @@ Three categories of section:
   port not used by the program does not exist in its effective table. `input` /
   `output` are written only to *pin* a type/schema, or to document a
   node with no handler (a saga) or a graph's public interface. `var`
-  holds state owned only by that Node; `instances.key` selects its logical
+  holds state owned only by that Node; `instance.key` selects its logical
   address and `lifetime` independently controls temporal closure.
 - **Active behavior** — the `on <trigger>` handlers (§2.3). Outputs are
   assigned explicitly; **atomic multi-emit** uses tuple assignment
@@ -918,7 +928,7 @@ future gate rather than an inert accepted clause.
 the Operator before it can enter the join buffer, so `on (a, b)` correlates in
 that address for free. There is no second `by` key authority. If a flow needs
 a different correlation domain, the Operator declares the corresponding
-`instances.key`. The §1.5 approval graph is exactly this: both legs select the
+`instance.key`. The §1.5 approval graph is exactly this: both legs select the
 same request-id instance.
 
 **Joins are bounded — and the bound is behavior.** A presence join
@@ -983,7 +993,7 @@ wired to an input — time enters the graph as envelopes (§5):
 
 ```rastok
 operator stats {
-  instances = { key = meta.app.session_id }
+  instance = { key = meta.app.session_id }
   input  tick : timestamp                // a Clock tick's payload IS the timestamp
   var count: int = 0
 
@@ -1005,7 +1015,7 @@ the Operator's order-id instance):
 
 ```rastok
 operator settle {
-  instances = { key = meta.app.order_id }
+  instance = { key = meta.app.order_id }
 
   on (invoice, payment) {
     out = {
@@ -1038,7 +1048,7 @@ commits atomically — state delta + emissions + audit — at its end.
 
 ```rastok
 operator counter {
-  instances = { key = meta.app.session_id }
+  instance = { key = meta.app.session_id }
   var count: int = 0
 
   on msg {
@@ -1091,7 +1101,7 @@ in that Operator's handlers and are serialized by its instance mailbox:
 
 ```rastok
 operator account {
-  instances = { key = meta.app.account_id }
+  instance = { key = meta.app.account_id }
   var balance: long = 0
 
   on debit {
@@ -1132,7 +1142,7 @@ graph my_app : App {
 }
 
 operator pricing {
-  instances = { key = meta.app.tenant_id }
+  instance = { key = meta.app.tenant_id }
   val TIERS = { "free": 0, "pro": 99, "enterprise": 999 }   // Operator-level constant (a map: `:` keys)
   var subscribed_tier: text = "free"                   // private Node-instance state
 
@@ -1214,9 +1224,10 @@ compilers/executors and typed boundaries. jq is the initial document
 guest; SQL is the planned relational guest.
 Additional guests are admitted only through the same contract.
 
-**Rastok expressions — the intrinsic core.** Every expression position in the DSL — a
-`where` guard, an instance-key expression, a Router selector, a state expression,
-an attribute value, a simulation expectation — is one pure Rastok expression:
+**Rastok expressions — the intrinsic core.** Every expression position in the
+DSL — a `where` guard, an instance-key expression, a future
+conditional-emission selector, a state expression, an attribute value, a
+simulation expectation — is one pure Rastok expression:
 
 ```rastok
 on payment where data.amount > 100 && meta.app.region == "eu" { … }
@@ -1278,16 +1289,13 @@ Operators and Connectors look the same syntactically but differ in
 nature:
 
 - **Operators are the pure computation primitive.** The
-  `operator <name> { … }` form expresses any computation node. The
-  standard vocabulary names frequent patterns — `Router`, `Reducer`,
-  `Aggregator`, `Joiner`, keyed Graph dispatch, and the jq-backed `Jaq`
-  helper (cataloged with examples in
-  [stdlib.md](docs/spec/stdlib.md)). `Sql` and the fuller window helper
-  remain planned. A user
-  may always fall back to the primitive form or contribute new helpers
-  in pure DSL. (One-offs like a filter are just `Jaq` + `select` — no
-  dedicated alias. Broadcast needs no `Fanout` alias because the atomic
-  multi-emit statement `(a, b, c) = x` expresses it directly.)
+  `operator <name> { … }` form expresses any computation node. Reducer,
+  Aggregator, Window, Joiner, Router, Dispatch, and Fanout are guide names for
+  ordinary combinations of `var`, `instance.key`, `lifetime`, bounded joins,
+  conditional emission, Graph containment, and atomic multi-emit. They are
+  not distinct Node types. A genuinely different pure engine such as a pinned
+  jq or Wasm executor may become an Operator NodeType only after its own
+  executable contract and transport exist.
 - **Connectors are runtime primitives.** They bridge the graph to
   the outside world through Driver code (HTTP libraries, process
   spawning, database drivers, file I/O). A new Connector requires a
@@ -1304,8 +1312,9 @@ compute, route, mutate state inside the graph, but they do not write to the
 outside world. The exact effect classes, compensation rules and Saga behavior
 belong to [docs/spec/effects-and-sagas.md](docs/spec/effects-and-sagas.md).
 
-**Aspects** are orthogonal scoping behaviors composed on the `:` annotation
-slot. The initial specified aspects are `Saga` and `Loop`; the generic mechanism is in
+**Aspects** are orthogonal orchestration protocols composed after the optional
+NodeType in the `:` annotation. The initial specified aspects are `Saga` and
+`Loop`; the generic mechanism is in
 [docs/spec/aspects.md](docs/spec/aspects.md), with the aspect-specific
 contracts in [effects-and-sagas.md](docs/spec/effects-and-sagas.md) and
 [loop.md](docs/spec/loop.md).
@@ -1331,13 +1340,13 @@ This is non-negotiable. The static DAG is what enables:
 - **Workflow soundness** — properties like proper completion and
   absence of deadlocks become decidable.
 
-Dynamism is recovered through two bounded primitives, both of which
-preserve static analyzability:
+Dynamism is recovered through bounded ordinary forms that preserve static
+analyzability:
 
-| Primitive  | Selection mode                       | Topology contract                        |
-|------------|--------------------------------------|------------------------------------------|
-| Router     | Runtime choice 1-of-N (or list-of-N) | All N output ports are declared          |
-| Dispatch   | Keyed sub-graph instance             | The sub-graph and key expression are statically declared |
+| Pattern | Selection mode | Topology contract |
+|---|---|---|
+| Conditional emission (“Router”) | Runtime choice among ordinary output ports | Every possible output port is statically declared; the generic source form remains a named gate |
+| Keyed Graph (“Dispatch”) | `instance.key` selects a logical Graph instance | The Graph body and key expression are statically declared |
 
 Broadcast to multiple outputs is expressed inline by the atomic
 multi-emit statement `(a, b, c, d) = x` — the same envelope is
@@ -1345,26 +1354,17 @@ delivered on every listed output port. This subsumes a dedicated
 `Fanout` alias and composes naturally with conditional logic without
 requiring an upstream split.
 
-A Router selects one or more statically declared outputs:
+The Router name grants no hidden runtime. Until the general conditional
+multi-output statement is specified, writing `: Router` refuses. Once that
+surface lands, it will choose only among ordinary declared output ports and
+lower to ordinary emissions.
 
-```rastok
-operator route : Router {
-  select = data.kind
-}
-
-route.invoice -> handle_invoice
-route.refund  -> handle_refund
-```
-
-Here, `select` is a Rastok expression. The runtime value chooses a route, while the
-possible ports remain visible to the compiler. A list of port names
-selects several outputs.
-
-Dispatch is the keyed instantiation of a declared sub-graph:
+The Dispatch pattern is already the keyed instantiation of a declared
+sub-graph:
 
 ```rastok
 graph conversation {
-  instances = { key = meta.app.session_id }
+  instance = { key = meta.app.session_id }
   lifetime = { kind = idle ; after = duration("2h") }
   . -> classify -> answer -> .
 }
@@ -1392,41 +1392,41 @@ journaled:
 - **In the Connector** (§2.7). External feedback loops — a user replying
   turn after turn, a retried HTTP call — stay outside the graph; each
   round trip re-enters as a fresh arrival.
-- **In the `Loop` aspect.** Bounded self-iteration — "refine until the
-  score passes, at most 10 times" — is declared by annotating a node
-  `: Loop` and configuring its well-founded measure:
+- **In the `Loop` aspect.** Finite temporal recursion — "apply this Graph
+  until it returns a result, with at most 10 body applications" — uses one
+  explicit state boundary:
 
   ```rastok
   graph refine: Loop {
-    Loop.variant = {
-      kind = measure
-      initial = 10
-      next = value - 1
-      until = value <= 0
+    input in: struct { remaining: int }
+    output out: text
+    Loop.fuel = 10
+
+    on in where data.remaining <= 0 { out = "done" }
+    on in where data.remaining > 0 {
+      next = { remaining = data.remaining - 1 }
     }
-    …
   }
   ```
 
-  `Loop.variant` is an attribute of the `Loop` aspect, not a `var` in
-  Operator state and not the dynamic data type named `variant`. The
-  fields on the right are Rastok expressions; `value` is the current
-  measure bound by the `measure` value.
+  Exactly one of the conventional control outputs `next` and `out` is
+  selected on every traversal. `next` carries the next value of `in` and the
+  runtime commits its re-admission as `l:next` — an event, never a back-edge.
+  If the final permitted application still chooses `next`, the aspect emits
+  `LoopExpired { last_state }` on `expired` instead of silently running again.
+  One external root owns one Loop run, so delayed runs may coexist safely in
+  one keyed instance.
 
-  The runtime re-injects the node's output as its next input (trigger
-  `l:next`) while the exit condition is false — an *event*, not
-  a back-edge. Every application is journaled and the DAG stays
-  acyclic. The runtime checks strict decrease; a violation is the typed
-  error `LoopVariantViolation`. A simple counted measure gets a
-  compiler-derived bound. Other forms declare an explicit `limit`, so
-  a convergence claim cannot become an unbounded production loop
-  ([loop.md](docs/spec/loop.md) §2, §12).
+  `Loop.fuel` is the first structural termination witness. The theorem-tier
+  `Loop.invariant` and `Loop.measure` will let a small verifier prove strict
+  well-founded progress and eventually make fuel optional; they are rejected
+  until that proof-certificate gate is real. Optional `Loop.delay` dates
+  re-entry without changing fuel, call timeout, or instance lifetime
+  ([loop.md](docs/spec/loop.md)).
 
 The maxim form: *cycles do not appear in the graph — they appear in
-state, in events, and in sequence*. Every `Loop` carries a decreasing
-measure and a finite call bound. The runtime rejects a non-decreasing
-step, and a future verifier may discharge selected obligations
-statically.
+state, in events, and in sequence*. Every admitted `Loop` has a finite
+termination witness, and its body has a separately checked completion bound.
 
 ### 2.7 The Connector as cycle absorber
 
@@ -1596,7 +1596,7 @@ Every Graph, Operator, and Connector may carry the same common attributes:
 
 ```rastok
 operator cart {
-  instances = {
+  instance = {
     key = meta.app.customer_id
   }
 
@@ -1621,7 +1621,7 @@ The attributes are independent:
 
 There is no named or inline `partition`, no `per` binding, and no catalogue
 of standard partition names. The owner states its key once. Absence of
-`instances` is an explicit singleton in the enclosing Graph instance;
+`instance` is an explicit singleton in the enclosing Graph instance;
 absence of `lifetime` is persistent.
 
 At the App root, this makes a global tumbling window honest instead of
@@ -1637,7 +1637,7 @@ operator global_metrics {
 
 ### 3.2 Key selection is a journaled routing decision
 
-`instances.key` is one Rastok expression evaluated exactly once when an
+`instance.key` is one Rastok expression evaluated exactly once when an
 envelope crosses into that owner. It may read the complete immutable entering
 envelope — `data`, `meta.sys`, `meta.app`, and `meta.ext` — plus immutable
 `val` bindings from enclosing lexical scopes. The owner's body is entered only
@@ -1656,7 +1656,7 @@ A key is either a canonical map-key scalar/enum value or a closed, recursively
 nested struct of such leaves:
 
 ```rastok
-instances = {
+instance = {
   key = {
     tenant = meta.app.tenant_id
     conversation = data.conversation_id
@@ -1689,7 +1689,7 @@ The selected key is contextual `instance.key`, not
 travels across Nodes; an envelope can visit several owners with different
 addresses. Hop-local addressing therefore belongs in the journal and the
 current execution context. `instance.key` is statically available only on an
-owner that declares `instances.key`; it never means an ancestor key or null.
+owner that declares `instance.key`; it never means an ancestor key or null.
 
 ### 3.3 Logical address, state ownership, and joins
 
@@ -1722,7 +1722,7 @@ failure visible; there is no nominal cross-Node state lookup.
 A join correlates inside the logical instance of its owning Operator.
 `where` refines candidates and `within` / `last` bound retention. There is
 no join `by` override: a different correlation domain is expressed by the
-Operator's own `instances.key`, keeping routing and correlation under one
+Operator's own `instance.key`, keeping routing and correlation under one
 authority.
 
 ### 3.4 Lifetime and Closing
@@ -2062,7 +2062,7 @@ timestamp — the `stats` Operator of §2.3 is the canonical shape:
 
 ```rastok
 operator stats {
-  instances = { key = meta.app.session_id }
+  instance = { key = meta.app.session_id }
   input  tick : timestamp        // time is just a port
   …                              // on tick { … } — an ordinary handler
 }
@@ -2592,8 +2592,8 @@ arbitrary message interleavings, that general model does not provide a
 finite application-level path set by construction.
 
 Rastok constrains communication to a **statically declared DAG**: every
-edge is visible in the source, dynamism is bounded (Router / Dispatch
-+ inline broadcast `(a, b, …) = x`, §2.6), and all I/O crosses
+edge is visible in the source, dynamism is bounded (conditional-emission and
+keyed-Graph patterns plus inline broadcast `(a, b, …) = x`, §2.6), and all I/O crosses
 declared Connectors. Three properties follow that a general actor model
 does not guarantee:
 
@@ -2753,7 +2753,7 @@ incumbents.
   scheduler, DAG processor, API server, and metadata database; Rastok
   does not yet make a performance or operational-footprint comparison.
   Equivalences: cron triggers map to a `Calendar` (civil time);
-  retries and backoff use the `Loop` aspect; XCom-like passing
+  retries and delayed re-entry use the `Loop` aspect; XCom-like passing
   becomes typed envelopes on edges; backfill is a replay over the
   event log. The practical gaps to close before claiming full
   Airflow parity: the stdlib `Calendar` (cron + tz, spec'd in stdlib.md),

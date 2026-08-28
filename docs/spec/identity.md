@@ -69,7 +69,7 @@ production graph).
 
 **Sensitive to** : topology (the parent-linked Graph/Operator/Connector owner
 tree, scoped edges, ports, edge configs), resolved
-`instances.key` and `lifetime` attributes; owner `val` expressions and every
+`instance.key` and `lifetime` attributes; owner `val` expressions and every
 effective Connector attribute's selected evaluation site; handlers, the order of statements inside
 a handler (`emission_index` = text order) and the order of ports in a
 join ; every Rastok expression (hashed as its canonical expression AST) ;
@@ -437,8 +437,8 @@ execution-model §1) — keys `30–39`, `48–50` and `52` :
 | 34 | join_inputs | array | for a join trigger, the presence-completing set (envelope.md §3), each a spine-`id` (bytes 16), **in the handler's declared port order**; this array is deliberately not lexicographically re-sorted, because tuple order is identity; omitted otherwise |
 | 35 | state_delta | array | canonical **sorted pair list** `[field_path (text), tagged_value]` of the firing Node's private `var` changes `state → state'` (sub-form below; fields sorted by `field_path`); omitted when empty |
 | 36 | emissions | array | **in text/`emission_index` order** (execution-model §4) ; each entry a fixed tuple `[port (text), emission_index (uint), envelope (spine 1–9)]` |
-| 37 | timers | array | dated obligations armed by a transaction or accepting inbound fact — each a fixed tuple `[kind (uint), ref (bytes)]`, sorted by `(kind, ref)`. The extend-only kinds are `1 = call timeout`, `2 = join within`, `3 = instance lifetime`, `4 = Saga timeout`, `5 = Loop backoff`, `6 = instance drain`, `7 = instance settlement`, `8 = inbound Call request timeout`, `9 = outbound Session handshake timeout`. Kind 3 uses domain `0x21`; kinds 6/7 use domain `0x22` plus their kind; kind 8 uses the already-derived `InboundCallRef`; kind 9 uses the candidate `SessionRef`. The due instant is NOT sealed (derivable and re-armed by the fold). |
-| 38 | routes | array | target admissions made before commit, each `[delivery_id (bytes16), edge (text), target_instance_ref]`, sorted by canonical tuple; omitted only when the transaction creates no routed delivery. This is the recovery authority for a delivery not yet consumed by its target; replay never re-evaluates `instances.key` and never substitutes a later generation. |
+| 37 | timers | array | dated obligations armed by a transaction or accepting inbound fact — each a fixed tuple `[kind (uint), ref (bytes)]`, sorted by `(kind, ref)`. The extend-only kinds are `1 = call timeout`, `2 = join within`, `3 = instance lifetime`, `4 = Saga timeout`, `5 = Loop delay`, `6 = instance drain`, `7 = instance settlement`, `8 = inbound Call request timeout`, `9 = outbound Session handshake timeout`. Kind 3 uses domain `0x21`; kinds 6/7 use domain `0x22` plus their kind; kind 8 uses the already-derived `InboundCallRef`; kind 9 uses the candidate `SessionRef`. The due instant is NOT sealed (derivable and re-armed by the fold). |
+| 38 | routes | array | target admissions made before commit, each `[delivery_id (bytes16), edge (text), target_instance_ref]`, sorted by canonical tuple; omitted only when the transaction creates no routed delivery. This is the recovery authority for a delivery not yet consumed by its target; replay never re-evaluates `instance.key` and never substitutes a later generation. |
 | 39 | cause_id | bytes(16) | causal envelope of a lifecycle transaction. Normally key 33 identifies the same cause and this field is omitted; `l:start`, `l:stop` and later `l:evict` have no consumed cursor, while a graph-response `l:reply` deliberately carries both: key 33 names the response delivery and key 39 preserves the distinct opening root as causal parent. This keeps lifecycle causality autonomous rather than relying on record order. |
 | 48 | parent_instance_ref | array | present exactly on `l:start` for a non-root owner; the fixed `[instance_address, generation]` of the enclosing Graph instance. It opens the replayable parent/child lifecycle obligation and is omitted only for the root App owner. A logical child address contains ancestor key/time frames but not ancestor generations, so this fact is not derivable from key 31. |
 | 49 | close_scope_ref | array | present exactly on the transaction whose close request wins (`l:closing`, or a handler transaction containing bare `stop`); the fixed instance reference of the root of the Closing scope. Descendant work may drain under this reference, and later external admission reserves its successor. Omitted on ordinary firings. |
@@ -493,8 +493,12 @@ cannot diverge on bytes for the same journal :
   a canonical sorted list of pairs `[stamp_kind (uint), value]` sorted
   by `stamp_kind`, from the EXACT set :
   `1 = saga_id (bytes 16) · 2 = saga_stack (array of bytes 16) ·
-  3 = loop_id (bytes 16) · 4 = loop_stack (array of bytes 16) ·
-  5 = iter_count (uint)` (extend-only ; no field renamed or dropped).
+  3 = reserved former loop_id (bytes 16) ·
+  4 = reserved former loop_stack (array of bytes 16) ·
+  5 = reserved former iter_count (uint)` (extend-only; old bytes remain
+  decodable, but D-2026-08-28-1 emits none of tags 3–5 and exposes no source
+  binding for them). Loop run identity lives in its journal fold instead of
+  every born envelope.
 - **The `type_tag` registry** — the fixed value-type tree of
   grammar.md `TYPE_KW` / WHITEPAPER §2.1, published in full,
   extend-only, never renumbered. A `tagged_value` is a 2-element
@@ -589,7 +593,7 @@ cannot diverge on bytes for the same journal :
   a `tagged_value` (per the registry above).
 - **`timers` (TX key 37)** = tuples `[timer_kind (uint), ref (bytes 16)]`,
   `timer_kind` from `1 = call_timeout · 2 = join_within ·
-  `3 = instance_lifetime · 4 = saga_timeout · 5 = loop_backoff ·
+  `3 = instance_lifetime · 4 = saga_timeout · 5 = loop_delay ·
   6 = instance_drain · 7 = instance_settlement ·
   8 = inbound_call_timeout · 9 = session_handshake`
   (extend-only), `ref` = the obligation's derived 16-byte identity —

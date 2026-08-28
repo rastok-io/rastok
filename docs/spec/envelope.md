@@ -90,7 +90,6 @@ born outside carry nothing (zero overhead) :
 | Fields | Present when | Spec |
 |---|---|---|
 | `meta.sys.saga_*` (`saga_id`, `saga_stack`) | **birth stamps** : minted on envelopes *born* inside a `: Saga` scope | [effects-and-sagas.md](effects-and-sagas.md) |
-| `meta.sys.loop_*` (`loop_id`, `loop_stack`, `iter_count`) | **birth stamps** : minted on envelopes *born* inside a `: Loop` scope | [loop.md](loop.md) |
 
 **The Tier-2 frame.** Tier-2 fields
 are **birth-context stamps**, immutable like everything else on the envelope :
@@ -98,15 +97,19 @@ set at mint time when the emitting transaction runs inside the scope, absent
 on envelopes born outside, and they simply travel wherever the wires go
 (nothing strips them — nothing *can* : edges are wires, envelopes are
 immutable ; and it is honest provenance : that envelope *is* the scope's
-product). **In the language**, the aspect context is *instance* context —
-inside the lexical scope, the Rastok expression environment exposes `meta.sys.saga_id`,
-`saga_stack`, `loop_id`, `loop_stack`, `iter_count` **resolved from the
-aspect instance** (exactly like the contextual `instance.key`) : always
-present inside — even while processing the scope-*creating* envelope, which
-was born outside — and not in the env at all outside the scope (compile
-error, even with `.?` — no abstraction leak). Lifecycle facts
-(`saga_state`/`loop_state` transitions, `*_started_at`) are **journal- and
-observability-side only** — wall-clock never enters the data plane.
+product). **In the language**, Saga context is *instance* context: inside its
+lexical scope, expressions expose `meta.sys.saga_id` / `saga_stack` resolved
+from the aspect instance (exactly like contextual `instance.key`). They are
+present even while processing the scope-creating envelope and absent from the
+type environment outside. Loop deliberately does not add birth stamps: its
+per-root reference and iteration ordinal are journal facts, while its sole
+expression binding is the immutable `Loop.state` entry envelope. Lifecycle
+facts are journal- and observability-side only — wall-clock never enters the
+data plane.
+
+Wire slots formerly allocated for the unpublished `loop_id`, `loop_stack` and
+`iter_count` draft remain reserved in [identity.md](identity.md); M1.7 emits
+none and source cannot read them.
 
 That is the **entire** `meta.sys` surface. Any other `meta.sys.*` field
 is outside the current contract — see §9.
@@ -340,9 +343,9 @@ Composed cases :
   `origin_id` across a join — `HttpServer { mode = respond }` correlates by
   lineage only on join-free return paths, and requires an explicit
   `correlate` field otherwise ([stdlib.md §3.1](stdlib.md)).
-- **Loop** (`: Loop` re-injection) → each call is a new envelope emitted by
-  the Loop-carrying node, trigger `l:next`, `parent_id` = the previous call's
-  output. The parent chain *is* the iteration history.
+- **Loop** (`: Loop` re-injection) → each iteration-state envelope is emitted
+  by the Loop manager, trigger `l:next`, `parent_id` = the selected `next`
+  emission. The parent chain *is* the iteration history.
 
 ### 3.1 Transactions without a port arrival — trigger and parent
 
@@ -357,7 +360,7 @@ transactions that no port arrival triggers :
 | `on stop` via lifetime expiry | `l:stop` | **the envelope that armed the deadline** — the last admitted envelope (`idle`), creator (`fixed`), or creating admission of the processing-time box (`tumbling`). Always exists; there is no phantom tick | the node itself |
 | Inbound Call terminal | `l:reply` | the committed root request that opened the Call | the inbound Connector instance that admitted it |
 | Session terminal | `l:exit` | the envelope that opened the logical Session | the Connector instance that owns the Session |
-| Loop re-injection | `l:next` | the previous call's output — the chain *is* the iteration history | **the `: Loop`-carrying node** |
+| Loop re-injection | `l:next` | the selected `next` emission — the chain *is* the iteration history | **the `: Loop` Graph**, in the same instance generation |
 | Saga compensation envelope | `l:compensate` | **the envelope explicitly routed to `Saga.rollback`** (or the saga's `SagaExpired` timeout event); for compensations 2..n: the previous compensation's ack (the chain IS the reverse rollback order) | **the `: Saga`-carrying node**, port `compensate` (reserved), index 0 |
 | Budget expiry (call `timeout`, `Saga.timeout`) | `l:timeout` | **the envelope that ARMED the budget** — the request (call) ; the instance-creating envelope (saga) | the Connector node / the `: Saga` node |
 | Join-buffer eviction | `l:evict` | the evicted envelope ([execution-model.md §7](execution-model.md)) | the Operator node |

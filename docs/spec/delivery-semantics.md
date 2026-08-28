@@ -66,7 +66,7 @@ worlds close cleanly :
 - **Crash after commit** → the emissions are durable facts ; delivery resumes
   from the journal. A keyed target resumes from the route bytes retained by
   its producer (INBOUND key 25 / TRANSACTION key 38); recovery never
-  re-evaluates `instances.key` against old traffic or substitutes a later
+  re-evaluates `instance.key` against old traffic or substitutes a later
   generation.
 
 Net observable guarantee **inside the graph : effectively-once** — the
@@ -249,17 +249,17 @@ Stripe-semantics rule) :
   `idempotency_key = meta.app.payment_id`. Retry after timeout → partner
   dedups (safe) ; retry after a *processed* failure → the partner replays
   the failure (correct — a declined payment must not silently re-run).
-- **Per-attempt key = the documented escape** (`… + "#" +
-  string(meta.sys.iter_count)`) for partners that consume the key on
-  failure.
-- **A key must not be required to reference `iter_count` inside a
-  Loop.** Composed with the call-closed rule and Loop re-injection, that
+- **Per-attempt key = an explicit state-carried escape** (`data.operation_id +
+  "#" + string(data.attempt)`) for partners that consume the key on failure.
+  The Loop Graph must advance that field visibly in its `next` state.
+- **A key must not be required to vary per iteration inside a Loop.** Composed
+  with the call-closed rule and Loop re-injection, that
   requirement would double-pay on the timeout-with-late-success path:
 
 ```
    call #0, key "pay_42#0" ──► the bank executes… slowly
    t=duration("30s") : timeout → call closed → TimeoutExpired → Loop re-injects
-   iter_count=1 → key "pay_42#1"  ← NEW key → the bank sees a NEW operation
+   next state attempt=1 → key "pay_42#1"  ← NEW key → the bank sees a NEW operation
    💸💸 double payment. Every rule was fine ; the composition was fatal.
 ```
 
@@ -301,7 +301,7 @@ derivable from (journal, state): an open call's REMAINING budget (its
 arming `t` annotation + `timeout`), a buffered join half's `within` deadline
 (its buffering annotation + the window), a live instance's lifetime (last
 admission + `idle`, creator + `fixed`, or epoch-aligned tumbling arithmetic), an open saga's
-`Saga.timeout` (creator record + budget), a Loop's pending backoff.
+`Saga.timeout` (creator record + budget), a Loop's pending delayed re-entry.
 At restart each obligation is re-armed for its remainder ; obligations
 already past **fire immediately, in date order** — a call whose budget
 expired during the outage delivers its `TimeoutExpired` late by
@@ -506,7 +506,7 @@ rollback_failed`) is **computed from the records of its scope** :
    selected outcome reaches `Saga.rollback`                        → rolling_back
    compensations sent = the saga node's transactions (l:compensate)→ rolling_back, j/k done
    compensations acked= their transaction + outbound records         → rolled_back
-   a compensation exhausted its Loop variant                       → rollback_failed
+   a compensation exhausted its Loop fuel                          → rollback_failed
 ```
 
 The saga manager stores nothing — it **folds the journal**. (This is

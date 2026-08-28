@@ -34,7 +34,7 @@ graph sim05 : App {
   }
 
   operator count {
-    instances = { key = meta.ext.user_id }
+    instance = { key = meta.ext.user_id }
     lifetime = { kind = idle; after = duration("2h") }
 
     input in : struct { }

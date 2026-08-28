@@ -30,7 +30,7 @@ use crate::identity::encoding::value_tagged;
 use crate::node;
 use crate::plan::{
     AttrSetting, ClosingPolicy, ConnectorSpec, Edge, Emission, EndpointRef, EvaluationSite,
-    ExecutionPlan, FieldWrite, Handler, InstanceLifetime, InstanceSpec, Node, NodeKind, Owner,
+    ExecutionPlan, FieldWrite, Handler, InstanceLifetime, InstanceSpec, Node, NodeExecution, Owner,
     OwnerKind, OwnerPath, OwnerSlot, OwnerValue, PlanValidationError, PortDecl, SemanticHash, Slot,
     Step, ValidatedExecutionPlan, VarCell,
 };
@@ -360,13 +360,13 @@ fn schema_tree(schema: &[(String, DataType)]) -> Cbor {
 }
 
 fn node_tree(node: &Node) -> Cbor {
-    let kind = match &node.kind {
-        NodeKind::Operator => Cbor::Uint(1),
-        NodeKind::Connector(spec) => Cbor::Array(vec![Cbor::Uint(2), spec_tree(spec)]),
+    let execution = match &node.execution {
+        NodeExecution::Operator => Cbor::Uint(1),
+        NodeExecution::Connector(spec) => Cbor::Array(vec![Cbor::Uint(2), spec_tree(spec)]),
     };
     let fields = BTreeMap::from([
         (1, Cbor::Text(node.path.to_string())),
-        (2, kind),
+        (2, execution),
         (
             3,
             Cbor::Array(node.ports.iter().map(port_decl_tree).collect()),
@@ -960,7 +960,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
     for node in &plan.nodes {
         // node map at 2: path, kind, and the two table arrays at 3.
         max = max.max(3);
-        if let NodeKind::Connector(spec) = &node.kind {
+        if let NodeExecution::Connector(spec) = &node.execution {
             // kind array at 3, spec map at 4, its fields at 5.
             max = max.max(5);
             if matches!(spec.effect, node::Effect::Class(_)) {
@@ -1442,13 +1442,13 @@ fn node_from(tree: &Cbor) -> Result<Node, DecodeError> {
             .collect::<Vec<_>>(),
     )
     .map_err(|_| err("node path"))?;
-    let kind = match get(pairs, 2, "node kind")? {
-        Cbor::Uint(1) => NodeKind::Operator,
+    let execution = match get(pairs, 2, "node execution")? {
+        Cbor::Uint(1) => NodeExecution::Operator,
         Cbor::Array(parts) => match parts.as_slice() {
-            [Cbor::Uint(2), spec] => NodeKind::Connector(spec_from(spec)?),
-            _ => return Err(err("node kind")),
+            [Cbor::Uint(2), spec] => NodeExecution::Connector(spec_from(spec)?),
+            _ => return Err(err("node execution")),
         },
-        _ => return Err(err("node kind")),
+        _ => return Err(err("node execution")),
     };
     let ports = array_of(get(pairs, 3, "node ports")?, "node ports")?
         .iter()
@@ -1461,7 +1461,7 @@ fn node_from(tree: &Cbor) -> Result<Node, DecodeError> {
     let owner = OwnerSlot::new(u32_from(get(pairs, 5, "node owner")?, "node owner")?);
     Ok(Node {
         path,
-        kind,
+        execution,
         ports,
         vars,
         owner,
@@ -2424,7 +2424,7 @@ mod tests {
             owners: vec![root_owner(), instance_owner],
             nodes: vec![Node {
                 path: node::Path::new(["worker"]).unwrap(),
-                kind: NodeKind::Operator,
+                execution: NodeExecution::Operator,
                 ports: vec![],
                 vars: vec![],
                 owner: OwnerSlot::new(1),
@@ -2645,7 +2645,7 @@ mod tests {
             nodes: vec![
                 Node {
                     path: node::Path::new(["relay"]).unwrap(),
-                    kind: NodeKind::Operator,
+                    execution: NodeExecution::Operator,
                     ports: vec![
                         PortDecl::untyped(port("extra"), node::Direction::Output),
                         PortDecl {
@@ -2664,7 +2664,7 @@ mod tests {
                 },
                 Node {
                     path: node::Path::new(["shell"]).unwrap(),
-                    kind: NodeKind::Connector(ConnectorSpec {
+                    execution: NodeExecution::Connector(ConnectorSpec {
                         contract: crate::connector::ConnectorId::parse(
                             crate::connector::PROCESS_CONNECTOR_ID,
                         )
@@ -2778,7 +2778,7 @@ mod tests {
             owners: vec![root_owner(), node_owner("o", 0)],
             nodes: vec![Node {
                 path: node::Path::new(["o"]).unwrap(),
-                kind: NodeKind::Operator,
+                execution: NodeExecution::Operator,
                 ports: vec![],
                 vars: vec![],
                 owner: OwnerSlot::new(1),
@@ -3335,7 +3335,7 @@ mod tests {
             expr: tree(expr::Expr::Literal(Value::Int(42))),
             resolved: Some(Value::Int(42)),
         }];
-        let NodeKind::Connector(spec) = &mut categorical.nodes[1].kind else {
+        let NodeExecution::Connector(spec) = &mut categorical.nodes[1].execution else {
             panic!("the rich plan's second node is a connector");
         };
         spec.attributes.push((

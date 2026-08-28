@@ -29,7 +29,7 @@ graph sim04 : App {
   connector confirmed : Memory { }
 
   graph book_trip : Saga {
-    instances = { key = meta.ext.booking_id }
+    instance = { key = meta.ext.booking_id }
     lifetime = { kind = idle; after = duration("1h") }
 
     Saga.timeout = duration("10m")

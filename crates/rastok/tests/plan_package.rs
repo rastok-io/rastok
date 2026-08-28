@@ -99,7 +99,7 @@ graph g : App {
   input in: text
   output out: text
   operator relay {
-    instances = { key = data }
+    instance = { key = data }
     lifetime = { kind = idle ; after = duration("30s") }
     input in: text
     output out: text
@@ -151,7 +151,7 @@ graph g : App {
   graph sessions {
     input in: text
     output out: text
-    instances = { key = data }
+    instance = { key = data }
 
     operator greet {
       input in: text
@@ -204,7 +204,7 @@ graph g : App {
   output out: int
   output expired: JoinExpiry
   operator pair {
-    instances = { key = data }
+    instance = { key = data }
     input left: int
     input right: int
     output out: int

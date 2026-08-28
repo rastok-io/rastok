@@ -28,6 +28,9 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
   WebSocket Codex gateway gates;
 - [`m1.6-exit-report.md`](m1.6-exit-report.md) for H7 static assembly,
   interoperability, identity, binary-size, no-std and QEMU closure evidence;
+- [`m1.7-loop-backlog.md`](m1.7-loop-backlog.md) for the ordered Node taxonomy,
+  Loop contract, categorical transport, journal fold, carrier execution and
+  closure gates;
 - [`release-qualification.md`](release-qualification.md) for the single
   inventory of executed third-party interoperability evidence and external
   qualifications still required before a public release;

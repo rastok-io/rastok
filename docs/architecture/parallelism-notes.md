@@ -7,7 +7,7 @@
 ## Four concepts that must stay separate
 
 ```text
-instances.key       = logical address and serialization domain
+instance.key       = logical address and serialization domain
 lifetime            = when one logical instance closes
 Connector capacity  = how many external calls may be open
 workers / shards    = physical execution and placement
@@ -77,7 +77,7 @@ protocol into local calls without deleting its journal facts.
 2. **Journal serialization** — global commit sequencer or per-shard journals
    with causal order across shards. Replay remains journal-relative.
 3. **Live-cardinality admission** — runtime caps, waiting/backpressure, and
-   deterministic eviction policy. This is not source `instances.key`.
+   deterministic eviction policy. This is not source `instance.key`.
 4. **Connector bulkheads** — max open calls and queue policy, separate from
    the number of live logical instances.
 5. **Explicit re-key boundaries** — changing correlation/addressing is a

@@ -33,7 +33,7 @@ graph sim02 : App {
   connector dlq      : Memory { }                       // evicted halves — never silent
 
   operator settle {
-    instances = { key = meta.ext.order_id }
+    instance = { key = meta.ext.order_id }
     lifetime = { kind = idle; after = duration("30m") }
 
     input order   : struct { total: decimal(10,2) }

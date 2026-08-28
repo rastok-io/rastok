@@ -1,410 +1,350 @@
-# Loop — bounded tail-recursive iteration
+# Loop — finite temporal recursion
 
-> **Status: Normative — under review.**
-> Companion to [aspects.md](aspects.md), which defines the generic aspect
-> mechanism, and [effects-and-sagas.md](effects-and-sagas.md), which defines
-> Saga composition.
+> **Status: normative M1.7 target.** The source classifier recognizes
+> `Loop` as a `node::Aspect`, but the checker remains fail-closed until the
+> categorical plan and runtime gates described here land. No accepted program
+> may silently execute as an ordinary Graph while carrying `: Loop`.
 
-The `Loop` aspect re-applies a Graph, Operator, or Connector to a passed
-envelope. It covers three related cases:
+`Loop` applies one Graph repeatedly to an immutable iteration-state envelope.
+It is finite temporal recursion, not a spatial cycle:
 
-- counted work: apply a body a known number of times;
-- convergence: refine data until a declared condition holds;
-- retry: repeat an external call while an explicitly selected typed
-  outcome case satisfies graph policy.
-
-The graph remains acyclic. Re-entry is performed by the Loop manager after
-one call has completed; it is not a graph edge and it does not suspend a
-stack frame. The runtime model is tail recursion over immutable envelopes.
-
-Every Loop declares exactly one qualified attribute:
-
-```rastok
-Loop.variant = {
-  kind = measure
-  initial = 10
-  next = value - 1
-  until = value <= 0
-}
+```text
+external in ──▶ body ──▶ out       terminal result
+                    └──▶ next ─┐
+                         l:next│
+                    in ◀───────┘
 ```
 
-`variant` is therefore a property of the `Loop` aspect. It is not an
-Operator `var`, a special top-level clause, or the dynamic data type named
-`variant`.
+The declared topology remains a DAG. `next` commits a dated or immediate
+`l:next` fact and re-enters the same Loop run; it is never a graph edge.
 
-## 1. Where Loop applies
+M1.7 admits `Loop` on a **Graph only**. Pure Operator work and Connector calls
+remain ordinary children of that Graph. This is not a loss of expressivity:
+it gives every Loop one boundary, one state type and one totality proof instead
+of three carrier-specific protocols. Direct `Operator + Loop` and
+`ConnectorType + Loop` are named later gates.
 
-The `: Loop` annotation is legal on every Node family:
+## 1. Boundary contract
 
-```rastok
-// Graph: the whole sub-DAG is applied again.
-graph refine : Loop {
-  input in: struct { error_margin: double, remaining_steps: int }
+A Loop Graph has four conventional port roles:
 
-  Loop.variant = {
-    kind = measure
-    source = data.remaining_steps
-    until = data.error_margin < 0.001
-    limit = 100
-  }
-
-  . -> normalize -> enrich -> score -> .
-}
-
-// Operator: one pure handler is applied again.
-operator repeat : Loop {
-  Loop.variant = {
-    kind = measure
-    initial = 10
-    next = value - 1
-    until = value <= 0
-  }
-
-  on in { out = . }
-}
-
-// Connector: an external call is retried.
-connector pay : HttpClient + Loop {
-  url = "https://payments.example"
-
-  Loop.variant = {
-    kind = measure
-    initial = 5
-    next = value - 1
-    until = value <= 0
-  }
-  Loop.backoff = {
-    curve = exponential
-    initial = duration("100ms")
-    max = duration("5s")
-  }
-
-  on out where meta.ext.http_status < 500
-  on out where meta.ext.http_status >= 500 { }
-  on exit where data is ConnectFailed || data is TimeoutExpired { }
-}
-```
-
-| Carrier | What one application means |
-|---|---|
-| Graph | one complete traversal from its input boundary to its output boundary |
-| Operator | one completed handler transaction |
-| Connector | one completed external call |
-
-Each application must produce at most one continuation envelope. A Loop
-whose iterating path emits none or more than one is rejected statically when
-possible and emits a typed Loop exit case otherwise.
-
-## 2. The `Loop.variant` measure
-
-The value of `Loop.variant` must be a `measure` tagged value with these
-fields:
-
-| Field | Rule | Meaning |
+| Port | Direction | Contract |
 |---|---|---|
-| `initial` | exactly one of `initial` or `source` | the measure before the first application |
-| `source` | exactly one of `source` or `initial` | a Rastok expression evaluated on the entering envelope and on each continuation envelope |
-| `next` | required with `initial`; forbidden with `source` | a Rastok expression producing the next measure after an application |
-| `until` | required | a Rastok boolean expression checked before each application |
-| `limit` | required unless a finite bound is proved statically | maximum number of body applications |
+| `in` | input | state envelope for the current iteration |
+| `next` | output owned by Loop | next state; its logical type is exactly the type of `in` |
+| `out` | output | terminal business result (`Done`) |
+| `expired` | output owned by Loop | `LoopExpired { last_state: In }` |
 
-Inside the block, `value` is the current measure. The current envelope is
-also in scope, so `source` and `until` may read `data` and writable `meta`.
-Elsewhere in the Loop's lexical body, the same read-only value is available
-as `Loop.value`.
+`next` and `expired` are contributed by the aspect and become ordinary typed
+plan ports after checking. User code emits them like any other port, but they
+cannot be redeclared with another direction or type. `in` and `out` remain
+ordinary Graph boundary declarations so their types stay visible.
 
-`initial`, `source`, `next`, `until`, and `limit` are ordinary Rastok
-expressions. They cannot read a clock, perform I/O, or mutate state.
+Every iteration makes **exactly one control decision**:
 
-### 2.1 Counted form
+```text
+next(state) XOR out(result)
+```
+
+The checker proves this over all reachable handler paths. A path that emits
+neither, both, or more than one of either is rejected. The VM repeats the same
+check only as defense against a forged or corrupted plan; it never guesses a
+decision from scheduler order. Other diagnostic or audit outputs may be
+emitted atomically, but they do not decide the Loop. Multiple business terminal
+cases use one tagged-union `out` type.
+
+`next` is an aspect-owned control port. It may be connected only to the Loop
+manager selected by the checker; source wiring to or from it is rejected. The
+`expired` port is ordinary after contribution and follows the usual wiring and
+root-sink policy.
+
+## 2. Surface
+
+Aspect-owned attributes use their canonical qualified spelling. The prefix is
+not optional: qualification keeps aspect composition local and prevents a
+future `Saga.fuel` or Connector `delay` from changing meaning.
+
+| Attribute | Phase and type | Presence |
+|---|---|---|
+| `Loop.fuel` | positive plan-constant integer | required until a `Loop.measure` proof is discharged |
+| `Loop.delay` | closed plan-constant delay policy | optional; absence means immediate re-entry |
+| `Loop.invariant` | boolean theorem expression | optional theorem input; deferred in the first executable gate |
+| `Loop.measure` | well-founded theorem expression | optional termination witness; deferred in the first executable gate |
+| `Loop.jitter` | deterministic delay policy | reserved and rejected by name |
+
+The closed delay forms are:
 
 ```rastok
-Loop.variant = {
-  kind = measure
-  initial = 10
-  next = value - 1
-  until = value <= 0
+Loop.delay = {
+  kind  = fixed
+  after = duration("100ms")
+}
+
+Loop.delay = {
+  kind    = exponential
+  first   = duration("100ms")
+  ceiling = duration("5s")
 }
 ```
 
-The predicate is checked before the body. This example therefore applies the
-body ten times, with values 10 through 1, and exits when the next value is 0.
+All durations are positive plan constants. For the `k`th re-entry, where
+`k >= 1`, exponential delay is:
 
-The compiler may derive the bound when all of the following are evident:
+```text
+min(ceiling, first * 2^(k - 1))
+```
 
-- `initial` is an integral constant;
-- `next` moves by a non-zero integral constant towards the terminal range;
-- `until` is a compatible comparison against an integral constant.
+Arithmetic saturates safely at `ceiling`. Delay changes only the admission
+date of `next`; it does not add fuel, extend a Connector timeout or alter the
+instance lifetime.
 
-All other forms declare `limit` explicitly.
+The following former spellings are removed rather than aliased:
+`Loop.variant`, `Loop.backoff`, `initial`, `source`, `value`, `until`,
+`limit`, `max_steps`, and `Loop.decreases`. Each receives one migration
+diagnostic to `Loop.fuel`, `Loop.delay`, or `Loop.measure` as appropriate.
 
-### 2.2 Envelope-derived form
+## 3. Iteration state
 
-`source` makes the body responsible for carrying the next measure in its
-output:
+At every iteration, `data` is the current input payload. The read-only binding
+`Loop.state` preserves the complete entry envelope even if a handler later
+works with another envelope:
+
+```text
+Loop.state.data
+Loop.state.meta
+```
+
+That is the only Loop-specific expression binding. There is no separate
+`initial`, `value`, attempt variable or writable Loop state. User `var` cells
+remain private to their declaring Node and follow the ordinary instance rules.
+
+One external root envelope opens one **Loop run**. Its `LoopRunRef` is derived
+from that root envelope identity. The run carries its own fuel, iteration
+ordinal and pending wakeup. Several runs may coexist in one keyed Graph
+instance and may interleave while one is delayed; mailbox serialization still
+makes each committed Graph transaction atomic.
+
+An iteration does not create a new instance generation. Instance generation
+belongs to `l:start`/`l:stop`; Loop progress belongs to the `LoopRunRef` and
+its zero-based iteration ordinal.
+
+## 4. Fuel and exhaustion
+
+`Loop.fuel = N` bounds **body applications**, not re-entries. Its operational
+meaning is exact:
+
+```text
+run(0, state) = expired(LoopExpired { last_state = state })
+
+run(N + 1, state) =
+  body(state) then
+    out(result)  -> out(result)
+    next(state') -> run(N, state')
+```
+
+Consequently, if the last permitted body application emits `next`, the
+manager does **not** commit an `l:next`. It emits
+`LoopExpired { last_state = state' }`: the proposed next state is the most
+truthful terminal observation.
+
+Fuel is derived from the committed Loop fold, never from a mutable RAM counter.
+Recovery cannot regain an application. Duplicate or stale wakeups cannot spend
+fuel twice.
+
+Fuel proves a finite number of iterations. It does not prove that one
+iteration returns. Every admitted body must therefore be total under its own
+contract:
+
+- pure Rastok expressions are total or fault the transaction;
+- an outbound Call has a positive finite `timeout`;
+- a guest execution has its declared finite budget;
+- an open-ended Event or Session wait is rejected from the M1.7 body.
+
+## 5. Delay and causal history
+
+Immediate and delayed recurrence use the same journal fact. After a committed
+`next(state')`, the Loop manager records `l:next` with:
+
+- the current `LoopRunRef`;
+- the next iteration ordinal;
+- the remaining fuel;
+- `state'` as the re-entry envelope;
+- the `next` emission as causal parent;
+- the due date, when `Loop.delay` is present.
+
+The generic dated-event queue uses timer kind 5. Lab time advances only through
+`advance`; production uses the hosted Clock. Equal input facts and equal
+virtual time therefore produce the same causal core.
+
+A pending Loop wakeup is scoped to the current instance generation and counts
+as an armed obligation for `idle`. If the owner enters Closing, that wakeup is
+cancelled/stale and cannot open work in a successor generation. A Loop wakeup
+is not a Connector call and owes no invocation `exit`.
+
+## 6. Termination witnesses
+
+An admitted Loop has at least one termination witness:
+
+| `Loop.fuel` | discharged `Loop.measure` | Admission |
+|---:|---:|---|
+| present | absent | yes — structural finite bound |
+| absent | present | yes — theorem proves termination |
+| present | present | yes — theorem plus operational cap |
+| absent | absent | reject |
+
+The first executable M1.7 gate admits the first row. `Loop.invariant` and
+`Loop.measure` remain named, fail-closed theorem positions until the verifier
+can produce and the core can check a proof certificate. They never degrade
+into runtime assertions masquerading as proof.
+
+### 6.1 Proof obligations
+
+For state `s`, invariant `I`, measure `m` and every reachable path through the
+finite body, the verifier must establish:
+
+1. `I(s)` at entry;
+2. one body application terminates;
+3. exactly one of `next(s')` or `out(r)` is emitted;
+4. every `next(s')` preserves `I(s')`;
+5. every `next(s')` strictly decreases `m(s') < m(s)` in a well-founded order.
+
+These obligations prove eventual `out`; no independent `until` predicate is
+needed. An external Connector result is a fresh symbolic typed value. The
+verifier may use explicit guards on that value, but never assumes that a
+remote service progresses merely because it usually does.
+
+The initial automatic fragment is intentionally small: affine integer
+arithmetic, comparisons, boolean connectives, structs and tagged unions over a
+finite spatial DAG. Unsupported guest calls, mutable state interactions,
+opaque functions, open Sessions or unproved nested summaries refuse the proof
+by name. The hosted compiler may search for a proof; a small `no_std` core
+checker validates the certificate. A future Rocq/Coq export is an independent
+oracle, not the runtime authority.
+
+The name `measure` follows Rocq/Coq's well-founded recursion vocabulary
+(`{measure term relation}` / `{wf relation term}`). `variant` remains a data
+type term in Rastok and is not reused for termination.
+
+## 7. Examples
+
+### 7.1 Count down
 
 ```rastok
-graph drain : Loop {
-  input in: struct {
-    items: array<variant>
-    remaining: int
+graph countdown : Loop {
+  input in: struct { n: int }
+  output out: text
+
+  Loop.fuel = 100
+
+  on in where data.n <= 0 { out = "liftoff" }
+  on in where data.n > 0  { next = { n = data.n - 1 } }
+}
+```
+
+### 7.2 Fold a finite payload
+
+```rastok
+graph total : Loop {
+  input in: struct { items: array<int>; i: int; acc: int }
+  output out: int
+
+  Loop.fuel = 10000
+
+  on in where data.i >= size(data.items) { out = data.acc }
+  on in where data.i < size(data.items) {
+    next = {
+      items = data.items
+      i     = data.i + 1
+      acc   = data.acc + data.items[data.i]
+    }
+  }
+}
+```
+
+### 7.3 Retry an outbound Call
+
+```rastok
+graph pay : Loop {
+  input in: PaymentRequest
+  output out: union { Receipt, Declined }
+
+  Loop.fuel = 5
+  Loop.delay = {
+    kind    = exponential
+    first   = duration("100ms")
+    ceiling = duration("5s")
   }
 
-  Loop.variant = {
-    kind = measure
-    source = data.remaining
-    until = value <= 0
-    limit = 10000
+  connector charge : HttpClient {
+    url      = "https://api.example/pay"
+    effect   = idempotent
+    behavior = probabilistic
+    timeout  = duration("10s")
   }
 
-  . -> pop_head -> .
-}
-```
-
-`source` is evaluated first on the entering envelope, then on each
-continuation envelope. The source expression is an obligation position:
-its fields must be statically present or explicitly optional.
-
-### 2.3 Decrease and bound checks
-
-Before re-entry, the Loop manager checks:
-
-1. `until` is false;
-2. the call count is below `limit`, when a limit is present;
-3. the next measure is strictly smaller than the current measure.
-
-A non-decrease, an incomparable value, or a type change emits
-`LoopVariantViolation`. Reaching the call limit without satisfying `until`
-emits `LoopExhausted`. These checks are journaled and replay identically.
-
-The current specification defines numeric measures. Lexicographic tuples
-and user-defined well-founded orders are deferred.
-
-### 2.4 Scope
-
-`value` exists only inside the `measure` block. `Loop.value` is visible
-inside the lexical body of the Node carrying `: Loop`, including nested
-Operators declared there. Wiring an externally declared Node into the Loop
-does not grant it access.
-
-The measure is runtime-owned state. User code can read it but cannot assign
-to it. The only ways to produce the next value are `next` or the next
-envelope evaluated by `source`.
-
-## 3. Exit semantics
-
-Loop has three exit paths:
-
-| Event | Result |
-|---|---|
-| `until` becomes true on a normal Graph or Operator iteration | current envelope leaves on `out` |
-| a Connector completion reaches a body-less outcome handler | the original typed completion outputs leave unchanged |
-| the measure exhausts or violates its invariant | `LoopExhausted` or `LoopVariantViolation` leaves on the qualified typed `Loop.exit` output |
-
-An `on <output> where <predicate> { ... }` handler with a body is an
-iterating case. `<output>` is an ordinary typed port selected by the
-author (`exit` for Process); no port name and no common `transient`
-field has privileged meaning. The Loop judges the boundary completion as
-one unit so simultaneous `out`/`err`/`exit` facts cannot be split by
-scheduler order. If an iterating case requests another call after the
-measure is exhausted, the Loop emits
-`LoopExhausted { calls, last_outcome }` on its declared `Loop.exit` output.
-
-An unmatched outcome follows the ordinary resolved sink/wiring policy;
-Loop never turns technical exhaustion into a business outcome.
-
-## 4. Backoff
-
-`Loop.backoff` is optional and applies between applications:
-
-```rastok
-Loop.backoff = {
-  curve = exponential
-  initial = duration("100ms")
-  factor = 2.0
-  max = duration("5s")
-}
-```
-
-The initial catalog contains `constant`, `linear`, `exponential`, and
-`fibonacci` tagged values. Their fields are compile-time constants. With no
-backoff, re-entry is immediate.
-
-A delay is a dated runtime event. Production execution is driven by the
-system Clock; Lab execution is driven by virtual time and `advance`.
-The obligation is scoped to the current Node-instance generation. If that
-instance enters Closing before the delay fires, the pending `l:next` becomes
-stale and cannot create work in a later generation. A Loop wakeup is not a
-Connector call and therefore owes no invocation `exit` of its own.
-
-## 5. Lifecycle hooks
-
-Loop lifecycle hooks use qualified names:
-
-```rastok
-on Loop.start { started = . }
-on Loop.stop  { finished = . }
-```
-
-`Loop.start` fires once before the first predicate check. `Loop.stop` fires
-once after any terminal result: success, selected base outcome, exhaustion, or variant
-violation. Bare `on start` and `on stop` remain Node lifecycle hooks.
-
-## 6. Envelope context
-
-Envelopes born inside a Loop carry runtime-owned `meta.sys` birth stamps:
-
-- `loop_id`: identity of the current Loop run;
-- `loop_stack`: enclosing Loop identities;
-- `iter_count`: zero-based application count.
-
-These fields cannot be written by DSL code. Re-entry emits a fresh envelope
-with trigger `l:next` and the previous application's output as causal parent.
-
-## 7. Composition with Saga
-
-Loop and Saga are independent aspects and may be combined on one Connector
-or nested lexically.
-
-### 7.1 Same-node composition
-
-```rastok
-connector reserve : HttpClient + Saga + Loop {
-  effect = compensable
-
-  Loop.variant = {
-    kind = measure
-    initial = 5
-    next = value - 1
-    until = value <= 0
+  . -> charge
+  on charge.out  { out = Receipt { value = data } }
+  on charge.exit where data is TimeoutExpired {
+    next = Loop.state.data
   }
-
-  on out where meta.ext.http_status < 500
-  on out where meta.ext.http_status >= 500 { }
-  on exit where data is ConnectFailed || data is TimeoutExpired { }
-  on compensate { /* inverse request */ }
+  on charge.exit where data is Exited {
+    out = Declined { status = data }
+  }
 }
 ```
 
-Loop resolves the call attempt. Saga records a step only after Loop returns
-a successful result. Exhaustion is one failed Saga step, not five completed
-steps.
+The retry policy belongs to the Graph, not to `HttpClient`. Stable
+idempotency keys and call close-once remain Connector obligations. A
+`Process(codec = jsonl)` can emit several `out` frames, so it is admitted only
+when the surrounding Graph still proves exactly one control decision.
 
-### 7.2 Nested composition
+## 8. What is not a Loop
 
-A Loop inside a Saga step is sealed before the Saga advances. A Saga inside
-a Loop iteration is likewise sealed before re-entry. Aspect stacks are
-lexical and journaled; they do not interleave implicitly.
+| Need | Primitive | Why not Loop |
+|---|---|---|
+| aggregate independent arrivals | Node-private `var` + optional `instance`/`lifetime` | state lives across unrelated root envelopes |
+| global or keyed window | finite `lifetime` + `on stop` | time closes an instance, not recursive progress |
+| calendar recurrence | `Calendar` | there is no result toward which one run converges |
+| open-ended polling daemon | `Clock` + ordinary Graph | intentionally unbounded service |
+| long-lived process/session | Connector mode + `lifetime` | lifecycle, not recursion |
 
-### 7.3 Effect rules inside Loop
+`lifetime` and Loop are orthogonal. A finite lifetime may close an instance
+containing active Loop runs. The termination theorem is conditional on the
+owner remaining open; Closing follows the instance protocol and invalidates
+pending Loop wakeups.
 
-Retrying an effectful Connector is legal only when its external contract
-makes the repeated call explicit:
+## 9. Composition
 
-- `none` and `idempotent` effects may repeat;
-- `compensable` and `irreversible` effects require an
-  `idempotency_key`;
-- the same byte-identical business key is normally reused for every attempt
-  of one logical call.
+`Saga + Loop` is not enabled merely because both names are recognized. Its
+composition rule must prove which journal fold is outermost. The target rule
+is: one complete Loop run resolves inside one Saga step, and only its terminal
+result becomes the step outcome. Saga compensation debt survives instance
+Closing; Loop wakeups do not.
 
-A per-attempt key is an explicit escape for a partner that permanently
-consumes a key on a processed failure. It changes the business operation
-seen by the partner and can double-apply after a late success, so it must be
-visible in source and in the coverage report. The full key-stability rule
-lives in [delivery-semantics.md](delivery-semantics.md) §4.3.
+## 10. Validation checklist
 
-## 8. Static rules
+Before a Loop plan becomes executable, Registry-free validation re-derives:
 
-The validator enforces:
+1. carrier is a Graph and the aspect occurs once;
+2. `in` and `out` exist and `next`/`expired` have their exact contributed
+   types;
+3. `Loop.fuel` is positive when no checked proof certificate exists;
+4. `Loop.delay` is canonical and all durations are positive;
+5. every reachable iteration path decides exactly one of `next`/`out`;
+6. the body is individually terminating under its Connector/guest budgets;
+7. no spatial edge reads or writes `next`;
+8. run identity, fuel and causal parents agree with the journal fold;
+9. instance Closing cannot revive a stale wakeup.
 
-1. `Loop.variant` appears exactly once on every `: Loop` Node and nowhere
-   else.
-2. Its value is a `measure` block with the field combinations in §2.
-3. `until` is boolean; `limit`, when present, is a positive integral
-   constant.
-4. The measure type is stable across applications.
-5. A form without a statically derived bound declares `limit`.
-6. An iterating path has at most one continuation envelope.
-7. Loop-owned fields and `meta.sys.loop_*` are read-only.
-8. Effectful retries satisfy §7.3.
-9. Re-entry is runtime-owned and never creates a static DAG edge.
+Any unsupported theorem expression, carrier, aspect combination or body
+cardinality refuses before VM construction.
 
-## 9. Limitations and open questions
+## 11. Related documents
 
-- Static bound derivation initially covers only the counted form in §2.1.
-- General proofs that a `source` decreases are deferred; runtime checking and
-  the explicit `limit` remain authoritative.
-- Tuple measures and custom orders are not part of the current type surface.
-- Wall-clock deadlines are expressed by a Connector observation and an exit
-  handler, not as a hidden Loop clock.
-
-## 10. Prover mapping
-
-The executable model maps directly to a recursive function:
-
-| Rastok | Proof-oriented reading |
-|---|---|
-| Node carrying `: Loop` | tail-recursive function over an envelope |
-| `Loop.variant` | decreasing measure |
-| `until` | base-case predicate |
-| body application | recursive step |
-| `limit` | executable finite bound when no stronger proof is available |
-
-Runtime checks provide executable evidence. They are not themselves a
-mathematical proof of total correctness.
-
-## 11. Lineage
-
-The design follows the loop-variant tradition associated with Floyd and
-Hoare, and the decreasing-measure formulations used by SPARK, Dafny, and
-Coq. Rastok keeps the user-facing word `Loop` because the source describes
-iteration; the runtime uses the equivalent tail-recursive execution model.
-
-## 12. Termination guarantee
-
-Every admitted Loop has a finite call bound:
-
-- the compiler derives it for a tractable counted measure; or
-- the declaration supplies `limit`.
-
-Strict-decrease checking catches a broken progress claim before the next
-application. The hard bound remains the final guard. Rastok therefore
-guarantees that the Loop manager will stop; it does not claim that an
-external Connector will answer before its separately declared timeout.
-
-## 13. Prover direction
-
-A future theorem layer may discharge a derived bound or prove that a
-`source` measure decreases. That proof can remove redundant runtime checks,
-but it must not change observable graph semantics. Until then, the
-executable checks in §2.3 and §12 are normative.
-
-## 14. Related documents
-
-- [aspects.md](aspects.md) — annotation, qualification, and composition;
-- [effects-and-sagas.md](effects-and-sagas.md) — effect and Saga rules;
-- [execution-model.md](execution-model.md) — handlers, timeouts, and dated
-  events;
-- [delivery-semantics.md](delivery-semantics.md) — journal and stable
-  idempotency keys;
-- [envelope.md](envelope.md) — Loop birth stamps;
-- [grammar.md](grammar.md) — concrete syntax.
-
-## 15. First dischargeable theorem: bounded retry
-
-For the counted declaration
-
-```rastok
-Loop.variant = {
-  kind = measure
-  initial = 5
-  next = value - 1
-  until = value <= 0
-}
-```
-
-assume every external attempt terminates with a result or its declared
-timeout. The measure starts at 5, decreases by 1 after every retry, and the
-terminal predicate holds at 0. The Connector therefore performs at most
-five attempts for one logical call. This is the first Loop property the
-future theorem layer should be able to discharge automatically.
+- [aspects.md](aspects.md) — Node kind/type/aspect classification;
+- [instances.md](instances.md) — key, lifetime, generation and Closing;
+- [execution-model.md](execution-model.md) — transactions and dated events;
+- [delivery-semantics.md](delivery-semantics.md) — journal-before-effect and
+  Connector close-once;
+- [identity.md](identity.md) — extend-only causal registries;
+- [grammar.md](grammar.md) — concrete source productions.

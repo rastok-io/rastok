@@ -16,7 +16,7 @@ use crate::boundary::{
 use crate::connector::{ConnectorId, ConnectorRoles};
 use crate::plan::ValidatedExecutionPlan;
 #[cfg(feature = "hosted-http12")]
-use crate::plan::{AttrSetting, NodeKind};
+use crate::plan::{AttrSetting, NodeExecution};
 #[cfg(feature = "hosted-http12")]
 use crate::value::Value;
 
@@ -158,9 +158,9 @@ pub(crate) fn bind_routes(
             .nodes
             .iter()
             .find(|node| &node.path == path)
-            .and_then(|node| match &node.kind {
-                NodeKind::Connector(spec) => Some(spec),
-                NodeKind::Operator => None,
+            .and_then(|node| match &node.execution {
+                NodeExecution::Connector(spec) => Some(spec),
+                NodeExecution::Operator => None,
             })
             .ok_or_else(|| {
                 super::DriverFactoryError::new(format!(

@@ -35,7 +35,7 @@ key on its definition:
 
 ```rastok
 operator counter {
-  instances = {
+  instance = {
     key = meta.app.customer_id
   }
 
@@ -53,7 +53,7 @@ Node attributes:
 
 ```rastok
 graph conversations {
-  instances = {
+  instance = {
     key = meta.app.session_id
   }
 
@@ -87,7 +87,7 @@ Node's state by name.
 
 ## 2. Key selection
 
-`instances.key` is evaluated exactly once for every envelope crossing into
+`instance.key` is evaluated exactly once for every envelope crossing into
 that owner. It runs against the complete immutable entering envelope:
 
 - `data`;
@@ -178,8 +178,8 @@ sorts fields by name at every level. Thus field names, resolved leaf types and
 canonical values are all identity, and these select the same instance:
 
 ```rastok
-instances = { key = { tenant = data.tenant, session = data.session } }
-instances = { key = { session = data.session, tenant = data.tenant } }
+instance = { key = { tenant = data.tenant, session = data.session } }
+instance = { key = { session = data.session, tenant = data.tenant } }
 ```
 
 but a renamed field selects a different address. The inferred resolved key
@@ -232,12 +232,12 @@ with the next generation.
 
 `instance.key` exposes the owner's local selected key as a read-only value in
 that owner's handlers. It is statically available only when that owner declares
-`instances.key`; it never falls back to an ancestor key or to null. A Graph may
+`instance.key`; it never falls back to an ancestor key or to null. A Graph may
 bind immutable values derived from it:
 
 ```rastok
 graph workspace {
-  instances = { key = meta.app.workspace_id }
+  instance = { key = meta.app.workspace_id }
   val cwd = "/workspace/" + instance.key
   ...
 }
@@ -289,7 +289,7 @@ boot value to an enclosing `val`, then consume that immutable value later.
 val WORK_ROOT = env("WORK_ROOT")
 
 graph sessions {
-  instances = { key = meta.app.session_id }
+  instance = { key = meta.app.session_id }
   val workdir = WORK_ROOT + "/" + instance.key
 
   connector worker : Process {
@@ -324,7 +324,7 @@ one of its handlers:
 
 ```rastok
 operator account {
-  instances = { key = meta.app.account_id }
+  instance = { key = meta.app.account_id }
   var balance: long = 0
 
   on debit {
@@ -361,7 +361,7 @@ address.
 
 Key and lifetime are orthogonal:
 
-| `instances.key` | `lifetime` | Meaning |
+| `instance.key` | `lifetime` | Meaning |
 |---|---|---|
 | absent | absent | persistent singleton |
 | present | absent | persistent instances by key |
@@ -399,7 +399,7 @@ reference. The unique causal last-admission id additionally fences a deadline
 superseded within that generation. A later admission supersedes the earlier
 cause; a later generation cannot be mistaken for the expired one.
 
-Idle measures admission silence. An armed call, Loop backoff, or other dated
+Idle measures admission silence. An armed call, Loop delay, or other dated
 obligation does not silently rewrite that definition. If the idle deadline
 wins, the instance enters Closing; its outstanding obligations are then
 drained, cancelled, settled, or retained according to their own protocol and
@@ -430,7 +430,7 @@ same explicit closing contract as every other finite lifetime.
 Processing-time boxes are epoch-aligned at `epoch + k·every`. The runtime adds
 the canonical window start as a runtime-owned address frame; it is not a field
 the source author fabricates. One envelope belongs to exactly the box open at
-its admission. A lifetime without `instances.key` is therefore a true temporal
+its admission. A lifetime without `instance.key` is therefore a true temporal
 singleton in each enclosing Graph address, rather than a fake constant-key
 partition; it is App-global only when every ancestor is singleton.
 
@@ -547,7 +547,7 @@ means only that no terminal outcome was confirmed before settlement expired.
 It has no `reason` payload; its causal trigger and the abandoned OUTBOUND fact
 carry the provenance.
 
-Loop wakeups and backoffs are generation-bound and die with their instance.
+Loop wakeups are generation-bound and die with their instance.
 Saga compensation debt is journal-bound and survives instance closure; saga
 state remains a fold of ordinary journal facts, never a second ledger.
 
@@ -575,7 +575,7 @@ access remains a separately named expression-language gate.
 
 There is no `by` override. A different correlation domain is a different
 owner key and should be expressed by giving that Operator the appropriate
-`instances.key`. This keeps routing and correlation under one instance model.
+`instance.key`. This keeps routing and correlation under one instance model.
 
 A partial join is retained state but not runnable work. It is therefore
 quiescent for `drain`/Lab stability until another arrival, a `last` overflow,

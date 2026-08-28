@@ -77,7 +77,7 @@ implicit yield, D-2026-08-13-1).
 
 A graph is itself a Node when composed inside another graph, and — like an
 Operator or Connector — it may select one logical instance with
-`instances.key`. Here `sessions` selects one instance per session key; its
+`instance.key`. Here `sessions` selects one instance per session key; its
 per-session paths are **graph-level `val`s** derived from `instance.key` (a
 Rastok expression) and
 referenced by name inside. A single-in/out graph just uses the default `in` /
@@ -87,7 +87,7 @@ tagged lifecycle outcome — likewise no declaration.
 
 ```rastok
 graph sessions {
-  instances = { key = meta.app.session_key }
+  instance = { key = meta.app.session_key }
   lifetime = { kind = idle; after = duration("2h") }
   // One Graph instance per canonical session key. Physical capacity and
   // placement are deployment policy, not logical instance attributes.
@@ -138,7 +138,7 @@ graph sessions {
 
 ## 3. Per-key sub-graph composition
 
-`sessions` (from Example 2) owns `instances.key`, so it is a keyed sub-graph:
+`sessions` (from Example 2) owns `instance.key`, so it is a keyed sub-graph:
 **its declaration owns its instances** (`compose` is not a declaration form).
 The runtime materializes one logical instance per distinct canonical session
 key; key, lifetime and graph-level `val`s all come from that declaration. It
@@ -187,7 +187,7 @@ graph turn_stream {
 
   // One turn = one Operator instance, ended by the flush event.
   operator turn_aggregator {
-    instances = { key = data.params.turn_id }
+    instance = { key = data.params.turn_id }
     lifetime = { kind = idle; after = duration("5m") }
     var buffer: text = ""
 
@@ -233,35 +233,43 @@ graph teams_outbound {
   input read_dlq: struct { }
   output dlq_snapshot
 
-  connector teams_out : HttpClient + Loop {
-    base_url = env("TEAMS_SERVICE_URL")
-    path = "/v3/conversations/" + meta.app.conversation_id + "/activities"   // per-call Rastok expression
-    method = "POST"
-    codec = json
-    protocol = "teams_activity"
-    effect = irreversible
-    behavior = deterministic
-    idempotency_key = meta.app.delivery_id
-    // in = request, out = response (HttpClient defaults)
+  graph send : Loop {
+    input in: variant
+    output out: variant
+    Loop.fuel = 3
+    Loop.delay = {
+      kind = exponential
+      first = duration("200ms")
+      ceiling = duration("5s")
+    }
 
-    auth = {
-      scheme = oauth2_client_credentials
-      token_endpoint = env("TEAMS_TOKEN_ENDPOINT")
-      client_id      = env("TEAMS_BOT_APP_ID")
-      client_secret  = env("TEAMS_BOT_PASSWORD")
-      scope          = "https://api.botframework.com/.default"
-      refresh_before = duration("10m")
+    connector teams_out : HttpClient {
+      base_url = env("TEAMS_SERVICE_URL")
+      path = "/v3/conversations/" + meta.app.conversation_id + "/activities"
+      method = "POST"
+      codec = json
+      protocol = "teams_activity"
+      effect = irreversible
+      behavior = deterministic
+      idempotency_key = meta.app.delivery_id
+      timeout = duration("10s")
+
+      auth = {
+        scheme = oauth2_client_credentials
+        token_endpoint = env("TEAMS_TOKEN_ENDPOINT")
+        client_id      = env("TEAMS_BOT_APP_ID")
+        client_secret  = env("TEAMS_BOT_PASSWORD")
+        scope          = "https://api.botframework.com/.default"
+        refresh_before = duration("10m")
+      }
+      rate_limit = "10/s per meta.app.session_key"
     }
-    // retry is expressed by the Loop aspect
-    Loop.variant = {
-      kind = measure
-      initial = 3
-      next = value - 1
-      until = value <= 0
+
+    . -> teams_out
+    on teams_out.out { out = data }
+    on teams_out.exit where data is ConnectFailed {
+      next = Loop.state.data
     }
-    Loop.backoff = { curve = exponential, initial = duration("200ms") }
-    on exit where data is ConnectFailed { }      // explicit iterating outcome
-    rate_limit = "10/s per meta.app.session_key"
   }
 
   operator delivery_dispatch {
@@ -274,8 +282,9 @@ graph teams_outbound {
 
   connector dlq : Memory { }
 
-  in                            -> teams_out.in
-  teams_out.out                 -> delivery_dispatch.in
+  in                            -> send.in
+  send.out                      -> delivery_dispatch.in
+  send.expired                  -> dlq.in
   delivery_dispatch.delivered   -> nothing
   delivery_dispatch.failed      -> dlq.in
   .read_dlq                     -> dlq.read
@@ -285,7 +294,7 @@ graph teams_outbound {
 
 The snapshot is oldest-first and non-destructive. Replaying selected
 entries starts a new run and injects them as new roots; wiring
-`dlq.out -> teams_out.in` here would create the static cycle that the
+`dlq.out -> send.in` here would create the static cycle that the
 language deliberately rejects. The graph's input contract requires
 `meta.app.delivery_id` to be assigned once, before this retrying
 boundary, so every attempt carries the same business key.
@@ -353,7 +362,7 @@ graph city_weather {
   // Stateful Operator per session key: counts how many requests this
   // session has issued, exposed in the meta of the outgoing request.
   operator request_counter {
-    instances = { key = meta.app.session_key }
+    instance = { key = meta.app.session_key }
     lifetime = { kind = idle; after = duration("2h") }
     var count: int = 0
 
@@ -440,7 +449,7 @@ lab weather_demo {
 
 Four things visible here :
 
-- `request_counter.instances.key` keys the Operator's state by the incoming
+- `request_counter.instance.key` keys the Operator's state by the incoming
   session key. The state survives across envelopes of the same canonical key
   and is reclaimed when that instance becomes idle. Composite identity is one
   expression, for example `key = { user = meta.app.user_id; workspace =
@@ -544,7 +553,7 @@ graph quota_control : App {
     output rejection
 
     operator tenant_policy {
-      instances = { key = meta.app.tenant_id }
+      instance = { key = meta.app.tenant_id }
       lifetime = { kind = persistent }
 
       val PLAN_LIMITS = {
@@ -578,7 +587,7 @@ graph quota_control : App {
     }
 
     operator usage_gate {
-      instances = {
+      instance = {
         key = {
           tenant = meta.app.tenant_id
           user = meta.app.user_id
@@ -636,7 +645,7 @@ read falls back to `FALLBACK_LIMIT` via `.?` + `.orValue()`.
 
 | Construction | Form |
 |---|---|
-| Node instance selection | ordinary composite attribute: `instances = { key = <expr> }`; omission means one singleton in the enclosing Graph instance |
+| Node instance selection | ordinary composite attribute: `instance = { key = <expr> }`; omission means one singleton in the enclosing Graph instance |
 | Lifetime | independent ordinary attribute: `lifetime = { kind = persistent }`, `idle`, `fixed`, `single_pass`, or `tumbling` with the profile's duration field |
 | Operator declaration | `operator <name> { ... }` |
 | Connector declaration | `connector <name> : <NativeType> { ... }` |
@@ -648,7 +657,7 @@ read falls back to `FALLBACK_LIMIT` via `.?` + `.orValue()`.
 | Type | `variant`, scalar (`text`/`int`/`bytes`/…), `struct { … }`, `map<text, V>`, `array<T>`, `enum`, `union`, `T?` |
 | State field | `var <name>: <type> [= <default>]`; private to its declaring Node and serialized by that Node's logical instance mailbox |
 | Connector attribute | `<name> = <value>` |
-| Composite attribute | `<name> = { ... }` (`restart = { ... }`, `Loop.backoff = { curve = exponential, ... }`) |
+| Composite attribute | `<name> = { ... }` (`restart = { ... }`, `Loop.delay = { kind = exponential, ... }`) |
 | Handler | `on <trigger> [where … within … last …] { ... }` (`on (a, b)` join, `on start`, `on stop`; parsed `having` is deferred) |
 | State read (inside jq) | `$<name>` (bare `<name>` in DSL) |
 | State write | `<name> = <expr>` |

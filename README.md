@@ -18,6 +18,12 @@ business processes. It contains three kinds of nodes:
   APIs, processes, databases, files, brokers, and clocks.
 - **Graphs** compose Operators, Connectors, and other Graphs.
 
+The declaration keyword fixes a Node's structural kind. Every Node also has
+one effective type — `App`, the ordinary `Graph`/`Operator` default, or an
+exact versioned Connector contract — and may carry orthogonal aspects such as
+`Loop` or `Saga`. A type says what executes; an aspect adds a separately
+validated orchestration protocol. The two are never interchangeable.
+
 This separation makes effects replaceable. In production, Connectors
 interact with real systems. In a simulation sandbox called the
 **Lab**, controlled handlers replace those external systems while the

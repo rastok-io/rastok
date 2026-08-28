@@ -2,7 +2,7 @@
 skinparam shadowing false
 skinparam packageStyle rectangle
 
-title Rastok — bird's-eye module overview (M1.6 H4.1, 2026-08-26)
+title Rastok — bird's-eye module overview (M1.7 L0/L1, 2026-08-28)
 
 note as LEGEND
   Representative load-bearing modules and types (public or
@@ -19,7 +19,11 @@ package "node — shared graph and execution vocabulary" as P_NODE {
   class Path <<struct>>
   Path : stable root-relative node address
   enum Kind <<enum>>
-  Kind : operator, connector, or graph category
+  Kind : structural operator, connector, or graph family
+  enum Type <<enum>>
+  Type : one effective implementation or contract
+  enum Aspect <<enum>>
+  Aspect : optional Loop or Saga orchestration protocol
   class Port <<struct>>
   Port : named node endpoint
   enum Direction <<enum>>
@@ -171,8 +175,8 @@ package "compiler — source-to-plan compilation pipeline" as P_COMP {
   Unit : merged application and lab sources
   class Hir <<struct>>
   Hir : desugared, resolved, and typed graph + labs
-  enum NodeRole <<enum>>
-  NodeRole : graph, operator, or connector with its resolved contract
+  enum NodeSemantics <<enum>>
+  NodeSemantics : family-specific facts beside the effective node Type
   class Lab <<struct>>
   Lab : checked simulation corpus (never hashed)
   class Scenario <<struct>>
@@ -188,8 +192,8 @@ package "plan — serializable compiled execution model" as P_PLAN {
   ValidatedExecutionPlan : plan plus total effective port types
   class ResolvedPortTable <<struct>>
   ResolvedPortTable : exact declared/inferred type of every port
-  enum NodeKind <<enum>>
-  NodeKind : executable operator or connector with its spec
+  enum NodeExecution <<enum>>
+  NodeExecution : executable operator or connector with its spec
   class Owner <<struct>>
   Owner : parent-linked lexical Graph or Node scope
   enum OwnerKind <<enum>>

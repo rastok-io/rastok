@@ -40,6 +40,17 @@ pub use crate::node::Direction;
 pub struct Graph {
     /// The graph's declared name; excluded from descendant identity.
     pub name: String,
+    /// The graph's effective node type (`App` for the deployment root,
+    /// otherwise the canonical `Graph`).
+    pub ty: node::Type,
+    /// Canonically sorted aspects. Recovery HIR records a recognized aspect
+    /// even while its diagnostic refuses compilation; lowering independently
+    /// rejects every aspect until its plan/runtime gate lands.
+    pub aspects: Vec<node::Aspect>,
+    /// Checked Loop source contract retained behind the M1.7 lowering gate.
+    /// `None` for every Graph without `: Loop`, and for a malformed recovery
+    /// declaration.
+    pub loop_spec: Option<LoopSpec>,
     /// Root-relative lexical owner path. The App owns the empty path; nested
     /// Graphs append their declared name to their parent's path.
     pub path: crate::plan::OwnerPath,
@@ -58,6 +69,35 @@ pub struct Graph {
     /// persistent singleton and is canonically identical to an explicitly
     /// written persistent lifetime.
     pub instance: Option<InstancePolicy>,
+}
+
+/// The first checked Loop contract. The categorical plan remains the next
+/// gate; keeping reduced constants here prevents parser strings from becoming
+/// a second semantic authority.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoopSpec {
+    /// Positive body-application budget. A proof-only Loop is deferred until
+    /// the certificate checker lands, so every currently checked spec has it.
+    pub fuel: Const,
+    /// Optional re-entry timing policy.
+    pub delay: Option<LoopDelay>,
+}
+
+/// Closed Loop re-entry delay policy.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LoopDelay {
+    /// Every `next` waits the same positive duration.
+    Fixed {
+        /// Fixed delay.
+        after: Const,
+    },
+    /// Delay doubles from `first`, saturating at `ceiling`.
+    Exponential {
+        /// Delay for the first re-entry.
+        first: Const,
+        /// Inclusive saturation ceiling, no smaller than `first`.
+        ceiling: Const,
+    },
 }
 
 /// A constant position: the expression it was written as — the
@@ -80,17 +120,17 @@ pub struct Val {
     pub value: Const,
 }
 
-/// What a checked node is — one source of truth, no duplicated
-/// discriminant: an operator never carries a trait or attributes, a
-/// connector always carries both.
+/// Family-specific facts attached to one checked node.
+///
+/// The structural family itself is [`node::Kind`], derived from the node's
+/// effective [`node::Type`]. This enum preserves the extra contract facts a
+/// Connector needs without calling that family distinction a "role".
 #[derive(Debug, Clone, PartialEq)]
-pub enum NodeRole {
+pub enum NodeSemantics {
     /// Pure graph-internal computation.
     Operator,
     /// External-effect Driver under a contract sheet.
     Connector {
-        /// Stable canonical identity resolved from the source symbol.
-        contract_id: String,
         /// Runtime roles declared by that contract.
         roles: crate::connector::ConnectorRoles,
         /// Interaction lifecycle declared by that contract.
@@ -105,8 +145,13 @@ pub enum NodeRole {
 pub struct Node {
     /// Root-relative address; single-segment in the flat M0 subset.
     pub path: node::Path,
-    /// What the node is.
-    pub role: NodeRole,
+    /// Exactly one effective node type.
+    pub ty: node::Type,
+    /// Canonically sorted aspects. Recovery HIR records a recognized aspect;
+    /// lowering independently refuses it until its plan/runtime gate lands.
+    pub aspects: Vec<node::Aspect>,
+    /// Family-specific checked facts.
+    pub semantics: NodeSemantics,
     /// Node-local constant bindings — identity material, substituted
     /// into shipped expressions at lowering.
     pub vals: Vec<Val>,
@@ -124,30 +169,27 @@ pub struct Node {
 }
 
 impl Node {
-    /// The node vocabulary category of this role.
+    /// The node's structural kind.
     #[must_use]
-    pub fn category(&self) -> node::Kind {
-        match self.role {
-            NodeRole::Operator => node::Kind::Operator,
-            NodeRole::Connector { .. } => node::Kind::Connector,
-        }
+    pub fn kind(&self) -> node::Kind {
+        self.ty.kind()
     }
 
     /// The connector's stable contract identity, when a connector.
     #[must_use]
-    pub fn connector_contract_id(&self) -> Option<&str> {
-        match &self.role {
-            NodeRole::Connector { contract_id, .. } => Some(contract_id),
-            NodeRole::Operator => None,
+    pub fn connector_contract_id(&self) -> Option<&crate::connector::ConnectorId> {
+        match &self.ty {
+            node::Type::Connector(contract) => Some(contract),
+            node::Type::Graph | node::Type::App | node::Type::Operator => None,
         }
     }
 
     /// The checked attributes; an operator has none.
     #[must_use]
     pub fn attributes(&self) -> &[Attribute] {
-        match &self.role {
-            NodeRole::Connector { attributes, .. } => attributes,
-            NodeRole::Operator => &[],
+        match &self.semantics {
+            NodeSemantics::Connector { attributes, .. } => attributes,
+            NodeSemantics::Operator => &[],
         }
     }
 }

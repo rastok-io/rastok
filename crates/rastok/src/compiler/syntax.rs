@@ -196,8 +196,8 @@ pub struct GraphDecl {
     pub span: Span,
 }
 
-/// `: IDENT ( "+" IDENT )*` — trait, role, and aspect symbols, in
-/// written order.
+/// `: IDENT ( "+" IDENT )*` — one optional NodeType followed by
+/// NodeAspect symbols, in written order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Annotation {
     /// The symbols, in written order.
@@ -236,7 +236,7 @@ pub enum GraphItem {
 pub struct OperatorDecl {
     /// The declared instance name.
     pub name: Name,
-    /// Optional stdlib alias and aspects.
+    /// Optional explicit NodeType followed by NodeAspects.
     pub annotation: Option<Annotation>,
     /// Recovery-only capture of the unpublished `per` spelling.
     pub removed_per: Option<RemovedPerClause>,
@@ -252,7 +252,7 @@ pub struct OperatorDecl {
 pub struct ConnectorDecl {
     /// The declared instance name.
     pub name: Name,
-    /// The mandatory trait, plus optional aspects.
+    /// The mandatory Connector NodeType, plus optional NodeAspects.
     pub annotation: Annotation,
     /// Recovery-only capture of the unpublished `per` spelling.
     pub removed_per: Option<RemovedPerClause>,
@@ -389,8 +389,8 @@ pub enum RemovedPerClause {
     Inline(Vec<RemovedPartitionField>),
 }
 
-/// `on trigger guard* body?` — a body-less handler is the Loop
-/// base-case declaration; legality is the checker's judgment.
+/// `on trigger guard* body?` — body-less handlers are retained for recovery;
+/// every currently executable handler has a body.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HandlerDecl {
     /// What fires the handler.
@@ -425,7 +425,7 @@ pub enum Trigger {
     Port(Name),
 }
 
-/// Aspect-qualified lifecycle event.
+/// Recovery-only capture of a removed aspect-qualified lifecycle event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AspectEvent {
     /// `.start`

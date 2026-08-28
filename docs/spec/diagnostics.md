@@ -5,7 +5,7 @@
 
 **Scope.** This catalog norms diagnostics emitted by *tools* (compiler,
 planner, sim runner) — they never appear in a journal or a golden trace.
-Runtime outcome cases (`JoinExpired`, `LoopExhausted`,
+Runtime outcome cases (`JoinExpired`, `LoopExpired`,
 `SagaRolledBack`, `OutcomeUnknown`, …) are **language material**:
 ordinary typed port payloads, hashed through their resolved types and
 compared in the causal core. They live in their home specs, not here.
@@ -61,7 +61,9 @@ no public diagnostic contract ever carried the old code.
 | E-META-SYS-READONLY | error | check | [envelope.md](envelope.md) | a write reaching the read-only `meta.sys` namespace (§6: there is no write) |
 | E-EXPR | error | check | [grammar.md](grammar.md) | a Rastok expression fault, adapted from the isolated expression compiler; field `detail` |
 | E-CHECK-DEFERRED | error | check | [grammar.md](grammar.md) | grammar admitted but outside the executable subset of this build; field `construct` |
-| E-INSTANCE | error | check | [instances.md](instances.md) | a malformed or repeated `instances`/`lifetime` attribute, a superseded `partition`/`per` spelling, or an instance key without one total canonical type; field `detail`; post-solver type variants additionally carry `name` |
+| E-NODE-ANNOTATION | error | check | [aspects.md](aspects.md) | a NodeType/NodeAspect symbol is unknown, duplicated, misordered, or incompatible with the declaration kind; fields `name`, `detail` |
+| E-INSTANCE | error | check | [instances.md](instances.md) | a malformed or repeated `instance`/`lifetime` attribute, a superseded `instances`/`partition`/`per` spelling, or an instance key without one total canonical type; field `detail`; post-solver type variants additionally carry `name` |
+| E-LOOP | error | check | [loop.md](loop.md) | a malformed, duplicate, misplaced, removed, or non-finite `Loop` attribute/contract; field `detail` |
 | E-CONNECTOR-UNAVAILABLE | error | check | [stdlib.md](stdlib.md) | a connector type with no Driver in this build — declared catalogue or unknown; field `type` |
 | E-CONTRACT-ATTR | error | check | [stdlib.md](stdlib.md) | an attribute violating its connector contract sheet; fields `attribute`, `detail` |
 | E-CONTRACT-REQUIRED | error | check | [stdlib.md](stdlib.md) | a mandatory contract attribute left undeclared; field `attribute` |

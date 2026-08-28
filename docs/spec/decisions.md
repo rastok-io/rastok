@@ -5,6 +5,134 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-28-1 — Loop is finite temporal recursion over one Graph boundary
+
+M1.7 makes `Loop` the first executable `node::Aspect`, with one carrier and
+one protocol: a Graph receives iteration state on `in`, emits either the next
+state on aspect-owned `next` or its terminal result on `out`, and publishes
+`LoopExpired { last_state }` on aspect-owned `expired` when its finite fuel is
+spent. The checker proves exactly one `next XOR out` decision for every
+reachable completed traversal. Other outputs may be emitted atomically but do
+not decide. Multiple business terminal cases use a tagged union on `out`.
+
+`next` is temporal control, not a spatial edge. One root envelope derives one
+`LoopRunRef`; each run owns its fuel, zero-based iteration ordinal and pending
+wakeup even when several runs share one keyed instance. A recurrence remains
+in the same instance generation. Its `l:next` fact is parented by the selected
+`next` emission and records the proposed state, next ordinal, remaining fuel
+and optional due date. Recovery folds those journal facts; RAM never owns the
+attempt authority.
+
+The live surface is deliberately small and qualified:
+
+- `Loop.fuel = N`, a positive plan constant bounding body applications;
+- optional `Loop.delay`, either `{ kind = fixed; after = D }` or
+  `{ kind = exponential; first = D; ceiling = M }`;
+- theorem-tier `Loop.invariant` and `Loop.measure`;
+- reserved, rejected `Loop.jitter`.
+
+Absence of delay means immediate `l:next`. Exponential re-entry `k >= 1` uses
+`min(ceiling, first * 2^(k-1))` with safe saturation. Delay never extends
+fuel, Connector timeout or instance lifetime. The former unpublished
+`Loop.variant`, `Loop.backoff`, `initial/source/value/until/limit`,
+`max_steps` and `decreases` forms are removed with migration diagnostics;
+they are not aliases.
+
+Fuel has the exact recursion `run(0,s)=expired(last_state=s)` and
+`run(N+1,s)=body(s)` followed by either terminal `out` or `run(N,s')` for
+`next(s')`. Therefore a `next` proposed by the final permitted application
+does not create `l:next`; the proposed state becomes `expired.last_state`.
+Fuel bounds applications, not the duration of one application. Calls inside
+the body require finite positive timeout, guest work its finite budget, and
+open Event/Session waits refuse in v1.
+
+At least one termination witness is mandatory. Fuel is the first executable
+structural witness. A future checked `measure` may stand alone, or accompany
+fuel as proof plus operational cap. The verifier must establish invariant
+entry/preservation, body termination, total `next XOR out`, and strict
+well-founded decrease on every `next` path. It treats Connector results as
+fresh symbolic typed values and may use only explicit path guards. Hosted
+proof search produces a certificate checked by a small deterministic
+`no_std` core verifier; unsupported proof fragments fail closed. The term
+`measure` follows Rocq/Coq well-founded recursion vocabulary. `variant` stays
+a data-type word.
+
+`Loop.state` is the sole read-only aspect binding and denotes the complete
+iteration-entry envelope (`.data` and `.meta`). There are no Loop lifecycle
+hooks or hidden writable state. Instance lifetime is orthogonal: Closing
+invalidates pending Loop wakeups, while the termination theorem is conditional
+on the owner remaining open.
+
+**Superseded:** D-2026-08-27-4's tentative Graph/Operator/Connector
+compatibility; D-2026-08-12-1 examples using `Loop.backoff`; and every older
+Loop clause that described `variant/until`, runtime decrease checks,
+Connector-local retry, `Loop.exit`, or an iteration as a new instance
+generation.
+
+**Rejected:** three carrier-specific continuation protocols; direct Loop on a
+Connector merely because it has an outbound Driver role; an unqualified
+`fuel`/`delay`; `until` as a second base-case mechanism; runtime assertions
+presented as termination proofs; a separate Loop ledger; wall-clock or
+placement facts in `LoopRunRef`; and an unbounded admitted Loop.
+
+## D-2026-08-27-4 — Every Node has one kind, one type, and zero or more aspects
+
+The three classifications are orthogonal and use one vocabulary in the
+specification and Rust API: `node::Kind`, `node::Type`, and `node::Aspect`.
+
+- `Kind` is structural and is fixed by the declaration keyword: `Graph`,
+  `Operator`, or `Connector`.
+- `Type` is the one effective implementation/contract within that kind.
+  `Graph` and `Operator` are implicit defaults; `App` is the unique root
+  Graph type; every Connector names one exact versioned contract type.
+- `Aspect` is an additional orchestration protocol. A Node may carry none or
+  several, in canonical order, but an aspect never replaces its type and
+  cannot execute before its checker, plan, runtime, Lab, and identity gates
+  have landed. The closed initial vocabulary is `Loop` and `Saga`.
+
+The source slot is `: Type? (+ Aspect)*`. When an explicit type is present it
+must be first. Omission is canonical for ordinary Graphs and Operators:
+`operator x {}` and `operator x : Operator {}` are the same program. A
+Connector type is mandatory. `Saga` is Graph-only. Under D-2026-08-28-1,
+M1.7 admits `Loop` on Graphs only; direct Operator/Connector carriers are
+later gates. The current executable build classifies the spelling and refuses
+it by the named aspect gate until its categorical transport lands. A
+duplicate, unknown, misordered, or incompatible symbol is
+`E-NODE-ANNOTATION`.
+
+`Reducer`, `Aggregator`, `Window`, and `Joiner` are user-guide names for
+ordinary Operator parameterizations, not NodeTypes: Node-local `var`, optional
+`instance.key`, optional `lifetime`, and an ordinary or bounded-join handler
+fully determine them. `Dispatch` is the corresponding keyed-Graph pattern.
+`Router` is likewise a multi-output conditional-emission pattern; the name
+does not become executable syntax until the general conditional routing
+surface can express it without a privileged runtime family. A genuinely
+different pure implementation such as a future `Jaq` or `Wasm` engine may be
+an Operator NodeType.
+
+The common addressing attribute is singular: `instance = { key = <expr> }`.
+It describes the policy of the one declared Node; runtime collections and
+ordinary prose still use the plural “instances”, while the contextual value
+remains `instance.key`. The unpublished plural source spelling is a one-voice
+`E-INSTANCE` migration refusal. The already-published identity extension
+domain `rastok.instances.r1` is historical binary vocabulary and does not
+move merely to mirror source spelling.
+
+This preparatory change adds no aspect to an executable plan and therefore
+does not bump the v12 plan package, semantic hashes, or causal records. The
+current type of every executable plan entry is derivable from existing facts:
+root Graph owner → `App`, other Graph owner → `Graph`, Operator entry →
+`Operator`, Connector spec → `Connector(id)`. The first executable aspect
+will pay for one categorical transport extension and its identity moves in
+M1.7; the package will never carry a second contradictory kind/type claim.
+
+**Rejected:** `trait | role | aspect` as three annotation categories (`App`
+is a type, and “trait” collides with Rust implementation vocabulary);
+interchangeable annotations where any symbol can act as the principal type;
+stdlib aliases that make ordinary state/lifetime combinations look like
+different runtimes; implicit execution of a recognized but unimplemented
+aspect; renaming the historical identity domain for cosmetic consistency.
+
 ## D-2026-08-27-3 — Hosted capability selection is static registry assembly
 
 The shipped standalone image has one explicit assembly function and one

@@ -31,7 +31,7 @@
 > categorical lexical-owner table. The root App Graph, nested Graphs, and
 > executable Nodes retain parent-linked ownership; each Node points back to
 > its owner and each edge carries its lexical Graph scope. Owners transport
-> the exact `instances.key` tree and inferred type, independent lifetime, and
+> the exact `instance.key` tree and inferred type, independent lifetime, and
 > phased immutable values. Connector attributes may likewise transport a
 > checked boot/instance/invocation expression; a plan-shaping dynamic row
 > refuses without consulting the compiler ContractCatalog.

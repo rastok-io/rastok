@@ -222,8 +222,8 @@ pub mod timer_kind {
     pub const INSTANCE_LIFETIME: u8 = 3;
     /// One Saga deadline (reserved until Saga execution).
     pub const SAGA_TIMEOUT: u8 = 4;
-    /// One Loop backoff wakeup (reserved until Loop execution).
-    pub const LOOP_BACKOFF: u8 = 5;
+    /// One Loop delayed re-entry wakeup (reserved until Loop execution).
+    pub const LOOP_DELAY: u8 = 5;
     /// End of an instance's admitted-work drain interval.
     pub const INSTANCE_DRAIN: u8 = 6;
     /// End of an instance's cancellation settlement interval.
@@ -2548,7 +2548,7 @@ mod tests {
                 emissions: vec![],
                 routes: vec![],
                 timers: vec![
-                    (timer_kind::LOOP_BACKOFF, Id::from_bytes([2; 16])),
+                    (timer_kind::LOOP_DELAY, Id::from_bytes([2; 16])),
                     (timer_kind::CALL_TIMEOUT, Id::from_bytes([1; 16])),
                 ],
             })

@@ -12,7 +12,7 @@
 
 use crate::compiler::hir::{
     AttrValue, Direction, EdgeTarget, EmitValue, EndpointOwner, Graph as HirGraph, Hir,
-    InstanceLifetime, InstancePolicy, Node as HirNode, NodeRole, Statement as HirStatement,
+    InstanceLifetime, InstancePolicy, Node as HirNode, NodeSemantics, Statement as HirStatement,
 };
 use crate::datatype::{
     BinaryType, DataType, DateUnit, FloatType, IntegerType, IntegerWidth, IntervalUnit,
@@ -23,8 +23,8 @@ use crate::node;
 use crate::plan::{
     AttrSetting, ClosingPolicy as PlanClosingPolicy, ConnectorSpec, Edge, Emission, EndpointRef,
     EvaluationSite, ExecutionPlan, FieldWrite, Handler, InstanceLifetime as PlanInstanceLifetime,
-    InstanceSpec, Node, NodeKind, Owner, OwnerKind, OwnerPath, OwnerSlot, OwnerValue, SemanticHash,
-    Slot, Step, SymbolTable, VarCell,
+    InstanceSpec, Node, NodeExecution, Owner, OwnerKind, OwnerPath, OwnerSlot, OwnerValue,
+    SemanticHash, Slot, Step, SymbolTable, VarCell,
 };
 
 /// Computes the semantic hash of a checked graph.
@@ -319,6 +319,31 @@ fn flat_edge_text(edge: &FlatEdge) -> String {
 /// Lowers a checked graph into the shipped plan and its symbol table.
 pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
     let nodes = sorted_nodes(hir);
+    for graph in sorted_graphs(hir) {
+        let expected = if graph.path.is_root() {
+            node::Type::App
+        } else {
+            node::Type::Graph
+        };
+        if graph.ty != expected {
+            return Err(LowerError {
+                owner: graph.path.to_string(),
+                detail: "a checked Graph carries an incompatible Node type",
+            });
+        }
+        if !graph.aspects.is_empty() {
+            return Err(LowerError {
+                owner: graph.path.to_string(),
+                detail: "a Node aspect reached lowering before its plan gate",
+            });
+        }
+    }
+    if let Some(node) = nodes.iter().find(|node| !node.aspects.is_empty()) {
+        return Err(LowerError {
+            owner: node.path.to_string(),
+            detail: "a Node aspect reached lowering before its plan gate",
+        });
+    }
     let slot_of = |path: &node::Path| {
         Slot::new(
             u32::try_from(
@@ -472,26 +497,27 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         vars.sort_by(|a, b| a.name.cmp(&b.name));
         plan.nodes.push(Node {
             path: hir_node.path.clone(),
-            kind: match &hir_node.role {
-                NodeRole::Connector {
-                    contract_id,
-                    roles,
-                    exchange,
-                    ..
-                } => NodeKind::Connector(ConnectorSpec {
-                    contract: crate::connector::ConnectorId::parse(contract_id).map_err(|_| {
-                        LowerError {
-                            owner: hir_node.path.to_string(),
-                            detail: "a checked Connector carries a non-canonical contract id",
-                        }
-                    })?,
+            execution: match (&hir_node.ty, &hir_node.semantics) {
+                (
+                    node::Type::Connector(contract),
+                    NodeSemantics::Connector {
+                        roles, exchange, ..
+                    },
+                ) => NodeExecution::Connector(ConnectorSpec {
+                    contract: contract.clone(),
                     roles: *roles,
                     exchange: *exchange,
                     effect: typed_effect(hir_node),
                     behavior: typed_behavior(hir_node),
                     attributes,
                 }),
-                NodeRole::Operator => NodeKind::Operator,
+                (node::Type::Operator, NodeSemantics::Operator) => NodeExecution::Operator,
+                _ => {
+                    return Err(LowerError {
+                        owner: hir_node.path.to_string(),
+                        detail: "a checked Node type disagrees with its family semantics",
+                    });
+                }
             },
             ports,
             vars,
@@ -787,7 +813,7 @@ fn sorted_nodes(hir: &Hir) -> Vec<&HirNode> {
     }
     let mut nodes = Vec::new();
     collect(&hir.app, &mut nodes);
-    nodes.sort_by_key(|node| (kind_rank(node.category()), node.path.to_string()));
+    nodes.sort_by_key(|node| (kind_rank(node.kind()), node.path.to_string()));
     nodes
 }
 
@@ -1120,24 +1146,30 @@ impl Writer<'_> {
     }
 
     fn node(&mut self, node: &HirNode) {
-        self.tag(match node.category() {
+        self.tag(match node.kind() {
             node::Kind::Operator => 1,
             node::Kind::Connector => 2,
             node::Kind::Graph => 3,
         });
         self.str(&node.path.to_string());
-        match &node.role {
-            crate::compiler::hir::NodeRole::Operator => self.tag(0),
-            crate::compiler::hir::NodeRole::Connector {
-                contract_id,
-                roles,
-                exchange,
-                ..
-            } => {
+        match (&node.ty, &node.semantics) {
+            (node::Type::Operator, crate::compiler::hir::NodeSemantics::Operator) => self.tag(0),
+            (
+                node::Type::Connector(contract),
+                crate::compiler::hir::NodeSemantics::Connector {
+                    roles, exchange, ..
+                },
+            ) => {
                 self.tag(1);
-                self.str(contract_id);
+                self.str(contract.as_str());
                 self.tag(roles.tag());
                 self.tag(exchange.tag());
+            }
+            _ => {
+                // Executable HIR cannot contain an incompatible type/family
+                // pair. Keep the hash total without granting that recovery
+                // state a semantic spelling.
+                self.tag(u8::MAX);
             }
         }
         let mut vals: Vec<_> = node.vals.iter().collect();

@@ -10,7 +10,7 @@ use crate::boundary::{
     Completion, HttpClientExit, PreparedRequest, RequestPreparation, SchedulerCompletion,
 };
 use crate::envelope::Data;
-use crate::plan::{AttrSetting, NodeKind, ValidatedExecutionPlan};
+use crate::plan::{AttrSetting, NodeExecution, ValidatedExecutionPlan};
 use crate::value::Value;
 use std::collections::BTreeMap;
 
@@ -77,9 +77,9 @@ impl HttpClientRequestBindings {
                 .nodes
                 .iter()
                 .find(|node| &node.path == path)
-                .and_then(|node| match &node.kind {
-                    NodeKind::Connector(spec) => Some(spec),
-                    NodeKind::Operator => None,
+                .and_then(|node| match &node.execution {
+                    NodeExecution::Connector(spec) => Some(spec),
+                    NodeExecution::Operator => None,
                 })
                 .ok_or_else(|| {
                     super::DriverFactoryError::new(format!(

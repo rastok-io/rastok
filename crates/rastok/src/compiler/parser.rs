@@ -1171,8 +1171,8 @@ impl<'src> Parser<'src, '_> {
 
     // ----- handlers -----
 
-    /// `on trigger guard* body?` — a body-less handler is the Loop
-    /// base-case declaration; its legality is the checker's judgment.
+    /// `on trigger guard* body?` — the removed body-less spelling is retained
+    /// as a recovery form; every normative handler has a body.
     fn handler_decl(&mut self) -> Option<HandlerDecl> {
         let start = self.peek().span.range().start;
         self.bump();
@@ -3436,14 +3436,14 @@ graph m0_probe : App {
             panic!("expected the start handler");
         };
         assert!(matches!(start.trigger, Trigger::Start(_)));
-        let OperatorItem::Handler(base_case) = &operator.body[2] else {
-            panic!("expected the base-case handler");
+        let OperatorItem::Handler(removed_lifecycle) = &operator.body[2] else {
+            panic!("expected the removed lifecycle handler");
         };
         assert!(matches!(
-            &base_case.trigger,
+            &removed_lifecycle.trigger,
             Trigger::Aspect { aspect, event: AspectEvent::Stop } if aspect.text == "Loop"
         ));
-        assert!(base_case.body.is_none());
+        assert!(removed_lifecycle.body.is_none());
     }
 
     #[test]

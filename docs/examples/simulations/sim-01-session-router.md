@@ -46,7 +46,7 @@ graph sim01 : App {
   }
 
   operator route {
-    instances = { key = meta.ext.user_id }
+    instance = { key = meta.ext.user_id }
     lifetime = { kind = idle; after = duration("2h") }
 
     input in : struct { kind: text, text: text }     // typed pin — grid row 1

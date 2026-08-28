@@ -12,7 +12,7 @@ use crate::datatype::{DataType, TypeError};
 use crate::expr;
 use crate::node;
 use crate::plan::{
-    Emission, EndpointRef, EvaluationSite, ExecutionPlan, InstanceLifetime, Node, NodeKind,
+    Emission, EndpointRef, EvaluationSite, ExecutionPlan, InstanceLifetime, Node, NodeExecution,
     OwnerKind, OwnerSlot, Slot, Step,
 };
 
@@ -1206,10 +1206,10 @@ fn instance_key_signature(
 /// connectors, then by path — mirrored here so a reordered node
 /// table refuses instead of minting a second byte form of the same
 /// graph.
-fn kind_rank(kind: &NodeKind) -> u8 {
-    match kind {
-        NodeKind::Operator => 0,
-        NodeKind::Connector(_) => 1,
+fn execution_rank(execution: &NodeExecution) -> u8 {
+    match execution {
+        NodeExecution::Operator => 0,
+        NodeExecution::Connector(_) => 1,
     }
 }
 
@@ -1835,7 +1835,7 @@ fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
         }
     }
     for node in &plan.nodes {
-        if let NodeKind::Connector(spec) = &node.kind {
+        if let NodeExecution::Connector(spec) = &node.execution {
             for (name, setting) in &spec.attributes {
                 if let crate::plan::AttrSetting::Expr { expr, .. } = setting {
                     tree_type_at(expr, format!("attribute `{}.{name}`", node.path))?;
@@ -2156,8 +2156,8 @@ fn owner_values_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationEr
             }
         }
         if let OwnerKind::Node(slot) = owner.kind
-            && let Some(NodeKind::Connector(spec)) =
-                plan.nodes.get(slot.index()).map(|node| &node.kind)
+            && let Some(NodeExecution::Connector(spec)) =
+                plan.nodes.get(slot.index()).map(|node| &node.execution)
         {
             for (name, setting) in &spec.attributes {
                 let crate::plan::AttrSetting::Expr { site, expr } = setting else {
@@ -2444,8 +2444,8 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         }
     }
     for pair in plan.nodes.windows(2) {
-        if (kind_rank(&pair[0].kind), pair[0].path.to_string())
-            >= (kind_rank(&pair[1].kind), pair[1].path.to_string())
+        if (execution_rank(&pair[0].execution), pair[0].path.to_string())
+            >= (execution_rank(&pair[1].execution), pair[1].path.to_string())
         {
             return Err(PlanValidationError::NonCanonicalOrder {
                 collection: "nodes",
@@ -2550,7 +2550,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 return Err(PlanValidationError::NonCanonicalOrder { collection: "vars" });
             }
         }
-        if let NodeKind::Connector(spec) = &node.kind {
+        if let NodeExecution::Connector(spec) = &node.execution {
             for (name, setting) in &spec.attributes {
                 match setting {
                     crate::plan::AttrSetting::Value(value) => value_expressible(value)?,
@@ -3138,7 +3138,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     // The table ANSWERED for the port — but the
                     // OutboundConnectorDriver seam cannot execute it yet: refuse by
                     // capability, distinctly from ignorance.
-                    if matches!(node.kind, NodeKind::Connector(_))
+                    if matches!(node.execution, NodeExecution::Connector(_))
                         && !matches!(endpoint.port.name(), "in" | "out" | "err" | "exit")
                     {
                         return Err(PlanValidationError::UnsupportedConnectorPort {
@@ -3570,7 +3570,7 @@ fn join_metadata_presence_holds(plan: &ExecutionPlan) -> Result<(), PlanValidati
         }
 
         for (slot_index, planned) in plan.nodes.iter().enumerate() {
-            if !matches!(planned.kind, NodeKind::Connector(_)) {
+            if !matches!(planned.execution, NodeExecution::Connector(_)) {
                 continue;
             }
             let slot = Slot::new(slot_index as u32);
@@ -3620,7 +3620,7 @@ fn join_metadata_presence_holds(plan: &ExecutionPlan) -> Result<(), PlanValidati
             continue;
         }
         let owner = planned.path.to_string();
-        if let NodeKind::Connector(spec) = &planned.kind {
+        if let NodeExecution::Connector(spec) = &planned.execution {
             for (_, setting) in &spec.attributes {
                 if let crate::plan::AttrSetting::Expr { expr, .. } = setting {
                     required_meta_reads_hold(&expr.root, &base, &owner)?;

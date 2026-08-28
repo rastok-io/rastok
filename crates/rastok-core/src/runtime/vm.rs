@@ -31,7 +31,7 @@ use crate::identity::{InstanceAddress, InstanceFrame, InstanceRef};
 use crate::journal::{Journal, RouteTarget, RoutedDelivery, ids};
 use crate::node;
 use crate::plan::{
-    AttrSetting, Edge, EndpointRef, EvaluationSite, GraphVersion, InstanceLifetime, NodeKind,
+    AttrSetting, Edge, EndpointRef, EvaluationSite, GraphVersion, InstanceLifetime, NodeExecution,
     OwnerKind, OwnerPath, OwnerSlot, Slot, ValidatedExecutionPlan,
 };
 use crate::runtime::{
@@ -451,7 +451,7 @@ struct LifecycleWork {
 
 /// One edge whose target instance was selected before the causing record
 /// committed. Reusing this value after the commit makes routing infallible and
-/// prevents a replay-sensitive second evaluation of `instances.key`.
+/// prevents a replay-sensitive second evaluation of `instance.key`.
 #[derive(Debug, Clone)]
 struct PreparedEdge {
     edge: Edge,
@@ -1543,9 +1543,11 @@ impl<'plan> Vm<'plan> {
             else {
                 return Ok(false);
             };
-            match &self.plan.nodes[slot.index()].kind {
-                NodeKind::Operator => self.fire_operator(journal, slot, &instance, &delivery)?,
-                NodeKind::Connector(_) => {
+            match &self.plan.nodes[slot.index()].execution {
+                NodeExecution::Operator => {
+                    self.fire_operator(journal, slot, &instance, &delivery)?
+                }
+                NodeExecution::Connector(_) => {
                     self.fire_connector(journal, bindings, slot, &instance, &delivery)?
                 }
             }
@@ -1585,12 +1587,12 @@ impl<'plan> Vm<'plan> {
                 })
         {
             after = Some((slot, instance.clone()));
-            match &self.plan.nodes[slot.index()].kind {
-                NodeKind::Connector(_) => {
+            match &self.plan.nodes[slot.index()].execution {
+                NodeExecution::Connector(_) => {
                     self.fire_connector(journal, bindings, slot, &instance, &delivery)?;
                     return Ok(true);
                 }
-                NodeKind::Operator => {
+                NodeExecution::Operator => {
                     // An ordinary FIFO head necessarily precedes any work a
                     // later delivery could make runnable. Only a join-owned
                     // head can be partial and require the wider candidate
@@ -2219,7 +2221,7 @@ impl<'plan> Vm<'plan> {
                 return Ok(());
             };
             let planned = &self.plan.nodes[slot.index()];
-            let NodeKind::Connector(spec) = &planned.kind else {
+            let NodeExecution::Connector(spec) = &planned.execution else {
                 unreachable!("budgets arm connectors only")
             };
             // Validation refuses an effectless callee
@@ -2614,7 +2616,10 @@ impl<'plan> Vm<'plan> {
                     )
                 })
         {
-            if !matches!(self.plan.nodes[slot.index()].kind, NodeKind::Operator) {
+            if !matches!(
+                self.plan.nodes[slot.index()].execution,
+                NodeExecution::Operator
+            ) {
                 return false;
             }
             let join_owned = self.plan.handlers.iter().any(|handler| {
@@ -3725,7 +3730,7 @@ impl<'plan> Vm<'plan> {
         delivery: &Delivery,
     ) -> Result<(), VmError> {
         let planned = &self.plan.nodes[slot.index()];
-        let NodeKind::Connector(spec) = &planned.kind else {
+        let NodeExecution::Connector(spec) = &planned.execution else {
             return Err(VmError::PlanInvariant {
                 node: planned.path.clone(),
                 reason: "connector dispatch reached a non-connector node",
@@ -3874,7 +3879,7 @@ impl<'plan> Vm<'plan> {
         delivery: &Delivery,
     ) -> Result<(), VmError> {
         let planned = &self.plan.nodes[slot.index()];
-        let NodeKind::Connector(spec) = &planned.kind else {
+        let NodeExecution::Connector(spec) = &planned.execution else {
             return Err(VmError::PlanInvariant {
                 node: planned.path.clone(),
                 reason: "an inbound-Call response was routed to a non-connector",
@@ -3982,7 +3987,7 @@ impl<'plan> Vm<'plan> {
         delivery: &Delivery,
     ) -> Result<(), VmError> {
         let planned = &self.plan.nodes[slot.index()];
-        let NodeKind::Connector(spec) = &planned.kind else {
+        let NodeExecution::Connector(spec) = &planned.execution else {
             return Err(VmError::PlanInvariant {
                 node: planned.path.clone(),
                 reason: "Session dispatch reached a non-connector",
@@ -4340,7 +4345,7 @@ impl<'plan> Vm<'plan> {
         delivery: &Delivery,
     ) -> Result<(), VmError> {
         let planned = &self.plan.nodes[slot.index()];
-        let NodeKind::Connector(spec) = &planned.kind else {
+        let NodeExecution::Connector(spec) = &planned.execution else {
             unreachable!("routed here by kind");
         };
         // The typed belt behind the validator's `EffectlessCallee`
