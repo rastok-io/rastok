@@ -31,6 +31,8 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 - [`m1.7-loop-backlog.md`](m1.7-loop-backlog.md) for the ordered Node taxonomy,
   Loop contract, categorical transport, journal fold, carrier execution and
   closure gates;
+- [`m1.7-exit-report.md`](m1.7-exit-report.md) for the public composition,
+  three-register identity, portability and Cortex-M33 closure evidence;
 - [`release-qualification.md`](release-qualification.md) for the single
   inventory of executed third-party interoperability evidence and external
   qualifications still required before a public release;
@@ -43,7 +45,7 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
   data forms, interfaces, dependency direction, and current status;
 - [`spec-to-code.md`](spec-to-code.md) for the map from normative
   documents to implementation responsibilities;
-- [`plan-package.md`](plan-package.md) for current categorical v13, its retained
+- [`plan-package.md`](plan-package.md) for current categorical v14, its retained
   v9 owner/instance and v7 type/value/expression registries, stable Connector
   identities/roles/exchange lifecycles, H4.1 `media_type` extension, and the
   validation boundary;

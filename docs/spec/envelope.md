@@ -602,7 +602,8 @@ INBOUND (the world enters, `inbound_seq` committed atomically with the
 accept), TRANSACTION (the atomic unit : consumed positions, state delta,
 emissions, `committed_at`), OUTBOUND (the graph acts on the world : `open` →
 `closed` XOR timeout | `discarded`). Supervision decisions ARE transaction
-records (`l:*` triggers) ; clock ticks ARE inbound records. Three pieces
+records (`l:*` triggers); declared `Timer` firings ARE inbound records, while
+an observed `now()` instant is key 54 of its firing transaction. Three pieces
 together reconstruct everything :
 
 | Piece | Where | Gives |
@@ -634,14 +635,15 @@ Three principles drove every inclusion and every removal :
    journal — not on the envelope. Anything that is the envelope's own *identity*
    (its derived id, its lineage pointers, its role, its content type, its build
    stamp) is on the envelope.
-2. **No hidden clock in the data plane.** A handler must not be able to read
-   wall-clock and branch on it without going through a `Clock`. A
-   readable `created_at` on the envelope was exactly such a leak — so it was
-   removed (its regulatory purpose moved to the journal's `committed_at`).
-   Wall-clock observation belongs to the non-deterministic
-   observation/supervision plane, which injects its decisions back as journaled
-   events — the same mechanism as `Clock` ticks. (That plane is
-   specified with the execution model, #2.)
+2. **No hidden clock in the envelope or evaluator.** A readable `created_at`
+   on every envelope was a per-message ambient clock leak, so it was removed
+   (its regulatory purpose moved to the journal's `committed_at`). A handler
+   may instead call `now()`: the VM supplies one explicit logical timestamp
+   for the whole firing and seals it in that transaction when observable. The
+   evaluator never reads the host clock, and the instant is not copied into
+   `meta.sys`. A `Timer` produces ordinary one-shot or periodic timestamp
+   envelopes only when the program actually needs time events. (The time plane is specified
+   with the execution model, #2.)
 3. **Determinism is a property of `(graph, journal)`, not of the graph
    alone** (§2.0). Individual transactions are deterministic ; multi-input joins,
    Connector responses and `within` windows are **timed merges** — races whose
@@ -660,7 +662,7 @@ canonical mapping :
 |---|---|---|
 | `envelope_id` | renamed | → `id` (now derived, §2) |
 | `seq` | removed from envelope | → per-hop journal ; ordering = mailbox FIFO per instance reference (§7, and execution model #2) |
-| `created_at` | **removed** | hidden clock leak (§8) ; regulatory timestamp → journal `committed_at` |
+| `created_at` | **removed** | per-envelope ambient clock leak (§8) ; regulatory timestamp → journal `committed_at`, expression observation → transaction-fixed `now()` |
 | `correlation_id` | removed | → Connector-internal protocol ids + logical instance address + a `meta.app` echo-token (re-addable later, additive) |
 | `trace_id` | merged | → `origin_id` *is* the OTel trace id (§1.1). There is **no** `meta.sys.trace_*` field, now or planned. |
 | `direction` | removed | no use case (the stream-protocol "direction" of a *Connector* is a different thing and stays) |

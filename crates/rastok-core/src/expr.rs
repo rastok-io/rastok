@@ -8,9 +8,10 @@
 //! The admitted subset covers literals, paths, member and index
 //! access, arithmetic, comparisons, logic with short-circuit, the
 //! ternary, list and map literals, and the `duration`, `timestamp`,
-//! and `size` functions. Checked `is`/`as` narrowing is a Rastok extension;
-//! macros and optional access remain refused explicitly. There is no `now()`
-//! and no ambient clock: time enters only as data or constants.
+//! `size`, and context-bound `now` functions. Checked `is`/`as` narrowing is
+//! a Rastok extension; macros and optional access remain refused explicitly.
+//! `now()` is compiled as the reserved `now` binding: the host signature
+//! decides where logical time exists, and evaluation never reads a clock.
 //!
 //! Map iteration and map value ordering are sorted-key — an evaluator
 //! guarantee that golden-trace stability relies on.
@@ -431,7 +432,8 @@ fn keyed_map_eq_by(
 
 /// Names and types visible to an expression. Keys may be dotted
 /// (`data.text`) for pre-resolved leaves, or bare roots. The
-/// signature never offers `now`.
+/// A handler signature may offer the reserved `now` binding. The expression
+/// parser accepts it only through the function spelling `now()`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Signature {
     names: BTreeMap<String, DataType>,
@@ -1673,9 +1675,37 @@ impl<'a> ExprParser<'_, 'a> {
 
     fn name_or_call(&mut self, word: &'a str, range: Range<usize>) -> Result<Expr, Diagnostic> {
         if self.peek() != Some(&Tok::LParen) {
+            if word == "now" {
+                return Err(Diagnostic {
+                    kind: DiagnosticKind::General,
+                    message: String::from("`now` is a function; write `now()`"),
+                    range,
+                });
+            }
             return Ok(Expr::Path(vec![String::from(word)]));
         }
         self.pos += 1;
+        if word == "now" {
+            let mut args = Vec::new();
+            while self.peek() != Some(&Tok::RParen) {
+                args.push(self.ternary()?);
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+            self.expect(&Tok::RParen, "`)`")?;
+            if !args.is_empty() {
+                return Err(Diagnostic {
+                    kind: DiagnosticKind::General,
+                    message: String::from("`now()` takes no arguments"),
+                    range,
+                });
+            }
+            // Context functions are bindings, not evaluator opcodes. This
+            // keeps the plan form unchanged and makes the host's explicit
+            // signature the sole authority for where logical time exists.
+            return Ok(Expr::Path(vec![String::from("now")]));
+        }
         let function = match word {
             "asset" => Function::Asset,
             "duration" => Function::Duration,
@@ -1683,15 +1713,6 @@ impl<'a> ExprParser<'_, 'a> {
             "size" => Function::Size,
             "decimal" => Function::Decimal,
             "media_type" => Function::MediaType,
-            "now" => {
-                return Err(Diagnostic {
-                    kind: DiagnosticKind::General,
-                    message: String::from(
-                        "there is no `now()`: time enters only as data or constants",
-                    ),
-                    range,
-                });
-            }
             other if UNSUPPORTED_FUNCTIONS.contains(&other) => {
                 return Err(Diagnostic {
                     kind: DiagnosticKind::General,
@@ -3677,7 +3698,6 @@ mod tests {
     #[test]
     fn the_guard_rails_refuse_explicitly() {
         let cases: &[(&str, &str)] = &[
-            ("now()", "no `now()`"),
             ("data.?text", "outside this build's subset"),
             ("items.map(i, i * 2)", "outside this build's subset"),
             ("has(data.text)", "macro is outside"),
@@ -3693,6 +3713,30 @@ mod tests {
                 "`{text}` → {diagnostics:?}"
             );
         }
+    }
+
+    #[test]
+    fn now_is_an_explicit_context_function() {
+        let signature = Signature::new().with("now", DataType::TIMESTAMP);
+        let tree = compile("now()", &signature).expect("the handler context supplies time");
+        assert_eq!(tree.root, Expr::Path(vec![String::from("now")]));
+        let bindings = BTreeMap::from([(String::from("now"), EvalValue::Timestamp(1_234_567_890))]);
+        assert_eq!(
+            eval(&tree, &bindings).expect("the injected instant evaluates"),
+            EvalValue::Timestamp(1_234_567_890)
+        );
+
+        for (text, needle) in [("now", "write `now()`"), ("now(1)", "takes no arguments")] {
+            let diagnostics = compile(text, &signature).expect_err("the spelling is invalid");
+            assert!(diagnostics[0].message.contains(needle), "{diagnostics:?}");
+        }
+        let diagnostics = compile("now()", &Signature::new())
+            .expect_err("a plan-time expression has no logical instant");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("`now` is not a visible name")
+        );
     }
 
     #[test]

@@ -549,13 +549,13 @@ graph conflicting_instance : App {
         use crate::runtime::vm::Vm;
         use crate::value::Value;
 
-        fn run(fuel: u64) -> (Vm<'static>, MemJournal) {
+        fn run(witness: &str) -> (Vm<'static>, MemJournal) {
             let source = format!(
                 r#"
 graph countdown : App + Loop {{
   input in: int
   output out: int
-  Loop.fuel = {fuel}
+  {witness}
 
   on in where data <= 0 {{ out = Loop.state.data }}
   on in where data > 0  {{ next = data - 1 }}
@@ -591,7 +591,7 @@ graph countdown : App + Loop {{
             (vm, journal)
         }
 
-        let (completed, completed_journal) = run(4);
+        let (completed, completed_journal) = run("Loop.fuel = 4");
         assert_eq!(completed.outputs().len(), 1);
         assert_eq!(completed.outputs()[0].port.name(), "out");
         assert_eq!(
@@ -607,7 +607,21 @@ graph countdown : App + Loop {{
                 _ => None,
             })
             .collect();
-        assert_eq!(completed_facts.len(), 5);
+        assert_eq!(
+            completed_facts
+                .iter()
+                .filter(|fact| matches!(fact, LoopFact::Next { .. }))
+                .count(),
+            3
+        );
+        assert_eq!(
+            completed_facts
+                .iter()
+                .filter(|fact| matches!(fact, LoopFact::Admit { .. }))
+                .count(),
+            3,
+            "every selected state crosses the temporal boundary exactly once"
+        );
         assert!(matches!(
             completed_facts.first(),
             Some(LoopFact::Open { .. })
@@ -617,7 +631,7 @@ graph countdown : App + Loop {{
             Some(LoopFact::Close { .. })
         ));
 
-        let (expired, expired_journal) = run(2);
+        let (expired, expired_journal) = run("Loop.fuel = 2");
         assert_eq!(expired.outputs().len(), 1);
         assert_eq!(expired.outputs()[0].port.name(), "expired");
         let Value::TaggedUnion(expiry) =
@@ -632,6 +646,40 @@ graph countdown : App + Loop {{
             vec![(String::from("last_state"), Value::Int(1))]
         );
         assert!(expired_journal.records().iter().any(|record| matches!(
+            record,
+            Record::Transaction(transaction)
+                if matches!(transaction.loop_fact.as_deref(), Some(LoopFact::Expired { .. }))
+        )));
+
+        let (proved, proved_journal) = run("Loop.measure = data");
+        assert_eq!(proved.outputs().len(), 1);
+        assert_eq!(proved.outputs()[0].port.name(), "out");
+        assert_eq!(
+            crate::runtime::data_value(proved.outputs()[0].envelope.data())
+                .expect("the proved result is materialized"),
+            Value::Int(0)
+        );
+        assert_eq!(
+            proved_journal
+                .records()
+                .iter()
+                .filter(|record| matches!(
+                    record,
+                    Record::Transaction(transaction)
+                        if matches!(transaction.loop_fact.as_deref(), Some(LoopFact::Admit { .. }))
+                ))
+                .count(),
+            3,
+            "measure 3 derives exactly four body applications, three of them recurrent"
+        );
+
+        let (capped, capped_journal) = run("Loop.fuel = 2\n  Loop.measure = data");
+        assert_eq!(
+            capped.outputs()[0].port.name(),
+            "expired",
+            "explicit fuel remains the operational cap when a proof also exists"
+        );
+        assert!(capped_journal.records().iter().any(|record| matches!(
             record,
             Record::Transaction(transaction)
                 if matches!(transaction.loop_fact.as_deref(), Some(LoopFact::Expired { .. }))

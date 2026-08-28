@@ -543,6 +543,7 @@ pub(crate) struct JoinCandidate<'a> {
 pub struct TransactionExecutor<'plan> {
     plan: &'plan ValidatedExecutionPlan,
     graph_version: GraphVersion,
+    logical_time: i64,
 }
 
 impl<'plan> TransactionExecutor<'plan> {
@@ -555,6 +556,23 @@ impl<'plan> TransactionExecutor<'plan> {
         Self {
             plan,
             graph_version,
+            logical_time: 0,
+        }
+    }
+
+    /// An executor at one explicit logical instant. The VM supplies this from
+    /// its deterministic scheduler; the evaluator never reads an ambient
+    /// clock. Every expression in one firing therefore sees the same value.
+    #[must_use]
+    pub(crate) fn at(
+        plan: &'plan ValidatedExecutionPlan,
+        graph_version: GraphVersion,
+        logical_time: i64,
+    ) -> Self {
+        Self {
+            plan,
+            graph_version,
+            logical_time,
         }
     }
 
@@ -641,6 +659,10 @@ impl<'plan> TransactionExecutor<'plan> {
             base.insert(name.clone(), expr::EvalValue::from(value.clone()));
         }
         base.extend(extra);
+        base.insert(
+            String::from("now"),
+            expr::EvalValue::Timestamp(self.logical_time),
+        );
         base.insert(
             String::from("meta"),
             expr::EvalValue::from(meta_value(input.meta())),
@@ -742,6 +764,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 close_scope: None,
                 exchange_exit: None,
                 loop_fact: None,
+                logical_time: None,
                 trigger,
                 cause: Some(delivery.envelope.meta().sys().id()),
                 consumed: vec![ConsumedPosition {
@@ -827,15 +850,21 @@ impl<'plan> TransactionExecutor<'plan> {
         let state_payload =
             expr::EvalValue::Payload(expr::PayloadRef::Named(String::from("loop_state")));
         let state_meta = expr::EvalValue::from(meta_value(loop_state.meta()));
+        let state = expr::EvalValue::Struct(vec![
+            (String::from("data"), state_payload.clone()),
+            (String::from("meta"), state_meta.clone()),
+        ]);
         let mut extra = BTreeMap::new();
         extra.insert(String::from("Loop.state.data"), state_payload.clone());
         extra.insert(String::from("Loop.state.meta"), state_meta.clone());
+        extra.insert(String::from("Loop.state"), state.clone());
+        // The checker resolves the longest known dotted prefix, while the
+        // evaluator may continue through members beyond that prefix. Expose
+        // the structural root as well, so `Loop.state.data.field` and the
+        // exact dotted aliases are one binding rather than two semantics.
         extra.insert(
-            String::from("Loop.state"),
-            expr::EvalValue::Struct(vec![
-                (String::from("data"), state_payload),
-                (String::from("meta"), state_meta),
-            ]),
+            String::from("Loop"),
+            expr::EvalValue::Struct(vec![(String::from("state"), state)]),
         );
         let base = |lets: &BTreeMap<String, expr::EvalValue>| {
             let mut bindings: BTreeMap<String, expr::EvalValue> = instance_values
@@ -852,6 +881,10 @@ impl<'plan> TransactionExecutor<'plan> {
                     .map(|(name, value)| (name.clone(), value.clone())),
             );
             bindings.insert(
+                String::from("now"),
+                expr::EvalValue::Timestamp(self.logical_time),
+            );
+            bindings.insert(
                 String::from("meta"),
                 expr::EvalValue::from(meta_value(input.meta())),
             );
@@ -859,33 +892,50 @@ impl<'plan> TransactionExecutor<'plan> {
         };
 
         let mut selected = None;
-        for handler in self.plan.handlers.iter().filter(|handler| {
-            handler.owner == HandlerOwner::Graph(owner_slot) && handler.activation == *activation
-        }) {
+        let mut logical_time_observed = false;
+        for (handler, time_use) in self
+            .plan
+            .handlers
+            .iter()
+            .zip(self.plan.handler_logical_time())
+            .filter(|(handler, _)| {
+                handler.owner == HandlerOwner::Graph(owner_slot)
+                    && handler.activation == *activation
+            })
+        {
             let matches = match &handler.guard {
                 None => true,
-                Some(guard) => match resolve_payload_with_slots(
-                    eval_with_slots(guard, &base(&BTreeMap::new()), &payloads, &self.plan.assets)?,
-                    &payloads,
-                )? {
-                    Value::Bool(value) => value,
-                    other => {
-                        return Err(Fault::Eval(expr::Error {
-                            kind: expr::ErrorKind::Evaluation,
-                            message: format!("the guard evaluated to {other:?}"),
-                        }));
+                Some(guard) => {
+                    logical_time_observed |= time_use.guard;
+                    match resolve_payload_with_slots(
+                        eval_with_slots(
+                            guard,
+                            &base(&BTreeMap::new()),
+                            &payloads,
+                            &self.plan.assets,
+                        )?,
+                        &payloads,
+                    )? {
+                        Value::Bool(value) => value,
+                        other => {
+                            return Err(Fault::Eval(expr::Error {
+                                kind: expr::ErrorKind::Evaluation,
+                                message: format!("the guard evaluated to {other:?}"),
+                            }));
+                        }
                     }
-                },
+                }
             };
-            if matches && selected.replace(handler).is_some() {
+            if matches && selected.replace((handler, time_use)).is_some() {
                 return Err(Fault::Unrepresentable(String::from(
                     "two Graph handlers selected the same Loop traversal",
                 )));
             }
         }
-        let Some(handler) = selected else {
+        let Some((handler, time_use)) = selected else {
             return Err(Fault::MissingHandler);
         };
+        logical_time_observed |= time_use.body;
 
         let trigger = match activation {
             node::HandlerActivation::Port(port)
@@ -967,6 +1017,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 close_scope: close_requested.then(|| instance.clone()),
                 exchange_exit: None,
                 loop_fact: None,
+                logical_time: logical_time_observed.then_some(self.logical_time),
                 trigger,
                 cause: Some(input.meta().sys().id()),
                 consumed: vec![],
@@ -1000,10 +1051,15 @@ impl<'plan> TransactionExecutor<'plan> {
         let Some(node) = self.plan.nodes.get(slot.index()) else {
             return Err(Fault::UnknownSlot(slot));
         };
-        let handler = self.plan.handlers.iter().find(|handler| {
-            handler.owner.node() == Some(slot) && &handler.activation == activation
-        });
-        let Some(handler) = handler else {
+        let handler = self
+            .plan
+            .handlers
+            .iter()
+            .zip(self.plan.handler_logical_time())
+            .find(|(handler, _)| {
+                handler.owner.node() == Some(slot) && &handler.activation == activation
+            });
+        let Some((handler, time_use)) = handler else {
             if matches!(
                 activation,
                 node::HandlerActivation::Port(_) | node::HandlerActivation::Join { .. }
@@ -1018,6 +1074,7 @@ impl<'plan> TransactionExecutor<'plan> {
                     close_scope: None,
                     exchange_exit: None,
                     loop_fact: None,
+                    logical_time: None,
                     trigger: trigger.clone(),
                     cause,
                     consumed,
@@ -1029,6 +1086,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 },
             });
         };
+        let guard_logical_time = time_use.guard.then_some(self.logical_time);
         // Scratch isolation: the handler runs against copies; nothing
         // below touches the caller's state.
         let mut scratch = state.clone();
@@ -1050,6 +1108,10 @@ impl<'plan> TransactionExecutor<'plan> {
             for (name, value) in lets {
                 map.insert(name.clone(), value.clone());
             }
+            map.insert(
+                String::from("now"),
+                expr::EvalValue::Timestamp(self.logical_time),
+            );
             map.insert(
                 String::from("meta"),
                 expr::EvalValue::from(meta_value(input.meta())),
@@ -1079,6 +1141,7 @@ impl<'plan> TransactionExecutor<'plan> {
                             close_scope: None,
                             exchange_exit: None,
                             loop_fact: None,
+                            logical_time: guard_logical_time,
                             trigger: trigger.clone(),
                             cause,
                             consumed,
@@ -1098,6 +1161,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 }
             }
         }
+        let logical_time = (time_use.guard || time_use.body).then_some(self.logical_time);
         let mut close_requested = false;
         for step in &handler.body {
             match step {
@@ -1215,6 +1279,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 close_scope: close_requested.then(|| instance.clone()),
                 exchange_exit: None,
                 loop_fact: None,
+                logical_time,
                 trigger: trigger.clone(),
                 cause,
                 consumed,
@@ -1320,6 +1385,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 close_scope: None,
                 exchange_exit: None,
                 loop_fact: None,
+                logical_time: None,
                 trigger: trigger.clone(),
                 cause: None,
                 consumed: vec![ConsumedPosition {
@@ -1366,6 +1432,7 @@ impl<'plan> TransactionExecutor<'plan> {
                     call_ref,
                 ))),
                 loop_fact: None,
+                logical_time: None,
                 trigger,
                 cause: Some(request.meta().sys().id()),
                 consumed: vec![],
@@ -1448,6 +1515,7 @@ impl<'plan> TransactionExecutor<'plan> {
                     crate::journal::InboundExchangeExitRecord::Session(session_ref),
                 )),
                 loop_fact: None,
+                logical_time: None,
                 trigger,
                 cause: Some(opening.meta().sys().id()),
                 consumed: consumed

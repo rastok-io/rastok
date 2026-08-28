@@ -11,7 +11,7 @@
 > structural-union and tagged-union targets is executable in memory. Tagged
 > constructors and contextual structural-union wrapping are checked,
 > executable and transported; `err` uses the same emission path as any port.
-> Categorical plan-package v13 retains v9's owner model and v7's complete
+> Categorical plan-package v14 retains v9's owner model and v7's complete
 > type/value/expression registry and total effective port table, then adds the
 > parent-linked lexical owner tree plus instance-key/lifetime descriptors
 > without changing this logical algebra. The unpublished named-partition v8
@@ -459,7 +459,7 @@ checked and reviewable.
 
 This schema adapter is distinct from:
 
-- a package-format reader (the current v13 rejects older `.rkp` versions rather than
+- a package-format reader (the current v14 rejects older `.rkp` versions rather than
   translating application schemas);
 - an internal representation codec;
 - a journal-format decoder.

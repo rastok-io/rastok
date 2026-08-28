@@ -1153,6 +1153,10 @@ pub struct Intent {
     /// request preparation. Drivers consume them but never choose defaults or
     /// evaluate expressions.
     pub resolved_settings: alloc::collections::BTreeMap<String, crate::value::Value>,
+    /// Logical instant fixed by the VM for the causing transaction. This is
+    /// execution context for scripted Drivers, not an OUTBOUND identity field
+    /// and never an invitation for a Driver to read the host clock.
+    pub logical_time: i64,
 }
 
 impl Intent {
@@ -1795,17 +1799,6 @@ pub struct Draft {
     pub ext: envelope::Namespace,
 }
 
-/// One scheduler-owned event with a logical date. Virtual time is
-/// discrete and journal-relative; the absolute value is derivable and
-/// never sealed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DatedEvent {
-    /// The logical due instant, in nanoseconds of virtual time.
-    pub at: i64,
-    /// What comes due.
-    pub payload: DatedPayload,
-}
-
 /// What a dated event carries. Per-call timeout budgets are
 /// scheduler-owned; further obligations (lifetimes, windows) join
 /// with their stages.
@@ -1850,6 +1843,21 @@ pub enum DatedPayload {
         delivery: envelope::Id,
         /// Exact Operator generation that retained it.
         instance: InstanceRef,
+    },
+    /// One committed Loop continuation reached its re-admission date. The
+    /// journal fold remains authoritative for the state, ordinal and fuel;
+    /// these fields only identify the exact obligation to re-check.
+    LoopDelay {
+        /// Graph owner carrying the Loop aspect.
+        owner: OwnerSlot,
+        /// Exact generation in which the continuation was selected.
+        instance: InstanceRef,
+        /// Durable Loop run whose fold must still be open.
+        run: crate::journal::LoopRunRef,
+        /// Ordinal of the manager-produced state awaiting admission.
+        iteration: u64,
+        /// Re-entry envelope id, also used as timer kind 5's stable ref.
+        state: envelope::Id,
     },
     /// One owner lifetime reached a scheduler-owned deadline. The complete
     /// instance reference is the generation fence; idle additionally compares
@@ -2404,13 +2412,6 @@ where
     }
 }
 
-/// Supplies one due event at a time: the VM drains to a stable state
-/// between events, which may arm new obligations before the target.
-pub trait Clock {
-    /// The next event due at or before `target`, if any.
-    fn next_due(&mut self, target: i64) -> Option<DatedEvent>;
-}
-
 /// Supplies lifecycle events.
 pub trait Supervisor {
     /// The next supervision fact, if one is pending.
@@ -2789,6 +2790,7 @@ mod tests {
             idempotency_key: None,
             effect: node::EffectClass::Idempotent,
             resolved_settings: alloc::collections::BTreeMap::new(),
+            logical_time: 0,
         };
         journal.open_outbound(intent.clone()).unwrap();
         (journal, intent)

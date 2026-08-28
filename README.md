@@ -95,16 +95,25 @@ proof. The single
 records executed independent HTTP/WebSocket interop and the remaining
 ngtcp2/Autobahn qualifications without conflating them with workspace tests.
 
-M1.7 L4 is landed. `Loop` is the first aspect with a closed categorical plan
-contract and a Registry-free finite-control proof: a fuel-only Loop crosses
-source, typed HIR and v13 round-trip with typed `in`, aspect-owned
+M1.7 is closed. `Loop` is the first aspect with a closed categorical plan
+contract and Registry-free control and termination proofs. Fuel-bounded and
+directly ranked Loops cross source, typed HIR and v14 round-trip with typed
+`in`, aspect-owned
 `next`/`expired`, domain terminal outputs and ordinary Graph handlers. Every
 completed body application proves exactly one continuation or explicit
 termination (`out`, `exit`, another ordinary output, or `stop`). Execution
-now folds each immediate persistent root-Graph run from journaled
-open/next/close/expired facts; exact exhaustion, independent concurrent roots
-and crash reconstruction execute without a spatial back-edge. Dated,
-spatial-child and nested-owner Loop gates remain fail-closed.
+folds each immediate or delayed root-Graph run from journaled
+open/next/admit/close/expired facts; exact exhaustion, independent concurrent
+roots, direct-child Call recurrence and direct-body crash reconstruction
+execute without a spatial back-edge. The first proof certificate accepts a
+direct signed-integer measure that is positive on every recurrent path and
+decreases by a known positive literal. The `no_std` validator re-derives that
+evidence after decode; unsupported theorem fragments, spatial recovery and
+nested-owner Loop gates remain fail-closed. Public Lab scenarios additionally
+prove singleton and keyed concurrent runs, ordinary nested-Graph composition,
+bounded Process retry with multi-frame data, exact exhaustion, and stale-wake
+fencing across instance Closing. See the
+[M1.7 exit report](docs/architecture/m1.7-exit-report.md).
 
 The standalone runner links Process by default. Hosted features add the
 selected HTTP/WebSocket families through one registry assembly. Pass

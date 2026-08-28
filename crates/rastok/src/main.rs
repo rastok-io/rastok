@@ -190,6 +190,34 @@ fn check(paths: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Hosted mapping from one wall-clock observation plus monotonic elapsed time
+/// to the VM's explicit logical timeline. Nothing below this boundary reads
+/// the OS clock, and wall-clock adjustments cannot move a running VM back.
+struct HostedTimeSource {
+    origin: i64,
+    started: std::time::Instant,
+}
+
+impl HostedTimeSource {
+    fn start() -> Result<Self, String> {
+        let since_epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| String::from("the hosted wall clock is before the Unix epoch"))?;
+        let origin = i64::try_from(since_epoch.as_nanos()).map_err(|_| {
+            String::from("the hosted wall clock does not fit Rastok's timestamp range")
+        })?;
+        Ok(Self {
+            origin,
+            started: std::time::Instant::now(),
+        })
+    }
+
+    fn logical_now(&self) -> i64 {
+        let elapsed = i64::try_from(self.started.elapsed().as_nanos()).unwrap_or(i64::MAX);
+        self.origin.saturating_add(elapsed)
+    }
+}
+
 /// Runs the App against the real Drivers: each stdin line is one
 /// text submission; boundary envelopes print to stdout, root errors
 /// to stderr.
@@ -214,7 +242,14 @@ fn run(paths: &[String], file_root: Option<&std::path::Path>) -> ExitCode {
     // Binding is complete before either mutable execution authority exists.
     let version = GraphVersion(1);
     let mut journal = MemJournal::new(version);
-    let mut vm = Vm::boot(&compilation.plan, version);
+    let time = match HostedTimeSource::start() {
+        Ok(time) => time,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut vm = Vm::boot_at(&compilation.plan, version, time.logical_now());
     let inbound_path = match node::Path::new(["cli"]) {
         Ok(path) => path,
         Err(_) => return ExitCode::FAILURE,
@@ -235,6 +270,13 @@ fn run(paths: &[String], file_root: Option<&std::path::Path>) -> ExitCode {
     let mut stdin_open = true;
     loop {
         let mut progressed = false;
+        let target = time.logical_now();
+        if target > vm.now()
+            && let Err(error) = vm.advance(&mut journal, &mut world, target)
+        {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
         while let Ok(message) = input.try_recv() {
             let Some(line) = message else {
                 stdin_open = false;
@@ -286,14 +328,10 @@ fn run(paths: &[String], file_root: Option<&std::path::Path>) -> ExitCode {
             break;
         }
         if !progressed {
-            // Wall time is translated only at this hosted boundary. Timers in
-            // the VM remain deterministic virtual dates and Drivers never
-            // manufacture timeout outcomes themselves.
+            // The next pump translates monotonic elapsed time at the one
+            // hosted boundary. Timers remain deterministic logical dates and
+            // Drivers never manufacture timeout outcomes themselves.
             std::thread::sleep(std::time::Duration::from_millis(10));
-            if let Err(error) = vm.advance(&mut journal, &mut world, vm.now() + 10_000_000) {
-                eprintln!("error: {error}");
-                return ExitCode::FAILURE;
-            }
         }
     }
     ExitCode::SUCCESS

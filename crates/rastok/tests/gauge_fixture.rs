@@ -6,7 +6,7 @@
 //! owe (D-2026-08-08-2/-3): one graph carrying a TYPED named
 //! boundary input, typed operator ports, and a typed named output,
 //! with its Lab scenario. Pinned here: the exact semantic hash (the
-//! identity move of the port-table presence tag), the current v13 package
+//! identity move of the port-table presence tag), the current v14 package
 //! bytes, and the full golden trace whose INBOUND record seals the
 //! ingress port as key 24.
 
@@ -61,6 +61,9 @@ fn compilation() -> rastok::compiler::Compilation {
 // DELIBERATE CONTAINER MOVE 2026-08-28 (M1.7 L2): categorical v13 adds
 // Graph aspect and handler-owner transport. Gauge has no aspect; only its
 // version, derived empty owner rows and checksum move. Hash/trace stay fixed.
+// DELIBERATE CONTAINER MOVE 2026-08-28 (M1.7 L6): categorical v14 makes
+// optional Loop proof transport explicit. Gauge has no Loop; only its version
+// and checksum move. Hash/trace stay fixed.
 const GAUGE_HASH: &str = "0d3ad43d9fb09c8626146342f6a50d1f4c387a8de52a47a3134a408cf74cb22e";
 
 #[test]
@@ -86,7 +89,7 @@ fn the_package_matches_its_golden() {
     }
     let golden = std::fs::read_to_string(&path)
         .expect("no package golden; run once with RASTOK_BLESS=1 to bless");
-    assert_eq!(golden.trim(), rendered, "the v13 typed package is pinned");
+    assert_eq!(golden.trim(), rendered, "the v14 typed package is pinned");
 }
 
 #[test]

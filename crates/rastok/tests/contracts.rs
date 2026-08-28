@@ -108,7 +108,7 @@ fn all_four_network_contracts_cross_the_source_to_validated_plan_boundary() {
         assert!(spec.attribute("versions").is_some());
         let package = rastok::plan::encode(&compilation.plan, &compilation.hash);
         let (decoded, hash) = rastok::plan::decode(&package)
-            .unwrap_or_else(|error| panic!("the {kind} v13 package must decode: {error}"));
+            .unwrap_or_else(|error| panic!("the {kind} v14 package must decode: {error}"));
         assert_eq!(hash, compilation.hash);
         assert_eq!(*decoded, *compilation.plan);
         assert_eq!(
@@ -2182,6 +2182,10 @@ fn structural_words_are_reserved_but_frontend_names_are_bindable() {
         (
             "val null",
             "graph g : App {\n  operator o {\n    val null = 1\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "val now",
+            "graph g : App {\n  operator o {\n    val now = 1\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
         ),
         // A user type may not SPELL a builtin: the builtin resolves
         // first and the declaration is silently dead (proved by the

@@ -79,11 +79,13 @@ pub struct Graph {
 /// a second semantic authority.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoopSpec {
-    /// Positive body-application budget. A proof-only Loop is deferred until
-    /// the certificate checker lands, so every currently checked spec has it.
-    pub fuel: Const,
+    /// Optional positive body-application budget. A checked measure can stand
+    /// alone; when both are present, fuel remains the operational cap.
+    pub fuel: Option<Const>,
     /// Optional re-entry timing policy.
     pub delay: Option<LoopDelay>,
+    /// Independently checkable termination proof, when declared.
+    pub proof: Option<crate::loop_proof::Certificate>,
 }
 
 /// Closed Loop re-entry delay policy.

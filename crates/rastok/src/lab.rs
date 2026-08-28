@@ -478,6 +478,10 @@ impl MockOutboundConnectorDriver {
         // slot caches across branches — one decode at most.
         let mut env: BTreeMap<String, expr::EvalValue> = BTreeMap::new();
         env.insert(
+            String::from("now"),
+            expr::EvalValue::Timestamp(intent.logical_time),
+        );
+        env.insert(
             String::from("meta"),
             expr::EvalValue::from(runtime::meta_value(request.meta())),
         );
@@ -763,6 +767,7 @@ mod tests {
             idempotency_key: None,
             effect: node::EffectClass::Idempotent,
             resolved_settings: BTreeMap::new(),
+            logical_time: 0,
         };
         let outcome = driver.answer(&intent, &request);
         let reported = faults.borrow().clone();
@@ -782,6 +787,18 @@ mod tests {
             outcome.is_some_and(|completion| completion.outputs().len() == 2),
             "the meta-only branch answered"
         );
+    }
+
+    #[test]
+    fn a_mock_observes_the_same_injected_logical_time_as_the_machine() {
+        let (outcome, faults) = opaque_answer(
+            "      on in where now() == timestamp(\"1970-01-01T00:00:00Z\") {\n        out = \"epoch\"\n        exit = Exited { exit_code = 0, signal = null }\n      }",
+        );
+        assert!(
+            faults.is_empty(),
+            "the context time is explicit: {faults:?}"
+        );
+        assert!(outcome.is_some(), "the epoch branch answers");
     }
 
     #[test]

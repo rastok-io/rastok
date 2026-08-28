@@ -229,7 +229,7 @@ impl<'plan> Solver<'plan> {
         }
         for handler in &self.plan.handlers {
             let Some(node) = handler.owner.node() else {
-                // Graph boundaries carried by v13 are fully pinned and their
+                // Graph boundaries carried by v14 are fully pinned and their
                 // handlers are verified against that contract by plan
                 // validation. They do not participate in the flattened Node
                 // port fixed point.
@@ -1271,10 +1271,19 @@ fn write_type_path(
 }
 
 pub(super) fn expression_reads_data(expr: &expr::Expr) -> bool {
+    expression_reads_root(expr, "data")
+}
+
+/// Whether one checked expression reads a contextual root. This is derived
+/// once during plan validation for runtime context such as `now`; it is also
+/// the authority used by the data-dependent type solver.
+pub(super) fn expression_reads_root(expr: &expr::Expr, expected: &str) -> bool {
     let mut stack = alloc::vec![expr];
     while let Some(expr) = stack.pop() {
         match expr {
-            expr::Expr::Path(path) if path.first().is_some_and(|root| root == "data") => {
+            expr::Expr::Path(path)
+                if path.first().is_some_and(|root| root.as_str() == expected) =>
+            {
                 return true;
             }
             expr::Expr::Path(_) | expr::Expr::Literal(_) | expr::Expr::Asset(_) => {}

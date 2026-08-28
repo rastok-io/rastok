@@ -1,8 +1,9 @@
 # Node kinds, types, and aspects
 
 > **Status:** normative taxonomy. `node::Kind` and `node::Type` are executable.
-> `Loop` has categorical v13 transport and Registry-free finite-control
-> validation; its runtime manager remains gated until M1.7 L4. `Saga` is recognized but
+> `Loop` has categorical v14 transport, Registry-free finite-control and
+> direct-integer termination validation, plus dated and publicly composed
+> execution through closed M1.7. `Saga` is recognized but
 > remains a named execution gate.
 
 This document defines the common classification model used by Graphs,
@@ -217,7 +218,7 @@ aspect wins over another. Any unqualified collision refuses.
 
 ## 8. Transport and identity
 
-The v13 plan still derives every NodeType from existing categorical facts and
+The v14 plan still derives every NodeType from existing categorical facts and
 does not serialize a duplicate claim:
 
 - parentless Graph owner → `App`;
@@ -232,17 +233,19 @@ carry neither Graph ports nor aspects. Ordinary handlers carry a tagged Node
 or Graph owner, so a Loop Graph can observe its own input or a direct child's
 typed output without inventing an aspect-only AST. Registry-free validation
 re-derives every contribution after decode. A runtime never rediscovers an
-aspect from source strings, attributes, or port names. L4's Loop manager
-executes only the admitted immediate persistent root-Graph subset; every other
-transported composition remains a named refusal until its complete gate lands.
+aspect from source strings, attributes, or port names. The Loop manager
+executes the closed M1.7 root-Graph contract, including ordinary nested Graph
+composition, keyed/singleton instances, finite lifetimes, delayed re-entry and
+bounded Calls. Nested Loop owners, direct spatial Graph-boundary terminals,
+explicit Loop `stop` and spatial recovery remain named refusals rather than
+inferred extensions.
 
 ## 9. Deferred questions
 
 - User-defined and parameterized aspects are outside the current contract.
 - Every future pair requires a composition matrix entry.
-- M1.7 must still close dated/nested/Closing and source-to-Lab evidence; run
-  identity, exact fuel, typed exhaustion and immediate recovery landed at L4,
-  after the Graph boundary progress proof at L3.
+- M1.7 is closed. Its remaining limits are named in [loop.md](loop.md) and are
+  later extensions, not incomplete milestone claims.
 - Saga remains later than Loop; this document fixes its classification but
   does not claim an executable manager.
 

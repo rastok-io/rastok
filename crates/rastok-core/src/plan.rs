@@ -679,10 +679,13 @@ pub struct PlanConstant {
 /// Complete first-gate Loop transport.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoopSpec {
-    /// Positive maximum number of body applications.
-    pub fuel: PlanConstant,
+    /// Optional positive maximum number of body applications. A verified
+    /// measure may stand alone; when both exist this remains the runtime cap.
+    pub fuel: Option<PlanConstant>,
     /// Optional re-admission delay.
     pub delay: Option<LoopDelay>,
+    /// Optional small termination certificate, re-verified after decode.
+    pub proof: Option<crate::loop_proof::Certificate>,
 }
 
 /// Closed Loop delay policy.

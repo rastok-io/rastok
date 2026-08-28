@@ -47,9 +47,9 @@ the current state and evidence are indexed by
 [`docs/architecture/m1-slice.md`](docs/architecture/m1-slice.md).
 [`ROADMAP.md`](ROADMAP.md) remains the source for milestone gates.
 
-The current slice does not require clustering, a durable disk journal,
-live Saga or Loop managers, a complete Connector catalogue, a plugin loader,
-a web console, or enterprise deployment features. Those capabilities
+The current slice does not require clustering, a durable disk journal, a live
+Saga manager, a complete Connector catalogue, a plugin loader, a web console,
+or enterprise deployment features. Those capabilities
 must grow from demonstrated boundaries rather than be represented by
 empty crates.
 
@@ -176,7 +176,7 @@ layer; their library types never leak into the no_std kernel. See the
 M1.6 H4.1 extends that same core algebra with the open canonical
 `media_type` scalar. OpenAPI remains a hosted compiler/tool adapter:
 `serde_json`/`serde_yaml_ng` and filesystem discovery stay in `rastok`, while
-only resolved `DataType` trees and categorical v13 plan data cross toward the
+only resolved `DataType` trees and categorical plan data cross toward the
 core. Connector modules are flat by contract family; a shared module is named
 for its real responsibility (`websocket_protocol` or private `network`) rather
 than becoming a generic utility bucket.
@@ -188,6 +188,15 @@ WebSocketClient/WebSocketServer use the generic Session fold over H1 Upgrade
 and H2/H3 Extended CONNECT. Tokio and every protocol-library type remain
 private to `rastok::connectors::network`; the same core still builds for the
 three established no-std targets.
+
+M1.7 keeps temporal recursion on that same deterministic boundary. The
+`Loop` manager consumes a categorical v14 aspect contract and folds ordinary
+journal facts; optional dated re-entry uses the generic scheduler, not a
+thread sleep or a spatial cycle. The compiler and Registry-free core prove a
+finite control verdict plus either positive fuel or the admitted integer
+ranking certificate before the VM can execute the aspect. Public Lab and
+Cortex-M33 evidence are recorded in the
+[M1.7 exit report](docs/architecture/m1.7-exit-report.md).
 
 ## Views
 
@@ -214,8 +223,6 @@ instructions live in [`tools/diagrams/`](tools/diagrams/README.md).
 The blueprint does not yet select:
 
 - the physical durable-journal layout and recovery deployment;
-- the first production Inbound Driver's acknowledgement protocol;
-- an HTTP/TLS dependency boundary;
 - a serialized plugin manifest syntax, loader, trust policy or native ABI;
 - a public embedding API beyond the current library surface.
 

@@ -26,6 +26,7 @@ pub mod expr;
 pub mod identity;
 pub mod journal;
 pub mod json;
+pub mod loop_proof;
 pub mod node;
 pub mod plan;
 pub mod runtime;

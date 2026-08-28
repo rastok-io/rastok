@@ -1,7 +1,7 @@
 # Instances, keys, lifetime, and placement
 
 > **Status:** normative M1.4 target, adopted by D-2026-08-18-1. The compiler
-> accepts and checks the R1 `instance` / `lifetime` surface. Plan-package v13
+> accepts and checks the R1 `instance` / `lifetime` surface. Plan-package v14
 > retains v9's categorical parent-linked owner table, scoped routes,
 > independent instance policy, immutable owner expressions, and phased
 > Connector settings. R3 routes every owner through canonical hierarchical
@@ -14,8 +14,12 @@
 > settings/values remains a named R1 gap. R6 makes nested Graphs and
 > instance-local joins public end to end, including Lab and package evidence;
 > M1.7 L2 subsequently transports Graph-owned handlers categorically, L3
-> proves their finite Loop progress decision, and L4 executes immediate root
-> recurrence in the same journaled generation. R7
+> proves their finite Loop progress decision, L4 executes immediate root
+> recurrence, and L5 dates recurrence on the shared queue while preserving
+> the same journaled generation and ordinary lifetime deadlines. L6 carries
+> optional proof certificates in plan-package v14, and L7 closes the public
+> composition matrix, including ordinary nested Graph bodies, without
+> admitting nested Loop owners or widening the proof fragment. R7
 > closes the executable instance slice with negative-space and
 > placement-neutrality proofs; it adds no cluster runtime. This document is
 > the single authority for logical instance addressing, key selection,
@@ -460,9 +464,11 @@ transaction or any external resource effect. `on start` and `on stop` are
 ordinary handlers owned by the Node and require a causal input envelope;
 Graph lifecycle facts execute now. Graph-owned handler source and categorical
 transport landed with the Loop L2 gate, and L3 proves their finite progress;
-L4's manager now executes an immediate persistent root Loop and reconstructs
-its open runs from journal facts. Delayed, nested, spatial-child and finite
-lifetime Loop compositions still refuse until their named gates land.
+closed M1.7 executes immediate or delayed root Loops across ordinary flattened
+nested Graphs, finite lifetimes and direct-child output handlers, including
+bounded Calls. Nested Loop owners, direct Graph-boundary terminal producers, spatial
+Worker recovery and explicit Loop `stop` still refuse until their named gates
+land.
 
 Bare `stop` requests closure of the current Node instance after the current
 transaction commits. There is no `stop <partition>` form. Stopping a Graph
@@ -652,7 +658,7 @@ The plan/package and journal vocabulary has been rewritten from the draft
 `partition_key` / `target_partition` names to logical instance addresses and
 generation-bearing references without renumbering already reserved
 extend-only journal keys merely for spelling.
-Plan-package v13 retains v9's categorical owner/instance transport and
+Plan-package v14 retains v9's categorical owner/instance transport and
 refuses v11 and every older format, including the unpublished v8 draft, as
 input. The original v9
 package-only move left semantic hashes and causal traces unchanged at R2. R3

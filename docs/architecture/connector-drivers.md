@@ -205,7 +205,7 @@ The model covers the intended catalogue without new role kinds:
 |---|---|
 | `Process(job)`, `File(read/replace)`, HTTP client, LLM, database call | outbound call |
 | HTTP server | inbound call |
-| Clock, Calendar | inbound event |
+| Timer, Calendar | inbound event |
 | WebSocket client/server, queue consumer/producer, future `File.watch` plus writes | both-role session, when one contract really shares one protocol state |
 
 Whether `File.watch` widens `rastok/file@1` or becomes a separate contract is

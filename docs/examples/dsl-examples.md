@@ -15,7 +15,7 @@ these concepts concretely. Stdlib aliases (`HttpClient`, `Process`,
 the primitive `operator` / `connector` keywords stand on their own
 when no alias fits.
 
-The parser is a forward lexeme stream. Categorical plan-package v13 retains
+The parser is a forward lexeme stream. Categorical plan-package v14 retains
 v9's lexical owners, Node-owned instance policy, scoped edges and phased
 immutable expressions plus the complete v7 M1.3 type/value/expression
 registry, extended by H4.1's `media_type`; it also carries stable Connector
@@ -30,9 +30,12 @@ dispatch, Graph lifecycle facts, explicit bounded closing, and bounded
 presence joins execute. R7 has audited the removed surface and physical
 placement neutrality without claiming a cluster runtime. Graph lifecycle
 handlers outside an admitted aspect, File append/watch/directory profiles,
-dated/nested/spatial-child Loop composition, Process service mode, and guest
-engines are still pending or guarded. L4 executes immediate persistent
-root-Graph Loops from their replay-derived fuel fold. Thus these are
+nested Loop owners, direct spatial Loop-boundary verdicts, Process service
+mode, and guest engines are still pending or guarded. Closed M1.7 executes
+immediate or delayed root-Graph Loops across ordinary flattened nested Graphs
+from their replay-derived fuel fold, composes their wakeups with ordinary
+instance lifetimes, and admits the first proof-only direct integer countdown
+after a `no_std` certificate check. Thus these are
 parser- and design-reference snippets, not a claim
 that every section runs today. The small executable fixtures under
 [`examples/`](../../examples/) are the run/simulate proofs.
@@ -465,8 +468,10 @@ Four things visible here :
 - `on in { … }` is the single-port handler. The handler forms
   (`on start`, `on <port>`, the `on (a, b)` join with executable
   `where` / `within` / `last` clauses, and `on stop`) cover
-  everything. No `on tick` — time-based behavior wires a
-  `Clock` to an input. The parsed quorum clause `having` remains a named gate.
+  everything. There is no implicit `on tick`: a graph that needs time as an
+  event wires a `Timer` to an input, while a firing can observe its fixed
+  logical instant with `now()`. The parsed quorum clause `having` remains a
+  named gate.
 - `mock weather_api { on in where … { out = … } }` replaces the real
   `HttpClient` Connector at simulation time, without touching the
   graph itself (mock bodies are ordinary handler grammar —

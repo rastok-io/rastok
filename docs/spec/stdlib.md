@@ -69,7 +69,7 @@ frames with one `exit`; a session correlates messages in both directions with
 one session `exit`, never one exit per message (D-2026-08-25-1).
 
 **Naming rule**: stdlib Connector NodeTypes carry **no suffix** — the keyword already says
-it (`connector c: Clock`). Applies to all future contract types too (`Postgres`,
+it (`connector c: Timer`). Applies to all future contract types too (`Postgres`,
 `S3`, …).
 
 
@@ -93,7 +93,7 @@ external system's semantic function** —
                                        (a distribution is sampled)
 ```
 
-- **Pre-declared** where the Connector NodeType imposes it: `Clock`, `Calendar`,
+- **Pre-declared** where the Connector NodeType imposes it: `Timer`, `Calendar`,
   `Memory`, `HttpServer` = `deterministic`.
 - **Per-instance, mandatory** on `HttpClient` and `Process` (only the dev
   knows who answers). Forgetting it = compile refusal, like `effect`.
@@ -408,19 +408,26 @@ exchange: one resident run carries many stdin/stdout messages and one terminal
 `ProcessExit`. It is not lowered as one Process job per line and needs no
 WebSocket-specific runtime path.
 
-### 3.4 `Clock` — the metronome
+### 3.4 `Timer` — one-shot or periodic time events
 
 | Case | Contract |
 |---|---|
-| Exchange | event — each tick is one spontaneous inbound root and has no per-tick `exit` |
-| Role / Direction | periodic physical time; **inbound source** |
-| Ports | `out`: tick envelopes (`timestamp`) |
+| Exchange | event — each firing is one spontaneous inbound root and has no per-event `exit` |
+| Role / Direction | one-shot or periodic logical-time event; **inbound source** |
+| Ports | `out`: timestamp envelopes |
 | effect / behavior | `none` / `deterministic` (pre-declared) |
-| Attributes | `every = duration("…")` (a constant Rastok duration expression) |
+| Attributes | exactly one of `after = duration("…")` (one firing) or `every = duration("…")` (periodic); positive plan constants |
 | Correlator | **none** (a pure source makes no calls) |
-| Outcome cases | none (a metronome has no runtime outcome worth an envelope) |
-| Instances | singleton per declaration; `system_clock` = the implicit instance the supervision plane already uses (lifetimes, `within`) |
-| Journal / sim | ticks = INBOUND records; in sim, driven by `advance` |
+| Outcome cases | none (a timer event has no runtime outcome worth another envelope) |
+| Instances | one source per declared Node instance; no implicit `system_clock` Node exists |
+| Journal / sim | firings = INBOUND records; in simulation, driven by `advance` |
+
+`Timer` is not the VM's clock and is not required for `now()`, timeouts,
+lifetimes, join eviction or Loop delay. Those mechanisms consume the explicit
+logical timeline and generic dated-event queue directly. Declare a `Timer`
+only when the graph itself needs an event because time passed. An embedded
+host may drive both from a monotonic hardware timer; an RTC or another
+civil-time source is needed only to anchor `Calendar` semantics.
 
 ### 3.5 `Calendar` — civil time
 
@@ -440,8 +447,7 @@ WebSocket-specific runtime path.
 **skipped**; an ambiguous one (fall back) fires **once, first occurrence**.
 The classic sane-cron behavior, written down.
 
-*(Clock vs Calendar = the time literature's own pair: clock time — physical,
-relative — vs calendar time — civil, absolute.)*
+*(`Timer` schedules elapsed-time events; `Calendar` schedules civil instants.)*
 
 ### 3.6 `Memory` — the bounded in-process store
 

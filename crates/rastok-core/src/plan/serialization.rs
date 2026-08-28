@@ -1,7 +1,7 @@
 //! The plan package — the transportable, verifiable serialization
 //! of an [`ExecutionPlan`], per `docs/architecture/plan-package.md`.
 //!
-//! Format v13: the 4-byte magic `RKPB`, then one canonical CBOR map —
+//! Format v14: the 4-byte magic `RKPB`, then one canonical CBOR map —
 //! format version, the plan's semantic hash, the body as an embedded
 //! byte string, and a blake3 checksum over the domain-framed
 //! association `domain ‖ version ‖ semantic_hash ‖ body`, so a
@@ -45,7 +45,7 @@ pub const MAGIC: [u8; 4] = *b"RKPB";
 /// closed aspect specifications, and Graph-owned ordinary handlers.
 /// A new format is a new version, and an old decoder refuses it by name,
 /// exactly as the format note promises.
-pub const FORMAT_VERSION: u32 = 13;
+pub const FORMAT_VERSION: u32 = 14;
 
 /// The checksum domain — fixed-width framing, so the covered fields
 /// cannot slide into one another.
@@ -415,9 +415,29 @@ fn aspect_spec_tree(aspect: &AspectSpec) -> Cbor {
 }
 
 fn loop_spec_tree(spec: &LoopSpec) -> Cbor {
-    let mut fields = BTreeMap::from([(1, plan_constant_tree(&spec.fuel))]);
+    let mut fields = BTreeMap::new();
+    if let Some(fuel) = &spec.fuel {
+        fields.insert(1, plan_constant_tree(fuel));
+    }
     if let Some(delay) = &spec.delay {
         fields.insert(2, loop_delay_tree(delay));
+    }
+    if let Some(proof) = &spec.proof {
+        fields.insert(3, loop_proof_tree(proof));
+    }
+    Cbor::Map(fields)
+}
+
+fn loop_proof_tree(proof: &crate::loop_proof::Certificate) -> Cbor {
+    let mut fields = BTreeMap::from([
+        (1, tree_tree(&proof.measure)),
+        (
+            3,
+            Cbor::Array(proof.decreases.iter().copied().map(Cbor::Uint).collect()),
+        ),
+    ]);
+    if let Some(invariant) = &proof.invariant {
+        fields.insert(2, tree_tree(invariant));
     }
     Cbor::Map(fields)
 }
@@ -1086,9 +1106,11 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
         for aspect in &owner.aspects {
             let AspectSpec::Loop(spec) = aspect;
             // aspects array at 3, tagged aspect at 4, Loop map at 5.
-            // Its fuel constant starts at 6; a delay's tagged policy starts
-            // at 6 and nests each constant one level further at 7.
-            plan_constant(&spec.fuel, 6, &mut max, &mut stack);
+            // An optional fuel constant starts at 6; a delay's tagged policy
+            // starts at 6 and nests each constant one level further at 7.
+            if let Some(fuel) = &spec.fuel {
+                plan_constant(fuel, 6, &mut max, &mut stack);
+            }
             match &spec.delay {
                 None => {}
                 Some(LoopDelay::Fixed { after }) => {
@@ -1098,6 +1120,14 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                     plan_constant(first, 7, &mut max, &mut stack);
                     plan_constant(ceiling, 7, &mut max, &mut stack);
                 }
+            }
+            if let Some(proof) = &spec.proof {
+                // Proof map at 6, tree roots and witness array at 7.
+                tree(&proof.measure, 7, &mut stack);
+                if let Some(invariant) = &proof.invariant {
+                    tree(invariant, 7, &mut stack);
+                }
+                max = max.max(7);
             }
         }
     }
@@ -1610,8 +1640,28 @@ fn aspect_spec_from(tree: &Cbor) -> Result<AspectSpec, DecodeError> {
 fn loop_spec_from(tree: &Cbor) -> Result<LoopSpec, DecodeError> {
     let fields = map_of(tree, "Loop specification")?;
     Ok(LoopSpec {
-        fuel: plan_constant_from(get(fields, 1, "Loop fuel")?)?,
+        fuel: find(fields, 1).map(plan_constant_from).transpose()?,
         delay: find(fields, 2).map(loop_delay_from).transpose()?,
+        proof: find(fields, 3).map(loop_proof_from).transpose()?,
+    })
+}
+
+fn loop_proof_from(tree: &Cbor) -> Result<crate::loop_proof::Certificate, DecodeError> {
+    let fields = map_of(tree, "Loop proof")?;
+    let decreases = array_of(
+        get(fields, 3, "Loop proof decreases")?,
+        "Loop proof decreases",
+    )?
+    .iter()
+    .map(|value| match value {
+        Cbor::Uint(value) => Ok(*value),
+        _ => Err(err("Loop proof decrease")),
+    })
+    .collect::<Result<Vec<_>, _>>()?;
+    Ok(crate::loop_proof::Certificate {
+        measure: tree_from(get(fields, 1, "Loop proof measure")?)?,
+        invariant: find(fields, 2).map(tree_from).transpose()?,
+        decreases,
     })
 }
 
@@ -2635,7 +2685,7 @@ mod tests {
     }
 
     #[test]
-    fn v13_retains_one_spelling_for_owner_lifetimes_sites_and_dynamic_attributes() {
+    fn v14_retains_one_spelling_for_owner_lifetimes_sites_and_dynamic_attributes() {
         let lifetimes = [
             InstanceLifetime::Persistent,
             InstanceLifetime::Idle(1),
@@ -2705,7 +2755,7 @@ mod tests {
     }
 
     #[test]
-    fn v13_package_sabotage_cannot_change_an_instance_key_or_lifetime() {
+    fn v14_package_sabotage_cannot_change_an_instance_key_or_lifetime() {
         let package = instance_package();
 
         let lying_key_type = mutate_package_body(&package, |body| {
@@ -3512,10 +3562,10 @@ mod tests {
             ty: Some(nested_type.clone()),
         });
         categorical.owners[0].aspects = vec![AspectSpec::Loop(LoopSpec {
-            fuel: PlanConstant {
+            fuel: Some(PlanConstant {
                 expr: tree(nested_maplit.clone()),
                 resolved: nested_value.clone(),
-            },
+            }),
             delay: Some(LoopDelay::Exponential {
                 first: PlanConstant {
                     expr: tree(expr::Expr::Literal(Value::Duration(1))),
@@ -3526,6 +3576,7 @@ mod tests {
                     resolved: Value::Duration(2),
                 },
             }),
+            proof: None,
         })];
 
         let plans = [

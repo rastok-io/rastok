@@ -968,6 +968,37 @@ impl core::error::Error for PlanValidationError {}
 pub struct ValidatedExecutionPlan {
     plan: ExecutionPlan,
     resolved_ports: super::type_resolution::ResolvedPortTable,
+    handler_logical_time: Vec<HandlerLogicalTimeUse>,
+}
+
+/// Derived context demand for one handler. It never travels in a package:
+/// validation computes it from the already canonical expression trees once,
+/// so a time-insensitive firing does no AST walk on the hot path.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct HandlerLogicalTimeUse {
+    /// Guard selection can observe the firing instant.
+    pub(crate) guard: bool,
+    /// The selected body can observe the firing instant.
+    pub(crate) body: bool,
+}
+
+fn handler_logical_time_use(handler: &crate::plan::Handler) -> HandlerLogicalTimeUse {
+    let reads =
+        |tree: &expr::Tree| super::type_resolution::expression_reads_root(&tree.root, "now");
+    HandlerLogicalTimeUse {
+        guard: handler.guard.as_ref().is_some_and(reads),
+        body: handler.body.iter().any(|step| match step {
+            Step::Let { expr, .. } | Step::SetVar { expr, .. } => reads(expr),
+            Step::Emit { value, .. } => match value {
+                Emission::Data(tree) => reads(tree),
+                Emission::Patch(writes) | Emission::Replace(writes) => {
+                    writes.iter().any(|write| reads(&write.expr))
+                }
+                Emission::Identity | Emission::Nothing => false,
+            },
+            Step::Stop => false,
+        }),
+    }
 }
 
 impl ValidatedExecutionPlan {
@@ -1010,9 +1041,11 @@ impl ValidatedExecutionPlan {
                 budget: crate::canonical_cbor::MAX_NESTING,
             });
         }
+        let handler_logical_time = plan.handlers.iter().map(handler_logical_time_use).collect();
         Ok(Self {
             plan,
             resolved_ports,
+            handler_logical_time,
         })
     }
 
@@ -1030,6 +1063,13 @@ impl ValidatedExecutionPlan {
     #[must_use]
     pub const fn resolved_ports(&self) -> &super::type_resolution::ResolvedPortTable {
         &self.resolved_ports
+    }
+
+    /// Context demands in exact handler-table order. This is derived from the
+    /// validated trees and deliberately absent from categorical transport.
+    #[must_use]
+    pub(crate) fn handler_logical_time(&self) -> &[HandlerLogicalTimeUse] {
+        &self.handler_logical_time
     }
 
     /// Gives the raw plan back — the validity claim does not travel
@@ -1851,7 +1891,7 @@ fn validate_network_connector(
 }
 
 /// Every type-bearing plan position passes this audit before the infallible
-/// v13 encoder can observe the plan.
+/// v14 encoder can observe the plan.
 fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     for (field, ty) in &plan.app_schema {
         data_type_at(ty, format!("meta.app.{field}"))?;
@@ -1881,7 +1921,9 @@ fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
         }
         for aspect in &owner.aspects {
             let crate::plan::AspectSpec::Loop(spec) = aspect;
-            tree_type_at(&spec.fuel.expr, format!("Loop fuel on `{}`", owner.path))?;
+            if let Some(fuel) = &spec.fuel {
+                tree_type_at(&fuel.expr, format!("Loop fuel on `{}`", owner.path))?;
+            }
             match &spec.delay {
                 None => {}
                 Some(crate::plan::LoopDelay::Fixed { after }) => {
@@ -1893,6 +1935,12 @@ fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
                         &ceiling.expr,
                         format!("Loop delay ceiling on `{}`", owner.path),
                     )?;
+                }
+            }
+            if let Some(proof) = &spec.proof {
+                tree_type_at(&proof.measure, format!("Loop measure on `{}`", owner.path))?;
+                if let Some(invariant) = &proof.invariant {
+                    tree_type_at(invariant, format!("Loop invariant on `{}`", owner.path))?;
                 }
             }
         }
@@ -2344,7 +2392,7 @@ fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
         // Requiring an empty value environment here makes that canonical form
         // a validation invariant instead of admitting an equivalent second
         // spelling that a forged package could exploit.
-        let signature = expr::Signature::new();
+        let constant_signature = expr::Signature::new();
         let bindings = PlanValueBindings {
             values: &no_values,
             assets: &plan.assets,
@@ -2356,12 +2404,10 @@ fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
             expr_canonical(&constant.expr.root)?;
             asset_indexes_bound(plan, &constant.expr.root)?;
             value_expressible(&constant.resolved)?;
-            let derived =
-                expr::rederive_type(&constant.expr.root, &signature).ok_or_else(|| {
-                    PlanValidationError::InvalidGraphContract {
-                        owner: owner_name.clone(),
-                        detail,
-                    }
+            let derived = expr::rederive_type(&constant.expr.root, &constant_signature)
+                .ok_or_else(|| PlanValidationError::InvalidGraphContract {
+                    owner: owner_name.clone(),
+                    detail,
                 })?;
             if derived != constant.expr.ty || !derived.is_assignable_to(expected) {
                 return Err(PlanValidationError::InvalidGraphContract {
@@ -2383,27 +2429,105 @@ fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
             }
             Ok(())
         };
-        let fuel_type = match spec.fuel.resolved {
-            crate::value::Value::Int(value) if value > 0 => {
-                if i32::try_from(value).is_ok() {
-                    DataType::INT
-                } else {
-                    DataType::LONG
+        if spec.fuel.is_none() && spec.proof.is_none() {
+            return Err(PlanValidationError::InvalidGraphContract {
+                owner: owner_name.clone(),
+                detail: "Loop requires positive fuel or a verified measure",
+            });
+        }
+        if let Some(fuel) = &spec.fuel {
+            let fuel_type = match fuel.resolved {
+                crate::value::Value::Int(value) if value > 0 => {
+                    if i32::try_from(value).is_ok() {
+                        DataType::INT
+                    } else {
+                        DataType::LONG
+                    }
                 }
-            }
-            crate::value::Value::Uint(value) if value > 0 => DataType::UINT,
-            _ => {
-                return Err(PlanValidationError::InvalidGraphContract {
-                    owner: owner_name,
-                    detail: "Loop.fuel must reduce to a positive integer",
+                crate::value::Value::Uint(value) if value > 0 => DataType::UINT,
+                _ => {
+                    return Err(PlanValidationError::InvalidGraphContract {
+                        owner: owner_name.clone(),
+                        detail: "Loop.fuel must reduce to a positive integer",
+                    });
+                }
+            };
+            validate_constant(
+                fuel,
+                &fuel_type,
+                "Loop.fuel is not its claimed plan constant",
+            )?;
+        }
+        if let Some(proof) = &spec.proof {
+            expr_canonical(&proof.measure.root)?;
+            asset_indexes_bound(plan, &proof.measure.root)?;
+            let theorem_signature = expr::Signature::new().with("data", state.clone());
+            let measure_type = expr::rederive_type(&proof.measure.root, &theorem_signature)
+                .ok_or_else(|| PlanValidationError::InvalidLoopControl {
+                    owner: owner_name.clone(),
+                    path: String::from("measure"),
+                    detail: "the Loop measure type cannot be re-derived",
+                })?;
+            if measure_type != proof.measure.ty
+                || !matches!(
+                    measure_type,
+                    DataType::Integer(crate::datatype::IntegerType::Signed(_))
+                )
+            {
+                return Err(PlanValidationError::InvalidLoopControl {
+                    owner: owner_name.clone(),
+                    path: String::from("measure"),
+                    detail: "the Loop measure is not a signed integer expression",
                 });
             }
-        };
-        validate_constant(
-            &spec.fuel,
-            &fuel_type,
-            "Loop.fuel is not its claimed plan constant",
-        )?;
+            if let Some(invariant) = &proof.invariant {
+                expr_canonical(&invariant.root)?;
+                asset_indexes_bound(plan, &invariant.root)?;
+                let invariant_type = expr::rederive_type(&invariant.root, &theorem_signature)
+                    .ok_or_else(|| PlanValidationError::InvalidLoopControl {
+                        owner: owner_name.clone(),
+                        path: String::from("invariant"),
+                        detail: "the Loop invariant type cannot be re-derived",
+                    })?;
+                if invariant_type != invariant.ty || invariant_type != DataType::Bool {
+                    return Err(PlanValidationError::InvalidLoopControl {
+                        owner: owner_name.clone(),
+                        path: String::from("invariant"),
+                        detail: "the Loop invariant is not boolean",
+                    });
+                }
+            }
+            crate::loop_proof::verify(owner_slot, proof, &plan.handlers).map_err(|error| {
+                let detail = match error {
+                    crate::loop_proof::Error::UnsupportedMeasure => {
+                        "the Loop measure is outside the supported direct integer-path fragment"
+                    }
+                    crate::loop_proof::Error::UnsupportedInvariant => {
+                        "the Loop invariant cannot be established at entry by this proof gate"
+                    }
+                    crate::loop_proof::Error::UnsupportedActivation => {
+                        "a recurrent path is not a direct Graph input handler"
+                    }
+                    crate::loop_proof::Error::AmbiguousRecurrence => {
+                        "a recurrent handler does not select exactly one next state"
+                    }
+                    crate::loop_proof::Error::MeasureNotPositive => {
+                        "a recurrent path does not prove that the Loop measure is positive"
+                    }
+                    crate::loop_proof::Error::MeasureDoesNotDecrease => {
+                        "a recurrent path does not strictly decrease the Loop measure"
+                    }
+                    crate::loop_proof::Error::CertificateMismatch => {
+                        "the Loop proof certificate disagrees with the shipped handlers"
+                    }
+                };
+                PlanValidationError::InvalidLoopControl {
+                    owner: owner_name.clone(),
+                    path: String::from("measure"),
+                    detail,
+                }
+            })?;
+        }
         match &spec.delay {
             None => {}
             Some(crate::plan::LoopDelay::Fixed { after }) => {
@@ -3364,7 +3488,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             validate_network_connector(node, spec)?;
             // Built-in sheets above retain their more specific missing-row
             // diagnostics. Foreign families still cannot bypass the generic
-            // exchange lifecycle retained by v13.
+            // exchange lifecycle retained by v14.
             let exits = node
                 .ports
                 .iter()
@@ -3932,6 +4056,7 @@ fn validate_graph_handler(
     let mut signature = expr::Signature::new()
         .with("data", input_type.clone())
         .with_metadata("meta")
+        .with("now", DataType::TIMESTAMP)
         .with("Loop.state", DataType::Variant)
         .with("Loop.state.data", state_type)
         .with_metadata("Loop.state.meta");
@@ -4165,17 +4290,6 @@ impl<'plan> LoopControl<'plan> {
     }
 
     fn prove(mut self) -> Result<(), PlanValidationError> {
-        if self
-            .plan
-            .owners
-            .iter()
-            .any(|owner| owner.parent == Some(self.owner) && matches!(owner.kind, OwnerKind::Graph))
-        {
-            return Err(self.error(
-                "<nested Graph>",
-                "a nested Graph needs a separately proved Loop control summary",
-            ));
-        }
         let input = node::HandlerActivation::Port(
             node::Port::new("in")
                 .map_err(|_| self.error("in", "the Loop input name is not representable"))?,
@@ -4240,7 +4354,9 @@ impl<'plan> LoopControl<'plan> {
             .edges
             .iter()
             .filter(|edge| {
-                edge.scope == self.owner && edge.from.node == node && edge.from.port == *port
+                owner_contains(self.plan, self.owner, edge.scope)
+                    && edge.from.node == node
+                    && edge.from.port == *port
             })
             .map(|edge| edge.to.clone())
             .collect();
@@ -4300,11 +4416,7 @@ impl<'plan> LoopControl<'plan> {
                 "the Loop route names no executable Node",
             )
         })?;
-        if !self
-            .plan
-            .owner(node.owner)
-            .is_some_and(|owner| owner.parent == Some(self.owner))
-        {
+        if !owner_contains(self.plan, self.owner, node.owner) {
             return Err(self.error(
                 format!("{}.{port}", node.path),
                 "control crossed an unproved nested Graph boundary",

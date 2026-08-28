@@ -111,7 +111,7 @@ difficult operational properties:
 | Events arriving out of order | Each flow grows its own correlation state machine and locking rules. | Bounded joins correlate typed envelopes by key. |
 | External side effects | HTTP calls, processes, files, payments, and retries are hidden inside application code. | Every external interaction crosses a declared Connector. |
 | Probabilistic components | An LLM may return different answers for the same request, with variable latency and cost. | The journal records each boundary outcome; the graph isolates and measures the probabilistic surface. |
-| Time-dependent behavior | Code reads `now()` or sleeps, so tests wait in real time and cannot reproduce the same timeout race. | Time enters through a Connector and becomes controlled virtual time in the Lab. |
+| Time-dependent behavior | Code reads the host clock or sleeps, so tests wait in real time and cannot reproduce the same timeout race. | The VM owns an explicit logical timeline: `now()` observes one transaction-fixed instant, and `Timer`/`Calendar` create events only when the graph needs them. |
 | Recovery and audit | Effects and state updates leave separate, incomplete records. | Transactions and boundary outcomes form one causal journal. |
 | Operational policy | Every team reimplements retries, timeouts, supervision, backpressure, and cost metering. | The graph declares shared runtime policy once. |
 | Change control | Visual canvases and custom glue are difficult to review, compare, and generate safely. | Typed text is versioned in Git, checked before execution, and projected into a diagram. |
@@ -122,11 +122,13 @@ Three questions summarize the intended result:
 2. *Can you test the whole flow without calling the real LLM or bank?*
 3. *Can you show which input caused each external effect?*
 
-Time matters in all three. Reading the wall clock is an external
-observation, just like reading an API response. If a timeout depends on
-an invisible `now()`, the value appears in neither the fixture nor the
-journal. A test must wait, and a replay may take a different branch.
-Rastok therefore treats time as an explicit effect (§5).
+Time matters in all three. Reading the operating-system clock inside an
+expression is an external observation, just like reading an API response. If
+that value appears in neither the fixture nor the journal, a test must wait and
+a replay may take a different branch. Rastok therefore makes the VM timeline
+explicit: `now()` reads one injected transaction instant, never the host
+clock, and the journal seals that instant whenever it can affect behavior
+(§5).
 
 ### 1.2 Why use a DSL instead of a general-purpose language?
 
@@ -163,8 +165,8 @@ payment, a reply that arrives too late — ranges from laborious to
 practically impossible.
 
 In Rastok, the world around the graph is part of the simulation
-specification: partners, processes, LLMs, databases, *and the clock*
-are declared — so the complete flow builds and runs on a laptop,
+specification: partners, processes, LLMs and databases are declared, while
+logical time is supplied explicitly — so the complete flow builds and runs on a laptop,
 whole-world simulated, **before the real systems are available**, and
 each difficult case is a few scenario lines (§1.5). This is not unit
 mocking: the simulation
@@ -213,10 +215,12 @@ The platform of §1.2 follows from four decisions:
 1. **The topology is a static, acyclic graph** (§2.6). Every path a
    message can take is visible in the source. What cannot be enumerated
    cannot be tested, replayed, or proved.
-2. **All contact with the outside world crosses a declared Connector**
-   (§2.7) — HTTP, processes, databases, *and the clock itself* (§5).
-   Mock the Connectors and the graph becomes a closed, deterministic
-   system. That makes simulation (§6) a first-class artifact
+2. **All contact with an external system crosses a declared Connector**
+   (§2.7) — HTTP, processes and databases. Logical time is a separate,
+   explicit VM input; `Timer` and `Calendar` are Connectors only when elapsed
+   or civil time must itself enter the graph as an event (§5). Mock the
+   Connectors and control the timeline, and the graph becomes a closed,
+   deterministic system. That makes simulation (§6) a first-class artifact
    instead of a best-effort test harness.
 3. **A Node may select its own logical instance by key** (§3), independently
    of its lifetime. Its `var` state remains private to that Node. Processing
@@ -988,13 +992,15 @@ been handled under the bounded Closing contract. There is no targeted
 0`). Stopping a Graph also closes its live descendants inner-first; this is a
 lifecycle relation, not shared state.
 
-**No `on tick`.** All time-based behavior comes from a `Clock`
-wired to an input — time enters the graph as envelopes (§5):
+**No implicit `on tick`.** `now()` may observe the fixed logical instant of an
+already-running handler, but it does not create a firing. When elapsed time
+must itself trigger work, declare a `Timer` and wire its event like any other
+input (§5):
 
 ```rastok
 operator stats {
   instance = { key = meta.app.session_id }
-  input  tick : timestamp                // a Clock tick's payload IS the timestamp
+  input  tick : timestamp                // a Timer event's payload is the timestamp
   var count: int = 0
 
   on event { count = count + 1 }         // scalar state update: Rastok expression
@@ -1006,8 +1012,8 @@ operator stats {
 }
 
 // wiring at graph level
-connector minute_clock : Clock { every = duration("1m") }
-minute_clock -> stats.tick
+connector minute_timer : Timer { every = duration("1m") }
+minute_timer -> stats.tick
 ```
 
 A join example (settle an order once both legs arrive, correlated by
@@ -1028,12 +1034,13 @@ operator settle {
 }
 ```
 
-The simulator controls every `Clock` like any other Connector. There
-is no hidden `now()` inside an Operator or a mock; time is whatever the
-most recent clock envelope carries. A real Connector may observe time
-in an external system — for example, a Postgres query may call
-`NOW()` — but its controlled Lab handler must return a declared outcome
-instead of reading the host clock.
+The simulator controls the VM timeline directly. A call to `now()` receives
+that timeline's one fixed value for the whole firing, and a declared `Timer`
+turns selected instants into ordinary INBOUND roots. Neither Operators nor
+mocks read the host clock. A real Connector may observe time in an external
+system — for example, a Postgres query may call `NOW()` — but its controlled
+Lab handler must return a declared outcome instead of repeating that external
+observation.
 
 ### 2.4 Node-local state
 
@@ -1068,7 +1075,9 @@ ambient I/O. The right-hand side of an assignment is a Rastok expression
 (§2.5): `count = count + 1`, `x = x * 2 + data.n`,
 `label = meta.app.region + "-" + instance.key`. Structural reshaping may
 use tagged frontends such as `jq! { … }` / `sql! { … }`. No expression
-position admits `now()`, environment lookup, network or filesystem I/O.
+position admits ambient environment, network or filesystem I/O. Firing
+handlers alone admit `now()`, which reads their injected fixed logical instant
+rather than an ambient clock.
 
 **Emitting.**
 - A port emits **once per transaction** — the value of its *final* assignment
@@ -1400,7 +1409,7 @@ journaled:
   graph refine: Loop {
     input in: struct { remaining: int }
     output out: text
-    Loop.fuel = 10
+    Loop.measure = data.remaining
 
     on in where data.remaining <= 0 { out = "done" }
     on in where data.remaining > 0 {
@@ -1413,17 +1422,24 @@ journaled:
   any ordinary Graph output (`out`, `exit`, a domain name, or several outputs
   atomically) terminates the run, and bare `stop` terminates while closing the
   whole owner instance. `next` carries the next value of `in` and the
-  runtime commits its re-admission as `l:next` — an event, never a back-edge.
+  runtime first records the selected state and then commits its exactly-once
+  admission as `l:next` — an event, never a back-edge. Spatial destinations
+  are selected and capacity-checked at that admission, never held while a
+  delay is pending.
   If the final permitted application still chooses `next`, the aspect emits
   `LoopExpired { last_state }` on `expired` instead of silently running again.
   One external root owns one Loop run, so delayed runs may coexist safely in
   one keyed instance.
 
-  `Loop.fuel` is the first structural termination witness. The theorem-tier
-  `Loop.invariant` and `Loop.measure` will let a small verifier prove strict
-  well-founded progress and eventually make fuel optional; they are rejected
-  until that proof-certificate gate is real. Optional `Loop.delay` dates
-  re-entry without changing fuel, call timeout, or instance lifetime
+  `Loop.fuel` is the structural termination witness and remains an explicit
+  operational cap. The first theorem gate also accepts the direct signed
+  integer measure above: every recurrent `on in` path proves it positive and
+  writes exactly `measure - k` for a positive literal. The hosted compiler
+  derives a certificate and the deterministic `no_std` core derives it again
+  after v14 decode; richer invariants, computed measures and external-progress
+  claims fail closed. Optional `Loop.delay` dates
+  re-entry without changing fuel, call timeout, or instance lifetime; a typed
+  Call exit selects recurrence before the independent Loop delay begins
   ([loop.md](docs/spec/loop.md)).
 
 The maxim form: *cycles do not appear in the graph — they appear in
@@ -1541,7 +1557,7 @@ call     operation ──▶ zero or more outputs ──▶ exactly one exit
 session  open ──▶ messages in both directions* ──▶ exactly one exit
 ```
 
-Clock ticks and calendar instants are events. Every call has a causal
+Timer firings and calendar instants are events. Every call has a causal
 call identity. For a world-originated Call, the committed request root itself
 is that identity and opens the obligation on the exact source Connector
 instance; its sole terminal fact is an ordinary `l:reply` transaction, not a
@@ -2006,23 +2022,24 @@ that cannot alter graph behavior or identity.
 
 ## 5. Time and Sequence
 
-Rastok keeps four distinct notions of "time" cleanly separated. Not
+Rastok keeps five related notions cleanly separated. Not
 to be confused with the synchronous languages (Lustre, Esterel,
 SCADE) from which Rastok inherits ideas: those unify these notions
 under a single global atomic clock, while Rastok exposes them as
 orthogonal mechanisms.
 
-| Concept              | Definition                                             | Where it appears                              |
-|----------------------|--------------------------------------------------------|----------------------------------------------|
-| **Sequence**         | FIFO order of envelopes on a single input              | Stateful reads (`x` carries history)          |
-| **Wall-clock**       | Real-world time, delivered as envelopes by a Clock | Timeouts, throttling, scheduling, periodic ticks |
-| **Causality**        | Happens-before partial order on the global trace       | Theorem reasoning                            |
-| **Simulation clock** | Virtual clock controlled by the simulator              | `simulate at 50ms`, replay                   |
+| Concept | Definition | Where it appears |
+|---|---|---|
+| **Sequence** | FIFO order of envelopes on one input | Stateful reads (`x` carries history) |
+| **Logical instant** | The VM timeline; one fixed value per firing | `now()`, timeout/lifetime/deadline arithmetic |
+| **Timer event** | Elapsed time itself triggers one root envelope | Declared `Timer` Connector |
+| **Civil schedule** | Calendar date/time in an explicit zone | Declared `Calendar` Connector |
+| **Causality** | Happens-before partial order on the global trace | Journal and theorem reasoning |
 
 Instance lifetimes combine a declared duration with journaled supervision
 events.
-The duration is a pure value. Expiration occurs only when a Clock event
-advances the relevant timeline.
+The duration is a pure value. Expiration occurs only when the caller advances
+the explicit VM timeline to the relevant deadline.
 
 ### 5.1 Sequence
 
@@ -2035,48 +2052,47 @@ cycle — the across-transaction "value the previous transaction left" is the
 Lustre/SCADE `pre` (§9.1), but *within* a transaction the sequence is
 imperative. See §2.4.
 
-### 5.2 Wall-clock time
+### 5.2 Logical time, `now()`, and timer events
 
-Start from the failure mode. A node that calls `now()` reads a value
-that appears in no journal and no test fixture — two runs of the same
-inputs diverge, a replayed incident does not reproduce, and a test can
-only *wait* for a timeout instead of *declaring* it. One hidden clock
-read anywhere in a codebase is enough to destroy reproducibility
-everywhere.
+Start from the failure mode. If an expression calls the operating system's
+clock directly, that value appears in no causal record or test input: two runs
+can diverge, replay cannot reproduce the branch, and a test can only wait.
+One ambient clock read is enough to break reproducibility.
 
-Rastok's rule closes the hole by construction: **the graph never reads
-time — time arrives as data.** There is no `now()` callable from a Node,
-no `on tick` builtin, no implicit timer, *and no invisible runtime clock
-either*.
+Rastok closes that hole without pretending that time is absent. The host gives
+the VM an explicit logical timeline. At the start of a firing the VM fixes one
+instant; `now()` returns that `timestamp` throughout guard selection and body
+execution. The expression evaluator only reads a reserved binding. It never
+calls an OS API. If a checked handler can observe `now()`, the TRANSACTION
+record seals that value, so replay consumes the same input rather than asking
+either clock again.
 
-The reasoning is the same as for HTTP or a database: wall-clock time is
-a value the program does not control — it is produced by the world
-outside the graph. And in Rastok, everything that comes from the outside
-world crosses a declared Connector (§2.7). **The clock is the outside
-world, so a clock is necessarily a Connector** — visible in the source,
-journaled at its boundary, and mockable in simulation like any other
-external system. This is not a stylistic preference; it is decision 2
-of §1.3 applied to time.
+Hosted execution observes civil time once at boot and advances from a
+monotonic timer, so wall-clock corrections cannot move a running VM backward.
+The Lab chooses an origin and advances instantly. A microcontroller without an
+RTC can still advance from a hardware timer with origin zero (or an origin
+provided by its host); it can enforce durations without claiming knowledge of
+the civil date. `Calendar` is the separate source for civil schedules.
 
-A Node that needs to react to time therefore has an input wired to a
-`Clock`, and receives ticks as ordinary envelopes whose payload is the
-timestamp — the `stats` Operator of §2.3 is the canonical shape:
+`now()` observes a firing; it does not create one. A Node that must react
+*because time passed* wires a `Timer` and receives ordinary timestamp
+envelopes — the `stats` Operator of §2.3 is the canonical shape:
 
 ```rastok
 operator stats {
   instance = { key = meta.app.session_id }
-  input  tick : timestamp        // time is just a port
+  input  tick : timestamp        // a timer event is just data on a port
   …                              // on tick { … } — an ordinary handler
 }
 
 // wiring lives at graph level — the port stays decoupled from its source
-connector minute_clock : Clock { every = duration("1m") }
-minute_clock -> stats.tick
+connector minute_timer : Timer { every = duration("1m") }
+minute_timer -> stats.tick
 ```
 
-"What time is it?" becomes "what did the last tick carry?" — a
-question about received data, answerable identically in production, in
-replay, and in simulation.
+Use `now()` for “what is this transaction's logical instant?” Use `Timer` for
+“run this handler after/every duration.” These are deliberately different
+questions.
 
 **Wiring is always graph-level, never inside a node body.** A node body
 declares **what the node is** (its ports, handlers, effects); the graph
@@ -2084,25 +2100,16 @@ section declares **how nodes compose**. A shared source is reused by
 adding edges, not by touching the nodes:
 
 ```rastok
-minute_clock -> a.tick
-minute_clock -> b.tick
+minute_timer -> a.tick
+minute_timer -> b.tick
 ```
 
 (There is no port-side `<-` shortcut. The explicit form keeps node
 bodies pure and lets simulation overlays rebind sources without
 touching node interfaces.)
 
-**The stdlib `system_clock`.** A `Clock` named
-`system_clock` is provided by the stdlib at App boot time. It
-drives the runtime's lifetime management (idle TTL expiration,
-window rollover, fixed TTL) — but it is *not* a hidden internal
-clock. It is a real Connector, visible in the deployment manifest,
-mockable by the simulator like any other Connector. In simulation,
-advancing virtual time advances `system_clock`, which fires all
-lifetime expirations deterministically.
-
 For most patterns "do X when time passes", you do **not** need an
-explicit `Clock` wiring:
+explicit `Timer` wiring:
 
 | Pattern | Mechanism (no clock wire needed) |
 |---|---|
@@ -2111,23 +2118,24 @@ explicit `Clock` wiring:
 | Rate limit "max N per minute" | keyed or singleton tumbling instance + a private counter |
 | Deadline / timeout for a saga | the distinct `Saga.timeout` aspect attribute |
 
-Explicit `Clock` is reserved for patterns where an
+Explicit `Timer` is reserved for patterns where an
 Operator actively emits or polls on tick — periodic metrics,
 external state polling, heartbeats.
 
-Production and Lab execution differ only in the source of clock
-events. In production, `system_clock` emits events derived from real
-time. In the Lab, `advance duration("2h")` asks the virtual clock to
-emit the same relevant events without waiting two hours. Those events
-travel through the same lifetime, window, and handler logic.
+Production and Lab execution differ only in who advances the logical timeline.
+In production the hosted source maps monotonic elapsed time. In the Lab,
+`advance duration("2h")` reaches the same deadlines without waiting two hours.
+Internal deadlines run directly on the dated-event queue; a declared `Timer`
+turns its own scheduled instants into inbound envelopes. Both paths use the
+same ordering and causal rules.
 
 For example, an idle lifetime records the last mailbox-admission event and its
 declared duration. Advancing the Lab clock past that deadline emits the
-same expiration event that production would emit later. The resulting
+same expiration event that production would produce later. The resulting
 `on stop` transaction is therefore deterministic for the same plan,
-journal, and clock events. Rastok does not claim that real time itself
-is deterministic; it makes every time observation explicit and
-replaceable.
+journal, and logical-time inputs. Rastok does not claim that civil time itself
+is deterministic; it makes every semantic observation explicit and
+replayable.
 
 ### 5.3 Causality
 
@@ -2144,7 +2152,8 @@ trajectories — a reserved surface whose body is not yet specified
 
 The simulator owns a virtual timeline. It dispatches injected
 envelopes at declared virtual times, drives mocked Connectors
-(including `Clock`) accordingly, and asserts on the
+(including `Timer`) accordingly, supplies the transaction context observed by
+`now()`, and asserts on the
 observed output trace.
 
 This is what allows Rastok to be asynchronous in production yet
@@ -2269,10 +2278,10 @@ outcome asserted on `decide.expired`, an `expect nothing`. Its scenarios are
 acceptance criteria a product owner can read: "the decision may arrive
 first," "a rejection is a business outcome," and "no decision within
 48 hours becomes the typed `JoinExpired` outcome." Nothing waits
-forty-eight real hours: `advance` moves the *virtual*
-clock, and every time-dependent decision in the graph (join expiry,
+forty-eight real hours: `advance` moves the *logical*
+timeline, and every time-dependent decision in the graph (join expiry,
 Connector timeouts, lifetime and window closes) fires deterministically —
-§5's "the clock is a Connector" paying off.
+§5's explicit-time rule paying off.
 
 Key properties:
 
@@ -2823,7 +2832,7 @@ families through one exact-id/role registry and one VM boundary; the Lab
 composes both through the same binding and protocol. Static Driver selection is
 implemented. A data-only capability manifest proves the future discovery seam,
 but no plugin loader or native ABI is claimed. Four exact HTTP/WebSocket
-contracts now cross source, checked v13 plan, Registry-free validation and
+  contracts now cross source, checked v14 plan, Registry-free validation and
 family-owned Lab binding with codec-selected ports, lossless protocol metadata
 and typed terminal unions. H3 pins one bounded private hosted
 pump, Hyper/Rustls for HTTP/1.1-2, quiche/BoringSSL for HTTP/3 and Tungstenite
@@ -2852,15 +2861,21 @@ The official Autobahn report remains a named external qualification because
 the reference host has no container engine; M1.6 does not substitute an
 unmaintained runner or convert that missing report into a production claim.
 
-M1.7 L3 has made `Loop` the first aspect with categorical transport and a
-Registry-free finite-control proof. A
-fuel-only Loop carries its fixed state/progress boundary, domain-named
-terminal outputs, closed delay policy and ordinary Graph-owned handlers from
-source through v13; every reachable completed traversal proves one `next` or
-explicit termination by ordinary output(s)/`stop`. This is deliberately not
-yet an execution claim: the VM refuses the aspect before mutation until the
-L4 journal-derived run fold lands. The distinction preserves the central rule
-that a recognized orchestration policy can never silently run as a plain
+Closed M1.7 has made `Loop` the first aspect with categorical transport,
+Registry-free finite-control proof and a checked termination certificate.
+Fuel-bounded and directly ranked Loops carry their fixed state/progress
+boundary, domain-named terminal outputs, closed delay policy and ordinary
+Graph-owned handlers from source through v14. Every reachable completed
+traversal proves one `next` or explicit termination by ordinary output(s) or
+`stop`; immediate and delayed recurrence execute through one journal-derived
+run fold. A proof-only direct integer countdown derives its safe body budget
+from the root measure, while the `no_std` validator re-derives every decrement
+from the transported handlers. Public source-to-Lab scenarios cover keyed and
+singleton concurrency, ordinary nested Graph composition, bounded Connector
+retry, multi-frame Process data, exact exhaustion and instance-Closing fences.
+Unsupported mathematics, nested Loop owners, direct spatial boundary verdicts,
+explicit Loop `stop` and spatial recovery still refuse before execution,
+preserving the rule that a recognized policy never silently runs as a plain
 Graph.
 
 This white paper is designed to outlive individual releases. The DSL
@@ -2886,8 +2901,9 @@ wins.
    context. Do not fuse the three.**
 5. **Cycles do not appear in the graph. They appear in state, in
    events, and in sequence.**
-6. **Operators do not read a hidden clock. Sequence is journaled;
-   wall-clock observations enter through Clock or Calendar Connectors.**
+6. **Operators do not read a hidden clock. `now()` observes one injected,
+   journaled transaction instant; Timer and Calendar create explicit time
+   events.**
 7. **The runtime is asynchronous. The simulation is deterministic.
    Same world-half in, byte-identical causal cores out — the two modes
    agree journal-relative.**

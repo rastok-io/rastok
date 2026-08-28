@@ -2,7 +2,7 @@
 
 > **Status:** normative. The Node-owned instance model in
 > [instances.md](instances.md) supersedes the unreleased P0–P3
-> named-partition implementation. Categorical plan-package v13 retains the v9
+> named-partition implementation. Categorical plan-package v14 retains the v9
 > realigned owner tree and instance policies. R3 routes every delivery through
 > one hierarchical instance reference shared by journal, mailbox, state,
 > calls, timers, lifecycle, and cursors. R4 executes persistent, idle, fixed,
@@ -276,17 +276,21 @@ Conditional emissions count only when they execute — the index reflects the
 the transaction's inputs are (journal-relative) identical.
 
 
-## 5. The two planes — and the dated-events queue
+## 5. The two planes — logical time and the dated-events queue
 
-The **data plane** (the graph) never reads a wall-clock and never observes the
-external world directly. The **observation/supervision plane** does both — and
-everything it decides enters the graph as a **journaled event** :
+The semantic core never reads an operating-system clock. The hosted
+**observation/supervision plane** maps one civil-time origin plus monotonic
+elapsed time onto an explicit logical timeline; the Lab supplies that timeline
+directly. The VM uses it for dated obligations and fixes one instant for every
+transaction. A handler may observe that instant through `now()`, in which case
+the transaction seals it as an input fact. Everything else the supervision
+plane decides enters the graph as a **journaled event**:
 
 ```
   ┌──────────────────────────────────────────────────────┐
   │ OBSERVATION / SUPERVISION PLANE     (non-deterministic)│
-  │ watches : wall-clock, per-call chronos, resource      │
-  │ liveness. decides : tick, timeout, eviction, expiry.  │
+  │ maps hosted time; watches per-call budgets and         │
+  │ liveness. decides : timeout, eviction, expiry.         │
   └───────────────┬───────────────────────────────────────┘
                   │ every decision = a journaled event
                   ▼
@@ -296,26 +300,29 @@ everything it decides enters the graph as a **journaled event** :
   └──────────────────────────────────────────────────────┘
 ```
 
-Concretely, the supervision plane maintains **one queue of dated events** :
+Concretely, the supervision plane maintains **one queue of dated events**:
 
 | Dated event | Armed by | Delivered as |
 |---|---|---|
-| clock tick | `Clock` (`system_clock` incl.) | a root tick envelope (inbound) |
+| timer event | a declared `Timer` Connector | a root timestamp envelope (inbound) |
 | per-call timeout | a Connector's `timeout` (§6) | `TimeoutExpired` on the contract's typed call-exit port (`exit` for Process) |
 | join eviction | a join's `within` / `last` (§7) | `JoinExpired` on the Operator's declared typed expiry output (conventionally `expired`) |
 | instance lifetime expiry | `lifetime = { … }` | the instance's `on stop` sequence (parent = **the envelope that armed the deadline** — last admission for `idle`, creator for `fixed`, creating admission for its tumbling box) |
-| Loop re-entry delay | `Loop.delay` ([loop.md](loop.md) §5) | the next iteration-state envelope (trigger `l:next`, same Loop run and instance generation) |
+| Loop re-entry delay | `Loop.delay` ([loop.md](loop.md) §5) | an exactly-once `l:next` admission of the recorded iteration-state envelope (same Loop run and instance generation; spatial routes selected only when due) |
 | saga completion budget | `Saga.timeout` ([effects-and-sagas.md](effects-and-sagas.md)) | a transaction of the `: Saga` node — trigger `l:timeout`, parent = the instance-creating envelope; emits `SagaExpired` on the ordinary typed `Saga.exit` output and the instance enters `rolling_back` |
 
-In production the queue is driven by wall-clock ; in simulation, by the
-fixture (§8). **The delivery contract — order, causality, identity — is
-identical in both modes** ; that identity is the foundation of two-mode
+In production the queue is advanced by the hosted time source; in simulation,
+by the fixture (§8). **The delivery contract — order, causality, identity — is
+identical in both modes**; that identity is the foundation of two-mode
 equivalence. Replay re-reads the journaled events ; it never re-observes and
 never re-runs a race.
 
-Real times (when a chrono was armed, when it expired) live in the journal
-(`committed_at`) and the observability spans — **never** on the envelope and
-never readable from the data plane (the `created_at` lesson, envelope.md §8).
+Arming/due instants and host commit time remain journal annotations and
+observability facts — **never** envelope fields. The narrow exception is an
+explicit `now()` observation: the transaction's fixed logical instant is
+sealed under canonical key 54 because it may change control flow. It remains
+absent from time-insensitive firings (the `created_at` lesson,
+envelope.md §8).
 
 
 ## 6. Per-call supervision — `timeout` on Connectors
@@ -568,7 +575,7 @@ advance Δ :                     (target = t + Δ)
 t=0   inject(msg) ──► drain : msg → route → codex.in   (chrono armed : expires t=5)
 advance duration("30s") (target 30) :
   earliest ≤ 30 ?  t=5  TimeoutExpired(codex) → deliver → drain (triage → alert)
-  earliest ≤ 30 ?  t=10 clock tick            → deliver → drain (stats emits)
+  earliest ≤ 30 ?  t=10 Timer event           → deliver → drain (stats emits)
   earliest ≤ 30 ?  none → t := 30. done.
 expect …  ──► evaluated on the STABLE state at t=30
 ```
@@ -581,7 +588,7 @@ Edge rules :
 - A cascade may arm new dated events ; if they fall ≤ target they are swept in
   turn, in date order.
 
-In production the same queue runs against wall-clock ; the delivery contract
+In production the same queue runs against the hosted time source; the delivery contract
 (§5) is identical — which is exactly what makes a fixture able to *play the
 journal's role*.
 

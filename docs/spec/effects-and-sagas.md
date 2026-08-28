@@ -73,7 +73,7 @@ the stdlib carries the declaration so the dev doesn't repeat it :
 |---|---|
 | `SmtpSender` | `irreversible` |
 | `Memory` | `idempotent` |
-| `Clock` | `none` (read-only) |
+| `Timer` | `none` (pure source) |
 | `Calendar` | `none` (pure source) |
 | `HttpServer` (inbound) | `none` (pure source) |
 
@@ -529,7 +529,8 @@ Two mechanisms carry saga context :
 - **Birth stamps** on envelopes minted inside the scope : the same identity
   fields — immutable provenance, journal-visible wherever the wire goes.
 - **Journal/observability only** (never in the data plane) :
-  `saga_started_at` (wall-clock), the `Saga.timeout` deadline, and the
+  `saga_started_at` (a commit-time observation annotation, never a control
+  input), the logical `Saga.timeout` deadline, and the
   lifecycle state (`open | committed | rolling_back | rolled_back |
   rollback_failed` — §5.3) : the state is a **fold over the journal**
   (delivery-semantics §7.1), not an envelope field. Asserting it in a

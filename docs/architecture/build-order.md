@@ -121,10 +121,11 @@ Exit: ordering and close-once invariant tests, per
 ### Stage 10 — `boundary`
 
 The world-facing traits (`InboundConnectorDriver`,
-`OutboundConnectorDriver`, `Clock`, `Supervisor`)
+`OutboundConnectorDriver`, `Supervisor`) and the VM's explicit logical-time
+input
 and the journal-driven machinery: `InboundSubmission`,
 `InboundEnvelopeProvenance`, `Intent`, `Response`, `CallRef`, `Dispatcher`,
-`DatedEvent`, `LifecycleEvent`.
+`DatedPayload`, `LifecycleEvent`.
 
 Exit: dispatcher tests against a scripted Outbound Driver, asserting journaled
 intents and correlated responses.
@@ -155,7 +156,7 @@ Exit: the App integration test named in the M0 minimal evidence.
 ### Stage 14 — `lab`
 
 Scenario parsing (`Scenario`, `Expectation`, `Quantifier`, `Fixture`)
-and controlled execution (`MockOutboundConnectorDriver`, `VirtualClock`,
+and controlled execution (family mock Drivers, scenario origin/`advance`,
 `ScenarioRunner`) over the same `Vm`.
 
 Exit: a repeatable Lab scenario for the same graph, with a scripted

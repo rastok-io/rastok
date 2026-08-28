@@ -119,13 +119,13 @@ their wire bindings independently. The Lab still replaces the listener or
 peer rather than opening a fake socket, while retaining the same SessionRefs,
 write obligations and sole terminal exit as production.
 
-Two-mode equivalence, stated journal-relative : *same world-half in →
-byte-identical **causal cores** out*
+Two-mode equivalence, stated journal-relative : *same world-half and logical
+timeline in → byte-identical **causal cores** out*
 (delivery-semantics §1 : a record = causal core + observation annotations ;
-`committed_at` — wall-clock in production, virtual in simulation — is an
-annotation, outside the comparison). This makes the claim **checkable against
-production** : fingerprint a prod slice's causal cores and compare them to
-the bridge-generated scenario's.
+`committed_at` is an annotation outside the comparison, while a handler's
+explicit `now()` observation is causal key 54). This makes the claim
+**checkable against production** : fingerprint a prod slice's causal cores and
+compare them to the bridge-generated scenario's.
 
 **Boundaries** :
 - **Scope = the lab of the deployed unit** : simulations live in the
@@ -337,11 +337,12 @@ Byte-identical **iff** :
    specification-owned) ;
 4. same guest-language, compiler/lowering-profile and `GuestExecutor` versions
    (jq / SQL pinned in the manifest) ;
-5. **the fingerprint covers the CAUSAL CORE only** —
-   clock-valued fields (`committed_at`, outbound arming `t`) are observation
-   annotations, journaled but outside the blake3 ; in simulation they are
-   virtual (deterministic — the display may show them), in production they
-   are wall-clock ; the fingerprint is identical either way ;
+5. **the fingerprint covers the CAUSAL CORE only** — `committed_at` and
+   scheduler arming/due instants are observation annotations, journaled when
+   useful but outside blake3. The transaction-fixed logical instant is sealed
+   only when a checked handler can observe `now()`; equivalent Lab execution
+   must therefore supply the same logical timeline, without waiting in real
+   time;
 6. **canonical serialization AND evaluation** — field order = spec schemas;
    fixed unsigned CBOR table keys use table order; struct fields and
    state-delta paths use UTF-8 name order; `app_meta` triples use

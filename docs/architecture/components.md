@@ -1,8 +1,8 @@
 # Component blueprint
 
 > Implementation blueprint — non-normative. Originally written ahead
-> of the build; updated 2026-08-28 for the M1.7 L4 checkpoint. The
-> former named-partition P1-P3 implementation is superseded; categorical v13
+> of the build; updated 2026-08-28 for the M1.7 L7 closure. The
+> former named-partition P1-P3 implementation is superseded; categorical v14
 > owner transport and hierarchical instance routing are executable evidence.
 > The M0 deviations remain recorded in
 > [`m0-exit-notes.md`](m0-exit-notes.md), while the chronological M1
@@ -10,7 +10,7 @@
 > replacement of the type/value and boundary seams is tracked in
 > [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md); this file
 > distinguishes the retained v7 type/value/expression registry from the
-> categorical v13 plan transport (retaining v9's instance model, v10's stable
+> categorical v14 plan transport (retaining v9's instance model, v10's stable
 > Connector ids/roles, v11's exchange lifecycles, and v12's `media_type` while
 > adding Graph aspect contracts), R3 causal routing rows, R4 lifetime
 > execution, R5 Closing, R6 joins, and R7 placement-neutrality proof.
@@ -170,9 +170,9 @@ data out, the governing spec, and current status.
 | **Lexer + parser** | one forward byte cursor and token lookahead in `Lexer`; complete host lexemes; byte-adjacent `IDENT!` frontend selection; specialized expression/JSON/verbatim/guest regions; spans and structural recovery | source bytes + frontend Registry → syntax tree + diagnostics | [grammar.md](../spec/grammar.md); D-2026-08-13-1; D-2026-08-14-1 | M1.3 B4 |
 | **Unit assembly** | the deployed unit: multi-file resolution, lab-fragment merge, exactly-one-App, wiring by name, no shadowing | syntax trees → one resolved `Unit` | [grammar.md](../spec/grammar.md) scope rules; [simulation-semantics.md §2](../spec/simulation-semantics.md) | M0 (single unit) |
 | **Desugarer** | the finite sugar table — afterwards there is one way to say each thing | resolved unit → core-form graph | [grammar.md](../spec/grammar.md) | M0 |
-| **Type checker** | envelope/data types, `sys`/`app`/`ext` metadata grid, named structural types, contract attributes/defaults/profiles and resolved port rules, typed `is`/`as` narrowing, one `node::Kind`, one `node::Type`, a closed fail-closed `node::Aspect` list, Node-owned instance-key expressions, lifetime profiles, nested Graph composition, instance-local joins, and the closed `Loop.fuel`/`Loop.delay` contract with ordinary Graph handlers | core-form graph → `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [instances.md](../spec/instances.md); [expressions.md](../spec/expressions.md); [aspects.md](../spec/aspects.md); [loop.md](../spec/loop.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | M1.7 L4: fuel-only Loop transport, finite-control proof and immediate journal-fold execution accepted; dated/nested/spatial-child Loop, Saga execution and some dynamic owner values/non-aspect Graph handlers remain named gates |
+| **Type checker** | envelope/data types, `sys`/`app`/`ext` metadata grid, named structural types, contract attributes/defaults/profiles and resolved port rules, typed `is`/`as` narrowing, one `node::Kind`, one `node::Type`, a closed fail-closed `node::Aspect` list, Node-owned instance-key expressions, lifetime profiles, nested Graph composition, instance-local joins, and the closed Loop fuel/delay/proof contract with ordinary Graph handlers | core-form graph → `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [instances.md](../spec/instances.md); [expressions.md](../spec/expressions.md); [aspects.md](../spec/aspects.md); [loop.md](../spec/loop.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | M1.7 closed: fuel or direct-integer proof, finite-control validation, dated journal-fold execution and public nested/keyed/Closing composition accepted; nested Loop owners, spatial recovery, Saga execution and some dynamic owner values/non-aspect Graph handlers remain named gates |
 | **Canonicalizer** | the canonical byte form of the resolved HIR; the semantic hash | `Hir` → canonical bytes + `plan::SemanticHash` | [identity.md §1](../spec/identity.md) | M0, extended in M1 |
-| **Lowering + plan gate** | parent-linked Graph/Operator/Connector owner table, lexically scoped edges, Node/Graph-owned handlers, expression trees, stable Connector ids/roles/exchange lifecycles, `plan::NodeExecution`, closed Graph aspects, `Slot` resolution, schemas and assets; key and Loop claims re-derived before success | `Hir` → `plan::ValidatedExecutionPlan` | [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [execution-model.md](../spec/execution-model.md); [aspects.md](../spec/aspects.md); [plan-package.md](plan-package.md) | categorical v13 M1.7 L4; compiler-only data-key inference is explicit and unsupported dynamic source rows/aspect compositions refuse closed |
+| **Lowering + plan gate** | parent-linked Graph/Operator/Connector owner table, lexically scoped edges, Node/Graph-owned handlers, expression trees, stable Connector ids/roles/exchange lifecycles, `plan::NodeExecution`, closed Graph aspects, `Slot` resolution, schemas and assets; key and Loop claims re-derived before success | `Hir` → `plan::ValidatedExecutionPlan` | [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [execution-model.md](../spec/execution-model.md); [aspects.md](../spec/aspects.md); [plan-package.md](plan-package.md) | categorical v14, M1.7 closed; compiler-only data-key inference is explicit and unsupported dynamic source rows/aspect compositions refuse closed |
 | **Tagged frontends** | registered name, framing and reader policy; built-in JSON/text/base64 decoding; deferred guest/data compiler identity; the host never tokenizes an owned body | `IDENT!` region → typed value, named deferral, or future compiled guest program | [expressions.md](../spec/expressions.md); [stdlib.md §5](../spec/stdlib.md) | B4 framing/readers; guest execution guarded |
 
 The facade returns `Result<Compilation, Diagnostics>` with
@@ -193,7 +193,7 @@ Effect   = None | Class(EffectClass)   — `none` is an explicit declared
 
 so "an Operator with an effect" or "a Connector without a declaration"
 cannot be constructed. `Effect::None` also represents the catalogue's
-pure-source connectors (Clock, Calendar, HttpServer) without turning
+pure-source connectors (Timer, Calendar, HttpServer) without turning
 `none` into a fourth effect class; their current declared-only status is
 still rejected before HIR construction
 ([effects-and-sagas.md §2.1–2.2](../spec/effects-and-sagas.md),
@@ -222,7 +222,7 @@ Two compiler rules with consequences elsewhere:
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`expr`** | the expression compiler/evaluator over core `DataType` and `Value`; its evaluator-only carrier may additionally hold the lazy payload witness | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → evaluation result; (`Tree`, boot constants) → core value | [expressions.md](../spec/expressions.md); [execution-model.md §5](../spec/execution-model.md) (no ambient time) | M1.3 B3 core + v7 registry; v12 added `media_type(text)`, retained by v13 |
+| **`expr`** | the expression compiler/evaluator over core `DataType` and `Value`; its evaluator-only carrier may additionally hold the lazy payload witness | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → evaluation result; (`Tree`, boot constants) → core value | [expressions.md](../spec/expressions.md); [execution-model.md §5](../spec/execution-model.md) (no ambient time) | M1.3 B3 core + v7 registry; v12 added `media_type(text)`, retained by v14 |
 
 `expr` never sees an envelope, Node, or placement boundary, and owns its own
 `expr::Diagnostic` (the compiler adapts it into `diagnostics::Diagnostic`).
@@ -254,7 +254,7 @@ resolved constructor/narrowing forms their canonical package ids.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`plan::ValidatedExecutionPlan`** | the executable/package form — a private raw `ExecutionPlan` plus a total effective `ResolvedPortTable`; v13 preserves every owner separately from executable Node slots, validates scoped routes and ports, carries Connector identity/exchange plus closed Graph aspects and explicit Graph-handler ownership | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [types.md](../spec/types.md); [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [aspects.md](../spec/aspects.md); [plan-package.md](plan-package.md) | M1.7 L4 v13 transport/control proof plus immediate root-Graph Loop execution; later compositions remain fail-closed |
+| **`plan::ValidatedExecutionPlan`** | the executable/package form — a private raw `ExecutionPlan` plus a total effective `ResolvedPortTable`; v14 preserves every owner separately from executable Node slots, validates scoped routes and ports, carries Connector identity/exchange plus closed Graph aspects, explicit Graph-handler ownership and optional checked Loop proof | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [types.md](../spec/types.md); [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [aspects.md](../spec/aspects.md); [plan-package.md](plan-package.md) | M1.7 v14 transport/control/termination proof plus dated, keyed and ordinary nested-Graph Loop execution; named later compositions remain fail-closed |
 | **`plan::Manifest`** | the append-only ledger `SemanticHash → GraphVersions` — plural: a rollback allocates a **new** version for the same hash; a version is never renumbered, never reused | allocated at boot | [identity.md §2](../spec/identity.md) | M0 (minimal) |
 
 `ExecutionPlan` remains the whitepaper's domain term and the private data
@@ -305,7 +305,7 @@ single-stepping and future journal-relative inspection structural.
 | **`GuestExecutor`** | the existing runtime seam future guest engines implement: `run(&[u8], value, budget)` — pure, deterministic, budgeted, inside the node transaction; the bytes become a typed/versioned `GuestProgram` only when that slice lands | opaque program bytes → value or typed error | [stdlib.md §5](../spec/stdlib.md) | seam only; no engine/program type yet |
 | **`BootBindings`** | future `env()` / `secret()` resolution at boot; a missing or ill-typed binding will be a typed refusal, never a default; `Secret<T>` remains a design requirement, not a current type | plan + deployment profile → bound constants | [grammar.md](../spec/grammar.md) initializer positions | guarded / later |
 
-### 3.5 The boundary (`boundary`) — the four host interfaces
+### 3.5 The boundary (`boundary`) — host interfaces and explicit time
 
 Every nondeterministic thing is represented at one of these host
 boundaries, and what crosses into causality is recorded — the journal's
@@ -314,14 +314,16 @@ Drivers, the exchange conformance suite supplies Event/Session Drivers, and
 H5 supplies the generic inbound Call fold, H5.1 a live bounded H1/H2 ack
 Driver and H5.2 the generic graph-response handoff; direct
 scenarios may still inject drafts through `Vm::inject`, and virtual time
-advances through `Vm::advance`; the declared `Clock` and `Supervisor` traits
-remain host seams rather than objects the M1 VM consumes directly.
+advances through `Vm::advance`. Hosted code maps one civil origin plus a
+monotonic timer to that explicit input; Lab and bare-metal callers may provide
+their own origin. The evaluator never reads either clock. `Supervisor` remains
+a declared host seam rather than an object the M1 VM consumes directly.
 
 | Interface | Owns | Real side | Lab side | Spec | Status |
 |---|---|---|---|---|---|
 | **`InboundConnectorDriver`** | one retained `InboundProposal` — draft, provenance, sequence request and optional Session framing — until the runtime answers accepted-after-commit or rejected; pending admission makes no callback and therefore applies bounded backpressure. It never births an envelope: only the journal's accepting transaction mints root/exchange identity. Call bindings expose retained acknowledgement/response; Session bindings correlate each admitted message to the committed logical `SessionRef`. | live HttpServer and WebSocketServer over H1/H2/H3 | family-owned fake Drivers; direct scenario injection remains available through `Vm::inject` | [envelope.md §1.1, §2](../spec/envelope.md); [delivery-semantics.md §3, §4.4.1, §4.5, §6](../spec/delivery-semantics.md); [simulation-semantics.md](../spec/simulation-semantics.md) | M1.6 H1 generic protocol; H5 Calls; H6 Sessions |
 | **`OutboundConnectorDriver`** | categorical exchange view: `CallConnectorDriver` launches journaled `Intent`s and answers by `CallRef`; `SessionConnectorDriver` launches journaled open/write intents and reports by `SessionRef`/`SessionWriteRef`. Cancellation/timeout remain runtime policy and no Driver writes causal records. | Process/File/HttpClient Calls; WebSocketClient/Server Sessions | Call and Session family mocks plus generic conformance batteries | [delivery-semantics.md §4](../spec/delivery-semantics.md); [execution-model.md §6.1, §6.6](../spec/execution-model.md); [M1.6 backlog](m1.6-http-websocket-backlog.md) | Call semantics M1.3 B7; role name M1.5 C0; live Sessions M1.6 H6 |
-| **`Clock`** | the only source of time. As built, M0 consumes no trait impl: `Vm::advance(journal, driver, target)` IS the virtual clock — the caller (a Lab step, the CLI's wall-mapping loop) chooses targets, due budgets fire in expiry order, and same-instant expiries all fire before the machine drains | declared trait; `advance` targets in M0 | `advance` calls | [execution-model.md §5, §8](../spec/execution-model.md) | M0 (target-driven) |
+| **Logical-time input** | `Vm::boot_at` fixes an origin and `Vm::advance(journal, driver, target)` advances one deterministic timeline. A hosted runner uses one wall-clock sample plus monotonic elapsed time; a microcontroller with no RTC may use zero or a supplied origin. `now()` observes the firing's fixed instant and seals it only when used. | hosted time source | scenario origin + `advance` | [execution-model.md §5, §8](../spec/execution-model.md); D-2026-08-28-5 | target-driven VM; handler observation current |
 | **`Supervisor`** | process lifecycle: boot, crash, restart; recovery must never require a clean shutdown | host lifecycle | not built; fault steps remain guarded | [delivery-semantics.md §4.4](../spec/delivery-semantics.md); [simulation-semantics.md §5.4](../spec/simulation-semantics.md) | declared seam; current wiring boots only |
 
 The **`Dispatcher`** (owned here) is the loop between the journal and
@@ -426,7 +428,7 @@ whatever its execution format.
 | **hosted WebSocket Client/Server** | one logical Session over H1 Upgrade or H2/H3 Extended CONNECT; bounded complete-message admission and writes, portable terminal exit, server multi-session correlation and client one-session-per-instance | [stdlib.md §3.8–3.9](../spec/stdlib.md); D-2026-08-27-2 | M1.6 H6 complete |
 | **`connectors::assembly::hosted_registry`** | deterministic feature-selected registration of Process, optional File and linked network families; manifest projection; no listener or effect during assembly | [connector-drivers.md](connector-drivers.md); D-2026-08-27-3 | M1.6 H7 complete |
 | **Connector conformance profiles** | one role-aware battery over `DriverRegistry`/`RuntimeBindings`; exact resolved terminal union, silence, typed completion coverage, correlation, journal-before-effect, close-once and explicit unprovable cases | [stdlib.md §1](../spec/stdlib.md); D-2026-08-22-1 C5 checkpoint | M1.5 C5 (Process + File) |
-| **Catalogue remainder** (`Clock`, `Calendar`, `Memory`) | names declared so source refuses explicitly; contract sheets and Drivers land by slice | [stdlib.md §3](../spec/stdlib.md) | guarded |
+| **Catalogue remainder** (`Timer`, `Calendar`, `Memory`) | names declared so source refuses explicitly; contract sheets and Drivers land by slice | [stdlib.md §3](../spec/stdlib.md) | guarded |
 | **Future jq/sql engines** | pure guest engines under the six-clause contract; no `guest_engines` module exists yet | [stdlib.md §5](../spec/stdlib.md) | guarded |
 
 ### 3.9 The lab (`lab`)
@@ -436,7 +438,7 @@ A Driver set plus the production machine — never a second engine.
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
 | **`lab::run`** | driving the production `Vm` through each checked scenario: inject, advance, settle, expectation windows over the machine's observation log, the three quantifiers; every uncovered call, faulting predicate or guard, and unsettled machine is a named failure | `hir::Lab` + plan → `Vec<ScenarioRun { report, records }>` — the records feed the golden workflow | [simulation-semantics.md §2, §5–6](../spec/simulation-semantics.md) | M0 |
-| **The scripted world** | as built, leaner than sketched: the *fixture* IS the scenario's steps (injections through `Vm::inject` — no `Fixture` type); the *virtual clock* IS `Vm::advance` (no `VirtualClock` type); explicit mock factories bind by the same exact Connector id/roles and reuse each family's pure request protocol — replies only, the VM still writes every OUTBOUND; the fault injector stays `next` | the scripted external world | [simulation-semantics.md §2, §5](../spec/simulation-semantics.md) | M0; multi-family registry parity M1.5 C5 |
+| **The scripted world** | as built, leaner than sketched: the *fixture* IS the scenario's steps (injections through `Vm::inject` — no `Fixture` type); the *virtual timeline* IS `Vm::advance` (no separate time-source type); explicit mock factories bind by the same exact Connector id/roles and reuse each family's pure request protocol — replies only, the VM still writes every OUTBOUND; the fault injector stays `next` | the scripted external world | [simulation-semantics.md §2, §5](../spec/simulation-semantics.md) | M0; multi-family registry parity M1.5 C5 |
 | **Coverage** | the statically enumerable failure-space checklist | plan + scenarios → coverage report | [simulation-semantics.md §7](../spec/simulation-semantics.md) | later |
 | **Unsupported surfaces** | `integration`, `theorem`, `experiment`: parse, then refuse explicitly | reachable syntax → `unsupported` diagnostic | [simulation-semantics.md §10–11](../spec/simulation-semantics.md) | guarded |
 

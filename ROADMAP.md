@@ -182,22 +182,45 @@ The repository opens publicly with this milestone (15 October 2026).
   v12 package move is isolated from the later H5/H6 physical execution, which
   introduced no further package-format move.
 - M1.7 makes `Loop` the first NodeAspect to receive categorical transport and
-  then become executable. L0–L4 are landed:
+  then become executable. L0–L7 are landed and the slice is closed:
   `node::{Kind, Type, Aspect}` are separate,
   Reducer/Router remain patterns, source spelling is singular
   `instance = { key = ... }`, and positive `Loop.fuel` plus closed
-  `Loop.delay` cross checked HIR and categorical v13. The exact Loop boundary,
+  `Loop.delay` cross checked HIR and categorical v14. The exact Loop boundary,
   closed aspect contract, ordinary Graph-owned handlers, and the finite
   progress decision are re-derived Registry-free. Immediate persistent
   root-Graph Loops now execute through a per-root journal fold: exact fuel,
   `l:next`, exhaustion, concurrent runs and crash reconstruction are proven
-  without a spatial back-edge. The remaining L5–L7 gates date optional
-  `delay`, begin checked
-  `invariant`/`measure` proofs, model-check Closing/recovery in the Lab, and
-  close identity, no-std and QEMU evidence. Operator work and Connector calls
-  remain ordinary children of the Loop Graph; no privileged `err`/`exit`
+  without a spatial back-edge. L5 now executes fixed and safely saturating
+  exponential `Loop.delay` on the shared dated queue. Timer kind 5 is sealed
+  by the `l:next` id; an exactly-once `Admit` transition selects and commits
+  bounded spatial routes only when due; direct child output handlers execute
+  after their producer commits. Equal-date wakes retain arm order, and
+  instance Closing fences every stale generation before its successor. A
+  fixed lifetime is proven not to inherit or wait for a later Loop delay, and
+  a Process timeout at 1s is proven to precede an independent 2s recurrence
+  delay. Direct-body recovery re-arms the persisted annotation; spatial
+  recovery remains named until general instance/Connector replay. The temporal
+  substrate also exposes `now()` only as one transaction-fixed logical
+  timestamp, supplied by the VM and sealed when observed; the hosted runner
+  maps wall origin plus monotonic elapsed time, while Lab/bare-metal callers
+  own the origin and `advance`.
+  The deferred event source is named `Timer`, distinct from that runtime
+  timeline and from civil `Calendar`. L6 now admits the first proof-only Loop:
+  a direct signed-integer `Loop.measure`, positive on every recurrent direct
+  input path and updated as `measure - k`, produces evidence which the
+  deterministic `no_std` core re-derives after v14 decode. Non-trivial
+  invariants, computed/lexicographic measures and Connector-dependent progress
+  remain named theorem gates. L7 exercises the final public composition
+  surface: singleton and keyed concurrent runs, ordinary nested Graphs,
+  bounded Process retry with multi-frame data, exhaustion, and
+  instance-Closing fences. It
+  closes the separate package/semantic/causal identity audits, three no-std
+  builds, independent interop and QEMU evidence. Operator work and Connector
+  calls remain ordinary children of the Loop Graph; no privileged `err`/`exit`
   spelling determines policy. See the
-  [ordered M1.7 backlog](docs/architecture/m1.7-loop-backlog.md).
+  [ordered M1.7 backlog](docs/architecture/m1.7-loop-backlog.md) and
+  [exit report](docs/architecture/m1.7-exit-report.md).
 - Per-flow cost counters, carried by the journal.
 - A live view of the running graph, fed by the journal.
 - A guided example gallery seeded by the benchmark's reference

@@ -6,7 +6,7 @@
 > journal records.
 >
 > The registry below retains the executable v7 value registry inside
-> categorical plan-package v13. V12 introduced the
+> categorical plan-package v14. V12 introduced the
 > open `media_type` scalar and its constructor, and specifies the M1.4 instance-address
 > extension under D-2026-08-18-1. V9 refuses the old unpublished v8
 > named-partition draft and carries the parent-linked owner tree, scoped edges,
@@ -43,6 +43,11 @@
 > Loop programs seal their contract under `rastok.aspects.r1`. L3 adds no
 > identity; L4 allocates only new Loop causal forms under domains `0x05`/`0x13`
 > and transaction key 53, leaving every pre-Loop artifact byte-identical.
+> L6 moves every package container to v14 for optional proof certificates.
+> Existing fuel-only Loop source retains `rastok.aspects.r1`; a declared
+> proof adds `rastok.loop-proof.r1`. No existing causal record moves.
+> L7 adds public composition evidence and fixes runtime expression bindings,
+> but moves no semantic hash, plan package, or causal record.
 > D-2026-08-14-1
 > transports the canonical `DataType` registry, complete resolved port types
 > and structural/tagged unions together. Decode re-derives the effective table
@@ -326,6 +331,45 @@ selected_next_id)`. The journal folds open/next/close/expired facts and rejects
 any skipped, duplicate or post-terminal transition; Worker RAM contributes no
 identity or fuel.
 
+**Transaction-time context checkpoint (2026-08-28).** D-2026-08-28-5 adds
+optional TRANSACTION key 54 for the signed nanosecond logical instant fixed for
+a handler that can observe `now()`. Existing expression transport already
+represents the reserved context path, so v13 and semantic identity do not move.
+The key is absent from every handler that cannot observe time; all existing
+causal traces therefore remain byte-identical. Scheduler arming and due dates
+remain derivable annotations. Only the explicit value allowed to influence a
+transaction is sealed.
+
+**M1.7 L5 dated-admission checkpoint (2026-08-28).** Key 53 gains the
+extend-only `admit = 5` subtag. `Next` remains the selected-state and fuel
+transition; `Admit` is the later exactly-once `l:next` crossing and seals any
+spatial routes under the already published key 38. Timer kind 5 remains the
+sole delayed obligation and continues to reuse the re-entry envelope id. The
+new subtag occurs only in newly executable Loop histories: categorical v13,
+semantic hashes and all non-Loop causal traces remain byte-identical.
+
+**M1.7 L6 checked-measure checkpoint (2026-08-28).**
+D-2026-08-28-7 moves every package container categorically from v13 to v14:
+`LoopSpec` key 1 becomes optional fuel and new key 3 carries the checked
+measure, optional invariant and sorted decrement witness. V13 is refused.
+The witness is re-derived from canonical handlers and is not semantic source
+identity. Fuel-only Loop programs retain their exact
+`rastok.aspects.r1` stream; proof-bearing programs add
+`rastok.loop-proof.r1`. Echo/spike `e50026ee…`, JSONL `036f7ea5…` and gauge
+`0d3ad43d…` remain semantic witnesses, and all existing causal traces remain
+byte-identical. The v14 echo/spike, JSONL and gauge containers remain 988 B,
+1,032 B and 323 B respectively; their categorical checksums are
+`afcc22ac…c0ebc`, `1ca982c4…e54a06` and `cf8e9ac4…399bc5`. The complete bytes
+are pinned by the package goldens and the Cortex-M33 measurement below.
+
+**M1.7 L7 closure checkpoint (2026-08-28).** D-2026-08-28-8 adds no
+identity-bearing fact. The finite control walk follows descendant Nodes in the
+already flattened scoped DAG, and the public Lab exercises already published
+Loop, instance, Call and Closing forms. Categorical v14 bytes and checksums,
+semantic hashes and every existing causal trace are therefore byte-identical
+to L6. Echo/spike remains `e50026ee…`, JSONL remains `036f7ea5…`, and the
+connector-free gauge remains `0d3ad43d…`. No golden is re-blessed for L7.
+
 ## 2. `graph_version` and the manifest
 
 `meta.sys.graph_version` is a small integer. It is a
@@ -437,7 +481,7 @@ a record is canonicalized (its full `meta.sys`, per envelope.md §1) :
 |---|---|---|---|
 | 10 | kind | uint | 1 = INBOUND · 2 = TRANSACTION · 3 = OUTBOUND |
 
-**A raw virtual timestamp is NOT a sealed field**, consistently with
+**A raw scheduler timestamp is NOT generally a sealed field**, consistently with
 simulation-semantics §6.1, which excludes an obligation's arming and due
 times from the fingerprint. A timeout firing at t = 48 h *is* behavior — but
 that behavior manifests as a **record that exists in a position**
@@ -451,7 +495,10 @@ differs. The one deliberate distinction is a processing-time tumbling box:
 its canonical box start identifies the selected logical instance and therefore
 travels inside the sealed `instance_address` below. That is a journaled routing
 fact derived once at admission, not a general license to seal wall-clock or
-timer fields.
+timer fields. The other deliberate distinction is `now()`: when a handler can
+observe the transaction-fixed logical instant, key 54 seals that explicit
+input. Omitting it would allow two different control-flow inputs to share one
+causal record.
 
 **INBOUND** (kind 1 — an envelope entered) — keys `20–28` :
 
@@ -469,7 +516,7 @@ timer fields.
 
 **TRANSACTION** (kind 2 — one Node firing or one Graph-owner lifecycle fact;
 the commit packet of
-execution-model §1) — keys `30–39`, `48–50`, `52` and `53` :
+execution-model §1) — keys `30–39` and `48–54`:
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
@@ -480,14 +527,15 @@ execution-model §1) — keys `30–39`, `48–50`, `52` and `53` :
 | 34 | join_inputs | array | for a join trigger, the presence-completing set (envelope.md §3), each a spine-`id` (bytes 16), **in the handler's declared port order**; this array is deliberately not lexicographically re-sorted, because tuple order is identity; omitted otherwise |
 | 35 | state_delta | array | canonical **sorted pair list** `[field_path (text), tagged_value]` of the firing Node's private `var` changes `state → state'` (sub-form below; fields sorted by `field_path`); omitted when empty |
 | 36 | emissions | array | **in text/`emission_index` order** (execution-model §4) ; each entry a fixed tuple `[port (text), emission_index (uint), envelope (spine 1–9)]` |
-| 37 | timers | array | dated obligations armed by a transaction or accepting inbound fact — each a fixed tuple `[kind (uint), ref (bytes)]`, sorted by `(kind, ref)`. The extend-only kinds are `1 = call timeout`, `2 = join within`, `3 = instance lifetime`, `4 = Saga timeout`, `5 = Loop delay`, `6 = instance drain`, `7 = instance settlement`, `8 = inbound Call request timeout`, `9 = outbound Session handshake timeout`. Kind 3 uses domain `0x21`; kinds 6/7 use domain `0x22` plus their kind; kind 8 uses the already-derived `InboundCallRef`; kind 9 uses the candidate `SessionRef`. The due instant is NOT sealed (derivable and re-armed by the fold). |
+| 37 | timers | array | dated obligations armed by a transaction or accepting inbound fact — each a fixed tuple `[kind (uint), ref (bytes)]`, sorted by `(kind, ref)`. The extend-only kinds are `1 = call timeout`, `2 = join within`, `3 = instance lifetime`, `4 = Saga timeout`, `5 = Loop delay`, `6 = instance drain`, `7 = instance settlement`, `8 = inbound Call request timeout`, `9 = outbound Session handshake timeout`. Kind 3 uses domain `0x21`; kind 5 uses the manager-produced `l:next` envelope id; kinds 6/7 use domain `0x22` plus their kind; kind 8 uses the already-derived `InboundCallRef`; kind 9 uses the candidate `SessionRef`. The due instant is NOT sealed (a persisted, replayable scheduler annotation). |
 | 38 | routes | array | target admissions made before commit, each `[delivery_id (bytes16), edge (text), target_instance_ref]`, sorted by canonical tuple; omitted only when the transaction creates no routed delivery. This is the recovery authority for a delivery not yet consumed by its target; replay never re-evaluates `instance.key` and never substitutes a later generation. |
 | 39 | cause_id | bytes(16) | causal envelope of a lifecycle transaction. Normally key 33 identifies the same cause and this field is omitted; `l:start`, `l:stop` and later `l:evict` have no consumed cursor, while a graph-response `l:reply` deliberately carries both: key 33 names the response delivery and key 39 preserves the distinct opening root as causal parent. This keeps lifecycle causality autonomous rather than relying on record order. |
 | 48 | parent_instance_ref | array | present exactly on `l:start` for a non-root owner; the fixed `[instance_address, generation]` of the enclosing Graph instance. It opens the replayable parent/child lifecycle obligation and is omitted only for the root App owner. A logical child address contains ancestor key/time frames but not ancestor generations, so this fact is not derivable from key 31. |
 | 49 | close_scope_ref | array | present exactly on the transaction whose close request wins (`l:closing`, or a handler transaction containing bare `stop`); the fixed instance reference of the root of the Closing scope. Descendant work may drain under this reference, and later external admission reserves its successor. Omitted on ordinary firings. |
 | 50 | session_exit_ref | bytes(16) | present exactly on the Connector transaction that terminates a Session. That transaction emits exactly one conventional `exit`, last; its envelope projects the same reference as `meta.ext.session_id`. The fold refuses a second exit, an exit with an open write, or any later message/write. |
 | 52 | inbound_call_exit_ref | bytes(16) | present exactly on the Connector `l:reply` transaction that terminates the inbound Call opened by INBOUND key 28. Its cause is the root request; fixed ack consumes zero positions, while a graph response consumes exactly its one real delivery position. Owner/instance equal the opening source and exactly one conventional `exit` is last. The fold refuses an unmatched trigger or any second terminal. |
-| 53 | loop_fact | array | present only on one `: Loop` run transition. Closed tags: `open = [1, run_ref, instance_ref, root_id, fuel, state_spine]`; `next = [2, run_ref, iteration, remaining, selected_next_id, state_spine]`; `close = [3, run_ref, iteration]`; `expired = [4, run_ref, iteration, selected_next_id, output_spine]`. Open is unique; next advances the ordinal and decrements fuel exactly; close/expired are terminal. Omitted for every non-Loop transaction. |
+| 53 | loop_fact | array | present only on one `: Loop` run transition. Extend-only tags: `open = [1, run_ref, instance_ref, root_id, fuel, state_spine]`; `next = [2, run_ref, iteration, remaining, selected_next_id, state_spine]`; `close = [3, run_ref, iteration]`; `expired = [4, run_ref, iteration, selected_next_id, output_spine]`; `admit = [5, run_ref, iteration]`. Open is unique; next advances the ordinal and decrements fuel exactly; admit crosses the recorded state into one body application exactly once; close/expired are terminal. A delayed next may retain its due instant as a non-canonical journal annotation; that instant is never an additional array field. Omitted for every non-Loop transaction. |
+| 54 | logical_time | int | the signed nanosecond logical instant since the Unix epoch, present exactly when a checked firing handler can observe `now()`; fixed across guard selection and body evaluation, omitted otherwise. This is an explicit transaction input, not a scheduler due date or host `committed_at`. |
 
 **OUTBOUND / Call** (kind 3 — one external call's WAL record ;
 delivery-semantics §4) — keys `40–47` :
@@ -639,8 +687,13 @@ cannot diverge on bytes for the same journal :
   `derive(0x05, loop_run_ref ‖ iteration_u64_le ‖ selected_next_id)`; its
   parent is the selected `next` emission and its origin remains the external
   root. The selected emission stays in key 36, while key 53 carries the
-  manager-owned re-entry or exact `LoopExpired` output. A replay folds these
-  facts; no mutable counter or arrival order is sealed.
+  manager-owned re-entry or exact `LoopExpired` output. Extend-only fact tag 5
+  records `admit(run_ref, iteration)`, the exactly-once `l:next` crossing after
+  route selection and bounded-capacity proof. A replay folds these facts; no
+  mutable counter or arrival order is sealed. A delayed re-entry retains its
+  scheduler due instant outside the canonical key-53 array and seals
+  `(5, reentry_envelope_id)` in key 37, so recovery can re-arm the same
+  obligation without changing causal identity.
 - **`app_meta` values (spine key 9)** : each triple's third element is
   a `tagged_value` (per the registry above).
 - **`timers` (TX key 37)** = tuples `[timer_kind (uint), ref (bytes 16)]`,
@@ -651,9 +704,10 @@ cannot diverge on bytes for the same journal :
   (extend-only), `ref` = the obligation's derived 16-byte identity —
   for a call budget, the `delivery_ref` of the arming delivery
   (envelope.md §2); kind 3 derives under domain `0x21` from
-  `(instance_address, generation)`, while kinds 6/7 derive under domain
-  `0x22` from `(instance_address, generation, timer_kind)`. The due µs is never
-  sealed (annotation).
+  `(instance_address, generation)`, kind 5 reuses the exact `l:next` envelope
+  id, while kinds 6/7 derive under domain
+  `0x22` from `(instance_address, generation, timer_kind)`. The signed
+  nanosecond due instant is never sealed (annotation).
 - **`session_ref` and `session_write_ref`** use the same injective framed
   derivation as every other identity in this registry: one domain byte, then
   for each listed component `u32_le(length) ‖ bytes`. Owner path segments are
@@ -714,10 +768,12 @@ triples and `tier2` stamps), the INBOUND `(connector_path, replica,
 inbound_seq)` root recipe, the firing node/key/trigger, the consumed
 positions, the typed `state_delta`, the ordered emissions, the call
 key/digest/status and the discriminated `closure`, or the Session opening,
-message-write, settlement, abandonment and terminal reference. **Virtual time is
-NOT among them** (it is derivable — an annotation, above) :
+message-write, settlement, abandonment and terminal reference. **Scheduler due
+time is NOT among them** (it is derivable — an annotation, above); an explicit
+`now()` observation is the narrow key-54 exception:
 two runs differ in the seal because their *records and orders*
-differ, never because a time value differs. Conformance vectors (a corpus of
+differ, or because an expression received a different sealed time input.
+Conformance vectors (a corpus of
 minimally-differing record pairs proven to differ in bytes) are required for
 the journal/golden implementation.
 
@@ -729,4 +785,4 @@ executions differ on this field ?* Yes → annotation. No → core.
 
 | Causal core (in the canonical form, compared bytewise) | Annotations (recorded if useful, excluded from the form and the seal) |
 |---|---|
-| record kind ; full `meta.sys` (id, parent_id, origin_id, role, graph_version) ; port ; `emission_index` ; the causal record fields (consumed set, state delta, ordered emissions, call/session identities and transitions) ; every typed port payload | **virtual dated time** (derivable — annotation, simulation-semantics §6.1) ; wall-clock (`committed_at`) ; execution durations ; cost / metrics ; host info ; runtime version ; thread ids ; socket ids ; negotiated protocol ; all non-normative diagnostics |
+| record kind ; full `meta.sys` (id, parent_id, origin_id, role, graph_version) ; port ; `emission_index` ; the causal record fields (consumed set, state delta, ordered emissions, call/session identities and transitions) ; every typed port payload ; explicit transaction `logical_time` when `now()` is observable | scheduler arming/due time (derivable — annotation, simulation-semantics §6.1) ; wall-clock `committed_at` ; execution durations ; cost / metrics ; host info ; runtime version ; thread ids ; socket ids ; negotiated protocol ; all non-normative diagnostics |

@@ -423,17 +423,24 @@ step touches `vm.rs` once.
    source owner attribute singular (`instance = { key = ... }`) while
    preserving the historical identity domain. L1 freezes the protocol and L2
    now carries its closed boundary, plan constants and ordinary Graph handlers
-   through categorical v13 with Registry-free validation and a pre-mutation VM
-   refusal. L3 now proves one finite progress verdict per completed traversal,
+   through categorical v14 with Registry-free validation. L3 proves one finite
+   progress verdict per completed traversal,
    without privileging `out`: continuation uses one `next`; ordinary outputs
    or `stop` terminate. L4 now executes the immediate persistent root-Graph
    subset through per-root journal-folded runs, exact fuel and `l:next`,
-   including crash reconstruction and independent concurrent roots. L5–L7
-   add dated re-entry, the first theorem
-   checker, Closing/recovery model checks, and final identity/portability
-   evidence. The checker remains fail-closed at every unfinished gate. Ordered
+   including crash reconstruction and independent concurrent roots. L5 adds
+   dated re-entry and direct-child Call recurrence. L6 adds the first checked
+   theorem fragment: a direct signed-integer measure with a positivity guard
+   and exact literal decrement, re-derived by the `no_std` core from v14.
+   L7 closes the public composition, identity and portability evidence:
+   singleton/keyed concurrent runs, ordinary nested Graphs, bounded Process
+   retry with multi-frame data, exhaustion and Closing fencing. Unsupported
+   nested Loop owners and spatial recovery stay named rather than being
+   over-claimed. The
+   checker remains fail-closed at every unfinished gate. Ordered
    work and exit criteria live in the
-   [M1.7 backlog](m1.7-loop-backlog.md).
+   [M1.7 backlog](m1.7-loop-backlog.md) and
+   [exit report](m1.7-exit-report.md).
 9. **Cost counters** — the `cost` map (stdlib §6.4) accumulated
     from the journal; a subscriber, not a core dependency.
 10. **`--watch`** — the HTML+SSE mini-visualization, strictly a

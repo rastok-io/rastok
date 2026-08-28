@@ -1,7 +1,10 @@
 # Reference simulation 3 — Loop retry × outbound WAL × key stability
 
-> **Status : Reference derivation — not yet executable.** The expected trace
-> is derived by hand from
+> **Status : Reference derivation — this complete HTTP/idempotency spelling is
+> not yet executable.** The M1.7 Process retry core is exercised through the
+> public Lab in
+> [`loop_control.rs`](../../../crates/rastok/tests/loop_control.rs); the expected
+> HTTP recovery trace below is still derived by hand from
 > [delivery-semantics.md](../../spec/delivery-semantics.md) §4 and
 > [loop.md](../../spec/loop.md). It is a conformance target for the outbound
 > record lifecycle, the call-closed rule and stable idempotency keys.

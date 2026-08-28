@@ -447,8 +447,9 @@ Inputs keep their existing rule: a declared, required input that is
 ## 6. The journal — three record types (fills envelope.md §7)
 
 The taxonomy collapses by construction : supervision decisions ARE
-transaction records (triggers `l:timeout`, `l:evict`, `l:stop`…) ; clock
-ticks ARE inbound records (Clock roots). Exactly three **causal** types
+transaction records (triggers `l:timeout`, `l:evict`, `l:stop`…) ; explicit
+timer firings ARE inbound records (`Timer` roots), while `now()` is an optional
+field of the firing transaction itself. Exactly three **causal** types
 remain — plus one **derived** type, the SNAPSHOT (§3 : the folded state of
 an instance or an open saga ; no new facts, rebuildable, excluded from
 traces and replay — an index, not history) :

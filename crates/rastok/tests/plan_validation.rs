@@ -143,12 +143,12 @@ graph app : App {
         panic!("the nested Graph carries Loop");
     };
     assert_eq!(
-        spec.fuel.expr.root,
+        spec.fuel.as_ref().expect("fuel").expr.root,
         expr::Expr::Literal(rastok::value::Value::Int(3)),
         "lexical App constants are substituted before categorical transport"
     );
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
-    let (decoded, declared) = plan::decode(&bytes).expect("v13 re-derives inherited val types");
+    let (decoded, declared) = plan::decode(&bytes).expect("v14 re-derives inherited val types");
     assert_eq!(decoded, compilation.plan);
     assert_eq!(declared, compilation.hash);
 
@@ -161,7 +161,7 @@ graph app : App {
     let [plan::AspectSpec::Loop(spec)] = countdown.aspects.as_mut_slice() else {
         panic!("the nested Graph carries Loop");
     };
-    spec.fuel.expr.root = expr::Expr::Path(vec![String::from("attempts")]);
+    spec.fuel.as_mut().expect("fuel").expr.root = expr::Expr::Path(vec![String::from("attempts")]);
     assert!(matches!(
         ValidatedExecutionPlan::try_new(forged),
         Err(PlanValidationError::InvalidGraphContract {
@@ -177,7 +177,7 @@ fn loop_claims_are_rederived_from_the_graph_contract() {
     let [plan::AspectSpec::Loop(spec)] = zero_fuel.owners[0].aspects.as_mut_slice() else {
         panic!("the fixture has one Loop");
     };
-    spec.fuel.resolved = rastok::value::Value::Int(0);
+    spec.fuel.as_mut().expect("fuel").resolved = rastok::value::Value::Int(0);
     assert!(matches!(
         ValidatedExecutionPlan::try_new(zero_fuel),
         Err(PlanValidationError::InvalidGraphContract { detail, .. })
@@ -460,7 +460,7 @@ graph g : App {
     assert_eq!(boundary.origin(), plan::TypeOrigin::Declared);
 
     let package = plan::encode(&compilation.plan, &compilation.hash);
-    let (decoded, _) = plan::decode(&package).expect("the source pin survives v13");
+    let (decoded, _) = plan::decode(&package).expect("the source pin survives v14");
     assert_eq!(
         decoded
             .resolved_ports()

@@ -119,25 +119,28 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
                         writer.tag(1);
                         match &graph.loop_spec {
                             None => writer.tag(0),
-                            Some(spec) => {
-                                writer.tag(1);
-                                writer.tree(&spec.fuel.tree);
-                                match &spec.delay {
-                                    None => writer.tag(0),
-                                    Some(crate::compiler::hir::LoopDelay::Fixed { after }) => {
-                                        writer.tag(1);
-                                        writer.tree(&after.tree);
-                                    }
-                                    Some(crate::compiler::hir::LoopDelay::Exponential {
-                                        first,
-                                        ceiling,
-                                    }) => {
-                                        writer.tag(2);
-                                        writer.tree(&first.tree);
-                                        writer.tree(&ceiling.tree);
+                            Some(spec) => match &spec.fuel {
+                                None => writer.tag(0),
+                                Some(fuel) => {
+                                    writer.tag(1);
+                                    writer.tree(&fuel.tree);
+                                    match &spec.delay {
+                                        None => writer.tag(0),
+                                        Some(crate::compiler::hir::LoopDelay::Fixed { after }) => {
+                                            writer.tag(1);
+                                            writer.tree(&after.tree);
+                                        }
+                                        Some(crate::compiler::hir::LoopDelay::Exponential {
+                                            first,
+                                            ceiling,
+                                        }) => {
+                                            writer.tag(2);
+                                            writer.tree(&first.tree);
+                                            writer.tree(&ceiling.tree);
+                                        }
                                     }
                                 }
-                            }
+                            },
                         }
                     }
                     node::Aspect::Saga => writer.tag(2),
@@ -156,6 +159,44 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
             writer.count(handlers.len());
             for handler in handlers {
                 writer.handler(handler);
+            }
+        }
+    }
+    let proved_graphs: Vec<_> = sorted_graphs(hir)
+        .into_iter()
+        .filter_map(|graph| {
+            graph
+                .loop_spec
+                .as_ref()
+                .and_then(|spec| spec.proof.as_ref().map(|proof| (graph, spec, proof)))
+        })
+        .collect();
+    if !proved_graphs.is_empty() {
+        writer.str("rastok.loop-proof.r1");
+        writer.count(proved_graphs.len());
+        for (graph, spec, proof) in proved_graphs {
+            writer.str(&graph.path.to_string());
+            writer.tree(&proof.measure);
+            match &proof.invariant {
+                None => writer.tag(0),
+                Some(invariant) => {
+                    writer.tag(1);
+                    writer.tree(invariant);
+                }
+            }
+            if spec.fuel.is_none() {
+                match &spec.delay {
+                    None => writer.tag(0),
+                    Some(crate::compiler::hir::LoopDelay::Fixed { after }) => {
+                        writer.tag(1);
+                        writer.tree(&after.tree);
+                    }
+                    Some(crate::compiler::hir::LoopDelay::Exponential { first, ceiling }) => {
+                        writer.tag(2);
+                        writer.tree(&first.tree);
+                        writer.tree(&ceiling.tree);
+                    }
+                }
             }
         }
     }
@@ -762,7 +803,7 @@ fn lower_loop_spec(
         resolved: value.value.clone(),
     };
     PlanLoopSpec {
-        fuel: constant(&spec.fuel),
+        fuel: spec.fuel.as_ref().map(constant),
         delay: spec.delay.as_ref().map(|delay| match delay {
             crate::compiler::hir::LoopDelay::Fixed { after } => PlanLoopDelay::Fixed {
                 after: constant(after),
@@ -774,6 +815,7 @@ fn lower_loop_spec(
                 }
             }
         }),
+        proof: spec.proof.clone(),
     }
 }
 

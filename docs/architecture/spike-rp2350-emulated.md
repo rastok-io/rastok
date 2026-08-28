@@ -39,8 +39,8 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
 
 - Firmware: `spikes/rp2350-emu` — a standalone crate outside the
   product workspace (its embedded runtime dependencies are
-  spike-only). Its current M1.7 L3 measurement embeds the blessed **v13
-  aspect-capable package** of `examples/echo.rkg` as a `static`, opens it with
+  spike-only). Its current M1.7 transaction-time measurement embeds the blessed **v14
+  proof-capable package** of `examples/echo.rkg` as a `static`, opens it with
   `rastok_core::plan::decode` — which now validates
   structurally and re-encodes for canonicity — boots the `Vm` over a
   `MemJournal`, and runs inject → step rounds: the bare-metal
@@ -82,20 +82,20 @@ peripheral or silicon claim.
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
-| `plan::decode` (988-byte v13 package; re-measured after M1.7 L3 on 2026-08-28) | 17 363 | 868.2 k | 5.79 ms |
+| `plan::decode` (988-byte v14 package; re-measured at the M1.7 L7 closure on 2026-08-28) | 17 359 | 868.0 k | 5.79 ms |
 | — re-measured 2026-08-09, rounds four and five: +109 decode ticks (the pinned-edge audit at validation) and ~14 per relay transaction (the crossing-pin judge at construction + the pre-commit choke point scanning for watching pins; the FINAL gate converts the value only when a pin watches its fan-out — construction-level checks and expression bindings still materialize handler values as they always did) — priced, no criterion near | | | |
-| relay transaction (avg of 32 exact actor/trigger samples; re-measured 2026-08-28 after L3) | 2 655 (min 2 570 / max 2 886) | **132.8 k avg / 144.3 k max** | **0.885 ms avg / 0.962 ms max** |
+| relay transaction (avg of 32 exact actor/trigger samples; re-measured at M1.7 L7) | 2 719 (min 2 631 / max 2 960) | **136.0 k avg / 148.0 k max** | **0.906 ms avg / 0.987 ms max** |
 | blake3 id, 64-byte frame (avg of 1000) | 91.0 | 4.6 k | 30 µs |
 
 | Resource | Value | Criterion |
 |---|---|---|
-| Heap high-water mark (allocator-tracked, 32 journaled relay rounds plus their owner lifecycle facts; re-measured 2026-08-28 after L3) | 128 252 B (125.2 KiB) | < 128 KiB ✓ |
-| Flash `.text` + `.rodata` (opt-level=z + LTO) | 562 812 + 55 436 = 618 248 B (603.8 KiB; re-measured 2026-08-28 after L3) | < 1 MiB ✓ |
+| Heap high-water mark (allocator-tracked, 32 journaled relay rounds plus their owner lifecycle facts; re-measured at M1.7 L7) | 129 796 B (126.8 KiB) | < 128 KiB ✓ |
+| Flash `.text` + `.rodata` (opt-level=z + LTO) | 602 852 + 58 436 = 661 288 B (645.8 KiB; re-measured at M1.7 L7) | < 1 MiB ✓ |
 | Dependencies patched to build | none | none ✓ |
 
 Notes the numbers carry:
 
-- The slowest measured relay transaction meets its criterion with a **1.040× margin**,
+- The slowest measured relay transaction meets its criterion with a **1.014× margin**,
   not the 3× the withdrawn verdict claimed. The claim shrank; the
   fact held.
 - Package decode grew from v1's 1 468 ticks to 15 334 across the
@@ -287,6 +287,37 @@ Notes the numbers carry:
   to 17 363 ticks and linked `.text + .rodata` by 16 992 B to 603.8 KiB;
   relay layout jitter measures 2 655 average / 2 570 minimum / 2 886 maximum.
   `SPIKE_OK` prints the same `e50026ee…` hash.
+- D-2026-08-28-5 adds no package field and echo never calls `now()`: its
+  semantic hash, 988-byte package and 67-record trace remain byte-identical.
+  Validation derives each handler's time demand once, so the time-insensitive
+  relay never scans an expression tree. Final decode is 17 357 ticks, relay
+  is 2 701 average / 2 609 minimum / 2 934 maximum, heap is 129 796 B, and
+  linked `.text + .rodata` is 638 288 B. `SPIKE_OK` still prints
+  `e50026ee…`; the narrowest criterion is the 146.7 k-instruction relay
+  maximum against 150 k (1.02× margin).
+- M1.7 L5 activates timer kind 5, the delayed-Loop recovery annotation and the
+  exactly-once spatial `Admit` transition in core without changing echo's
+  aspect-free v13 package, semantic hash or 67-record trace. A boot-derived
+  Loop-presence fast path keeps non-Loop emissions off the new owner-chain
+  scan. The 2026-08-28 rerun measures decode at 17 358 ticks, relay at 2 718
+  average / 2 631 minimum / 2 959 maximum, heap at 129 796 B, and linked
+  `.text + .rodata` at 646 416 B. `SPIKE_OK` prints the same `e50026ee…` hash;
+  the relay maximum keeps a measured 1.014× margin.
+- M1.7 L6 moves only the categorical container to v14 and links the small
+  `no_std` ranking-certificate verifier. Echo declares no Loop, so the package
+  remains 988 B, the semantic hash stays `e50026ee…`, and its 67-record trace,
+  relay path and heap peak are byte-/tick-identical to L5. Decode changes by
+  +1 tick to 17 359. The verifier increases linked `.text + .rodata` by
+  14 664 B to 661 080 B (645.6 KiB), still below 1 MiB; the relay maximum
+  remains 2 959 ticks / 148.0 k instructions (1.014× margin). Two consecutive
+  QEMU executions printed the same measurements and `SPIKE_OK`.
+- M1.7 L7 closes public composition without adding a package, semantic or
+  causal form. Echo therefore retains its 988-byte v14 package,
+  `e50026ee…` semantic hash and 67-record trace. The contained-DAG control walk
+  and structural `Loop.state` binding add 208 linked bytes; decode and heap are
+  unchanged. Relay layout jitter is +1 tick average/maximum (2 719 / 2 960),
+  still about 148.0 k calibrated instructions with a 1.014× margin. The final
+  execution prints `SPIKE_OK`.
 - Flash grew from 193 KiB to 516.4 KiB (`.text` 481 404 B +
   `.rodata` 47 356 B, re-measured after C1 on 2026-08-22): the consolidated
   reform's decoders, the jsonl codec's canonical writer and now the
@@ -343,13 +374,13 @@ llvm-objdump -d target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350 \
 ## Verdict
 
 **GO (provisional), re-issued 2026-08-07 on the corrected
-instrumentation and last re-measured 2026-08-28 after M1.7 L3.**
+instrumentation and last re-measured 2026-08-28 at the M1.7 L7 closure.**
 These measurements price complete hierarchical routing, causal instance
 references, the executable lifetime machine, bounded Closing, joins, and the
 R7 closure-only keyed drain. All four
-criteria of record hold: no patched dependencies, 144.3 k instructions for
-the slowest measured relay transaction against the 150 k bound (1.040×), a
-125.2 KiB true high-water mark against 128 KiB, and 603.8 KiB of flash against
+criteria of record hold: no patched dependencies, 148.0 k instructions for
+the slowest measured relay transaction against the 150 k bound (1.014×), a
+126.8 KiB true high-water mark against 128 KiB, and 645.8 KiB of flash against
 1 MiB. The
 margins are thinner than first
 claimed and are reported as measured. The option stays dormant as

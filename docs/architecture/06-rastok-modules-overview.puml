@@ -2,7 +2,7 @@
 skinparam shadowing false
 skinparam packageStyle rectangle
 
-title Rastok — bird's-eye module overview (M1.7 L0/L1, 2026-08-28)
+title Rastok — bird's-eye module overview (M1.7 closed, 2026-08-28)
 
 note as LEGEND
   Representative load-bearing modules and types (public or
@@ -105,6 +105,15 @@ package "expr — Rastok expression engine" as P_EXPR {
   Expr_Diagnostic : native expression compiler diagnostic
   class "Error" as Expr_Error <<struct>>
   Expr_Error : expression evaluation error
+}
+
+package "loop_proof — finite-recursion certificates" as P_LOOP_PROOF {
+  class Certificate <<struct>>
+  Certificate : checked measure, optional invariant, exact decrements
+  enum "Error" as LoopProof_Error <<enum>>
+  LoopProof_Error : closed unsupported or contradicted proof obligation
+  class "derive / verify" as LOOP_PROOF_API <<mod>>
+  LOOP_PROOF_API : deterministic no-std re-derivation from handlers
 }
 
 note bottom of P_EXPR
@@ -224,7 +233,7 @@ package "plan — serializable compiled execution model" as P_PLAN {
   GuestProgram : opaque compiled guest program
   class AssetBlob <<struct>>
   AssetBlob : content-addressed build-time asset bytes
-  class "encode / decode (categorical v12)" as PLAN_CODEC <<mod>>
+  class "encode / decode (categorical v14)" as PLAN_CODEC <<mod>>
   PLAN_CODEC : canonical validated plan package transport
 }
 
@@ -273,8 +282,6 @@ package "boundary — contracts with the external world" as P_BND {
   SessionWriteRef : one journaled graph-to-world message obligation
   interface CompletionGate <<trait>>
   CompletionGate : admits every typed port draft before call closure
-  interface Clock <<trait>>
-  Clock : supplies one due event at a time (current driver uses target advance)
   interface Supervisor <<trait>>
   Supervisor : supplies lifecycle events (current build: boot only)
   class Dispatcher <<struct>>
@@ -393,7 +400,7 @@ package "connectors — concrete external-effect Drivers" as P_CONN {
   WebSocketProtocol : shared bounded RFC 6455 message state
   class HostedNetworkEngine <<private>>
   HostedNetworkEngine : bounded pump; Hyper H1-H2, quiche H3, Tungstenite
-  class "Clock, Calendar, Memory" as CATALOGUE <<guarded>>
+  class "Timer, Calendar, Memory" as CATALOGUE <<guarded>>
   CATALOGUE : declared names — sheets and Drivers land by slice
 }
 
@@ -417,7 +424,7 @@ note bottom of P_LAB
   the scenario forms live in compiler::hir (one
   parser, one checker) ; the fixture IS the scenario's
   steps ; virtual time IS Vm::advance — no separate
-  Fixture or VirtualClock types exist
+  Fixture or time-source types exist
 end note
 
 package "render — rustc-shaped diagnostic rendering" as P_REN {
@@ -446,6 +453,8 @@ P_EXPR ..> P_DATA : consumes types / values
 P_EXPR ..> P_CBOR : canonical doubles / nesting budget
 P_EXPR ..> P_JSON : exact number reader
 P_EXPR ..> P_TRIVIA : shares comment facts
+P_LOOP_PROOF ..> P_EXPR : checks typed trees
+P_LOOP_PROOF ..> P_PLAN : re-derives from handlers
 P_JSON ..> P_DATA : produces core values
 P_SCHEMA ..> P_DATA : projects logical types
 P_SCHEMA ..> P_JSON : parses JSON schemas
@@ -458,6 +467,7 @@ P_PLAN ..> P_CBOR : encodes / decodes
 P_PLAN ..> P_IDENT : tagged values
 P_PLAN ..> P_DATA : carries types / values
 P_PLAN ..> P_CONNECTOR : carries ids / roles
+P_PLAN ..> P_LOOP_PROOF : carries certificate
 P_CONTRACT ..> P_CONNECTOR : keys sheets
 P_RT ..> P_IDENT : addresses work
 P_RT ..> P_PLAN : uses

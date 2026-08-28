@@ -3593,6 +3593,104 @@ on in where data.text != "" {
 "#;
 
 #[test]
+fn now_is_fixed_for_one_transaction_and_moves_only_with_logical_time() {
+    let source = r#"
+graph logical_time : App {
+  input in: variant
+  output out: struct { first: timestamp, second: timestamp }
+
+  operator stamp {
+    input in: variant
+    output out: struct { first: timestamp, second: timestamp }
+    on in { out = { first = now(); second = now() } }
+  }
+
+  . -> stamp -> .
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a handler may observe its logical instant");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot_at(&compilation.plan, GraphVersion(1), 1_000);
+    let mut world = EchoWorld::default();
+
+    vm.inject(&mut journal, submission("first")).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.advance(&mut journal, &mut world, 2_000).unwrap();
+    vm.inject(&mut journal, submission("second")).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+
+    let instants: Vec<_> = vm
+        .outputs()
+        .iter()
+        .map(|output| match output.envelope.data() {
+            Data::Materialized(Value::Struct(fields)) => fields
+                .iter()
+                .map(|(_, value)| match value {
+                    Value::Timestamp(value) => *value,
+                    other => panic!("expected a timestamp, got {other:?}"),
+                })
+                .collect::<Vec<_>>(),
+            other => panic!("expected a struct, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(instants, [vec![1_000, 1_000], vec![2_000, 2_000]]);
+
+    let observed: Vec<_> = journal
+        .records()
+        .iter()
+        .filter_map(|record| match record {
+            Record::Transaction(transaction) => transaction.logical_time,
+            Record::Inbound(_) | Record::Outbound(_) => None,
+        })
+        .collect();
+    assert_eq!(observed, [1_000, 2_000]);
+}
+
+#[test]
+fn a_filtered_guard_seals_the_logical_time_it_observed() {
+    let source = r#"
+graph logical_time_guard : App {
+  input in: variant
+  output out: variant
+
+  operator filter {
+    input in: variant
+    output out: variant
+    on in where now() < timestamp("1970-01-01T00:00:00Z") { out = . }
+  }
+
+  . -> filter -> .
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a guard may observe its logical instant");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot_at(&compilation.plan, GraphVersion(1), 1_000);
+    let mut world = EchoWorld::default();
+
+    vm.inject(&mut journal, submission("filtered")).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+
+    assert!(vm.outputs().is_empty(), "the false guard emits nothing");
+    let observed: Vec<_> = journal
+        .records()
+        .iter()
+        .filter_map(|record| match record {
+            Record::Transaction(transaction) => transaction.logical_time,
+            Record::Inbound(_) | Record::Outbound(_) => None,
+        })
+        .collect();
+    assert_eq!(observed, [1_000]);
+}
+
+#[test]
 fn a_silent_driver_expires_into_a_typed_timeout() {
     let compilation = compile(
         &[TIMED_PROBE],
@@ -4073,4 +4171,381 @@ fn a_filtered_input_reaches_stability_without_output() {
         journal.records()[1],
         Record::Transaction(ref t) if t.emissions.is_empty()
     ));
+}
+
+#[test]
+fn loop_delay_dates_reentry_and_recovers_the_same_wakeup() {
+    let compilation = compile(
+        &[r#"
+graph countdown : App + Loop {
+  input in: int
+  output out: int
+  Loop.fuel = 3
+  Loop.delay = { kind = fixed ; after = duration("2s") }
+
+  on in where data <= 0 { out = Loop.state.data }
+  on in where data > 0  { next = data - 1 }
+}
+"#],
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a fixed-delay Loop is executable");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut before_restart = Vm::boot_at(&compilation.plan, GraphVersion(1), 0);
+    before_restart
+        .inject(&mut journal, int_submission(2))
+        .expect("the root is admitted");
+    before_restart
+        .drain(&mut journal)
+        .expect("the first traversal arms, rather than runs, its successor");
+    let (run, first) = journal
+        .open_loop_runs()
+        .expect("the Loop fold is valid")
+        .into_iter()
+        .next()
+        .expect("one run remains open");
+    assert_eq!(first.iteration, 1);
+    assert_eq!(first.due_at, Some(2_000_000_000));
+    assert!(before_restart.outputs().is_empty());
+    drop(before_restart);
+
+    let mut recovered = Vm::boot_at(&compilation.plan, GraphVersion(1), 1_000_000_000);
+    recovered
+        .recover_loop_runs(&journal)
+        .expect("the persisted due-date annotation re-arms the same wakeup");
+    recovered
+        .recover_loop_runs(&journal)
+        .expect("a duplicate recovery observation may re-arm but cannot re-enter twice");
+    let mut world = EchoWorld::default();
+    recovered
+        .advance(&mut journal, &mut world, 1_999_999_999)
+        .expect("advancing short of the date is inert");
+    assert_eq!(journal.loop_run(&run).unwrap().unwrap().iteration, 1);
+    recovered
+        .advance(&mut journal, &mut world, 2_000_000_000)
+        .expect("the exact date admits one traversal");
+    let second = journal.loop_run(&run).unwrap().unwrap();
+    assert_eq!(second.iteration, 2);
+    assert_eq!(second.due_at, Some(4_000_000_000));
+    recovered
+        .advance(&mut journal, &mut world, 4_000_000_000)
+        .expect("the second exact date reaches the terminal branch");
+    assert_eq!(recovered.outputs().len(), 1);
+    assert_eq!(
+        rastok::runtime::data_value(recovered.outputs()[0].envelope.data()).unwrap(),
+        Value::Int(0)
+    );
+    assert_eq!(
+        journal.loop_run(&run).unwrap().unwrap().phase,
+        rastok::journal::LoopRunPhase::Closed
+    );
+    let delayed_facts: Vec<_> = journal
+        .records()
+        .iter()
+        .filter_map(|record| match record {
+            Record::Transaction(transaction)
+                if matches!(
+                    transaction.loop_fact.as_deref(),
+                    Some(rastok::journal::LoopFact::Next { .. })
+                ) =>
+            {
+                Some(transaction)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(delayed_facts.len(), 2);
+    assert!(delayed_facts.iter().all(|transaction| {
+        transaction.timers.len() == 1
+            && transaction.timers[0].0 == rastok::journal::timer_kind::LOOP_DELAY
+    }));
+}
+
+#[test]
+fn exponential_loop_delay_saturates_without_extending_fuel() {
+    let compilation = compile(
+        &[r#"
+graph countdown : App + Loop {
+  input in: int
+  output out: int
+  Loop.fuel = 4
+  Loop.delay = {
+    kind = exponential
+    first = duration("1s")
+    ceiling = duration("3s")
+  }
+
+  on in where data <= 0 { out = Loop.state.data }
+  on in where data > 0  { next = data - 1 }
+}
+"#],
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("an exponential-delay Loop is executable");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = EchoWorld::default();
+    vm.inject(&mut journal, int_submission(3)).unwrap();
+    vm.drain(&mut journal).unwrap();
+    let run = journal.open_loop_runs().unwrap()[0].0;
+    assert_eq!(
+        journal.loop_run(&run).unwrap().unwrap().due_at,
+        Some(1_000_000_000)
+    );
+    vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
+    assert_eq!(
+        journal.loop_run(&run).unwrap().unwrap().due_at,
+        Some(3_000_000_000)
+    );
+    vm.advance(&mut journal, &mut world, 3_000_000_000).unwrap();
+    assert_eq!(
+        journal.loop_run(&run).unwrap().unwrap().due_at,
+        Some(6_000_000_000)
+    );
+    vm.advance(&mut journal, &mut world, 6_000_000_000).unwrap();
+    assert_eq!(vm.outputs().len(), 1);
+    assert_eq!(journal.loop_run(&run).unwrap().unwrap().remaining, 1);
+}
+
+#[test]
+fn instance_closing_fences_a_delayed_loop_from_the_successor_generation() {
+    let compilation = compile(
+        &[r#"
+graph countdown : App + Loop {
+  input in: int
+  output out: int
+  lifetime = { kind = fixed ; after = duration("1s") }
+  Loop.fuel = 3
+  Loop.delay = { kind = fixed ; after = duration("2s") }
+
+  on in where data <= 0 { out = Loop.state.data }
+  on in where data > 0  { next = data - 1 }
+}
+"#],
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("Loop delay and instance lifetime are orthogonal");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = EchoWorld::default();
+    vm.inject(&mut journal, int_submission(1)).unwrap();
+    vm.drain(&mut journal).unwrap();
+    let old_run = journal.open_loop_runs().unwrap()[0].0;
+
+    vm.advance(&mut journal, &mut world, 1_000_000_000)
+        .expect("the lifetime closes before the later Loop wakeup");
+    vm.inject(&mut journal, int_submission(0))
+        .expect("the next root reserves a clean successor generation");
+    vm.drain(&mut journal)
+        .expect("the successor run reaches its own terminal branch");
+    assert_eq!(vm.outputs().len(), 1);
+    vm.advance(&mut journal, &mut world, 2_000_000_000)
+        .expect("the stale predecessor wakeup is a harmless observation");
+    assert_eq!(vm.outputs().len(), 1, "the stale wakeup did not re-enter");
+    let old = journal.loop_run(&old_run).unwrap().unwrap();
+    assert_eq!(old.iteration, 1);
+    assert_eq!(old.phase, rastok::journal::LoopRunPhase::Open);
+}
+
+#[test]
+fn equal_date_loop_wakeups_keep_their_causal_arm_order() {
+    let compilation = compile(
+        &[r#"
+graph countdown : App + Loop {
+  input in: int
+  output out: int
+  Loop.fuel = 3
+  Loop.delay = { kind = fixed ; after = duration("1s") }
+
+  on in where data <= 0 { out = Loop.state.data }
+  on in where data > 0  { next = data - 1 }
+}
+"#],
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a delayed Loop is executable");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    vm.inject(&mut journal, int_submission(1)).unwrap();
+    vm.inject(&mut journal, int_submission(2)).unwrap();
+    vm.drain(&mut journal).unwrap();
+    let runs: Vec<_> = journal
+        .records()
+        .iter()
+        .filter_map(|record| match record {
+            Record::Transaction(transaction) => match transaction.loop_fact.as_deref() {
+                Some(rastok::journal::LoopFact::Open { run, .. }) => Some(*run),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(runs.len(), 2);
+    let before = journal.records().len();
+    vm.advance(&mut journal, &mut EchoWorld::default(), 1_000_000_000)
+        .unwrap();
+    let transitions: Vec<_> = journal.records()[before..]
+        .iter()
+        .filter_map(|record| match record {
+            Record::Transaction(transaction) => transaction.loop_fact.as_deref().filter(|fact| {
+                matches!(
+                    fact,
+                    rastok::journal::LoopFact::Next { .. }
+                        | rastok::journal::LoopFact::Close { .. }
+                )
+            }),
+            _ => None,
+        })
+        .collect();
+    assert!(matches!(
+        transitions.as_slice(),
+        [
+            rastok::journal::LoopFact::Close { run: first, .. },
+            rastok::journal::LoopFact::Next { run: second, .. }
+        ] if *first == runs[0] && *second == runs[1]
+    ));
+}
+
+#[test]
+fn loop_delay_starts_only_after_the_call_timeout_exit_decides_next() {
+    let compilation = compile(
+        &[r#"
+graph retry : App + Loop {
+  input in: text
+  output done: text
+  Loop.fuel = 2
+  Loop.delay = { kind = fixed ; after = duration("2s") }
+
+  connector shell : Process {
+    mode = job
+    command = "cat"
+    codec = lines
+    effect = idempotent
+    behavior = deterministic
+    timeout = duration("1s")
+    max_output = "1 MiB"
+  }
+
+  . -> shell
+  shell.out -> nothing
+  shell.err -> nothing
+  on shell.exit where data is CaptureFailed  { done = "capture" }
+  on shell.exit where data is DecodeFailed   { done = "decode" }
+  on shell.exit where data is Exited         { done = "exited" }
+  on shell.exit where data is OutcomeUnknown { done = "unknown" }
+  on shell.exit where data is OutputOverflow { done = "overflow" }
+  on shell.exit where data is SpawnFailed    { done = "spawn" }
+  on shell.exit where data is TimeoutExpired { next = Loop.state.data }
+}
+"#],
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a bounded Call may decide one Loop traversal");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = ClosingWorld::default();
+
+    vm.inject(&mut journal, text_submission("again")).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    assert_eq!(journal.open_calls().len(), 1);
+    let run = journal.open_loop_runs().unwrap()[0].0;
+
+    vm.advance(&mut journal, &mut world, 1_000_000_000)
+        .expect("the Call budget publishes TimeoutExpired first");
+    let after_timeout = journal.loop_run(&run).unwrap().unwrap();
+    assert_eq!(after_timeout.iteration, 1);
+    assert_eq!(after_timeout.due_at, Some(3_000_000_000));
+    assert!(!after_timeout.iteration_admitted);
+    assert!(journal.open_calls().is_empty());
+
+    vm.advance(&mut journal, &mut world, 2_999_999_999)
+        .expect("the Loop delay has not elapsed");
+    assert!(journal.open_calls().is_empty());
+    vm.advance(&mut journal, &mut world, 3_000_000_000)
+        .expect("the delayed state re-enters the spatial Call body");
+    assert_eq!(journal.open_calls().len(), 1);
+
+    vm.advance(&mut journal, &mut world, 4_000_000_000)
+        .expect("the second independent Call timeout exhausts fuel");
+    assert!(journal.open_calls().is_empty());
+    assert_eq!(vm.outputs().len(), 1);
+    assert!(matches!(
+        journal.loop_run(&run).unwrap().unwrap().phase,
+        rastok::journal::LoopRunPhase::Expired
+    ));
+
+    let call_timeouts = journal
+        .records()
+        .iter()
+        .filter(|record| {
+            matches!(
+                record,
+                Record::Outbound(OutboundRecord::Call(call))
+                    if matches!(
+                        call.status,
+                        OutboundStatus::Closed(rastok::journal::Closure::Timeout)
+                    )
+            )
+        })
+        .count();
+    assert_eq!(
+        call_timeouts, 2,
+        "each body application owns one Call timeout"
+    );
+}
+
+#[test]
+fn spatial_loop_recovery_waits_for_general_instance_recovery() {
+    let compilation = compile(
+        &[r#"
+graph retry : App + Loop {
+  input in: text
+  output done: text
+  Loop.fuel = 2
+  Loop.delay = { kind = fixed ; after = duration("2s") }
+
+  connector shell : Process {
+    mode = job
+    command = "cat"
+    codec = lines
+    effect = idempotent
+    behavior = deterministic
+    timeout = duration("1s")
+    max_output = "1 MiB"
+  }
+
+  . -> shell
+  shell.out -> nothing
+  shell.err -> nothing
+  on shell.exit where data is CaptureFailed  { done = "capture" }
+  on shell.exit where data is DecodeFailed   { done = "decode" }
+  on shell.exit where data is Exited         { done = "exited" }
+  on shell.exit where data is OutcomeUnknown { done = "unknown" }
+  on shell.exit where data is OutputOverflow { done = "overflow" }
+  on shell.exit where data is SpawnFailed    { done = "spawn" }
+  on shell.exit where data is TimeoutExpired { next = Loop.state.data }
+}
+"#],
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the spatial Loop is valid");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = ClosingWorld::default();
+
+    vm.inject(&mut journal, text_submission("again")).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.advance(&mut journal, &mut world, 1_000_000_000)
+        .expect("the first Call timeout selects delayed recurrence");
+    drop(vm);
+
+    let mut recovered = Vm::boot_at(&compilation.plan, GraphVersion(1), 2_000_000_000);
+    let error = recovered
+        .recover_loop_runs(&journal)
+        .expect_err("spatial recovery must fail closed until owner bundles are replayed");
+    assert!(
+        error.to_string().contains(
+            "a spatial Loop waits for general instance and Connector obligation recovery"
+        )
+    );
 }

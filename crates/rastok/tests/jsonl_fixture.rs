@@ -77,6 +77,9 @@ fn compilation() -> rastok::compiler::Compilation {
 // DELIBERATE CONTAINER MOVE 2026-08-28 (M1.7 L2): categorical v13 adds
 // Graph aspect and handler-owner transport. This graph has no aspect, so its
 // semantic hash and causal trace remain byte-identical.
+// DELIBERATE CONTAINER MOVE 2026-08-28 (M1.7 L6): categorical v14 makes
+// optional Loop proof transport explicit. This graph has no Loop, so only its
+// container version/checksum move; semantic hash and trace remain identical.
 const JSONL_HASH: &str = "036f7ea5346fac883a3bad155fbdf41b303f6e54bef93f8c850ff5f138f769de";
 
 #[test]

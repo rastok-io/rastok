@@ -4,10 +4,12 @@
 > executable module is `expr` and consumes core `DataType`/`Value`. Its
 > `is`/`as`, closed-struct and tagged-constructor trees execute, are
 > type-checked, and travel in the v7 registry with their resolved targets.
-> Categorical package v13 retains the registry that v12 extended with the open
+> Categorical package v14 retains the registry that v12 extended with the open
 > `media_type(text)` constructor. The
 > `IDENT!` frontend surface and full JSON-value reader described below are
-> executable. A `variant` must be narrowed before member or index access.
+> executable. M1.7's temporal prerequisite adds the transaction-context
+> function `now()` without changing the expression transport. A `variant` must be
+> narrowed before member or index access.
 
 Rastok has an intrinsic, pure expression language. Its syntax and much of
 its operator semantics are inspired by CEL, and the compatible core stays
@@ -20,7 +22,9 @@ An expression:
 
 - is pure and deterministic;
 - terminates under a declared structural/cost bound;
-- has no ambient clock, environment, filesystem, network or randomness;
+- has no ambient environment, filesystem, network or randomness;
+- may observe only the explicit, transaction-fixed logical instant through
+  `now()`;
 - reads only names present in its compile-time signature;
 - is checked against the logical [`DataType`](types.md) domain;
 - evaluates to the one Rastok materialized `Value` domain.
@@ -87,6 +91,31 @@ position already typed `media_type` is the only implicit convenience; a
 dynamic `text` or `variant` must call the constructor or use an explicit
 `as media_type`. This keeps a failed protocol parse visible instead of hiding
 it in assignment.
+
+### 1.2 Transaction time
+
+`now()` returns the transaction's logical instant as a `timestamp`. It is a
+context function, not an evaluator primitive that reads the host clock:
+
+```rastok
+on in {
+  val observed = now()
+  out = { first = observed; second = now() }
+}
+```
+
+Both calls above are equal. The VM fixes the value before guard selection and
+keeps it unchanged until the firing either commits or faults. A hosted runner
+maps one wall-clock origin plus monotonic elapsed time onto this logical
+timeline; a Lab controls the same value with its origin and `advance` steps.
+The resulting transaction seals the observation in the journal, so replay
+does not read either clock again.
+
+The name is intentionally unavailable in plan, boot, owner, instance-key and
+Connector-setting expressions. Bare `now`, `now(args)` and user bindings named
+`now` refuse. Programs that need one-shot or periodic events rather than an
+observation in an already-running transaction use the `Timer` Connector;
+civil schedules use `Calendar`.
 
 ## 2. A tagged frontend is not an expression keyword
 

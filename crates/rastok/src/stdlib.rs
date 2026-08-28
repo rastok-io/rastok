@@ -963,7 +963,7 @@ pub const WEBSOCKET_SERVER: ConnectorContract = ConnectorContract {
 
 /// The catalogue names declared by `stdlib.md` whose Drivers are not
 /// in the M0 build.
-const DECLARED: &[&str] = &["Clock", "Calendar", "Memory"];
+const DECLARED: &[&str] = &["Timer", "Calendar", "Memory"];
 
 const M0_FRONTENDS: &[FrontendContract] = &[
     FrontendContract {
@@ -1095,7 +1095,7 @@ mod tests {
             catalogue.connector("HttpServer"),
             Availability::Available(contract) if contract.id == HTTP_SERVER_CONNECTOR_ID
         ));
-        assert_eq!(catalogue.connector("Clock"), Availability::Declared);
+        assert_eq!(catalogue.connector("Timer"), Availability::Declared);
         assert_eq!(catalogue.connector("Postgres"), Availability::Unknown);
     }
 

@@ -194,7 +194,7 @@ explicit exact contract names:
 
 ```rastok
 Graph, App, Operator, Jaq, Wasm,
-HttpClient, HttpServer, Process, File, Postgres, Kafka, Clock, …
+HttpClient, HttpServer, Process, File, Postgres, Kafka, Timer, …
 ```
 
 A real alternate pure implementation such as `Jaq` or `Wasm` may be an
@@ -453,7 +453,7 @@ There are no mutation shortcuts (`x++` / `x += v`) ; they are redundant with
 ordinary expressions. Structural reshaping may use tagged frontends
 (`jq! { … }` / `sql! { … }`).
 
-**Emitting** : a braced value is classified ONCE by its top-level roots (D-2026-08-09-1). With only the reserved roots `data` and `meta` it is the ENVELOPE form : `out = { meta.app.count = count }` inherits the input envelope (meta + data) and patches the listed fields, and a whole-`data` assignment makes the data fresh. With no reserved root, `out = { total = n }` builds a fresh data record (a `struct`), keeping the input's heritable metadata per the uniform propagation rule (D-2026-08-10-2 ; `content_type` excluded — D-2026-08-10-4). Mixing the two refuses with `E-BRACE-MIXED` — business fields named `data` or `meta` take the explicit escape `data = { … }`. `out = .` re-emits the input envelope unchanged ; `out = nothing` emits nothing on that port this transaction. There is no `previous(x)` operator — a transaction reads the previous transaction's committed state at its start, then proceeds imperatively. The synchronous-dataflow `pre` of Lustre/SCADE applies at the **inter-transaction** boundary (each transaction is one cycle), not inside a transaction. Wall-clock time enters only through a `Clock` observed via `on <clock_port>` (see [WHITEPAPER.md §5](../../WHITEPAPER.md)).
+**Emitting** : a braced value is classified ONCE by its top-level roots (D-2026-08-09-1). With only the reserved roots `data` and `meta` it is the ENVELOPE form : `out = { meta.app.count = count }` inherits the input envelope (meta + data) and patches the listed fields, and a whole-`data` assignment makes the data fresh. With no reserved root, `out = { total = n }` builds a fresh data record (a `struct`), keeping the input's heritable metadata per the uniform propagation rule (D-2026-08-10-2 ; `content_type` excluded — D-2026-08-10-4). Mixing the two refuses with `E-BRACE-MIXED` — business fields named `data` or `meta` take the explicit escape `data = { … }`. `out = .` re-emits the input envelope unchanged ; `out = nothing` emits nothing on that port this transaction. There is no `previous(x)` operator — a transaction reads the previous transaction's committed state at its start, then proceeds imperatively. The synchronous-dataflow `pre` of Lustre/SCADE applies at the **inter-transaction** boundary (each transaction is one cycle), not inside a transaction. `now()` observes the one logical timestamp fixed for the current firing; it never reads the host clock and its value is sealed when observable (see [expressions.md §1.2](expressions.md)).
 
 ## Dynamic routing and keyed dispatch
 
@@ -1144,8 +1144,8 @@ does not claim implementation or release status.
 | `File` | Connector node | executable C3 sheet: explicit one-file `read` / atomic `replace`; `watch` and directory operations are named deferrals |
 | `Postgres` | Connector node | deferred; must use the standard Connector contract |
 | `Sqlite` | Connector node | deferred; must use the standard Connector contract |
-| `Clock` | Connector node (mockable clock) | specified in the initial stdlib catalog |
-| `Calendar` | Source Connector | civil time (cron+tz / at) — see stdlib.md ; `Clock` = physical time |
+| `Timer` | Connector node (one-shot or periodic timestamp events) | specified in the initial stdlib catalog; not the runtime time authority |
+| `Calendar` | Source Connector | civil time (cron+tz / at) — see stdlib.md |
 | `Memory` | bounded in-process store | initial catalog; append and snapshot-read contract in stdlib.md |
 | `Jaq` | future Operator NodeType (jq guest over structured values) | frontend is registered; full Operator engine remains deferred |
 | `Sql` | future Operator NodeType (SQL guest over the table view of `array<struct>`) | planned guest; not in the initial executable slice |
@@ -1157,7 +1157,7 @@ does not claim implementation or release status.
 | Fanout pattern | atomic multi-emit statement `(a, b, c) = x` | executable; no NodeType |
 | Dispatch pattern | Graph carrying `instance.key` | executable; no NodeType |
 | `Saga` (aspect) | Saga aspect — opt-in scoping for long-running compensation-based workflows (model in [`effects-and-sagas.md`](effects-and-sagas.md), generic mechanism in [`aspects.md`](aspects.md)) | grammar specified; runtime manager requires effective `durability >= local` |
-| `Loop` (aspect) | Loop aspect — bounded tail-recursive iteration (retry / convergent / counted), spec in [`loop.md`](loop.md) | source/check/v13 transport and finite-control proof through L3; runtime manager deferred |
+| `Loop` (aspect) | Loop aspect — bounded tail-recursive iteration (retry / convergent / counted), spec in [`loop.md`](loop.md) | closed M1.7 source/check/v14/runtime contract; named later limits remain fail-closed |
 | `-> nothing` | Discard sink (built-in) | not a node — `nothing` as an edge target ; non-blocking drain |
 | `RequestReply` | Correlated call pattern | design intent ; may lower to Connector + Operator composition |
 | `Metrics` | Sink Connector | future |
@@ -1512,17 +1512,18 @@ type_decl         ::= "type" IDENT "=" type_ref                   // TOP-LEVEL o
 //   Loop.fuel = 5
 //   Loop.delay = { kind = exponential; first = duration("100ms");
 //                  ceiling = duration("5s") }
-// `Loop.invariant` and `Loop.measure` are theorem positions and remain
-// fail-closed until their proof-certificate gate lands. `Loop.jitter` is
-// reserved. Semantic validation, the contributed `next`/`expired` ports and
-// the removal of `Loop.variant`/`Loop.backoff` are specified in loop.md.
+// `Loop.measure` admits the L6 direct signed-integer ranking fragment;
+// `Loop.invariant` is absent or literal true in that first certificate gate.
+// Every richer theorem spelling fails closed. `Loop.jitter` is reserved.
+// Semantic validation, the contributed `next`/`expired` ports and the removal
+// of `Loop.variant`/`Loop.backoff` are specified in loop.md.
 
 port_decl         ::= ( "input" | "output" ) IDENT ( ":" type_ref )?  // source annotation OPTIONAL; every validated port has an effective type
                     // in / out / err are conventional spellings and use this same model; only used/declared rows materialize in the resolved plan.
                     // Connector contracts declare fixed or parametric port rules; attributes/codecs resolve them per instantiation.
                     // No port-side inbound shortcut : wiring is always graph-level.
                     // To bind a port to a source, declare the Connector then wire it :
-                    //    connector c : Clock { every = duration("1s") }
+                    //    connector c : Timer { every = duration("1s") }
                     //    c -> a.tick
 
 val_decl          ::= "val" IDENT ( ":" type_ref )? "=" value        // immutable, scope by position
@@ -1733,11 +1734,12 @@ expr              ::= /* a Rastok expression (homegrown parser+checker+eval).
                        NO leading dots (paths are bare : data.x, meta.app.y, instance.key,
                        alias names). No coalesce shorthand and no
                        string-interpolation tokens. `env()`/`secret()` are
-                       legal only in boot-site positions. NO `now`/`now()` and
-                       no ambient clock read of any kind : time enters an
-                       expression only as envelope data (a Clock tick's payload)
-                       or as a constant duration()/timestamp() value — replay
-                       and simulation depend on it. */
+                       legal only in boot-site positions. `now()` is a reserved
+                       zero-argument context function available only in firing
+                       handlers; it returns the transaction-fixed logical
+                       timestamp, never reads an ambient clock, and seals that
+                       observation in the transaction record. Bare `now`,
+                       arguments and user bindings named `now` refuse. */
 expr_path         ::= /* a Rastok expression access path (subset of expr) : IDENT ( "." IDENT )* —
                        used by correlators and key extractors. */
 

@@ -5,6 +5,210 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-28-8 — Loop closes on public composition evidence, not a wider theorem claim
+
+M1.7 L7 closes the first executable NodeAspect without broadening its proof
+language. An ordinary nested Graph is a passive composition seam: lowering
+removes that boundary and leaves one finite, scoped DAG. The Registry-free
+Loop control walk therefore follows every edge and executable Node contained
+by the Loop owner, including descendants of ordinary nested Graphs. It does
+not treat a nested Graph name as another recursion or require a synthetic
+summary. A nested Graph carrying its own `Loop` aspect is a different temporal
+owner and remains fail-closed, as do direct spatial terminal edges to the Loop
+boundary, explicit Loop `stop`, spatial Worker recovery and every theorem
+fragment outside D-2026-08-28-7.
+
+The public Lab closes the composition surface from source rather than through
+private VM state: independent concurrent runs in one singleton instance;
+independent keyed retries; an ordinary nested Graph in the body; a bounded
+Process timeout followed by Loop delay; zero-or-more Process `out` frames
+which cannot choose progress; exact exhaustion; and a finite instance
+deadline which kills a stale wake before a clean successor generation runs.
+The negative control proof still rejects a Connector stream as a progress
+verdict. Thus a typed Call `exit`, not the number or arrival order of data
+frames, remains the sole Connector fact from which this Loop gate may decide.
+
+Expression binding is one rule at check and execution. The checker may resolve
+the longest known dotted prefix such as `Loop.state.data`; the evaluator may
+then traverse further members. The runtime consequently supplies both the
+exact dotted aliases and the structural `Loop = { state = { data, meta } }`
+root from the same immutable entry envelope. `Loop.state.data.field` cannot
+compile and then fail because the root binding was absent.
+
+L7 adds no source form, plan field, package tag, semantic extension or journal
+fact. Categorical v14 containers, existing semantic hashes and every existing
+causal trace remain byte-identical. The final report audits those three
+identity registers separately and records the full all-feature, three-ISA,
+independent-interop and Cortex-M33 evidence.
+
+**Rejected:** treating every nested Graph as an opaque theorem boundary;
+claiming nested Loop execution because ordinary nesting works; letting a
+multi-frame Connector output select recurrence; adding a second Loop-state
+binding semantics for long paths; removing named deferrals merely to make the
+milestone look complete; and re-blessing identity artifacts for an execution-
+coverage-only gate.
+
+## D-2026-08-28-7 — The first Loop proof is a checked integer ranking certificate
+
+M1.7 L6 admits the first deliberately small `Loop.measure` fragment. The
+measure is a direct signed-integer path rooted at the iteration input
+(`data` or `data.field…`). An invariant is either omitted or the independently
+established literal `true`. Every recurrent path in this first gate is a
+direct Graph `on in` handler whose guard proves the measure positive and whose
+single `next` state writes that same scalar or struct field as
+`measure - k`, for one positive integer literal `k`. The existing L3 control
+proof remains the authority for disjoint/exhaustive progress and the existing
+body contracts remain the authority for one finite traversal.
+
+The hosted checker derives a certificate containing the checked measure,
+optional invariant, and the sorted multiset of exact decrements. Sorting
+makes evidence independent of source and handler-table order while preserving
+duplicate paths. The small `no_std` core verifier derives the multiset again
+from the transported canonical handlers and requires exact equality. A
+certificate is evidence, never authority: unsupported activation, unsigned or
+computed measure, unproved invariant, missing positivity, non-decrease,
+multiple recurrence, or altered evidence refuses before a
+`ValidatedExecutionPlan` exists. Nested summaries, Connector-result progress,
+mutable-state claims, tagged-union case reasoning, lexicographic/custom
+relations and a Rocq oracle remain named later theorem extensions.
+
+At runtime an explicit positive `Loop.fuel` remains the operational cap. If a
+verified measure stands alone, the manager evaluates it once on the root
+iteration state and derives a safe internal application budget:
+`max(measure, 0) + 1`. Strict descent while positive proves that this budget
+contains every recurrent application plus the terminal application. The
+budget then travels through the unchanged journal fuel fold; the runtime does
+not re-prove, wrap, or repair a recurrence. With both declarations present,
+the explicit fuel wins as the deliberate operational cap while the measure
+remains a checked termination argument.
+
+The transport is categorical plan-package v14. `LoopSpec` carries optional
+fuel, optional delay and optional proof, and validation requires at least one
+of fuel/proof. V13 is refused rather than interpreted as an absent proof. This
+moves every package container and checksum, but no causal record: key 53 and
+the run fold are unchanged. Existing fuel-only Loop source retains its exact
+`rastok.aspects.r1` semantic bytes. A program that declares a proof adds the
+domain-separated `rastok.loop-proof.r1` extension; the derived decrement list
+does not enter source identity. Non-Loop semantic witnesses (echo/JSONL/gauge)
+and every existing trace remain byte-identical. Exact v14 package sizes and
+checksums are recorded in the identity checkpoint: echo/spike 988 B
+(`afcc22ac…c0ebc`), JSONL 1,032 B (`1ca982c4…e54a06`), and gauge 323 B
+(`cf8e9ac4…399bc5`).
+
+**Rejected:** executing an unchecked measure as a runtime assertion; trusting
+the compiler's witness list after decode; using an unsigned wraparound order;
+accepting opaque Connector progress because it usually converges; making fuel
+mandatory after a proof; treating proof-derived fuel as source identity; and
+changing Loop causal facts merely because their admission proof became
+stronger.
+
+## D-2026-08-28-6 — A delayed Loop re-enters through one dated obligation
+
+M1.7 L5 replaces only the scheduling edge of L4. A committed `next` still
+advances the same journal fold, spends exactly one unit of fuel and mints the
+same `l:next` envelope. With `Loop.delay`, that transaction additionally arms
+timer kind 5 using the re-entry envelope id as the obligation reference. The
+due instant is a persisted scheduler annotation, deliberately omitted from
+canonical transaction key 53 and from semantic identity. Recovery restores
+the same due instant; a date already reached becomes runnable immediately.
+
+Selection and admission are two journal transitions. `Next` owns the selected
+state, fuel decrement and optional dated obligation; `Admit` (extend-only
+key-53 tag 5) is the sole `l:next` crossing into the next body application.
+At `Admit`, the Worker selects every spatial destination, proves bounded
+mailbox room, and commits those route facts atomically before delivery. A
+duplicate admission therefore cannot execute the body twice, and an immediate
+recurrence uses exactly the same crossing without a timer.
+
+Fixed delay always uses its positive `after`. Exponential continuation number
+`k >= 1` uses `min(ceiling, first * 2^(k-1))`; checked multiplication saturates
+directly at the ceiling before any signed overflow is possible. The delay is
+added to the VM's current logical instant. It changes neither fuel, a
+Connector's independently armed timeout, nor an instance lifetime deadline.
+Equal dates retain scheduler arm order, so production-shaped execution and
+Lab `advance` share one deterministic causal order.
+
+The dated payload carries the exact `InstanceRef`, run, ordinal and re-entry
+id, but treats them as claims to re-check against the journal fold. A duplicate
+or superseded event is therefore inert. If Closing wins before `Admit`, its
+generation is no longer open and the event dies; it cannot target the
+successor generation. Work whose admission already committed may drain as
+admitted work, but the closing drain deadline discards any still-runnable Loop
+work in that scope. Delayed work does not postpone an `idle`, `fixed` or
+`tumbling` deadline: expiry enters the ordinary bounded Closing protocol.
+
+The first spatial-body gate follows direct child emissions into their ordinary
+Graph-owned handlers. The child transaction commits before the handler becomes
+runnable, and the Loop fold accepts the decision only when its causal envelope
+descends from the current iteration state. A bounded outbound Call retains its
+own timeout: a timeout at `t` may select `next`, after which a two-second Loop
+delay is due at `t + 2s`; the two budgets never share an arm or a deadline.
+Direct Graph-boundary terminal producers remain fail-closed for the later
+general verdict gate.
+
+The in-memory journal retains the due annotation beside its typed Loop fact
+so a fresh VM can re-arm a direct-body run without regaining fuel. A durable
+journal may use another physical sidecar, provided its semantic query returns
+the same annotation and its canonical causal projection remains the documented
+key 53 array. Spatial recovery remains fail-closed until the general instance,
+Connector-obligation and private-state recovery fold can rebuild its child
+owners; L5 does not counterfeit that larger Worker-recovery claim.
+
+**Rejected:** sleeping a Worker thread; a second Loop-only timer queue;
+decrementing fuel when the timer fires; deriving delay from host wall time;
+letting a wakeup migrate to a successor generation; treating an armed delay as
+an extension of instance lifetime; selecting routes before the delay and
+holding their mailbox capacity; pretending Loop-only replay reconstructs an
+active Connector owner; and sealing scheduler due time into causal identity.
+
+## D-2026-08-28-5 — `now()` observes one explicit transaction instant
+
+Rastok admits `now()` as a context function in firing handlers. It returns a
+`timestamp`: the VM's logical instant at the start of that transaction. The
+instant is fixed for the whole firing, including guard selection, state
+updates, emissions and scripted Connector handling. Evaluation remains pure:
+the expression engine compiles `now()` to the reserved context binding
+`now` and never reads an operating-system clock. Bare `now`, arguments to
+`now()`, user bindings named `now`, and use outside a transaction handler are
+refused.
+
+Hosted execution samples civil time once at boot, then maps monotonic elapsed
+time onto the VM timeline. Lab and embedded callers own the same explicit
+timeline through `Vm::boot_at` and `Vm::advance`; the default origin is the
+Unix epoch. A microcontroller without an RTC therefore still has useful
+relative time from a hardware timer, without pretending to know the current
+civil date. Internal deadlines, lifetimes, joins and Loop delays consume the
+generic dated-event queue directly. No implicit clock port, clock envelope or
+`meta.sys.created_at` field is introduced.
+
+When a checked handler can observe `now()`, its TRANSACTION records seal the
+fixed signed nanosecond instant under extend-only canonical key 54. The key is
+omitted otherwise, preserving every time-insensitive causal record. This is a
+deliberate exception to the rule that scheduler arming and due dates are
+derivable annotations: an instant that can affect expression control flow is
+an input fact and must replay as one. `Intent.logical_time` carries the same
+instant to a scripted Driver but does not enter OUTBOUND call identity. Plan
+validation derives guard/body time demand once from the canonical expression
+trees; this derived cache is not transported and a time-insensitive firing
+does no demand-discovery walk on its hot path.
+
+The former deferred `Clock` Connector is renamed `Timer`. A `Timer` is an
+ordinary inbound Event source for programs that need one-shot or periodic
+timestamp envelopes; it is not the runtime's time authority. `Calendar`
+remains the civil-schedule Event source. Neither is required merely to
+evaluate `now()` or to run a timeout, lifetime, join eviction or Loop delay.
+
+No package-format bump occurs: categorical v13 already represents the
+canonical reserved path used by the context function. Existing semantic
+hashes, packages and traces remain byte-identical unless a program newly uses
+`now()`.
+
+**Rejected:** evaluator-side `SystemTime::now`; one implicit clock input on
+every Node; a readable envelope creation timestamp; forcing internal deadlines
+through timer envelopes; keeping the ambiguous name `Clock` for both
+the runtime timeline and an Event Connector; and recording every transaction's
+time even when no expression can observe it.
+
 ## D-2026-08-28-4 — Loop fuel is an ordinary journal fold
 
 M1.7 L4 executes the immediate, persistent root-Graph subset of `Loop`. One
@@ -924,8 +1128,9 @@ the interaction:
 - `Session` opens once, carries zero or more messages in either direction,
   and ends with exactly one typed session `exit`.
 
-This is cardinality, not another Driver role. `Clock` and `Calendar` use event
-semantics. `HttpClient`, `HttpServer` in ack/respond mode, `Process(job)` and
+This is cardinality, not another Driver role. The then-named `Clock` (renamed
+`Timer` by D-2026-08-28-5) and `Calendar` use event semantics. `HttpClient`,
+`HttpServer` in ack/respond mode, `Process(job)` and
 `File` use call semantics.
 `WebSocketClient` and `WebSocketServer` use session semantics and require both
 Driver roles over one shared bound state. `Process(service)` will reuse the

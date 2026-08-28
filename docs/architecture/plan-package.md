@@ -104,8 +104,25 @@
 > mirrored: plan key 2 remains their sole authority, while owner key 6 is
 > populated only for nested Graphs. L2 writes no Loop journal fact; L3 adds a
 > derived control proof without changing the container. L4 executes the
-> immediate persistent root-Graph subset from new causal facts but does not
-> change v13 package bytes; every later Loop composition remains fail-closed.
+> immediate persistent root-Graph subset from new causal facts, and L5 uses
+> the already-transported delay policy with the shared dated queue and
+> ordinary instance lifetimes. Neither changes v13 package bytes; nested and
+> spatial-child Loop composition remains fail-closed.
+>
+> **M1.7 L6 is categorical format v14.** D-2026-08-28-7 makes the
+> termination witness sum explicit: positive `fuel`, independently checked
+> proof, or both. The proof carries the checked measure, optional invariant
+> and a sorted decrement witness that Registry-free validation re-derives
+> from the ordinary handler table. V13 cannot distinguish absent fuel from a
+> proof-only Loop and is refused rather than guessed. The change moves every
+> package container and checksum, but neither the Loop journal fold nor an
+> existing causal trace.
+>
+> **M1.7 L7 retains v14 unchanged.** Closing the public composition matrix
+> changes neither the transported Loop contract nor its checked proof. An
+> ordinary nested Graph is already flattened into the scoped edge and Node
+> tables; L7 merely lets the existing Registry-free control walk follow that
+> complete contained DAG. No package, semantic hash or causal trace moves.
 >
 > The lifetime rows are one closed transport and executable registry: v9
 > validation admits `persistent`, `idle`, `fixed`, `single_pass`, and
@@ -285,7 +302,7 @@ invariants the runtime dereferences without checking. Refusals are
 typed and total; there is no silent migration — a new format is a
 new version, and an old decoder refuses it by name.
 
-## Body tables (format v13)
+## Body tables (format v14)
 
 The body is one canonical CBOR value encoding the `ExecutionPlan`.
 Compound values use fixed-shape arrays with a leading numeric
@@ -335,13 +352,19 @@ owner_kind := [1]                                 — graph
               // sole boundary authority; it is the complete canonical
               // boundary on a nested Graph and empty on a Node owner.
               // Key 7 is a canonical closed aspect list on Graphs and empty
-              // on Node owners. V13 admits at most Loop.
+              // on Node owners. V14 admits at most Loop.
 
 aspect_spec := [1, loop_spec]                     — Loop
-loop_spec   := {1: fuel, 2: delay?}
+loop_spec   := {1: fuel?, 2: delay?, 3: proof?}
+              // At least one of fuel/proof is mandatory.
 fuel        := plan_constant
 delay       := [1, plan_constant]                 — fixed(after)
              | [2, plan_constant, plan_constant] — exponential(first, ceiling)
+proof       := {1: measure_tree, 2: invariant_tree?,
+                3: [positive_decrement (uint)*]}
+              // Decrements are a sorted multiset. Validation derives the
+              // same evidence from Graph handlers and compares exactly;
+              // this map is never trusted as a compiler claim.
 plan_constant := [tree, tagged_value]
               // Lowering substitutes every lexical `val`, so tree is closed
               // except for indexed assets. Validation re-evaluates the value

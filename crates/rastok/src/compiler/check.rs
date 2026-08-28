@@ -1839,6 +1839,14 @@ impl Checker<'_, '_> {
                         graph.handlers.push(checked);
                     }
                 }
+                if graph
+                    .loop_spec
+                    .as_ref()
+                    .is_some_and(|spec| spec.proof.is_some())
+                    && !self.complete_loop_proof(&mut graph, decl.span)
+                {
+                    graph.loop_spec = None;
+                }
             }
         } else {
             for handler in handlers {
@@ -2434,7 +2442,7 @@ impl Checker<'_, '_> {
             if owns_loop {
                 self.loop_refusal(
                     decl.span,
-                    "a `: Loop` Graph requires `Loop.fuel`, or a discharged `Loop.measure` proof in the later theorem gate",
+                    "a `: Loop` Graph requires positive `Loop.fuel` or a `Loop.measure` that can be proved finite",
                 );
             }
             return None;
@@ -2579,23 +2587,101 @@ impl Checker<'_, '_> {
             self.deferred(construct, span);
             return None;
         }
-        if measure.is_some() {
-            self.deferred("the Loop measure proof certificate", decl.span);
-            return None;
-        }
-        let Some(fuel) = fuel else {
+        let fuel = match fuel {
+            Some(attribute) => Some(self.loop_fuel(attribute, signature, consts)?),
+            None => None,
+        };
+        let proof = match measure {
+            Some(attribute) => {
+                let state_type = graph
+                    .boundary
+                    .iter()
+                    .find(|port| port.port.name() == "in" && port.direction == Direction::Input)
+                    .and_then(|port| port.ty.clone());
+                let Some(state_type) = state_type else {
+                    self.loop_refusal(
+                        attribute.span,
+                        "`Loop.measure` requires one typed Graph input named `in`",
+                    );
+                    return None;
+                };
+                let theorem_signature = signature.clone().with("data", state_type);
+                let measure = self.typed_value_tree(
+                    &attribute.value,
+                    &theorem_signature,
+                    None,
+                    attribute.span,
+                    "Loop.measure",
+                )?;
+                if !matches!(
+                    measure.ty,
+                    DataType::Integer(crate::datatype::IntegerType::Signed(_))
+                ) {
+                    self.loop_refusal(
+                        attribute.span,
+                        "`Loop.measure` must be a signed integer expression",
+                    );
+                    return None;
+                }
+                let invariant = match invariant {
+                    None => None,
+                    Some(attribute) => Some(self.typed_value_tree(
+                        &attribute.value,
+                        &theorem_signature,
+                        Some(&DataType::Bool),
+                        attribute.span,
+                        "Loop.invariant",
+                    )?),
+                };
+                Some(crate::loop_proof::Certificate {
+                    measure,
+                    invariant,
+                    decreases: Vec::new(),
+                })
+            }
+            None => None,
+        };
+        if fuel.is_none() && proof.is_none() {
             self.loop_refusal(
                 decl.span,
-                "a `: Loop` Graph requires positive `Loop.fuel` until a `Loop.measure` proof is discharged",
+                "a `: Loop` Graph requires positive `Loop.fuel` or a `Loop.measure` that can be proved finite",
             );
             return None;
-        };
-        let fuel = self.loop_fuel(fuel, signature, consts)?;
+        }
         let delay = match delay {
             Some(attribute) => Some(self.loop_delay(attribute, signature, consts)?),
             None => None,
         };
-        Some(LoopSpec { fuel, delay })
+        Some(LoopSpec { fuel, delay, proof })
+    }
+
+    /// Produces the hosted proof evidence only after the ordinary Graph
+    /// handlers have been checked. The `no_std` validator derives the same
+    /// evidence again from the transported plan, so this step cannot grant
+    /// authority to a compiler-only claim.
+    fn complete_loop_proof(&mut self, graph: &mut Graph, span: Span) -> bool {
+        let handlers = loop_proof_handlers(graph);
+        let Some(spec) = graph.loop_spec.as_mut() else {
+            return false;
+        };
+        let Some(proof) = spec.proof.take() else {
+            return true;
+        };
+        match crate::loop_proof::derive(
+            crate::plan::OwnerSlot::new(0),
+            proof.measure,
+            proof.invariant,
+            &handlers,
+        ) {
+            Ok(proof) => {
+                spec.proof = Some(proof);
+                true
+            }
+            Err(error) => {
+                self.loop_refusal(span, &format!("this Loop cannot be proved finite: {error}"));
+                false
+            }
+        }
     }
 
     fn loop_fuel(
@@ -3525,6 +3611,19 @@ impl Checker<'_, '_> {
             self.node_annotation_refusal(
                 type_symbol,
                 "a Connector requires its exact Connector NodeType first, before every NodeAspect",
+            );
+            return None;
+        }
+        if type_symbol.text == "Clock" {
+            self.bag.push(
+                Diagnostic::new(
+                    E_CONNECTOR_UNAVAILABLE,
+                    Phase::Check,
+                    "`Clock` was renamed to `Timer`; use `Timer` for one-shot or periodic events",
+                )
+                .with_span(type_symbol.span)
+                .with_field("type", type_symbol.text.clone())
+                .with_field("replacement", "Timer"),
             );
             return None;
         }
@@ -4524,8 +4623,9 @@ impl Checker<'_, '_> {
     /// compile-time constant substitution sound.
     /// THE naming policy, one door for every live declaration
     /// (D-2026-08-14-1): the structural value form `nothing` and the
-    /// expression literals (`true`/`false`/`null`) refuse in every
-    /// binding-introducing position. Frontend names such as `json`
+    /// expression literals (`true`/`false`/`null`), and the handler context
+    /// function `now()` refuse in every binding-introducing position.
+    /// Frontend names such as `json`
     /// remain ordinary identifiers because only the adjacent `!`
     /// selects a frontend.
     /// The refusal lands AT THE DECLARATION, one voice, the name's
@@ -4534,6 +4634,7 @@ impl Checker<'_, '_> {
         let reason = match name.text.as_str() {
             "nothing" => "a value form of the language",
             "true" | "false" | "null" => "a literal of the expression language",
+            "now" => "the transaction-time function `now()`",
             _ => return true,
         };
         self.bag.push(
@@ -5067,7 +5168,11 @@ impl Checker<'_, '_> {
         // `declared_data_type` is what prevents that placeholder from being
         // mistaken for an explicit dynamic port constraint.
         let data_type = declared_data_type.clone().unwrap_or(DataType::Variant);
-        let mut signature = node_signature.clone();
+        // `now()` is the syntax of a context binding, not an evaluator clock
+        // read. Only a firing handler owns one logical instant; plan, owner,
+        // instance and invocation-setting expressions deliberately do not
+        // receive this name.
+        let mut signature = node_signature.clone().with("now", DataType::TIMESTAMP);
         match &activation {
             node::HandlerActivation::Join { ports, .. } => {
                 for port in ports {
@@ -7899,6 +8004,60 @@ fn is_loop_attribute(attribute: &SynAttribute) -> bool {
             ))
 }
 
+/// Mirrors only the already-checked handler algebra into the core proof
+/// boundary. Plan lowering performs its own full conversion later; this local
+/// copy exists so an unsupported theorem is diagnosed at its source instead
+/// of first appearing as an internal plan refusal.
+fn loop_proof_handlers(graph: &Graph) -> Vec<crate::plan::Handler> {
+    let emission = |value: &EmitValue| match value {
+        EmitValue::Identity => crate::plan::Emission::Identity,
+        EmitValue::Patch(fields) | EmitValue::FreshData(fields) => {
+            let writes = fields
+                .iter()
+                .map(|field| crate::plan::FieldWrite {
+                    target: field.target.clone(),
+                    expr: field.value.clone(),
+                })
+                .collect();
+            if matches!(value, EmitValue::Patch(_)) {
+                crate::plan::Emission::Patch(writes)
+            } else {
+                crate::plan::Emission::Replace(writes)
+            }
+        }
+        EmitValue::Data(tree) => crate::plan::Emission::Data(tree.clone()),
+        EmitValue::Nothing => crate::plan::Emission::Nothing,
+    };
+    graph
+        .handlers
+        .iter()
+        .map(|handler| crate::plan::Handler {
+            owner: crate::plan::HandlerOwner::Graph(crate::plan::OwnerSlot::new(0)),
+            activation: handler.activation.clone(),
+            guard: handler.guard.clone(),
+            body: handler
+                .body
+                .iter()
+                .map(|statement| match statement {
+                    Statement::Let { name, value } => crate::plan::Step::Let {
+                        name: name.clone(),
+                        expr: value.clone(),
+                    },
+                    Statement::Emit { port, value } => crate::plan::Step::Emit {
+                        port: port.clone(),
+                        value: emission(value),
+                    },
+                    Statement::SetVar { name, value } => crate::plan::Step::SetVar {
+                        name: name.clone(),
+                        expr: value.clone(),
+                    },
+                    Statement::Stop => crate::plan::Step::Stop,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
 fn is_bare_word(text: &str) -> bool {
     !text.is_empty()
         && text
@@ -8013,13 +8172,21 @@ fn remap_graph_assets(graph: &mut Graph, remap: &[u32]) {
         instance(policy, remap);
     }
     if let Some(spec) = &mut graph.loop_spec {
-        expr(&mut spec.fuel.tree.root, remap);
+        if let Some(fuel) = &mut spec.fuel {
+            expr(&mut fuel.tree.root, remap);
+        }
         match &mut spec.delay {
             None => {}
             Some(LoopDelay::Fixed { after }) => expr(&mut after.tree.root, remap),
             Some(LoopDelay::Exponential { first, ceiling }) => {
                 expr(&mut first.tree.root, remap);
                 expr(&mut ceiling.tree.root, remap);
+            }
+        }
+        if let Some(proof) = &mut spec.proof {
+            expr(&mut proof.measure.root, remap);
+            if let Some(invariant) = &mut proof.invariant {
+                expr(&mut invariant.root, remap);
             }
         }
     }
@@ -8589,7 +8756,10 @@ graph app : App {
             .loop_spec
             .as_ref()
             .expect("the source half of Loop is checked before its plan gate");
-        assert_eq!(spec.fuel.value, crate::value::Value::Int(3));
+        assert_eq!(
+            spec.fuel.as_ref().map(|fuel| &fuel.value),
+            Some(&crate::value::Value::Int(3))
+        );
         assert!(spec.delay.is_none());
         let retry = &hir.app.graphs[0];
         let next = retry
@@ -8637,7 +8807,10 @@ graph app : App {
             .loop_spec
             .clone()
             .expect("LoopSpec");
-        assert_eq!(spec.fuel.value, crate::value::Value::Int(4));
+        assert_eq!(
+            spec.fuel.as_ref().map(|fuel| &fuel.value),
+            Some(&crate::value::Value::Int(4))
+        );
         let LoopDelay::Exponential { first, ceiling } = spec.delay.expect("delay") else {
             panic!("expected exponential delay");
         };
@@ -9024,10 +9197,20 @@ graph g : App {
 
     #[test]
     fn unavailable_and_unknown_connector_types_split() {
-        let declared = "graph g : App {\n  connector c : Clock { }\n  . -> c -> .\n}\n";
+        let declared = "graph g : App {\n  connector c : Timer { }\n  . -> c -> .\n}\n";
         let (_, bag) = check_source(declared);
         assert!(diagnostic_codes(&bag).contains(&E_CONNECTOR_UNAVAILABLE));
         assert!(bag.diagnostics()[0].message().contains("catalogue"));
+
+        let removed = "graph g : App {\n  connector c : Clock { }\n}\n";
+        let (_, bag) = check_source(removed);
+        assert_eq!(bag.diagnostics().len(), 1);
+        assert!(
+            bag.diagnostics()[0]
+                .message()
+                .contains("renamed to `Timer`")
+        );
+
         let unknown = "graph g : App {\n  connector d : Postgres { }\n  . -> d -> .\n}\n";
         let (_, bag) = check_source(unknown);
         assert!(bag.diagnostics().iter().any(|diagnostic| {
