@@ -108,7 +108,7 @@ fn all_four_network_contracts_cross_the_source_to_validated_plan_boundary() {
         assert!(spec.attribute("versions").is_some());
         let package = rastok::plan::encode(&compilation.plan, &compilation.hash);
         let (decoded, hash) = rastok::plan::decode(&package)
-            .unwrap_or_else(|error| panic!("the {kind} v12 package must decode: {error}"));
+            .unwrap_or_else(|error| panic!("the {kind} v13 package must decode: {error}"));
         assert_eq!(hash, compilation.hash);
         assert_eq!(*decoded, *compilation.plan);
         assert_eq!(

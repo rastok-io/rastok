@@ -1,9 +1,11 @@
 # Loop — finite temporal recursion
 
-> **Status: normative M1.7 target.** The source classifier recognizes
-> `Loop` as a `node::Aspect`, but the checker remains fail-closed until the
-> categorical plan and runtime gates described here land. No accepted program
-> may silently execute as an ordinary Graph while carrying `: Loop`.
+> **Status: normative M1.7 contract; executable through L2 transport.** A
+> fuel-only `Loop` crosses source, checked HIR and categorical v13 with its
+> exact boundary and ordinary Graph-owned handlers. Registry-free validation
+> re-derives the contract after decode. The VM still refuses the aspect before
+> its first mutation until L3 proves the control decision and L4 installs the
+> journal fold. No accepted program silently executes as an ordinary Graph.
 
 `Loop` applies one Graph repeatedly to an immutable iteration-state envelope.
 It is finite temporal recursion, not a spatial cycle:
@@ -40,18 +42,20 @@ plan ports after checking. User code emits them like any other port, but they
 cannot be redeclared with another direction or type. `in` and `out` remain
 ordinary Graph boundary declarations so their types stay visible.
 
-Every iteration makes **exactly one control decision**:
+Every iteration must make **exactly one control decision**:
 
 ```text
 next(state) XOR out(result)
 ```
 
-The checker proves this over all reachable handler paths. A path that emits
-neither, both, or more than one of either is rejected. The VM repeats the same
-check only as defense against a forged or corrupted plan; it never guesses a
-decision from scheduler order. Other diagnostic or audit outputs may be
-emitted atomically, but they do not decide the Loop. Multiple business terminal
-cases use one tagged-union `out` type.
+L3 will prove this over all reachable handler paths. L2 transports the
+ordinary handlers and their exact types but makes no total-decision claim;
+the VM therefore refuses the whole aspect before mutation. Once L3 lands, a
+path that emits neither, both, or more than one of either is rejected, and the
+VM repeats the same check only as defense against a forged or corrupted plan.
+It never guesses a decision from scheduler order. Other diagnostic or audit
+outputs may be emitted atomically, but they do not decide the Loop. Multiple
+business terminal cases use one tagged-union `out` type.
 
 `next` is an aspect-owned control port. It may be connected only to the Loop
 manager selected by the checker; source wiring to or from it is rejected. The
@@ -192,7 +196,7 @@ An admitted Loop has at least one termination witness:
 | present | present | yes — theorem plus operational cap |
 | absent | absent | reject |
 
-The first executable M1.7 gate admits the first row. `Loop.invariant` and
+The first transport gate admits the first row. `Loop.invariant` and
 `Loop.measure` remain named, fail-closed theorem positions until the verifier
 can produce and the core can check a proof certificate. They never degrade
 into runtime assertions masquerading as proof.
@@ -337,7 +341,9 @@ Before a Loop plan becomes executable, Registry-free validation re-derives:
 9. instance Closing cannot revive a stale wakeup.
 
 Any unsupported theorem expression, carrier, aspect combination or body
-cardinality refuses before VM construction.
+cardinality refuses before a validated plan is returned. A supported L2
+transport still refuses before the first VM mutation until the remaining
+execution invariants above land.
 
 ## 11. Related documents
 

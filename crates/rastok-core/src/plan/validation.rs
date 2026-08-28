@@ -12,8 +12,8 @@ use crate::datatype::{DataType, TypeError};
 use crate::expr;
 use crate::node;
 use crate::plan::{
-    Emission, EndpointRef, EvaluationSite, ExecutionPlan, InstanceLifetime, Node, NodeExecution,
-    OwnerKind, OwnerSlot, Slot, Step,
+    Emission, EndpointRef, EvaluationSite, ExecutionPlan, HandlerOwner, InstanceLifetime, Node,
+    NodeExecution, OwnerKind, OwnerSlot, Slot, Step,
 };
 
 /// Why a plan is not executable — one named invariant violation. The
@@ -46,6 +46,20 @@ pub enum PlanValidationError {
         node: Slot,
         /// The claimed owner row.
         owner: OwnerSlot,
+    },
+    /// A Graph owner carries a malformed boundary/aspect contract.
+    InvalidGraphContract {
+        /// Static Graph path; `<root>` denotes the App.
+        owner: String,
+        /// Closed invariant that failed.
+        detail: &'static str,
+    },
+    /// A Graph-owned handler contradicts its Graph boundary contract.
+    InvalidGraphHandler {
+        /// Static Graph path; `<root>` denotes the App.
+        owner: String,
+        /// Closed invariant that failed.
+        detail: &'static str,
     },
     /// An edge's lexical scope is absent or is not a Graph owner.
     InvalidEdgeScope {
@@ -580,6 +594,14 @@ impl core::fmt::Display for PlanValidationError {
                 "invalid plan: node {} and owner {} do not refer to each other",
                 node.index(),
                 owner.index()
+            ),
+            Self::InvalidGraphContract { owner, detail } => write!(
+                f,
+                "invalid plan: Graph `{owner}` carries an invalid aspect contract: {detail}"
+            ),
+            Self::InvalidGraphHandler { owner, detail } => write!(
+                f,
+                "invalid plan: Graph `{owner}` carries an invalid handler: {detail}"
             ),
             Self::InvalidEdgeScope { owner } => write!(
                 f,
@@ -1810,7 +1832,7 @@ fn validate_network_connector(
 }
 
 /// Every type-bearing plan position passes this audit before the infallible
-/// v12 encoder can observe the plan.
+/// v13 encoder can observe the plan.
 fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     for (field, ty) in &plan.app_schema {
         data_type_at(ty, format!("meta.app.{field}"))?;
@@ -1824,6 +1846,11 @@ fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
         }
     }
     for owner in &plan.owners {
+        for decl in &owner.ports {
+            if let Some(ty) = &decl.ty {
+                data_type_at(ty, format!("Graph port `{}.{}`", owner.path, decl.port))?;
+            }
+        }
         if let Some(key) = &owner.instance.key {
             tree_type_at(key, format!("instance key on `{}`", owner.path))?;
         }
@@ -1832,6 +1859,23 @@ fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
                 &value.expr,
                 format!("immutable value `{}.{}`", owner.path, value.name),
             )?;
+        }
+        for aspect in &owner.aspects {
+            let crate::plan::AspectSpec::Loop(spec) = aspect;
+            tree_type_at(&spec.fuel.expr, format!("Loop fuel on `{}`", owner.path))?;
+            match &spec.delay {
+                None => {}
+                Some(crate::plan::LoopDelay::Fixed { after }) => {
+                    tree_type_at(&after.expr, format!("Loop delay on `{}`", owner.path))?;
+                }
+                Some(crate::plan::LoopDelay::Exponential { first, ceiling }) => {
+                    tree_type_at(&first.expr, format!("Loop delay on `{}`", owner.path))?;
+                    tree_type_at(
+                        &ceiling.expr,
+                        format!("Loop delay ceiling on `{}`", owner.path),
+                    )?;
+                }
+            }
         }
     }
     for node in &plan.nodes {
@@ -1893,7 +1937,7 @@ fn response_path_crosses_join(plan: &ExecutionPlan, target: Slot) -> bool {
             continue;
         }
         if plan.handlers.iter().any(|handler| {
-            handler.node == slot
+            handler.owner.node() == Some(slot)
                 && matches!(handler.activation, node::HandlerActivation::Join { .. })
         }) {
             return true;
@@ -2196,6 +2240,198 @@ fn owner_values_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationEr
     Ok(())
 }
 
+fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
+    let no_values = BTreeMap::new();
+    for (owner_index, owner) in plan.owners.iter().enumerate() {
+        let owner_slot = OwnerSlot::new(u32::try_from(owner_index).unwrap_or(u32::MAX));
+        let Some(crate::plan::AspectSpec::Loop(spec)) = owner.aspects.first() else {
+            continue;
+        };
+        let owner_name = if owner.path.is_root() {
+            String::from("<root>")
+        } else {
+            owner.path.to_string()
+        };
+        if owner.kind != OwnerKind::Graph {
+            return Err(PlanValidationError::InvalidGraphContract {
+                owner: owner_name,
+                detail: "Loop can be carried only by a Graph owner",
+            });
+        }
+        let ports = plan.graph_ports(owner_slot).ok_or_else(|| {
+            PlanValidationError::InvalidGraphContract {
+                owner: owner_name.clone(),
+                detail: "the Loop owner has no Graph boundary",
+            }
+        })?;
+        let state = ports
+            .iter()
+            .find(|port| port.port.name() == "in" && port.direction == node::Direction::Input)
+            .and_then(|port| port.ty.clone())
+            .ok_or_else(|| PlanValidationError::InvalidGraphContract {
+                owner: owner_name.clone(),
+                detail: "Loop requires typed input `in`",
+            })?;
+        if !ports.iter().any(|port| {
+            port.port.name() == "out"
+                && port.direction == node::Direction::Output
+                && port.ty.is_some()
+        }) {
+            return Err(PlanValidationError::InvalidGraphContract {
+                owner: owner_name.clone(),
+                detail: "Loop requires typed output `out`",
+            });
+        }
+        if !ports.iter().any(|port| {
+            port.port.name() == "next"
+                && port.direction == node::Direction::Output
+                && port.ty.as_ref() == Some(&state)
+        }) {
+            return Err(PlanValidationError::InvalidGraphContract {
+                owner: owner_name.clone(),
+                detail: "Loop.next must have exactly the input carrier type",
+            });
+        }
+        let expired = node::loop_expired_type(state.clone()).map_err(|_| {
+            PlanValidationError::InvalidGraphContract {
+                owner: owner_name.clone(),
+                detail: "LoopExpired cannot be represented",
+            }
+        })?;
+        if !ports.iter().any(|port| {
+            port.port.name() == "expired"
+                && port.direction == node::Direction::Output
+                && port.ty.as_ref() == Some(&expired)
+        }) {
+            return Err(PlanValidationError::InvalidGraphContract {
+                owner: owner_name.clone(),
+                detail: "Loop.expired must carry canonical LoopExpired<In>",
+            });
+        }
+        if plan.edges.iter().any(|edge| {
+            edge.scope == owner_slot
+                && ((edge.from.node.is_none() && edge.from.port.name() == "next")
+                    || edge
+                        .to
+                        .as_ref()
+                        .is_some_and(|to| to.node.is_none() && to.port.name() == "next"))
+        }) {
+            return Err(PlanValidationError::InvalidGraphContract {
+                owner: owner_name.clone(),
+                detail: "Loop.next cannot participate in a spatial edge",
+            });
+        }
+
+        // Lowering substitutes every lexical plan constant before transport.
+        // Requiring an empty value environment here makes that canonical form
+        // a validation invariant instead of admitting an equivalent second
+        // spelling that a forged package could exploit.
+        let signature = expr::Signature::new();
+        let bindings = PlanValueBindings {
+            values: &no_values,
+            assets: &plan.assets,
+        };
+        let validate_constant = |constant: &crate::plan::PlanConstant,
+                                 expected: &DataType,
+                                 detail: &'static str|
+         -> Result<(), PlanValidationError> {
+            expr_canonical(&constant.expr.root)?;
+            asset_indexes_bound(plan, &constant.expr.root)?;
+            value_expressible(&constant.resolved)?;
+            let derived =
+                expr::rederive_type(&constant.expr.root, &signature).ok_or_else(|| {
+                    PlanValidationError::InvalidGraphContract {
+                        owner: owner_name.clone(),
+                        detail,
+                    }
+                })?;
+            if derived != constant.expr.ty || !derived.is_assignable_to(expected) {
+                return Err(PlanValidationError::InvalidGraphContract {
+                    owner: owner_name.clone(),
+                    detail,
+                });
+            }
+            let actual = expr::eval(&constant.expr, &bindings)
+                .and_then(expr::EvalValue::into_value)
+                .map_err(|_| PlanValidationError::InvalidGraphContract {
+                    owner: owner_name.clone(),
+                    detail,
+                })?;
+            if actual != constant.resolved || !expected.accepts(&actual) {
+                return Err(PlanValidationError::InvalidGraphContract {
+                    owner: owner_name.clone(),
+                    detail,
+                });
+            }
+            Ok(())
+        };
+        let fuel_type = match spec.fuel.resolved {
+            crate::value::Value::Int(value) if value > 0 => {
+                if i32::try_from(value).is_ok() {
+                    DataType::INT
+                } else {
+                    DataType::LONG
+                }
+            }
+            crate::value::Value::Uint(value) if value > 0 => DataType::UINT,
+            _ => {
+                return Err(PlanValidationError::InvalidGraphContract {
+                    owner: owner_name,
+                    detail: "Loop.fuel must reduce to a positive integer",
+                });
+            }
+        };
+        validate_constant(
+            &spec.fuel,
+            &fuel_type,
+            "Loop.fuel is not its claimed plan constant",
+        )?;
+        match &spec.delay {
+            None => {}
+            Some(crate::plan::LoopDelay::Fixed { after }) => {
+                validate_constant(
+                    after,
+                    &DataType::DURATION,
+                    "Loop.delay.after is not a positive duration constant",
+                )?;
+                if !matches!(after.resolved, crate::value::Value::Duration(value) if value > 0) {
+                    return Err(PlanValidationError::InvalidGraphContract {
+                        owner: owner_name,
+                        detail: "Loop.delay.after is not positive",
+                    });
+                }
+            }
+            Some(crate::plan::LoopDelay::Exponential { first, ceiling }) => {
+                validate_constant(
+                    first,
+                    &DataType::DURATION,
+                    "Loop.delay.first is not a positive duration constant",
+                )?;
+                validate_constant(
+                    ceiling,
+                    &DataType::DURATION,
+                    "Loop.delay.ceiling is not a positive duration constant",
+                )?;
+                let (crate::value::Value::Duration(first), crate::value::Value::Duration(ceiling)) =
+                    (&first.resolved, &ceiling.resolved)
+                else {
+                    return Err(PlanValidationError::InvalidGraphContract {
+                        owner: owner_name,
+                        detail: "Loop.delay exponential fields are not durations",
+                    });
+                };
+                if *first <= 0 || ceiling < first {
+                    return Err(PlanValidationError::InvalidGraphContract {
+                        owner: owner_name,
+                        detail: "Loop.delay.ceiling must be no smaller than positive first",
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     let Some(root) = plan.owners.first() else {
         return Err(PlanValidationError::MissingRootOwner);
@@ -2234,6 +2470,12 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         }
 
         if let OwnerKind::Node(node_slot) = owner.kind {
+            if !owner.ports.is_empty() || !owner.aspects.is_empty() {
+                return Err(PlanValidationError::InvalidGraphContract {
+                    owner: path.clone(),
+                    detail: "Node owners cannot carry Graph ports or aspects",
+                });
+            }
             let Some(node) = plan.nodes.get(node_slot.index()) else {
                 return Err(PlanValidationError::SlotOutOfBounds {
                     slot: node_slot,
@@ -2250,6 +2492,57 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 return Err(PlanValidationError::OwnerNodeMismatch {
                     node: node_slot,
                     owner: slot,
+                });
+            }
+        } else {
+            if owner.path.is_root() && !owner.ports.is_empty() {
+                return Err(PlanValidationError::InvalidGraphContract {
+                    owner: path.clone(),
+                    detail: "the root Graph boundary belongs only to the plan boundary table",
+                });
+            }
+            // `ExecutionPlan::boundary` remains the root Graph's one port
+            // table. Nested Graph owners have no other table and are
+            // validated here directly.
+            if !owner.path.is_root() {
+                let mut ports = BTreeSet::new();
+                for port in &owner.ports {
+                    if !ports.insert(port.port.clone()) {
+                        return Err(PlanValidationError::InvalidGraphContract {
+                            owner: path.clone(),
+                            detail: "a Graph boundary port is declared twice",
+                        });
+                    }
+                    if port.unwired != crate::plan::UnwiredPolicy::RequireWire {
+                        return Err(PlanValidationError::InvalidGraphContract {
+                            owner: path.clone(),
+                            detail: "Graph boundary ports cannot carry a Node root-sink policy",
+                        });
+                    }
+                }
+                if !owner
+                    .ports
+                    .windows(2)
+                    .all(|pair| pair[0].key() < pair[1].key())
+                {
+                    return Err(PlanValidationError::NonCanonicalOrder {
+                        collection: "Graph owner ports",
+                    });
+                }
+            }
+            if !owner
+                .aspects
+                .windows(2)
+                .all(|pair| pair[0].aspect() < pair[1].aspect())
+            {
+                return Err(PlanValidationError::NonCanonicalOrder {
+                    collection: "Graph aspects",
+                });
+            }
+            if owner.aspects.len() > 1 {
+                return Err(PlanValidationError::InvalidGraphContract {
+                    owner: path.clone(),
+                    detail: "this format admits only the first closed Loop aspect",
                 });
             }
         }
@@ -2493,6 +2786,11 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             port: decl.port.clone(),
         });
     }
+    // The root boundary has passed its own uniqueness and canonicality gates;
+    // only now may an aspect derive a contract from it. This preserves the
+    // validation rule that the table's structural defect speaks before a
+    // dependent semantic claim.
+    loop_specs_well_formed(plan)?;
     for (node_index, node) in plan.nodes.iter().enumerate() {
         if let Some((decl, expected)) = node.ports.iter().find_map(|decl| {
             conventional_direction(&decl.port)
@@ -3038,7 +3336,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             validate_network_connector(node, spec)?;
             // Built-in sheets above retain their more specific missing-row
             // diagnostics. Foreign families still cannot bypass the generic
-            // exchange lifecycle carried by v12.
+            // exchange lifecycle retained by v13.
             let exits = node
                 .ports
                 .iter()
@@ -3286,20 +3584,30 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     // one trigger fired twice, whereas sharing one input between two
     // DIFFERENT activations is the distinct AmbiguousInputActivation defect.
     let handler_key =
-        |handler: &crate::plan::Handler| (handler.node.index(), handler.activation.canonical_key());
+        |handler: &crate::plan::Handler| (handler.owner, handler.activation.canonical_key());
     let mut activations = BTreeSet::new();
     for handler in &plan.handlers {
         if !activations.insert(handler_key(handler)) {
-            return Err(PlanValidationError::DuplicateHandler {
-                node: node_at(handler.node)?.path.clone(),
-                activation: handler.activation.clone(),
-            });
+            return match handler.owner {
+                HandlerOwner::Node(slot) => Err(PlanValidationError::DuplicateHandler {
+                    node: node_at(slot)?.path.clone(),
+                    activation: handler.activation.clone(),
+                }),
+                HandlerOwner::Graph(owner) => Err(PlanValidationError::InvalidGraphHandler {
+                    owner: graph_owner_name(plan, owner)?,
+                    detail: "one activation is declared twice",
+                }),
+            };
         }
     }
 
     let mut activated_inputs = BTreeSet::new();
     for handler in &plan.handlers {
-        let node = node_at(handler.node)?;
+        let HandlerOwner::Node(handler_node) = handler.owner else {
+            validate_graph_handler(plan, handler)?;
+            continue;
+        };
+        let node = node_at(handler_node)?;
         match &handler.activation {
             node::HandlerActivation::Port(port) => {
                 if !has_port(node, port, node::Direction::Input) {
@@ -3309,12 +3617,18 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                         expected: node::Direction::Input,
                     });
                 }
-                if !activated_inputs.insert((handler.node, port.clone())) {
+                if !activated_inputs.insert((handler_node, port.clone())) {
                     return Err(PlanValidationError::AmbiguousInputActivation {
                         node: node.path.clone(),
                         port: port.clone(),
                     });
                 }
+            }
+            node::HandlerActivation::ChildPort { .. } => {
+                return Err(PlanValidationError::InvalidGraphHandler {
+                    owner: node.path.to_string(),
+                    detail: "a child-output activation requires a Graph owner",
+                });
             }
             node::HandlerActivation::Join {
                 ports,
@@ -3342,7 +3656,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                             expected: node::Direction::Input,
                         });
                     }
-                    if !activated_inputs.insert((handler.node, port.clone())) {
+                    if !activated_inputs.insert((handler_node, port.clone())) {
                         return Err(PlanValidationError::AmbiguousInputActivation {
                             node: node.path.clone(),
                             port: port.clone(),
@@ -3460,6 +3774,202 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     Ok(())
 }
 
+fn graph_owner_name(plan: &ExecutionPlan, slot: OwnerSlot) -> Result<String, PlanValidationError> {
+    let owner = plan
+        .owners
+        .get(slot.index())
+        .ok_or(PlanValidationError::OwnerOutOfBounds {
+            owner: slot,
+            owner_count: plan.owners.len(),
+        })?;
+    if owner.kind != OwnerKind::Graph {
+        return Err(PlanValidationError::InvalidGraphHandler {
+            owner: owner.path.to_string(),
+            detail: "the handler owner is not a Graph",
+        });
+    }
+    Ok(if owner.path.is_root() {
+        String::from("<root>")
+    } else {
+        owner.path.to_string()
+    })
+}
+
+fn validate_graph_handler(
+    plan: &ExecutionPlan,
+    handler: &crate::plan::Handler,
+) -> Result<(), PlanValidationError> {
+    let HandlerOwner::Graph(slot) = handler.owner else {
+        return Ok(());
+    };
+    let owner_name = graph_owner_name(plan, slot)?;
+    let owner = &plan.owners[slot.index()];
+    if !owner
+        .aspects
+        .iter()
+        .any(|aspect| aspect.aspect() == node::Aspect::Loop)
+    {
+        return Err(PlanValidationError::InvalidGraphHandler {
+            owner: owner_name,
+            detail: "Graph handlers require an executable aspect owner",
+        });
+    }
+    let ports = plan
+        .graph_ports(slot)
+        .ok_or_else(|| PlanValidationError::InvalidGraphHandler {
+            owner: owner_name.clone(),
+            detail: "the handler owner has no Graph boundary",
+        })?;
+    let state_type = ports
+        .iter()
+        .find(|decl| decl.port.name() == "in" && decl.direction == node::Direction::Input)
+        .and_then(|decl| decl.ty.clone())
+        .ok_or_else(|| PlanValidationError::InvalidGraphHandler {
+            owner: owner_name.clone(),
+            detail: "the Loop owner has no typed iteration-state input",
+        })?;
+    let input_type = match &handler.activation {
+        node::HandlerActivation::Port(port) => ports
+            .iter()
+            .find(|decl| decl.port == *port && decl.direction == node::Direction::Input)
+            .and_then(|decl| decl.ty.clone()),
+        node::HandlerActivation::ChildPort { child, port } => {
+            let node_output = plan.nodes.iter().find(|candidate| {
+                candidate.path == *child
+                    && plan
+                        .owner(candidate.owner)
+                        .is_some_and(|child_owner| child_owner.parent == Some(slot))
+            });
+            let graph_output = plan.owners.iter().find(|candidate| {
+                candidate.kind == OwnerKind::Graph
+                    && candidate.path.segments() == child.segments()
+                    && candidate.parent == Some(slot)
+            });
+            match (node_output, graph_output) {
+                (Some(child), None) => child
+                    .ports
+                    .iter()
+                    .find(|decl| decl.port == *port && decl.direction == node::Direction::Output)
+                    .and_then(|decl| decl.ty.clone()),
+                (None, Some(child)) => child
+                    .ports
+                    .iter()
+                    .find(|decl| decl.port == *port && decl.direction == node::Direction::Output)
+                    .and_then(|decl| decl.ty.clone()),
+                _ => None,
+            }
+        }
+        node::HandlerActivation::Lifecycle(node::Lifecycle::Start | node::Lifecycle::Stop) => {
+            let mut inputs = ports
+                .iter()
+                .filter(|decl| decl.direction == node::Direction::Input);
+            let first = inputs.next().map(|decl| decl.ty.clone());
+            if let Some(first) = first {
+                if first.is_some() && inputs.all(|decl| decl.ty.as_ref() == first.as_ref()) {
+                    first
+                } else {
+                    Some(DataType::Variant)
+                }
+            } else {
+                None
+            }
+        }
+        node::HandlerActivation::Join { .. } | node::HandlerActivation::Lifecycle(_) => None,
+    }
+    .ok_or_else(|| PlanValidationError::InvalidGraphHandler {
+        owner: owner_name.clone(),
+        detail: "the activation has no single typed Graph input carrier",
+    })?;
+
+    let mut signature = expr::Signature::new()
+        .with("data", input_type.clone())
+        .with_metadata("meta")
+        .with("Loop.state", DataType::Variant)
+        .with("Loop.state.data", state_type)
+        .with_metadata("Loop.state.meta");
+    let check_tree =
+        |tree: &expr::Tree, signature: &expr::Signature| -> Result<DataType, PlanValidationError> {
+            expr_canonical(&tree.root)?;
+            asset_indexes_bound(plan, &tree.root)?;
+            let actual = expr::rederive_type(&tree.root, signature).ok_or_else(|| {
+                PlanValidationError::InvalidGraphHandler {
+                    owner: owner_name.clone(),
+                    detail: "an expression cannot be re-derived from the Graph input",
+                }
+            })?;
+            if actual != tree.ty {
+                return Err(PlanValidationError::InvalidGraphHandler {
+                    owner: owner_name.clone(),
+                    detail: "an expression contradicts its transported type",
+                });
+            }
+            Ok(actual)
+        };
+    if let Some(guard) = &handler.guard
+        && check_tree(guard, &signature)? != DataType::Bool
+    {
+        return Err(PlanValidationError::InvalidGraphHandler {
+            owner: owner_name.clone(),
+            detail: "a guard is not boolean",
+        });
+    }
+    for step in &handler.body {
+        match step {
+            Step::Let { name, expr } => {
+                let ty = check_tree(expr, &signature)?;
+                signature = signature.with(name, ty);
+            }
+            Step::SetVar { .. } => {
+                return Err(PlanValidationError::InvalidGraphHandler {
+                    owner: owner_name.clone(),
+                    detail: "Graph mutable state has not landed",
+                });
+            }
+            Step::Stop => {
+                if handler.activation == node::HandlerActivation::Lifecycle(node::Lifecycle::Stop) {
+                    return Err(PlanValidationError::InvalidGraphHandler {
+                        owner: owner_name.clone(),
+                        detail: "an on-stop handler cannot request stop recursively",
+                    });
+                }
+            }
+            Step::Emit { port, value } => {
+                let expected = ports
+                    .iter()
+                    .find(|decl| decl.port == *port && decl.direction == node::Direction::Output)
+                    .and_then(|decl| decl.ty.as_ref())
+                    .ok_or_else(|| PlanValidationError::InvalidGraphHandler {
+                        owner: owner_name.clone(),
+                        detail: "an emission targets no typed Graph output",
+                    })?;
+                match value {
+                    Emission::Data(tree) => {
+                        let _ = check_tree(tree, &signature)?;
+                    }
+                    Emission::Patch(writes) | Emission::Replace(writes) => {
+                        for write in writes {
+                            let _ = check_tree(&write.expr, &signature)?;
+                            meta_target_known(plan, &write.target)?;
+                        }
+                    }
+                    Emission::Identity | Emission::Nothing => {}
+                }
+                let actual =
+                    super::type_resolution::resolved_emission_type(value, &input_type, expected)?;
+                if let Some(actual) = actual
+                    && !actual.is_assignable_to(expected)
+                {
+                    return Err(PlanValidationError::InvalidGraphHandler {
+                        owner: owner_name.clone(),
+                        detail: "an emission contradicts its Graph output type",
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum WritableMetaField {
     App(String),
@@ -3526,6 +4036,9 @@ fn join_metadata_presence_holds(plan: &ExecutionPlan) -> Result<(), PlanValidati
         }
 
         for handler in &plan.handlers {
+            let Some(handler_node) = handler.owner.node() else {
+                continue;
+            };
             let base = activation_presence(handler, &inputs, &all_fields);
             for step in &handler.body {
                 let Step::Emit { port, value } = step else {
@@ -3540,7 +4053,7 @@ fn join_metadata_presence_holds(plan: &ExecutionPlan) -> Result<(), PlanValidati
                 }
                 changed |= extend_presence(
                     outputs
-                        .entry((Some(handler.node), port.clone()))
+                        .entry((Some(handler_node), port.clone()))
                         .or_default(),
                     &emitted,
                 );
@@ -3556,14 +4069,14 @@ fn join_metadata_presence_holds(plan: &ExecutionPlan) -> Result<(), PlanValidati
                     ..
                 } | node::HandlerActivation::Join { last: Some(_), .. }
             ) {
-                let inherited = node_input_presence(plan, handler.node, &inputs);
+                let inherited = node_input_presence(plan, handler_node, &inputs);
                 let expired = node::Port::new("expired").map_err(|_| {
                     PlanValidationError::InvalidJoinActivation {
-                        node: plan.nodes[handler.node.index()].path.clone(),
+                        node: plan.nodes[handler_node.index()].path.clone(),
                     }
                 })?;
                 changed |= extend_presence(
-                    outputs.entry((Some(handler.node), expired)).or_default(),
+                    outputs.entry((Some(handler_node), expired)).or_default(),
                     &inherited,
                 );
             }
@@ -3593,8 +4106,11 @@ fn join_metadata_presence_holds(plan: &ExecutionPlan) -> Result<(), PlanValidati
     }
 
     for handler in &plan.handlers {
+        let Some(handler_node) = handler.owner.node() else {
+            continue;
+        };
         let base = activation_presence(handler, &inputs, &all_fields);
-        let owner = &plan.nodes[handler.node.index()].path.to_string();
+        let owner = &plan.nodes[handler_node.index()].path.to_string();
         if let Some(guard) = &handler.guard {
             required_meta_reads_hold(&guard.root, &base, owner)?;
         }
@@ -3665,15 +4181,19 @@ fn activation_presence(
     inputs: &EndpointPresence,
     all_fields: &MetaPresence,
 ) -> MetaPresence {
+    let Some(handler_node) = handler.owner.node() else {
+        return all_fields.clone();
+    };
     match &handler.activation {
         node::HandlerActivation::Port(port) => inputs
-            .get(&(Some(handler.node), port.clone()))
+            .get(&(Some(handler_node), port.clone()))
             .cloned()
             .unwrap_or_default(),
+        node::HandlerActivation::ChildPort { .. } => MetaPresence::new(),
         node::HandlerActivation::Join { .. } => all_fields.clone(),
         node::HandlerActivation::Lifecycle(_) => inputs
             .iter()
-            .filter(|((slot, _), _)| *slot == Some(handler.node))
+            .filter(|((slot, _), _)| *slot == Some(handler_node))
             .flat_map(|(_, fields)| fields)
             .cloned()
             .collect(),

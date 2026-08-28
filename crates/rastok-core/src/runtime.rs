@@ -624,11 +624,9 @@ impl<'plan> TransactionExecutor<'plan> {
         state: &BTreeMap<String, Value>,
         instance_values: &BTreeMap<String, Value>,
     ) -> Result<bool, Fault> {
-        let Some(handler) =
-            self.plan.handlers.iter().find(|handler| {
-                handler.node == slot && &handler.activation == candidate.activation
-            })
-        else {
+        let Some(handler) = self.plan.handlers.iter().find(|handler| {
+            handler.owner.node() == Some(slot) && &handler.activation == candidate.activation
+        }) else {
             return Err(Fault::MissingHandler);
         };
         let Some(guard) = &handler.guard else {
@@ -817,11 +815,9 @@ impl<'plan> TransactionExecutor<'plan> {
         let Some(node) = self.plan.nodes.get(slot.index()) else {
             return Err(Fault::UnknownSlot(slot));
         };
-        let handler = self
-            .plan
-            .handlers
-            .iter()
-            .find(|handler| handler.node == slot && &handler.activation == activation);
+        let handler = self.plan.handlers.iter().find(|handler| {
+            handler.owner.node() == Some(slot) && &handler.activation == activation
+        });
         let Some(handler) = handler else {
             if matches!(
                 activation,
@@ -1080,7 +1076,7 @@ impl<'plan> TransactionExecutor<'plan> {
                     ));
                 }
                 let join_within = self.plan.handlers.iter().find_map(|handler| {
-                    (handler.node == target)
+                    (handler.owner.node() == Some(target))
                         .then_some(&handler.activation)
                         .and_then(|activation| match activation {
                             node::HandlerActivation::Join {
@@ -1335,7 +1331,7 @@ impl<'plan> TransactionExecutor<'plan> {
         self.plan
             .handlers
             .iter()
-            .find(|handler| handler.node == slot && handler.activation == *activation)
+            .find(|handler| handler.owner.node() == Some(slot) && handler.activation == *activation)
     }
 }
 

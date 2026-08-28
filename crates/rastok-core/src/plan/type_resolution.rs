@@ -228,9 +228,17 @@ impl<'plan> Solver<'plan> {
             }
         }
         for handler in &self.plan.handlers {
-            let node_index = handler.node.index();
+            let Some(node) = handler.owner.node() else {
+                // Graph boundaries carried by v13 are fully pinned and their
+                // handlers are verified against that contract by plan
+                // validation. They do not participate in the flattened Node
+                // port fixed point.
+                continue;
+            };
+            let node_index = node.index();
             let input_ports: Vec<node::Port> = match &handler.activation {
                 node::HandlerActivation::Port(port) => alloc::vec![port.clone()],
+                node::HandlerActivation::ChildPort { .. } => Vec::new(),
                 node::HandlerActivation::Join { ports, .. } => ports.clone(),
                 node::HandlerActivation::Lifecycle(_) => self.plan.nodes[node_index]
                     .ports
@@ -652,6 +660,14 @@ fn emission_type(
             writes_type(fields, Some(empty), input, expected, &mut require_input)
         }
     }
+}
+
+pub(super) fn resolved_emission_type(
+    emission: &Emission,
+    input: &DataType,
+    expected: &DataType,
+) -> Result<Option<DataType>, PlanValidationError> {
+    emission_type(emission, Some(input), Some(expected), |_| Ok(false))
 }
 
 fn expression_type(

@@ -181,13 +181,15 @@ The repository opens publicly with this milestone (15 October 2026).
   project-wide `--resolve-open-api` generated-source workflow. Its categorical
   v12 package move is isolated from the later H5/H6 physical execution, which
   introduced no further package-format move.
-- M1.7 makes `Loop` the first executable NodeAspect. L0 and the normative L1
-  contract are landed: `node::{Kind, Type, Aspect}` are separate,
+- M1.7 makes `Loop` the first NodeAspect to receive categorical transport and
+  then become executable. L0–L2 are landed:
+  `node::{Kind, Type, Aspect}` are separate,
   Reducer/Router remain patterns, source spelling is singular
   `instance = { key = ... }`, and positive `Loop.fuel` plus closed
-  `Loop.delay` are checked into fail-closed recovery HIR without an identity
-  move. The remaining L2–L7 gates make one Graph boundary decide `next XOR out`,
-  add categorical aspect transport, build the per-root Loop journal fold over
+  `Loop.delay` cross checked HIR and categorical v13. The exact Loop boundary,
+  closed aspect contract and ordinary Graph-owned handlers are re-derived
+  Registry-free; the VM refuses them before mutation. The remaining L3–L7
+  gates make one Graph boundary prove `next XOR out`, build the per-root Loop journal fold over
   finite `fuel` and `l:next`, date optional `delay`, begin checked
   `invariant`/`measure` proofs, model-check Closing/recovery in the Lab, and
   close identity, no-std and QEMU evidence. Operator work and Connector calls

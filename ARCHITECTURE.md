@@ -176,7 +176,7 @@ layer; their library types never leak into the no_std kernel. See the
 M1.6 H4.1 extends that same core algebra with the open canonical
 `media_type` scalar. OpenAPI remains a hosted compiler/tool adapter:
 `serde_json`/`serde_yaml_ng` and filesystem discovery stay in `rastok`, while
-only resolved `DataType` trees and categorical v12 plan data cross toward the
+only resolved `DataType` trees and categorical v13 plan data cross toward the
 core. Connector modules are flat by contract family; a shared module is named
 for its real responsibility (`websocket_protocol` or private `network`) rather
 than becoming a generic utility bucket.

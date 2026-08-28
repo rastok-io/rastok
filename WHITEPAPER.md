@@ -2821,7 +2821,7 @@ families through one exact-id/role registry and one VM boundary; the Lab
 composes both through the same binding and protocol. Static Driver selection is
 implemented. A data-only capability manifest proves the future discovery seam,
 but no plugin loader or native ABI is claimed. Four exact HTTP/WebSocket
-contracts now cross source, checked v12 plan, Registry-free validation and
+contracts now cross source, checked v13 plan, Registry-free validation and
 family-owned Lab binding with codec-selected ports, lossless protocol metadata
 and typed terminal unions. H3 pins one bounded private hosted
 pump, Hyper/Rustls for HTTP/1.1-2, quiche/BoringSSL for HTTP/3 and Tungstenite
@@ -2849,6 +2849,15 @@ assembly, all-feature/no-std gates, identity audit and Cortex-M33 evidence.
 The official Autobahn report remains a named external qualification because
 the reference host has no container engine; M1.6 does not substitute an
 unmaintained runner or convert that missing report into a production claim.
+
+M1.7 L2 has made `Loop` the first aspect with categorical transport. A
+fuel-only Loop carries its exact four-port boundary, closed delay policy and
+ordinary Graph-owned handlers from source through v13 and Registry-free
+validation. This is deliberately not yet an execution claim: the VM refuses
+the aspect before mutation until the L3 `next XOR out` proof and L4
+journal-derived run fold land. The distinction preserves the central rule
+that a recognized orchestration policy can never silently run as a plain
+Graph.
 
 This white paper is designed to outlive individual releases. The DSL
 grammar, runtime traits, and feature set will evolve; the conceptual

@@ -1157,7 +1157,7 @@ does not claim implementation or release status.
 | Fanout pattern | atomic multi-emit statement `(a, b, c) = x` | executable; no NodeType |
 | Dispatch pattern | Graph carrying `instance.key` | executable; no NodeType |
 | `Saga` (aspect) | Saga aspect — opt-in scoping for long-running compensation-based workflows (model in [`effects-and-sagas.md`](effects-and-sagas.md), generic mechanism in [`aspects.md`](aspects.md)) | grammar specified; runtime manager requires effective `durability >= local` |
-| `Loop` (aspect) | Loop aspect — bounded tail-recursive iteration (retry / convergent / counted), spec in [`loop.md`](loop.md) | grammar specified ; runtime support is deferred |
+| `Loop` (aspect) | Loop aspect — bounded tail-recursive iteration (retry / convergent / counted), spec in [`loop.md`](loop.md) | source/check/v13 transport through L2; control proof and runtime manager deferred |
 | `-> nothing` | Discard sink (built-in) | not a node — `nothing` as an edge target ; non-blocking drain |
 | `RequestReply` | Correlated call pattern | design intent ; may lower to Connector + Operator composition |
 | `Metrics` | Sink Connector | future |
@@ -1537,9 +1537,13 @@ trigger           ::= "start"
                     | "stop"
                     | "compensate"                                   // compensation event on a `compensable` Connector — see effects-and-sagas.md
                     | "(" IDENT ( "," IDENT )* ")"                   // join : presence of all named ports
+                    | IDENT "." IDENT                                 // direct-child output, only in a Graph-owned aspect handler
                     | IDENT                                          // single port
                     // The parser consumes removed `Aspect.start` / `Aspect.stop`
                     // triggers for a named migration; they are not productions.
+                    // Among child-output observations, L2 transports only a
+                    // direct child. Deeper descendant paths and Graph handlers
+                    // without an admitted aspect remain named refusals.
 guard_clause      ::= "where" expr                                   // content predicate (Tier 1 = 1 port, Tier 2 = ≥2)
                     | "having" expr                                  // aggregate predicate (quorum, e.g. count(p) >= k) — parsed, named-deferred in R6
                     | "within" expr                                  // join time window (optional ; positive constant duration)

@@ -1,8 +1,8 @@
 # Component blueprint
 
 > Implementation blueprint — non-normative. Originally written ahead
-> of the build; updated 2026-08-27 for the M1.6 H7 closure. The
-> former named-partition P1-P3 implementation is superseded; categorical v12
+> of the build; updated 2026-08-28 for the M1.7 L2 checkpoint. The
+> former named-partition P1-P3 implementation is superseded; categorical v13
 > owner transport and hierarchical instance routing are executable evidence.
 > The M0 deviations remain recorded in
 > [`m0-exit-notes.md`](m0-exit-notes.md), while the chronological M1
@@ -10,8 +10,9 @@
 > replacement of the type/value and boundary seams is tracked in
 > [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md); this file
 > distinguishes the retained v7 type/value/expression registry from the
-> categorical v12 plan transport (retaining v9's instance model and adding
-> stable Connector ids/roles/exchange lifecycles), R3 causal routing rows, R4 lifetime
+> categorical v13 plan transport (retaining v9's instance model, v10's stable
+> Connector ids/roles, v11's exchange lifecycles, and v12's `media_type` while
+> adding Graph aspect contracts), R3 causal routing rows, R4 lifetime
 > execution, R5 Closing, R6 joins, and R7 placement-neutrality proof.
 
 This document refines the responsibility table of
@@ -169,9 +170,9 @@ data out, the governing spec, and current status.
 | **Lexer + parser** | one forward byte cursor and token lookahead in `Lexer`; complete host lexemes; byte-adjacent `IDENT!` frontend selection; specialized expression/JSON/verbatim/guest regions; spans and structural recovery | source bytes + frontend Registry → syntax tree + diagnostics | [grammar.md](../spec/grammar.md); D-2026-08-13-1; D-2026-08-14-1 | M1.3 B4 |
 | **Unit assembly** | the deployed unit: multi-file resolution, lab-fragment merge, exactly-one-App, wiring by name, no shadowing | syntax trees → one resolved `Unit` | [grammar.md](../spec/grammar.md) scope rules; [simulation-semantics.md §2](../spec/simulation-semantics.md) | M0 (single unit) |
 | **Desugarer** | the finite sugar table — afterwards there is one way to say each thing | resolved unit → core-form graph | [grammar.md](../spec/grammar.md) | M0 |
-| **Type checker** | envelope/data types, `sys`/`app`/`ext` metadata grid, named structural types, contract attributes/defaults/profiles and resolved port rules, typed `is`/`as` narrowing, one `node::Kind`, one `node::Type`, a closed fail-closed `node::Aspect` list, Node-owned instance-key expressions, lifetime profiles, nested Graph composition, instance-local joins, and the reduced source half of `Loop.fuel`/`Loop.delay` | core-form graph → `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [instances.md](../spec/instances.md); [expressions.md](../spec/expressions.md); [aspects.md](../spec/aspects.md); [loop.md](../spec/loop.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | M1.7 L0/L1 plus fail-closed L2 source contract over the closed M1.4/M1.6 surface; Loop plan/runtime, Saga execution and some dynamic owner values/Graph handlers remain named gates |
+| **Type checker** | envelope/data types, `sys`/`app`/`ext` metadata grid, named structural types, contract attributes/defaults/profiles and resolved port rules, typed `is`/`as` narrowing, one `node::Kind`, one `node::Type`, a closed fail-closed `node::Aspect` list, Node-owned instance-key expressions, lifetime profiles, nested Graph composition, instance-local joins, and the closed `Loop.fuel`/`Loop.delay` contract with ordinary Graph handlers | core-form graph → `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [instances.md](../spec/instances.md); [expressions.md](../spec/expressions.md); [aspects.md](../spec/aspects.md); [loop.md](../spec/loop.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | M1.7 L2: fuel-only Loop transport accepted; multi-path control proof/runtime, Saga execution and some dynamic owner values/non-aspect Graph handlers remain named gates |
 | **Canonicalizer** | the canonical byte form of the resolved HIR; the semantic hash | `Hir` → canonical bytes + `plan::SemanticHash` | [identity.md §1](../spec/identity.md) | M0, extended in M1 |
-| **Lowering + plan gate** | parent-linked Graph/Operator/Connector owner table, lexically scoped edges, handlers, expression trees, stable Connector ids/roles/exchange lifecycles, `plan::NodeExecution`, `Slot` resolution, schemas and assets; key types re-derived and structural/runtime capability validated before success; no recognized aspect can lower before its categorical gate | `Hir` → `plan::ValidatedExecutionPlan` | [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [execution-model.md](../spec/execution-model.md); [aspects.md](../spec/aspects.md); [plan-package.md](plan-package.md) | categorical v12 H4.1 plus M1.7 L0 fail-closed aspect belt; compiler-only data-key inference is explicit, unsupported dynamic source rows refuse closed |
+| **Lowering + plan gate** | parent-linked Graph/Operator/Connector owner table, lexically scoped edges, Node/Graph-owned handlers, expression trees, stable Connector ids/roles/exchange lifecycles, `plan::NodeExecution`, closed Graph aspects, `Slot` resolution, schemas and assets; key and Loop claims re-derived before success | `Hir` → `plan::ValidatedExecutionPlan` | [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [execution-model.md](../spec/execution-model.md); [aspects.md](../spec/aspects.md); [plan-package.md](plan-package.md) | categorical v13 M1.7 L2; compiler-only data-key inference is explicit, unsupported dynamic source rows and aspect execution refuse closed |
 | **Tagged frontends** | registered name, framing and reader policy; built-in JSON/text/base64 decoding; deferred guest/data compiler identity; the host never tokenizes an owned body | `IDENT!` region → typed value, named deferral, or future compiled guest program | [expressions.md](../spec/expressions.md); [stdlib.md §5](../spec/stdlib.md) | B4 framing/readers; guest execution guarded |
 
 The facade returns `Result<Compilation, Diagnostics>` with
@@ -221,7 +222,7 @@ Two compiler rules with consequences elsewhere:
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`expr`** | the expression compiler/evaluator over core `DataType` and `Value`; its evaluator-only carrier may additionally hold the lazy payload witness | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → evaluation result; (`Tree`, boot constants) → core value | [expressions.md](../spec/expressions.md); [execution-model.md §5](../spec/execution-model.md) (no ambient time) | M1.3 B3 core + v7 registry, extended in categorical v12 only by `media_type(text)` |
+| **`expr`** | the expression compiler/evaluator over core `DataType` and `Value`; its evaluator-only carrier may additionally hold the lazy payload witness | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → evaluation result; (`Tree`, boot constants) → core value | [expressions.md](../spec/expressions.md); [execution-model.md §5](../spec/execution-model.md) (no ambient time) | M1.3 B3 core + v7 registry; v12 added `media_type(text)`, retained by v13 |
 
 `expr` never sees an envelope, Node, or placement boundary, and owns its own
 `expr::Diagnostic` (the compiler adapts it into `diagnostics::Diagnostic`).
@@ -253,7 +254,7 @@ resolved constructor/narrowing forms their canonical package ids.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`plan::ValidatedExecutionPlan`** | the executable/package form — a private raw `ExecutionPlan` plus a total effective `ResolvedPortTable`; v12 preserves every Graph/Operator/Connector owner and parent relation separately from executable Node slots, validates scoped routes, solves every port, and carries canonical Connector ids/roles/exchange lifecycles plus the open `media_type` type/constructor | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [types.md](../spec/types.md); [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [plan-package.md](plan-package.md) | M1.6 H4.1 v12 transport; retains M1.4's owner/instance and H1 exchange models unchanged |
+| **`plan::ValidatedExecutionPlan`** | the executable/package form — a private raw `ExecutionPlan` plus a total effective `ResolvedPortTable`; v13 preserves every owner separately from executable Node slots, validates scoped routes and ports, carries Connector identity/exchange plus closed Graph aspects and explicit Graph-handler ownership | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [types.md](../spec/types.md); [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [aspects.md](../spec/aspects.md); [plan-package.md](plan-package.md) | M1.7 L2 v13 transport; Loop execution remains fail-closed until L3/L4 |
 | **`plan::Manifest`** | the append-only ledger `SemanticHash → GraphVersions` — plural: a rollback allocates a **new** version for the same hash; a version is never renumbered, never reused | allocated at boot | [identity.md §2](../spec/identity.md) | M0 (minimal) |
 
 `ExecutionPlan` remains the whitepaper's domain term and the private data

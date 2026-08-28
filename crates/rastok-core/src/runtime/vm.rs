@@ -51,6 +51,15 @@ use core::fmt;
 /// A machine-integrity refusal — never a business error.
 #[derive(Debug, Clone, PartialEq)]
 pub enum VmError {
+    /// A categorical NodeAspect reached the machine before its execution
+    /// gate. Transport may precede execution, but it can never degrade to the
+    /// underlying plain Graph semantics.
+    UnsupportedAspect {
+        /// Graph carrying the aspect.
+        owner: OwnerPath,
+        /// Closed unsupported aspect.
+        aspect: node::Aspect,
+    },
     /// An evaluation or engine fault. It is outside every graph port
     /// contract: the transaction commits nothing and supervision decides.
     Fault(Fault),
@@ -177,6 +186,10 @@ fn expression_roots(expression: &crate::expr::Expr, roots: &mut Vec<String>) {
 impl fmt::Display for VmError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::UnsupportedAspect { owner, aspect } => write!(
+                f,
+                "Graph `{owner}` carries `{aspect}`, whose VM protocol has not landed"
+            ),
             Self::Fault(fault) => fault.fmt(f),
             Self::Journal(error) => error.fmt(f),
             Self::Dispatch(error) => error.fmt(f),
@@ -789,6 +802,18 @@ pub struct Vm<'plan> {
 }
 
 impl<'plan> Vm<'plan> {
+    fn unsupported_aspect(&self) -> Option<VmError> {
+        self.plan.owners.iter().find_map(|owner| {
+            owner
+                .aspects
+                .first()
+                .map(|aspect| VmError::UnsupportedAspect {
+                    owner: owner.path.clone(),
+                    aspect: aspect.aspect(),
+                })
+        })
+    }
+
     /// Boots the machine over a VALIDATED plan — once. The machine
     /// dereferences the plan's tables without checking; the type is
     /// what makes that safe, so no raw plan is accepted here. This
@@ -1042,6 +1067,9 @@ impl<'plan> Vm<'plan> {
         session: Option<InboundSession>,
         connector_path: Option<node::Path>,
     ) -> Result<InboundAcceptance, VmError> {
+        if let Some(error) = self.unsupported_aspect() {
+            return Err(error);
+        }
         let session_admission = session;
         // Boundary injection and Connector-origin roots are distinct causal
         // sources. The caller chooses the category; the validated plan proves
@@ -1479,6 +1507,9 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         bindings: &mut B,
     ) -> Result<bool, VmError> {
+        if let Some(error) = self.unsupported_aspect() {
+            return Err(error);
+        }
         self.progress_closures();
         if !self.lifecycle.is_empty() {
             self.fire_lifecycle_next(journal)?;
@@ -1599,7 +1630,7 @@ impl<'plan> Vm<'plan> {
                     // scan, so the common single-port path stays allocation
                     // free.
                     let join_owned = self.plan.handlers.iter().any(|handler| {
-                        handler.node == slot
+                        handler.owner.node() == Some(slot)
                             && matches!(
                                 &handler.activation,
                                 node::HandlerActivation::Join { ports, .. }
@@ -1680,6 +1711,9 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         bindings: &mut B,
     ) -> Result<PumpReport, VmError> {
+        if let Some(error) = self.unsupported_aspect() {
+            return Err(error);
+        }
         let mut report = core::mem::take(&mut self.buffered_pump);
         report.append(self.poll_outbound_driver(journal, bindings)?);
         Ok(report)
@@ -2623,7 +2657,7 @@ impl<'plan> Vm<'plan> {
                 return false;
             }
             let join_owned = self.plan.handlers.iter().any(|handler| {
-                handler.node == slot
+                handler.owner.node() == Some(slot)
                     && matches!(
                         &handler.activation,
                         node::HandlerActivation::Join { ports, .. }
@@ -3525,7 +3559,7 @@ impl<'plan> Vm<'plan> {
             .plan
             .handlers
             .iter()
-            .filter(|handler| handler.node == slot)
+            .filter(|handler| handler.owner.node() == Some(slot))
             .collect();
         let join_owns = |port: &node::Port| {
             handlers.iter().any(|handler| {
@@ -5467,7 +5501,7 @@ impl<'plan> Vm<'plan> {
                                 unreachable!("capacity was reserved before the commit")
                             });
                         let join_within = self.plan.handlers.iter().find_map(|handler| {
-                            (handler.node == target)
+                            (handler.owner.node() == Some(target))
                                 .then_some(&handler.activation)
                                 .and_then(|activation| match activation {
                                     node::HandlerActivation::Join {

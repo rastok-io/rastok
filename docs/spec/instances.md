@@ -1,7 +1,7 @@
 # Instances, keys, lifetime, and placement
 
 > **Status:** normative M1.4 target, adopted by D-2026-08-18-1. The compiler
-> accepts and checks the R1 `instances` / `lifetime` surface. Plan-package v12
+> accepts and checks the R1 `instance` / `lifetime` surface. Plan-package v13
 > retains v9's categorical parent-linked owner table, scoped routes,
 > independent instance policy, immutable owner expressions, and phased
 > Connector settings. R3 routes every owner through canonical hierarchical
@@ -11,9 +11,10 @@
 > temporal singletons. R5 executes bounded Closing, successor-generation
 > admission, cancellation, settlement, terminal `OutcomeUnknown`, inner-first
 > Graph closure, and bare `stop`. Source production of some dynamic
-> settings/values and Graph handlers remain named R1 gaps. R6 makes nested
-> Graphs and instance-local joins public end to end, including Lab and package
-> evidence. R7 closes the executable slice with negative-space and
+> settings/values remains a named R1 gap. R6 makes nested Graphs and
+> instance-local joins public end to end, including Lab and package evidence;
+> M1.7 L2 subsequently transports Graph-owned handlers categorically. R7
+> closes the executable instance slice with negative-space and
 > placement-neutrality proofs; it adds no cluster runtime. This document is
 > the single authority for logical instance addressing, key selection,
 > Node-local state, lifetime, and the semantic boundary with future sharding.
@@ -455,8 +456,9 @@ candidate bundle. A failure leaves the delivery unconsumed, commits no
 runtime commits the `l:start` lifecycle transaction before the port
 transaction or any external resource effect. `on start` and `on stop` are
 ordinary handlers owned by the Node and require a causal input envelope;
-Graph lifecycle facts execute now, while Graph handler source/lowering remains
-the named R1 gap.
+Graph lifecycle facts execute now. Graph-owned handler source and categorical
+transport landed with the Loop L2 gate, but a Graph carrying Loop still
+refuses before its first mutating VM door until the Loop manager lands.
 
 Bare `stop` requests closure of the current Node instance after the current
 transaction commits. There is no `stop <partition>` form. Stopping a Graph
@@ -646,7 +648,7 @@ The plan/package and journal vocabulary has been rewritten from the draft
 `partition_key` / `target_partition` names to logical instance addresses and
 generation-bearing references without renumbering already reserved
 extend-only journal keys merely for spelling.
-Plan-package v12 retains v9's categorical owner/instance transport and
+Plan-package v13 retains v9's categorical owner/instance transport and
 refuses v11 and every older format, including the unpublished v8 draft, as
 input. The original v9
 package-only move left semantic hashes and causal traces unchanged at R2. R3

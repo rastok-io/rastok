@@ -6,7 +6,7 @@
 > journal records.
 >
 > The registry below retains the executable v7 value registry inside
-> categorical plan-package v12, extends the type/expression registry with the
+> categorical plan-package v13. V12 introduced the
 > open `media_type` scalar and its constructor, and specifies the M1.4 instance-address
 > extension under D-2026-08-18-1. V9 refuses the old unpublished v8
 > named-partition draft and carries the parent-linked owner tree, scoped edges,
@@ -33,10 +33,15 @@
 > are omitted from older facts, so no existing causal record moves.
 > Final H5 allocates timer kind 8 for a retained inbound-Call request deadline
 > and narrows `HttpServerExit` to facts possible after admission. Only the
-> representative HttpServer semantic hash moves; plan v12 and prior records
+> representative HttpServer semantic hash moves; the then-current plan v12 and prior records
 > remain byte-identical. H6 executes the H1 Session forms and optional timer
 > kind 9 without moving an existing artifact; H7's static assembly is wholly
 > physical and likewise moves none.
+> M1.7 L2 moves every package container categorically to v13 for closed
+> Graph-aspect contracts and explicit Graph-handler ownership. Existing
+> semantic hashes and every causal record remain byte-identical; newly checked
+> Loop programs seal their contract under `rastok.aspects.r1` but cannot yet
+> execute.
 > D-2026-08-14-1
 > transports the canonical `DataType` registry, complete resolved port types
 > and structural/tagged unions together. Decode re-derives the effective table
@@ -282,6 +287,19 @@ data-only projection of that registry and does not enter a plan. Reduced and
 full images therefore accept or refuse the same package according to linked
 capability without changing its hash, bytes or history. No identity register
 moves at H7.
+
+**M1.7 L2 aspect-transport checkpoint (2026-08-28).**
+D-2026-08-28-2 widens the owner and handler grammars in categorical v13:
+nested Graph boundaries, one closed canonical aspect list, tagged
+Node-or-Graph handler ownership, and direct-child output activation. Every
+v12 container moves because the version and checksum are categorical; v12 is
+refused. Existing programs keep their semantic hash — echo/spike
+`e50026ee…`, JSONL `036f7ea5…`, and connector-free gauge `0d3ad43d…` — because
+root boundary data is not duplicated and empty derived owner lists are not
+semantic source claims. Their v13 packages are respectively 988 B, 1,032 B,
+and 323 B. A new Loop seals its checked `LoopSpec`, contributed
+ports and Graph handlers under `rastok.aspects.r1`. L2 emits no Loop record,
+so all stored causal traces remain byte-identical.
 
 ## 2. `graph_version` and the manifest
 

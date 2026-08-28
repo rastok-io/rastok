@@ -1,7 +1,7 @@
 //! The plan package — the transportable, verifiable serialization
 //! of an [`ExecutionPlan`], per `docs/architecture/plan-package.md`.
 //!
-//! Format v12: the 4-byte magic `RKPB`, then one canonical CBOR map —
+//! Format v13: the 4-byte magic `RKPB`, then one canonical CBOR map —
 //! format version, the plan's semantic hash, the body as an embedded
 //! byte string, and a blake3 checksum over the domain-framed
 //! association `domain ‖ version ‖ semantic_hash ‖ body`, so a
@@ -29,22 +29,23 @@ use crate::expr;
 use crate::identity::encoding::value_tagged;
 use crate::node;
 use crate::plan::{
-    AttrSetting, ClosingPolicy, ConnectorSpec, Edge, Emission, EndpointRef, EvaluationSite,
-    ExecutionPlan, FieldWrite, Handler, InstanceLifetime, InstanceSpec, Node, NodeExecution, Owner,
-    OwnerKind, OwnerPath, OwnerSlot, OwnerValue, PlanValidationError, PortDecl, SemanticHash, Slot,
-    Step, ValidatedExecutionPlan, VarCell,
+    AspectSpec, AttrSetting, ClosingPolicy, ConnectorSpec, Edge, Emission, EndpointRef,
+    EvaluationSite, ExecutionPlan, FieldWrite, Handler, HandlerOwner, InstanceLifetime,
+    InstanceSpec, LoopDelay, LoopSpec, Node, NodeExecution, Owner, OwnerKind, OwnerPath, OwnerSlot,
+    OwnerValue, PlanConstant, PlanValidationError, PortDecl, SemanticHash, Slot, Step,
+    ValidatedExecutionPlan, VarCell,
 };
 use crate::value::Value;
 
 /// The package's leading magic.
 pub const MAGIC: [u8; 4] = *b"RKPB";
 
-/// The format version this module writes and reads. V11 retains v10's complete
-/// transport and adds each Connector's closed exchange lifecycle beside its
-/// stable id and roles.
+/// The format version this module writes and reads. V13 retains v12's complete
+/// type and Connector transport, then adds categorical Graph boundaries,
+/// closed aspect specifications, and Graph-owned ordinary handlers.
 /// A new format is a new version, and an old decoder refuses it by name,
 /// exactly as the format note promises.
-pub const FORMAT_VERSION: u32 = 12;
+pub const FORMAT_VERSION: u32 = 13;
 
 /// The checksum domain — fixed-width framing, so the covered fields
 /// cannot slide into one another.
@@ -396,7 +397,47 @@ fn owner_tree(owner: &Owner) -> Cbor {
             5,
             Cbor::Array(owner.vals.iter().map(owner_value_tree).collect()),
         ),
+        (
+            6,
+            Cbor::Array(owner.ports.iter().map(port_decl_tree).collect()),
+        ),
+        (
+            7,
+            Cbor::Array(owner.aspects.iter().map(aspect_spec_tree).collect()),
+        ),
     ]))
+}
+
+fn aspect_spec_tree(aspect: &AspectSpec) -> Cbor {
+    match aspect {
+        AspectSpec::Loop(spec) => Cbor::Array(vec![Cbor::Uint(1), loop_spec_tree(spec)]),
+    }
+}
+
+fn loop_spec_tree(spec: &LoopSpec) -> Cbor {
+    let mut fields = BTreeMap::from([(1, plan_constant_tree(&spec.fuel))]);
+    if let Some(delay) = &spec.delay {
+        fields.insert(2, loop_delay_tree(delay));
+    }
+    Cbor::Map(fields)
+}
+
+fn loop_delay_tree(delay: &LoopDelay) -> Cbor {
+    match delay {
+        LoopDelay::Fixed { after } => Cbor::Array(vec![Cbor::Uint(1), plan_constant_tree(after)]),
+        LoopDelay::Exponential { first, ceiling } => Cbor::Array(vec![
+            Cbor::Uint(2),
+            plan_constant_tree(first),
+            plan_constant_tree(ceiling),
+        ]),
+    }
+}
+
+fn plan_constant_tree(constant: &PlanConstant) -> Cbor {
+    Cbor::Array(vec![
+        tree_tree(&constant.expr),
+        value_tagged(&constant.resolved),
+    ])
 }
 
 fn instance_tree(instance: &InstanceSpec) -> Cbor {
@@ -545,6 +586,11 @@ fn handler_tree(handler: &Handler) -> Cbor {
         node::HandlerActivation::Port(port) => {
             Cbor::Array(vec![Cbor::Uint(1), Cbor::Text(port.name().to_string())])
         }
+        node::HandlerActivation::ChildPort { child, port } => Cbor::Array(vec![
+            Cbor::Uint(4),
+            Cbor::Text(child.to_string()),
+            Cbor::Text(port.name().to_string()),
+        ]),
         node::HandlerActivation::Join {
             ports,
             within_ns,
@@ -564,10 +610,15 @@ fn handler_tree(handler: &Handler) -> Cbor {
             Cbor::Array(vec![Cbor::Uint(2), Cbor::Uint(lifecycle_tag(*lifecycle))])
         }
     };
-    let mut pairs = BTreeMap::from([
-        (1, Cbor::Uint(handler.node.index() as u64)),
-        (2, activation),
-    ]);
+    let owner = match handler.owner {
+        HandlerOwner::Node(slot) => {
+            Cbor::Array(vec![Cbor::Uint(1), Cbor::Uint(slot.index() as u64)])
+        }
+        HandlerOwner::Graph(slot) => {
+            Cbor::Array(vec![Cbor::Uint(2), Cbor::Uint(slot.index() as u64)])
+        }
+    };
+    let mut pairs = BTreeMap::from([(1, owner), (2, activation)]);
     if let Some(guard) = &handler.guard {
         pairs.insert(3, tree_tree(guard));
     }
@@ -954,6 +1005,18 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
         stack.push(Item::Ty(&tree.ty, level));
         stack.push(Item::Expr(&tree.root, level));
     }
+    /// A `plan_constant_tree` at `level`: its tree and tagged value are one
+    /// level down, and the tree's type/expression roots one level below that.
+    fn plan_constant<'a>(
+        constant: &'a PlanConstant,
+        level: usize,
+        max: &mut usize,
+        stack: &mut Vec<Item<'a>>,
+    ) {
+        *max = (*max).max(level + 1);
+        tree(&constant.expr, level + 2, stack);
+        stack.push(Item::Val(&constant.resolved, level + 1));
+    }
     // The root map's table arrays sit at level 1.
     let mut max = 1usize;
     let mut stack: Vec<Item<'_>> = Vec::new();
@@ -1008,6 +1071,29 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
             tree(&value.expr, 6, &mut stack);
             if let Some(resolved) = &value.resolved {
                 stack.push(Item::Val(resolved, 5));
+            }
+        }
+        for decl in &owner.ports {
+            // owner port array at 3, declaration array at 4, fields at 5.
+            if let Some(ty) = &decl.ty {
+                stack.push(Item::Ty(ty, 5));
+            }
+        }
+        for aspect in &owner.aspects {
+            let AspectSpec::Loop(spec) = aspect;
+            // aspects array at 3, tagged aspect at 4, Loop map at 5.
+            // Its fuel constant starts at 6; a delay's tagged policy starts
+            // at 6 and nests each constant one level further at 7.
+            plan_constant(&spec.fuel, 6, &mut max, &mut stack);
+            match &spec.delay {
+                None => {}
+                Some(LoopDelay::Fixed { after }) => {
+                    plan_constant(after, 7, &mut max, &mut stack);
+                }
+                Some(LoopDelay::Exponential { first, ceiling }) => {
+                    plan_constant(first, 7, &mut max, &mut stack);
+                    plan_constant(ceiling, 7, &mut max, &mut stack);
+                }
             }
         }
     }
@@ -1491,13 +1577,61 @@ fn owner_from(tree: &Cbor) -> Result<Owner, DecodeError> {
         .iter()
         .map(owner_value_from)
         .collect::<Result<Vec<_>, _>>()?;
+    let ports = array_of(get(fields, 6, "owner ports")?, "owner ports")?
+        .iter()
+        .map(port_decl_from)
+        .collect::<Result<Vec<_>, _>>()?;
+    let aspects = array_of(get(fields, 7, "owner aspects")?, "owner aspects")?
+        .iter()
+        .map(aspect_spec_from)
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Owner {
         path,
         parent,
         kind,
+        ports,
+        aspects,
         instance,
         vals,
     })
+}
+
+fn aspect_spec_from(tree: &Cbor) -> Result<AspectSpec, DecodeError> {
+    match array_of(tree, "aspect specification")? {
+        [Cbor::Uint(1), spec] => Ok(AspectSpec::Loop(loop_spec_from(spec)?)),
+        _ => Err(err("aspect specification")),
+    }
+}
+
+fn loop_spec_from(tree: &Cbor) -> Result<LoopSpec, DecodeError> {
+    let fields = map_of(tree, "Loop specification")?;
+    Ok(LoopSpec {
+        fuel: plan_constant_from(get(fields, 1, "Loop fuel")?)?,
+        delay: find(fields, 2).map(loop_delay_from).transpose()?,
+    })
+}
+
+fn loop_delay_from(tree: &Cbor) -> Result<LoopDelay, DecodeError> {
+    match array_of(tree, "Loop delay")? {
+        [Cbor::Uint(1), after] => Ok(LoopDelay::Fixed {
+            after: plan_constant_from(after)?,
+        }),
+        [Cbor::Uint(2), first, ceiling] => Ok(LoopDelay::Exponential {
+            first: plan_constant_from(first)?,
+            ceiling: plan_constant_from(ceiling)?,
+        }),
+        _ => Err(err("Loop delay")),
+    }
+}
+
+fn plan_constant_from(tree: &Cbor) -> Result<PlanConstant, DecodeError> {
+    match array_of(tree, "plan constant")? {
+        [expr, resolved] => Ok(PlanConstant {
+            expr: tree_from(expr)?,
+            resolved: value_from(resolved)?,
+        }),
+        _ => Err(err("plan constant")),
+    }
 }
 
 fn instance_from(tree: &Cbor) -> Result<InstanceSpec, DecodeError> {
@@ -1693,9 +1827,12 @@ fn endpoint_from(tree: &Cbor) -> Result<EndpointRef, DecodeError> {
 
 fn handler_from(tree: &Cbor) -> Result<Handler, DecodeError> {
     let pairs = map_of(tree, "handler")?;
-    let slot = match get(pairs, 1, "handler slot")? {
-        Cbor::Uint(index) => Slot::new(u32::try_from(*index).map_err(|_| err("handler slot"))?),
-        _ => return Err(err("handler slot")),
+    let owner = match array_of(get(pairs, 1, "handler owner")?, "handler owner")? {
+        [Cbor::Uint(1), index] => HandlerOwner::Node(Slot::new(u32_from(index, "handler node")?)),
+        [Cbor::Uint(2), index] => {
+            HandlerOwner::Graph(OwnerSlot::new(u32_from(index, "handler Graph")?))
+        }
+        _ => return Err(err("handler owner")),
     };
     let activation = match array_of(get(pairs, 2, "activation")?, "activation")? {
         [Cbor::Uint(1), Cbor::Text(port)] => node::HandlerActivation::Port(
@@ -1734,6 +1871,18 @@ fn handler_from(tree: &Cbor) -> Result<Handler, DecodeError> {
                 _ => return Err(err("join last")),
             },
         },
+        [Cbor::Uint(4), Cbor::Text(child), Cbor::Text(port)] => {
+            node::HandlerActivation::ChildPort {
+                child: node::Path::new(
+                    child
+                        .split('.')
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>(),
+                )
+                .map_err(|_| err("handler child path"))?,
+                port: node::Port::new(port.clone()).map_err(|_| err("handler child port"))?,
+            }
+        }
         _ => return Err(err("activation")),
     };
     let guard = match find(pairs, 3) {
@@ -1745,7 +1894,7 @@ fn handler_from(tree: &Cbor) -> Result<Handler, DecodeError> {
         .map(step_from)
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Handler {
-        node: slot,
+        owner,
         activation,
         guard,
         body,
@@ -2387,6 +2536,8 @@ mod tests {
             path: OwnerPath::root(),
             parent: None,
             kind: OwnerKind::Graph,
+            ports: vec![],
+            aspects: vec![],
             instance: InstanceSpec {
                 key: None,
                 lifetime: InstanceLifetime::Persistent,
@@ -2401,6 +2552,8 @@ mod tests {
             path: OwnerPath::new([name]).unwrap(),
             parent: Some(OwnerSlot::new(0)),
             kind: OwnerKind::Node(Slot::new(slot)),
+            ports: vec![],
+            aspects: vec![],
             instance: InstanceSpec {
                 key: None,
                 lifetime: InstanceLifetime::Persistent,
@@ -2478,7 +2631,7 @@ mod tests {
     }
 
     #[test]
-    fn v12_retains_one_spelling_for_owner_lifetimes_sites_and_dynamic_attributes() {
+    fn v13_retains_one_spelling_for_owner_lifetimes_sites_and_dynamic_attributes() {
         let lifetimes = [
             InstanceLifetime::Persistent,
             InstanceLifetime::Idle(1),
@@ -2524,6 +2677,8 @@ mod tests {
             path: OwnerPath::new(["workspace"]).unwrap(),
             parent: Some(OwnerSlot::new(0)),
             kind: OwnerKind::Graph,
+            ports: vec![],
+            aspects: vec![],
             instance: InstanceSpec {
                 key: Some(expr::Tree {
                     root: expr::Expr::Path(vec![text("meta"), text("app"), text("workspace")]),
@@ -2546,7 +2701,7 @@ mod tests {
     }
 
     #[test]
-    fn v12_package_sabotage_cannot_change_an_instance_key_or_lifetime() {
+    fn v13_package_sabotage_cannot_change_an_instance_key_or_lifetime() {
         let package = instance_package();
 
         let lying_key_type = mutate_package_body(&package, |body| {
@@ -2714,7 +2869,7 @@ mod tests {
                 },
             ],
             handlers: vec![Handler {
-                node: Slot::new(0),
+                owner: HandlerOwner::Node(Slot::new(0)),
                 activation: node::HandlerActivation::Port(port("in")),
                 guard: Some(tree(expr.clone())),
                 body: vec![
@@ -2786,7 +2941,7 @@ mod tests {
             boundary: vec![],
             edges: vec![],
             handlers: vec![Handler {
-                node: Slot::new(0),
+                owner: HandlerOwner::Node(Slot::new(0)),
                 activation: node::HandlerActivation::Port(port("in")),
                 guard: None,
                 body: vec![Step::Let {
@@ -3346,6 +3501,28 @@ mod tests {
             },
         ));
         spec.attributes.sort_by(|left, right| left.0.cmp(&right.0));
+        categorical.boundary.push(PortDecl {
+            port: port("deep"),
+            direction: node::Direction::Input,
+            unwired: crate::plan::UnwiredPolicy::RequireWire,
+            ty: Some(nested_type.clone()),
+        });
+        categorical.owners[0].aspects = vec![AspectSpec::Loop(LoopSpec {
+            fuel: PlanConstant {
+                expr: tree(nested_maplit.clone()),
+                resolved: nested_value.clone(),
+            },
+            delay: Some(LoopDelay::Exponential {
+                first: PlanConstant {
+                    expr: tree(expr::Expr::Literal(Value::Duration(1))),
+                    resolved: Value::Duration(1),
+                },
+                ceiling: PlanConstant {
+                    expr: tree(expr::Expr::Literal(Value::Duration(2))),
+                    resolved: Value::Duration(2),
+                },
+            }),
+        })];
 
         let plans = [
             ExecutionPlan {

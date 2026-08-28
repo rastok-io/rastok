@@ -1,8 +1,9 @@
 # Node kinds, types, and aspects
 
 > **Status:** normative taxonomy. `node::Kind` and `node::Type` are executable.
-> `Loop` and `Saga` are recognized `node::Aspect` values but remain named
-> execution gates until their individual specifications land.
+> `Loop` has categorical v13 transport and Registry-free validation; its
+> runtime manager remains gated until M1.7 L3/L4. `Saga` is recognized but
+> remains a named execution gate.
 
 This document defines the common classification model used by Graphs,
 Operators, and Connectors. The aspect-specific protocols live in
@@ -214,27 +215,31 @@ aspect wins over another. Any unqualified collision refuses.
 
 ## 8. Transport and identity
 
-The current v12 plan has no executable aspects. It derives all current
-NodeTypes from existing categorical facts and does not serialize a duplicate
-claim:
+The v13 plan still derives every NodeType from existing categorical facts and
+does not serialize a duplicate claim:
 
 - parentless Graph owner → `App`;
 - other Graph owner → `Graph`;
 - Operator plan entry → `Operator`;
 - Connector spec → `Connector(id)`.
 
-The first executable aspect will add one closed aspect list at the plan gate,
-with Registry-free validation and an enumerated semantic/package identity
-move. A runtime never rediscovers aspects from source strings, attributes, or
-port names.
+Each owner row now carries one closed canonical aspect list. L2 admits only
+`AspectSpec::Loop`, with a closed `LoopSpec`; root Graph ports remain solely in
+the plan boundary table, nested Graph ports ride their owner, and Node owners
+carry neither Graph ports nor aspects. Ordinary handlers carry a tagged Node
+or Graph owner, so a Loop Graph can observe its own input or a direct child's
+typed output without inventing an aspect-only AST. Registry-free validation
+re-derives every contribution after decode. A runtime never rediscovers an
+aspect from source strings, attributes, or port names, and refuses the
+transported Loop before mutation until its manager lands.
 
 ## 9. Deferred questions
 
 - User-defined and parameterized aspects are outside the current contract.
 - Every future pair requires a composition matrix entry.
-- M1.7 must close the Graph boundary decision proof, run identity, fuel,
-  typed exhaustion and source-to-Lab evidence before removing the current
-  `E-CHECK-DEFERRED`.
+- M1.7 must still close the Graph boundary decision proof, run identity, fuel,
+  typed exhaustion and source-to-Lab evidence before executing the transported
+  aspect.
 - Saga remains later than Loop; this document fixes its classification but
   does not claim an executable manager.
 

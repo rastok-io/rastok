@@ -97,6 +97,14 @@
 > body of affected graphs without changing the format. H6/H7 move no existing
 > semantic hash, package or causal trace.
 >
+> **M1.7 L2 is categorical format v13.** D-2026-08-28-2 adds the first
+> closed aspect transport, nested-Graph port rows, explicit Node-or-Graph
+> handler ownership and direct-child output activation. V12 cannot represent
+> those facts and is refused rather than guessed. Root Graph ports are not
+> mirrored: plan key 2 remains their sole authority, while owner key 6 is
+> populated only for nested Graphs. L2 writes no Loop journal fact and the VM
+> refuses any transported aspect before its first mutation until L3/L4.
+>
 > The lifetime rows are one closed transport and executable registry: v9
 > validation admits `persistent`, `idle`, `fixed`, `single_pass`, and
 > processing-time `tumbling` on Graph and Node owners. R5 adds the optional
@@ -188,7 +196,7 @@ module carries it.
 package := magic "RKPB"                      4 raw bytes, sniffable
            ("Rastok Plan Binary" — the pinned meaning of the magic)
         ┌ canonical CBOR map ─────────────────────────────────┐
-        │ 1 : format_version   uint      (12)                 │
+        │ 1 : format_version   uint      (13)                 │
         │ 2 : semantic_hash    bytes(32) (the plan's identity)│
         │ 3 : body             bytes     (embedded, see below)│
         │ 4 : checksum         bytes(32) (see recipe below)   │
@@ -223,7 +231,8 @@ of the contract, in order:
    every referenced port declared with the right direction, every Node and
    owner row reciprocally linked, one root Graph and a parent-before-child
    lexical tree, every edge scoped to a Graph, every handler owned by its
-   node, activation on an input port, emission on an output port, paths and
+   executable Node or aspect Graph, activation on a typed input or direct
+   child output, emission on an output port, paths and
    names unique, every state write resolvable. Well-shaped bytes naming impossible structure (an
    edge to slot 999) refuse typed — and the machine's `Vm::boot`
    accepts only the validated type, so no raw plan reaches it by
@@ -233,7 +242,7 @@ of the contract, in order:
    path order with a preceding Graph parent, Node port tables sorted and unique with
    untyped conventional rows omitted (a typed `in`/`out`/`err` row is a
    real source constraint), edges by their endpoint text,
-   handlers by (slot, activation key) with one handler per
+   handlers by (tagged owner, activation key) with one handler per
    activation, immutable bindings, vars and attributes sorted. Immutable
    owner expressions additionally have an acyclic lexical dependency graph,
    one derived earliest phase, and (at Plan) one independently reproduced
@@ -273,7 +282,7 @@ invariants the runtime dereferences without checking. Refusals are
 typed and total; there is no silent migration — a new format is a
 new version, and an old decoder refuses it by name.
 
-## Body tables (format v12)
+## Body tables (format v13)
 
 The body is one canonical CBOR value encoding the `ExecutionPlan`.
 Compound values use fixed-shape arrays with a leading numeric
@@ -311,13 +320,32 @@ node_kind  := 1                                   — operator
               // one owner_kind=[2,this_node_slot] with the same path.
 
 owner      := {1: path (text), 2: parent_owner_slot | null,
-               3: owner_kind, 4: instance, 5: [owner_val*]}
+               3: owner_kind, 4: instance, 5: [owner_val*],
+               6: [port_decl*], 7: [aspect_spec*]}
 owner_kind := [1]                                 — graph
             | [2, node_slot]                      — executable Node owner
               // Canonical root-first path order. The root App Graph is the
               // unique empty path, parentless Graph. Every other parent is a
               // preceding Graph owner and the direct lexical path prefix.
               // Graphs retain scope/lifecycle without becoming VM Nodes.
+              // Key 6 is empty on the root Graph because plan key 2 is its
+              // sole boundary authority; it is the complete canonical
+              // boundary on a nested Graph and empty on a Node owner.
+              // Key 7 is a canonical closed aspect list on Graphs and empty
+              // on Node owners. V13 admits at most Loop.
+
+aspect_spec := [1, loop_spec]                     — Loop
+loop_spec   := {1: fuel, 2: delay?}
+fuel        := plan_constant
+delay       := [1, plan_constant]                 — fixed(after)
+             | [2, plan_constant, plan_constant] — exponential(first, ceiling)
+plan_constant := [tree, tagged_value]
+              // Lowering substitutes every lexical `val`, so tree is closed
+              // except for indexed assets. Validation re-evaluates the value
+              // with no name environment; a surviving free name refuses
+              // instead of introducing a second package spelling. Fuel is a
+              // positive integer; delay fields are positive durations and
+              // ceiling is no smaller than first.
 
 instance   := {1: key (tree)?, 2: lifetime, 3: closing?}
               // key's tree already contains its inferred DataType. Absent =
@@ -413,15 +441,19 @@ endpoint   := [node_slot (uint) | null, port (text)]
               // executable Node table. Edge scope independently preserves the
               // lexical Graph whose boundary owns the route.
 
-handler    := {1: slot (uint), 2: activation, 3: guard (tree)?, 4: [step*]}
-              // slot names the owning executable Operator or Connector
+handler    := {1: handler_owner, 2: activation, 3: guard (tree)?, 4: [step*]}
+handler_owner := [1, node_slot]                   — Operator or Connector
+               | [2, owner_slot]                 — aspect-owning Graph
 activation := [1, port (text)]
             | [2, lifecycle]
             | [3, [port (text)+], within_ns (signed) | null,
                   last (positive uint32) | null]
+            | [4, child_path (text), port (text)]
               // join ports stay in source-declared order; >=2 and distinct.
               // A bound requires exact typed output `expired`; `where` lives
               // in handler key 3 and no second correlation key is transported.
+              // Tag 4 is one direct child output observed by a Graph-owned
+              // handler; validation proves lexical parenthood and exact type.
 lifecycle  := uint: 1 start · 2 stop · 3 compensate · 4 next ·
                     5 timeout · 6 evict · 7 recover · 8 closing · 9 reply
               // registry is closed and extend-only; M1.4 instance lifecycle

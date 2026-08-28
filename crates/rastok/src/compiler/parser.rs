@@ -1239,20 +1239,29 @@ impl<'src> Parser<'src, '_> {
             TokenKind::Ident => {
                 let first = self.bump();
                 if self.eat(TokenKind::Dot).is_some() {
-                    let aspect = Name {
+                    let qualifier = Name {
                         text: String::from(first.text),
                         span: first.span,
                     };
-                    let event = self.name("`start` or `stop`")?;
-                    let event = match event.text.as_str() {
-                        "start" => AspectEvent::Start,
-                        "stop" => AspectEvent::Stop,
-                        _ => {
-                            self.error_expected("`start` or `stop`");
-                            return None;
-                        }
-                    };
-                    return Some(Trigger::Aspect { aspect, event });
+                    let member = self.name("an output port")?;
+                    if matches!(qualifier.text.as_str(), "Loop" | "Saga") {
+                        let event = match member.text.as_str() {
+                            "start" => AspectEvent::Start,
+                            "stop" => AspectEvent::Stop,
+                            _ => {
+                                self.error_expected("`start` or `stop`");
+                                return None;
+                            }
+                        };
+                        return Some(Trigger::Aspect {
+                            aspect: qualifier,
+                            event,
+                        });
+                    }
+                    return Some(Trigger::ChildPort {
+                        child: qualifier,
+                        port: member,
+                    });
                 }
                 Some(match first.text {
                     "start" => Trigger::Start(first.span),
@@ -3444,6 +3453,24 @@ graph m0_probe : App {
             Trigger::Aspect { aspect, event: AspectEvent::Stop } if aspect.text == "Loop"
         ));
         assert!(removed_lifecycle.body.is_none());
+    }
+
+    #[test]
+    fn a_graph_handler_names_one_direct_child_output() {
+        let tree = parse_clean(
+            "graph g : App {\n  operator work { output done: text }\n  on work.done { out = data }\n}\n",
+        );
+        let TopDecl::Graph(graph) = &tree.decls[0] else {
+            panic!("expected a graph");
+        };
+        let GraphItem::Handler(handler) = &graph.body[1] else {
+            panic!("expected the Graph handler");
+        };
+        assert!(matches!(
+            &handler.trigger,
+            Trigger::ChildPort { child, port }
+                if child.text == "work" && port.text == "done"
+        ));
     }
 
     #[test]

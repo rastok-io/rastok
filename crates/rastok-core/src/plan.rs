@@ -413,6 +413,25 @@ impl ExecutionPlan {
         self.owners.get(slot.index())
     }
 
+    /// Complete boundary contract of one Graph owner.
+    ///
+    /// The root Graph already owns [`Self::boundary`], so its owner row keeps
+    /// no duplicate claim. Nested Graphs carry their contract on the owner
+    /// row because composition removes their boundary endpoints from the
+    /// flattened edge table.
+    #[must_use]
+    pub fn graph_ports(&self, slot: OwnerSlot) -> Option<&[PortDecl]> {
+        let owner = self.owner(slot)?;
+        if owner.kind != OwnerKind::Graph {
+            return None;
+        }
+        if owner.path.is_root() {
+            Some(&self.boundary)
+        } else {
+            Some(&owner.ports)
+        }
+    }
+
     /// The instance policy owned by one executable Node.
     #[must_use]
     pub fn node_instance(&self, slot: Slot) -> Option<&InstanceSpec> {
@@ -611,10 +630,76 @@ pub struct Owner {
     pub parent: Option<OwnerSlot>,
     /// The declaration this row preserves after DAG flattening.
     pub kind: OwnerKind,
+    /// A nested Graph's complete boundary contract in canonical order. Node
+    /// owners and the root Graph carry an empty table: Node ports remain on
+    /// [`Node`], while the root contract has its existing single authority in
+    /// [`ExecutionPlan::boundary`].
+    pub ports: Vec<PortDecl>,
+    /// Closed aspect specifications in canonical aspect order. Keeping the
+    /// specification inside the enum makes an aspect-without-configuration
+    /// impossible in a categorical plan.
+    pub aspects: Vec<AspectSpec>,
     /// Orthogonal logical addressing and lifetime policy.
     pub instance: InstanceSpec,
     /// Immutable bindings owned by this scope, in canonical name order.
     pub vals: Vec<OwnerValue>,
+}
+
+/// One fully configured NodeAspect carried by a categorical plan.
+///
+/// The enum is deliberately closed. Recognizing a source name does not grant
+/// it a transport tag: a new aspect lands only together with its complete
+/// Registry-free validation contract.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AspectSpec {
+    /// Finite temporal recursion owned by a Graph boundary.
+    Loop(LoopSpec),
+}
+
+impl AspectSpec {
+    /// Semantic aspect selected by this complete specification.
+    #[must_use]
+    pub const fn aspect(&self) -> node::Aspect {
+        match self {
+            Self::Loop(_) => node::Aspect::Loop,
+        }
+    }
+}
+
+/// One plan-reduced constant whose checked expression remains identity and
+/// validation material.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanConstant {
+    /// Canonical checked expression after lexical constant substitution.
+    pub expr: expr::Tree,
+    /// Claimed reduction, re-evaluated Registry-free after decode.
+    pub resolved: Value,
+}
+
+/// Complete first-gate Loop transport.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoopSpec {
+    /// Positive maximum number of body applications.
+    pub fuel: PlanConstant,
+    /// Optional re-admission delay.
+    pub delay: Option<LoopDelay>,
+}
+
+/// Closed Loop delay policy.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LoopDelay {
+    /// Every recurrence waits the same duration.
+    Fixed {
+        /// Positive delay.
+        after: PlanConstant,
+    },
+    /// Delay doubles and saturates at the inclusive ceiling.
+    Exponential {
+        /// Positive first delay.
+        first: PlanConstant,
+        /// Positive ceiling, no smaller than `first`.
+        ceiling: PlanConstant,
+    },
 }
 
 /// One owner's logical instance policy. A missing key selects the singleton
@@ -759,8 +844,8 @@ pub struct VarCell {
 /// One planned handler: a triggered, ordered statement body.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Handler {
-    /// The owning node.
-    pub node: Slot,
+    /// Lexical declaration that owns the handler.
+    pub owner: HandlerOwner,
     /// The declared activation pattern — not the causal trigger a
     /// transaction records; see [`node::HandlerActivation`].
     pub activation: node::HandlerActivation,
@@ -768,6 +853,39 @@ pub struct Handler {
     pub guard: Option<expr::Tree>,
     /// The steps, in text order — the order fixing emission indices.
     pub body: Vec<Step>,
+}
+
+/// Owner of one ordinary handler body.
+///
+/// Graph handlers reuse the exact guard/statement representation of Node
+/// handlers. This is a transport distinction, not a Loop-only execution
+/// family.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum HandlerOwner {
+    /// Executable Operator or Connector slot.
+    Node(Slot),
+    /// Lexical Graph owner slot.
+    Graph(OwnerSlot),
+}
+
+impl HandlerOwner {
+    /// Node slot when this is an executable-Node handler.
+    #[must_use]
+    pub const fn node(self) -> Option<Slot> {
+        match self {
+            Self::Node(slot) => Some(slot),
+            Self::Graph(_) => None,
+        }
+    }
+
+    /// Graph owner slot when this is a Graph handler.
+    #[must_use]
+    pub const fn graph(self) -> Option<OwnerSlot> {
+        match self {
+            Self::Graph(slot) => Some(slot),
+            Self::Node(_) => None,
+        }
+    }
 }
 
 /// One executable step.

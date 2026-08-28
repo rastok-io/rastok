@@ -21,10 +21,11 @@ use crate::datatype::{
 use crate::expr;
 use crate::node;
 use crate::plan::{
-    AttrSetting, ClosingPolicy as PlanClosingPolicy, ConnectorSpec, Edge, Emission, EndpointRef,
-    EvaluationSite, ExecutionPlan, FieldWrite, Handler, InstanceLifetime as PlanInstanceLifetime,
-    InstanceSpec, Node, NodeExecution, Owner, OwnerKind, OwnerPath, OwnerSlot, OwnerValue,
-    SemanticHash, Slot, Step, SymbolTable, VarCell,
+    AspectSpec, AttrSetting, ClosingPolicy as PlanClosingPolicy, ConnectorSpec, Edge, Emission,
+    EndpointRef, EvaluationSite, ExecutionPlan, FieldWrite, Handler, HandlerOwner,
+    InstanceLifetime as PlanInstanceLifetime, InstanceSpec, LoopDelay as PlanLoopDelay,
+    LoopSpec as PlanLoopSpec, Node, NodeExecution, Owner, OwnerKind, OwnerPath, OwnerSlot,
+    OwnerValue, PlanConstant, SemanticHash, Slot, Step, SymbolTable, VarCell,
 };
 
 /// Computes the semantic hash of a checked graph.
@@ -99,6 +100,54 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
             for val in vals {
                 writer.str(&val.name);
                 writer.expr(&val.value.tree.root);
+            }
+        }
+    }
+    let aspect_graphs: Vec<_> = sorted_graphs(hir)
+        .into_iter()
+        .filter(|graph| !graph.aspects.is_empty())
+        .collect();
+    if !aspect_graphs.is_empty() {
+        writer.str("rastok.aspects.r1");
+        writer.count(aspect_graphs.len());
+        for graph in aspect_graphs {
+            writer.str(&graph.path.to_string());
+            writer.count(graph.aspects.len());
+            for aspect in &graph.aspects {
+                match aspect {
+                    node::Aspect::Loop => {
+                        writer.tag(1);
+                        match &graph.loop_spec {
+                            None => writer.tag(0),
+                            Some(spec) => {
+                                writer.tag(1);
+                                writer.tree(&spec.fuel.tree);
+                                match &spec.delay {
+                                    None => writer.tag(0),
+                                    Some(crate::compiler::hir::LoopDelay::Fixed { after }) => {
+                                        writer.tag(1);
+                                        writer.tree(&after.tree);
+                                    }
+                                    Some(crate::compiler::hir::LoopDelay::Exponential {
+                                        first,
+                                        ceiling,
+                                    }) => {
+                                        writer.tag(2);
+                                        writer.tree(&first.tree);
+                                        writer.tree(&ceiling.tree);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    node::Aspect::Saga => writer.tag(2),
+                }
+            }
+            let mut handlers: Vec<_> = graph.handlers.iter().collect();
+            handlers.sort_by_key(|handler| handler.activation.canonical_key());
+            writer.count(handlers.len());
+            for handler in handlers {
+                writer.handler(handler);
             }
         }
     }
@@ -331,10 +380,16 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                 detail: "a checked Graph carries an incompatible Node type",
             });
         }
-        if !graph.aspects.is_empty() {
+        if graph
+            .aspects
+            .iter()
+            .any(|aspect| *aspect != node::Aspect::Loop)
+            || (graph.aspects.contains(&node::Aspect::Loop) && graph.loop_spec.is_none())
+            || (!graph.aspects.contains(&node::Aspect::Loop) && graph.loop_spec.is_some())
+        {
             return Err(LowerError {
                 owner: graph.path.to_string(),
-                detail: "a Node aspect reached lowering before its plan gate",
+                detail: "a Graph aspect reached lowering without its complete categorical specification",
             });
         }
     }
@@ -411,12 +466,27 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
             }
         };
         let mut constants = graph_constant_environment(hir, &graph_path);
-        let (kind, instance, vals) = match checked {
-            CheckedOwner::Graph(graph) => (
-                OwnerKind::Graph,
-                lower_instance(graph.instance.as_ref(), &constants, &graph.path.to_string())?,
-                lower_owner_values(&graph.vals),
-            ),
+        let (kind, ports, aspects, instance, vals) = match checked {
+            CheckedOwner::Graph(graph) => {
+                let mut ports = if graph.path.is_root() {
+                    Vec::new()
+                } else {
+                    graph.boundary.clone()
+                };
+                ports.sort_by(|left, right| left.key().cmp(&right.key()));
+                let aspects = graph
+                    .loop_spec
+                    .as_ref()
+                    .map(|spec| vec![AspectSpec::Loop(lower_loop_spec(spec, &constants))])
+                    .unwrap_or_default();
+                (
+                    OwnerKind::Graph,
+                    ports,
+                    aspects,
+                    lower_instance(graph.instance.as_ref(), &constants, &graph.path.to_string())?,
+                    lower_owner_values(&graph.vals),
+                )
+            }
             CheckedOwner::Node(node) => {
                 constants.extend(
                     node.vals
@@ -427,6 +497,8 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                 node_owners.insert(node.path.clone(), owner_slot);
                 (
                     OwnerKind::Node(slot),
+                    Vec::new(),
+                    Vec::new(),
                     lower_instance(node.instance.as_ref(), &constants, &node.path.to_string())?,
                     lower_owner_values(&node.vals),
                 )
@@ -436,6 +508,8 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
             path: path.clone(),
             parent,
             kind,
+            ports,
+            aspects,
             instance,
             vals,
         });
@@ -547,7 +621,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         handlers.sort_by_key(|handler| handler.activation.canonical_key());
         for handler in handlers {
             plan.handlers.push(Handler {
-                node: slot,
+                owner: HandlerOwner::Node(slot),
                 activation: handler.activation.clone(),
                 guard: handler.guard.as_ref().map(&subst),
                 body: handler
@@ -572,6 +646,32 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
             });
         }
     }
+    for graph in sorted_graphs(hir) {
+        let owner = *owner_slots.get(&graph.path).ok_or_else(|| LowerError {
+            owner: graph.path.to_string(),
+            detail: "the canonical owner table omitted a Graph handler owner",
+        })?;
+        let constants = graph_constant_environment(hir, &graph.path);
+        let subst = |tree: &expr::Tree| substitute_tree(tree, &constants);
+        let mut handlers: Vec<_> = graph.handlers.iter().collect();
+        handlers.sort_by_key(|handler| handler.activation.canonical_key());
+        for handler in handlers {
+            plan.handlers.push(Handler {
+                owner: HandlerOwner::Graph(owner),
+                activation: handler.activation.clone(),
+                guard: handler.guard.as_ref().map(&subst),
+                body: handler
+                    .body
+                    .iter()
+                    .map(|statement| lower_statement(statement, &subst))
+                    .collect(),
+            });
+        }
+    }
+    plan.handlers.sort_by(|left, right| {
+        (left.owner, left.activation.canonical_key())
+            .cmp(&(right.owner, right.activation.canonical_key()))
+    });
     for (_, edge) in sorted_edges(hir) {
         let endpoint = |end: &crate::compiler::hir::Endpoint| -> Result<EndpointRef, LowerError> {
             let node = match &end.owner {
@@ -617,6 +717,48 @@ fn lower_owner_values(values: &[crate::compiler::hir::Val]) -> Vec<OwnerValue> {
         .collect();
     lowered.sort_by(|left, right| left.name.cmp(&right.name));
     lowered
+}
+
+fn lower_loop_spec(
+    spec: &crate::compiler::hir::LoopSpec,
+    constants: &std::collections::BTreeMap<String, crate::value::Value>,
+) -> PlanLoopSpec {
+    let constant = |value: &crate::compiler::hir::Const| PlanConstant {
+        expr: substitute_tree(&value.tree, constants),
+        resolved: value.value.clone(),
+    };
+    PlanLoopSpec {
+        fuel: constant(&spec.fuel),
+        delay: spec.delay.as_ref().map(|delay| match delay {
+            crate::compiler::hir::LoopDelay::Fixed { after } => PlanLoopDelay::Fixed {
+                after: constant(after),
+            },
+            crate::compiler::hir::LoopDelay::Exponential { first, ceiling } => {
+                PlanLoopDelay::Exponential {
+                    first: constant(first),
+                    ceiling: constant(ceiling),
+                }
+            }
+        }),
+    }
+}
+
+fn lower_statement(statement: &HirStatement, subst: &impl Fn(&expr::Tree) -> expr::Tree) -> Step {
+    match statement {
+        HirStatement::Let { name, value } => Step::Let {
+            name: name.clone(),
+            expr: subst(value),
+        },
+        HirStatement::SetVar { name, value } => Step::SetVar {
+            name: name.clone(),
+            expr: subst(value),
+        },
+        HirStatement::Emit { port, value } => Step::Emit {
+            port: port.clone(),
+            value: lower_emission(value, subst),
+        },
+        HirStatement::Stop => Step::Stop,
+    }
 }
 
 fn lower_instance(
@@ -1242,56 +1384,58 @@ impl Writer<'_> {
         handlers.sort_by_key(|handler| handler.activation.canonical_key());
         self.count(handlers.len());
         for handler in handlers {
-            // Hash material: the canonical key (`p:<port>`) — the
-            // pinned identity form, byte-identical to the
-            // pre-activation encoding; Display is presentation and
-            // free to move.
-            self.str(&handler.activation.canonical_key());
-            if let node::HandlerActivation::Join { last, .. } = &handler.activation {
-                self.str("rastok.join.bounds.r1");
-                self.tag(1);
-                match &handler.join_within {
-                    None => self.tag(0),
-                    Some(within) => {
-                        self.tag(1);
-                        self.tree(&within.tree);
-                    }
-                }
-                match last {
-                    None => self.tag(0),
-                    Some(count) => {
-                        self.tag(1);
-                        self.u32(*count);
-                    }
-                }
-            }
-            match &handler.guard {
+            self.handler(handler);
+        }
+    }
+
+    fn handler(&mut self, handler: &crate::compiler::hir::Handler) {
+        // Hash material: the canonical activation key. Display is
+        // presentation and free to move.
+        self.str(&handler.activation.canonical_key());
+        if let node::HandlerActivation::Join { last, .. } = &handler.activation {
+            self.str("rastok.join.bounds.r1");
+            self.tag(1);
+            match &handler.join_within {
                 None => self.tag(0),
-                Some(guard) => {
+                Some(within) => {
                     self.tag(1);
-                    self.tree(guard);
+                    self.tree(&within.tree);
                 }
             }
-            self.count(handler.body.len());
-            for statement in &handler.body {
-                match statement {
-                    HirStatement::Let { name, value } => {
-                        self.tag(1);
-                        self.str(name);
-                        self.tree(value);
-                    }
-                    HirStatement::Emit { port, value } => {
-                        self.tag(2);
-                        self.str(port.name());
-                        self.emission(value);
-                    }
-                    HirStatement::SetVar { name, value } => {
-                        self.tag(3);
-                        self.str(name);
-                        self.tree(value);
-                    }
-                    HirStatement::Stop => self.tag(4),
+            match last {
+                None => self.tag(0),
+                Some(count) => {
+                    self.tag(1);
+                    self.u32(*count);
                 }
+            }
+        }
+        match &handler.guard {
+            None => self.tag(0),
+            Some(guard) => {
+                self.tag(1);
+                self.tree(guard);
+            }
+        }
+        self.count(handler.body.len());
+        for statement in &handler.body {
+            match statement {
+                HirStatement::Let { name, value } => {
+                    self.tag(1);
+                    self.str(name);
+                    self.tree(value);
+                }
+                HirStatement::Emit { port, value } => {
+                    self.tag(2);
+                    self.str(port.name());
+                    self.emission(value);
+                }
+                HirStatement::SetVar { name, value } => {
+                    self.tag(3);
+                    self.str(name);
+                    self.tree(value);
+                }
+                HirStatement::Stop => self.tag(4),
             }
         }
     }
@@ -1711,7 +1855,7 @@ graph m0_probe : App {
         );
         assert_eq!(plan.handlers.len(), 1);
         let handler = &plan.handlers[0];
-        assert_eq!(handler.node.index(), 0);
+        assert_eq!(handler.owner.node().map(|slot| slot.index()), Some(0));
         assert_eq!(
             handler.activation,
             node::HandlerActivation::Port(node::Port::new("in").unwrap())
@@ -1743,6 +1887,34 @@ graph m0_probe : App {
                 .ty(),
             &DataType::Text
         );
+    }
+
+    #[test]
+    fn loop_identity_tracks_policy_but_not_formatting() {
+        let source = |fuel: u32, spaced: bool| {
+            if spaced {
+                format!(
+                    "graph app : App + Loop {{\n  input in : int\n  output out : int\n  Loop.fuel = {fuel}\n  on in {{ out = data }}\n}}\n"
+                )
+            } else {
+                format!(
+                    "graph app:App+Loop{{input in:int;output out:int;Loop.fuel={fuel};on in{{out=data}}}}"
+                )
+            }
+        };
+        let compile_hash = |source: String| {
+            compile(
+                &[source.as_str()],
+                &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+            )
+            .expect("the categorical Loop compiles")
+            .hash
+        };
+        let compact = compile_hash(source(3, false));
+        let formatted = compile_hash(source(3, true));
+        let different_fuel = compile_hash(source(4, true));
+        assert_eq!(compact, formatted);
+        assert_ne!(formatted, different_fuel);
     }
 
     #[test]

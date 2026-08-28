@@ -421,8 +421,11 @@ step touches `vm.rs` once.
    type; `Loop` and `Saga` are aspects; Reducer/Aggregator/Window/Joiner/
    Router/Dispatch/Fanout remain ordinary guide patterns. L0 also makes the
    source owner attribute singular (`instance = { key = ... }`) while
-   preserving the historical identity domain. L1–L7 then freeze and execute
-   one bounded continuation protocol: categorical aspect transport, a
+   preserving the historical identity domain. L1 freezes the protocol and L2
+   now carries its closed boundary, plan constants and ordinary Graph handlers
+   through categorical v13 with Registry-free validation and a pre-mutation VM
+   refusal. L3–L7 execute
+   one bounded continuation protocol: a
    journal-folded run and `l:next` chain, Graph traversal with ordinary pure
    Operator work, typed Connector retry, dated re-entry, Closing/recovery model checks, and
    final identity/portability evidence. The checker remains fail-closed at

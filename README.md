@@ -95,6 +95,13 @@ proof. The single
 records executed independent HTTP/WebSocket interop and the remaining
 ngtcp2/Autobahn qualifications without conflating them with workspace tests.
 
+M1.7 L2 is landed. `Loop` is the first aspect with a closed categorical plan
+contract: a fuel-only Loop crosses source, typed HIR and v13 round-trip with
+its exact `in`/`next`/`out`/`expired` boundary and ordinary Graph handlers.
+Registry-free validation re-derives every claim. Execution remains
+deliberately fail-closed before the first VM mutation until the L3 control
+proof and L4 journal fold land.
+
 The standalone runner links Process by default. Hosted features add the
 selected HTTP/WebSocket families through one registry assembly. Pass
 `--file-root <dir>` to `rastok run` to add the real File Driver with an

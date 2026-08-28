@@ -419,6 +419,15 @@ pub enum Trigger {
         /// The qualified lifecycle event.
         event: AspectEvent,
     },
+    /// `on <child>.<output>` — an output emitted by a direct child of the
+    /// lexical Graph. This form is meaningful only for Graph-owned handlers;
+    /// ordinary Nodes still activate on their own input ports.
+    ChildPort {
+        /// Direct child declaration.
+        child: Name,
+        /// Output port on that child.
+        port: Name,
+    },
     /// `on (a, b)` — presence join.
     Join(Vec<Name>),
     /// `on <port>`

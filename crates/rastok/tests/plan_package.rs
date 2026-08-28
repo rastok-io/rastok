@@ -35,6 +35,37 @@ fn packaged_example() -> (
     (compilation.plan, compilation.hash, bytes)
 }
 
+fn packaged_loop() -> (
+    rastok::plan::ValidatedExecutionPlan,
+    rastok::plan::SemanticHash,
+    Vec<u8>,
+) {
+    let source = r#"
+graph countdown : App + Loop {
+  input in: text
+  output out: text
+  Loop.fuel = 3
+
+  operator relay {
+    input in: text
+    output out: text
+    on in { out = data }
+  }
+
+  . -> relay
+  on relay.out { out = Loop.state.data }
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the first categorical Loop crosses source lowering");
+    assert!(compilation.warnings.is_empty());
+    let bytes = plan::encode(&compilation.plan, &compilation.hash);
+    (compilation.plan, compilation.hash, bytes)
+}
+
 #[test]
 fn the_round_trip_preserves_the_plan_and_its_identity() {
     let (plan, hash, bytes) = packaged_example();
@@ -44,7 +75,135 @@ fn the_round_trip_preserves_the_plan_and_its_identity() {
 }
 
 #[test]
-fn v12_round_trips_tagged_structural_and_narrowing_expressions() {
+fn v13_carries_one_closed_loop_without_executing_plain_graph_semantics() {
+    let (compiled, hash, bytes) = packaged_loop();
+    let root = compiled.owners.first().expect("the root owner");
+    let [rastok::plan::AspectSpec::Loop(spec)] = root.aspects.as_slice() else {
+        panic!("the root carries exactly one closed Loop specification");
+    };
+    assert_eq!(spec.fuel.resolved, rastok::value::Value::Int(3));
+    assert!(spec.delay.is_none());
+    assert!(compiled.boundary.iter().any(|port| {
+        port.port.name() == "next"
+            && port.direction == rastok::node::Direction::Output
+            && port.ty.as_ref() == Some(&rastok::datatype::DataType::Text)
+    }));
+    assert!(matches!(
+        compiled.handlers.as_slice(),
+        [
+            rastok::plan::Handler {
+                owner: rastok::plan::HandlerOwner::Node(_),
+                ..
+            },
+            rastok::plan::Handler {
+                owner: rastok::plan::HandlerOwner::Graph(_),
+                activation: rastok::node::HandlerActivation::ChildPort { .. },
+                ..
+            }
+        ]
+    ));
+
+    let (decoded, declared) = plan::decode(&bytes).expect("v13 revalidates Loop Registry-free");
+    assert_eq!(decoded, compiled);
+    assert_eq!(declared, hash);
+
+    use rastok::boundary::{
+        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    };
+    use rastok::envelope::{Data, Namespace};
+    use rastok::journal::MemJournal;
+    use rastok::plan::GraphVersion;
+    use rastok::runtime::vm::{Vm, VmError};
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&decoded, GraphVersion(1));
+    let refusal = vm
+        .inject(
+            &mut journal,
+            InboundSubmission {
+                provenance: InboundEnvelopeProvenance::single(
+                    rastok::node::Path::new(["probe"]).unwrap(),
+                ),
+                port: rastok::node::Port::new("in").unwrap(),
+                draft: Draft {
+                    data: Data::materialized(rastok::value::Value::Text(String::from("go"))),
+                    ext: Namespace::new(),
+                },
+                sequence: SubmissionSequence::Next,
+            },
+        )
+        .expect_err("L2 transport cannot degrade to a plain Graph execution");
+    assert!(matches!(
+        refusal,
+        VmError::UnsupportedAspect {
+            aspect: rastok::node::Aspect::Loop,
+            ..
+        }
+    ));
+    assert!(
+        journal.records().is_empty(),
+        "the refusal precedes journal mutation"
+    );
+
+    let registry = rastok::connectors::DriverRegistry::default();
+    let mut bindings = rastok::connectors::RuntimeBindings::try_new(&decoded, &registry)
+        .expect("a connector-free Loop needs no Driver");
+    assert!(matches!(
+        vm.pump(&mut journal, &mut bindings),
+        Err(VmError::UnsupportedAspect {
+            aspect: rastok::node::Aspect::Loop,
+            ..
+        })
+    ));
+    assert!(
+        journal.records().is_empty(),
+        "even a boundary pump refuses before polling a Driver"
+    );
+}
+
+#[test]
+fn a_partial_or_foreign_loop_spec_never_enters_a_v13_plan() {
+    let (_, _, bytes) = packaged_loop();
+    let mutate_aspect = |body: &mut std::collections::BTreeMap<u64, Cbor>,
+                         edit: &dyn Fn(&mut Vec<Cbor>)| {
+        let Cbor::Array(owners) = body.get_mut(&9).expect("the owner table") else {
+            panic!("owners are an array");
+        };
+        let Cbor::Map(root) = &mut owners[0] else {
+            panic!("the root owner is a map");
+        };
+        let Cbor::Array(aspects) = root.get_mut(&7).expect("the aspect table") else {
+            panic!("aspects are an array");
+        };
+        let Cbor::Array(aspect) = &mut aspects[0] else {
+            panic!("the Loop aspect is tagged");
+        };
+        edit(aspect);
+    };
+
+    let partial = reframe_body(&bytes, |body| {
+        mutate_aspect(body, &|aspect| {
+            let Cbor::Map(spec) = &mut aspect[1] else {
+                panic!("the Loop specification is a map");
+            };
+            spec.remove(&1);
+        });
+    });
+    assert_eq!(
+        plan::decode(&partial).unwrap_err(),
+        DecodeError::Malformed(String::from("Loop fuel: missing"))
+    );
+
+    let foreign = reframe_body(&bytes, |body| {
+        mutate_aspect(body, &|aspect| aspect[0] = Cbor::Uint(99));
+    });
+    assert_eq!(
+        plan::decode(&foreign).unwrap_err(),
+        DecodeError::Malformed(String::from("aspect specification"))
+    );
+}
+
+#[test]
+fn v13_round_trips_tagged_structural_and_narrowing_expressions() {
     let sources = [
         r#"
 type Failure = union { Broken { message: text } }
@@ -84,16 +243,16 @@ graph g : App {
             &[source],
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
-        .expect("a valid v12 program");
+        .expect("a valid v13 program");
         let bytes = plan::encode(&compilation.plan, &compilation.hash);
-        let (decoded, hash) = plan::decode(&bytes).expect("the v12 package opens");
+        let (decoded, hash) = plan::decode(&bytes).expect("the v13 package opens");
         assert_eq!(decoded, compilation.plan);
         assert_eq!(hash, compilation.hash);
     }
 }
 
 #[test]
-fn v12_round_trips_the_categorical_instance_contract() {
+fn v13_round_trips_the_categorical_instance_contract() {
     let source = r#"
 graph g : App {
   input in: text
@@ -135,7 +294,7 @@ graph g : App {
     }));
 
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
-    let (decoded, hash) = plan::decode(&bytes).expect("the v12 package opens");
+    let (decoded, hash) = plan::decode(&bytes).expect("the v13 package opens");
     assert_eq!(decoded, compilation.plan);
     assert_eq!(hash, compilation.hash);
 }
@@ -195,7 +354,7 @@ graph g : App {
 }
 
 #[test]
-fn v12_round_trips_a_bounded_join_activation_without_a_second_key_authority() {
+fn v13_round_trips_a_bounded_join_activation_without_a_second_key_authority() {
     let source = r#"
 type JoinExpiry = union { JoinExpired {} }
 graph g : App {
@@ -253,7 +412,8 @@ fn the_example_package_matches_its_golden() {
     // M1.6 H1 adds the explicit Call exchange tag and categorically moves the
     // container to v11. Existing Call causal records remain byte-identical.
     // M1.6 H4.1 adds `media_type` to the type/expression registry and moves
-    // every container categorically to v12.
+    // every container categorically to v12. M1.7 L2 moves containers to v13
+    // so Graph aspect contracts and their ordinary handlers can travel.
     let (_, _, bytes) = packaged_example();
     let rendered: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/echo.rkp");
@@ -396,8 +556,9 @@ fn every_refusal_is_typed() {
     // silently. In particular, v8 was the unreleased named-partition draft;
     // v9 replaced it rather than assigning two meanings to one version; v10
     // then replaced source Connector names with stable ids, v11 adds the
-    // mandatory exchange lifecycle, and v12 adds the media-type registry.
-    for draft in [2u64, 3, 4, 5, 6, 7, 8, 9, 10, 11] {
+    // mandatory exchange lifecycle, v12 adds the media-type registry, and
+    // v13 adds categorical Graph-aspect transport.
+    for draft in [2u64, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] {
         let retired = reframe(&bytes, |pairs| {
             pairs.insert(1, Cbor::Uint(draft));
         });
@@ -564,11 +725,11 @@ fn a_non_canonical_envelope_refuses() {
     // Reordered header keys: same fields, same checksum coverage,
     // different bytes — not the canonical encoding. Raw splice,
     // because the canonical encoder itself refuses to write an
-    // unsorted map: entry (1, uint 12) is bytes 5..7, entry
+    // unsorted map: entry (1, uint 13) is bytes 5..7, entry
     // (2, bytes32) is the 35 bytes after it; swap them.
     assert_eq!(
         &bytes[4..7],
-        &[0xa4, 0x01, 0x0c],
+        &[0xa4, 0x01, 0x0d],
         "the envelope head is stable"
     );
     assert_eq!(&bytes[7..10], &[0x02, 0x58, 0x20], "the hash entry follows");
@@ -583,16 +744,16 @@ fn a_non_canonical_envelope_refuses() {
         DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))
     ));
 
-    // A non-minimal integer in the header: uint 12 written on two
-    // bytes (0x18 0x0c) instead of one. The checksum still holds —
+    // A non-minimal integer in the header: uint 13 written on two
+    // bytes (0x18 0x0d) instead of one. The checksum still holds —
     // the VALUE is unchanged — so only the canonicity check refuses.
     assert_eq!(
         &bytes[4..7],
-        &[0xa4, 0x01, 0x0c],
+        &[0xa4, 0x01, 0x0d],
         "the envelope head is stable"
     );
     let mut widened = bytes.clone();
-    widened.splice(6..7, [0x18, 0x0c]);
+    widened.splice(6..7, [0x18, 0x0d]);
     assert!(matches!(
         plan::decode(&widened).unwrap_err(),
         DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))

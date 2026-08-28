@@ -448,6 +448,15 @@ impl fmt::Display for Trigger {
 pub enum HandlerActivation {
     /// Arrival on a single port.
     Port(Port),
+    /// Output of one direct child declaration, observed by its lexical Graph.
+    /// The path is global and structural in the plan even though the source
+    /// spelling uses only the direct child's local name.
+    ChildPort {
+        /// Canonical child Node or Graph path.
+        child: Path,
+        /// Typed child output.
+        port: Port,
+    },
     /// Presence of one delivery on every port, inside one owning Operator
     /// instance. Port order is semantic: it fixes bindings, contribution
     /// order, and the activation identity. Bounds retain candidates; they
@@ -476,6 +485,7 @@ impl HandlerActivation {
     pub fn canonical_key(&self) -> alloc::string::String {
         match self {
             Self::Port(port) => alloc::format!("p:{port}"),
+            Self::ChildPort { child, port } => alloc::format!("c:{child}:{port}"),
             Self::Join { ports, .. } => {
                 let mut key = String::from("j:(");
                 for (index, port) in ports.iter().enumerate() {
@@ -498,6 +508,7 @@ impl fmt::Display for HandlerActivation {
         // pinned.
         match self {
             Self::Port(port) => write!(f, "p:{port}"),
+            Self::ChildPort { child, port } => write!(f, "c:{child}:{port}"),
             Self::Join { ports, .. } => {
                 f.write_str("j:(")?;
                 for (index, port) in ports.iter().enumerate() {
@@ -524,6 +535,26 @@ impl fmt::Display for HandlerActivation {
 pub fn join_expired_type() -> Result<DataType, TypeError> {
     let payload = StructType::new(Vec::new())?;
     let case = TaggedCase::new("JoinExpired", payload)?;
+    Ok(DataType::TaggedUnion(TaggedUnionType::new(alloc::vec![
+        case,
+    ])?))
+}
+
+/// Canonical logical type of a Loop's conventional `expired` output.
+///
+/// The payload keeps the last proposed iteration state under the exact input
+/// carrier. It is an ordinary one-case tagged union; `expired` is a Loop
+/// convention, not a privileged runtime error channel.
+///
+/// # Errors
+///
+/// Returns the canonical type constructor's invariant violation.
+pub fn loop_expired_type(state: DataType) -> Result<DataType, TypeError> {
+    let payload = StructType::new(alloc::vec![crate::datatype::TypeField::new(
+        "last_state",
+        state,
+    )])?;
+    let case = TaggedCase::new("LoopExpired", payload)?;
     Ok(DataType::TaggedUnion(TaggedUnionType::new(alloc::vec![
         case,
     ])?))
@@ -597,5 +628,21 @@ mod tests {
             "compensable"
         );
         assert_eq!(Behavior::Probabilistic.to_string(), "probabilistic");
+    }
+
+    #[test]
+    fn loop_expiry_keeps_the_exact_iteration_carrier() {
+        let DataType::TaggedUnion(union) = loop_expired_type(DataType::Text).unwrap() else {
+            panic!("LoopExpired is a tagged union");
+        };
+        let [case] = union.cases() else {
+            panic!("LoopExpired has one terminal case");
+        };
+        assert_eq!(case.name(), "LoopExpired");
+        let [field] = case.payload().fields() else {
+            panic!("LoopExpired keeps one last_state field");
+        };
+        assert_eq!(field.name(), "last_state");
+        assert_eq!(field.ty(), &DataType::Text);
     }
 }

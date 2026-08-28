@@ -15,7 +15,7 @@ these concepts concretely. Stdlib aliases (`HttpClient`, `Process`,
 the primitive `operator` / `connector` keywords stand on their own
 when no alias fits.
 
-The parser is a forward lexeme stream. Categorical plan-package v12 retains
+The parser is a forward lexeme stream. Categorical plan-package v13 retains
 v9's lexical owners, Node-owned instance policy, scoped edges and phased
 immutable expressions plus the complete v7 M1.3 type/value/expression
 registry, extended by H4.1's `media_type`; it also carries stable Connector
@@ -25,13 +25,15 @@ the three metadata zones, `IDENT!` frontends, structural and tagged types,
 typed narrowing, all five Graph/Node lifetime profiles, and the one-file
 `File(read|replace)` Driver execute. The former
 named-partition P0-P3 implementation is superseded by the
-`instances`/`lifetime` model. Hierarchical routing, keyed/nested Graph
+`instance`/`lifetime` model. Hierarchical routing, keyed/nested Graph
 dispatch, Graph lifecycle facts, explicit bounded closing, and bounded
 presence joins execute. R7 has audited the removed surface and physical
-placement neutrality without claiming a cluster runtime. Graph
-lifecycle-handler lowering, HTTP Drivers, File append/watch/directory
-profiles, Loop, Process service mode, and guest engines are still pending or
-guarded. Thus these are parser- and design-reference snippets, not a claim
+placement neutrality without claiming a cluster runtime. Graph lifecycle
+handlers outside an admitted aspect, File append/watch/directory profiles,
+the Loop control proof/runtime manager, Process service mode, and guest
+engines are still pending or guarded. Loop's closed L2 transport and ordinary
+Graph handlers execute only up to the fail-closed VM gate. Thus these are
+parser- and design-reference snippets, not a claim
 that every section runs today. The small executable fixtures under
 [`examples/`](../../examples/) are the run/simulate proofs.
 

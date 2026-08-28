@@ -90,6 +90,158 @@ fn raw_join(bounded: bool) -> ExecutionPlan {
     .into_inner()
 }
 
+fn raw_loop() -> ExecutionPlan {
+    let source = r#"
+graph countdown : App + Loop {
+  input in: text
+  output out: text
+  Loop.fuel = 3
+  operator relay {
+    input in: text
+    output out: text
+    on in { out = data }
+  }
+  . -> relay
+  on relay.out { out = Loop.state.data }
+}
+"#;
+    compile(
+        &[source],
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the categorical Loop fixture is valid")
+    .plan
+    .into_inner()
+}
+
+#[test]
+fn an_app_val_is_substituted_into_a_nested_loop_constant() {
+    let source = r#"
+graph app : App {
+  val attempts = 3
+
+  graph countdown : Loop {
+    input in: text
+    output out: text
+    Loop.fuel = attempts
+
+    operator relay {
+      input in: text
+      output out: text
+      on in { out = data }
+    }
+
+    . -> relay
+    on relay.out { out = Loop.state.data }
+  }
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("an App val remains visible in its nested Loop");
+    let countdown = compilation
+        .plan
+        .owners
+        .iter()
+        .find(|owner| owner.path.to_string() == "countdown")
+        .expect("the nested Graph owner travels");
+    let [plan::AspectSpec::Loop(spec)] = countdown.aspects.as_slice() else {
+        panic!("the nested Graph carries Loop");
+    };
+    assert_eq!(
+        spec.fuel.expr.root,
+        expr::Expr::Literal(rastok::value::Value::Int(3)),
+        "lexical App constants are substituted before categorical transport"
+    );
+    let bytes = plan::encode(&compilation.plan, &compilation.hash);
+    let (decoded, declared) = plan::decode(&bytes).expect("v13 re-derives inherited val types");
+    assert_eq!(decoded, compilation.plan);
+    assert_eq!(declared, compilation.hash);
+
+    let mut forged = compilation.plan.clone().into_inner();
+    let countdown = forged
+        .owners
+        .iter_mut()
+        .find(|owner| owner.path.to_string() == "countdown")
+        .expect("the nested Graph owner");
+    let [plan::AspectSpec::Loop(spec)] = countdown.aspects.as_mut_slice() else {
+        panic!("the nested Graph carries Loop");
+    };
+    spec.fuel.expr.root = expr::Expr::Path(vec![String::from("attempts")]);
+    assert!(matches!(
+        ValidatedExecutionPlan::try_new(forged),
+        Err(PlanValidationError::InvalidGraphContract {
+            owner,
+            detail: "Loop.fuel is not its claimed plan constant",
+        }) if owner == "countdown"
+    ));
+}
+
+#[test]
+fn loop_claims_are_rederived_from_the_graph_contract() {
+    let mut zero_fuel = raw_loop();
+    let [plan::AspectSpec::Loop(spec)] = zero_fuel.owners[0].aspects.as_mut_slice() else {
+        panic!("the fixture has one Loop");
+    };
+    spec.fuel.resolved = rastok::value::Value::Int(0);
+    assert!(matches!(
+        ValidatedExecutionPlan::try_new(zero_fuel),
+        Err(PlanValidationError::InvalidGraphContract { detail, .. })
+            if detail.contains("Loop.fuel")
+    ));
+
+    let mut wrong_next = raw_loop();
+    wrong_next
+        .boundary
+        .iter_mut()
+        .find(|port| port.port.name() == "next")
+        .expect("Loop.next")
+        .ty = Some(DataType::INT);
+    assert!(matches!(
+        ValidatedExecutionPlan::try_new(wrong_next),
+        Err(PlanValidationError::InvalidGraphContract { detail, .. })
+            if detail.contains("Loop.next")
+    ));
+
+    let mut unbound_asset = raw_loop();
+    let graph_handler = unbound_asset
+        .handlers
+        .iter_mut()
+        .find(|handler| handler.owner.graph().is_some())
+        .expect("the fixture has one Graph handler");
+    let Step::Emit {
+        value: plan::Emission::Data(tree),
+        ..
+    } = &mut graph_handler.body[0]
+    else {
+        panic!("the Graph handler emits its result");
+    };
+    tree.root = expr::Expr::Asset(0);
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(unbound_asset).unwrap_err(),
+        PlanValidationError::AssetOutOfBounds { index: 0, count: 0 }
+    );
+}
+
+#[test]
+fn a_loop_spec_cannot_be_moved_onto_an_operator_owner() {
+    let mut plan = raw_loop();
+    let aspects = core::mem::take(&mut plan.owners[0].aspects);
+    let node_owner = plan
+        .owners
+        .iter_mut()
+        .find(|owner| matches!(owner.kind, plan::OwnerKind::Node(_)))
+        .expect("the fixture contains the relay owner");
+    node_owner.aspects = aspects;
+    assert!(matches!(
+        ValidatedExecutionPlan::try_new(plan),
+        Err(PlanValidationError::InvalidGraphContract { detail, .. })
+            if detail == "Node owners cannot carry Graph ports or aspects"
+    ));
+}
+
 fn bare_operator_plan() -> ExecutionPlan {
     ExecutionPlan {
         owners: vec![
@@ -97,6 +249,8 @@ fn bare_operator_plan() -> ExecutionPlan {
                 path: plan::OwnerPath::root(),
                 parent: None,
                 kind: plan::OwnerKind::Graph,
+                ports: vec![],
+                aspects: vec![],
                 instance: plan::InstanceSpec {
                     key: None,
                     lifetime: plan::InstanceLifetime::Persistent,
@@ -108,6 +262,8 @@ fn bare_operator_plan() -> ExecutionPlan {
                 path: plan::OwnerPath::new(["worker"]).unwrap(),
                 parent: Some(plan::OwnerSlot::new(0)),
                 kind: plan::OwnerKind::Node(Slot::new(0)),
+                ports: vec![],
+                aspects: vec![],
                 instance: plan::InstanceSpec {
                     key: None,
                     lifetime: plan::InstanceLifetime::Persistent,
@@ -259,7 +415,7 @@ graph g : App {
     assert_eq!(boundary.origin(), plan::TypeOrigin::Declared);
 
     let package = plan::encode(&compilation.plan, &compilation.hash);
-    let (decoded, _) = plan::decode(&package).expect("the source pin survives v12");
+    let (decoded, _) = plan::decode(&package).expect("the source pin survives v13");
     assert_eq!(
         decoded
             .resolved_ports()
@@ -518,7 +674,7 @@ fn closing_budgets_and_stop_recursion_are_registry_free_invariants() {
         ty: Some(DataType::INT),
     });
     recursive.handlers.push(plan::Handler {
-        node: Slot::new(0),
+        owner: plan::HandlerOwner::Node(Slot::new(0)),
         activation: rastok::node::HandlerActivation::Lifecycle(rastok::node::Lifecycle::Stop),
         guard: None,
         body: vec![Step::Stop],
@@ -1741,7 +1897,12 @@ graph attributed : App {
     let pair = forged
         .handlers
         .iter_mut()
-        .find(|handler| forged.nodes[handler.node.index()].path.to_string() == "pair")
+        .find(|handler| {
+            handler
+                .owner
+                .node()
+                .is_some_and(|slot| forged.nodes[slot.index()].path.to_string() == "pair")
+        })
         .expect("the join handler");
     let Step::Emit {
         value: plan::Emission::Replace(writes),
@@ -1761,7 +1922,7 @@ graph attributed : App {
 }
 
 #[test]
-fn a_future_lifecycle_handler_cannot_enter_v12_early() {
+fn a_future_lifecycle_handler_cannot_enter_v13_early() {
     let mut plan = raw_probe();
     plan.handlers[0].activation =
         rastok::node::HandlerActivation::Lifecycle(rastok::node::Lifecycle::Compensate);

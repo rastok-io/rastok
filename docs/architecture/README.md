@@ -43,7 +43,7 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
   data forms, interfaces, dependency direction, and current status;
 - [`spec-to-code.md`](spec-to-code.md) for the map from normative
   documents to implementation responsibilities;
-- [`plan-package.md`](plan-package.md) for current categorical v12, its retained
+- [`plan-package.md`](plan-package.md) for current categorical v13, its retained
   v9 owner/instance and v7 type/value/expression registries, stable Connector
   identities/roles/exchange lifecycles, H4.1 `media_type` extension, and the
   validation boundary;

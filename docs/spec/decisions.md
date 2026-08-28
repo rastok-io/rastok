@@ -5,6 +5,55 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-28-2 — V13 carries one closed Loop contract without executing it early
+
+M1.7 L2 allocates categorical plan-package v13 for the first executable
+`node::Aspect` transport. A Graph carrying `Loop` lowers one closed
+`AspectSpec::Loop`: its positive plan-constant `fuel`, optional fixed or
+exponential plan-constant `delay`, exact `in`/`next`/`out`/`expired` boundary,
+and ordinary Graph-owned handlers. `Loop.invariant` and `Loop.measure` remain
+theorem-tier refusals until L6; no partial or unknown aspect form travels.
+
+The root Graph keeps one port authority: `ExecutionPlan::boundary`. An owner
+row therefore carries an empty port table at the root, the complete boundary
+only for a nested Graph, and no ports for a Node owner. This prevents two
+transported claims from drifting while still making a nested Loop independently
+decodable. Owner rows also carry a canonical closed aspect list. Handler
+ownership becomes an explicit tagged choice between an executable Node slot
+and a Graph owner slot; a Graph activation may name one direct child's typed
+output. These are extensions of the ordinary handler and port mechanisms, not
+a Loop-only executable AST.
+
+After decode, the Registry-free gate re-derives the carrier and every
+aspect-contributed port, requires each plan-constant expression to be closed
+after lexical `val` substitution, re-evaluates its transported value, checks
+positive delay/fuel constraints, canonical owner/aspect/handler order, direct
+child ownership, expression types, and the prohibition on spatial `next`
+wiring. Unknown, incomplete, misplaced, or forged claims refuse before the
+validated-plan type is returned.
+
+L2 deliberately does not execute the aspect. Until L3 proves one total
+`next XOR out` decision and L4 installs the journal fold, every public mutating
+VM door refuses a validated plan containing an aspect before it admits an
+envelope, advances virtual time, or writes a journal record. `Vm::boot`
+remains an allocation-only constructor and is not falsely described as an
+execution gate.
+
+Every package container moves categorically from v12 to v13 because the owner
+and handler grammars widened; v12 is refused rather than guessed. Unchanged
+programs retain their semantic hash because the added owner rows contain only
+derived empty lists and the existing root boundary stays authoritative. A
+new Loop program seals its checked contract and Graph handlers under the
+`rastok.aspects.r1` semantic extension. No causal record moves at L2 because
+no Loop plan executes yet; the connector-free gauge remains the negative
+scope witness.
+
+**Rejected:** mirroring the root boundary in its owner row; inferring an
+aspect from port names or attributes after decode; carrying theorem syntax as
+an unchecked expression; lowering a recognized aspect and silently running
+it as a plain Graph; and changing `Vm::boot` solely to move a fail-closed gate
+away from the first mutating operation.
+
 ## D-2026-08-28-1 — Loop is finite temporal recursion over one Graph boundary
 
 M1.7 makes `Loop` the first executable `node::Aspect`, with one carrier and

@@ -59,6 +59,9 @@ pub struct Graph {
     pub boundary: Vec<crate::plan::PortDecl>,
     /// Graph-level constant bindings, in declaration order.
     pub vals: Vec<Val>,
+    /// Graph-owned handlers. They use the same checked statement algebra as
+    /// executable Node handlers; the distinct owner is preserved at lowering.
+    pub handlers: Vec<Handler>,
     /// The graph's nodes, in declaration order.
     pub nodes: Vec<Node>,
     /// Lexically nested Graph owners, in declaration order.
