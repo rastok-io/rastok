@@ -426,8 +426,10 @@ step touches `vm.rs` once.
    through categorical v13 with Registry-free validation and a pre-mutation VM
    refusal. L3 now proves one finite progress verdict per completed traversal,
    without privileging `out`: continuation uses one `next`; ordinary outputs
-   or `stop` terminate. L4–L7 execute the resulting bounded protocol through a
-   journal-folded run and `l:next` chain, dated re-entry, the first theorem
+   or `stop` terminate. L4 now executes the immediate persistent root-Graph
+   subset through per-root journal-folded runs, exact fuel and `l:next`,
+   including crash reconstruction and independent concurrent roots. L5–L7
+   add dated re-entry, the first theorem
    checker, Closing/recovery model checks, and final identity/portability
    evidence. The checker remains fail-closed at every unfinished gate. Ordered
    work and exit criteria live in the

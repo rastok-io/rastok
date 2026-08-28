@@ -64,7 +64,7 @@ no public diagnostic contract ever carried the old code.
 | E-NODE-ANNOTATION | error | check | [aspects.md](aspects.md) | a NodeType/NodeAspect symbol is unknown, duplicated, misordered, or incompatible with the declaration kind; fields `name`, `detail` |
 | E-INSTANCE | error | check | [instances.md](instances.md) | a malformed or repeated `instance`/`lifetime` attribute, a superseded `instances`/`partition`/`per` spelling, or an instance key without one total canonical type; field `detail`; post-solver type variants additionally carry `name` |
 | E-LOOP | error | check | [loop.md](loop.md) | a malformed, duplicate, misplaced, removed, or non-finite `Loop` attribute/contract; field `detail` |
-| E-LOOP-CONTROL | error | check | [loop.md](loop.md) | a Loop traversal cannot prove exactly one continuation or terminal verdict; fields `owner`, `path`, `detail` |
+| E-LOOP-CONTROL | error | check | [loop.md](loop.md) | the compiler cannot prove that a Loop always terminates because one traversal lacks exactly one continuation or terminal verdict; fields `owner`, `path`, `detail` |
 | E-CONNECTOR-UNAVAILABLE | error | check | [stdlib.md](stdlib.md) | a connector type with no Driver in this build — declared catalogue or unknown; field `type` |
 | E-CONTRACT-ATTR | error | check | [stdlib.md](stdlib.md) | an attribute violating its connector contract sheet; fields `attribute`, `detail` |
 | E-CONTRACT-REQUIRED | error | check | [stdlib.md](stdlib.md) | a mandatory contract attribute left undeclared; field `attribute` |

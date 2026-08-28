@@ -620,7 +620,7 @@ impl core::fmt::Display for PlanValidationError {
                 detail,
             } => write!(
                 f,
-                "invalid plan: Loop Graph `{owner}` cannot prove progress at `{path}`: {detail}"
+                "invalid plan: cannot prove that Loop Graph `{owner}` always terminates at `{path}`: {detail}"
             ),
             Self::InvalidEdgeScope { owner } => write!(
                 f,

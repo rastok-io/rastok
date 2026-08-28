@@ -182,15 +182,17 @@ The repository opens publicly with this milestone (15 October 2026).
   v12 package move is isolated from the later H5/H6 physical execution, which
   introduced no further package-format move.
 - M1.7 makes `Loop` the first NodeAspect to receive categorical transport and
-  then become executable. L0–L3 are landed:
+  then become executable. L0–L4 are landed:
   `node::{Kind, Type, Aspect}` are separate,
   Reducer/Router remain patterns, source spelling is singular
   `instance = { key = ... }`, and positive `Loop.fuel` plus closed
   `Loop.delay` cross checked HIR and categorical v13. The exact Loop boundary,
   closed aspect contract, ordinary Graph-owned handlers, and the finite
-  progress decision are re-derived Registry-free; the VM refuses them before
-  mutation. The remaining L4–L7 gates build the per-root Loop journal fold
-  over finite `fuel` and `l:next`, date optional `delay`, begin checked
+  progress decision are re-derived Registry-free. Immediate persistent
+  root-Graph Loops now execute through a per-root journal fold: exact fuel,
+  `l:next`, exhaustion, concurrent runs and crash reconstruction are proven
+  without a spatial back-edge. The remaining L5–L7 gates date optional
+  `delay`, begin checked
   `invariant`/`measure` proofs, model-check Closing/recovery in the Lab, and
   close identity, no-std and QEMU evidence. Operator work and Connector calls
   remain ordinary children of the Loop Graph; no privileged `err`/`exit`

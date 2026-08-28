@@ -232,16 +232,17 @@ carry neither Graph ports nor aspects. Ordinary handlers carry a tagged Node
 or Graph owner, so a Loop Graph can observe its own input or a direct child's
 typed output without inventing an aspect-only AST. Registry-free validation
 re-derives every contribution after decode. A runtime never rediscovers an
-aspect from source strings, attributes, or port names, and refuses the
-transported Loop before mutation until its manager lands.
+aspect from source strings, attributes, or port names. L4's Loop manager
+executes only the admitted immediate persistent root-Graph subset; every other
+transported composition remains a named refusal until its complete gate lands.
 
 ## 9. Deferred questions
 
 - User-defined and parameterized aspects are outside the current contract.
 - Every future pair requires a composition matrix entry.
-- M1.7 must still close run identity, fuel, typed exhaustion and source-to-Lab
-  evidence before executing the transported aspect; the Graph boundary
-  progress proof landed at L3.
+- M1.7 must still close dated/nested/Closing and source-to-Lab evidence; run
+  identity, exact fuel, typed exhaustion and immediate recovery landed at L4,
+  after the Graph boundary progress proof at L3.
 - Saga remains later than Loop; this document fixes its classification but
   does not claim an executable manager.
 

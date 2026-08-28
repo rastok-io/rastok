@@ -5,6 +5,48 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-28-4 — Loop fuel is an ordinary journal fold
+
+M1.7 L4 executes the immediate, persistent root-Graph subset of `Loop`. One
+accepted external root reserves the Loop owner generation and derives one
+`LoopRunRef` from `(instance_address, generation, root_id)`. Distinct roots in
+the same instance therefore retain independent state, ordinal and fuel. The
+INBOUND route uses the reserved internal edge name `@loop.in`; it records the
+selected owner generation before the run opens and is not a spatial back-edge.
+
+One optional closed fact travels in ordinary TRANSACTION key 53. `Open` fixes
+the run, owner generation, root, positive fuel and iteration-zero envelope.
+`Next` advances the zero-based ordinal exactly once, decrements remaining fuel
+exactly once and carries the manager-produced state envelope whose parent is
+the selected `next` emission. `Close` records ordinary terminal output or
+`stop`; `Expired` records the final selected `next` plus the exact
+`LoopExpired { last_state }` envelope. Both are terminal. The journal refuses
+duplicate open, missing/skipped/duplicated ordinal, wrong parent, premature
+exhaustion and every transition after a terminal fact.
+
+Domain `0x13` derives the placement-neutral run reference. Envelope domain
+`0x05` derives immediate re-entry from `(run_ref, next_iteration,
+selected_next_id)`. The last permitted body application that selects `next`
+creates `Expired`, not `Next`: no `l:next` envelope exists beyond the fuel
+boundary. A fresh Worker reconstructs every open immediate run by folding key
+53 facts, rebuilds only disposable instance/scheduler state, and resumes from
+the recorded envelope and remaining fuel. There is no mutable Loop ledger or
+RAM attempt counter beside the journal. An implementation may cache the
+replay-derived fold for indexed lookup; the cache is valid only when a fresh
+fold of key 53 produces the same projection.
+
+This gate deliberately keeps `Loop.delay`, spatial child bodies, nested Loop
+owners, bare `stop` and finite owner lifetimes fail-closed. Their dated,
+Closing and composition semantics land in L5/L7; L4 does not guess them. The
+new domains and key occur only in newly executable Loop histories. Existing
+semantic hashes, categorical v13 packages and causal traces remain
+byte-identical.
+
+**Rejected:** representing recurrence as an edge; deriving a run from only an
+instance; decrementing fuel before an uncommitted traversal; committing
+`l:next` and then translating it to expiry; keeping the live ordinal only in
+the VM; and calling a cache replay when a fresh Worker cannot resume it.
+
 ## D-2026-08-28-3 — Loop proves finite progress, not one privileged result port
 
 M1.7 L3 supersedes the `next XOR out` clauses of D-2026-08-28-1 and the

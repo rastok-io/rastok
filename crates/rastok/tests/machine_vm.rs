@@ -3449,6 +3449,20 @@ impl Journal for FlakyJournal {
     ) -> Result<InstanceRef, rastok::journal::Error> {
         self.inner.instance_ref_for_admission(address)
     }
+    fn loop_run(
+        &self,
+        run: &rastok::journal::LoopRunRef,
+    ) -> Result<Option<rastok::journal::LoopRunState>, rastok::journal::Error> {
+        self.inner.loop_run(run)
+    }
+    fn open_loop_runs(
+        &self,
+    ) -> Result<
+        Vec<(rastok::journal::LoopRunRef, rastok::journal::LoopRunState)>,
+        rastok::journal::Error,
+    > {
+        self.inner.open_loop_runs()
+    }
     fn commit(
         &mut self,
         transaction: rastok::journal::TransactionRecord,

@@ -26,9 +26,11 @@ use crate::boundary::{
     SessionWriteIntent, SessionWriteRef,
 };
 use crate::connector::ConnectorExchange;
-use crate::envelope::{Data, Envelope, Id};
+use crate::envelope::{Data, Envelope, Id, Meta, MetaSys};
 use crate::identity::{InstanceAddress, InstanceFrame, InstanceRef};
-use crate::journal::{Journal, RouteTarget, RoutedDelivery, ids};
+use crate::journal::{
+    Emission, Journal, LoopFact, LoopRunPhase, LoopRunRef, RouteTarget, RoutedDelivery, ids,
+};
 use crate::node;
 use crate::plan::{
     AttrSetting, Edge, EndpointRef, EvaluationSite, GraphVersion, InstanceLifetime, NodeExecution,
@@ -72,6 +74,19 @@ pub enum VmError {
     MailboxFull {
         /// The refusing node.
         node: node::Path,
+    },
+    /// The bounded Loop-manager queue cannot admit another external root.
+    LoopQueueFull {
+        /// Loop owner refusing the root.
+        owner: OwnerPath,
+    },
+    /// Runtime defense for a control decision the validated L3 proof says is
+    /// impossible.
+    InvalidLoopDecision {
+        /// Loop owner whose traversal contradicted the proof.
+        owner: OwnerPath,
+        /// Stable invariant description.
+        reason: &'static str,
     },
     /// A route reached an owner generation whose finite lifetime has already
     /// won. The producer must retain normal backpressure; it cannot journal a
@@ -195,6 +210,15 @@ impl fmt::Display for VmError {
             Self::Dispatch(error) => error.fmt(f),
             Self::MailboxFull { node } => {
                 write!(f, "the mailbox of `{node}` is full")
+            }
+            Self::LoopQueueFull { owner } => {
+                write!(f, "the Loop work queue of `{owner}` is full")
+            }
+            Self::InvalidLoopDecision { owner, reason } => {
+                write!(
+                    f,
+                    "Loop `{owner}` made an invalid progress decision: {reason}"
+                )
             }
             Self::InstanceClosing { owner } => {
                 write!(f, "instance owner `{owner}` is closing")
@@ -460,6 +484,27 @@ struct LifecycleWork {
     parent_instance: Option<InstanceRef>,
     lifecycle: node::Lifecycle,
     cause: Envelope,
+}
+
+/// Journal-before-work progression owned by the Loop manager. One queued
+/// item per external root keeps admission bounded while the journal remains
+/// the only authority for fuel and iteration ordinals.
+#[derive(Debug, Clone)]
+enum LoopWork {
+    Open {
+        owner: OwnerSlot,
+        instance: InstanceRef,
+        state: Envelope,
+        run: LoopRunRef,
+        fuel: u64,
+    },
+    Fire {
+        owner: OwnerSlot,
+        instance: InstanceRef,
+        activation: node::HandlerActivation,
+        input: Envelope,
+        run: LoopRunRef,
+    },
 }
 
 /// One edge whose target instance was selected before the causing record
@@ -787,6 +832,9 @@ pub struct Vm<'plan> {
     /// ordinary deliveries so `l:start` precedes the creating arrival and a
     /// detached `l:stop` precedes the following generation.
     lifecycle: VecDeque<LifecycleWork>,
+    /// Immediate Loop manager work. Delayed recurrence belongs to L5 and is
+    /// still refused before mutation.
+    loop_work: VecDeque<LoopWork>,
     /// Won closures awaiting their completion transaction — replayable:
     /// an entry leaves this queue only when its transaction commits.
     settled: VecDeque<SettledEntry>,
@@ -802,23 +850,54 @@ pub struct Vm<'plan> {
 }
 
 impl<'plan> Vm<'plan> {
-    fn unsupported_aspect(&self) -> Option<VmError> {
-        self.plan.owners.iter().find_map(|owner| {
-            owner
-                .aspects
-                .first()
-                .map(|aspect| VmError::UnsupportedAspect {
-                    owner: owner.path.clone(),
-                    aspect: aspect.aspect(),
-                })
+    fn loop_port(owner: &OwnerPath, name: &'static str) -> Result<node::Port, VmError> {
+        node::Port::new(name).map_err(|_| VmError::InvalidLoopDecision {
+            owner: owner.clone(),
+            reason: "a conventional Loop port is not representable",
         })
+    }
+
+    fn unsupported_aspect(&self) -> Option<VmError> {
+        self.plan
+            .owners
+            .iter()
+            .enumerate()
+            .find_map(|(index, owner)| {
+                let aspect = owner.aspects.first()?;
+                let crate::plan::AspectSpec::Loop(spec) = aspect;
+                // L4 executes the direct, immediate Graph body. Spatial
+                // bodies, nested Loop owners and dated recurrence remain
+                // fail-closed until their explicitly named later gates.
+                let has_stop = self.plan.handlers.iter().any(|handler| {
+                    handler.owner
+                        == crate::plan::HandlerOwner::Graph(OwnerSlot::new(
+                            u32::try_from(index).unwrap_or(u32::MAX),
+                        ))
+                        && handler
+                            .body
+                            .iter()
+                            .any(|step| matches!(step, crate::plan::Step::Stop))
+                });
+                (index != 0
+                    || self.plan.owners.len() != 1
+                    || owner.aspects.len() != 1
+                    || spec.delay.is_some()
+                    || !self.plan.nodes.is_empty()
+                    || !matches!(owner.instance.lifetime, InstanceLifetime::Persistent)
+                    || has_stop)
+                    .then(|| VmError::UnsupportedAspect {
+                        owner: owner.path.clone(),
+                        aspect: aspect.aspect(),
+                    })
+            })
     }
 
     /// Boots the machine over a VALIDATED plan — once. The machine
     /// dereferences the plan's tables without checking; the type is
     /// what makes that safe, so no raw plan is accepted here. This
-    /// is a fresh boot; recovering obligations from an existing
-    /// journal is the recovery fold's job and is not in this build.
+    /// is a fresh boot. L4 can explicitly restore immediate Loop work with
+    /// [`Self::recover_loop_runs`]; general Connector and Session obligation
+    /// recovery remains a separate fold.
     #[must_use]
     pub fn boot(plan: &'plan ValidatedExecutionPlan, graph_version: GraphVersion) -> Self {
         let mut owner_chains: Vec<Option<Vec<OwnerSlot>>> = Vec::with_capacity(plan.owners.len());
@@ -854,6 +933,7 @@ impl<'plan> Vm<'plan> {
             waiting: BTreeMap::new(),
             closing: BTreeSet::new(),
             lifecycle: VecDeque::new(),
+            loop_work: VecDeque::new(),
             settled: VecDeque::new(),
             buffered_pump: PumpReport::default(),
             now: 0,
@@ -861,6 +941,100 @@ impl<'plan> Vm<'plan> {
             errors: Vec::new(),
             observed: Vec::new(),
         }
+    }
+
+    /// Rebuilds the ready work for every open, immediate Loop run after a
+    /// fresh Worker boot. The journal supplies the current state, ordinal and
+    /// fuel; this method reconstructs only disposable instance bundles and
+    /// scheduler work. It deliberately makes no general Worker-recovery claim
+    /// for Connector or Session obligations.
+    ///
+    /// # Errors
+    ///
+    /// A corrupt Loop fold, a run whose owner no longer exists in the plan,
+    /// an address which cannot be re-derived from its recorded state, or a
+    /// recovery batch larger than the bounded Worker queue.
+    pub fn recover_loop_runs(&mut self, journal: &dyn Journal) -> Result<(), VmError> {
+        if let Some(error) = self.unsupported_aspect() {
+            return Err(error);
+        }
+        let runs = journal.open_loop_runs().map_err(VmError::Journal)?;
+        if self.loop_work.len().saturating_add(runs.len()) > WORKER_MAILBOX_CAPACITY {
+            let owner = runs
+                .first()
+                .and_then(|(_, state)| {
+                    self.plan
+                        .owners
+                        .iter()
+                        .find(|owner| owner.path == *state.instance.address().owner())
+                })
+                .map_or_else(OwnerPath::root, |owner| owner.path.clone());
+            return Err(VmError::LoopQueueFull { owner });
+        }
+        let in_port = Self::loop_port(&OwnerPath::root(), "in")?;
+        let mut candidates = BTreeMap::new();
+        let mut work = Vec::with_capacity(runs.len());
+        let mut created_by = BTreeMap::new();
+        for (run, state) in runs {
+            let root =
+                journal
+                    .find_envelope(state.root)
+                    .ok_or_else(|| VmError::InvalidLoopDecision {
+                        owner: state.instance.address().owner().clone(),
+                        reason: "the journaled Loop root envelope is absent",
+                    })?;
+            let owner_index = self
+                .plan
+                .owners
+                .iter()
+                .position(|owner| owner.path == *state.instance.address().owner())
+                .ok_or_else(|| VmError::InvalidLoopDecision {
+                    owner: state.instance.address().owner().clone(),
+                    reason: "the journaled Loop owner is absent from this plan",
+                })?;
+            let owner = OwnerSlot::new(u32::try_from(owner_index).unwrap_or(u32::MAX));
+            let selected =
+                self.candidate_owner(journal, owner, None, None, &root, &mut candidates)?;
+            if selected != state.instance {
+                return Err(VmError::InvalidLoopDecision {
+                    owner: self.plan.owners[owner.index()].path.clone(),
+                    reason: "the recorded Loop instance cannot be re-derived from its state",
+                });
+            }
+            created_by.entry(selected.clone()).or_insert(root);
+            work.push(LoopWork::Fire {
+                owner,
+                instance: selected,
+                activation: node::HandlerActivation::Port(in_port.clone()),
+                input: state.state,
+                run,
+            });
+        }
+        for (reference, candidate) in candidates {
+            let cause =
+                created_by
+                    .remove(&reference)
+                    .ok_or_else(|| VmError::InvalidLoopDecision {
+                        owner: self.plan.owners[candidate.owner.index()].path.clone(),
+                        reason: "the recovered instance has no Loop state envelope",
+                    })?;
+            self.instances.insert(
+                reference,
+                Instance {
+                    owner: candidate.owner,
+                    parent: candidate.parent,
+                    frames: candidate.frames,
+                    values: candidate.values,
+                    settings: candidate.settings,
+                    created_by: cause.clone(),
+                    last_activity: cause,
+                    residual: Vec::new(),
+                    phase: InstancePhase::Open,
+                },
+            );
+        }
+        self.loop_work.extend(work);
+        Ok(())
     }
 
     /// Accepts one submission — the journal's one accepting
@@ -1175,6 +1349,7 @@ impl<'plan> Vm<'plan> {
         // zero-id provisional envelope would be a semantic lie. Destination
         // admission and the accepting record commit only after this complete
         // envelope has selected every route.
+        let boundary_submission = connector_path.is_none();
         let mut inbound = match (connector_path, session_admission) {
             (Some(_), session) => journal.prepare_connector_inbound(submission, session),
             (None, Some(session)) => journal.prepare_session_inbound(submission, session),
@@ -1182,6 +1357,11 @@ impl<'plan> Vm<'plan> {
         }
         .map_err(VmError::Journal)?;
         let mut candidates = BTreeMap::new();
+        let loop_target = if boundary_submission {
+            self.prepare_root_loop(journal, inbound.envelope(), &mut candidates)?
+        } else {
+            None
+        };
         // A Call root opens an obligation on the exact source Connector
         // generation. Select that instance in the same pure preparation as
         // downstream routing; the accepting INBOUND record seals both before
@@ -1405,7 +1585,13 @@ impl<'plan> Vm<'plan> {
             )?
         };
         self.check_room_for_routes(core::iter::once(prepared.as_slice()))?;
-        let recorded_routes = self.inbound_route_targets(&prepared);
+        let mut recorded_routes = self.inbound_route_targets(&prepared);
+        if let Some((_, target, _)) = &loop_target {
+            recorded_routes.push(RouteTarget {
+                edge: String::from("@loop.in"),
+                target: target.reference.clone(),
+            });
+        }
         let committed = journal
             .commit_inbound(inbound, recorded_routes)
             .map_err(VmError::Journal)?;
@@ -1477,6 +1663,17 @@ impl<'plan> Vm<'plan> {
                 },
             );
         }
+        if let Some((owner, target, fuel)) = loop_target {
+            self.install_target(&target, &candidates, &committed.envelope);
+            let run = ids::loop_run_ref(&target.reference, id);
+            self.loop_work.push_back(LoopWork::Open {
+                owner,
+                instance: target.reference,
+                state: committed.envelope.clone(),
+                run,
+                fuel,
+            });
+        }
         self.route_prepared(prepared, &candidates, &committed.envelope, source_instance);
         Ok(InboundAcceptance {
             envelope: id,
@@ -1513,6 +1710,10 @@ impl<'plan> Vm<'plan> {
         self.progress_closures();
         if !self.lifecycle.is_empty() {
             self.fire_lifecycle_next(journal)?;
+            return Ok(true);
+        }
+        if !self.loop_work.is_empty() {
+            self.fire_loop_next(journal)?;
             return Ok(true);
         }
         let inbound_ready =
@@ -2617,6 +2818,7 @@ impl<'plan> Vm<'plan> {
     #[must_use]
     pub fn is_stable(&self) -> bool {
         if !self.lifecycle.is_empty()
+            || !self.loop_work.is_empty()
             || !self.settled.is_empty()
             || !self.pending.is_empty()
             || !self.settled_inbound_calls.is_empty()
@@ -2813,6 +3015,7 @@ impl<'plan> Vm<'plan> {
             parent_instance: None,
             close_scope: Some(reference.clone()),
             exchange_exit: None,
+            loop_fact: None,
             trigger: node::Trigger::Lifecycle(node::Lifecycle::Closing),
             cause: Some(cause.meta().sys().id()),
             consumed: vec![],
@@ -3146,6 +3349,244 @@ impl<'plan> Vm<'plan> {
     /// Commits exactly one queued lifecycle transition. The instance remains
     /// installed through `l:stop`, so its handler can route from the exact
     /// source chain; state and bundle are reclaimed only after the commit.
+    fn fire_loop_next(&mut self, journal: &mut dyn Journal) -> Result<(), VmError> {
+        let Some(work) = self.loop_work.front().cloned() else {
+            return Ok(());
+        };
+        match work {
+            LoopWork::Open {
+                owner,
+                instance,
+                state,
+                run,
+                fuel,
+            } => {
+                let owner_path = self.plan.owners[owner.index()].path.clone();
+                let in_port = Self::loop_port(&owner_path, "in")?;
+                let record = crate::journal::TransactionRecord {
+                    owner_path,
+                    instance: instance.clone(),
+                    parent_instance: None,
+                    close_scope: None,
+                    exchange_exit: None,
+                    loop_fact: Some(Box::new(LoopFact::Open {
+                        run,
+                        instance: instance.clone(),
+                        root: state.meta().sys().id(),
+                        fuel,
+                        state: state.clone(),
+                    })),
+                    trigger: node::Trigger::Port(in_port.clone()),
+                    cause: Some(state.meta().sys().id()),
+                    consumed: vec![],
+                    join_inputs: vec![],
+                    state_delta: vec![],
+                    emissions: vec![],
+                    routes: vec![],
+                    timers: vec![],
+                };
+                journal.commit(record).map_err(VmError::Journal)?;
+                self.loop_work.pop_front();
+                self.loop_work.push_back(LoopWork::Fire {
+                    owner,
+                    instance,
+                    activation: node::HandlerActivation::Port(in_port),
+                    input: state,
+                    run,
+                });
+            }
+            LoopWork::Fire {
+                owner,
+                instance,
+                activation,
+                input,
+                run,
+            } => {
+                let current = journal
+                    .loop_run(&run)
+                    .map_err(VmError::Journal)?
+                    .filter(|state| state.phase == LoopRunPhase::Open)
+                    .ok_or(crate::journal::Error::UnknownLoopRun { run })
+                    .map_err(VmError::Journal)?;
+                if current.instance != instance {
+                    return Err(VmError::InvalidLoopDecision {
+                        owner: self.plan.owners[owner.index()].path.clone(),
+                        reason: "the queued traversal names another instance generation",
+                    });
+                }
+                let values = self
+                    .instances
+                    .get(&instance)
+                    .map(|bundle| bundle.values.clone())
+                    .ok_or_else(|| VmError::InvalidLoopDecision {
+                        owner: self.plan.owners[owner.index()].path.clone(),
+                        reason: "the Loop owner generation is not live",
+                    })?;
+                let executor = TransactionExecutor::new(self.plan, self.graph_version);
+                let mut outcome = executor
+                    .fire_graph(
+                        owner,
+                        &instance,
+                        &activation,
+                        &input,
+                        &current.state,
+                        &values,
+                    )
+                    .map_err(VmError::Fault)?;
+                let next: Vec<_> = outcome
+                    .record
+                    .emissions
+                    .iter()
+                    .filter(|emission| emission.port.name() == "next")
+                    .cloned()
+                    .collect();
+                let user_expired = outcome
+                    .record
+                    .emissions
+                    .iter()
+                    .any(|emission| emission.port.name() == "expired");
+                let terminal = outcome
+                    .record
+                    .emissions
+                    .iter()
+                    .any(|emission| emission.port.name() != "next")
+                    || outcome.record.close_scope.is_some();
+                let owner_path = self.plan.owners[owner.index()].path.clone();
+                if user_expired {
+                    return Err(VmError::InvalidLoopDecision {
+                        owner: owner_path,
+                        reason: "user code emitted the manager-owned `expired` port",
+                    });
+                }
+                if next.len() > 1 || (!next.is_empty() && terminal) {
+                    return Err(VmError::InvalidLoopDecision {
+                        owner: owner_path,
+                        reason: "one traversal did not choose exactly one progress class",
+                    });
+                }
+
+                let mut reentry = None;
+                if let Some(selected) = next.first() {
+                    let selected_id = selected.envelope.meta().sys().id();
+                    if current.remaining > 1 {
+                        let iteration = current.iteration.saturating_add(1);
+                        let id = ids::loop_reentry_id(run, iteration, selected_id);
+                        let meta = Meta::new(MetaSys::emission(
+                            id,
+                            selected.envelope.meta().sys(),
+                            self.graph_version.0,
+                        ))
+                        .with_app(selected.envelope.meta().app().clone())
+                        .with_ext(selected.envelope.meta().ext().clone());
+                        let state = Envelope::new(meta, selected.envelope.data().clone());
+                        outcome.record.loop_fact = Some(Box::new(LoopFact::Next {
+                            run,
+                            iteration,
+                            remaining: current.remaining - 1,
+                            selected: selected_id,
+                            state: state.clone(),
+                        }));
+                        reentry = Some(state);
+                    } else {
+                        let output = self.loop_expired_emission(&owner_path, selected)?;
+                        outcome.record.loop_fact = Some(Box::new(LoopFact::Expired {
+                            run,
+                            iteration: current.iteration,
+                            selected: selected_id,
+                            output: output.envelope.clone(),
+                        }));
+                        outcome.record.emissions.push(output);
+                    }
+                } else if terminal {
+                    outcome.record.loop_fact = Some(Box::new(LoopFact::Close {
+                        run,
+                        iteration: current.iteration,
+                    }));
+                } else {
+                    return Err(VmError::InvalidLoopDecision {
+                        owner: owner_path,
+                        reason: "one traversal finished without `next` or a terminal output",
+                    });
+                }
+
+                journal
+                    .commit(outcome.record.clone())
+                    .map_err(VmError::Journal)?;
+                self.loop_work.pop_front();
+                self.publish_loop_outputs(&outcome.record.emissions);
+                if let Some(state) = reentry {
+                    self.loop_work.push_back(LoopWork::Fire {
+                        owner,
+                        instance,
+                        activation: node::HandlerActivation::Port(Self::loop_port(
+                            &owner_path,
+                            "in",
+                        )?),
+                        input: state,
+                        run,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn loop_expired_emission(
+        &self,
+        owner: &OwnerPath,
+        selected: &Emission,
+    ) -> Result<Emission, VmError> {
+        let port = Self::loop_port(owner, "expired")?;
+        let last_state =
+            crate::runtime::data_value(selected.envelope.data()).map_err(VmError::Fault)?;
+        let value = crate::value::Value::TaggedUnion(Box::new(crate::value::TaggedUnionValue {
+            case: String::from("LoopExpired"),
+            payload: vec![(String::from("last_state"), last_state)],
+        }));
+        let from = EndpointRef {
+            node: None,
+            port: port.clone(),
+        };
+        crate::runtime::crossing_pins_hold(self.plan, &from, &value)
+            .map_err(|violation| VmError::Fault(violation.into_fault()))?;
+        let id = ids::graph_emission_id(
+            owner,
+            &node::Trigger::Lifecycle(node::Lifecycle::Next),
+            selected.envelope.meta().sys().id(),
+            &port,
+            0,
+        );
+        let meta = Meta::new(MetaSys::emission(
+            id,
+            selected.envelope.meta().sys(),
+            self.graph_version.0,
+        ))
+        .with_app(selected.envelope.meta().app().clone())
+        .with_ext(selected.envelope.meta().ext().clone());
+        Ok(Emission {
+            port,
+            index: 0,
+            envelope: Envelope::new(meta, Data::materialized(value)),
+        })
+    }
+
+    fn publish_loop_outputs(&mut self, emissions: &[Emission]) {
+        for emission in emissions {
+            if emission.port.name() == "next" {
+                continue;
+            }
+            self.outputs.push(BoundaryOutput {
+                port: emission.port.clone(),
+                envelope: emission.envelope.clone(),
+            });
+            self.observed.push(Observed {
+                node: None,
+                port: emission.port.clone(),
+                envelope: emission.envelope.clone(),
+            });
+        }
+    }
+
     fn fire_lifecycle_next(&mut self, journal: &mut dyn Journal) -> Result<(), VmError> {
         let Some(work) = self.lifecycle.front().cloned() else {
             return Ok(());
@@ -3162,6 +3603,7 @@ impl<'plan> Vm<'plan> {
                     parent_instance: parent_instance.cloned(),
                     close_scope: None,
                     exchange_exit: None,
+                    loop_fact: None,
                     trigger: node::Trigger::Lifecycle(work.lifecycle),
                     cause: Some(work.cause.meta().sys().id()),
                     consumed: vec![],
@@ -3985,6 +4427,7 @@ impl<'plan> Vm<'plan> {
             trigger: node::Trigger::Port(delivery.port.clone()),
             cause: Some(delivery.envelope.meta().sys().id()),
             exchange_exit: None,
+            loop_fact: None,
             consumed: vec![crate::journal::ConsumedPosition {
                 edge: delivery.edge.clone(),
                 source: delivery.source_instance.clone(),
@@ -4759,6 +5202,48 @@ impl<'plan> Vm<'plan> {
                 })
             })
             .collect()
+    }
+
+    fn prepare_root_loop(
+        &self,
+        journal: &dyn Journal,
+        envelope: &Envelope,
+        candidates: &mut BTreeMap<InstanceRef, InstanceCandidate>,
+    ) -> Result<Option<(OwnerSlot, PreparedTarget, u64)>, VmError> {
+        let Some(owner) = self.plan.owners.first() else {
+            return Ok(None);
+        };
+        let Some(crate::plan::AspectSpec::Loop(spec)) = owner.aspects.first() else {
+            return Ok(None);
+        };
+        if self.loop_work.len() >= WORKER_MAILBOX_CAPACITY {
+            return Err(VmError::LoopQueueFull {
+                owner: owner.path.clone(),
+            });
+        }
+        let fuel = match spec.fuel.resolved {
+            crate::value::Value::Int(value) => u64::try_from(value).ok(),
+            crate::value::Value::Uint(value) => Some(value),
+            _ => None,
+        }
+        .filter(|value| *value > 0)
+        .ok_or_else(|| VmError::InvalidLoopDecision {
+            owner: owner.path.clone(),
+            reason: "a validated Loop lost its positive fuel constant",
+        })?;
+        let owner_slot = OwnerSlot::new(0);
+        let reference =
+            self.candidate_owner(journal, owner_slot, None, None, envelope, candidates)?;
+        Ok(Some((
+            owner_slot,
+            PreparedTarget {
+                reference: reference.clone(),
+                scope: reference.clone(),
+                chain: vec![reference.clone()],
+                admitted: vec![reference],
+            },
+            fuel,
+        )))
     }
 
     fn prepare_target(

@@ -1,11 +1,15 @@
 # Loop — finite temporal recursion
 
-> **Status: normative M1.7 contract; executable through L3 control proof.** A
+> **Status: normative M1.7 contract; executable through the immediate L4
+> journal fold.** A
 > fuel-only `Loop` crosses source, checked HIR and categorical v13 with its
 > exact boundary and ordinary Graph-owned handlers. Registry-free validation
 > re-derives the contract and finite progress decision after decode. The VM
-> still refuses the aspect before its first mutation until L4 installs the
-> journal fold. No accepted program silently executes as an ordinary Graph.
+> executes a persistent root Loop whose traversal lives in Graph-owned
+> handlers and whose `Loop.delay` is absent. Spatial child bodies, nested Loop
+> owners, `stop`, finite instance lifetimes and dated recurrence remain named,
+> fail-closed later gates. No accepted program silently executes as an
+> ordinary Graph.
 
 `Loop` applies one Graph repeatedly to an immutable iteration-state envelope.
 It is finite temporal recursion, not a spatial cycle:
@@ -167,6 +171,25 @@ truthful terminal observation.
 Fuel is derived from the committed Loop fold, never from a mutable RAM counter.
 Recovery cannot regain an application. Duplicate or stale wakeups cannot spend
 fuel twice.
+
+L4 records one closed, extend-only fact in transaction key 53:
+
+```text
+Open    (run, instance, root, fuel, state₀)
+Next    (run, iteration, remaining, selected-next, stateₙ)
+Close   (run, iteration)
+Expired (run, iteration, selected-next, LoopExpired envelope)
+```
+
+`Open` is unique for a run. `Next` must advance the ordinal by exactly one and
+reduce remaining fuel by exactly one; its re-entry envelope is derived from
+the selected `next` emission. `Close` and `Expired` are terminal and reject any
+later progress. The complete live projection is a fold over these facts, not a
+second authority. A journal implementation may maintain a replay-derived
+index of that projection, provided a fresh fold produces the same state. On a
+fresh Worker boot, open immediate runs rebuild their disposable execution work
+from that projection; the journal remains the only source of the current
+state, ordinal and fuel.
 
 Fuel proves a finite number of iterations. It does not prove that one
 iteration returns. Every admitted body must therefore be total under its own
@@ -370,8 +393,10 @@ Before a Loop plan becomes executable, Registry-free validation re-derives:
 9. instance Closing cannot revive a stale wakeup.
 
 Any unsupported theorem expression, carrier, aspect combination or body
-cardinality refuses before a validated plan is returned. A supported L3 plan
-still refuses before the first VM mutation until the L4 journal fold lands.
+cardinality refuses before a validated plan is returned. L4 executes the
+immediate persistent root-Graph subset; every delayed, nested, spatial-child,
+`stop` or finite-lifetime composition refuses at the VM gate until its named
+later gate lands.
 
 ## 11. Related documents
 

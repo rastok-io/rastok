@@ -25,6 +25,15 @@ fn refusal(source: &str, expected: &str) {
     assert_eq!(diagnostics.len(), 1, "{bag:#?}");
     assert_eq!(diagnostics[0].code().as_str(), "E-LOOP-CONTROL");
     assert!(
+        diagnostics[0]
+            .message()
+            .starts_with("cannot prove that Loop `")
+            && diagnostics[0]
+                .message()
+                .contains("` always terminates at `"),
+        "the user-facing proof failure should use plain English: {bag:#?}"
+    );
+    assert!(
         diagnostics[0].message().contains(expected),
         "wanted {expected:?}, got {bag:#?}"
     );

@@ -30,9 +30,9 @@ dispatch, Graph lifecycle facts, explicit bounded closing, and bounded
 presence joins execute. R7 has audited the removed surface and physical
 placement neutrality without claiming a cluster runtime. Graph lifecycle
 handlers outside an admitted aspect, File append/watch/directory profiles,
-the Loop runtime manager, Process service mode, and guest engines are still
-pending or guarded. Loop's closed L3 finite-control plan executes only up to
-the fail-closed VM gate. Thus these are
+dated/nested/spatial-child Loop composition, Process service mode, and guest
+engines are still pending or guarded. L4 executes immediate persistent
+root-Graph Loops from their replay-derived fuel fold. Thus these are
 parser- and design-reference snippets, not a claim
 that every section runs today. The small executable fixtures under
 [`examples/`](../../examples/) are the run/simulate proofs.

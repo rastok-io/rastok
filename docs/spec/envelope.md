@@ -135,7 +135,11 @@ domain_tag = 0x01 (root, 2 fields)          |  0x02 (emission, 5 fields)
              0x03 (root + boot-epoch, 3 fields : connector_path, inbound_seq,
                    epoch u64 LE — the `durability = none` mode)
              0x04 (root + replica — RESERVED byte ; multi-host semantics are deferred)
+             0x05 (Loop re-entry envelope, 3 fields : loop_run_ref,
+                   iteration u64 LE, selected_next_id)
              0x10 (call, 2 fields : delivery_ref, request_digest)
+             0x13 (Loop run reference, 3 fields : canonical instance-address
+                   bytes, generation u64 LE, external_root_id)
              0x20 (delivery reference, 2 fields : canonical_edge_text, envelope_id)
              0x21 (instance lifetime, 2 fields : canonical instance-address bytes,
                                                     generation u64 little-endian)
@@ -344,8 +348,11 @@ Composed cases :
   lineage only on join-free return paths, and requires an explicit
   `correlate` field otherwise ([stdlib.md §3.1](stdlib.md)).
 - **Loop** (`: Loop` re-injection) → each iteration-state envelope is emitted
-  by the Loop manager, trigger `l:next`, `parent_id` = the selected `next`
-  emission. The parent chain *is* the iteration history.
+  by the Loop manager under domain `0x05`, trigger `l:next`, `parent_id` = the
+  selected `next` emission. Its run reference uses domain `0x13` and includes
+  the exact owner generation plus external root. The parent chain *is* the
+  iteration history; the last permitted proposed `next` instead parents the
+  terminal `LoopExpired` output and creates no re-entry.
 
 ### 3.1 Transactions without a port arrival — trigger and parent
 

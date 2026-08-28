@@ -430,6 +430,56 @@ fn record_tree(record: &Record) -> Cbor {
                 }
                 None => {}
             }
+            if let Some(fact) = transaction.loop_fact.as_deref() {
+                let tree = match fact {
+                    crate::journal::LoopFact::Open {
+                        run,
+                        instance,
+                        root,
+                        fuel,
+                        state,
+                    } => Cbor::Array(vec![
+                        Cbor::Uint(1),
+                        Cbor::Bytes(run.id().as_bytes().to_vec()),
+                        instance.tree(),
+                        Cbor::Bytes(root.as_bytes().to_vec()),
+                        Cbor::Uint(*fuel),
+                        spine(state),
+                    ]),
+                    crate::journal::LoopFact::Next {
+                        run,
+                        iteration,
+                        remaining,
+                        selected,
+                        state,
+                    } => Cbor::Array(vec![
+                        Cbor::Uint(2),
+                        Cbor::Bytes(run.id().as_bytes().to_vec()),
+                        Cbor::Uint(*iteration),
+                        Cbor::Uint(*remaining),
+                        Cbor::Bytes(selected.as_bytes().to_vec()),
+                        spine(state),
+                    ]),
+                    crate::journal::LoopFact::Close { run, iteration } => Cbor::Array(vec![
+                        Cbor::Uint(3),
+                        Cbor::Bytes(run.id().as_bytes().to_vec()),
+                        Cbor::Uint(*iteration),
+                    ]),
+                    crate::journal::LoopFact::Expired {
+                        run,
+                        iteration,
+                        selected,
+                        output,
+                    } => Cbor::Array(vec![
+                        Cbor::Uint(4),
+                        Cbor::Bytes(run.id().as_bytes().to_vec()),
+                        Cbor::Uint(*iteration),
+                        Cbor::Bytes(selected.as_bytes().to_vec()),
+                        spine(output),
+                    ]),
+                };
+                pairs.insert(53, tree);
+            }
             if let Some(cause) = transaction.cause {
                 pairs.insert(39, Cbor::Bytes(cause.as_bytes().to_vec()));
             }
@@ -701,6 +751,58 @@ fn completion_spine(completion: &crate::boundary::Completion) -> Cbor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_loop_open_fact_owns_transaction_key_53_and_closed_tag_1() {
+        let owner = crate::plan::OwnerPath::root();
+        let instance = crate::identity::InstanceRef::new(
+            crate::identity::InstanceAddress::singleton(&owner),
+            0,
+        );
+        let root = crate::envelope::Id::from_bytes([3; 16]);
+        let state = Envelope::new(
+            crate::envelope::Meta::new(crate::envelope::MetaSys::root(root, 1)),
+            Data::materialized(crate::value::Value::Int(7)),
+        );
+        let run = crate::journal::ids::loop_run_ref(&instance, root);
+        let record = Record::Transaction(crate::journal::TransactionRecord {
+            owner_path: owner,
+            instance: instance.clone(),
+            parent_instance: None,
+            close_scope: None,
+            trigger: crate::node::Trigger::Port(crate::node::Port::new("in").unwrap()),
+            cause: Some(root),
+            exchange_exit: None,
+            loop_fact: Some(Box::new(crate::journal::LoopFact::Open {
+                run,
+                instance: instance.clone(),
+                root,
+                fuel: 9,
+                state: state.clone(),
+            })),
+            consumed: Vec::new(),
+            join_inputs: Vec::new(),
+            state_delta: Vec::new(),
+            emissions: Vec::new(),
+            routes: Vec::new(),
+            timers: Vec::new(),
+        });
+
+        let Cbor::Map(tree) = record_tree(&record) else {
+            panic!("a transaction projects as a canonical map")
+        };
+        assert_eq!(
+            tree.get(&53),
+            Some(&Cbor::Array(vec![
+                Cbor::Uint(1),
+                Cbor::Bytes(run.id().as_bytes().to_vec()),
+                instance.tree(),
+                Cbor::Bytes(root.as_bytes().to_vec()),
+                Cbor::Uint(9),
+                spine(&state),
+            ]))
+        );
+    }
 
     #[test]
     fn a_connector_root_seals_its_structural_source_path_under_key_27() {

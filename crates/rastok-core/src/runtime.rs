@@ -21,8 +21,8 @@ use crate::identity::InstanceRef;
 use crate::journal::{ConsumedPosition, Emission, TransactionRecord, ids};
 use crate::node;
 use crate::plan::{
-    Emission as PlanEmission, ExecutionPlan, GraphVersion, Handler, Slot, Step,
-    ValidatedExecutionPlan,
+    Emission as PlanEmission, ExecutionPlan, GraphVersion, Handler, HandlerOwner, OwnerSlot, Slot,
+    Step, ValidatedExecutionPlan,
 };
 use crate::value::{Value, ValueError};
 use alloc::boxed::Box;
@@ -741,6 +741,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 parent_instance: None,
                 close_scope: None,
                 exchange_exit: None,
+                loop_fact: None,
                 trigger,
                 cause: Some(delivery.envelope.meta().sys().id()),
                 consumed: vec![ConsumedPosition {
@@ -794,6 +795,190 @@ impl<'plan> TransactionExecutor<'plan> {
         )
     }
 
+    /// Fires one ordinary Graph-owned handler. Graph handlers use the same
+    /// expression and emission machinery as Operator handlers; the only
+    /// additional bindings are the immutable Loop entry envelope and its
+    /// metadata. Keeping this here prevents the Loop manager from becoming a
+    /// second expression evaluator.
+    pub(crate) fn fire_graph(
+        &self,
+        owner_slot: OwnerSlot,
+        instance: &InstanceRef,
+        activation: &node::HandlerActivation,
+        input: &Envelope,
+        loop_state: &Envelope,
+        instance_values: &BTreeMap<String, Value>,
+    ) -> Result<TransactionOutcome, Fault> {
+        let owner = self
+            .plan
+            .owner(owner_slot)
+            .filter(|owner| owner.kind == crate::plan::OwnerKind::Graph)
+            .ok_or_else(|| Fault::Unrepresentable(String::from("a Graph handler owner")))?;
+        let loop_slot = node::Port::new("loop_state")
+            .map_err(|error| Fault::Unrepresentable(error.to_string()))?;
+        let named = [Delivery {
+            port: loop_slot,
+            edge: String::from("@loop.state"),
+            seq: 0,
+            source_instance: instance.clone(),
+            envelope: loop_state.clone(),
+        }];
+        let payloads = PayloadSlots::new(input, &named);
+        let state_payload =
+            expr::EvalValue::Payload(expr::PayloadRef::Named(String::from("loop_state")));
+        let state_meta = expr::EvalValue::from(meta_value(loop_state.meta()));
+        let mut extra = BTreeMap::new();
+        extra.insert(String::from("Loop.state.data"), state_payload.clone());
+        extra.insert(String::from("Loop.state.meta"), state_meta.clone());
+        extra.insert(
+            String::from("Loop.state"),
+            expr::EvalValue::Struct(vec![
+                (String::from("data"), state_payload),
+                (String::from("meta"), state_meta),
+            ]),
+        );
+        let base = |lets: &BTreeMap<String, expr::EvalValue>| {
+            let mut bindings: BTreeMap<String, expr::EvalValue> = instance_values
+                .iter()
+                .map(|(name, value)| (name.clone(), expr::EvalValue::from(value.clone())))
+                .collect();
+            bindings.extend(
+                extra
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.clone())),
+            );
+            bindings.extend(
+                lets.iter()
+                    .map(|(name, value)| (name.clone(), value.clone())),
+            );
+            bindings.insert(
+                String::from("meta"),
+                expr::EvalValue::from(meta_value(input.meta())),
+            );
+            bindings
+        };
+
+        let mut selected = None;
+        for handler in self.plan.handlers.iter().filter(|handler| {
+            handler.owner == HandlerOwner::Graph(owner_slot) && handler.activation == *activation
+        }) {
+            let matches = match &handler.guard {
+                None => true,
+                Some(guard) => match resolve_payload_with_slots(
+                    eval_with_slots(guard, &base(&BTreeMap::new()), &payloads, &self.plan.assets)?,
+                    &payloads,
+                )? {
+                    Value::Bool(value) => value,
+                    other => {
+                        return Err(Fault::Eval(expr::Error {
+                            kind: expr::ErrorKind::Evaluation,
+                            message: format!("the guard evaluated to {other:?}"),
+                        }));
+                    }
+                },
+            };
+            if matches && selected.replace(handler).is_some() {
+                return Err(Fault::Unrepresentable(String::from(
+                    "two Graph handlers selected the same Loop traversal",
+                )));
+            }
+        }
+        let Some(handler) = selected else {
+            return Err(Fault::MissingHandler);
+        };
+
+        let trigger = match activation {
+            node::HandlerActivation::Port(port)
+            | node::HandlerActivation::ChildPort { port, .. } => node::Trigger::Port(port.clone()),
+            node::HandlerActivation::Lifecycle(lifecycle) => node::Trigger::Lifecycle(*lifecycle),
+            node::HandlerActivation::Join { ports, .. } => {
+                let port = ports
+                    .first()
+                    .cloned()
+                    .ok_or_else(|| Fault::Unrepresentable(String::from("an empty Graph join")))?;
+                node::Trigger::Port(port)
+            }
+        };
+        let mut lets = BTreeMap::new();
+        let mut buffer = EmissionBuffer::new();
+        let mut close_requested = false;
+        for step in &handler.body {
+            match step {
+                Step::Let { name, expr } => {
+                    let value = eval_with_slots(expr, &base(&lets), &payloads, &self.plan.assets)?;
+                    lets.insert(name.clone(), value);
+                }
+                Step::SetVar { .. } => {
+                    return Err(Fault::Unrepresentable(String::from(
+                        "Graph handlers cannot own mutable state",
+                    )));
+                }
+                Step::Emit { port, value } => {
+                    let built = emitted_content(value, input, &base(&lets), &payloads, self.plan)?;
+                    if let Some(built) = built {
+                        let index = buffer.next_index(port);
+                        let id = ids::graph_emission_id(
+                            &owner.path,
+                            &trigger,
+                            input.meta().sys().id(),
+                            port,
+                            index,
+                        );
+                        let from = crate::plan::EndpointRef {
+                            node: None,
+                            port: port.clone(),
+                        };
+                        let data = match built.data {
+                            BuiltData::Carried(data) => {
+                                if let Data::Materialized(current) = &data {
+                                    crossing_pins_hold(self.plan, &from, current)
+                                        .map_err(PinViolation::into_fault)?;
+                                }
+                                data
+                            }
+                            BuiltData::Value(value) => {
+                                crossing_pins_hold(self.plan, &from, &value)
+                                    .map_err(PinViolation::into_fault)?;
+                                Data::materialized(value)
+                            }
+                        };
+                        let meta = Meta::new(MetaSys::emission(
+                            id,
+                            input.meta().sys(),
+                            self.graph_version.0,
+                        ))
+                        .with_app(built.app)
+                        .with_ext(built.ext);
+                        buffer.push(Emission {
+                            port: port.clone(),
+                            index,
+                            envelope: Envelope::new(meta, data),
+                        });
+                    }
+                }
+                Step::Stop => close_requested = true,
+            }
+        }
+        Ok(TransactionOutcome {
+            record: TransactionRecord {
+                owner_path: owner.path.clone(),
+                instance: instance.clone(),
+                parent_instance: None,
+                close_scope: close_requested.then(|| instance.clone()),
+                exchange_exit: None,
+                loop_fact: None,
+                trigger,
+                cause: Some(input.meta().sys().id()),
+                consumed: vec![],
+                join_inputs: vec![],
+                state_delta: vec![],
+                emissions: buffer.into_emissions(),
+                routes: vec![],
+                timers: vec![],
+            },
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn fire_activation(
         &self,
@@ -832,6 +1017,7 @@ impl<'plan> TransactionExecutor<'plan> {
                     parent_instance: parent_instance.cloned(),
                     close_scope: None,
                     exchange_exit: None,
+                    loop_fact: None,
                     trigger: trigger.clone(),
                     cause,
                     consumed,
@@ -892,6 +1078,7 @@ impl<'plan> TransactionExecutor<'plan> {
                             parent_instance: parent_instance.cloned(),
                             close_scope: None,
                             exchange_exit: None,
+                            loop_fact: None,
                             trigger: trigger.clone(),
                             cause,
                             consumed,
@@ -1027,6 +1214,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 parent_instance: parent_instance.cloned(),
                 close_scope: close_requested.then(|| instance.clone()),
                 exchange_exit: None,
+                loop_fact: None,
                 trigger: trigger.clone(),
                 cause,
                 consumed,
@@ -1131,6 +1319,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 parent_instance: None,
                 close_scope: None,
                 exchange_exit: None,
+                loop_fact: None,
                 trigger: trigger.clone(),
                 cause: None,
                 consumed: vec![ConsumedPosition {
@@ -1176,6 +1365,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 exchange_exit: Some(Box::new(crate::journal::InboundExchangeExitRecord::Call(
                     call_ref,
                 ))),
+                loop_fact: None,
                 trigger,
                 cause: Some(request.meta().sys().id()),
                 consumed: vec![],
@@ -1257,6 +1447,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 exchange_exit: Some(Box::new(
                     crate::journal::InboundExchangeExitRecord::Session(session_ref),
                 )),
+                loop_fact: None,
                 trigger,
                 cause: Some(opening.meta().sys().id()),
                 consumed: consumed

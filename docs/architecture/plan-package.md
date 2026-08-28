@@ -103,8 +103,9 @@
 > those facts and is refused rather than guessed. Root Graph ports are not
 > mirrored: plan key 2 remains their sole authority, while owner key 6 is
 > populated only for nested Graphs. L2 writes no Loop journal fact; L3 adds a
-> derived control proof without changing the container, and the VM refuses
-> any transported aspect before its first mutation until L4.
+> derived control proof without changing the container. L4 executes the
+> immediate persistent root-Graph subset from new causal facts but does not
+> change v13 package bytes; every later Loop composition remains fail-closed.
 >
 > The lifetime rows are one closed transport and executable registry: v9
 > validation admits `persistent`, `idle`, `fixed`, `single_pass`, and

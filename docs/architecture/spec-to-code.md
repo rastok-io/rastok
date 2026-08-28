@@ -1,7 +1,7 @@
 # Specification-to-implementation map
 
-> Planning aid — non-normative. **Updated 2026-08-28 for the M1.7 L3
-> finite-control checkpoint.** The former named-partition P1-P3 implementation is superseded.
+> Planning aid — non-normative. **Updated 2026-08-28 for the M1.7 L4
+> journal-fold checkpoint.** The former named-partition P1-P3 implementation is superseded.
 > Categorical v13 transport retains v9's owner model, stable Connector
 > identities/roles/exchange lifecycles; hierarchical route/journal instance
 > references are executable; all five lifetime profiles and explicitly bounded
@@ -31,7 +31,7 @@ they are not promised crate names.
 | [`stdlib.md`](../spec/stdlib.md) | The Process connector contract used by M0; other catalogue entries remain unimplemented. | One real handler and one controlled handler behind the same intent/outcome types. |
 | [`aspects.md`](../spec/aspects.md) | Give every Node one structural kind, one effective type, and a closed aspect list; classify known aspects but refuse any whose complete execution gate has not landed. | Default/explicit type identity twins, annotation compatibility negatives, and a lowering belt that cannot erase an aspect. |
 | [`effects-and-sagas.md`](../spec/effects-and-sagas.md) | Preserve effect classification and explicit outcomes. Live Saga management is deferred. | Effect boundary tests; no placeholder Saga subsystem. |
-| [`loop.md`](../spec/loop.md) | Classify Loop as a Graph aspect; retain its closed positive-fuel/fixed-or-exponential-delay contract, exact boundary and ordinary Graph handlers in v13; prove one finite progress verdict while the journal fold/runtime remain fail-closed. | Exact `E-LOOP` shape diagnostics and `E-LOOP-CONTROL` proof refusals; source→HIR→v13 round trip; forged/partial/theorem/control plans rejected Registry-free; VM refusal before mutation. |
+| [`loop.md`](../spec/loop.md) | Classify Loop as a Graph aspect; retain its closed positive-fuel/fixed-or-exponential-delay contract, exact boundary and ordinary Graph handlers in v13; prove one finite progress verdict and execute the immediate root-Graph subset from a replay-derived journal fold. | Exact `E-LOOP` shape diagnostics and `E-LOOP-CONTROL` proof refusals; source→HIR→v13→VM countdown; forged/partial/theorem/control plans rejected Registry-free; exact exhaustion, concurrent roots and fresh-VM recovery. |
 
 ## M1 extensions now in force
 
@@ -83,6 +83,7 @@ they are not promised crate names.
 | M1.7 L0 Node taxonomy | The declaration fixes `node::Kind`; every Node has one effective `node::Type`; `Loop`/`Saga` are canonical `node::Aspect` values that remain fail-closed. Ordinary reducer/aggregator/window/join/router/dispatch/fanout configurations are patterns rather than types. Source key policy is singular `instance`; historical identity vocabulary stays fixed. The plan's existing executable payload is named `NodeExecution`, not a second kind authority. | core `node`; compiler syntax/HIR/check/lower; plan API; current docs | implicit/explicit Graph and Operator identity twins, exact annotation diagnostics, recognized-aspect lower refusal, plural-instance migration, unchanged packages/hashes/traces; ordered continuation in [`m1.7-loop-backlog.md`](m1.7-loop-backlog.md) |
 | M1.7 L2 Loop transport | One closed `LoopSpec`, contributed `next`/`expired` types, nested-Graph ports and ordinary Graph-owned handlers cross source and categorical v13. Root boundary has one authority. Registry-free validation re-derives every constant/type/ownership claim, and execution refuses before mutation until L4. | compiler check/HIR/lower; core `node`, `plan::{serialization,validation}`, `runtime::vm` | valid fuel-only round trip; exact `LoopExpired<In>`; forged partial/unknown/misplaced aspects; v12 refusal; preserved non-Loop hashes/traces; empty journal on VM refusal |
 | M1.7 L3 finite control | A pure finite summary follows the flattened Graph and proves exactly one `next` continuation or one explicit terminal transaction per completed traversal. Domain output names remain ordinary; `stop` closes the owner; typed Call exits are finite symbolic guard domains. | compiler Graph-handler checking/lowering; core `plan::validation` | complementary/exhaustive guards, source-order twins, domain outputs, stop, Registry-free forged-body refusals, silence/mixed/repeated/multi-terminal and Connector-cardinality negatives |
+| M1.7 L4 Loop journal fold | One external root derives one placement-neutral run; open/progress/close/exhaustion facts live in ordinary transactions and fold to the sole current ordinal, fuel and state. Immediate `next` re-enters the same owner generation; the final permitted `next` becomes exact `LoopExpired` and never creates a re-entry. | core `journal::{LoopFact,fold_loop_run}`, `runtime::{TransactionExecutor,vm}`, compiler source-to-VM proof, canonical trace projection | countdown/fold completion and exact exhaustion; two runs in one instance; journal double-open/skip/duplicate/post-close refusals; fresh-VM continuation after a committed `next`; unchanged non-Loop identities |
 
 The ordered evidence and dependency decision are in
 [`m1.6-http-websocket-backlog.md`](m1.6-http-websocket-backlog.md). H1 through

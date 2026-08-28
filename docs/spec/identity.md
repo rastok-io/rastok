@@ -40,8 +40,9 @@
 > M1.7 L2 moves every package container categorically to v13 for closed
 > Graph-aspect contracts and explicit Graph-handler ownership. Existing
 > semantic hashes and every causal record remain byte-identical; newly checked
-> Loop programs seal their contract under `rastok.aspects.r1` but cannot yet
-> execute.
+> Loop programs seal their contract under `rastok.aspects.r1`. L3 adds no
+> identity; L4 allocates only new Loop causal forms under domains `0x05`/`0x13`
+> and transaction key 53, leaving every pre-Loop artifact byte-identical.
 > D-2026-08-14-1
 > transports the canonical `DataType` registry, complete resolved port types
 > and structural/tagged unions together. Decode re-derives the effective table
@@ -314,6 +315,17 @@ facts. Every pre-L3 program keeps its semantic hash, v13 package bytes and
 causal trace; L3 emits no Loop record. The connector-free gauge remains the
 negative scope witness.
 
+**M1.7 L4 Loop-fold checkpoint (2026-08-28).** L4 allocates envelope domain
+`0x05` for manager-produced immediate re-entry, reference domain `0x13` for
+`LoopRunRef`, and optional TRANSACTION key 53 for the closed Loop fact. These
+forms occur only when a new Loop executes. Every pre-L4 semantic hash, v13
+package and causal trace therefore remains byte-identical; no existing golden
+is re-blessed. One run derives from `(instance_address, generation,
+external_root_id)`. One re-entry derives from `(run_ref, next_iteration,
+selected_next_id)`. The journal folds open/next/close/expired facts and rejects
+any skipped, duplicate or post-terminal transition; Worker RAM contributes no
+identity or fuel.
+
 ## 2. `graph_version` and the manifest
 
 `meta.sys.graph_version` is a small integer. It is a
@@ -450,14 +462,14 @@ timer fields.
 | 22 | inbound_seq | uint | the atomic sequence for `(connector_path, replica)` — minted by the owning shard's leader ; root recipe input |
 | 23 | replica | uint | the logical inbound Connector replica in `InboundEnvelopeProvenance`; sealed so the record autonomously reconstructs `(connector_path, replica, inbound_seq)`. It may be allocated by the leader responsible for that inbound Connector, but is never the target-routing shard and never changes when a destination moves Workers. |
 | 24 | ingress_port | text | the source port the envelope entered through: an App input when key 27 is absent, otherwise the named Connector output; **omitted for the conventional `in`** (absent = omitted), so pre-multiport records remain byte-identical (D-2026-08-08-2) |
-| 25 | routes | array | target admissions made before the inbound commit, each `[edge (text), target_instance_ref]`, sorted by canonical `(edge, target_instance_ref)`; omitted only when this ingress produces no routed delivery. The destination reservation returns the generation, so delayed transport cannot enter a successor. The entering envelope is implicit in the INBOUND record. |
+| 25 | routes | array | target admissions made before the inbound commit, each `[edge (text), target_instance_ref]`, sorted by canonical `(edge, target_instance_ref)`; omitted only when this ingress produces no routed delivery. The destination reservation returns the generation, so delayed transport cannot enter a successor. The entering envelope is implicit in the INBOUND record. `@loop.in` is the reserved internal edge spelling for root admission into a Loop manager; it records selection but is never a spatial plan edge. |
 | 26 | session_ingress | array | present only for Session ingress: `[1, session_ref (bytes16)]` opens a session and `[2, session_ref (bytes16)]` admits one message into an already-open session. Omitted for Event and Call facts, preserving every pre-H1 record byte. |
 | 27 | source_connector_path | array | lexical UTF-8 path segments of the inbound Connector whose output introduced this root. Omitted exactly for an explicit App-boundary injection. Derived from the proposal's single `InboundEnvelopeProvenance` authority at acceptance; its presence and structural spelling are the replay-routing fact. |
 | 28 | inbound_call | array | present exactly when this Connector-origin root opens an inbound Call: `[inbound_call_ref (bytes16), source_instance_ref]`. The reference is the root id behind a direction-specific type; the instance is selected and reserved before this same INBOUND commit. Omitted for Event, Session and App-boundary facts. |
 
 **TRANSACTION** (kind 2 — one Node firing or one Graph-owner lifecycle fact;
 the commit packet of
-execution-model §1) — keys `30–39`, `48–50` and `52` :
+execution-model §1) — keys `30–39`, `48–50`, `52` and `53` :
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
@@ -475,6 +487,7 @@ execution-model §1) — keys `30–39`, `48–50` and `52` :
 | 49 | close_scope_ref | array | present exactly on the transaction whose close request wins (`l:closing`, or a handler transaction containing bare `stop`); the fixed instance reference of the root of the Closing scope. Descendant work may drain under this reference, and later external admission reserves its successor. Omitted on ordinary firings. |
 | 50 | session_exit_ref | bytes(16) | present exactly on the Connector transaction that terminates a Session. That transaction emits exactly one conventional `exit`, last; its envelope projects the same reference as `meta.ext.session_id`. The fold refuses a second exit, an exit with an open write, or any later message/write. |
 | 52 | inbound_call_exit_ref | bytes(16) | present exactly on the Connector `l:reply` transaction that terminates the inbound Call opened by INBOUND key 28. Its cause is the root request; fixed ack consumes zero positions, while a graph response consumes exactly its one real delivery position. Owner/instance equal the opening source and exactly one conventional `exit` is last. The fold refuses an unmatched trigger or any second terminal. |
+| 53 | loop_fact | array | present only on one `: Loop` run transition. Closed tags: `open = [1, run_ref, instance_ref, root_id, fuel, state_spine]`; `next = [2, run_ref, iteration, remaining, selected_next_id, state_spine]`; `close = [3, run_ref, iteration]`; `expired = [4, run_ref, iteration, selected_next_id, output_spine]`. Open is unique; next advances the ordinal and decrements fuel exactly; close/expired are terminal. Omitted for every non-Loop transaction. |
 
 **OUTBOUND / Call** (kind 3 — one external call's WAL record ;
 delivery-semantics §4) — keys `40–47` :
@@ -620,6 +633,14 @@ cannot diverge on bytes for the same journal :
   belongs to the firing Node instance at key 31 and is self-describing via the
   `type_tag` registry above. No owner qualifier is needed because mutable
   state cannot cross a Node boundary.
+- **`loop_fact` (TX key 53)** is the sole run-state authority. A
+  `LoopRunRef` is `derive(0x13, instance_address ‖ generation_u64_le ‖
+  external_root_id)`. An immediate re-entry envelope id is
+  `derive(0x05, loop_run_ref ‖ iteration_u64_le ‖ selected_next_id)`; its
+  parent is the selected `next` emission and its origin remains the external
+  root. The selected emission stays in key 36, while key 53 carries the
+  manager-owned re-entry or exact `LoopExpired` output. A replay folds these
+  facts; no mutable counter or arrival order is sealed.
 - **`app_meta` values (spine key 9)** : each triple's third element is
   a `tagged_value` (per the registry above).
 - **`timers` (TX key 37)** = tuples `[timer_kind (uint), ref (bytes 16)]`,
