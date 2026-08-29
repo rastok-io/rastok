@@ -786,3 +786,13 @@ executions differ on this field ?* Yes → annotation. No → core.
 | Causal core (in the canonical form, compared bytewise) | Annotations (recorded if useful, excluded from the form and the seal) |
 |---|---|
 | record kind ; full `meta.sys` (id, parent_id, origin_id, role, graph_version) ; port ; `emission_index` ; the causal record fields (consumed set, state delta, ordered emissions, call/session identities and transitions) ; every typed port payload ; explicit transaction `logical_time` when `now()` is observable | scheduler arming/due time (derivable — annotation, simulation-semantics §6.1) ; wall-clock `committed_at` ; execution durations ; cost / metrics ; host info ; runtime version ; thread ids ; socket ids ; negotiated protocol ; all non-normative diagnostics |
+
+**M1.8 target.** Source data annotations are different from the record
+annotation ring: their canonical resolved side-table is semantic identity
+because it changes handling and accounting policy. A2 will transport that
+table categorically in package v15 without adding a `DataType` tag. Concrete
+secret values, deployment bindings, cost profiles and exporter configuration
+remain outside graph identity; run-affecting versions/digests use the boot
+attestation rule above. Typed measure/cost samples remain in the non-causal
+ring, and no existing record moves merely because an annotation vocabulary is
+recognized.

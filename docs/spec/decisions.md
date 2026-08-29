@@ -5,6 +5,84 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-30-1 — M1.8 separates data policy, accounting truth and disposable export
+
+M1.8 replaces the old untyped Connector `cost` map with four typed schema
+annotations beside the resolved logical type: `@sensitive`, `@secret`,
+`@measure` and `@cost`. They never wrap or extend `DataType` and never alter
+ordinary conformance or assignability. A canonical `SchemaPath ->
+AnnotationSet` side-table carries their resolved meaning. Source annotations
+that affect handling or accounting enter semantic identity; annotation order
+does not. A schema with an empty table pays no runtime annotation walk.
+
+Annotation arguments are closed plan constants. The initial path vocabulary
+distinguishes the root, struct field, array element, map key/value, structural-
+union branch and tagged-union case. Unknown annotations, duplicate kinds,
+illegal targets, dynamic arguments and transported claims that cannot be
+re-derived refuse by exact path. `@sensitive` propagates conservatively through
+derived data. `@secret` is stronger and is not a secret origin: `secret(path)`
+mints a `SecretRef` from attested boot bindings, while the annotation governs
+handling. M1 admits only late resolution from a reference into a declared
+secret-compatible Driver setting. A raw incoming secret-classified field
+refuses before journaling until field-level externalization has its own gate.
+
+The journal remains the accounting authority. Exact typed
+`RecordObservation` values sit beside causal records but outside their seal;
+the same fold produces `CostReport` with exporters disabled. Logs and hosted
+OpenTelemetry are bounded never-block projections: saturation drops only the
+projection and increments a drop counter. Redaction happens from the resolved
+annotation table before formatting. High-cardinality flow identity belongs to
+spans, logs and reports, not metric labels by default.
+
+Semantic naming is standards-first. When an OpenTelemetry Semantic Convention
+matches exactly, Rastok uses that canonical name directly. The `rastok.*`
+namespace exists only for uncovered Rastok concepts; no Rastok alias shadows a
+standard name. The initial snapshot is OpenTelemetry Semantic Conventions
+v1.44.0 (`e10a930844c6951757a43b849d364f7d056ac32b`) plus the separate GenAI
+repository at `67dff024110be5bd9f318006e733f4078e0f4c97`. GenAI's development
+status is carried as registry metadata, so adopting a later definition is an
+explicit registry migration rather than a silent change of meaning.
+
+Monetary values are exact. `Money` is the canonical resolved struct shape
+`{ amount: decimal(38,18), currency: text }`, not another logical type family.
+A decimal cost annotation fixes an ISO currency in its constant arguments; a
+Money-shaped value carries the validated currency itself. Provider-reported
+and pricebook-calculated bases remain distinct, missing prices remain
+`unpriced`, and reports never add currencies or apply an implicit FX rate.
+Human deployment configuration is parsed only in the hosted crate (JSON is
+already an exact-pinned production dependency there); the no-std core receives
+typed `DeploymentProfile`/`BootBindings` values and parses no JSON, TOML or
+YAML. `serde_json` remains dev-only in `rastok-core`; `serde_yaml_ng` remains
+hosted OpenAPI input only.
+
+Categorical package v15 is reserved for the annotation side-table and registry
+references but does not exist until A2 lands its independent decoder and
+sabotage evidence. The `DataType` registry and tags remain unchanged. Only
+annotated programs gain the `rastok.metering.r1` semantic extension; concrete
+secret values, deployment profiles, price profiles and exporter settings do
+not become graph identity. Costs, metrics, host facts and export loss remain
+outside causal identity as already required by `identity.md`.
+
+Budget enforcement is deliberately outside M1.8. The draft aspect would need
+dynamic deployment policy, pre-effect reservation, plan-shaped typed refusal
+and distributed accounting semantics; metering and OpenTelemetry cannot
+authorize future spend. No `Budget` spelling, aspect tag, `BudgetRefused` case
+or journal key is reserved now. FX, billing, FOCUS/OpenCost conformance,
+sampled calibration, arbitrary user dimensions, raw secret envelopes and hot
+secret rotation likewise remain named later work. Hosted OpenTelemetry export
+is calendar-optional; annotations, secrets, structured logs and replayable
+`CostReport` are not.
+
+**Rejected:** annotations as `DataType` wrappers; arbitrary string maps or
+user-defined annotation names; repeating units that a registered measure
+already fixes; Rastok aliases for standard OTel names; OTel as accounting or
+control authority; blocking an execution thread on export; redacting with a
+post-format regex; treating unknown usage or price as zero; float money;
+implicit FX; putting live budget amounts in source; moving YAML or another
+human configuration parser into the core; serializing placeholder empty
+annotation tables before the v15 gate; and reserving Budget identities merely
+to preserve a design draft.
+
 ## D-2026-08-28-8 — Loop closes on public composition evidence, not a wider theorem claim
 
 M1.7 L7 closes the first executable NodeAspect without broadening its proof

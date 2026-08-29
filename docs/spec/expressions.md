@@ -274,8 +274,11 @@ grid, which is a distinct statically validated namespace. `decimal(...)`
 produces the one exact Rastok decimal value and its transported result type is
 canonical `number`.
 
-## 6. Future `@` annotations
+## 6. `@` belongs to schema annotations, not expressions
 
-`@` is no longer reserved as the guest-language sigil. Its allocation is
-left open for the separate schema-classification design (`@sensitive` is
-the leading candidate). Tagged frontends use `IDENT!` exclusively.
+M1.8 allocates `@` to the closed schema-annotation grammar in
+[observability.md](observability.md). Annotation arguments are named plan
+constants, not Rastok expressions: `data`, `meta`, `var`, `now()`, `env()` and
+`secret()` are not evaluated inside them. Tagged frontends continue to use
+`IDENT!` exclusively. An `@` encountered inside an expression remains an
+expression/lexical refusal; it never invokes annotation parsing.

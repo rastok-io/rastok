@@ -441,8 +441,16 @@ step touches `vm.rs` once.
    work and exit criteria live in the
    [M1.7 backlog](m1.7-loop-backlog.md) and
    [exit report](m1.7-exit-report.md).
-9. **Cost counters** — the `cost` map (stdlib §6.4) accumulated
-    from the journal; a subscriber, not a core dependency.
+9. **M1.8 data policy, secrets, observations and cost** — replace the
+    never-executable stringly `cost` map with canonical schema side-tables for
+    `@sensitive`, `@secret`, `@measure` and `@cost`; late-resolve secret
+    references at authorized Driver settings; derive structured logs and an
+    exact per-flow `CostReport` from the journal. OpenTelemetry semantic names
+    win where they match exactly and `rastok.*` fills only project-specific
+    gaps. Export remains optional for M1 closure; Budget enforcement, FX,
+    FOCUS and OpenCost are later consumers. See the ordered
+    [M1.8 backlog](m1.8-observability-backlog.md) and the non-normative
+    [Budget draft](budget-governance-draft.md).
 10. **`--watch`** — the HTML+SSE mini-visualization, strictly a
     journal subscriber; the observation plane stays outside the
     core by construction.

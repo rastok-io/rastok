@@ -38,6 +38,8 @@ semantic ownership rather than by release layer.
 [types.md](types.md) (logical payload types) →
 [schema-projections.md](schema-projections.md) (JSON Schema / Avro / Arrow /
 OpenAPI profiles and project resolution) →
+[observability.md](observability.md) (data annotations, secrets, observations
+and exact cost) →
 [expressions.md](expressions.md) (pure expressions + tagged frontends) →
 [grammar.md](grammar.md) (host surface and delimitation) →
 [envelope.md](envelope.md) (identity, metadata, storage) →
@@ -60,6 +62,7 @@ six Connectors and guest languages) →
 |---|---|
 | [types.md](types.md) | logical payload/value tree, inference boundary, parametric port types, schema adapters, classification boundary |
 | [schema-projections.md](schema-projections.md) | lossless supported JSON Schema, Avro and Arrow mappings plus path-specific refusal vocabulary |
+| [observability.md](observability.md) | schema annotations, secret handling, typed record observations, OpenTelemetry projection and exact cost reports |
 | [expressions.md](expressions.md) | Rastok expression contract, CEL-compatible core, `IDENT!` tagged frontends, JSON values, narrowing |
 | [grammar.md](grammar.md) | host syntax, keywords, LL(1) productions, expression/frontend positions and delimitation, simulation grammar |
 | [envelope.md](envelope.md) | envelope structure, `meta.sys`, identity framing, storage and wire form, provenance |

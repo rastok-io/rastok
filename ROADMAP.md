@@ -221,7 +221,16 @@ The repository opens publicly with this milestone (15 October 2026).
   spelling determines policy. See the
   [ordered M1.7 backlog](docs/architecture/m1.7-loop-backlog.md) and
   [exit report](docs/architecture/m1.7-exit-report.md).
-- Per-flow cost counters, carried by the journal.
+- M1.8 adds the data-policy and accounting foundation: canonical
+  `@sensitive`/`@secret`/`@measure`/`@cost` side-tables, late-resolved secrets,
+  structured observations, and exact per-flow measure/cost reports carried by
+  the journal. OpenTelemetry names are used wherever their semantic
+  conventions match; `rastok.*` fills only uncovered runtime concepts. Budget
+  enforcement, FX, FOCUS and OpenCost remain later consumers. Ordered work and
+  the calendar-safe OpenTelemetry cut are in the
+  [M1.8 backlog](docs/architecture/m1.8-observability-backlog.md); the explored
+  post-M1 reservation model is preserved separately in the
+  [Budget draft](docs/architecture/budget-governance-draft.md).
 - A live view of the running graph, fed by the journal.
 - A guided example gallery seeded by the benchmark's reference
   solutions, closed by the October demo flow.

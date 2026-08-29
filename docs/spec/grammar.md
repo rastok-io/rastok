@@ -1586,7 +1586,7 @@ tuple_or_broadcast ::= "(" value ( "," value )* ")"                    // explic
                     | value                                            // broadcast — same value to every lvalue
 
 
-type_ref          ::= union_type ( "?" )?                             // T? optional == T | null
+type_ref          ::= union_type ( "?" )? data_annotation*           // T? optional == T | null; annotations target this resolved position
 union_type        ::= base_type ( "|" base_type )*                    // sum type
 base_type         ::= scalar_type
                     | "variant"
@@ -1618,9 +1618,13 @@ interval_unit     ::= "year_month" | "day_time" | "month_day_nano"
 SIGNED_INT        ::= "-"? INT
 field_decl        ::= field_name ":" type_ref
                     | ".."                                            // open record (row polymorphism)
-tagged_case       ::= IDENT ( "{" ( field_decl ( ","? field_decl )* )? "}" )?
+tagged_case       ::= IDENT data_annotation* ( "{" ( field_decl ( ","? field_decl )* )? "}" )?
 field_name        ::= IDENT | TYPE_KW                                 // field NAMES may reuse type words (`text: text`,
                                                                       //   `kind: text`) — position disambiguates
+data_annotation   ::= "@" IDENT annotation_arguments?                // M1.8 closed data-policy family; recognized now, executable only after v15
+annotation_arguments ::= "(" named_annotation_argument ( "," named_annotation_argument )* ")"
+named_annotation_argument ::= IDENT "=" annotation_constant
+annotation_constant ::= IDENT ( "." IDENT )* | STRING | SIGNED_INT  // plan constants only; no expression or positional argument
 
 attribute         ::= lvalue "=" value                               // dots = owner qualification ONLY (Loop.delay = …)
 struct_body       ::= ( attr_entry ( ","? attr_entry )* )?
@@ -1992,8 +1996,8 @@ symbol of lookahead after the IDENT is consumed. The parser never needs to
 
 - **One braced form, classified once** (D-2026-08-09-1, punctuated by D-2026-08-10-6). `{ … }` with `=` entries is the struct literal, with `:` entries the map literal (`{}` empty struct, `{:}` empty map, mixing refuses) ; in ENVELOPE positions (handler emissions, fixture injections, mock replies) the checker classifies a struct-form body's top-level roots — no reserved root builds a fresh data record, only reserved roots (`data`, `meta`) select the envelope form, a mix refuses with `E-BRACE-MIXED`. There is no `envelope { … }` keyword form, no `struct { … }` value literal, and no `map { … }` spelling. No silent reinterpretation, LL(1)-clean.
 - **No closed frontend-keyword partition.** Built-in and user-registered frontends
-  use `name!`; a bare `name` remains an identifier. `@` is unallocated
-  and may later introduce schema classification, not guest dispatch.
+  use `name!`; a bare `name` remains an identifier. `@` introduces M1.8
+  schema annotations only; it never selects guest dispatch.
 - **Separators are Scala-style, scoped by bracket.** Inside a **`{ }` block**
   (node body, composite attribute such as `instance`/`lifetime`, struct), a newline
   terminates each statement / attribute and **`;` is the optional same-line

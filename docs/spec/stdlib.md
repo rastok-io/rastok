@@ -752,11 +752,14 @@ spans; nothing wall-clock in the data plane). This note pins four things:
 3. **OTel export** — `origin_id` = trace id; one span per transaction (real
    durations); outbound calls as child spans. **The journal is the truth;
    spans are derived** — never the reverse.
-4. **Per-session cost attribution** — OUTBOUND records MAY carry a `cost`
-   map declared by the Connector (tokens, calls, bytes); aggregated by
-   logical instance address / `origin_id` → per-session spend. With §2: the
-   probabilistic surface is *where* the cost lives; the journal *prices*
-   it.
+4. **Per-flow measure and cost attribution** — M1.8 replaces the former
+   stringly Connector `cost` map (which never became executable) with typed
+   `RecordObservation` values. Standard OpenTelemetry names identify exact
+   matching measures; `rastok.*` covers only project-specific runtime facts.
+   The journal folds calls, bytes, durations, tokens and exact monetary facts
+   by logical instance / `origin_id` into `CostReport`. Export is a subscriber;
+   it is never the accounting authority. See
+   [observability.md](observability.md).
 
 
 ## 7. The MCP appendix (non-normative design direction)

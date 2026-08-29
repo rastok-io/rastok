@@ -548,7 +548,12 @@ than source semantics.
 Beyond the mechanics, note the operational posture: a thousand
 concurrent sessions are one declaration and one knob — and one journal.
 Per-session cost (every LLM and API crossing is an OUTBOUND record) is
-an aggregation over the journal, not an instrumentation project; a
+a replayable fold over typed journal observations, not an exporter-dependent
+instrumentation project. OpenTelemetry is a standards-first projection of
+that truth, never the accounting authority. Sensitive, secret, measure and
+cost meaning lives in a canonical schema side-table beside the logical type,
+so redaction and accounting policy survive composition without changing type
+assignability. A
 dying `codex` is a typed terminal error with a declared restart policy,
 not a 3 a.m. mystery; and the whole gateway is simulated — process,
 clock and Teams included — before it ever touches production.
@@ -2967,6 +2972,13 @@ wins.
     implementation. Exact ids and roles meet once at binding. Static builds and
     future plugin hosts must feed the same registry, while the VM remains
     ignorant of concrete Connector families.**
+21. **Data policy is orthogonal to logical type. Canonical annotations beside
+    the resolved schema govern sensitivity, secrets, measures and exact cost
+    without changing ordinary assignability. The causal journal remains the
+    accounting truth; reports are deterministic folds and OpenTelemetry/logs
+    are bounded, never-block projections. Missing usage or price is never
+    silently zero, and currencies are never added without an explicit FX
+    authority.**
 
 These maxims are not arbitrary slogans. Each one resolves a specific
 architectural ambiguity, and contributors are expected to know them.

@@ -468,14 +468,18 @@ Migration of an existing journal onto a modified graph remains deferred;
 until its execution contract lands, replay across unequal semantic
 hashes is a typed refusal, never an implicit application of a shim.
 
-## 7. Data classifications are a separate future layer
+## 7. Data classifications are a side-table, never another type algebra
 
-A future marker such as `@sensitive` classifies a schema field or port;
-it does not create a new logical string or struct type. Classification
-will eventually govern propagation, sinks, redaction, retention,
-telemetry and Lab fixtures. It belongs beside `DataType` in resolved
-schema metadata, and will affect plan identity when it affects policy.
+M1.8 allocates `@sensitive`, `@secret`, `@measure` and `@cost` under
+[D-2026-08-30-1](decisions.md). They do not create logical scalar or composite
+types and do not affect ordinary assignability. Their resolved meaning lives
+in a sparse canonical `SchemaPath -> AnnotationSet` table beside `DataType`.
+Policy-aware propagation and sink checks are separate judgements.
 
-M1.3 neither assigns the `@` syntax nor serializes an empty annotation
-table pre-emptively. The extension point is explicit; the policy model is
-deferred.
+The annotation table is absent/empty for an unannotated schema and therefore
+adds no recursive wrapper to this type tree. `Money` likewise remains the
+canonical struct shape `{ amount: decimal(38,18), currency: text }`, not a new
+`DataType` family. The source form, path vocabulary, propagation rules,
+secret boundary and observation semantics are normative in
+[observability.md](observability.md). Categorical package v14 carries no
+annotation table; the v15 transport remains fail-closed until M1.8 A2 lands.
