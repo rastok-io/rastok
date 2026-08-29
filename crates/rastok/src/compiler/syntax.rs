@@ -665,15 +665,53 @@ pub struct PortRef {
     pub span: Span,
 }
 
-/// `type_ref ::= union_type "?"?` — alternatives plus optionality.
+/// `type_ref ::= union_type "?"? data_annotation*`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeRef {
     /// The `|`-joined alternatives, one when not a union.
     pub alternatives: Vec<BaseType>,
     /// Trailing `?` — shorthand for `| null`.
     pub optional: bool,
+    /// Data-policy annotations written on this exact type position.
+    pub annotations: Vec<SchemaAnnotation>,
     /// The whole type expression.
     pub span: Span,
+}
+
+/// One `@name(...)` annotation on a schema position.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaAnnotation {
+    /// Source annotation name, without the `@` sigil.
+    pub name: Name,
+    /// Named constant arguments in written order.
+    pub arguments: Vec<SchemaAnnotationArgument>,
+    /// The complete annotation span.
+    pub span: Span,
+}
+
+/// One named constant argument of a schema annotation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaAnnotationArgument {
+    /// Argument name.
+    pub name: Name,
+    /// Constant source value.
+    pub value: SchemaAnnotationConstant,
+}
+
+/// Closed constant vocabulary accepted by schema annotations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchemaAnnotationConstant {
+    /// Dotted symbolic constant such as `gen_ai.usage.input_tokens`.
+    Symbol(Vec<Name>),
+    /// String constant, with quotes stripped and source escapes retained.
+    Text {
+        /// Source content between the quotes.
+        text: String,
+        /// Source span including quotes.
+        span: Span,
+    },
+    /// Integer constant, preserved as written.
+    Integer(IntLit),
 }
 
 /// One base type of a union.
@@ -709,6 +747,8 @@ pub enum BaseType {
 pub struct TaggedCaseDecl {
     /// Semantic case name.
     pub name: Name,
+    /// Data-policy annotations on the tagged-union case itself.
+    pub annotations: Vec<SchemaAnnotation>,
     /// Closed payload fields; an empty list is the unit case.
     pub fields: Vec<FieldDecl>,
 }
@@ -865,19 +905,23 @@ mod tests {
                 Box::new(TypeRef {
                     alternatives: vec![BaseType::Scalar(ScalarType::Text)],
                     optional: false,
+                    annotations: Vec::new(),
                     span: span(4..8),
                 }),
                 Box::new(TypeRef {
                     alternatives: vec![BaseType::Array(Box::new(TypeRef {
                         alternatives: vec![BaseType::Scalar(ScalarType::Int)],
                         optional: false,
+                        annotations: Vec::new(),
                         span: span(16..19),
                     }))],
                     optional: false,
+                    annotations: Vec::new(),
                     span: span(10..20),
                 }),
             )],
             optional: true,
+            annotations: Vec::new(),
             span: span(0..22),
         };
         assert!(ty.optional);

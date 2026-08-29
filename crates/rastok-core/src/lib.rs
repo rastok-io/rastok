@@ -30,5 +30,6 @@ pub mod loop_proof;
 pub mod node;
 pub mod plan;
 pub mod runtime;
+pub mod schema_annotation;
 pub mod trivia;
 pub mod value;

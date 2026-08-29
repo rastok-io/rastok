@@ -4754,6 +4754,13 @@ impl Checker<'_, '_> {
     }
 
     fn resolve_type_ref(&mut self, ty: &TypeRef) -> Option<DataType> {
+        if let Some(annotation) = ty.annotations.first() {
+            self.deferred(
+                "a data annotation before categorical package v15",
+                annotation.span,
+            );
+            return None;
+        }
         let mut alternatives = Vec::with_capacity(ty.alternatives.len() + usize::from(ty.optional));
         for alternative in &ty.alternatives {
             alternatives.push(self.resolve_base_type(alternative, ty.span)?);
@@ -4890,6 +4897,13 @@ impl Checker<'_, '_> {
             BaseType::TaggedUnion(cases) => {
                 let mut resolved_cases = Vec::with_capacity(cases.len());
                 for case in cases {
+                    if let Some(annotation) = case.annotations.first() {
+                        self.deferred(
+                            "a tagged-union case annotation before categorical package v15",
+                            annotation.span,
+                        );
+                        return None;
+                    }
                     let mut fields = Vec::with_capacity(case.fields.len());
                     for field in &case.fields {
                         fields.push(TypeField::new(
@@ -9501,6 +9515,17 @@ graph g : App {
             .collect();
         assert!(constructs.contains(&"a top-level graph outside the App"));
         assert!(constructs.contains(&"a top-level val"));
+    }
+
+    #[test]
+    fn recognized_data_annotations_refuse_until_the_v15_transport_exists() {
+        let source = "type Prompt = text @sensitive(level = confidential)\ngraph g : App {\n  operator o {\n    input in: Prompt\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
+        let (_, bag) = check_source(source);
+        assert!(bag.has_errors(), "policy metadata must never be ignored");
+        assert!(bag.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code() == E_CHECK_DEFERRED
+                && diagnostic.fields()[0].1 == "a data annotation before categorical package v15"
+        }));
     }
 
     #[test]

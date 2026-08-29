@@ -68,6 +68,8 @@ pub enum TokenKind {
     Pipe,
     /// `!`
     Bang,
+    /// `@`
+    At,
     /// `<`
     Lt,
     /// `>`
@@ -1456,6 +1458,7 @@ fn punctuation(byte: u8) -> Option<TokenKind> {
         b'?' => TokenKind::Question,
         b'|' => TokenKind::Pipe,
         b'!' => TokenKind::Bang,
+        b'@' => TokenKind::At,
         b'>' => TokenKind::Gt,
         _ => return None,
     })
@@ -1606,20 +1609,34 @@ mod tests {
     }
 
     #[test]
+    fn at_is_a_host_token() {
+        let (tokens, bag) = lex("text @secret");
+        assert_eq!(
+            tokens,
+            [
+                (TokenKind::Ident, "text"),
+                (TokenKind::At, "@"),
+                (TokenKind::Ident, "secret"),
+            ]
+        );
+        assert!(bag.diagnostics().is_empty(), "{bag:?}");
+    }
+
+    #[test]
     fn an_unknown_character_is_reported_and_skipped() {
-        let (tokens, bag) = lex("a @ b");
+        let (tokens, bag) = lex("a ^ b");
         assert_eq!(
             tokens,
             [
                 (TokenKind::Ident, "a"),
-                (TokenKind::Error, "@"),
+                (TokenKind::Error, "^"),
                 (TokenKind::Ident, "b"),
             ]
         );
         let diagnostic = &bag.diagnostics()[0];
         assert_eq!(diagnostic.code(), E_LEX_CHAR);
         assert_eq!(diagnostic.spans()[0].range(), 2..3);
-        assert_eq!(diagnostic.fields(), [("character", String::from("@"))]);
+        assert_eq!(diagnostic.fields(), [("character", String::from("^"))]);
     }
 
     #[test]

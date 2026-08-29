@@ -20,8 +20,9 @@ use crate::compiler::syntax::{
     GraphItem, Guard, HandlerDecl, IntLit, LValue, LabDecl, MockDecl, Name, OperatorDecl,
     OperatorItem, PortDecl, PortDirection, PortRef, RemovedLifetimeValue, RemovedPartitionDecl,
     RemovedPartitionField, RemovedPerClause, RemovedWindowMode, ScalarType, ScenarioDecl,
-    ScenarioItem, SimulationDecl, Statement, StructBody, StructEntry, SubBlock, SyntaxTree,
-    TaggedCaseDecl, TopDecl, Trigger, TypeRef, ValDecl, Value, VarDecl,
+    ScenarioItem, SchemaAnnotation, SchemaAnnotationArgument, SchemaAnnotationConstant,
+    SimulationDecl, Statement, StructBody, StructEntry, SubBlock, SyntaxTree, TaggedCaseDecl,
+    TopDecl, Trigger, TypeRef, ValDecl, Value, VarDecl,
 };
 use crate::diagnostics::{Bag, Code, Diagnostic, Phase, SourceId, Span};
 
@@ -2101,11 +2102,69 @@ impl<'src> Parser<'src, '_> {
             alternatives.push(self.base_type()?);
         }
         let optional = self.eat(TokenKind::Question).is_some();
+        let annotations = self.schema_annotations()?;
         Some(TypeRef {
             alternatives,
             optional,
+            annotations,
             span: self.span_from(start),
         })
+    }
+
+    fn schema_annotations(&mut self) -> Option<Vec<SchemaAnnotation>> {
+        let mut annotations = Vec::new();
+        while let Some(at) = self.eat(TokenKind::At) {
+            let name = self.name("a data annotation name")?;
+            let mut arguments = Vec::new();
+            if self.eat(TokenKind::LParen).is_some() {
+                loop {
+                    let argument_name = self.name("an annotation argument name")?;
+                    self.expect(TokenKind::Eq, "`=`")?;
+                    let value = self.schema_annotation_constant()?;
+                    arguments.push(SchemaAnnotationArgument {
+                        name: argument_name,
+                        value,
+                    });
+                    if self.eat(TokenKind::Comma).is_none() {
+                        break;
+                    }
+                }
+                self.expect(TokenKind::RParen, "`)`")?;
+            }
+            annotations.push(SchemaAnnotation {
+                name,
+                arguments,
+                span: Span::new(self.source_id, at.span.range().start..self.last_end),
+            });
+        }
+        Some(annotations)
+    }
+
+    fn schema_annotation_constant(&mut self) -> Option<SchemaAnnotationConstant> {
+        let token = self.peek();
+        match token.kind {
+            TokenKind::Ident => Some(SchemaAnnotationConstant::Symbol(
+                self.dotted_names("an annotation constant")?,
+            )),
+            TokenKind::Str => {
+                self.bump();
+                Some(SchemaAnnotationConstant::Text {
+                    text: token.text[1..token.text.len().saturating_sub(1)].to_string(),
+                    span: token.span,
+                })
+            }
+            TokenKind::Int => {
+                self.bump();
+                Some(SchemaAnnotationConstant::Integer(IntLit {
+                    text: String::from(token.text),
+                    span: token.span,
+                }))
+            }
+            _ => {
+                self.error_expected("an annotation constant");
+                None
+            }
+        }
     }
 
     fn base_type(&mut self) -> Option<BaseType> {
@@ -2202,6 +2261,7 @@ impl<'src> Parser<'src, '_> {
                         }
                         _ => {
                             let name = self.name("a tagged-union case")?;
+                            let annotations = self.schema_annotations()?;
                             let mut fields = Vec::new();
                             if self.eat(TokenKind::LBrace).is_some() {
                                 loop {
@@ -2222,7 +2282,11 @@ impl<'src> Parser<'src, '_> {
                                 }
                                 self.expect(TokenKind::RBrace, "`}`")?;
                             }
-                            cases.push(TaggedCaseDecl { name, fields });
+                            cases.push(TaggedCaseDecl {
+                                name,
+                                annotations,
+                                fields,
+                            });
                         }
                     }
                 }
@@ -3118,6 +3182,48 @@ mod tests {
             "unexpected diagnostics: {bag:?}"
         );
         tree
+    }
+
+    #[test]
+    fn data_annotations_are_retained_as_named_constant_syntax() {
+        let tree = parse_clean(
+            "type Usage = struct {\n  prompt: text @sensitive(level = confidential),\n  tokens: int @measure(id = gen_ai.usage.input_tokens)\n}\n",
+        );
+        let TopDecl::Type(decl) = &tree.decls[0] else {
+            panic!("expected a type declaration");
+        };
+        let BaseType::Struct { fields, .. } = &decl.ty.alternatives[0] else {
+            panic!("expected a struct");
+        };
+        assert_eq!(fields[0].ty.annotations[0].name.text, "sensitive");
+        assert!(matches!(
+            &fields[0].ty.annotations[0].arguments[0].value,
+            SchemaAnnotationConstant::Symbol(path)
+                if path.iter().map(|name| name.text.as_str()).collect::<Vec<_>>()
+                    == ["confidential"]
+        ));
+        assert_eq!(fields[1].ty.annotations[0].name.text, "measure");
+        assert!(matches!(
+            &fields[1].ty.annotations[0].arguments[0].value,
+            SchemaAnnotationConstant::Symbol(path)
+                if path.iter().map(|name| name.text.as_str()).collect::<Vec<_>>()
+                    == ["gen_ai", "usage", "input_tokens"]
+        ));
+    }
+
+    #[test]
+    fn a_tagged_union_case_can_carry_data_policy_syntax() {
+        let tree = parse_clean(
+            "type Result = union { Done @sensitive(level = internal) { value: text }, Empty }\n",
+        );
+        let TopDecl::Type(decl) = &tree.decls[0] else {
+            panic!("expected a type declaration");
+        };
+        let BaseType::TaggedUnion(cases) = &decl.ty.alternatives[0] else {
+            panic!("expected a tagged union");
+        };
+        assert_eq!(cases[0].annotations[0].name.text, "sensitive");
+        assert!(cases[1].annotations.is_empty());
     }
 
     const DECLS_ONLY: &str = r#"
