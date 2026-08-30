@@ -222,8 +222,8 @@ The repository opens publicly with this milestone (15 October 2026).
   spelling determines policy. See the
   [ordered M1.7 backlog](docs/architecture/m1.7-loop-backlog.md) and
   [exit report](docs/architecture/m1.7-exit-report.md).
-- M1.8 adds the data-policy and accounting foundation: canonical
-  `@sensitive`/`@secret`/`@measure`/`@cost` side-tables, late-resolved secrets,
+- M1.8 adds the data-policy, privacy and accounting foundation: canonical
+  `@sensitive`/`@secret`/`@personal`/`@measure`/`@cost` side-tables, late-resolved secrets,
   structured observations, and exact per-flow measure/cost reports carried by
   the journal. OpenTelemetry names are used wherever their semantic
   conventions match; `rastok.*` fills only uncovered runtime concepts. Budget
@@ -231,12 +231,13 @@ The repository opens publicly with this milestone (15 October 2026).
   the calendar-safe OpenTelemetry cut are in the
   [M1.8 backlog](docs/architecture/m1.8-observability-backlog.md); the explored
   post-M1 reservation model is preserved separately in the
-  [Budget draft](docs/architecture/budget-governance-draft.md). A0–A3 are
-  closed: categorical v15 carries the four contracts as canonical sparse
+  [Budget draft](docs/architecture/budget-governance-draft.md). A0–A3.1 are
+  closed: categorical v15 carries the five contracts as canonical sparse
   side-tables; Registry-free validation derives their effective result through
-  canonical operations, and presentation redacts before formatting.
-  Unannotated semantic hashes and causal traces remain fixed. Clear secret
-  payloads stay fail-closed pending A4's reference boundary.
+  canonical operations, and presentation redacts confidential, secret and
+  personal data before formatting. Unannotated semantic hashes and causal
+  traces remain fixed. Clear secret and personal payloads stay fail-closed
+  pending A4's attested deployment boundary.
 - A live view of the running graph, fed by the journal.
 - A guided example gallery seeded by the benchmark's reference
   solutions, closed by the October demo flow.

@@ -286,6 +286,77 @@ pub struct CostAnnotation {
     basis: CostBasis,
 }
 
+/// GDPR-facing classification of one personal-data position.
+///
+/// Personal data is orthogonal to confidentiality: a public-facing account
+/// name can still identify a data subject, while confidential business data
+/// need not be personal. The two legal regimes below are independent flags
+/// because one derived value can depend on both Article 9 special-category
+/// data and Article 10 criminal-offence data. `identifier` marks a field that
+/// directly or indirectly identifies the subject; calculations deliberately
+/// clear that claim while retaining personal-data taint.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PersonalDataClass {
+    special_category: bool,
+    criminal_offence: bool,
+    identifier: bool,
+}
+
+impl PersonalDataClass {
+    /// Builds one closed personal-data classification.
+    #[must_use]
+    pub const fn new(special_category: bool, criminal_offence: bool, identifier: bool) -> Self {
+        Self {
+            special_category,
+            criminal_offence,
+            identifier,
+        }
+    }
+
+    /// Whether Article 9 special-category handling applies.
+    #[must_use]
+    pub const fn is_special_category(self) -> bool {
+        self.special_category
+    }
+
+    /// Whether Article 10 criminal-offence handling applies.
+    #[must_use]
+    pub const fn is_criminal_offence(self) -> bool {
+        self.criminal_offence
+    }
+
+    /// Whether this exact value is declared as a data-subject identifier.
+    #[must_use]
+    pub const fn is_identifier(self) -> bool {
+        self.identifier
+    }
+
+    /// Conservative result of combining dependencies at one derived path.
+    ///
+    /// Legal classes accumulate. Identifier meaning survives only when both
+    /// operands are themselves identifiers; an arbitrary calculation may not
+    /// invent a subject index.
+    #[must_use]
+    pub const fn combine(self, other: Self) -> Self {
+        Self {
+            special_category: self.special_category || other.special_category,
+            criminal_offence: self.criminal_offence || other.criminal_offence,
+            identifier: self.identifier && other.identifier,
+        }
+    }
+
+    /// Personal-data taint after a calculation whose identifier semantics are
+    /// not independently registered.
+    #[must_use]
+    pub const fn derived(self) -> Self {
+        Self {
+            special_category: self.special_category,
+            criminal_offence: self.criminal_offence,
+            identifier: false,
+        }
+    }
+}
+
 impl CostAnnotation {
     /// Cost on a scalar decimal field; the contract fixes its currency.
     #[must_use]
@@ -330,6 +401,8 @@ pub enum DataAnnotation {
     Measure(MeasureId),
     /// Exact monetary interpretation.
     Cost(CostAnnotation),
+    /// GDPR personal-data classification and optional subject-id role.
+    Personal(PersonalDataClass),
 }
 
 impl DataAnnotation {
@@ -341,6 +414,7 @@ impl DataAnnotation {
             Self::Secret => AnnotationKind::Secret,
             Self::Measure(_) => AnnotationKind::Measure,
             Self::Cost(_) => AnnotationKind::Cost,
+            Self::Personal(_) => AnnotationKind::Personal,
         }
     }
 }
@@ -356,6 +430,11 @@ pub enum AnnotationKind {
     Measure,
     /// `rastok/cost@1`.
     Cost,
+    /// `rastok/personal@1`.
+    ///
+    /// Appended after the original A1 registry so existing annotation-set
+    /// order and semantic identity remain unchanged.
+    Personal,
 }
 
 /// Canonically ordered annotations attached to one schema path.
@@ -550,7 +629,9 @@ fn validate_annotation(
     path: &SchemaPath,
 ) -> Result<(), SchemaAnnotationError> {
     match annotation {
-        DataAnnotation::Sensitive(_) | DataAnnotation::Secret => Ok(()),
+        DataAnnotation::Sensitive(_) | DataAnnotation::Secret | DataAnnotation::Personal(_) => {
+            Ok(())
+        }
         DataAnnotation::Measure(id) => {
             let Some(spec) = measure_spec(id) else {
                 return Err(SchemaAnnotationError::UnknownMeasureId(id.as_str().into()));
@@ -759,6 +840,7 @@ mod tests {
             DataAnnotation::Secret,
             measure.clone(),
             DataAnnotation::Sensitive(SensitivityLevel::Restricted),
+            DataAnnotation::Personal(PersonalDataClass::new(true, false, true)),
         ])
         .unwrap_or_else(|error| panic!("valid annotation set: {error}"));
         assert_eq!(
@@ -767,6 +849,7 @@ mod tests {
                 DataAnnotation::Sensitive(SensitivityLevel::Restricted),
                 DataAnnotation::Secret,
                 measure,
+                DataAnnotation::Personal(PersonalDataClass::new(true, false, true)),
             ]
         );
 
@@ -777,6 +860,21 @@ mod tests {
         )
         .unwrap_or_else(|error| panic!("valid schema: {error}"));
         assert_eq!(schema.ty(), &DataType::UINT);
+    }
+
+    #[test]
+    fn personal_data_class_keeps_legal_regimes_orthogonal_to_identifier_role() {
+        let general_identifier = PersonalDataClass::new(false, false, true);
+        let special = PersonalDataClass::new(true, false, false);
+        let combined = general_identifier.combine(special);
+        assert!(combined.is_special_category());
+        assert!(!combined.is_criminal_offence());
+        assert!(!combined.is_identifier());
+        assert_eq!(
+            PersonalDataClass::new(true, true, true).derived(),
+            PersonalDataClass::new(true, true, false),
+            "a calculation preserves personal-data regimes but not subject-id meaning"
+        );
     }
 
     #[test]

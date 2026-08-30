@@ -116,15 +116,18 @@ bounded Process retry with multi-frame data, exact exhaustion, and stale-wake
 fencing across instance Closing. See the
 [M1.7 exit report](docs/architecture/m1.7-exit-report.md).
 
-M1.8 A0–A3 are closed on categorical package v15. The source front end
-recognizes the closed `@sensitive`/`@secret`/`@measure`/`@cost` family,
+M1.8 A0–A3.1 are closed on categorical package v15. The source front end
+recognizes the closed `@sensitive`/`@secret`/`@personal`/`@measure`/`@cost` family,
 resolves aliases into canonical schema paths and transports the sparse policy
 tables through checked HIR, package decode and Registry-free validation.
 Invalid or forged annotations refuse by exact path. A3 independently derives
 effective policy across copies, projections, calculations, guards, state and
 Loop recurrence; accounting meanings never merge ambiguously, and terminal
-presentation redacts before formatting. Clear `@secret` payloads still refuse
-before mutation pending A4's reference-only boundary. Unannotated semantic
+presentation redacts before formatting. `@personal` remains orthogonal to
+confidentiality, preserves the GDPR Articles 9/10 regimes and an exact
+data-subject identifier role, and redacts by default. Clear `@secret` and
+`@personal` payloads still refuse before mutation pending A4's attested
+deployment boundary. Unannotated semantic
 hashes and all existing causal traces remain unchanged. The ordered work is
 tracked in the
 [M1.8 backlog](docs/architecture/m1.8-observability-backlog.md).

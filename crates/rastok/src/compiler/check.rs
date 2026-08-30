@@ -29,8 +29,8 @@ use crate::expr;
 use crate::node;
 use crate::schema_annotation::{
     AnnotatedSchema, AnnotationSet, AnnotationTable, CostAnnotation, CostBasis, CurrencyCode,
-    DataAnnotation, MeasureCarrier, MeasureId, MeasureSource, SchemaPath, SchemaPathSegment,
-    SensitivityLevel, is_iso_4217_currency, is_money_type, measure_spec,
+    DataAnnotation, MeasureCarrier, MeasureId, MeasureSource, PersonalDataClass, SchemaPath,
+    SchemaPathSegment, SensitivityLevel, is_iso_4217_currency, is_money_type, measure_spec,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -5450,6 +5450,29 @@ impl Checker<'_, '_> {
                 Some(DataAnnotation::Measure(id))
             }
             "cost" => self.resolve_cost_annotation(annotation, target, path, &arguments),
+            "personal" => {
+                self.allow_annotation_arguments(
+                    annotation,
+                    path,
+                    &arguments,
+                    &["special", "criminal", "identifier"],
+                )?;
+                let special = match arguments.get("special") {
+                    Some(value) => self.annotation_bool(annotation, path, value, "special")?,
+                    None => false,
+                };
+                let criminal = match arguments.get("criminal") {
+                    Some(value) => self.annotation_bool(annotation, path, value, "criminal")?,
+                    None => false,
+                };
+                let identifier = match arguments.get("identifier") {
+                    Some(value) => self.annotation_bool(annotation, path, value, "identifier")?,
+                    None => false,
+                };
+                Some(DataAnnotation::Personal(PersonalDataClass::new(
+                    special, criminal, identifier,
+                )))
+            }
             _ => {
                 self.annotation_refusal(
                     annotation.span,
@@ -5602,6 +5625,53 @@ impl Checker<'_, '_> {
             return None;
         }
         Some(())
+    }
+
+    fn allow_annotation_arguments(
+        &mut self,
+        annotation: &SynSchemaAnnotation,
+        path: &SchemaPath,
+        arguments: &BTreeMap<&str, &SchemaAnnotationConstant>,
+        allowed: &[&str],
+    ) -> Option<()> {
+        if let Some(unexpected) = arguments
+            .keys()
+            .find(|argument| !allowed.contains(argument))
+        {
+            self.annotation_refusal(
+                annotation.span,
+                &annotation.name.text,
+                path,
+                &format!("unexpected argument `{unexpected}`"),
+            );
+            return None;
+        }
+        Some(())
+    }
+
+    fn annotation_bool(
+        &mut self,
+        annotation: &SynSchemaAnnotation,
+        path: &SchemaPath,
+        value: &SchemaAnnotationConstant,
+        argument: &str,
+    ) -> Option<bool> {
+        match self
+            .annotation_symbol(annotation, path, value, argument)?
+            .as_str()
+        {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => {
+                self.annotation_refusal(
+                    annotation.span,
+                    &annotation.name.text,
+                    path,
+                    &format!("argument `{argument}` must be `true` or `false`"),
+                );
+                None
+            }
+        }
     }
 
     fn annotation_symbol(
@@ -10339,12 +10409,15 @@ graph g : App {
     }
 
     #[test]
-    fn cost_and_secret_contracts_reach_checked_hir_without_changing_types() {
+    fn cost_secret_and_personal_contracts_reach_hir_without_changing_types() {
         let source = r#"
 type ScalarCost = decimal(38,18) @cost(currency = EUR, basis = provider_reported)
 type Money = struct { amount: decimal(38,18), currency: text }
              @cost(basis = pricebook_calculated)
 type Credential = text @sensitive(level = restricted) @secret
+type PersonalFact = text @personal
+type SubjectId = text @personal(identifier = true)
+type HealthFact = text @personal(special = true, criminal = false)
 graph g : App {}
 "#;
         let (hir, bag) = check_source(source);
@@ -10407,6 +10480,55 @@ graph g : App {}
                 DataAnnotation::Secret,
             ]
         );
+
+        let subject = hir
+            .named_schemas
+            .iter()
+            .find(|(name, _)| name == "SubjectId")
+            .map(|(_, schema)| schema)
+            .expect("SubjectId schema");
+        assert_eq!(subject.ty(), &DataType::Text);
+        assert!(matches!(
+            subject
+                .annotations()
+                .entries()
+                .get(&SchemaPath::root())
+                .map(AnnotationSet::annotations),
+            Some([DataAnnotation::Personal(class)]) if class.is_identifier()
+                && !class.is_special_category()
+                && !class.is_criminal_offence()
+        ));
+
+        let personal = hir
+            .named_schemas
+            .iter()
+            .find(|(name, _)| name == "PersonalFact")
+            .map(|(_, schema)| schema)
+            .expect("PersonalFact schema");
+        assert!(matches!(
+            personal
+                .annotations()
+                .entries()
+                .get(&SchemaPath::root())
+                .map(AnnotationSet::annotations),
+            Some([DataAnnotation::Personal(class)]) if *class == PersonalDataClass::default()
+        ));
+
+        let health = hir
+            .named_schemas
+            .iter()
+            .find(|(name, _)| name == "HealthFact")
+            .map(|(_, schema)| schema)
+            .expect("HealthFact schema");
+        assert!(matches!(
+            health
+                .annotations()
+                .entries()
+                .get(&SchemaPath::root())
+                .map(AnnotationSet::annotations),
+            Some([DataAnnotation::Personal(class)]) if class.is_special_category()
+                && !class.is_criminal_offence()
+        ));
     }
 
     #[test]
@@ -10509,6 +10631,18 @@ graph g : App {
                 "cost",
                 "$",
                 "unexpected argument `currency`",
+            ),
+            (
+                "type X = text @personal(identifier = maybe)\ngraph g : App {}\n",
+                "personal",
+                "$",
+                "must be `true` or `false`",
+            ),
+            (
+                "type X = text @personal(purpose = support)\ngraph g : App {}\n",
+                "personal",
+                "$",
+                "unexpected argument `purpose`",
             ),
         ];
         for (source, annotation, path, detail) in cases {

@@ -1284,6 +1284,14 @@ impl Writer<'_> {
                             }
                         }
                     }
+                    DataAnnotation::Personal(class) => {
+                        self.tag(5);
+                        self.tag(
+                            u8::from(class.is_special_category())
+                                | (u8::from(class.is_criminal_offence()) << 1)
+                                | (u8::from(class.is_identifier()) << 2),
+                        );
+                    }
                 }
             }
         }
@@ -2531,6 +2539,33 @@ graph app : App {
         );
         assert_eq!(rendered, "[REDACTED]");
         assert!(!rendered.contains("classified"));
+    }
+
+    #[test]
+    fn personal_data_stays_fail_closed_until_a_privacy_profile_is_attested() {
+        let compilation = compile(
+            &["graph app : App { input in: text @personal(identifier = true) }\n"],
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("personal-data policy crosses source and categorical validation");
+        let mut vm = crate::runtime::vm::Vm::boot(&compilation.plan, GraphVersion(1));
+        let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
+        let error = vm
+            .step(&mut journal)
+            .expect_err("A4 privacy attestation has not landed yet");
+        assert!(matches!(
+            error,
+            crate::runtime::vm::VmError::UnsupportedDataPolicy { .. }
+        ));
+        assert!(
+            error
+                .to_string()
+                .contains("personal-data boundary port `in`")
+        );
+        assert!(
+            journal.records().is_empty(),
+            "the refusal precedes mutation"
+        );
     }
 
     #[test]

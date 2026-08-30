@@ -383,13 +383,7 @@ fn project_prefix(
                 SchemaPath::root(),
                 set.annotations()
                     .iter()
-                    .filter(|annotation| {
-                        matches!(
-                            annotation,
-                            DataAnnotation::Sensitive(_) | DataAnnotation::Secret
-                        )
-                    })
-                    .cloned(),
+                    .filter_map(derived_security_annotation),
             )?;
         }
     }
@@ -539,6 +533,48 @@ pub(crate) fn alternatives(
             }
         }
     }
+    let personal_paths = tables
+        .iter()
+        .flat_map(|table| {
+            table
+                .entries()
+                .iter()
+                .filter(|(_, set)| {
+                    set.annotations()
+                        .iter()
+                        .any(|annotation| matches!(annotation, DataAnnotation::Personal(_)))
+                })
+                .map(|(path, _)| path.clone())
+        })
+        .collect::<alloc::collections::BTreeSet<_>>();
+    for path in personal_paths {
+        let mut combined: Option<crate::schema_annotation::PersonalDataClass> = None;
+        let mut every_alternative_is_identifier = true;
+        for table in &tables {
+            let class =
+                annotation_at(table, &path, AnnotationKind::Personal).and_then(|annotation| {
+                    match annotation {
+                        DataAnnotation::Personal(class) => Some(*class),
+                        _ => None,
+                    }
+                });
+            every_alternative_is_identifier &= class.is_some_and(|class| class.is_identifier());
+            if let Some(class) = class {
+                combined = Some(match combined {
+                    None => class,
+                    Some(current) => current.combine(class),
+                });
+            }
+        }
+        if let Some(class) = combined {
+            let class = crate::schema_annotation::PersonalDataClass::new(
+                class.is_special_category(),
+                class.is_criminal_offence(),
+                every_alternative_is_identifier,
+            );
+            insert_annotation(&mut rows, path, DataAnnotation::Personal(class))?;
+        }
+    }
     for (path, annotations) in first_semantics {
         for annotation in annotations {
             insert_annotation(&mut rows, path.clone(), annotation)?;
@@ -553,13 +589,12 @@ fn calculation(
     let mut rows = BTreeMap::new();
     for table in tables {
         for set in table.entries().values() {
-            for annotation in set.annotations().iter().filter(|annotation| {
-                matches!(
-                    annotation,
-                    DataAnnotation::Sensitive(_) | DataAnnotation::Secret
-                )
-            }) {
-                insert_annotation(&mut rows, SchemaPath::root(), annotation.clone())?;
+            for annotation in set
+                .annotations()
+                .iter()
+                .filter_map(derived_security_annotation)
+            {
+                insert_annotation(&mut rows, SchemaPath::root(), annotation)?;
             }
         }
     }
@@ -647,6 +682,10 @@ fn insert_annotation(
             Ok(())
         }
         (DataAnnotation::Secret, DataAnnotation::Secret) => Ok(()),
+        (DataAnnotation::Personal(left), DataAnnotation::Personal(right)) => {
+            row[index] = DataAnnotation::Personal(left.combine(*right));
+            Ok(())
+        }
         _ if existing == &annotation => Ok(()),
         _ => Err(PropagationError::ConflictingMeaning {
             path,
@@ -681,6 +720,16 @@ pub fn contains_secret(table: &AnnotationTable) -> bool {
     })
 }
 
+/// Whether one table contains GDPR personal-data classification anywhere.
+#[must_use]
+pub fn contains_personal(table: &AnnotationTable) -> bool {
+    table.entries().values().any(|set| {
+        set.annotations()
+            .iter()
+            .any(|annotation| matches!(annotation, DataAnnotation::Personal(_)))
+    })
+}
+
 /// Whether formatting this schema requires consulting the redactor.
 #[must_use]
 pub fn requires_redaction(table: &AnnotationTable) -> bool {
@@ -688,7 +737,7 @@ pub fn requires_redaction(table: &AnnotationTable) -> bool {
         set.annotations().iter().any(|annotation| {
             matches!(
                 annotation,
-                DataAnnotation::Sensitive(_) | DataAnnotation::Secret
+                DataAnnotation::Sensitive(_) | DataAnnotation::Secret | DataAnnotation::Personal(_)
             )
         })
     })
@@ -729,10 +778,20 @@ fn path_is_hidden(table: &AnnotationTable, path: &SchemaPath) -> bool {
             && set.annotations().iter().any(|annotation| {
                 matches!(
                     annotation,
-                    DataAnnotation::Sensitive(_) | DataAnnotation::Secret
+                    DataAnnotation::Sensitive(_)
+                        | DataAnnotation::Secret
+                        | DataAnnotation::Personal(_)
                 )
             })
     })
+}
+
+fn derived_security_annotation(annotation: &DataAnnotation) -> Option<DataAnnotation> {
+    match annotation {
+        DataAnnotation::Sensitive(_) | DataAnnotation::Secret => Some(annotation.clone()),
+        DataAnnotation::Personal(class) => Some(DataAnnotation::Personal(class.derived())),
+        DataAnnotation::Measure(_) | DataAnnotation::Cost(_) => None,
+    }
 }
 
 fn format_value(
@@ -839,7 +898,7 @@ mod tests {
     use super::*;
     use crate::datatype::{StructType, TypeField};
     use crate::schema_annotation::{
-        CostAnnotation, CostBasis, CurrencyCode, MeasureId, SensitivityLevel,
+        CostAnnotation, CostBasis, CurrencyCode, MeasureId, PersonalDataClass, SensitivityLevel,
     };
     use alloc::boxed::Box;
     use alloc::format;
@@ -960,6 +1019,68 @@ mod tests {
     }
 
     #[test]
+    fn personal_data_propagates_but_calculation_drops_subject_identifier_meaning() {
+        let prompt = SchemaPath::root().child(SchemaPathSegment::Field("prompt".into()));
+        let source = table(
+            prompt,
+            DataAnnotation::Personal(PersonalDataClass::new(true, false, true)),
+        );
+        let environment = Environment::new().with("data", record_type(), source);
+
+        let projected = expression(
+            &expr::Tree {
+                root: Expr::Path(vec!["data".into(), "prompt".into()]),
+                ty: DataType::Text,
+            },
+            &environment,
+        )
+        .unwrap_or_else(|error| panic!("personal projection: {error}"));
+        assert!(matches!(
+            annotation_at(&projected, &SchemaPath::root(), AnnotationKind::Personal),
+            Some(DataAnnotation::Personal(class))
+                if class.is_special_category() && class.is_identifier()
+        ));
+
+        let derived = expression(
+            &expr::Tree {
+                root: Expr::Binary {
+                    op: expr::BinaryOp::Eq,
+                    left: Box::new(Expr::Path(vec!["data".into(), "prompt".into()])),
+                    right: Box::new(Expr::Literal(Value::Text("probe".into()))),
+                },
+                ty: DataType::Bool,
+            },
+            &environment,
+        )
+        .unwrap_or_else(|error| panic!("personal calculation: {error}"));
+        assert!(matches!(
+            annotation_at(&derived, &SchemaPath::root(), AnnotationKind::Personal),
+            Some(DataAnnotation::Personal(class))
+                if class.is_special_category() && !class.is_identifier()
+        ));
+    }
+
+    #[test]
+    fn personal_alternatives_keep_identifier_meaning_only_when_every_branch_has_it() {
+        let path = SchemaPath::root();
+        let identifier = table(
+            path.clone(),
+            DataAnnotation::Personal(PersonalDataClass::new(false, false, true)),
+        );
+        let special_non_identifier = table(
+            path,
+            DataAnnotation::Personal(PersonalDataClass::new(true, false, false)),
+        );
+        let merged = alternatives([identifier, special_non_identifier])
+            .unwrap_or_else(|error| panic!("personal alternatives: {error}"));
+        assert!(matches!(
+            annotation_at(&merged, &SchemaPath::root(), AnnotationKind::Personal),
+            Some(DataAnnotation::Personal(class))
+                if class.is_special_category() && !class.is_identifier()
+        ));
+    }
+
+    #[test]
     fn alternative_accounting_meanings_refuse_instead_of_becoming_a_lie() {
         let eur = CurrencyCode::new("EUR").unwrap_or_else(|error| panic!("currency: {error}"));
         let cost = table(
@@ -988,6 +1109,23 @@ mod tests {
         let rendered = format!("{:?}", RedactedValue::new(&value, &annotations));
         assert_eq!(rendered, "{prompt: [REDACTED], tokens: Int(7)}");
         assert!(!rendered.contains("do not print"));
+    }
+
+    #[test]
+    fn personal_data_is_redacted_without_becoming_a_sensitivity_level() {
+        let annotations = table(
+            SchemaPath::root(),
+            DataAnnotation::Personal(PersonalDataClass::new(false, false, true)),
+        );
+        assert!(requires_redaction(&annotations));
+        assert!(contains_personal(&annotations));
+        assert!(!contains_secret(&annotations));
+        let rendered = format!(
+            "{:?}",
+            RedactedValue::new(&Value::Text("alice@example.test".into()), &annotations)
+        );
+        assert_eq!(rendered, "[REDACTED]");
+        assert!(!rendered.contains("alice"));
     }
 
     #[test]

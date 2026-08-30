@@ -37,7 +37,7 @@ use crate::plan::{
 };
 use crate::schema_annotation::{
     AnnotationSet, AnnotationTable, CostAnnotation, CostBasis, CurrencyCode, DataAnnotation,
-    MeasureId, SchemaPath, SchemaPathSegment, SensitivityLevel,
+    MeasureId, PersonalDataClass, SchemaPath, SchemaPathSegment, SensitivityLevel,
 };
 use crate::value::Value;
 
@@ -826,6 +826,14 @@ fn annotation_set_tree(set: &AnnotationSet) -> Cbor {
                     }
                     Cbor::Array(fields)
                 }
+                DataAnnotation::Personal(class) => Cbor::Array(vec![
+                    Cbor::Uint(5),
+                    Cbor::Uint(
+                        u64::from(class.is_special_category())
+                            | (u64::from(class.is_criminal_offence()) << 1)
+                            | (u64::from(class.is_identifier()) << 2),
+                    ),
+                ]),
             })
             .collect(),
     )
@@ -1932,6 +1940,9 @@ fn annotation_from(tree: &Cbor) -> Result<DataAnnotation, DecodeError> {
                 cost_basis_from(*basis)?,
             )))
         }
+        [Cbor::Uint(5), Cbor::Uint(flags)] if *flags <= 0b111 => Ok(DataAnnotation::Personal(
+            PersonalDataClass::new(flags & 0b001 != 0, flags & 0b010 != 0, flags & 0b100 != 0),
+        )),
         _ => Err(err("annotation")),
     }
 }
@@ -3049,6 +3060,24 @@ mod tests {
             ])
         );
         assert_eq!(annotation_table_from(&wire), Ok(table));
+    }
+
+    #[test]
+    fn personal_data_flags_append_one_closed_annotation_wire_tag() {
+        let set = AnnotationSet::new(vec![DataAnnotation::Personal(PersonalDataClass::new(
+            true, true, true,
+        ))])
+        .unwrap_or_else(|error| panic!("personal annotation set: {error}"));
+        let wire = annotation_set_tree(&set);
+        assert_eq!(
+            wire,
+            Cbor::Array(vec![Cbor::Array(vec![Cbor::Uint(5), Cbor::Uint(0b111)])])
+        );
+        assert_eq!(
+            annotation_set_from(&wire).unwrap_or_else(|error| panic!("personal wire: {error}")),
+            set
+        );
+        assert!(annotation_from(&Cbor::Array(vec![Cbor::Uint(5), Cbor::Uint(8)])).is_err());
     }
 
     #[test]

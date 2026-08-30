@@ -53,11 +53,12 @@ use core::fmt;
 /// A machine-integrity refusal — never a business error.
 #[derive(Debug, Clone, PartialEq)]
 pub enum VmError {
-    /// Secret-classified payload metadata reached execution before A4's
-    /// reference-only boundary protocol. A3 executes sensitivity and
-    /// accounting policies, but clear secret payloads remain fail-closed.
+    /// Classified payload metadata reached execution before its deployment
+    /// boundary protocol. A3 executes propagation and presentation policy;
+    /// secrets and personal data stay fail-closed until A4 supplies attested
+    /// references and privacy policy.
     UnsupportedDataPolicy {
-        /// First deterministic secret-classified schema site.
+        /// First deterministic unsupported classified schema site.
         location: String,
     },
     /// A categorical NodeAspect reached the machine before its execution
@@ -210,7 +211,7 @@ impl fmt::Display for VmError {
         match self {
             Self::UnsupportedDataPolicy { location } => write!(
                 f,
-                "secret-classified data at {location} requires the M1.8 A4 reference boundary"
+                "data policy at {location} requires the M1.8 A4 deployment boundary"
             ),
             Self::UnsupportedAspect { owner, aspect } => write!(
                 f,
@@ -848,9 +849,9 @@ impl Scheduler {
 #[derive(Debug)]
 pub struct Vm<'plan> {
     plan: &'plan ValidatedExecutionPlan,
-    /// First secret-classified schema, computed once at boot. A4 will replace
-    /// this fail-closed belt with reference-only boundary enforcement.
-    unsupported_secret_policy: Option<String>,
+    /// First still-unbound classified schema, computed once at boot. A4 will
+    /// replace this belt with reference-only secret and privacy enforcement.
+    unsupported_data_policy: Option<String>,
     /// Plan-derived owner chains, indexed once so route selection allocates
     /// only the dynamic reference chain it must commit.
     owner_chains: Vec<Option<Vec<OwnerSlot>>>,
@@ -911,9 +912,12 @@ pub struct Vm<'plan> {
     observed: Vec<Observed>,
 }
 
-fn first_secret_annotation_location(plan: &ValidatedExecutionPlan) -> Option<String> {
+fn first_annotation_location(
+    plan: &ValidatedExecutionPlan,
+    contains: fn(&crate::schema_annotation::AnnotationTable) -> bool,
+) -> Option<String> {
     for port in plan.resolved_ports().boundary() {
-        if crate::data_policy::contains_secret(port.annotations()) {
+        if contains(port.annotations()) {
             return Some(format!("boundary port `{}`", port.port()));
         }
     }
@@ -921,25 +925,25 @@ fn first_secret_annotation_location(plan: &ValidatedExecutionPlan) -> Option<Str
         let slot = Slot::new(u32::try_from(index).unwrap_or(u32::MAX));
         if let Some(ports) = plan.resolved_ports().node(slot) {
             for port in ports {
-                if crate::data_policy::contains_secret(port.annotations()) {
+                if contains(port.annotations()) {
                     return Some(format!("port `{}.{}`", planned.path, port.port()));
                 }
             }
         }
         for var in &planned.vars {
-            if crate::data_policy::contains_secret(&var.annotations) {
+            if contains(&var.annotations) {
                 return Some(format!("var `{}.{}`", planned.path, var.name));
             }
         }
     }
     for owner in &plan.owners {
         for port in &owner.ports {
-            if crate::data_policy::contains_secret(&port.annotations) {
+            if contains(&port.annotations) {
                 return Some(format!("Graph port `{}.{}`", owner.path, port.port));
             }
         }
         for value in &owner.vals {
-            if crate::data_policy::contains_secret(&value.annotations) {
+            if contains(&value.annotations) {
                 return Some(format!("value `{}.{}`", owner.path, value.name));
             }
         }
@@ -949,13 +953,22 @@ fn first_secret_annotation_location(plan: &ValidatedExecutionPlan) -> Option<Str
             if let crate::plan::Step::Let {
                 name, annotations, ..
             } = step
-                && crate::data_policy::contains_secret(annotations)
+                && contains(annotations)
             {
                 return Some(format!("handler {handler_index} let `{name}`"));
             }
         }
     }
     None
+}
+
+fn first_unsupported_data_policy_location(plan: &ValidatedExecutionPlan) -> Option<String> {
+    first_annotation_location(plan, crate::data_policy::contains_secret)
+        .map(|location| format!("secret-classified {location}"))
+        .or_else(|| {
+            first_annotation_location(plan, crate::data_policy::contains_personal)
+                .map(|location| format!("personal-data {location}"))
+        })
 }
 
 impl<'plan> Vm<'plan> {
@@ -1022,7 +1035,7 @@ impl<'plan> Vm<'plan> {
     }
 
     fn unsupported_feature(&self) -> Option<VmError> {
-        if let Some(location) = &self.unsupported_secret_policy {
+        if let Some(location) = &self.unsupported_data_policy {
             return Some(VmError::UnsupportedDataPolicy {
                 location: location.clone(),
             });
@@ -1097,7 +1110,7 @@ impl<'plan> Vm<'plan> {
         }
         Self {
             plan,
-            unsupported_secret_policy: first_secret_annotation_location(plan),
+            unsupported_data_policy: first_unsupported_data_policy_location(plan),
             owner_chains,
             has_join_activations: plan
                 .handlers

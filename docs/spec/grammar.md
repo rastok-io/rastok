@@ -1621,7 +1621,7 @@ field_decl        ::= field_name ":" type_ref
 tagged_case       ::= IDENT data_annotation* ( "{" ( field_decl ( ","? field_decl )* )? "}" )?
 field_name        ::= IDENT | TYPE_KW                                 // field NAMES may reuse type words (`text: text`,
                                                                       //   `kind: text`) — position disambiguates
-data_annotation   ::= "@" IDENT annotation_arguments?                // M1.8 closed family; A3 executes derived policy, clear @secret waits for A4
+data_annotation   ::= "@" IDENT annotation_arguments?                // M1.8 closed family; A3.1 executes derived policy, clear @secret/@personal wait for A4
 annotation_arguments ::= "(" named_annotation_argument ( "," named_annotation_argument )* ")"
 named_annotation_argument ::= IDENT "=" annotation_constant
 annotation_constant ::= IDENT ( "." IDENT )* | STRING | SIGNED_INT  // plan constants only; no expression or positional argument

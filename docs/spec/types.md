@@ -470,8 +470,8 @@ hashes is a typed refusal, never an implicit application of a shim.
 
 ## 7. Data classifications are a side-table, never another type algebra
 
-M1.8 allocates `@sensitive`, `@secret`, `@measure` and `@cost` under
-[D-2026-08-30-1](decisions.md). They do not create logical scalar or composite
+M1.8 allocates `@sensitive`, `@secret`, `@personal`, `@measure` and `@cost`
+under [D-2026-08-30-1 and D-2026-08-30-2](decisions.md). They do not create logical scalar or composite
 types and do not affect ordinary assignability. Their resolved meaning lives
 in a sparse canonical `SchemaPath -> AnnotationSet` table beside `DataType`.
 Policy-aware propagation and sink checks are separate judgements.
@@ -485,6 +485,7 @@ secret boundary and observation semantics are normative in
 sparse table beside every owning schema without allocating a `DataType` tag.
 Registry-free validation resolves each path against that adjacent type and
 independently derives effective resolved-port policy from raw declarations and
-canonical operations. A3 executes sensitivity and accounting policy without
-rewriting a derived verdict into source authority. Clear `@secret` payloads
-still refuse before mutation until A4 lands the reference-only boundary.
+canonical operations. A3/A3.1 execute confidentiality, personal-data and
+accounting policy without rewriting a derived verdict into source authority.
+Clear `@secret` and `@personal` payloads still refuse before mutation until A4
+lands the attested deployment boundary.

@@ -5,6 +5,56 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-30-2 — Personal data is a policy class, not a sensitivity level
+
+M1.8 extends the closed schema-policy registry with `@personal`, canonical
+identity `rastok/personal@1` and append-only annotation wire tag 5. This is the
+GDPR-facing class: the Regulation speaks about *personal data*, which is wider
+and more precise than the security acronym PII. Personal-data status is
+orthogonal to `@sensitive` confidentiality and to `@secret` handling. A value
+can be personal without being confidential, or restricted without identifying
+any natural person.
+
+The v1 source arguments are three optional booleans:
+`special`, for Article 9 special-category data; `criminal`, for Article 10
+criminal-offence data; and `identifier`, for a value used to identify or index
+the data subject. No argument means ordinary personal data. The legal flags
+accumulate under derivation. Exact copy and projection preserve `identifier`;
+an unregistered calculation clears that role while retaining personal-data
+taint. An alternative remains an identifier only when every alternative is
+one. Personal data is redacted before presentation by default, independently
+of its sensitivity level.
+
+Purpose, legal basis, recipients, international-transfer safeguards and
+retention are deployment facts, not type facts. A versioned privacy profile
+attests them at boot and the run header records only its stable reference and
+digest. The core validates presence and structural consistency; it cannot
+certify that a controller's legal judgement is true. Until A4 lands that
+boundary, any executable plan carrying `@personal` refuses before journal or
+state mutation, just as clear secret data does. The M1 hosted runner may then
+process personal data only with its run-scoped in-memory journal. A future
+durable journal must prove an erasure/externalization mechanism before it may
+accept clear personal fields; append-only causality is not permission for
+unbounded retention.
+
+This is an additive policy-registry move, not a categorical package move.
+Every pre-existing annotation tag and ordering stays byte-identical, v15
+remains the format, and unannotated as well as already-annotated witnesses and
+causal traces do not move. Programs using `@personal` gain semantic identity
+under the existing `rastok.metering.r1` policy extension.
+
+These controls support privacy by design, data minimisation, storage
+limitation, integrity/confidentiality and accountability. They do not make a
+deployment legally compliant without the controller's processing record and
+organisational measures. The legal vocabulary follows Regulation (EU)
+2016/679 Articles 4, 5, 9, 10, 17, 25, 30 and 32.
+
+**Rejected:** encoding PII as a fourth `@sensitive` level; using `@secret` as
+the personal-data marker; putting purpose or legal basis in reusable source
+types; allowing a durable journal to retain clear personal data merely because
+the causal record is immutable; and claiming GDPR certification from schema
+annotations alone.
+
 ## D-2026-08-30-1 — M1.8 separates data policy, accounting truth and disposable export
 
 M1.8 replaces the old untyped Connector `cost` map with four typed schema

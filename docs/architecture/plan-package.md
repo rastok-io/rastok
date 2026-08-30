@@ -134,8 +134,9 @@
 > byte-identical; only the outer version and checksum move. Registry-free
 > validation re-derives every local claim. A3 now derives effective transform
 > policy independently and compares the transported resolved table exactly;
-> raw declarations remain unchanged. Only clear `@secret` payloads retain the
-> fail-closed A4 boundary.
+> raw declarations remain unchanged. D-2026-08-30-2 appends `@personal` to
+> that registry without changing v15 or any previous spelling. Clear
+> `@secret` and `@personal` payloads retain the fail-closed A4 boundary.
 >
 > The lifetime rows are one closed transport and executable registry: v9
 > validation admits `persistent`, `idle`, `fixed`, `single_pass`, and
@@ -495,8 +496,11 @@ data_annotation := [1, sensitivity]
                  | [2]
                  | [3, measure_id (text)]
                  | [4, cost_basis, currency (text)?]
+                 | [5, personal_flags]
 sensitivity := uint: 1 internal · 2 confidential · 3 restricted
 cost_basis  := uint: 1 provider-reported · 2 pricebook-calculated
+personal_flags := uint: bit 0 special-category · bit 1 criminal-offence
+                         · bit 2 subject identifier; all other bits refuse
               // Tables sort paths structurally and sets sort annotation tags.
               // Decode reconstructs the closed domain, then validation resolves
               // every path against the adjacent type and rechecks its target,

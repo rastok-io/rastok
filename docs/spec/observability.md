@@ -1,11 +1,11 @@
-# Data policy, observations and cost
+# Data policy, privacy, observations and cost
 
-> **Status: normative and executable through M1.8 A3 under
-> D-2026-08-30-1.** Categorical package v15 transports the closed family as
+> **Status: normative and executable through M1.8 A3.1 under
+> D-2026-08-30-1 and D-2026-08-30-2.** Categorical package v15 transports the closed family as
 > canonical side-tables. Registry-free validation re-derives every local
 > claim and the effective policy of canonical operations; presentation
-> redacts before formatting. Clear `@secret` payloads remain fail-closed until
-> A4 lands the reference-only boundary.
+> redacts before formatting. Clear `@secret` and `@personal` payloads remain
+> fail-closed until A4 lands the attested deployment boundary.
 
 This document owns data classification, typed runtime observations and their
 accounting projections. Logical values and assignability remain owned by
@@ -76,6 +76,7 @@ The M1.8 set is closed:
 ```rastok
 text @sensitive(level = confidential)
 text @secret
+text @personal(identifier = true)
 uint @measure(id = gen_ai.usage.input_tokens)
 decimal(38,18) @cost(currency = USD, basis = provider_reported)
 ```
@@ -112,7 +113,41 @@ attested in the run header before use. A raw input schema field carrying
 `@secret` refuses at its decode boundary until a later externalization protocol
 can replace clear input with a reference before the causal commit.
 
-### 3.3 `@measure`
+### 3.3 `@personal`
+
+`@personal` marks personal data in the sense of Regulation (EU) 2016/679,
+not merely the narrower security acronym PII. It is independent of
+`@sensitive` and accepts three optional boolean plan constants:
+
+```rastok
+text @personal
+text @personal(identifier = true)
+text @personal(special = true)
+text @personal(criminal = true)
+```
+
+`special` identifies Article 9 special-category data; `criminal` keeps the
+distinct Article 10 regime; `identifier` marks an exact value used to identify
+or index the data subject. The flags may be combined. Exact copy and projection
+preserve all three. A calculation retains `special`/`criminal` taint but clears
+`identifier`; alternative producers retain that role only when every
+alternative is an identifier. All personal data is redacted before
+presentation by default, regardless of its confidentiality level.
+
+This annotation is a technical policy input, not a compliance certificate.
+Purpose, legal basis, recipients, transfer safeguards and retention belong to
+the attested deployment privacy profile. A4 must receive that profile before a
+personal-data plan can boot. The M1 hosted runner then uses only its run-scoped
+in-memory journal; a future durable journal must expose an approved erasure or
+field-externalization capability before accepting clear personal data.
+
+These rules implement technical support for privacy by design and default,
+data minimisation, storage limitation, security and accountability. The
+controller remains responsible for the legal and organisational judgements
+required by Articles 5, 25, 30 and 32, including any erasure request under
+Article 17.
+
+### 3.4 `@measure`
 
 `id` selects one entry from the pinned semantic-measure registry. The entry
 fixes carrier, unit, aggregation, subset relations and legal sources; source
@@ -155,7 +190,7 @@ observation projections. A future OTel convention that exactly covers one of
 these requires an explicit registry migration; two aliases are never emitted
 silently.
 
-### 3.4 `@cost`
+### 3.5 `@cost`
 
 `basis` is initially `provider_reported` or `pricebook_calculated`. A decimal
 field requires a constant ISO currency. A canonical Money-shaped struct
@@ -175,7 +210,7 @@ currency and any required rounding refuse; float conversion is never implicit.
 
 ## 4. Propagation
 
-| Operation | Sensitive / secret | Measure / cost |
+| Operation | Sensitive / secret / personal | Measure / cost |
 |---|---|---|
 | exact copy, projection, rename | preserve | preserve |
 | calculation | maximum taint | drop unless a registered rule proves meaning |
@@ -202,8 +237,8 @@ security-taint rule and discard accounting meaning before admission.
 If the raw plan has no annotation declaration, validation returns the ordinary
 resolved table without walking operation trees. Annotated plans pay the fixed
 derivation once at validation; transactions do no policy reconstruction. VM
-boot caches only whether a clear secret-classified site remains and refuses it
-with `UnsupportedDataPolicy` before journal or state mutation pending A4.
+boot caches whether a clear secret or personal-data site remains and refuses
+it with `UnsupportedDataPolicy` before journal or state mutation pending A4.
 Sensitivity, measure and cost policy otherwise execute. CLI and Lab fault
 paths never format a runtime value before consulting policy or reducing the
 message to a value category.
@@ -230,6 +265,15 @@ format. Duplicate physical sources for one binding refuse rather than obeying
 a hidden precedence rule. Secrets are never accepted as CLI argument values.
 Embedded applications may construct the same typed bindings directly or load
 a separately specified canonical binary profile.
+
+The same profile carries a versioned privacy attestation whenever the plan
+contains `@personal`. Its stable processing-activity reference and digest bind
+the declared purposes, legal-basis attestation, retention rule, recipient
+classes and any transfer safeguard without placing those deployment facts in
+graph identity. The run header records the reference and digest before the
+first personal value is admitted. Rastok verifies that the profile covers the
+plan and selected boundary; it does not adjudicate the controller's legal
+basis. Missing or contradictory coverage refuses before any effect.
 
 ## 6. Record observations
 
@@ -286,6 +330,7 @@ applicable; only uncovered project concepts use `rastok.*`.
 - sampled cost calibration and automatic model selection;
 - field-level externalization of incoming secret payloads;
 - hot secret rotation and encrypted durable-journal storage;
+- durable personal-data journaling until erasure/externalization is proved;
 - provider-specific exporter plugins.
 
 The non-normative reservation exploration lives in

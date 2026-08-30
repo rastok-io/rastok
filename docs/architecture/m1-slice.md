@@ -443,17 +443,19 @@ step touches `vm.rs` once.
    [exit report](m1.7-exit-report.md).
 9. **M1.8 data policy, secrets, observations and cost** — replace the
     never-executable stringly `cost` map with canonical schema side-tables for
-    `@sensitive`, `@secret`, `@measure` and `@cost`; late-resolve secret
+    `@sensitive`, `@secret`, `@personal`, `@measure` and `@cost`; late-resolve secret
     references at authorized Driver settings; derive structured logs and an
     exact per-flow `CostReport` from the journal. OpenTelemetry semantic names
     win where they match exactly and `rastok.*` fills only project-specific
     gaps. Export remains optional for M1 closure; Budget enforcement, FX,
     FOCUS and OpenCost are later consumers. See the ordered
     [M1.8 backlog](m1.8-observability-backlog.md) and the non-normative
-    [Budget draft](budget-governance-draft.md). A0–A3 are closed:
+    [Budget draft](budget-governance-draft.md). A0–A3.1 are closed:
     categorical v15 transports every local policy table and independently
     derives effective policy through canonical operations; presentation
-    redacts before formatting, while clear secrets remain fail-closed for A4.
+    redacts before formatting. Personal data remains independent of
+    confidentiality and carries its GDPR legal/identifier flags; clear secrets
+    and personal data remain fail-closed for A4.
 10. **`--watch`** — the HTML+SSE mini-visualization, strictly a
     journal subscriber; the observation plane stays outside the
     core by construction.

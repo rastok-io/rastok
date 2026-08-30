@@ -382,7 +382,10 @@ value tag registries do not move. `SchemaPath` segment tags are extend-only:
 `5 = structural-union branch`, `6 = tagged-union case`. Annotation tags are
 likewise extend-only: `1 = sensitive` (levels 1 internal, 2 confidential,
 3 restricted), `2 = secret`, `3 = measure`, `4 = cost` (basis 1 provider-
-reported, 2 pricebook-calculated; optional currency). Root is the empty path.
+reported, 2 pricebook-calculated; optional currency). D-2026-08-30-2 appends
+`5 = personal` with a closed bit mask (`1 = Article 9 special category`,
+`2 = Article 10 criminal offence`, `4 = subject identifier`). No existing
+tag, set order or package version moves. Root is the empty path.
 
 The version/checksum-only move leaves echo/spike at 988 B, JSONL at 1,032 B
 and gauge at 323 B. Their v15 categorical checksums are respectively
@@ -402,6 +405,8 @@ rows are never rewritten with derived verdicts. Annotated immutable bindings
 remain as paths in executable trees so their policy dependency is provable;
 this may change only annotated package bodies. Unannotated bodies and the
 three semantic witnesses above remain exact, and no causal trace moves.
+The additive A3.1 privacy registry uses the existing policy stream only for
+programs that write `@personal`; all earlier annotated witnesses remain exact.
 
 ## 2. `graph_version` and the manifest
 
