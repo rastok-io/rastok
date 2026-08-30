@@ -61,6 +61,41 @@ pub trait ConnectorDriverFactory {
         plan: &'plan ValidatedExecutionPlan,
         nodes: &[node::Path],
     ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError>;
+
+    /// Binds with deployment inputs already resolved and attested. The
+    /// default keeps every existing family honest: it delegates only when no
+    /// selected Node carries a boot reference. A family opens a boot setting
+    /// by overriding this method and consuming it before returning.
+    fn bind_with_boot<'plan>(
+        &self,
+        plan: &'plan ValidatedExecutionPlan,
+        nodes: &[node::Path],
+        _boot: &crate::deployment::BootBindings,
+    ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
+        for planned in &plan.plan().nodes {
+            if !nodes.contains(&planned.path) {
+                continue;
+            }
+            let Some(spec) = planned.connector() else {
+                continue;
+            };
+            for (name, setting) in &spec.attributes {
+                let crate::plan::AttrSetting::Expr { expr, .. } = setting else {
+                    continue;
+                };
+                if crate::expr::boot_reference(&expr.root)
+                    .map_err(|error| DriverFactoryError::new(error.to_string()))?
+                    .is_some()
+                {
+                    return Err(DriverFactoryError::new(format!(
+                        "the Driver for `{}` does not consume boot setting `{name}` at `{}`",
+                        spec.contract, planned.path
+                    )));
+                }
+            }
+        }
+        self.bind(plan, nodes)
+    }
 }
 
 /// One factory-specific refusal kept behind the generic registry boundary.
@@ -302,6 +337,17 @@ impl<'plan> RuntimeBindings<'plan> {
         plan: &'plan ValidatedExecutionPlan,
         registry: &DriverRegistry,
     ) -> Result<Self, DriverBindingError> {
+        Self::try_new_with_boot(plan, registry, &crate::deployment::BootBindings::empty())
+    }
+
+    /// Binds with one complete deployment input set before a VM or journal
+    /// exists. Secret material can cross only a factory override that owns a
+    /// contract-declared secret-compatible setting.
+    pub fn try_new_with_boot(
+        plan: &'plan ValidatedExecutionPlan,
+        registry: &DriverRegistry,
+        boot: &crate::deployment::BootBindings,
+    ) -> Result<Self, DriverBindingError> {
         let mut requirements: BTreeMap<ConnectorId, FamilyRequirement> = BTreeMap::new();
         for (index, planned) in plan.plan().nodes.iter().enumerate() {
             let Some(spec) = planned.connector() else {
@@ -348,13 +394,12 @@ impl<'plan> RuntimeBindings<'plan> {
             {
                 return Err(DriverBindingError::ConflictingExchange { id });
             }
-            let mut driver =
-                factory
-                    .bind(plan, &paths)
-                    .map_err(|error| DriverBindingError::Factory {
-                        id: id.clone(),
-                        detail: error.detail().to_string(),
-                    })?;
+            let mut driver = factory
+                .bind_with_boot(plan, &paths, boot)
+                .map_err(|error| DriverBindingError::Factory {
+                    id: id.clone(),
+                    detail: error.detail().to_string(),
+                })?;
             let actual = roles_of(driver.as_mut());
             let advertised = factory.roles();
             if actual != Some(advertised) {

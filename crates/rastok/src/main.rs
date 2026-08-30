@@ -23,7 +23,7 @@ use rastok::{connectors, lab, node};
 use std::io::{BufRead, Write as _};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: rastok check <file.rkg>...\n       rastok run <file.rkg>... [--file-root <dir>]\n       rastok simulate <file.rkg>... [--golden <dir>] [--bless]\n       rastok --resolve-open-api <project-dir> [--check]";
+const USAGE: &str = "usage: rastok check <file.rkg>...\n       rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>]\n       rastok simulate <file.rkg>... [--deployment <profile.json>] [--golden <dir>] [--bless]\n       rastok --resolve-open-api <project-dir> [--check]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -40,6 +40,7 @@ fn main() -> ExitCode {
         "run" => {
             let mut files = Vec::new();
             let mut file_root: Option<std::path::PathBuf> = None;
+            let mut deployment: Option<std::path::PathBuf> = None;
             let mut rest = paths.iter();
             while let Some(argument) = rest.next() {
                 match argument.as_str() {
@@ -50,6 +51,15 @@ fn main() -> ExitCode {
                             return ExitCode::from(2);
                         }
                     },
+                    "--deployment" => match rest.next() {
+                        Some(path) if deployment.is_none() => {
+                            deployment = Some(std::path::PathBuf::from(path));
+                        }
+                        _ => {
+                            eprintln!("error: --deployment requires one unique profile path");
+                            return ExitCode::from(2);
+                        }
+                    },
                     _ => files.push(argument.clone()),
                 }
             }
@@ -57,12 +67,21 @@ fn main() -> ExitCode {
                 eprintln!("{USAGE}");
                 return ExitCode::from(2);
             }
-            run(&files, file_root.as_deref())
+            let boot = match deployment.as_deref().map(rastok::deployment_config::load) {
+                Some(Ok(boot)) => Some(boot),
+                Some(Err(error)) => {
+                    eprintln!("error: {error}");
+                    return ExitCode::FAILURE;
+                }
+                None => None,
+            };
+            run(&files, file_root.as_deref(), boot.as_ref())
         }
         "simulate" => {
             let mut files = Vec::new();
             let mut golden_dir: Option<std::path::PathBuf> = None;
             let mut bless = false;
+            let mut deployment: Option<std::path::PathBuf> = None;
             let mut rest = paths.iter();
             while let Some(argument) = rest.next() {
                 match argument.as_str() {
@@ -74,6 +93,15 @@ fn main() -> ExitCode {
                         }
                     },
                     "--bless" => bless = true,
+                    "--deployment" => match rest.next() {
+                        Some(path) if deployment.is_none() => {
+                            deployment = Some(std::path::PathBuf::from(path));
+                        }
+                        _ => {
+                            eprintln!("error: --deployment requires one unique profile path");
+                            return ExitCode::from(2);
+                        }
+                    },
                     _ => files.push(argument.clone()),
                 }
             }
@@ -81,7 +109,15 @@ fn main() -> ExitCode {
                 eprintln!("error: --bless requires --golden <dir>");
                 return ExitCode::from(2);
             }
-            simulate(&files, golden_dir.as_deref(), bless)
+            let boot = match deployment.as_deref().map(rastok::deployment_config::load) {
+                Some(Ok(boot)) => Some(boot),
+                Some(Err(error)) => {
+                    eprintln!("error: {error}");
+                    return ExitCode::FAILURE;
+                }
+                None => None,
+            };
+            simulate(&files, golden_dir.as_deref(), bless, boot.as_ref())
         }
         _ => {
             eprintln!("{USAGE}");
@@ -221,7 +257,11 @@ impl HostedTimeSource {
 /// Runs the App against the real Drivers: each stdin line is one
 /// text submission; boundary envelopes print to stdout, root errors
 /// to stderr.
-fn run(paths: &[String], file_root: Option<&std::path::Path>) -> ExitCode {
+fn run(
+    paths: &[String],
+    file_root: Option<&std::path::Path>,
+    boot: Option<&rastok::deployment::BootBindings>,
+) -> ExitCode {
     let Ok((compilation, _)) = load(paths) else {
         return ExitCode::FAILURE;
     };
@@ -232,7 +272,13 @@ fn run(paths: &[String], file_root: Option<&std::path::Path>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let mut world = match connectors::RuntimeBindings::try_new(&compilation.plan, &registry) {
+    let bindings = match boot {
+        Some(boot) => {
+            connectors::RuntimeBindings::try_new_with_boot(&compilation.plan, &registry, boot)
+        }
+        None => connectors::RuntimeBindings::try_new(&compilation.plan, &registry),
+    };
+    let mut world = match bindings {
         Ok(bindings) => bindings,
         Err(error) => {
             eprintln!("error: {error}");
@@ -241,7 +287,10 @@ fn run(paths: &[String], file_root: Option<&std::path::Path>) -> ExitCode {
     };
     // Binding is complete before either mutable execution authority exists.
     let version = GraphVersion(1);
-    let mut journal = MemJournal::new(version);
+    let mut journal = boot.map_or_else(
+        || MemJournal::new(version),
+        |boot| MemJournal::new_with_deployment(version, boot.attestation().clone()),
+    );
     let time = match HostedTimeSource::start() {
         Ok(time) => time,
         Err(error) => {
@@ -249,7 +298,10 @@ fn run(paths: &[String], file_root: Option<&std::path::Path>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let mut vm = Vm::boot_at(&compilation.plan, version, time.logical_now());
+    let mut vm = boot.map_or_else(
+        || Vm::boot_at(&compilation.plan, version, time.logical_now()),
+        |boot| Vm::boot_at_with_deployment(&compilation.plan, version, time.logical_now(), boot),
+    );
     let inbound_path = match node::Path::new(["cli"]) {
         Ok(path) => path,
         Err(_) => return ExitCode::FAILURE,
@@ -402,7 +454,12 @@ fn print_new_outputs(vm: &Vm<'_>, printed_outputs: &mut usize, printed_errors: &
 
 /// Runs every lab of the unit; one line per scenario, non-zero exit
 /// on any red.
-fn simulate(paths: &[String], golden_dir: Option<&std::path::Path>, bless: bool) -> ExitCode {
+fn simulate(
+    paths: &[String],
+    golden_dir: Option<&std::path::Path>,
+    bless: bool,
+    boot: Option<&rastok::deployment::BootBindings>,
+) -> ExitCode {
     let Ok((compilation, _)) = load(paths) else {
         return ExitCode::FAILURE;
     };
@@ -413,7 +470,11 @@ fn simulate(paths: &[String], golden_dir: Option<&std::path::Path>, bless: bool)
     let mut failed = 0usize;
     let mut total = 0usize;
     for lab_decl in &compilation.labs {
-        for run in lab::run(&compilation.plan, GraphVersion(1), lab_decl) {
+        let runs = boot.map_or_else(
+            || lab::run(&compilation.plan, GraphVersion(1), lab_decl),
+            |boot| lab::run_with_boot(&compilation.plan, GraphVersion(1), lab_decl, boot),
+        );
+        for run in runs {
             let report = &run.report;
             total += 1;
             // The golden seam: a completed run projects to its

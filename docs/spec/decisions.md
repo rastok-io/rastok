@@ -5,6 +5,95 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-30-3 — Deployment binds references and privacy before effects
+
+M1.8 A4 opens one deliberately narrow boot boundary. `env("NAME")` and
+`secret("logical/path")` are exact root expressions with one string literal;
+they cannot be combined with another expression or hidden inside a
+calculation. The checker admits them only where the Connector contract has a
+matching Registry-free policy. The executable M1 surface is
+`HttpClient.url = env(...)` and `HttpClient.auth_bearer = secret(...)`.
+Every other setting, unit/App boot value, incoming secret field and composed
+boot expression still refuses until its real and scripted consumer lands in
+the same gate.
+
+The compiler lowers each reference to a reserved categorical expression path
+under `$boot`. That spelling is unforgeable from source and already fits the
+v15 expression transport, so A4 adds no package field or version. The logical
+reference and selected boot site are semantic graph identity. Environment
+values, secret material, provider coordinates, privacy profiles and CLI paths
+are deployment facts and never become graph identity. Every non-secret boot
+value is nevertheless fixed by its canonical tagged-value digest in the
+immutable run header; a changed endpoint cannot silently enter replay merely
+because it was outside graph identity.
+
+`rastok-core` owns only typed `DeploymentProfile`, `BootBindings`,
+`SecretRef`, `SecretProvider` and privacy-attestation values. It parses no
+human configuration and performs no environment lookup. The hosted runner
+accepts one closed JSON profile through `--deployment <profile.json>`.
+Non-secret environment values may occur in that profile. A secret entry
+contains only a logical reference, an environment-provider coordinate and an
+immutable declared version; the material itself comes from that environment
+coordinate and a matching `<NAME>_VERSION` variable. Secret material is never
+a normal `Value`, JSON field or CLI argument, and its `Debug` form is always
+redacted. Duplicate or malformed coordinates refuse rather than obeying a
+hidden precedence rule.
+
+The closed hosted shape uses exact-pinned `serde = 1.0.228` with `derive`.
+`serde_json` was already a production dependency and `serde`/`serde_derive`
+were already present through the pinned YAML/OpenAPI tooling, so this adds no
+package to the lock; both are maintained foundational crates under
+MIT-or-Apache-2.0 with MSRV 1.56/1.61, below Rastok's toolchain. Derivation
+removes hand-written field dispatch and reliably enforces unknown-field
+refusal. No serde type crosses the public/core boundary. The exit is local:
+replace the hosted parser or construct `DeploymentProfile` directly without
+changing source, plan, Driver or core contracts.
+
+All bindings resolve atomically before the VM or journal exists. A VM whose
+plan contains an absent or type-incompatible boot binding refuses before its
+first mutation, even when a library caller bypasses the hosted CLI. A Driver
+factory that does not explicitly consume a selected boot reference refuses at
+binding. The real and scripted HttpClient share one logical prepared request:
+it seals the URL and logical `SecretRef`, never the bearer bytes. The real
+Driver overlays the already-resolved bearer only inside its authorized
+boundary and only transports it after the OUTBOUND open; the scripted Driver
+observes the same descriptor without receiving physical material. Request
+identity therefore remains stable across secret rotation. Replay instead
+requires the immutable run header to match the exact environment-name/value
+digest and logical secret reference/provider coordinate/version used by the
+booted VM.
+
+Personal-data admission uses the same pre-effect boundary. The VM folds every
+`@personal` path into required ordinary, Article 9 and Article 10 regimes. A
+versioned `PrivacyProfile` must attest a processing-activity reference,
+non-empty purposes and legal bases, explicit recipients and transfer policy,
+and the additional Article 9 condition or Article 10 authority when those
+flags occur. A personal-data path entering an external Connector requires at
+least one declared recipient class; the core never guesses jurisdiction from
+a URL, so an empty transfer-safeguard list remains an explicit “no
+international transfer” attestation. M1 permits only `run_scoped` retention in `MemJournal`; dropping
+the run drops its complete in-memory history. The run header records the
+profile reference and canonical digest before the first personal value. VM
+and journal headers must agree at every public execution entry point. Rastok
+validates completeness and provenance of those facts, not whether the
+controller's legal judgement is substantively correct. A matching header is
+not a storage capability: `Journal::privacy_retention` is closed by default,
+and only the M1 in-memory journal advertises `RunScoped`.
+
+Raw `@secret` payloads remain fail-closed: A4 resolves reference-origin
+credentials, not clear secret fields arriving in envelopes. A later durable
+journal must prove field externalization or erasure before it can accept clear
+personal data. A4 moves no categorical package, semantic witness or existing
+causal trace. The run header is a fixed control attestation, not another
+causal record species.
+
+**Rejected:** putting secret bytes in source, profile JSON, CLI arguments,
+`Value`, prepared-request bytes or causal records; treating environment values
+as an authorization fallback for a secret setting; first-registration or
+first-source-wins binding; parsing YAML/TOML in the no-std core; claiming GDPR
+certification from a privacy-profile digest; and opening every historically
+documented boot site without a concrete consumer.
+
 ## D-2026-08-30-2 — Personal data is a policy class, not a sensitivity level
 
 M1.8 extends the closed schema-policy registry with `@personal`, canonical
@@ -29,9 +118,9 @@ Purpose, legal basis, recipients, international-transfer safeguards and
 retention are deployment facts, not type facts. A versioned privacy profile
 attests them at boot and the run header records only its stable reference and
 digest. The core validates presence and structural consistency; it cannot
-certify that a controller's legal judgement is true. Until A4 lands that
-boundary, any executable plan carrying `@personal` refuses before journal or
-state mutation, just as clear secret data does. The M1 hosted runner may then
+certify that a controller's legal judgement is true. At the A3.1 checkpoint,
+before A4 landed that boundary, every executable plan carrying `@personal`
+refused before journal or state mutation. The M1 hosted runner may now
 process personal data only with its run-scoped in-memory journal. A future
 durable journal must prove an erasure/externalization mechanism before it may
 accept clear personal fields; append-only causality is not permission for
@@ -119,10 +208,11 @@ claim. The `DataType` registry and tags remain unchanged. Only annotated program
 `rastok.metering.r1` semantic extension; concrete secret values, deployment
 profiles, price profiles and exporter settings do not become graph identity.
 Costs, metrics, host facts and export loss remain outside causal identity as
-already required by `identity.md`. A3 executes sensitivity and accounting
-policy; only clear secret-classified data remains rejected before mutation
-until A4 supplies its reference-only boundary. Transport never degrades into
-inert decoration.
+already required by `identity.md`. At the A3 checkpoint sensitivity and
+accounting policy executed while clear secret-classified data retained the
+named A4 refusal. D-2026-08-30-3 now opens only the reference-origin boundary;
+raw secret payloads remain rejected. Transport never degrades into inert
+decoration.
 
 The A2 categorical move changes the version byte and checksum of every
 package, but no unannotated body or semantic identity. Echo/spike remains 988 B

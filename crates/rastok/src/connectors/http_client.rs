@@ -1,10 +1,12 @@
 //! HttpClient contract binding shared by the Lab and hosted Driver.
 //!
 //! The outbound request descriptor is already family-owned and deterministic:
-//! mocks and the real Driver agree on the exact method, URL,
-//! headers and body covered by the request digest. The server twin is a
-//! deliberately passive inbound Driver; scenario injections enter through
-//! the ordinary Lab boundary, never through a fake socket.
+//! mocks and the real Driver agree on the exact method, URL, ordinary headers
+//! and body covered by the request digest. An attested bearer remains a
+//! logical `SecretRef` in that descriptor; only the real Driver overlays its
+//! material. The server twin is a deliberately passive inbound Driver;
+//! scenario injections enter through the ordinary Lab boundary, never through
+//! a fake socket.
 
 use crate::boundary::{
     Completion, HttpClientExit, PreparedRequest, RequestPreparation, SchedulerCompletion,
@@ -24,12 +26,31 @@ use super::http_shared::HttpVersion;
 ///
 /// This is a private semantic type, not a second framing. Decoding is the
 /// inverse of [`HttpClientRequestBindings::prepare`], so the physical engine
-/// executes the already-journaled bytes instead of rebuilding them from an
-/// envelope or settings.
+/// executes the already-journaled descriptor instead of rebuilding it from
+/// an envelope or settings. A secret-bearing authorization field retains only
+/// its logical reference until the authorized Driver applies the attested
+/// material.
+#[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
+#[derive(Clone, Eq, PartialEq)]
+pub(crate) enum HttpBearer {
+    Inline(String),
+    Secret(crate::deployment::SecretRef),
+}
+
+#[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
+impl core::fmt::Debug for HttpBearer {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Inline(_) => formatter.write_str("Inline([REDACTED])"),
+            Self::Secret(reference) => formatter.debug_tuple("Secret").field(reference).finish(),
+        }
+    }
+}
+
 #[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct HttpRequest {
-    pub(crate) auth_bearer: Option<String>,
+    pub(crate) auth_bearer: Option<HttpBearer>,
     pub(crate) body: Vec<u8>,
     pub(crate) codec: String,
     pub(crate) headers: BTreeMap<String, Vec<Vec<u8>>>,
@@ -48,6 +69,8 @@ pub(crate) struct HttpClientPlanBinding {
 #[derive(Debug)]
 pub(crate) struct HttpClientRequestBindings {
     pub(crate) specs: BTreeMap<crate::node::Path, crate::plan::ConnectorSpec>,
+    boot_environment: BTreeMap<(crate::node::Path, String), Value>,
+    boot_secrets: BTreeMap<(crate::node::Path, String), crate::deployment::SecretRef>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,11 +89,14 @@ impl HttpRequestRejection {
 }
 
 impl HttpClientRequestBindings {
-    pub(crate) fn try_bind(
+    pub(crate) fn try_bind_with_boot(
         plan: &ValidatedExecutionPlan,
         nodes: &[crate::node::Path],
+        boot: &crate::deployment::BootBindings,
     ) -> Result<Self, super::DriverFactoryError> {
         let mut specs = BTreeMap::new();
+        let mut boot_environment = BTreeMap::new();
+        let mut boot_secrets = BTreeMap::new();
         for path in nodes {
             let spec = plan
                 .plan()
@@ -92,12 +118,62 @@ impl HttpClientRequestBindings {
                     spec.contract
                 )));
             }
+            for (name, setting) in &spec.attributes {
+                let AttrSetting::Expr { site, expr } = setting else {
+                    continue;
+                };
+                let reference = crate::expr::boot_reference(&expr.root)
+                    .map_err(|error| super::DriverFactoryError::new(error.to_string()))?;
+                let Some(reference) = reference else {
+                    continue;
+                };
+                if *site != crate::plan::EvaluationSite::Boot
+                    || !crate::boundary::connector_boot_reference_policy(&spec.contract, name)
+                        .is_some_and(|policy| policy.admits(&reference))
+                {
+                    return Err(super::DriverFactoryError::new(format!(
+                        "the HttpClient setting `{name}` at `{path}` is not boot-compatible"
+                    )));
+                }
+                match reference {
+                    crate::deployment::BootReference::Environment(environment) => {
+                        let value = boot.environment(&environment).ok_or_else(|| {
+                            super::DriverFactoryError::new(format!(
+                                "deployment value `{}` required by `{path}.{name}` is missing",
+                                environment.as_str()
+                            ))
+                        })?;
+                        if let Some(violation) = expr.ty.violation(name, value) {
+                            return Err(super::DriverFactoryError::new(format!(
+                                "deployment value `{}` does not fit `{path}.{name}`: {violation}",
+                                environment.as_str()
+                            )));
+                        }
+                        boot_environment.insert((path.clone(), name.clone()), value.clone());
+                    }
+                    crate::deployment::BootReference::Secret(reference) => {
+                        if boot.secret(&reference).is_none() {
+                            return Err(super::DriverFactoryError::new(format!(
+                                "secret `{}` required by `{path}.{name}` is missing",
+                                reference.as_str()
+                            )));
+                        }
+                        boot_secrets.insert((path.clone(), name.clone()), reference);
+                    }
+                }
+            }
             specs.insert(path.clone(), spec.clone());
         }
-        Ok(Self { specs })
+        Ok(Self {
+            specs,
+            boot_environment,
+            boot_secrets,
+        })
     }
 
     pub(crate) fn value(
+        &self,
+        connector: &crate::node::Path,
         spec: &crate::plan::ConnectorSpec,
         resolved: &BTreeMap<String, Value>,
         name: &str,
@@ -105,17 +181,39 @@ impl HttpClientRequestBindings {
         match spec.attribute(name) {
             Some(AttrSetting::Word(word)) => Some(Value::Enum(word.clone())),
             Some(AttrSetting::Value(value)) => Some(value.clone()),
+            Some(AttrSetting::Expr {
+                site: crate::plan::EvaluationSite::Boot,
+                ..
+            }) => self
+                .boot_environment
+                .get(&(connector.clone(), name.to_string()))
+                .cloned(),
             Some(AttrSetting::Expr { .. }) => resolved.get(name).cloned(),
             None => None,
         }
     }
 
+    pub(crate) fn secret_references(&self) -> impl Iterator<Item = &crate::deployment::SecretRef> {
+        self.boot_secrets.values()
+    }
+
+    fn secret_reference(
+        &self,
+        connector: &crate::node::Path,
+        name: &str,
+    ) -> Option<&crate::deployment::SecretRef> {
+        self.boot_secrets
+            .get(&(connector.clone(), name.to_string()))
+    }
+
     fn text(
+        &self,
+        connector: &crate::node::Path,
         spec: &crate::plan::ConnectorSpec,
         resolved: &BTreeMap<String, Value>,
         name: &str,
     ) -> Result<String, HttpRequestRejection> {
-        match Self::value(spec, resolved, name) {
+        match self.value(connector, spec, resolved, name) {
             Some(Value::Text(value)) => Ok(value),
             _ => Err(HttpRequestRejection::DecodeFailed),
         }
@@ -146,31 +244,45 @@ impl HttpClientRequestBindings {
         if u64::try_from(body.len()).map_or(true, |length| length > max_body) {
             return Err(HttpRequestRejection::BodyTooLarge { limit: max_body });
         }
-        let typed_headers =
-            Self::value(spec, resolved, "headers").unwrap_or_else(|| Value::Struct(Vec::new()));
-        let custom_headers = Self::value(spec, resolved, "custom_headers")
+        let typed_headers = self
+            .value(connector, spec, resolved, "headers")
+            .unwrap_or_else(|| Value::Struct(Vec::new()));
+        let custom_headers = self
+            .value(connector, spec, resolved, "custom_headers")
             .unwrap_or_else(|| Value::Map(BTreeMap::new()));
         let headers = crate::plan::canonical_request_headers(&typed_headers, &custom_headers)
             .ok_or(HttpRequestRejection::DecodeFailed)?;
         let request = Value::Struct(vec![
             (
                 String::from("auth_bearer"),
-                Self::value(spec, resolved, "auth_bearer").unwrap_or(Value::Null),
+                self.secret_reference(connector, "auth_bearer").map_or_else(
+                    || {
+                        self.value(connector, spec, resolved, "auth_bearer")
+                            .unwrap_or(Value::Null)
+                    },
+                    |reference| {
+                        Value::Struct(vec![(
+                            String::from("secret_ref"),
+                            Value::Text(reference.as_str().to_string()),
+                        )])
+                    },
+                ),
             ),
             (String::from("body"), Value::Bytes(body)),
             (String::from("codec"), Value::Text(codec.to_string())),
             (String::from("headers"), headers),
             (
                 String::from("idempotency_key"),
-                Self::value(spec, resolved, "idempotency_key").unwrap_or(Value::Null),
+                self.value(connector, spec, resolved, "idempotency_key")
+                    .unwrap_or(Value::Null),
             ),
             (
                 String::from("method"),
-                Value::Text(Self::text(spec, resolved, "method")?),
+                Value::Text(self.text(connector, spec, resolved, "method")?),
             ),
             (
                 String::from("url"),
-                Value::Text(Self::text(spec, resolved, "url")?),
+                Value::Text(self.text(connector, spec, resolved, "url")?),
             ),
         ]);
         let bytes =
@@ -273,12 +385,19 @@ pub(crate) fn decode_request(prepared: &PreparedRequest) -> Option<HttpRequest> 
         return None;
     };
     let mut fields: BTreeMap<_, _> = fields.into_iter().collect();
-    let optional_text = |value: Value| match value {
-        Value::Null => Some(None),
-        Value::Text(value) => Some(Some(value)),
-        _ => None,
+    let auth_bearer = match fields.remove("auth_bearer")? {
+        Value::Null => None,
+        Value::Text(value) => Some(HttpBearer::Inline(value)),
+        Value::Struct(mut fields) if fields.len() == 1 && fields[0].0 == "secret_ref" => {
+            let (_, Value::Text(reference)) = fields.pop()? else {
+                return None;
+            };
+            Some(HttpBearer::Secret(
+                crate::deployment::SecretRef::new(reference).ok()?,
+            ))
+        }
+        _ => return None,
     };
-    let auth_bearer = optional_text(fields.remove("auth_bearer")?)?;
     let Value::Bytes(body) = fields.remove("body")? else {
         return None;
     };
@@ -304,7 +423,11 @@ pub(crate) fn decode_request(prepared: &PreparedRequest) -> Option<HttpRequest> 
                 .map(|values| (name, values))
         })
         .collect::<Option<BTreeMap<_, _>>>()?;
-    let idempotency_key = optional_text(fields.remove("idempotency_key")?)?;
+    let idempotency_key = match fields.remove("idempotency_key")? {
+        Value::Null => None,
+        Value::Text(value) => Some(value),
+        _ => return None,
+    };
     let Value::Text(method) = fields.remove("method")? else {
         return None;
     };
@@ -346,7 +469,8 @@ impl super::ScriptedConnectorProtocol for HttpClientRequestBindings {
 pub(crate) fn bind_scripted_protocol(
     plan: &ValidatedExecutionPlan,
     nodes: &[crate::node::Path],
+    boot: &crate::deployment::BootBindings,
 ) -> Result<Box<dyn super::ScriptedConnectorProtocol>, super::DriverFactoryError> {
-    HttpClientRequestBindings::try_bind(plan, nodes)
+    HttpClientRequestBindings::try_bind_with_boot(plan, nodes, boot)
         .map(|bindings| Box::new(bindings) as Box<dyn super::ScriptedConnectorProtocol>)
 }

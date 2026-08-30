@@ -1310,6 +1310,22 @@ impl core::error::Error for Error {}
 /// no exposure of a physical record layout: a durable implementation
 /// may hold anything on disk as long as it answers these questions.
 pub trait Journal {
+    /// Deployment facts fixed before the first causal append. A durable
+    /// journal stores this in its immutable run header; it is not a fourth
+    /// causal record stream.
+    #[must_use]
+    fn deployment_attestation(&self) -> Option<&crate::deployment::DeploymentAttestation> {
+        None
+    }
+
+    /// Personal-data retention capability of this journal implementation.
+    /// The default is deliberately closed: carrying a matching profile header
+    /// does not by itself prove storage limitation or erasure semantics.
+    #[must_use]
+    fn privacy_retention(&self) -> Option<crate::deployment::PrivacyRetention> {
+        None
+    }
+
     /// Mints the complete ingress envelope without committing it. The result
     /// is a read-only reservation: only [`Self::commit_inbound`] consumes the
     /// sequence.
@@ -1509,6 +1525,7 @@ pub trait Journal {
 #[derive(Debug)]
 pub struct MemJournal {
     graph_version: GraphVersion,
+    deployment_attestation: Option<crate::deployment::DeploymentAttestation>,
     records: Vec<Record>,
     next_seq: BTreeMap<InboundEnvelopeProvenance, u64>,
     /// Replay-derived lifecycle fold, maintained atomically with `records`.
@@ -1567,6 +1584,7 @@ impl MemJournal {
     pub fn new(graph_version: GraphVersion) -> Self {
         Self {
             graph_version,
+            deployment_attestation: None,
             records: Vec::new(),
             next_seq: BTreeMap::new(),
             instance_lifecycles: BTreeMap::new(),
@@ -1575,6 +1593,20 @@ impl MemJournal {
             inbound_calls: BTreeMap::new(),
             loop_runs: BTreeMap::new(),
         }
+    }
+
+    /// An empty run whose deployment facts have already been fixed. This is
+    /// the only M1 journal with a personal-data retention capability, and
+    /// that capability is deliberately run-scoped: dropping this value drops
+    /// its complete in-memory history.
+    #[must_use]
+    pub fn new_with_deployment(
+        graph_version: GraphVersion,
+        attestation: crate::deployment::DeploymentAttestation,
+    ) -> Self {
+        let mut journal = Self::new(graph_version);
+        journal.deployment_attestation = Some(attestation);
+        journal
     }
 
     /// The records in causal order — an implementation detail of the
@@ -2093,6 +2125,14 @@ impl MemJournal {
 }
 
 impl Journal for MemJournal {
+    fn deployment_attestation(&self) -> Option<&crate::deployment::DeploymentAttestation> {
+        self.deployment_attestation.as_ref()
+    }
+
+    fn privacy_retention(&self) -> Option<crate::deployment::PrivacyRetention> {
+        Some(crate::deployment::PrivacyRetention::RunScoped)
+    }
+
     fn prepare_inbound(&self, submission: InboundSubmission) -> Result<PreparedInbound, Error> {
         self.prepare_inbound_fact(submission, None, None)
     }

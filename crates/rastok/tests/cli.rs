@@ -296,6 +296,79 @@ fn simulate_runs_the_lab_and_reports_every_scenario() {
 }
 
 #[test]
+fn simulate_resolves_boot_refs_from_a_profile_without_cli_secret_values() {
+    let root = std::env::temp_dir().join(format!(
+        "rastok-cli-deployment-profile-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("the deployment fixture directory is writable");
+    let source = root.join("app.rkg");
+    let profile = root.join("deployment.json");
+    std::fs::write(
+        &source,
+        r#"graph deployed : App {
+  connector client : HttpClient {
+    url = env("SERVICE_URL")
+    auth_bearer = secret("providers/http/token")
+    method = "POST"
+    timeout = duration("1s")
+    codec = text
+    effect = idempotent ; behavior = deterministic
+  }
+  . -> client -> .
+}
+lab deployed {
+  simulation boot on app {
+    mock client {
+      on in {
+        out = "ok"
+        exit = Completed { status = 200 }
+      }
+    }
+    scenario configured "boot refs bind before execution" {
+      app.in = "request"
+      expect "reply" app.out count == 1 where data == "ok"
+    }
+  }
+}
+"#,
+    )
+    .expect("the deployment graph writes");
+    std::fs::write(
+        &profile,
+        r#"{
+  "environment":[{"name":"SERVICE_URL","value":"https://example.test"}],
+  "secrets":[{
+    "reference":"providers/http/token",
+    "environment":"RASTOK_TEST_API_TOKEN",
+    "version":"v1"
+  }]
+}"#,
+    )
+    .expect("the deployment profile writes");
+
+    let output = rastok()
+        .arg("simulate")
+        .arg(&source)
+        .arg("--deployment")
+        .arg(&profile)
+        .env("RASTOK_TEST_API_TOKEN", "physical-cli-secret")
+        .env("RASTOK_TEST_API_TOKEN_VERSION", "v1")
+        .output()
+        .expect("the binary runs with an out-of-band secret");
+    assert!(output.status.success(), "{output:?}");
+    let inspected = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(inspected.contains("PASS boot.configured"), "{inspected}");
+    assert!(!inspected.contains("physical-cli-secret"));
+    std::fs::remove_dir_all(root).expect("the deployment fixture is removable");
+}
+
+#[test]
 fn simulate_fails_loudly_on_a_broken_expectation() {
     let source = std::fs::read_to_string(example()).expect("the example reads");
     let path = std::env::temp_dir().join("rastok-cli-evidence-broken.rkg");

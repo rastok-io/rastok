@@ -189,9 +189,11 @@ impl fmt::Display for SessionWriteRef {
     }
 }
 
-/// The exact protocol or operation bytes of a request, sealed: what the
-/// journal digests and what the driver executes are THE SAME VALUE — the
-/// machine prepares once, the Driver acts, nobody recomputes.
+/// The exact logical protocol or operation descriptor of a request, sealed.
+/// What the journal digests is what the Driver decodes and executes without
+/// recomputing settings. The sole M1 exception is an attested `SecretRef`:
+/// its physical material overlays the descriptor inside the authorized Driver
+/// and is fixed independently by the immutable run header.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedRequest {
     bytes: alloc::vec::Vec<u8>,
@@ -209,7 +211,8 @@ impl PreparedRequest {
         Self { bytes, digest }
     }
 
-    /// The exact bytes to transport or execute.
+    /// The exact logical bytes to decode and execute. An authorized Driver may
+    /// overlay attested secret material without placing it in this carrier.
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
@@ -419,6 +422,53 @@ pub fn connector_attribute_site(
     process_attribute_site(contract, attribute)
         .or_else(|| file_attribute_site(contract, attribute))
         .or_else(|| network_attribute_site(contract, attribute))
+}
+
+/// Which deployment reference forms one Connector setting explicitly admits.
+/// The table is Registry-free so a decoded package cannot turn a later-phase
+/// expression into an undeclared boot capability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootReferencePolicy {
+    /// A typed non-secret value may come from `env("NAME")`.
+    Environment,
+    /// Material may come only from `secret("logical/path")`.
+    Secret,
+}
+
+impl BootReferencePolicy {
+    /// Whether this declared policy admits one exact reference kind.
+    #[must_use]
+    pub const fn admits(self, reference: &crate::deployment::BootReference) -> bool {
+        matches!(
+            (self, reference),
+            (
+                Self::Environment,
+                crate::deployment::BootReference::Environment(_)
+            ) | (Self::Secret, crate::deployment::BootReference::Secret(_))
+        )
+    }
+}
+
+/// Registry-free boot-reference policy for every currently executable
+/// Connector setting. Absence means that `env()` and `secret()` both refuse.
+#[must_use]
+pub fn connector_boot_reference_policy(
+    contract: &crate::connector::ConnectorId,
+    attribute: &str,
+) -> Option<BootReferencePolicy> {
+    use BootReferencePolicy::{Environment, Secret};
+
+    match contract.as_str() {
+        crate::connector::HTTP_CLIENT_CONNECTOR_ID => match attribute {
+            // A4 intentionally opens the smallest executable surface. Each
+            // later setting joins this table only with its real and scripted
+            // Driver consumers in the same gate.
+            "auth_bearer" => Some(Secret),
+            "url" => Some(Environment),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// The canonical logical type of the conventional `Process.exit` port.

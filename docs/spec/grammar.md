@@ -20,6 +20,9 @@
 > retained Calls and direct-path correlation. H6 executes both WebSocket
 > Session Drivers over H1 Upgrade and H2/H3 Extended CONNECT; H7 closes static
 > hosted assembly.
+> M1.8 A4 admits exact root `env()`/`secret()` references only at the
+> contract-declared HttpClient URL/bearer settings; no general expression or
+> unit/App boot-value surface is implied.
 >
 > **Conceptual basis** : this document assumes the model defined in [WHITEPAPER.md](../../WHITEPAPER.md) and the normative instance contract in [instances.md](instances.md). This document is the grammar ; foundations is the constitution.
 >
@@ -1096,9 +1099,12 @@ all project into the union forms in [types.md](types.md).
 
 The DSL has no `${…}` interpolation token.
 
-- **Boot phase** (unit/App boot `val`s and effective Connector settings whose
-  selected evaluation site is boot) : the expression functions
-  **`env("VAR")`** and **`secret("path")`**. Using them in an instance key,
+- **Boot phase target** (unit/App boot `val`s and effective Connector settings
+  whose selected evaluation site is boot) : the exact root reference forms
+  **`env("VAR")`** and **`secret("path")`**. M1.8 A4 executes only
+  `HttpClient.url = env(...)` and
+  `HttpClient.auth_bearer = secret(...)`; unit/App boot `val`s and every other
+  setting remain named gates until their consumers land. Using either form in an instance key,
   per-instance `val`, guard, handler-local binding, or state expression is a
   compile error — the language has explicit phases (boot → instance →
   transaction → frontend region).
@@ -1343,10 +1349,11 @@ COMMENT    ::= "//" .* EOL  |  "/*" any* "*/"
 // follows the retained CEL/Go-compatible format (ns/us/ms/s/m/h, compound, fractional — `min`/`d`/`w`
 // are not accepted). Rate strings stay opaque Connector-attribute values
 // ("10/s per …").
-// There is no `${…}` INTERP atom. Boot-time resolution uses the Rastok expression functions
-// `env("NAME")` / `secret("path")`, legal only in unit/App boot vals and
-// effective Connector fields whose selected site is boot ; the contract
-// declares the latest site, and checking chooses the earliest legal one.
+// There is no `${…}` INTERP atom. Boot-time resolution reserves the exact root
+// forms `env("NAME")` / `secret("path")`. M1.8 A4 admits them only for the
+// declared HttpClient URL/bearer settings; unit/App boot vals remain a named
+// gate. The contract declares the latest site, and checking chooses the
+// earliest legal one.
 // runtime references are plain Rastok expression paths (`instance.key`, `meta.app.x`).
 // Rastok expression spans are handed to the expression lexer: the DSL lexer only
 // finds the span's END (delimitation rules below).
@@ -1621,7 +1628,7 @@ field_decl        ::= field_name ":" type_ref
 tagged_case       ::= IDENT data_annotation* ( "{" ( field_decl ( ","? field_decl )* )? "}" )?
 field_name        ::= IDENT | TYPE_KW                                 // field NAMES may reuse type words (`text: text`,
                                                                       //   `kind: text`) — position disambiguates
-data_annotation   ::= "@" IDENT annotation_arguments?                // M1.8 closed family; A3.1 executes derived policy, clear @secret/@personal wait for A4
+data_annotation   ::= "@" IDENT annotation_arguments?                // M1.8 closed family; A4 admits attested personal data, raw @secret fields still refuse
 annotation_arguments ::= "(" named_annotation_argument ( "," named_annotation_argument )* ")"
 named_annotation_argument ::= IDENT "=" annotation_constant
 annotation_constant ::= IDENT ( "." IDENT )* | STRING | SIGNED_INT  // plan constants only; no expression or positional argument

@@ -193,6 +193,7 @@ impl super::ScriptedConnectorProtocol for FileRequestBindings {
 pub(super) fn bind_scripted_protocol(
     plan: &crate::plan::ValidatedExecutionPlan,
     nodes: &[crate::node::Path],
+    _boot: &crate::deployment::BootBindings,
 ) -> Result<Box<dyn super::ScriptedConnectorProtocol>, super::DriverFactoryError> {
     FileRequestBindings::try_bind(plan, nodes)
         .map(|bindings| Box::new(bindings) as Box<dyn super::ScriptedConnectorProtocol>)

@@ -193,6 +193,15 @@ share a request digest merely because their trigger payloads are equal. The
 resolved setting map is an execution carrier, not a new causal record field:
 the outbound record retains the canonical digest authority.
 
+D-2026-08-30-3 defines the one M1 credential exception without weakening
+journal-before-effect. An authorized secret setting contributes its logical
+`SecretRef` to the prepared descriptor, while material is fixed by provider
+coordinate/version in the immutable run header and never becomes request
+bytes in the journal. The Driver may inspect that material during pure
+pre-open validation and may transport it only after the OUTBOUND open wins.
+Recovery under another attestation refuses; rotation cannot silently change a
+replayed effect.
+
 Offering that open record to an outbound Driver is itself bounded. A
 `CallStart::Pending` verdict means no effect started: the record remains open
 and the dispatcher offers the same intent again after local capacity returns.

@@ -1,11 +1,12 @@
 # Data policy, privacy, observations and cost
 
-> **Status: normative and executable through M1.8 A3.1 under
-> D-2026-08-30-1 and D-2026-08-30-2.** Categorical package v15 transports the closed family as
+> **Status: normative and executable through M1.8 A4 under
+> D-2026-08-30-1 through D-2026-08-30-3.** Categorical package v15 transports the closed family as
 > canonical side-tables. Registry-free validation re-derives every local
 > claim and the effective policy of canonical operations; presentation
-> redacts before formatting. Clear `@secret` and `@personal` payloads remain
-> fail-closed until A4 lands the attested deployment boundary.
+> redacts before formatting. A4 admits personal data only under an attested
+> run-scoped privacy profile and resolves reference-origin credentials only at
+> declared Driver settings. Raw `@secret` envelope fields remain fail-closed.
 
 This document owns data classification, typed runtime observations and their
 accounting projections. Logical values and assignability remain owned by
@@ -147,6 +148,18 @@ controller remains responsible for the legal and organisational judgements
 required by Articles 5, 25, 30 and 32, including any erasure request under
 Article 17.
 
+The resulting PII/personal-data classes are therefore:
+
+| Source | Technical class | Additional deployment evidence |
+|---|---|---|
+| `@personal` | ordinary personal data | purpose and Article 6 legal basis |
+| `@personal(identifier = true)` | ordinary personal data used as a subject identifier | same; identifier semantics survive only exact transformations |
+| `@personal(special = true)` | Article 9 special-category personal data | explicit Article 9 condition |
+| `@personal(criminal = true)` | Article 10 criminal-offence personal data | controller-declared Article 10 authority |
+
+This is one composable classification, not a sensitivity hierarchy: the
+Article 9, Article 10 and identifier flags can coexist on one path.
+
 ### 3.4 `@measure`
 
 `id` selects one entry from the pinned semantic-measure registry. The entry
@@ -237,18 +250,20 @@ security-taint rule and discard accounting meaning before admission.
 If the raw plan has no annotation declaration, validation returns the ordinary
 resolved table without walking operation trees. Annotated plans pay the fixed
 derivation once at validation; transactions do no policy reconstruction. VM
-boot caches whether a clear secret or personal-data site remains and refuses
-it with `UnsupportedDataPolicy` before journal or state mutation pending A4.
-Sensitivity, measure and cost policy otherwise execute. CLI and Lab fault
-paths never format a runtime value before consulting policy or reducing the
-message to a value category.
+boot caches whether a raw clear-secret site remains and refuses it with
+`UnsupportedDataPolicy` before journal or state mutation. A personal-data site
+is admitted only when the booted profile covers every ordinary/Article 9/
+Article 10 requirement and the journal exposes the exact same deployment
+attestation. Sensitivity, measure and cost policy otherwise execute. CLI and
+Lab fault paths never format a runtime value before consulting policy or
+reducing the message to a value category.
 
 ## 5. Deployment bindings and secrets
 
 Human configuration is a hosted concern:
 
 ```text
-deployment JSON / explicit CLI setting / explicit env binding
+closed deployment JSON / `--deployment` path / provider environment
                          |
                          v
                  DeploymentProfile
@@ -262,9 +277,31 @@ deployment JSON / explicit CLI setting / explicit env binding
 
 The core accepts typed values and provider interfaces; it parses no human
 format. Duplicate physical sources for one binding refuse rather than obeying
-a hidden precedence rule. Secrets are never accepted as CLI argument values.
-Embedded applications may construct the same typed bindings directly or load
-a separately specified canonical binary profile.
+a hidden precedence rule. Secrets are never accepted as CLI argument values
+or JSON fields. Embedded applications may construct the same typed bindings
+directly or load a separately specified canonical binary profile.
+
+The hosted M1 profile is closed JSON. Non-secret environment values are
+explicit name/value rows. A secret row carries a logical reference, the name
+of an environment-provider coordinate and an immutable version; the actual
+bytes come only from that environment variable, whose `<NAME>_VERSION`
+companion must match. The executable source forms are exact root references:
+
+```rastok
+connector model : HttpClient {
+  url = env("MODEL_URL")
+  auth_bearer = secret("providers/model/token")
+  // ...
+}
+```
+
+In M1 only `HttpClient.url` admits `env()` and
+`HttpClient.auth_bearer` admits `secret()`. A concatenation, the wrong
+reference kind, any other setting and all unit/App boot `val` spellings refuse
+by name until their concrete consumers land. Both real and scripted Drivers
+bind the same logical request descriptor. The real Driver alone overlays
+secret material inside its boundary; package, request digest, journal,
+diagnostics and Lab expectations retain only the logical reference.
 
 The same profile carries a versioned privacy attestation whenever the plan
 contains `@personal`. Its stable processing-activity reference and digest bind
@@ -274,6 +311,60 @@ graph identity. The run header records the reference and digest before the
 first personal value is admitted. Rastok verifies that the profile covers the
 plan and selected boundary; it does not adjudicate the controller's legal
 basis. Missing or contradictory coverage refuses before any effect.
+If personal data reaches an input of an external Connector, `recipients` must
+name at least one stable recipient class; declaring no recipient is accepted
+only when the validated flow does not disclose personal data across such a
+boundary. `transfer_safeguards = []` is an explicit controller attestation
+that this processing has no international transfer, not a value inferred from
+a URL.
+
+The same immutable header stores each non-secret boot binding as
+`(EnvironmentName, canonical tagged-value digest)` and each secret binding as
+logical reference/provider coordinate/version. A VM with an absent or
+type-incompatible binding, or a journal carrying another header, refuses
+before mutation even through the low-level Rust API.
+
+M1 accepts only `run_scoped` retention and only the in-memory journal for a
+personal-data run. A special-category path additionally requires a declared
+Article 9 condition; a criminal-offence path requires a declared Article 10
+authority. A future durable journal is not implicitly authorized by this
+profile: the journal capability seam defaults to refusal, and an implementation
+must first expose an independently reviewed erasure or externalization
+capability.
+
+One hosted profile therefore has this closed shape (references are
+controller-owned stable identifiers, not free-form legal prose):
+
+```json
+{
+  "environment": [
+    { "name": "MODEL_URL", "value": "https://api.example.test" }
+  ],
+  "secrets": [
+    {
+      "reference": "providers/model/token",
+      "environment": "MODEL_TOKEN",
+      "version": "release-7"
+    }
+  ],
+  "privacy": {
+    "reference": "privacy/support@1",
+    "processing_activity": "ropa/support",
+    "purposes": ["purpose/customer-support"],
+    "legal_bases": ["basis/contract"],
+    "special_category_condition": null,
+    "criminal_offence_authority": null,
+    "recipients": ["recipient/model-provider"],
+    "transfer_safeguards": ["transfer/scc-2021"],
+    "retention": "run_scoped"
+  }
+}
+```
+
+For this example the host supplies `MODEL_TOKEN` and
+`MODEL_TOKEN_VERSION=release-7` out of band. A graph carrying
+`@personal(special = true)` must replace the null Article 9 condition with a
+stable attestation reference; the analogous rule applies to Article 10.
 
 ## 6. Record observations
 

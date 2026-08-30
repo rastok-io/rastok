@@ -457,7 +457,7 @@ instance addresses).
 This table is a *completeness contract on the journal* : every row requires
 only data the three record types already carry. The extraction tooling itself
 is deferred ; it requires `durability = global` and
-**redaction hooks** (a prod slice is real data, PII included ; the export
+**redaction hooks** (a prod slice is real data, personal data included ; the export
 anonymizes before becoming a committable scenario).
 
 The product loop this closes : a prod incident becomes a scenario ; the fixed

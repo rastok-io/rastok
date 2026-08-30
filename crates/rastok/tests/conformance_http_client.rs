@@ -15,11 +15,19 @@
 use rastok::conformance::{
     InterleaveExpectation, InterleaveProbe, Profile, Provocation, assert_conformant, verify,
 };
-use rastok::connectors::{DriverRegistry, HttpClientConfig, HttpClientFactory};
+use rastok::connectors::{DriverRegistry, HttpClientConfig, HttpClientFactory, RuntimeBindings};
 use rastok::contract::ContractCatalog;
-use rastok::envelope::{Data, Value};
+use rastok::deployment::{
+    BootBindings, DeploymentProfile, EnvironmentName, SecretBinding, SecretMaterial,
+    SecretProvider, SecretProviderError, SecretProviderId, SecretRef, SecretVersion,
+};
+use rastok::envelope::{Data, Namespace, Value};
+use rastok::journal::MemJournal;
 use rastok::node;
+use rastok::plan::GraphVersion;
+use rastok::runtime::vm::Vm;
 use rastok::stdlib::HTTP_CLIENT;
+use std::collections::BTreeMap;
 use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
@@ -107,23 +115,30 @@ fn serve(mut stream: TcpStream) {
     else {
         return;
     };
-    let (delay, content_type, body): (_, _, &[u8]) = match path {
-        "/happy" => (0, "text/plain", b"happy-response"),
-        "/large" => (0, "text/plain", b"too-large"),
-        "/bad-json" => (0, "application/json", b"not-json"),
-        "/first" => (40, "text/plain", b"first-result"),
-        "/second" => (1, "text/plain", b"second-result"),
+    let authorized = request.lines().any(|line| {
+        line.split_once(':').is_some_and(|(name, value)| {
+            name.eq_ignore_ascii_case("authorization") && value.trim() == "Bearer deployment-token"
+        })
+    });
+    let (status, delay, content_type, body): (_, _, _, &[u8]) = match path {
+        "/happy" => (200, 0, "text/plain", b"happy-response"),
+        "/authenticated" if authorized => (200, 0, "text/plain", b"authenticated"),
+        "/authenticated" => (401, 0, "text/plain", b"unauthorized"),
+        "/large" => (200, 0, "text/plain", b"too-large"),
+        "/bad-json" => (200, 0, "application/json", b"not-json"),
+        "/first" => (200, 40, "text/plain", b"first-result"),
+        "/second" => (200, 1, "text/plain", b"second-result"),
         "/mute" => {
             std::thread::sleep(std::time::Duration::from_millis(500));
             return;
         }
-        _ => (0, "text/plain", b"unknown"),
+        _ => (200, 0, "text/plain", b"unknown"),
     };
     if delay != 0 {
         std::thread::sleep(std::time::Duration::from_millis(delay));
     }
     let response = format!(
-        "HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\nx-repeat: a\r\nx-repeat: b\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+        "HTTP/1.1 {status} OK\r\ncontent-type: {content_type}\r\nx-repeat: a\r\nx-repeat: b\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
         body.len(),
     );
     stream
@@ -206,6 +221,138 @@ fn registry() -> DriverRegistry {
                 .expect("the HttpClient id is canonical"),
         ))
         .expect("HttpClient is registered once")
+}
+
+struct FixedSecretProvider;
+
+impl SecretProvider for FixedSecretProvider {
+    fn resolve(&self, binding: &SecretBinding) -> Result<SecretMaterial, SecretProviderError> {
+        assert_eq!(binding.reference().as_str(), "providers/http/token");
+        assert_eq!(binding.version().as_str(), "v3");
+        SecretMaterial::new(b"deployment-token".to_vec())
+    }
+}
+
+fn authenticated_boot(url: String) -> BootBindings {
+    let reference = SecretRef::new("providers/http/token").expect("logical secret reference");
+    let binding = SecretBinding::new(
+        reference.clone(),
+        SecretProviderId::new("rastok/test@1").expect("stable provider id"),
+        "HTTP_TEST_TOKEN",
+        SecretVersion::new("v3").expect("stable secret version"),
+    )
+    .expect("versioned secret binding");
+    let profile = DeploymentProfile::new(
+        BTreeMap::from([(
+            EnvironmentName::new("SERVICE_URL").expect("portable environment name"),
+            Value::Text(url),
+        )]),
+        BTreeMap::from([(reference, binding)]),
+        None,
+    )
+    .expect("typed deployment profile");
+    BootBindings::resolve(profile, &FixedSecretProvider).expect("all boot bindings resolve")
+}
+
+fn drive(vm: &mut Vm<'_>, journal: &mut MemJournal, world: &mut RuntimeBindings<'_>) {
+    let mut settled = false;
+    for _ in 0..250 {
+        vm.drain_with_bindings(journal, world)
+            .expect("the authenticated graph drains");
+        vm.pump(journal, world)
+            .expect("the authenticated Driver pumps");
+        vm.drain_with_bindings(journal, world)
+            .expect("the authenticated completion drains");
+        if !vm.has_open_obligations() {
+            settled = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(settled, "the authenticated loopback call did not settle");
+}
+
+#[test]
+fn deployment_secret_reaches_real_and_scripted_http_without_entering_artifacts() {
+    let server = LoopbackServer::start();
+    let source = r#"
+graph authenticated : App {
+  connector client : HttpClient {
+    url = env("SERVICE_URL")
+    auth_bearer = secret("providers/http/token")
+    method = "POST"
+    timeout = duration("1s")
+    codec = text
+    versions = ["http/1.1"]
+    effect = idempotent ; behavior = deterministic
+  }
+  . -> client -> .
+}
+
+lab authenticated {
+  simulation scripted on app {
+    mock client {
+      on in {
+        out = "scripted"
+        exit = Completed { status = 200 }
+      }
+    }
+    scenario same_plan "the mock consumes the same boot-bound descriptor" {
+      app.in = "request"
+      expect "scripted response" app.out count == 1 where data == "scripted"
+    }
+  }
+}
+"#;
+    let compilation = rastok::compiler::compile(
+        &[source],
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the boot-bound client compiles");
+    let boot = authenticated_boot(server.url("/authenticated"));
+    let mut world = RuntimeBindings::try_new_with_boot(&compilation.plan, &registry(), &boot)
+        .expect("the real Driver resolves its exact boot inputs");
+    let version = GraphVersion(1);
+    let mut journal = MemJournal::new_with_deployment(version, boot.attestation().clone());
+    let mut vm = Vm::boot_with_deployment(&compilation.plan, version, &boot);
+    vm.inject(
+        &mut journal,
+        rastok::boundary::InboundSubmission {
+            provenance: rastok::boundary::InboundEnvelopeProvenance::single(
+                node::Path::new(["test"]).expect("valid provenance"),
+            ),
+            port: node::Port::new("in").expect("valid input port"),
+            draft: rastok::boundary::Draft {
+                data: Data::materialized(Value::Text(String::from("request"))),
+                ext: Namespace::new(),
+            },
+            sequence: rastok::boundary::SubmissionSequence::Next,
+        },
+    )
+    .expect("the request is admitted");
+    drive(&mut vm, &mut journal, &mut world);
+    assert!(vm.outputs().iter().any(|output| {
+        output.envelope.data().materialized_value()
+            == Some(&Value::Text(String::from("authenticated")))
+    }));
+
+    let lab_runs =
+        rastok::lab::run_with_boot(&compilation.plan, version, &compilation.labs[0], &boot);
+    assert!(
+        lab_runs.iter().all(|run| run.report.passed()),
+        "{lab_runs:#?}"
+    );
+
+    let package = rastok::plan::encode(&compilation.plan, &compilation.hash);
+    let inspected = format!(
+        "{:?}\n{:?}\n{:?}\n{:?}",
+        compilation.plan,
+        boot,
+        journal.records(),
+        package
+    );
+    assert!(!inspected.contains("deployment-token"));
+    assert!(inspected.contains("providers/http/token"));
 }
 
 #[test]

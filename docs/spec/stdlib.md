@@ -3,7 +3,8 @@
 > **Status: normative and executable through M1.6 H7. HttpClient and
 > HttpServer are live over HTTP/1.1–3, including bounded `ack` and `respond`;
 > WebSocketClient and WebSocketServer are live over HTTP/1.1 Upgrade and
-> HTTP/2–3 Extended CONNECT.**
+> HTTP/2–3 Extended CONNECT. M1.8 A4 adds versioned boot binding for
+> HttpClient URL and bearer settings without changing the contract id.**
 > B5 removed the
 > former draft `error_set` and made the complete resolved port table the
 > executable contract. B7 removed the success/failure boundary seam:
@@ -203,11 +204,11 @@ request.
 | Payload type | required `codec`: `json → variant`, `text → text`, `bytes → bytes`; no line delimiter is added |
 | Populates | response canonical `meta.ext.content_type: media_type` when valid, lossless `http_headers`, `http_status: int`, and `http_version` |
 | effect / behavior | **both mandatory on each node; plan-evaluated** |
-| Attributes | required invocation `url: text`; invocation `method: text = "GET"`, optional typed `headers`, open `custom_headers`, `auth_bearer`, `idempotency_key`; required plan `codec`; plan `max_body: ByteSize = "8MiB"` bounds request and response bodies; required positive instance `timeout`; optional instance `tls_ca`, plus paired `tls_certificate`/`tls_private_key`; ordered plan `versions = ["http/3", "http/2", "http/1.1"]`; `zero_rtt = disabled` |
+| Attributes | required invocation `url: text` (M1.8 A4 additionally admits the exact boot reference `env("NAME")`); invocation `method: text = "GET"`, optional typed `headers`, open `custom_headers`, `auth_bearer` (A4 admits only `secret("logical/path")` at boot), `idempotency_key`; required plan `codec`; plan `max_body: ByteSize = "8MiB"` bounds request and response bodies; required positive instance `timeout`; optional instance `tls_ca`, plus paired `tls_certificate`/`tls_private_key`; ordered plan `versions = ["http/3", "http/2", "http/1.1"]`; `zero_rtt = disabled` |
 | Correlator | protocol-native: HTTP request ↔ response |
 | Outcome cases | `Completed { status: int }`, `DnsFailed`, `ConnectFailed`, `TlsFailed`, `ProtocolFailed`, `TimeoutExpired`, `BodyTooLarge { limit: uint }`, `DecodeFailed`, `OutcomeUnknown` |
 | Instances | singleton by default; the common Node attribute `instance.key` may key the Connector |
-| Journal / sim | method, resolved URL, canonical headers, exact body and idempotency material seal before OUTBOUND open; the family Lab twin scripts only the post-open outcome |
+| Journal / sim | method, resolved URL, canonical ordinary headers, exact body, idempotency material and a logical bearer `SecretRef` seal before OUTBOUND open; physical bearer bytes are fixed by the run header and overlaid only in the real Driver; the family Lab twin scripts only the post-open outcome |
 
 The hosted H4 Driver attempts declared versions in order, skipping backends
 not compiled into the runtime. It may fall back only before request bytes can
@@ -218,6 +219,13 @@ Driver-owned Host field, HTTP/2 multiplexes by origin/TLS identity, and HTTP/3
 requires verified HTTPS. Every valid status, including non-2xx, publishes its
 body on `out`; the wire version is observation in `meta.ext.http_version`, not
 payload or identity.
+
+A4's boot references are exact roots, not general evaluator calls. A profile
+must supply the URL value and resolve the versioned bearer before Driver
+binding. The logical request seen by real and Lab Drivers contains the secret
+reference only. The real Driver may validate the bearer before opening an
+effect and may put it on the wire only after the OUTBOUND record; neither
+material nor its command-line spelling exists in graph or causal artifacts.
 
 For hosted clients, absent `tls_ca` selects Rastok's compiled exact Mozilla
 root corpus. Present `tls_ca` replaces it with a PEM certificate bundle or one

@@ -255,8 +255,9 @@ not remotely read state.
 
 The initialization phases are distinct:
 
-- a unit/App boot `val` is resolved once for the deployment and may use the
-  boot-only `env()` / `secret()` functions;
+- a unit/App boot `val` is resolved once for the deployment in the target
+  phase model; its `env()` / `secret()` source production remains deferred in
+  M1.8 A4, which executes only the declared HttpClient URL/bearer boot sites;
 - a `val` declared inside any other Node is derived once for each new Node
   instance from enclosing immutable bindings and, when declared, that owner's
   `instance.key`; it cannot read `data`, `meta`, or mutable state;

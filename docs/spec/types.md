@@ -487,5 +487,6 @@ Registry-free validation resolves each path against that adjacent type and
 independently derives effective resolved-port policy from raw declarations and
 canonical operations. A3/A3.1 execute confidentiality, personal-data and
 accounting policy without rewriting a derived verdict into source authority.
-Clear `@secret` and `@personal` payloads still refuse before mutation until A4
-lands the attested deployment boundary.
+A4 admits personal data only with an attested run-scoped privacy profile and
+keeps raw `@secret` payloads refused; `secret()` references at declared Driver
+settings are deployment bindings, not classified payload values.

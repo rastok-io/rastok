@@ -76,6 +76,28 @@ pub fn run(
     graph_version: GraphVersion,
     lab: &Lab,
 ) -> Vec<ScenarioRun> {
+    run_inner(plan, graph_version, lab, None)
+}
+
+/// Runs every scenario with the same resolved deployment inputs used by real
+/// Drivers. Scripted Drivers consume logical secret references and typed boot
+/// values but never receive or expose physical secret bytes in expectations.
+#[must_use]
+pub fn run_with_boot(
+    plan: &ValidatedExecutionPlan,
+    graph_version: GraphVersion,
+    lab: &Lab,
+    boot: &crate::deployment::BootBindings,
+) -> Vec<ScenarioRun> {
+    run_inner(plan, graph_version, lab, Some(boot))
+}
+
+fn run_inner(
+    plan: &ValidatedExecutionPlan,
+    graph_version: GraphVersion,
+    lab: &Lab,
+    boot: Option<&crate::deployment::BootBindings>,
+) -> Vec<ScenarioRun> {
     let mut reports = Vec::new();
     for simulation in &lab.simulations {
         for scenario in &simulation.scenarios {
@@ -85,6 +107,7 @@ pub fn run(
                 &simulation.name,
                 &simulation.mocks,
                 scenario,
+                boot,
             ));
         }
     }
@@ -97,6 +120,7 @@ fn run_scenario(
     simulation: &str,
     shared_mocks: &[Mock],
     scenario: &Scenario,
+    boot: Option<&crate::deployment::BootBindings>,
 ) -> ScenarioRun {
     // Nearest wins, whole-mock replacement: a scenario mock for a
     // connector shadows the simulation-level one entirely.
@@ -107,10 +131,17 @@ fn run_scenario(
     for mock in &scenario.mocks {
         mocks.insert(mock.connector.clone(), mock.clone());
     }
-    let mut journal = MemJournal::new(graph_version);
-    let mut vm = Vm::boot(plan, graph_version);
+    let mut journal = boot.map_or_else(
+        || MemJournal::new(graph_version),
+        |boot| MemJournal::new_with_deployment(graph_version, boot.attestation().clone()),
+    );
+    let mut vm = boot.map_or_else(
+        || Vm::boot(plan, graph_version),
+        |boot| Vm::boot_with_deployment(plan, graph_version, boot),
+    );
     let mut failures = Vec::new();
-    let (mut driver, faults) = match mock_bindings(plan, mocks) {
+    let empty_boot = crate::deployment::BootBindings::empty();
+    let (mut driver, faults) = match mock_bindings(plan, mocks, boot.unwrap_or(&empty_boot)) {
         Ok(bound) => bound,
         Err(error) => {
             failures.push(format!("the Lab Driver composition refused: {error}"));
@@ -398,7 +429,16 @@ impl ConnectorDriverFactory for MockConnectorFactory {
         plan: &'plan ValidatedExecutionPlan,
         nodes: &[node::Path],
     ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
-        let protocol = (self.bind_protocol)(plan, nodes)?;
+        self.bind_with_boot(plan, nodes, &crate::deployment::BootBindings::empty())
+    }
+
+    fn bind_with_boot<'plan>(
+        &self,
+        plan: &'plan ValidatedExecutionPlan,
+        nodes: &[node::Path],
+        boot: &crate::deployment::BootBindings,
+    ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
+        let protocol = (self.bind_protocol)(plan, nodes, boot)?;
         Ok(Box::new(MockOutboundConnectorDriver {
             mocks: self.mocks.clone(),
             protocol,
@@ -411,6 +451,7 @@ impl ConnectorDriverFactory for MockConnectorFactory {
 fn mock_bindings<'plan>(
     plan: &'plan ValidatedExecutionPlan,
     mocks: BTreeMap<node::Path, Mock>,
+    boot: &crate::deployment::BootBindings,
 ) -> Result<(RuntimeBindings<'plan>, MockFaults), String> {
     let faults = Rc::new(RefCell::new(Vec::new()));
     let mocks = share_mocks(mocks);
@@ -431,7 +472,8 @@ fn mock_bindings<'plan>(
             .try_with(factory)
             .map_err(|error| error.to_string())?;
     }
-    let bindings = RuntimeBindings::try_new(plan, &registry).map_err(|error| error.to_string())?;
+    let bindings = RuntimeBindings::try_new_with_boot(plan, &registry, boot)
+        .map_err(|error| error.to_string())?;
     Ok((bindings, faults))
 }
 
@@ -976,8 +1018,12 @@ graph websocket_server_source : App {
                 &ContractCatalog::try_m0().expect("the standard catalogue holds"),
             )
             .unwrap_or_else(|bag| panic!("the H2 source and Lab must check: {bag:#?}"));
-            mock_bindings(&compilation.plan, BTreeMap::new())
-                .unwrap_or_else(|error| panic!("the family-owned Lab twin must bind: {error}"));
+            mock_bindings(
+                &compilation.plan,
+                BTreeMap::new(),
+                &crate::deployment::BootBindings::empty(),
+            )
+            .unwrap_or_else(|error| panic!("the family-owned Lab twin must bind: {error}"));
         }
     }
 

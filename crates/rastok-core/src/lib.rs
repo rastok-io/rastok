@@ -22,6 +22,7 @@ pub mod canonical_cbor;
 pub mod connector;
 pub mod data_policy;
 pub mod datatype;
+pub mod deployment;
 pub mod envelope;
 pub mod expr;
 pub mod identity;

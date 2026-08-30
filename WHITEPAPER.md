@@ -1174,8 +1174,11 @@ because they are immutable lexical context. A Graph `var`, if declared, is
 still private to the Graph's own handlers; lexical containment never grants a
 mutable read to a child.
 
-These scopes also define evaluation phase. Unit/App boot `val`s are resolved
-once for the deployment. A Node-level `val` is derived once for each new
+These scopes also define evaluation phase. In the target model, Unit/App boot
+`val`s are resolved once for the deployment. The M1.8 A4 executable subset is
+narrower: exact environment/secret references are open only for the declared
+HttpClient URL/bearer settings, while general boot `val`s remain a named gate.
+A Node-level `val` is derived once for each new
 instance from enclosing immutable values and that owner's local
 `instance.key`; it cannot read `data`, `meta`, or mutable state. Handler-local
 `val`s are transaction bindings. `instance.key` is a reserved contextual root,
@@ -2885,7 +2888,7 @@ explicit Loop `stop` and spatial recovery still refuse before execution,
 preserving the rule that a recognized policy never silently runs as a plain
 Graph.
 
-M1.8 A3.1 now executes the closed `@sensitive`, `@secret`, `@personal`,
+M1.8 A4 now executes the closed `@sensitive`, `@secret`, `@personal`,
 `@measure` and `@cost` family through source, checked HIR and categorical v15 as canonical
 side-tables beside logical schemas. Independent package validation re-derives
 every local structural path, legal target, registered measure carrier,
@@ -2895,9 +2898,11 @@ meaning; calculations and control dependencies retain security taint but do
 not invent accounting meaning; incompatible producers refuse. Presentation
 redacts before formatting. Personal data is a GDPR-facing class orthogonal to
 confidentiality, with distinct special-category, criminal-offence and
-data-subject identifier facts. Clear secret and personal payloads remain
-fail-closed for A4's attested deployment boundary. Unannotated semantic
-identities and causal traces remain fixed.
+data-subject identifier facts. Personal data is admitted only with a complete
+run-scoped privacy attestation; exact HttpClient environment/secret references
+bind through one real/Lab request descriptor while clear credentials stay out
+of graph and causal artifacts. Raw incoming `@secret` fields remain
+fail-closed. Unannotated semantic identities and causal traces remain fixed.
 
 This white paper is designed to outlive individual releases. The DSL
 grammar, runtime traits, and feature set will evolve; the conceptual

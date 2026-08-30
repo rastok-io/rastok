@@ -981,6 +981,116 @@ pub fn compile(text: &str, signature: &Signature) -> Result<Tree, Vec<Diagnostic
     Ok(Tree { root, ty })
 }
 
+/// Recognizes the two exact boot-reference forms through the ordinary
+/// expression lexer. This is deliberately a root-only recognizer: boot facts
+/// are references, not evaluator functions, and cannot be hidden in a
+/// calculation.
+///
+/// # Errors
+///
+/// A spelling beginning with `env(` or `secret(` must contain exactly one
+/// string argument and no surrounding expression. Lexical diagnostics retain
+/// their ordinary ranges.
+pub fn parse_boot_reference(
+    text: &str,
+) -> Result<Option<crate::deployment::BootReference>, Vec<Diagnostic>> {
+    let tokens = lex(text)?;
+    let Some(Spanned {
+        tok: Tok::Ident(function @ ("env" | "secret")),
+        range,
+    }) = tokens.first()
+    else {
+        return Ok(None);
+    };
+    let [
+        _,
+        Spanned {
+            tok: Tok::LParen, ..
+        },
+        Spanned {
+            tok: Tok::Str(argument),
+            ..
+        },
+        Spanned {
+            tok: Tok::RParen, ..
+        },
+    ] = tokens.as_slice()
+    else {
+        return Err(vec![Diagnostic {
+            kind: DiagnosticKind::General,
+            message: format!(
+                "`{function}()` is a boot reference and takes exactly one string literal"
+            ),
+            range: range.clone(),
+        }]);
+    };
+    let reference = if *function == "env" {
+        crate::deployment::EnvironmentName::new(argument.clone())
+            .map(crate::deployment::BootReference::Environment)
+    } else {
+        crate::deployment::SecretRef::new(argument.clone())
+            .map(crate::deployment::BootReference::Secret)
+    }
+    .map_err(|error| {
+        vec![Diagnostic {
+            kind: DiagnosticKind::General,
+            message: error.to_string(),
+            range: range.clone(),
+        }]
+    })?;
+    Ok(Some(reference))
+}
+
+const BOOT_REFERENCE_ROOT: &str = "$boot";
+
+/// Lowers one source boot reference into the existing categorical expression
+/// path form. `$boot` is not a source identifier, so an author cannot forge
+/// this reserved namespace through ordinary path syntax.
+#[must_use]
+pub fn boot_reference_tree(reference: &crate::deployment::BootReference, ty: DataType) -> Tree {
+    let (kind, name) = match reference {
+        crate::deployment::BootReference::Environment(name) => ("env", name.as_str()),
+        crate::deployment::BootReference::Secret(reference) => ("secret", reference.as_str()),
+    };
+    Tree {
+        root: Expr::Path(vec![
+            String::from(BOOT_REFERENCE_ROOT),
+            String::from(kind),
+            String::from(name),
+        ]),
+        ty,
+    }
+}
+
+/// Reconstructs a boot reference from its categorical expression spelling.
+///
+/// # Errors
+///
+/// A path entering the reserved `$boot` root must have one exact, valid
+/// three-segment form.
+pub fn boot_reference(
+    expression: &Expr,
+) -> Result<Option<crate::deployment::BootReference>, crate::deployment::DeploymentError> {
+    let Expr::Path(segments) = expression else {
+        return Ok(None);
+    };
+    if segments
+        .first()
+        .is_none_or(|root| root != BOOT_REFERENCE_ROOT)
+    {
+        return Ok(None);
+    }
+    match segments.as_slice() {
+        [_, kind, name] if kind == "env" => crate::deployment::EnvironmentName::new(name.clone())
+            .map(crate::deployment::BootReference::Environment)
+            .map(Some),
+        [_, kind, name] if kind == "secret" => crate::deployment::SecretRef::new(name.clone())
+            .map(crate::deployment::BootReference::Secret)
+            .map(Some),
+        _ => Err(crate::deployment::DeploymentError::InvalidBootReference),
+    }
+}
+
 /// Evaluates a compiled tree against runtime bindings.
 ///
 /// # Errors
@@ -3803,6 +3913,30 @@ mod tests {
                 .message
                 .contains("`now` is not a visible name")
         );
+    }
+
+    #[test]
+    fn boot_references_reuse_expression_lexing_but_never_become_calls() {
+        let environment = parse_boot_reference("env( /* trivia */ 'SERVICE_URL' )")
+            .unwrap_or_else(|diagnostics| panic!("env boot reference: {diagnostics:?}"))
+            .expect("one boot reference");
+        let secret = parse_boot_reference("secret(\"providers/openai/token\")")
+            .unwrap_or_else(|diagnostics| panic!("secret boot reference: {diagnostics:?}"))
+            .expect("one boot reference");
+        assert!(matches!(
+            environment,
+            crate::deployment::BootReference::Environment(ref name)
+                if name.as_str() == "SERVICE_URL"
+        ));
+        assert!(matches!(
+            secret,
+            crate::deployment::BootReference::Secret(ref reference)
+                if reference.as_str() == "providers/openai/token"
+        ));
+        let tree = boot_reference_tree(&secret, DataType::Text);
+        assert_eq!(boot_reference(&tree.root), Ok(Some(secret)));
+        assert!(parse_boot_reference("secret(\"token\") + \"leak\"").is_err());
+        assert_eq!(parse_boot_reference("size(data)"), Ok(None));
     }
 
     #[test]

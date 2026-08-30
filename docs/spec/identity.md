@@ -52,6 +52,9 @@
 > schema-policy side-tables. Unannotated bodies and semantic hashes remain
 > byte-identical; annotated programs alone gain `rastok.metering.r1`. No
 > causal record moves.
+> M1.8 A4 reuses the existing categorical expression-path form for exact boot
+> references. Physical values and profile facts move no graph or causal
+> identity; their immutable run-header attestation gates replay instead.
 > D-2026-08-14-1
 > transports the canonical `DataType` registry, complete resolved port types
 > and structural/tagged unions together. Decode re-derives the effective table
@@ -217,7 +220,10 @@ extending a package merely to name a library or negotiated wire version.
 **M1.6 H4 live-HttpClient checkpoint (2026-08-26).** The live Driver consumes
 the exact H2 sheet and H1 Call forms. Prepared request bytes already own the
 OUTBOUND digest; selected HTTP version and response headers/status are external
-observations on newly minted output envelopes. The new metadata-map carrier
+observations on newly minted output envelopes. D-2026-08-30-3 later narrows
+“request bytes” to the complete logical descriptor when an attested secret is
+used: its logical reference is sealed while physical material is fixed by the
+run header and overlaid only inside the authorized Driver. The new metadata-map carrier
 reuses value tags 18/19/8 and existing scalar tags, so no old metadata value
 changes bytes. H4 therefore moves no package, semantic hash or pre-existing
 causal trace; all goldens and the gauge witness remain byte-identical.
@@ -792,12 +798,12 @@ cannot diverge on bytes for the same journal :
 `run = f(graph, journal)` requires that any
 deployment binding able to change the run — a `var` default, a
 `timeout`/`lifetime`, a partner URL, the tzdata version, a class
-policy — be **journaled as a boot attestation record** (its version
-or content hash) before first use. Recovery under a differing
+policy — be fixed in an **immutable run-header attestation** (its version
+or content hash) before first use. This is journal-owned control metadata,
+not another App causal record species. Recovery under a differing
 attestation is a typed refusal, the `E-REPLAY-VERSION-MISMATCH`
 family. Secrets stay out of the journal in clear ; only their
-version is attested. This is a control-journal fact, not an
-App causal species.
+logical/provider coordinates and version are attested.
 
 **Collision guarantee.** Two records
 differ in bytes **iff** they differ in any causal fact : the kind,
@@ -834,3 +840,16 @@ remain outside graph identity; run-affecting versions/digests use the boot
 attestation rule above. Typed measure/cost samples remain in the non-causal
 ring, and no existing record moves merely because an annotation vocabulary is
 recognized.
+
+**M1.8 A4 deployment checkpoint.** Exact `env()` / `secret()` source
+references hash as their existing categorical expression paths and selected
+boot site. A physical environment value, bearer material, provider coordinate,
+privacy-profile fact or `--deployment` path does not hash. The HttpClient
+prepared descriptor seals a logical `SecretRef`; a rotated material value
+therefore keeps graph and Call-request identity stable, while recovery under a
+different environment-value digest or provider coordinate/version refuses
+because the immutable run header differs. The same header stores the stable
+privacy-profile reference and digest before personal data is admitted. It is
+control metadata outside the causal record array. A4 allocates no package
+version, semantic extension, record key or value/type tag; every earlier
+package, witness and trace remains byte-identical.

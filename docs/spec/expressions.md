@@ -9,7 +9,9 @@
 > `IDENT!` frontend surface and full JSON-value reader described below are
 > executable. M1.7's temporal prerequisite adds the transaction-context
 > function `now()` without changing the expression transport. A `variant` must be
-> narrowed before member or index access.
+> narrowed before member or index access. M1.8 A4 additionally recognizes the
+> exact root boot references `env()`/`secret()` at two declared HttpClient
+> settings; they are categorical references, never evaluator calls.
 
 Rastok has an intrinsic, pure expression language. Its syntax and much of
 its operator semantics are inspired by CEL, and the compatible core stays
@@ -48,8 +50,11 @@ selected key; it never searches an ancestor and never becomes null. An
 enclosing Graph passes such context to descendants through an immutable
 lexical `val`.
 
-Expression availability is phase-checked. Unit/App boot `val`s and effective
-settings bound at boot may use `env()` / `secret()`. A Node-level per-instance
+Expression availability is phase-checked. The target phase model gives
+unit/App boot `val`s and effective settings bound at boot exact `env()` /
+`secret()` references. M1.8 A4 executes only the declared HttpClient URL and
+bearer settings; unit/App boot values and all other boot consumers refuse by
+name. A Node-level per-instance
 `val`, or an effective Connector setting bound at the instance site, may use
 enclosing immutable bindings and that owner's local key but not `data`, `meta`,
 or `var`. Handler expressions have their ordinary transaction bindings;

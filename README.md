@@ -116,7 +116,7 @@ bounded Process retry with multi-frame data, exact exhaustion, and stale-wake
 fencing across instance Closing. See the
 [M1.7 exit report](docs/architecture/m1.7-exit-report.md).
 
-M1.8 A0–A3.1 are closed on categorical package v15. The source front end
+M1.8 A0–A4 are closed on categorical package v15. The source front end
 recognizes the closed `@sensitive`/`@secret`/`@personal`/`@measure`/`@cost` family,
 resolves aliases into canonical schema paths and transports the sparse policy
 tables through checked HIR, package decode and Registry-free validation.
@@ -125,12 +125,21 @@ effective policy across copies, projections, calculations, guards, state and
 Loop recurrence; accounting meanings never merge ambiguously, and terminal
 presentation redacts before formatting. `@personal` remains orthogonal to
 confidentiality, preserves the GDPR Articles 9/10 regimes and an exact
-data-subject identifier role, and redacts by default. Clear `@secret` and
-`@personal` payloads still refuse before mutation pending A4's attested
-deployment boundary. Unannotated semantic
+data-subject identifier role, and redacts by default. A4 now admits personal
+data only with a complete attested run-scoped privacy profile. Exact
+`env()`/`secret()` references bind HttpClient URL and bearer settings through
+the same real/Lab descriptor; physical secret bytes enter neither source,
+profile JSON, CLI, `Value`, package nor journal. Raw incoming `@secret` fields
+remain fail-closed. Unannotated semantic
 hashes and all existing causal traces remain unchanged. The ordered work is
 tracked in the
 [M1.8 backlog](docs/architecture/m1.8-observability-backlog.md).
+
+For hosted execution or simulation, `--deployment <profile.json>` supplies
+typed boot values, versioned secret coordinates and the optional privacy
+attestation. Secret material itself comes from the selected provider (the M1
+provider is the process environment plus a matching `_VERSION` coordinate),
+never from a command-line value.
 
 The standalone runner links Process by default. Hosted features add the
 selected HTTP/WebSocket families through one registry assembly. Pass

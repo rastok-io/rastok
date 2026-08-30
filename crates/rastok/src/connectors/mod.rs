@@ -65,6 +65,7 @@ pub(crate) type ScriptedProtocolBinder =
     fn(
         &crate::plan::ValidatedExecutionPlan,
         &[crate::node::Path],
+        &crate::deployment::BootBindings,
     ) -> Result<Box<dyn ScriptedConnectorProtocol>, registry::DriverFactoryError>;
 
 /// Every built-in family's scripted twin, declared beside its real module.

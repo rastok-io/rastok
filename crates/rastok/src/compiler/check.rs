@@ -3348,6 +3348,7 @@ impl Checker<'_, '_> {
             let Some(node) = node_at_path(graph, &pending.node) else {
                 continue;
             };
+            let contract = node.connector_contract_id().cloned();
             let Some(input_type) = node
                 .ports
                 .iter()
@@ -3388,14 +3389,86 @@ impl Checker<'_, '_> {
                 signature = signature.with(format!("meta.ext.{field}"), ty.clone());
             }
             let expected = pending.domain.expression_type();
-            let Some(tree) = self.typed_value_tree(
-                &pending.value,
-                &signature,
-                expected.as_ref(),
-                pending.span,
-                &pending.name,
-            ) else {
-                continue;
+            let boot_reference = match &pending.value {
+                SynValue::Expr(source) => match expr::parse_boot_reference(&source.text) {
+                    Ok(reference) => reference,
+                    Err(diagnostics) => {
+                        let base = source.span.range().start;
+                        for diagnostic in diagnostics {
+                            self.bag.push(
+                                Diagnostic::new(
+                                    E_CONTRACT_ATTR,
+                                    Phase::Check,
+                                    diagnostic.message.clone(),
+                                )
+                                .with_span(Span::new(
+                                    source.span.source(),
+                                    base + diagnostic.range.start..base + diagnostic.range.end,
+                                ))
+                                .with_field("attribute", pending.name.clone())
+                                .with_field("detail", diagnostic.message),
+                            );
+                        }
+                        continue;
+                    }
+                },
+                _ => None,
+            };
+            let (tree, forced_site) = if let Some(reference) = boot_reference {
+                let Some(contract) = contract.as_ref() else {
+                    continue;
+                };
+                let admitted =
+                    crate::boundary::connector_boot_reference_policy(contract, &pending.name)
+                        .is_some_and(|policy| policy.admits(&reference));
+                if !admitted {
+                    let function = match reference {
+                        crate::deployment::BootReference::Environment(_) => "env",
+                        crate::deployment::BootReference::Secret(_) => "secret",
+                    };
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_CONTRACT_ATTR,
+                            Phase::Check,
+                            format!(
+                                "`{function}()` is not authorized for the `{}` setting of `{contract}`",
+                                pending.name
+                            ),
+                        )
+                        .with_span(pending.span)
+                        .with_field("attribute", pending.name.clone())
+                        .with_field("detail", "undeclared boot reference"),
+                    );
+                    continue;
+                }
+                let Some(expected) = expected.clone() else {
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_CONTRACT_ATTR,
+                            Phase::Check,
+                            format!("`{}` has no boot-bindable value type", pending.name),
+                        )
+                        .with_span(pending.span)
+                        .with_field("attribute", pending.name.clone())
+                        .with_field("detail", "boot reference type"),
+                    );
+                    continue;
+                };
+                (
+                    expr::boot_reference_tree(&reference, expected),
+                    Some(crate::plan::EvaluationSite::Boot),
+                )
+            } else {
+                let Some(tree) = self.typed_value_tree(
+                    &pending.value,
+                    &signature,
+                    expected.as_ref(),
+                    pending.span,
+                    &pending.name,
+                ) else {
+                    continue;
+                };
+                (tree, None)
             };
             if pending.domain == contract::ValueDomain::ExprPath
                 && !matches!(
@@ -3435,7 +3508,7 @@ impl Checker<'_, '_> {
                 );
                 continue;
             }
-            let site = expression_evaluation_site(&tree.root);
+            let site = forced_site.unwrap_or_else(|| expression_evaluation_site(&tree.root));
             if !pending.latest_site.admits(site) {
                 self.bag.push(
                     Diagnostic::new(
@@ -10529,6 +10602,90 @@ graph g : App {}
             Some([DataAnnotation::Personal(class)]) if class.is_special_category()
                 && !class.is_criminal_offence()
         ));
+    }
+
+    #[test]
+    fn boot_references_close_only_at_declared_connector_settings() {
+        let source = r#"
+graph app : App {
+  connector client : HttpClient {
+    url = env("SERVICE_URL")
+    auth_bearer = secret("providers/openai/token")
+    method = "POST"
+    timeout = duration("2s")
+    codec = json
+    effect = idempotent
+    behavior = deterministic
+  }
+}
+"#;
+        let (hir, bag) = check_source(source);
+        assert!(!bag.has_errors(), "{:#?}", bag.diagnostics());
+        let hir = hir.expect("boot references check into HIR");
+        let client = &hir.app.nodes[0];
+        let attributes = client.attributes();
+        for (name, expected) in [
+            (
+                "url",
+                crate::deployment::BootReference::Environment(
+                    crate::deployment::EnvironmentName::new("SERVICE_URL")
+                        .expect("portable environment name"),
+                ),
+            ),
+            (
+                "auth_bearer",
+                crate::deployment::BootReference::Secret(
+                    crate::deployment::SecretRef::new("providers/openai/token")
+                        .expect("logical secret ref"),
+                ),
+            ),
+        ] {
+            let attribute = attributes
+                .iter()
+                .find(|attribute| attribute.name == name)
+                .expect("boot-bound attribute");
+            assert!(matches!(
+                &attribute.value,
+                AttrValue::Expr { site: crate::plan::EvaluationSite::Boot, tree }
+                    if crate::expr::boot_reference(&tree.root) == Ok(Some(expected.clone()))
+            ));
+        }
+
+        for (attribute, value, detail) in [
+            (
+                "idempotency_key",
+                "secret(\"providers/openai/token\")",
+                "not authorized",
+            ),
+            ("auth_bearer", "env(\"API_TOKEN\")", "not authorized"),
+            (
+                "auth_bearer",
+                "secret(\"providers/openai/token\") + \"leak\"",
+                "exactly one string literal",
+            ),
+        ] {
+            let source = format!(
+                r#"graph app : App {{
+  connector client : HttpClient {{
+    url = "https://example.test"
+    method = "GET"
+    timeout = duration("2s")
+    codec = json
+    effect = idempotent
+    behavior = deterministic
+    {attribute} = {value}
+  }}
+}}
+"#
+            );
+            let (_, bag) = check_source(&source);
+            let diagnostic = bag
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.code() == E_CONTRACT_ATTR)
+                .expect("boot reference refusal");
+            assert!(diagnostic.message().contains(detail), "{diagnostic:#?}");
+        }
     }
 
     #[test]

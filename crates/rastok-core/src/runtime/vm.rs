@@ -53,12 +53,20 @@ use core::fmt;
 /// A machine-integrity refusal — never a business error.
 #[derive(Debug, Clone, PartialEq)]
 pub enum VmError {
-    /// Classified payload metadata reached execution before its deployment
-    /// boundary protocol. A3 executes propagation and presentation policy;
-    /// secrets and personal data stay fail-closed until A4 supplies attested
-    /// references and privacy policy.
+    /// Classified payload metadata reached execution without its required
+    /// deployment protocol. Raw secret payloads remain fail-closed; personal
+    /// data requires A4's complete attested privacy profile.
     UnsupportedDataPolicy {
         /// First deterministic unsupported classified schema site.
+        location: String,
+    },
+    /// The journal run header does not carry the exact deployment facts with
+    /// which this VM was booted. No causal mutation may cross that split.
+    DeploymentAttestationMismatch,
+    /// One categorical boot reference has no compatible resolved binding.
+    /// The VM cannot defer this failure until a later Driver effect.
+    MissingDeploymentBinding {
+        /// Exact Connector setting that requires the binding.
         location: String,
     },
     /// A categorical NodeAspect reached the machine before its execution
@@ -213,6 +221,12 @@ impl fmt::Display for VmError {
                 f,
                 "data policy at {location} requires the M1.8 A4 deployment boundary"
             ),
+            Self::DeploymentAttestationMismatch => {
+                f.write_str("the journal deployment attestation does not match the booted bindings")
+            }
+            Self::MissingDeploymentBinding { location } => {
+                write!(f, "deployment binding required by {location} is missing")
+            }
             Self::UnsupportedAspect { owner, aspect } => write!(
                 f,
                 "Graph `{owner}` carries `{aspect}`, whose VM protocol has not landed"
@@ -849,9 +863,21 @@ impl Scheduler {
 #[derive(Debug)]
 pub struct Vm<'plan> {
     plan: &'plan ValidatedExecutionPlan,
-    /// First still-unbound classified schema, computed once at boot. A4 will
-    /// replace this belt with reference-only secret and privacy enforcement.
+    /// First still-unsupported classified schema, computed once at boot. Raw
+    /// secret payloads remain closed; personal data opens only under the
+    /// attested run-scoped privacy profile.
     unsupported_data_policy: Option<String>,
+    /// First categorical boot setting without a type-compatible resolved
+    /// binding. This closes the library API as well as the hosted CLI path.
+    missing_deployment_binding: Option<String>,
+    /// Whether any executable schema position contains personal data. A
+    /// matching profile header is insufficient unless the Journal separately
+    /// advertises an admitted retention capability.
+    requires_personal_retention: bool,
+    /// Exact run-header facts expected before any causal mutation. Physical
+    /// secret bytes are absent; only provider coordinates and versions live
+    /// here.
+    expected_deployment: Option<crate::deployment::DeploymentAttestation>,
     /// Plan-derived owner chains, indexed once so route selection allocates
     /// only the dynamic reference chain it must commit.
     owner_chains: Vec<Option<Vec<OwnerSlot>>>,
@@ -962,16 +988,125 @@ fn first_annotation_location(
     None
 }
 
-fn first_unsupported_data_policy_location(plan: &ValidatedExecutionPlan) -> Option<String> {
+fn first_unsupported_data_policy_location(
+    plan: &ValidatedExecutionPlan,
+    boot: Option<&crate::deployment::BootBindings>,
+) -> Option<String> {
     first_annotation_location(plan, crate::data_policy::contains_secret)
         .map(|location| format!("secret-classified {location}"))
         .or_else(|| {
-            first_annotation_location(plan, crate::data_policy::contains_personal)
-                .map(|location| format!("personal-data {location}"))
+            let location = first_annotation_location(plan, crate::data_policy::contains_personal)?;
+            let requirements = personal_data_requirements(plan);
+            (!boot
+                .and_then(crate::deployment::BootBindings::privacy)
+                .is_some_and(|profile| profile.covers(requirements)))
+            .then(|| format!("personal-data {location}"))
         })
 }
 
+fn personal_data_requirements(
+    plan: &ValidatedExecutionPlan,
+) -> crate::deployment::PrivacyRequirements {
+    let mut requirements = crate::deployment::PrivacyRequirements::default();
+    let mut inspect = |table: &crate::schema_annotation::AnnotationTable| {
+        for set in table.entries().values() {
+            for annotation in set.annotations() {
+                if let crate::schema_annotation::DataAnnotation::Personal(class) = annotation {
+                    requirements.personal = true;
+                    requirements.special_category |= class.is_special_category();
+                    requirements.criminal_offence |= class.is_criminal_offence();
+                }
+            }
+        }
+    };
+    for port in plan.resolved_ports().boundary() {
+        inspect(port.annotations());
+    }
+    for (index, planned) in plan.nodes.iter().enumerate() {
+        let slot = Slot::new(u32::try_from(index).unwrap_or(u32::MAX));
+        if let Some(ports) = plan.resolved_ports().node(slot) {
+            for port in ports {
+                inspect(port.annotations());
+                if planned.connector().is_some()
+                    && port.direction() == node::Direction::Input
+                    && crate::data_policy::contains_personal(port.annotations())
+                {
+                    requirements.external_disclosure = true;
+                }
+            }
+        }
+        for var in &planned.vars {
+            inspect(&var.annotations);
+        }
+    }
+    for owner in &plan.owners {
+        for port in &owner.ports {
+            inspect(&port.annotations);
+        }
+        for value in &owner.vals {
+            inspect(&value.annotations);
+        }
+    }
+    for handler in &plan.handlers {
+        for step in &handler.body {
+            if let crate::plan::Step::Let { annotations, .. } = step {
+                inspect(annotations);
+            }
+        }
+    }
+    requirements
+}
+
+fn first_missing_deployment_binding(
+    plan: &ValidatedExecutionPlan,
+    boot: Option<&crate::deployment::BootBindings>,
+) -> Option<String> {
+    for planned in &plan.plan().nodes {
+        let Some(spec) = planned.connector() else {
+            continue;
+        };
+        for (name, setting) in &spec.attributes {
+            let crate::plan::AttrSetting::Expr { expr, .. } = setting else {
+                continue;
+            };
+            let Ok(Some(reference)) = crate::expr::boot_reference(&expr.root) else {
+                continue;
+            };
+            let resolved = match (&reference, boot) {
+                (crate::deployment::BootReference::Environment(environment), Some(boot)) => boot
+                    .environment(environment)
+                    .is_some_and(|value| expr.ty.violation(name, value).is_none()),
+                (crate::deployment::BootReference::Secret(_), Some(boot)) => {
+                    boot.resolves(&reference)
+                }
+                (_, None) => false,
+            };
+            if !resolved {
+                return Some(format!("`{}.{name}`", planned.path));
+            }
+        }
+    }
+    None
+}
+
 impl<'plan> Vm<'plan> {
+    fn preflight(&self, journal: &dyn Journal) -> Result<(), VmError> {
+        if let Some(error) = self.unsupported_feature() {
+            return Err(error);
+        }
+        if self.requires_personal_retention
+            && journal.privacy_retention() != Some(crate::deployment::PrivacyRetention::RunScoped)
+        {
+            return Err(VmError::UnsupportedDataPolicy {
+                location: String::from("personal-data journal retention capability"),
+            });
+        }
+        if journal.deployment_attestation() != self.expected_deployment.as_ref() {
+            return Err(VmError::DeploymentAttestationMismatch);
+        }
+        Ok(())
+    }
+
     fn loop_port(owner: &OwnerPath, name: &'static str) -> Result<node::Port, VmError> {
         node::Port::new(name).map_err(|_| VmError::InvalidLoopDecision {
             owner: owner.clone(),
@@ -1035,6 +1170,11 @@ impl<'plan> Vm<'plan> {
     }
 
     fn unsupported_feature(&self) -> Option<VmError> {
+        if let Some(location) = &self.missing_deployment_binding {
+            return Some(VmError::MissingDeploymentBinding {
+                location: location.clone(),
+            });
+        }
         if let Some(location) = &self.unsupported_data_policy {
             return Some(VmError::UnsupportedDataPolicy {
                 location: location.clone(),
@@ -1086,6 +1226,19 @@ impl<'plan> Vm<'plan> {
         Self::boot_at(plan, graph_version, 0)
     }
 
+    /// Boots with already resolved deployment inputs. Personal-data policy is
+    /// admitted only when the supplied privacy profile covers every legal
+    /// regime carried by the plan; raw secret-classified payloads remain
+    /// fail-closed because A4 resolves only reference-origin secrets.
+    #[must_use]
+    pub fn boot_with_deployment(
+        plan: &'plan ValidatedExecutionPlan,
+        graph_version: GraphVersion,
+        boot: &crate::deployment::BootBindings,
+    ) -> Self {
+        Self::boot_at_with_deployment(plan, graph_version, 0, boot)
+    }
+
     /// Boots at an explicit logical instant, in nanoseconds since the Unix
     /// epoch. Hosted code maps its monotonic time source here; Lab and bare
     /// metal may keep the deterministic epoch default or supply another
@@ -1095,6 +1248,26 @@ impl<'plan> Vm<'plan> {
         plan: &'plan ValidatedExecutionPlan,
         graph_version: GraphVersion,
         logical_time: i64,
+    ) -> Self {
+        Self::boot_at_inner(plan, graph_version, logical_time, None)
+    }
+
+    /// Boots at an explicit logical instant with fixed deployment inputs.
+    #[must_use]
+    pub fn boot_at_with_deployment(
+        plan: &'plan ValidatedExecutionPlan,
+        graph_version: GraphVersion,
+        logical_time: i64,
+        boot: &crate::deployment::BootBindings,
+    ) -> Self {
+        Self::boot_at_inner(plan, graph_version, logical_time, Some(boot))
+    }
+
+    fn boot_at_inner(
+        plan: &'plan ValidatedExecutionPlan,
+        graph_version: GraphVersion,
+        logical_time: i64,
+        boot: Option<&crate::deployment::BootBindings>,
     ) -> Self {
         let mut owner_chains: Vec<Option<Vec<OwnerSlot>>> = Vec::with_capacity(plan.owners.len());
         for (index, owner) in plan.owners.iter().enumerate() {
@@ -1110,7 +1283,10 @@ impl<'plan> Vm<'plan> {
         }
         Self {
             plan,
-            unsupported_data_policy: first_unsupported_data_policy_location(plan),
+            unsupported_data_policy: first_unsupported_data_policy_location(plan, boot),
+            missing_deployment_binding: first_missing_deployment_binding(plan, boot),
+            requires_personal_retention: personal_data_requirements(plan).personal,
+            expected_deployment: boot.map(|boot| boot.attestation().clone()),
             owner_chains,
             has_join_activations: plan
                 .handlers
@@ -1159,9 +1335,7 @@ impl<'plan> Vm<'plan> {
     /// an address which cannot be re-derived from its recorded state, or a
     /// recovery batch larger than the bounded Worker queue.
     pub fn recover_loop_runs(&mut self, journal: &dyn Journal) -> Result<(), VmError> {
-        if let Some(error) = self.unsupported_feature() {
-            return Err(error);
-        }
+        self.preflight(journal)?;
         let runs = journal.open_loop_runs().map_err(VmError::Journal)?;
         let mut live_runs = Vec::with_capacity(runs.len());
         for (run, state) in runs {
@@ -1499,9 +1673,7 @@ impl<'plan> Vm<'plan> {
         session: Option<InboundSession>,
         connector_path: Option<node::Path>,
     ) -> Result<InboundAcceptance, VmError> {
-        if let Some(error) = self.unsupported_feature() {
-            return Err(error);
-        }
+        self.preflight(journal)?;
         let session_admission = session;
         // Boundary injection and Connector-origin roots are distinct causal
         // sources. The caller chooses the category; the validated plan proves
@@ -1962,9 +2134,7 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         bindings: &mut B,
     ) -> Result<bool, VmError> {
-        if let Some(error) = self.unsupported_feature() {
-            return Err(error);
-        }
+        self.preflight(journal)?;
         self.progress_closures();
         if !self.lifecycle.is_empty() {
             self.fire_lifecycle_next(journal)?;
@@ -2170,9 +2340,7 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         bindings: &mut B,
     ) -> Result<PumpReport, VmError> {
-        if let Some(error) = self.unsupported_feature() {
-            return Err(error);
-        }
+        self.preflight(journal)?;
         let mut report = core::mem::take(&mut self.buffered_pump);
         report.append(self.poll_outbound_driver(journal, bindings)?);
         Ok(report)
@@ -6413,7 +6581,9 @@ impl<'plan> Vm<'plan> {
                 continue;
             };
             let selected = match target_site {
-                EvaluationSite::Instance => *site != EvaluationSite::Invocation,
+                // Boot settings are consumed once by the bound Driver. They
+                // never become per-instance Values inside the semantic VM.
+                EvaluationSite::Instance => *site == EvaluationSite::Instance,
                 EvaluationSite::Invocation => *site == EvaluationSite::Invocation,
                 EvaluationSite::Plan | EvaluationSite::Boot => false,
             };

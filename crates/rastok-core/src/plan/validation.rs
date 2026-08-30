@@ -2196,6 +2196,17 @@ fn expression_site(
     match expression {
         expr::Expr::Literal(_) | expr::Expr::Asset(_) => Ok(EvaluationSite::Plan),
         expr::Expr::Path(segments) => {
+            match expr::boot_reference(expression) {
+                Ok(Some(_)) => return Ok(EvaluationSite::Boot),
+                Err(_) => {
+                    return Err(PlanValidationError::InvalidBinding {
+                        owner: owner_name,
+                        name: String::new(),
+                        path: segments.join("."),
+                    });
+                }
+                Ok(None) => {}
+            }
             let Some(root) = segments.first() else {
                 return Err(PlanValidationError::UnrepresentableConstant);
             };
@@ -3137,6 +3148,34 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                                 owner: node.path.to_string(),
                                 name: name.clone(),
                             });
+                        }
+                        match expr::boot_reference(&expr.root) {
+                            Ok(Some(reference)) => {
+                                let admitted = crate::boundary::connector_boot_reference_policy(
+                                    &spec.contract,
+                                    name,
+                                )
+                                .is_some_and(|policy| policy.admits(&reference));
+                                if *site != EvaluationSite::Boot || !admitted {
+                                    return Err(PlanValidationError::BindingSiteMismatch {
+                                        owner: node.path.to_string(),
+                                        name: name.clone(),
+                                    });
+                                }
+                            }
+                            Ok(None) if *site == EvaluationSite::Boot => {
+                                return Err(PlanValidationError::BindingSiteMismatch {
+                                    owner: node.path.to_string(),
+                                    name: name.clone(),
+                                });
+                            }
+                            Err(_) => {
+                                return Err(PlanValidationError::BindingSiteMismatch {
+                                    owner: node.path.to_string(),
+                                    name: name.clone(),
+                                });
+                            }
+                            Ok(None) => {}
                         }
                         expr_canonical(&expr.root)?;
                         asset_indexes_bound(plan, &expr.root)?;

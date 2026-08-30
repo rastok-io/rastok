@@ -3,7 +3,7 @@ use crate::boundary::{
     OutboundConnectorDriver, RequestPreparation, Response, SchedulerCompletion,
 };
 use crate::connectors::http_client::{
-    HttpClientPlanBinding, HttpClientRequestBindings, HttpRequest, decode_request,
+    HttpBearer, HttpClientPlanBinding, HttpClientRequestBindings, HttpRequest, decode_request,
 };
 use crate::connectors::http_shared::{HttpVersion, decode_body};
 use crate::connectors::network::pump::{
@@ -154,6 +154,22 @@ impl crate::connectors::ConnectorDriverFactory for HttpClientFactory {
             })
             .map_err(crate::connectors::DriverFactoryError::new)
     }
+
+    fn bind_with_boot<'plan>(
+        &self,
+        plan: &'plan crate::plan::ValidatedExecutionPlan,
+        nodes: &[crate::node::Path],
+        boot: &crate::deployment::BootBindings,
+    ) -> Result<
+        Box<dyn crate::connectors::BoundConnectorDriver + 'plan>,
+        crate::connectors::DriverFactoryError,
+    > {
+        HttpClient::try_bind_with_boot(plan, nodes, self.config, boot)
+            .map(|driver| {
+                Box::new(driver) as Box<dyn crate::connectors::BoundConnectorDriver + 'plan>
+            })
+            .map_err(crate::connectors::DriverFactoryError::new)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -256,6 +272,7 @@ type H2Pool = std::sync::Arc<tokio::sync::Mutex<BTreeMap<String, H2Sender>>>;
 struct HttpClient<'plan> {
     _plan: &'plan crate::plan::ValidatedExecutionPlan,
     bindings: HttpClientRequestBindings,
+    boot_secrets: BTreeMap<crate::deployment::SecretRef, crate::deployment::SecretMaterial>,
     plans: BTreeMap<crate::node::Path, HttpClientPlanBinding>,
     config: HttpClientConfig,
     engine: HostedNetworkEngine<ClientWork, ClientControl, ClientEvent>,
@@ -279,8 +296,29 @@ impl<'plan> HttpClient<'plan> {
         nodes: &[crate::node::Path],
         config: HttpClientConfig,
     ) -> Result<Self, String> {
-        let bindings =
-            HttpClientRequestBindings::try_bind(plan, nodes).map_err(|error| error.to_string())?;
+        Self::try_bind_with_boot(
+            plan,
+            nodes,
+            config,
+            &crate::deployment::BootBindings::empty(),
+        )
+    }
+
+    fn try_bind_with_boot(
+        plan: &'plan crate::plan::ValidatedExecutionPlan,
+        nodes: &[crate::node::Path],
+        config: HttpClientConfig,
+        boot: &crate::deployment::BootBindings,
+    ) -> Result<Self, String> {
+        let bindings = HttpClientRequestBindings::try_bind_with_boot(plan, nodes, boot)
+            .map_err(|error| error.to_string())?;
+        let mut boot_secrets = BTreeMap::new();
+        for reference in bindings.secret_references() {
+            let material = boot.secret(reference).ok_or_else(|| {
+                format!("secret `{}` disappeared during binding", reference.as_str())
+            })?;
+            boot_secrets.insert(reference.clone(), material.clone());
+        }
         let expected: BTreeSet<_> = nodes.iter().cloned().collect();
         let actual: BTreeSet<_> = bindings.specs.keys().cloned().collect();
         if expected != actual {
@@ -372,6 +410,7 @@ impl<'plan> HttpClient<'plan> {
         Ok(Self {
             _plan: plan,
             bindings,
+            boot_secrets,
             plans,
             config,
             engine,
@@ -387,7 +426,7 @@ impl<'plan> HttpClient<'plan> {
         name: &str,
     ) -> Option<Value> {
         let spec = self.bindings.specs.get(connector)?;
-        HttpClientRequestBindings::value(spec, resolved, name)
+        self.bindings.value(connector, spec, resolved, name)
     }
 
     fn tls_material(
@@ -417,6 +456,20 @@ impl<'plan> HttpClient<'plan> {
             completion: Completion::http_client_exit(exit),
         });
     }
+
+    fn resolve_bearer(&self, request: &mut HttpRequest) -> bool {
+        let Some(HttpBearer::Secret(reference)) = request.auth_bearer.as_ref() else {
+            return true;
+        };
+        let Some(material) = self.boot_secrets.get(reference) else {
+            return false;
+        };
+        let Ok(token) = core::str::from_utf8(material.expose_to_driver()) else {
+            return false;
+        };
+        request.auth_bearer = Some(HttpBearer::Inline(token.to_string()));
+        true
+    }
 }
 
 impl CallConnectorDriver for HttpClient<'_> {
@@ -433,6 +486,12 @@ impl CallConnectorDriver for HttpClient<'_> {
                         HttpClientExit::ProtocolFailed,
                     ));
                 };
+                let mut physical_request = request.clone();
+                if !self.resolve_bearer(&mut physical_request) {
+                    return RequestPreparation::Rejected(Completion::http_client_exit(
+                        HttpClientExit::ProtocolFailed,
+                    ));
+                }
                 let Some(binding) = self.plans.get(connector) else {
                     return RequestPreparation::Rejected(Completion::http_client_exit(
                         HttpClientExit::ProtocolFailed,
@@ -445,7 +504,7 @@ impl CallConnectorDriver for HttpClient<'_> {
                         },
                     ));
                 }
-                if request_head_bytes(&request)
+                if request_head_bytes(&physical_request)
                     .is_none_or(|bytes| bytes > self.config.max_header_bytes)
                 {
                     return RequestPreparation::Rejected(Completion::http_client_exit(
@@ -482,10 +541,14 @@ impl CallConnectorDriver for HttpClient<'_> {
     }
 
     fn start(&mut self, intent: &Intent, _request: &Envelope) -> CallStart {
-        let Some(request) = decode_request(&intent.prepared) else {
+        let Some(mut request) = decode_request(&intent.prepared) else {
             self.immediate(intent.call_ref, HttpClientExit::ProtocolFailed);
             return CallStart::Started;
         };
+        if !self.resolve_bearer(&mut request) {
+            self.immediate(intent.call_ref, HttpClientExit::ProtocolFailed);
+            return CallStart::Started;
+        }
         let Some(binding) = self.plans.get(&intent.connector_path).cloned() else {
             self.immediate(intent.call_ref, HttpClientExit::ProtocolFailed);
             return CallStart::Started;
@@ -704,6 +767,11 @@ fn request_headers(request: &HttpRequest) -> Result<http::HeaderMap, AttemptFail
                 HttpClientExit::ProtocolFailed,
             ));
         }
+        let HttpBearer::Inline(token) = token else {
+            return Err(AttemptFailure::before_request(
+                HttpClientExit::ProtocolFailed,
+            ));
+        };
         let value = http::HeaderValue::from_str(&format!("Bearer {token}"))
             .map_err(|_| AttemptFailure::before_request(HttpClientExit::ProtocolFailed))?;
         headers.insert(http::header::AUTHORIZATION, value);
@@ -1648,7 +1716,7 @@ mod tests {
             String::from("x-repeat"),
             vec![b"one".to_vec(), b"two".to_vec()],
         );
-        request.auth_bearer = Some(String::from("token"));
+        request.auth_bearer = Some(HttpBearer::Inline(String::from("token")));
         request.idempotency_key = Some(String::from("stable"));
         let bytes = request_head_bytes(&request).expect("the canonical request head is valid");
         assert!(bytes > request.method.len() + request.url.len());

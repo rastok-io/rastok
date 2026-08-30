@@ -336,6 +336,15 @@ Notes the numbers carry:
   rises by 517 ticks to 17 838. Relay layout jitter improves slightly to
   2 713 average / 2 965 maximum, heap falls by 176 B to 126.9 KiB, and
   `SPIKE_OK` prints the unchanged `e50026ee…` witness.
+- M1.8 A4 adds typed deployment bindings, immutable environment/secret/privacy
+  attestations and the fail-closed personal-data admission gate. Echo has no
+  deployment reference or personal-data policy, so its 988-byte v15 body,
+  `e50026ee…` semantic hash, 67-record trace and hot-path average remain
+  unchanged. The 2026-08-30 rerun measures decode at 17 844 ticks, relay at
+  2 713 average / 2 622 minimum / 2 966 maximum, heap at 129 972 B, and linked
+  `.text + .rodata` at 729 116 B (712.0 KiB). `SPIKE_OK` keeps the same witness;
+  the relay maximum remains about 148.3 k calibrated instructions below the
+  150 k criterion.
 - Flash grew from 193 KiB to 516.4 KiB (`.text` 481 404 B +
   `.rodata` 47 356 B, re-measured after C1 on 2026-08-22): the consolidated
   reform's decoders, the jsonl codec's canonical writer and now the
@@ -392,13 +401,13 @@ llvm-objdump -d target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350 \
 ## Verdict
 
 **GO (provisional), re-issued 2026-08-07 on the corrected
-instrumentation and last re-measured 2026-08-30 at the M1.8 A3 closure.**
+instrumentation and last re-measured 2026-08-30 at the M1.8 A4 closure.**
 These measurements price complete hierarchical routing, causal instance
 references, the executable lifetime machine, bounded Closing, joins, and the
 R7 closure-only keyed drain. All four
 criteria of record hold: no patched dependencies, 148.3 k instructions for
-the slowest measured relay transaction against the 150 k bound (1.012×), a
-126.9 KiB true high-water mark against 128 KiB, and 706.7 KiB of flash against
+the slowest measured relay transaction against the 150 k bound (1.011×), a
+126.9 KiB true high-water mark against 128 KiB, and 712.0 KiB of flash against
 1 MiB. The
 margins are thinner than first
 claimed and are reported as measured. The option stays dormant as

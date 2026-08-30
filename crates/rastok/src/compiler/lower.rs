@@ -2552,7 +2552,7 @@ graph app : App {
         let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
         let error = vm
             .step(&mut journal)
-            .expect_err("A4 privacy attestation has not landed yet");
+            .expect_err("personal data requires an A4 privacy attestation");
         assert!(matches!(
             error,
             crate::runtime::vm::VmError::UnsupportedDataPolicy { .. }
@@ -2566,6 +2566,249 @@ graph app : App {
             journal.records().is_empty(),
             "the refusal precedes mutation"
         );
+
+        struct NoSecrets;
+        impl crate::deployment::SecretProvider for NoSecrets {
+            fn resolve(
+                &self,
+                binding: &crate::deployment::SecretBinding,
+            ) -> Result<crate::deployment::SecretMaterial, crate::deployment::SecretProviderError>
+            {
+                Err(crate::deployment::SecretProviderError::NotFound(
+                    binding.reference().clone(),
+                ))
+            }
+        }
+        let policy = |value| {
+            crate::deployment::PolicyRef::new(value)
+                .unwrap_or_else(|error| panic!("policy ref: {error}"))
+        };
+        let privacy = crate::deployment::PrivacyProfile::new(
+            crate::deployment::PrivacyProfileRef::new("privacy/support@1")
+                .expect("stable privacy profile"),
+            policy("ropa/support"),
+            vec![policy("purpose/support")],
+            vec![policy("basis/contract")],
+            None,
+            None,
+            crate::deployment::RecipientPolicy::None,
+            crate::deployment::TransferPolicy::None,
+            crate::deployment::PrivacyRetention::RunScoped,
+        )
+        .expect("complete ordinary-personal-data profile");
+        let profile = crate::deployment::DeploymentProfile::new(
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            Some(privacy),
+        )
+        .expect("deployment profile");
+        let boot = crate::deployment::BootBindings::resolve(profile, &NoSecrets)
+            .expect("a profile without secrets resolves");
+
+        let mut attested =
+            crate::runtime::vm::Vm::boot_with_deployment(&compilation.plan, GraphVersion(1), &boot);
+        let mut attested_journal = crate::journal::MemJournal::new_with_deployment(
+            GraphVersion(1),
+            boot.attestation().clone(),
+        );
+        assert_eq!(
+            crate::journal::Journal::privacy_retention(&attested_journal),
+            Some(crate::deployment::PrivacyRetention::RunScoped)
+        );
+        let submission = crate::boundary::InboundSubmission {
+            provenance: crate::boundary::InboundEnvelopeProvenance::single(
+                node::Path::new(["test"]).expect("valid provenance path"),
+            ),
+            port: node::Port::new("in").expect("valid port"),
+            draft: crate::boundary::Draft {
+                data: crate::envelope::Data::materialized(crate::value::Value::Text(String::from(
+                    "subject-42",
+                ))),
+                ext: crate::envelope::Namespace::new(),
+            },
+            sequence: crate::boundary::SubmissionSequence::Next,
+        };
+        attested
+            .inject(&mut attested_journal, submission)
+            .expect("the attested run-scoped journal admits personal data");
+        assert_eq!(attested_journal.records().len(), 1);
+
+        let mut mismatched =
+            crate::runtime::vm::Vm::boot_with_deployment(&compilation.plan, GraphVersion(1), &boot);
+        let mut unattested_journal = crate::journal::MemJournal::new(GraphVersion(1));
+        let error = mismatched
+            .step(&mut unattested_journal)
+            .expect_err("the run header is an execution precondition");
+        assert_eq!(
+            error,
+            crate::runtime::vm::VmError::DeploymentAttestationMismatch
+        );
+        assert!(unattested_journal.records().is_empty());
+
+        let regulated = compile(
+            &["graph app : App { input in: text @personal(special = true, criminal = true) }\n"],
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("Article 9 and 10 flags compile together");
+        let mut missing_conditions =
+            crate::runtime::vm::Vm::boot_with_deployment(&regulated.plan, GraphVersion(1), &boot);
+        let mut missing_conditions_journal = crate::journal::MemJournal::new_with_deployment(
+            GraphVersion(1),
+            boot.attestation().clone(),
+        );
+        assert!(matches!(
+            missing_conditions.step(&mut missing_conditions_journal),
+            Err(crate::runtime::vm::VmError::UnsupportedDataPolicy { .. })
+        ));
+        assert!(missing_conditions_journal.records().is_empty());
+
+        let regulated_privacy = crate::deployment::PrivacyProfile::new(
+            crate::deployment::PrivacyProfileRef::new("privacy/regulated@1")
+                .expect("stable privacy profile"),
+            policy("ropa/regulated"),
+            vec![policy("purpose/regulated-support")],
+            vec![policy("basis/legal-obligation")],
+            Some(policy("article9/substantial-public-interest")),
+            Some(policy("article10/official-authority")),
+            crate::deployment::RecipientPolicy::None,
+            crate::deployment::TransferPolicy::None,
+            crate::deployment::PrivacyRetention::RunScoped,
+        )
+        .expect("both regulated regimes are attested");
+        let regulated_profile = crate::deployment::DeploymentProfile::new(
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            Some(regulated_privacy),
+        )
+        .expect("regulated deployment profile");
+        let regulated_boot =
+            crate::deployment::BootBindings::resolve(regulated_profile, &NoSecrets)
+                .expect("a profile without secrets resolves");
+        let mut admitted = crate::runtime::vm::Vm::boot_with_deployment(
+            &regulated.plan,
+            GraphVersion(1),
+            &regulated_boot,
+        );
+        let mut admitted_journal = crate::journal::MemJournal::new_with_deployment(
+            GraphVersion(1),
+            regulated_boot.attestation().clone(),
+        );
+        assert_eq!(admitted.step(&mut admitted_journal), Ok(false));
+        assert!(admitted_journal.records().is_empty());
+
+        let disclosed = compile(
+            &[r#"
+graph app : App {
+  input in: text @personal
+  connector model : HttpClient {
+    url = "https://example.test"
+    method = "POST"
+    timeout = duration("1s")
+    codec = text
+    effect = idempotent
+    behavior = deterministic
+  }
+  . -> model -> .
+}
+"#],
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("a personal-data disclosure compiles into policy");
+        let mut undeclared_recipient =
+            crate::runtime::vm::Vm::boot_with_deployment(&disclosed.plan, GraphVersion(1), &boot);
+        let mut undeclared_recipient_journal = crate::journal::MemJournal::new_with_deployment(
+            GraphVersion(1),
+            boot.attestation().clone(),
+        );
+        assert!(matches!(
+            undeclared_recipient.step(&mut undeclared_recipient_journal),
+            Err(crate::runtime::vm::VmError::UnsupportedDataPolicy { .. })
+        ));
+
+        let recipient_privacy = crate::deployment::PrivacyProfile::new(
+            crate::deployment::PrivacyProfileRef::new("privacy/disclosure@1")
+                .expect("stable privacy profile"),
+            policy("ropa/disclosure"),
+            vec![policy("purpose/model-service")],
+            vec![policy("basis/contract")],
+            None,
+            None,
+            crate::deployment::RecipientPolicy::Classes(vec![policy("recipient/model-provider")]),
+            crate::deployment::TransferPolicy::None,
+            crate::deployment::PrivacyRetention::RunScoped,
+        )
+        .expect("the external recipient is explicit");
+        let recipient_boot = crate::deployment::BootBindings::resolve(
+            crate::deployment::DeploymentProfile::new(
+                std::collections::BTreeMap::new(),
+                std::collections::BTreeMap::new(),
+                Some(recipient_privacy),
+            )
+            .expect("recipient deployment profile"),
+            &NoSecrets,
+        )
+        .expect("a profile without secrets resolves");
+        let mut disclosed_vm = crate::runtime::vm::Vm::boot_with_deployment(
+            &disclosed.plan,
+            GraphVersion(1),
+            &recipient_boot,
+        );
+        let mut disclosed_journal = crate::journal::MemJournal::new_with_deployment(
+            GraphVersion(1),
+            recipient_boot.attestation().clone(),
+        );
+        assert_eq!(disclosed_vm.step(&mut disclosed_journal), Ok(false));
+    }
+
+    #[test]
+    fn boot_references_cross_v15_without_sealing_physical_values() {
+        let source = r#"
+graph app : App {
+  connector client : HttpClient {
+    url = env("SERVICE_URL")
+    auth_bearer = secret("providers/openai/token")
+    method = "POST"
+    timeout = duration("2s")
+    codec = json
+    effect = idempotent
+    behavior = deterministic
+  }
+}
+"#;
+        let compilation = compile(
+            &[source],
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("declared boot references compile");
+        let spec = compilation.plan.plan().nodes[0]
+            .connector()
+            .expect("HttpClient connector");
+        for name in ["auth_bearer", "url"] {
+            assert!(matches!(
+                spec.attribute(name),
+                Some(AttrSetting::Expr {
+                    site: crate::plan::EvaluationSite::Boot,
+                    expr,
+                }) if crate::expr::boot_reference(&expr.root)
+                    .expect("canonical boot path")
+                    .is_some()
+            ));
+        }
+        let bytes = crate::plan::encode(&compilation.plan, &compilation.hash);
+        let (decoded, hash) = crate::plan::decode(&bytes).expect("v15 reads boot references");
+        assert_eq!(hash, compilation.hash);
+        assert_eq!(decoded, compilation.plan);
+        let rendered = format!("{decoded:?}");
+        assert!(rendered.contains("providers/openai/token"));
+        assert!(!rendered.contains("physical-secret"));
+
+        let mut unbound = crate::runtime::vm::Vm::boot(&decoded, GraphVersion(1));
+        let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
+        assert!(matches!(
+            unbound.step(&mut journal),
+            Err(crate::runtime::vm::VmError::MissingDeploymentBinding { .. })
+        ));
+        assert!(journal.records().is_empty());
     }
 
     #[test]
