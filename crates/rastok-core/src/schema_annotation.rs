@@ -15,6 +15,30 @@ use crate::datatype::{DataType, StructType};
 /// Maximum UTF-8 byte length of one registered semantic-measure name.
 pub const MAX_MEASURE_ID_BYTES: usize = 255;
 
+/// SHA-256 of the ISO 4217 Maintenance Agency's current List One snapshot
+/// consumed for M1.8 A1 on 2026-08-30.
+pub const ISO_4217_LIST_ONE_SHA256: &str =
+    "838dfb991648cf36df939edd5fe3811737962b75a32252847d239cedd1e291c9";
+
+// Sorted alphabetic codes from that snapshot. Registry updates are semantic
+// migrations; they never happen merely because a host library changed.
+const ISO_4217_CODES: &[&str] = &[
+    "AED", "AFN", "ALL", "AMD", "AOA", "ARS", "AUD", "AWG", "AZN", "BAM", "BBD", "BDT", "BHD",
+    "BIF", "BMD", "BND", "BOB", "BOV", "BRL", "BSD", "BTN", "BWP", "BYN", "BZD", "CAD", "CDF",
+    "CHE", "CHF", "CHW", "CLF", "CLP", "CNY", "COP", "COU", "CRC", "CUP", "CVE", "CZK", "DJF",
+    "DKK", "DOP", "DZD", "EGP", "ERN", "ETB", "EUR", "FJD", "FKP", "GBP", "GEL", "GHS", "GIP",
+    "GMD", "GNF", "GTQ", "GYD", "HKD", "HNL", "HTG", "HUF", "IDR", "ILS", "INR", "IQD", "IRR",
+    "ISK", "JMD", "JOD", "JPY", "KES", "KGS", "KHR", "KMF", "KPW", "KRW", "KWD", "KYD", "KZT",
+    "LAK", "LBP", "LKR", "LRD", "LSL", "LYD", "MAD", "MDL", "MGA", "MKD", "MMK", "MNT", "MOP",
+    "MRU", "MUR", "MVR", "MWK", "MXN", "MXV", "MYR", "MZN", "NAD", "NGN", "NIO", "NOK", "NPR",
+    "NZD", "OMR", "PAB", "PEN", "PGK", "PHP", "PKR", "PLN", "PYG", "QAR", "RON", "RSD", "RUB",
+    "RWF", "SAR", "SBD", "SCR", "SDG", "SEK", "SGD", "SHP", "SLE", "SOS", "SRD", "SSP", "STN",
+    "SVC", "SYP", "SZL", "THB", "TJS", "TMT", "TND", "TOP", "TRY", "TTD", "TWD", "TZS", "UAH",
+    "UGX", "USD", "USN", "UYI", "UYU", "UYW", "UZS", "VED", "VES", "VND", "VUV", "WST", "XAD",
+    "XAF", "XAG", "XAU", "XBA", "XBB", "XBC", "XBD", "XCD", "XCG", "XDR", "XOF", "XPD", "XPF",
+    "XPT", "XSU", "XTS", "XUA", "XXX", "YER", "ZAR", "ZMW", "ZWG",
+];
+
 /// One typed step through a resolved schema.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SchemaPathSegment {
@@ -56,6 +80,14 @@ impl SchemaPath {
     #[must_use]
     pub fn segments(&self) -> &[SchemaPathSegment] {
         &self.0
+    }
+
+    /// Returns one child target below this path.
+    #[must_use]
+    pub fn child(&self, segment: SchemaPathSegment) -> Self {
+        let mut segments = self.0.clone();
+        segments.push(segment);
+        Self(segments)
     }
 }
 
@@ -132,6 +164,13 @@ impl CurrencyCode {
     }
 }
 
+/// Whether a canonical spelling belongs to the pinned current ISO 4217
+/// currency-and-funds registry.
+#[must_use]
+pub fn is_iso_4217_currency(code: &CurrencyCode) -> bool {
+    ISO_4217_CODES.binary_search(&code.as_str()).is_ok()
+}
+
 /// Stable semantic-measure identifier.
 ///
 /// OpenTelemetry names are stored verbatim when a matching convention exists;
@@ -169,6 +208,75 @@ impl MeasureId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+}
+
+/// Where a registered semantic measure originates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MeasureSource {
+    /// A typed field supplied by a provider or codec. These entries may be
+    /// selected by source `@measure` annotations.
+    Field,
+    /// A runtime instrument produced by Rastok itself. Source fields cannot
+    /// impersonate instruments merely by reusing their names.
+    Instrument,
+}
+
+/// Logical carrier required by one registered measure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MeasureCarrier {
+    /// Exact integral count or byte quantity.
+    Integer,
+    /// Exact elapsed duration.
+    Duration,
+}
+
+/// One entry of the pinned M1.8 semantic-measure registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MeasureSpec {
+    source: MeasureSource,
+    carrier: MeasureCarrier,
+}
+
+impl MeasureSpec {
+    /// Whether the value comes from a typed field or a runtime instrument.
+    #[must_use]
+    pub const fn source(self) -> MeasureSource {
+        self.source
+    }
+
+    /// Logical value family required by the convention.
+    #[must_use]
+    pub const fn carrier(self) -> MeasureCarrier {
+        self.carrier
+    }
+}
+
+/// Looks up the pinned OpenTelemetry-first M1.8 registry.
+///
+/// The names and meanings are the snapshot recorded by D-2026-08-30-1.
+/// Unknown canonical dotted names remain invalid rather than becoming
+/// user-defined metrics by accident.
+#[must_use]
+pub fn measure_spec(id: &MeasureId) -> Option<MeasureSpec> {
+    let (source, carrier) = match id.as_str() {
+        "gen_ai.usage.input_tokens"
+        | "gen_ai.usage.output_tokens"
+        | "gen_ai.usage.cache_read.input_tokens"
+        | "gen_ai.usage.cache_creation.input_tokens"
+        | "gen_ai.usage.reasoning.output_tokens" => (MeasureSource::Field, MeasureCarrier::Integer),
+        "gen_ai.client.token.usage"
+        | "http.client.request.body.size"
+        | "http.client.response.body.size"
+        | "http.server.request.body.size"
+        | "http.server.response.body.size" => (MeasureSource::Instrument, MeasureCarrier::Integer),
+        "gen_ai.client.operation.duration"
+        | "gen_ai.client.operation.time_to_first_chunk"
+        | "gen_ai.client.operation.time_per_output_chunk"
+        | "http.client.request.duration"
+        | "http.server.request.duration" => (MeasureSource::Instrument, MeasureCarrier::Duration),
+        _ => return None,
+    };
+    Some(MeasureSpec { source, carrier })
 }
 
 /// Exact monetary-field interpretation.
@@ -225,7 +333,9 @@ pub enum DataAnnotation {
 }
 
 impl DataAnnotation {
-    const fn kind(&self) -> AnnotationKind {
+    /// Identity of this annotation within the closed family.
+    #[must_use]
+    pub const fn kind(&self) -> AnnotationKind {
         match self {
             Self::Sensitive(_) => AnnotationKind::Sensitive,
             Self::Secret => AnnotationKind::Secret,
@@ -581,6 +691,44 @@ mod tests {
             "EUR"
         );
         assert!(CurrencyCode::new("eur").is_err());
+    }
+
+    #[test]
+    fn currency_membership_is_pinned_separately_from_lexical_spelling() {
+        let usd = CurrencyCode::new("USD")
+            .unwrap_or_else(|error| panic!("canonical currency spelling: {error}"));
+        let unknown = CurrencyCode::new("ZZZ")
+            .unwrap_or_else(|error| panic!("canonical but unknown spelling: {error}"));
+        let withdrawn = CurrencyCode::new("BGN")
+            .unwrap_or_else(|error| panic!("canonical but withdrawn spelling: {error}"));
+        assert!(is_iso_4217_currency(&usd));
+        assert!(!is_iso_4217_currency(&unknown));
+        assert!(!is_iso_4217_currency(&withdrawn));
+    }
+
+    #[test]
+    fn measure_registry_distinguishes_fields_from_runtime_instruments() {
+        let field = MeasureId::new("gen_ai.usage.input_tokens")
+            .unwrap_or_else(|error| panic!("valid field measure: {error}"));
+        let instrument = MeasureId::new("http.client.request.duration")
+            .unwrap_or_else(|error| panic!("valid instrument measure: {error}"));
+        let unknown = MeasureId::new("rastok.unknown")
+            .unwrap_or_else(|error| panic!("canonical unknown measure: {error}"));
+        assert_eq!(
+            measure_spec(&field),
+            Some(MeasureSpec {
+                source: MeasureSource::Field,
+                carrier: MeasureCarrier::Integer,
+            })
+        );
+        assert_eq!(
+            measure_spec(&instrument),
+            Some(MeasureSpec {
+                source: MeasureSource::Instrument,
+                carrier: MeasureCarrier::Duration,
+            })
+        );
+        assert_eq!(measure_spec(&unknown), None);
     }
 
     #[test]

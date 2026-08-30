@@ -230,7 +230,10 @@ The repository opens publicly with this milestone (15 October 2026).
   the calendar-safe OpenTelemetry cut are in the
   [M1.8 backlog](docs/architecture/m1.8-observability-backlog.md); the explored
   post-M1 reservation model is preserved separately in the
-  [Budget draft](docs/architecture/budget-governance-draft.md).
+  [Budget draft](docs/architecture/budget-governance-draft.md). A0-A1 are
+  closed: the source checker resolves the four contracts into canonical sparse
+  HIR side-tables and rejects every invalid form by exact path, while v14
+  execution remains fail-closed pending A2's categorical transport.
 - A live view of the running graph, fed by the journal.
 - A guided example gallery seeded by the benchmark's reference
   solutions, closed by the October demo flow.

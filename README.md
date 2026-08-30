@@ -115,6 +115,14 @@ bounded Process retry with multi-frame data, exact exhaustion, and stale-wake
 fencing across instance Closing. See the
 [M1.7 exit report](docs/architecture/m1.7-exit-report.md).
 
+M1.8 A0-A1 are closed while categorical v14 remains current. The source
+front end recognizes the closed `@sensitive`/`@secret`/`@measure`/`@cost`
+family, resolves aliases into canonical schema paths and retains the sparse
+policy tables in checked HIR. Invalid annotations refuse through one exact
+diagnostic family; valid annotations stop at the named v15 transport gate, so
+no policy can be silently ignored or partially executed. The ordered work is
+tracked in the [M1.8 backlog](docs/architecture/m1.8-observability-backlog.md).
+
 The standalone runner links Process by default. Hosted features add the
 selected HTTP/WebSocket families through one registry assembly. Pass
 `--file-root <dir>` to `rastok run` to add the real File Driver with an

@@ -15,8 +15,9 @@ use crate::compiler::hir::{
 use crate::compiler::syntax::{
     Attribute as SynAttribute, BaseType, ConnectorDecl, EdgeDecl, EdgeEndpoint, ExprSource,
     GraphDecl, GraphItem, Name, OperatorDecl, OperatorItem, PortRef, ScalarType,
-    Statement as SynStatement, StructBody, StructEntry, SyntaxTree, TopDecl, Trigger as SynTrigger,
-    TypeRef, ValDecl, Value as SynValue, VarDecl,
+    SchemaAnnotation as SynSchemaAnnotation, SchemaAnnotationConstant, Statement as SynStatement,
+    StructBody, StructEntry, SyntaxTree, TopDecl, Trigger as SynTrigger, TypeRef, ValDecl,
+    Value as SynValue, VarDecl,
 };
 use crate::contract;
 use crate::datatype::{
@@ -26,6 +27,11 @@ use crate::datatype::{
 use crate::diagnostics::{Bag, Code, Diagnostic, Phase, SourceId, Span};
 use crate::expr;
 use crate::node;
+use crate::schema_annotation::{
+    AnnotatedSchema, AnnotationSet, AnnotationTable, CostAnnotation, CostBasis, CurrencyCode,
+    DataAnnotation, MeasureCarrier, MeasureId, MeasureSource, SchemaPath, SchemaPathSegment,
+    SensitivityLevel, is_iso_4217_currency, measure_spec,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Diagnostic for a unit without exactly one `: App` graph.
@@ -74,6 +80,9 @@ pub const E_TYPE_INVALID: Code = Code::new("E-TYPE-INVALID");
 /// An open compiler constraint that reached a position requiring a closed
 /// effective type.
 pub const E_TYPE_UNRESOLVED: Code = Code::new("E-TYPE-UNRESOLVED");
+/// A data annotation is unknown, malformed, duplicated, or targets an
+/// incompatible position. Fields: `annotation`, `path`, and `detail`.
+pub const E_DATA_ANNOTATION: Code = Code::new("E-DATA-ANNOTATION");
 /// A content-typed byte form outside whole-payload position
 /// (D-2026-08-10-5); field `tag`.
 pub const E_CONTENT_TYPE: Code = Code::new("E-CONTENT-TYPE");
@@ -98,6 +107,11 @@ enum TypeRefusal {
     DepthBudget { measured: usize },
     NodeBudget { measured: usize },
     WidthBudget { what: &'static str, measured: usize },
+}
+
+enum DataAnnotationTarget<'a> {
+    Type(&'a DataType),
+    TaggedUnionCase,
 }
 /// Diagnostic adapted from the expression chain, span mapped to the source.
 pub const E_EXPR: Code = Code::new("E-EXPR");
@@ -229,7 +243,10 @@ pub fn check(
         assets: Vec::new(),
         type_decls: BTreeMap::new(),
         resolved_types: BTreeMap::new(),
+        resolved_named_schemas: BTreeMap::new(),
         type_stack: Vec::new(),
+        first_resolved_annotation: None,
+        reported_annotation_refusals: BTreeSet::new(),
         pending_instances: Vec::new(),
         pending_connector_attributes: Vec::new(),
     };
@@ -373,12 +390,19 @@ pub fn check(
         .iter()
         .map(|field| (field.clone(), DataType::Variant))
         .collect();
+    if !checker.bag.has_errors()
+        && let Some(span) = checker.first_resolved_annotation
+    {
+        checker.deferred("categorical package v15 data-annotation transport", span);
+    }
+    let named_schemas = checker.resolved_named_schemas.into_iter().collect();
     Some(Hir {
         app: checked_app,
         labs,
         app_schema,
         ext_schema,
         assets: checker.assets,
+        named_schemas,
     })
 }
 
@@ -412,8 +436,18 @@ struct Checker<'bag, 'registry> {
     /// Named aliases expanded to their logical type for `is`/`as`. Expression
     /// trees carry the expansion, never the source spelling.
     resolved_types: BTreeMap<String, DataType>,
+    /// Alias schemas resolved through the same path-expanding annotation
+    /// pass as executable type sites. A1 retains these in HIR; A2 will carry
+    /// only the schemas that own transported policy.
+    resolved_named_schemas: BTreeMap<String, AnnotatedSchema>,
     /// The expansion stack — a name on it twice is a cycle.
     type_stack: Vec<String>,
+    /// First successfully resolved annotation. One fail-closed transport
+    /// diagnostic is emitted after all specific A1 judgements have run.
+    first_resolved_annotation: Option<Span>,
+    /// Alias expansion may visit one faulty source annotation at several use
+    /// sites. The source fault speaks once, at its own stable span.
+    reported_annotation_refusals: BTreeSet<Span>,
     /// Node-owned instance keys are type-checked after the production
     /// metadata schema has been sealed. That makes `meta.app.<leaf>` precise
     /// without a second type system or a runtime-only guess.
@@ -1626,6 +1660,7 @@ impl Checker<'_, '_> {
             loop_spec: None,
             path: path.clone(),
             boundary: Vec::new(),
+            boundary_annotations: Vec::new(),
             vals: Vec::new(),
             handlers: Vec::new(),
             nodes: Vec::new(),
@@ -1656,10 +1691,13 @@ impl Checker<'_, '_> {
                     }
                     // Boundary and state annotations resolve through the same
                     // complete logical type algebra.
-                    let pinned = match &port.ty {
-                        None => None,
-                        Some(type_ref) => match self.state_type(type_ref) {
-                            Some(mapped) => Some(mapped),
+                    let (pinned, annotations) = match &port.ty {
+                        None => (None, AnnotationTable::empty()),
+                        Some(type_ref) => match self.resolve_annotated_schema(type_ref) {
+                            Some(schema) => (
+                                Some(schema.ty().clone()),
+                                schema.annotations().clone(),
+                            ),
                             None => continue,
                         },
                     };
@@ -1707,12 +1745,19 @@ impl Checker<'_, '_> {
                             );
                         } else {
                             match node::Port::new(port.name.text.clone()) {
-                                Ok(declared) => graph.boundary.push(crate::plan::PortDecl {
-                                    port: declared,
-                                    direction,
-                                    unwired: crate::plan::UnwiredPolicy::RequireWire,
-                                    ty: pinned,
-                                }),
+                                Ok(declared) => {
+                                    if !annotations.is_empty() {
+                                        graph
+                                            .boundary_annotations
+                                            .push((declared.clone(), annotations.clone()));
+                                    }
+                                    graph.boundary.push(crate::plan::PortDecl {
+                                        port: declared,
+                                        direction,
+                                        unwired: crate::plan::UnwiredPolicy::RequireWire,
+                                        ty: pinned,
+                                    });
+                                }
                                 Err(invalid) => self.bag.push(
                                     Diagnostic::new(
                                         E_PORT_UNKNOWN,
@@ -1745,12 +1790,19 @@ impl Checker<'_, '_> {
                         continue;
                     }
                     match node::Port::new(port.name.text.clone()) {
-                        Ok(declared) => graph.boundary.push(crate::plan::PortDecl {
-                            port: declared,
-                            direction,
-                            unwired: crate::plan::UnwiredPolicy::RequireWire,
-                            ty: pinned,
-                        }),
+                        Ok(declared) => {
+                            if !annotations.is_empty() {
+                                graph
+                                    .boundary_annotations
+                                    .push((declared.clone(), annotations));
+                            }
+                            graph.boundary.push(crate::plan::PortDecl {
+                                port: declared,
+                                direction,
+                                unwired: crate::plan::UnwiredPolicy::RequireWire,
+                                ty: pinned,
+                            });
+                        }
                         Err(invalid) => self.bag.push(
                             Diagnostic::new(E_PORT_UNKNOWN, Phase::Check, invalid.to_string())
                                 .with_span(port.name.span),
@@ -1759,7 +1811,8 @@ impl Checker<'_, '_> {
                 }
                 GraphItem::Val(val) => {
                     if self.bindable(&val.name, &signature)
-                        && let Some(value) = self.graph_val(val, &signature, &consts)
+                        && let Some((value, annotations)) =
+                            self.graph_val(val, &signature, &consts)
                     {
                         let Some(ty) = self.constant_binding_type(&value, val.span) else {
                             continue;
@@ -1769,6 +1822,7 @@ impl Checker<'_, '_> {
                         graph.vals.push(Val {
                             name: val.name.text.clone(),
                             value,
+                            annotations,
                         });
                     }
                 }
@@ -1976,6 +2030,7 @@ impl Checker<'_, '_> {
             vals: graph.vals.clone(),
             vars: Vec::new(),
             ports: graph.boundary.clone(),
+            port_annotations: graph.boundary_annotations.clone(),
             handlers: Vec::new(),
             instance: None,
         };
@@ -3535,10 +3590,13 @@ impl Checker<'_, '_> {
         val: &ValDecl,
         signature: &expr::Signature,
         consts: &BTreeMap<String, crate::value::Value>,
-    ) -> Option<Const> {
-        let expected = match &val.ty {
-            Some(ty) => Some(self.resolve_type_ref(ty)?),
-            None => None,
+    ) -> Option<(Const, AnnotationTable)> {
+        let (expected, annotations) = match &val.ty {
+            Some(ty) => {
+                let schema = self.resolve_annotated_schema(ty)?;
+                (Some(schema.ty().clone()), schema.annotations().clone())
+            }
+            None => (None, AnnotationTable::empty()),
         };
         let tree = self.typed_value_tree(
             &val.value,
@@ -3548,6 +3606,7 @@ impl Checker<'_, '_> {
             &val.name.text,
         )?;
         self.reduce_constant(tree, val.span, consts)
+            .map(|value| (value, annotations))
     }
 
     fn operator(
@@ -3573,6 +3632,7 @@ impl Checker<'_, '_> {
             vals: Vec::new(),
             vars: Vec::new(),
             ports: Vec::new(),
+            port_annotations: Vec::new(),
             handlers: Vec::new(),
             instance: None,
         };
@@ -3692,6 +3752,7 @@ impl Checker<'_, '_> {
             vals: Vec::new(),
             vars: Vec::new(),
             ports: Vec::new(),
+            port_annotations: Vec::new(),
             handlers: Vec::new(),
             instance: None,
         };
@@ -4277,10 +4338,12 @@ impl Checker<'_, '_> {
                         );
                         continue;
                     }
-                    let pinned = match &port.ty {
-                        None => None,
-                        Some(type_ref) => match self.state_type(type_ref) {
-                            Some(mapped) => Some(mapped),
+                    let (pinned, annotations) = match &port.ty {
+                        None => (None, AnnotationTable::empty()),
+                        Some(type_ref) => match self.resolve_annotated_schema(type_ref) {
+                            Some(schema) => {
+                                (Some(schema.ty().clone()), schema.annotations().clone())
+                            }
                             None => continue,
                         },
                     };
@@ -4307,10 +4370,15 @@ impl Checker<'_, '_> {
                         continue;
                     }
                     self.add_port(node, &port.name, direction, pinned, "declared");
+                    if !annotations.is_empty()
+                        && let Ok(port_name) = node::Port::new(port.name.text.clone())
+                    {
+                        node.port_annotations.push((port_name, annotations));
+                    }
                 }
                 OperatorItem::Val(val) => {
                     if self.bindable(&val.name, &signature)
-                        && let Some(value) = self.graph_val(val, &signature, &consts)
+                        && let Some((value, annotations)) = self.graph_val(val, &signature, &consts)
                     {
                         let Some(ty) = self.constant_binding_type(&value, val.span) else {
                             continue;
@@ -4320,6 +4388,7 @@ impl Checker<'_, '_> {
                         node.vals.push(Val {
                             name: val.name.text.clone(),
                             value,
+                            annotations,
                         });
                     }
                 }
@@ -4578,7 +4647,9 @@ impl Checker<'_, '_> {
         if !self.guard_binding_name(&decl.name, "a var") {
             return None;
         }
-        let ty = self.state_type(&decl.ty)?;
+        let schema = self.resolve_annotated_schema(&decl.ty)?;
+        let ty = schema.ty().clone();
+        let annotations = schema.annotations().clone();
         let init = match &decl.value {
             None => None,
             // The parser already spoke for its recovery form.
@@ -4615,6 +4686,7 @@ impl Checker<'_, '_> {
             name: decl.name.text.clone(),
             ty,
             init,
+            annotations,
         })
     }
 
@@ -4710,13 +4782,6 @@ impl Checker<'_, '_> {
         }
     }
 
-    /// Resolves a source type structurally into the canonical core algebra.
-    /// Named declarations are aliases only; no source spelling survives in
-    /// the result.
-    fn state_type(&mut self, ty: &TypeRef) -> Option<DataType> {
-        self.resolve_type_ref(ty)
-    }
-
     fn inferred_value_type(&mut self, value: &crate::value::Value, span: Span) -> Option<DataType> {
         match value_type(value) {
             Ok(Some(ty)) => Some(ty),
@@ -4753,17 +4818,45 @@ impl Checker<'_, '_> {
         }
     }
 
-    fn resolve_type_ref(&mut self, ty: &TypeRef) -> Option<DataType> {
-        if let Some(annotation) = ty.annotations.first() {
-            self.deferred(
-                "a data annotation before categorical package v15",
-                annotation.span,
-            );
-            return None;
+    fn resolve_annotated_schema(&mut self, ty: &TypeRef) -> Option<AnnotatedSchema> {
+        let resolved = self.resolve_plain_type_ref(ty)?;
+        let mut rows = BTreeMap::new();
+        self.collect_type_annotations(ty, &resolved, &SchemaPath::root(), &mut rows)?;
+        let entries = rows
+            .into_iter()
+            .map(|(path, annotations)| {
+                AnnotationSet::new(annotations)
+                    .map(|annotations| (path, annotations))
+                    .map_err(|error| error.to_string())
+            })
+            .collect::<Result<Vec<_>, _>>();
+        let entries = match entries {
+            Ok(entries) => entries,
+            Err(detail) => {
+                self.annotation_refusal(ty.span, "schema", &SchemaPath::root(), &detail);
+                return None;
+            }
+        };
+        let table = match AnnotationTable::new(entries) {
+            Ok(table) => table,
+            Err(error) => {
+                self.annotation_refusal(ty.span, "schema", &SchemaPath::root(), &error.to_string());
+                return None;
+            }
+        };
+        match AnnotatedSchema::new(resolved, table) {
+            Ok(schema) => Some(schema),
+            Err(error) => {
+                self.annotation_refusal(ty.span, "schema", &SchemaPath::root(), &error.to_string());
+                None
+            }
         }
+    }
+
+    fn resolve_plain_type_ref(&mut self, ty: &TypeRef) -> Option<DataType> {
         let mut alternatives = Vec::with_capacity(ty.alternatives.len() + usize::from(ty.optional));
         for alternative in &ty.alternatives {
-            alternatives.push(self.resolve_base_type(alternative, ty.span)?);
+            alternatives.push(self.resolve_plain_base_type(alternative, ty.span)?);
         }
         if ty.optional {
             alternatives.push(DataType::Null);
@@ -4785,11 +4878,12 @@ impl Checker<'_, '_> {
         Some(resolved)
     }
 
-    fn resolve_base_type(&mut self, ty: &BaseType, span: Span) -> Option<DataType> {
+    fn resolve_plain_base_type(&mut self, ty: &BaseType, span: Span) -> Option<DataType> {
         let resolved = match ty {
             BaseType::Scalar(ScalarType::Bool) => DataType::Bool,
             BaseType::Scalar(ScalarType::Int) => DataType::INT,
             BaseType::Scalar(ScalarType::Long) => DataType::LONG,
+            BaseType::Scalar(ScalarType::Uint) => DataType::UINT,
             BaseType::Scalar(ScalarType::Float) => DataType::FLOAT,
             BaseType::Scalar(ScalarType::Double) => DataType::DOUBLE,
             BaseType::Scalar(ScalarType::Number) => DataType::Number,
@@ -4846,7 +4940,7 @@ impl Checker<'_, '_> {
                 for field in fields {
                     resolved.push(TypeField::new(
                         field.name.text.clone(),
-                        self.resolve_type_ref(&field.ty)?,
+                        self.resolve_plain_type_ref(&field.ty)?,
                     ));
                 }
                 match StructType::new(resolved) {
@@ -4858,8 +4952,8 @@ impl Checker<'_, '_> {
                 }
             }
             BaseType::Map(key, value) => {
-                let key = self.resolve_type_ref(key)?;
-                let value = self.resolve_type_ref(value)?;
+                let key = self.resolve_plain_type_ref(key)?;
+                let value = self.resolve_plain_type_ref(value)?;
                 match MapType::new(key, value) {
                     Ok(map) => DataType::Map(map),
                     Err(error) => {
@@ -4868,9 +4962,9 @@ impl Checker<'_, '_> {
                     }
                 }
             }
-            BaseType::Array(element) => DataType::array(self.resolve_type_ref(element)?),
+            BaseType::Array(element) => DataType::array(self.resolve_plain_type_ref(element)?),
             BaseType::Table(element) => {
-                let element = self.resolve_type_ref(element)?;
+                let element = self.resolve_plain_type_ref(element)?;
                 if !matches!(element, DataType::Struct(_)) {
                     self.bag.push(
                         Diagnostic::new(
@@ -4897,18 +4991,11 @@ impl Checker<'_, '_> {
             BaseType::TaggedUnion(cases) => {
                 let mut resolved_cases = Vec::with_capacity(cases.len());
                 for case in cases {
-                    if let Some(annotation) = case.annotations.first() {
-                        self.deferred(
-                            "a tagged-union case annotation before categorical package v15",
-                            annotation.span,
-                        );
-                        return None;
-                    }
                     let mut fields = Vec::with_capacity(case.fields.len());
                     for field in &case.fields {
                         fields.push(TypeField::new(
                             field.name.text.clone(),
-                            self.resolve_type_ref(&field.ty)?,
+                            self.resolve_plain_type_ref(&field.ty)?,
                         ));
                     }
                     let payload = match StructType::new(fields) {
@@ -4952,12 +5039,629 @@ impl Checker<'_, '_> {
                     return None;
                 }
                 self.type_stack.push(name.text.clone());
-                let resolved = self.resolve_type_ref(&aliased);
+                let resolved = self.resolve_plain_type_ref(&aliased);
                 self.type_stack.pop();
                 return resolved;
             }
         };
         Some(resolved)
+    }
+
+    fn collect_type_annotations(
+        &mut self,
+        source: &TypeRef,
+        resolved: &DataType,
+        path: &SchemaPath,
+        rows: &mut BTreeMap<SchemaPath, Vec<DataAnnotation>>,
+    ) -> Option<()> {
+        self.collect_direct_annotations(
+            &source.annotations,
+            DataAnnotationTarget::Type(resolved),
+            path,
+            rows,
+        )?;
+
+        let branch_count = source.alternatives.len() + usize::from(source.optional);
+        if branch_count > 1 {
+            let DataType::StructuralUnion(union) = resolved else {
+                self.annotation_refusal(
+                    source.span,
+                    "schema",
+                    path,
+                    "a source union did not resolve to a structural union",
+                );
+                return None;
+            };
+            for alternative in &source.alternatives {
+                let alternative_type = self.resolve_plain_base_type(alternative, source.span)?;
+                if let DataType::StructuralUnion(_) = alternative_type {
+                    self.collect_flattened_union_alternative(
+                        alternative,
+                        &alternative_type,
+                        union,
+                        path,
+                        source.span,
+                        rows,
+                    )?;
+                    continue;
+                }
+                let Some(index) = union
+                    .branches()
+                    .iter()
+                    .position(|branch| branch == &alternative_type)
+                else {
+                    self.annotation_refusal(
+                        source.span,
+                        "schema",
+                        path,
+                        "a source union branch has no canonical resolved position",
+                    );
+                    return None;
+                };
+                let Ok(index) = u16::try_from(index) else {
+                    self.annotation_refusal(
+                        source.span,
+                        "schema",
+                        path,
+                        "a structural-union branch index exceeds the canonical domain",
+                    );
+                    return None;
+                };
+                self.collect_base_annotations(
+                    alternative,
+                    &alternative_type,
+                    &path.child(SchemaPathSegment::StructuralUnionBranch(index)),
+                    rows,
+                )?;
+            }
+            return Some(());
+        }
+
+        let Some(alternative) = source.alternatives.first() else {
+            self.annotation_refusal(
+                source.span,
+                "schema",
+                path,
+                "a type reference has no alternative",
+            );
+            return None;
+        };
+        self.collect_base_annotations(alternative, resolved, path, rows)
+    }
+
+    fn collect_flattened_union_alternative(
+        &mut self,
+        source: &BaseType,
+        alternative_type: &DataType,
+        target: &crate::datatype::StructuralUnionType,
+        path: &SchemaPath,
+        at: Span,
+        rows: &mut BTreeMap<SchemaPath, Vec<DataAnnotation>>,
+    ) -> Option<()> {
+        let BaseType::Named(name) = source else {
+            self.annotation_refusal(
+                at,
+                "schema",
+                path,
+                "only a named alias can contribute a nested structural union",
+            );
+            return None;
+        };
+        let aliased = self.type_decls.get(&name.text).cloned()?;
+        let mut local = BTreeMap::new();
+        self.collect_type_annotations(&aliased, alternative_type, &SchemaPath::root(), &mut local)?;
+        let DataType::StructuralUnion(local_union) = alternative_type else {
+            return None;
+        };
+        for (local_path, annotations) in local {
+            if local_path.segments().is_empty() {
+                for branch in local_union.branches() {
+                    let Some(index) = target
+                        .branches()
+                        .iter()
+                        .position(|candidate| candidate == branch)
+                    else {
+                        self.annotation_refusal(
+                            name.span,
+                            &name.text,
+                            path,
+                            "an alias branch has no position after union flattening",
+                        );
+                        return None;
+                    };
+                    let Ok(index) = u16::try_from(index) else {
+                        return None;
+                    };
+                    let target_path = path.child(SchemaPathSegment::StructuralUnionBranch(index));
+                    self.merge_annotation_row(
+                        rows,
+                        target_path,
+                        annotations.clone(),
+                        name.span,
+                        &name.text,
+                    )?;
+                }
+                continue;
+            }
+            let Some(SchemaPathSegment::StructuralUnionBranch(local_index)) =
+                local_path.segments().first()
+            else {
+                self.annotation_refusal(
+                    name.span,
+                    &name.text,
+                    path,
+                    "an annotation inside a flattened union is not branch-addressable",
+                );
+                return None;
+            };
+            let branch = local_union.branches().get(usize::from(*local_index))?;
+            let target_index = target
+                .branches()
+                .iter()
+                .position(|candidate| candidate == branch)?;
+            let Ok(target_index) = u16::try_from(target_index) else {
+                return None;
+            };
+            let mut segments = path.segments().to_vec();
+            segments.push(SchemaPathSegment::StructuralUnionBranch(target_index));
+            segments.extend(local_path.segments()[1..].iter().cloned());
+            self.merge_annotation_row(
+                rows,
+                SchemaPath::new(segments),
+                annotations,
+                name.span,
+                &name.text,
+            )?;
+        }
+        Some(())
+    }
+
+    fn collect_base_annotations(
+        &mut self,
+        source: &BaseType,
+        resolved: &DataType,
+        path: &SchemaPath,
+        rows: &mut BTreeMap<SchemaPath, Vec<DataAnnotation>>,
+    ) -> Option<()> {
+        match source {
+            BaseType::Scalar(_) | BaseType::Variant | BaseType::Enum(_) => Some(()),
+            BaseType::Named(name) => {
+                let aliased = self.type_decls.get(&name.text).cloned()?;
+                if self.type_stack.contains(&name.text) {
+                    return None;
+                }
+                self.type_stack.push(name.text.clone());
+                let result = self.collect_type_annotations(&aliased, resolved, path, rows);
+                self.type_stack.pop();
+                result
+            }
+            BaseType::Struct { fields, .. } => {
+                let DataType::Struct(structure) = resolved else {
+                    return None;
+                };
+                for field in fields {
+                    let resolved_field = structure
+                        .fields()
+                        .iter()
+                        .find(|candidate| candidate.name() == field.name.text)?;
+                    self.collect_type_annotations(
+                        &field.ty,
+                        resolved_field.ty(),
+                        &path.child(SchemaPathSegment::Field(field.name.text.clone())),
+                        rows,
+                    )?;
+                }
+                Some(())
+            }
+            BaseType::Map(key, value) => {
+                let DataType::Map(map) = resolved else {
+                    return None;
+                };
+                self.collect_type_annotations(
+                    key,
+                    map.key(),
+                    &path.child(SchemaPathSegment::MapKey),
+                    rows,
+                )?;
+                self.collect_type_annotations(
+                    value,
+                    map.value(),
+                    &path.child(SchemaPathSegment::MapValue),
+                    rows,
+                )
+            }
+            BaseType::Array(element) | BaseType::Table(element) => {
+                let DataType::Array(array) = resolved else {
+                    return None;
+                };
+                self.collect_type_annotations(
+                    element,
+                    array.element(),
+                    &path.child(SchemaPathSegment::ArrayElement),
+                    rows,
+                )
+            }
+            BaseType::TaggedUnion(cases) => {
+                let DataType::TaggedUnion(union) = resolved else {
+                    return None;
+                };
+                for source_case in cases {
+                    let resolved_case = union
+                        .cases()
+                        .iter()
+                        .find(|candidate| candidate.name() == source_case.name.text)?;
+                    let case_path = path.child(SchemaPathSegment::TaggedUnionCase(
+                        source_case.name.text.clone(),
+                    ));
+                    self.collect_direct_annotations(
+                        &source_case.annotations,
+                        DataAnnotationTarget::TaggedUnionCase,
+                        &case_path,
+                        rows,
+                    )?;
+                    for field in &source_case.fields {
+                        let resolved_field = resolved_case
+                            .payload()
+                            .fields()
+                            .iter()
+                            .find(|candidate| candidate.name() == field.name.text)?;
+                        self.collect_type_annotations(
+                            &field.ty,
+                            resolved_field.ty(),
+                            &case_path.child(SchemaPathSegment::Field(field.name.text.clone())),
+                            rows,
+                        )?;
+                    }
+                }
+                Some(())
+            }
+        }
+    }
+
+    fn collect_direct_annotations(
+        &mut self,
+        source: &[SynSchemaAnnotation],
+        target: DataAnnotationTarget<'_>,
+        path: &SchemaPath,
+        rows: &mut BTreeMap<SchemaPath, Vec<DataAnnotation>>,
+    ) -> Option<()> {
+        for annotation in source {
+            let resolved = self.resolve_data_annotation(annotation, &target, path)?;
+            self.merge_annotation_row(
+                rows,
+                path.clone(),
+                vec![resolved],
+                annotation.span,
+                &annotation.name.text,
+            )?;
+            if self.first_resolved_annotation.is_none() {
+                self.first_resolved_annotation = Some(annotation.span);
+            }
+        }
+        Some(())
+    }
+
+    fn merge_annotation_row(
+        &mut self,
+        rows: &mut BTreeMap<SchemaPath, Vec<DataAnnotation>>,
+        path: SchemaPath,
+        annotations: Vec<DataAnnotation>,
+        span: Span,
+        source_name: &str,
+    ) -> Option<()> {
+        let row = rows.entry(path.clone()).or_default();
+        for annotation in annotations {
+            if row
+                .iter()
+                .any(|existing| existing.kind() == annotation.kind())
+            {
+                self.annotation_refusal(
+                    span,
+                    source_name,
+                    &path,
+                    &format!(
+                        "annotation kind {:?} appears twice on one resolved path",
+                        annotation.kind()
+                    ),
+                );
+                return None;
+            }
+            row.push(annotation);
+        }
+        Some(())
+    }
+
+    fn resolve_data_annotation(
+        &mut self,
+        annotation: &SynSchemaAnnotation,
+        target: &DataAnnotationTarget<'_>,
+        path: &SchemaPath,
+    ) -> Option<DataAnnotation> {
+        let arguments = self.annotation_arguments(annotation, path)?;
+        match annotation.name.text.as_str() {
+            "sensitive" => {
+                self.require_annotation_arguments(annotation, path, &arguments, &["level"])?;
+                let level = self.annotation_symbol(
+                    annotation,
+                    path,
+                    arguments.get("level").copied()?,
+                    "level",
+                )?;
+                let level = match level.as_str() {
+                    "internal" => SensitivityLevel::Internal,
+                    "confidential" => SensitivityLevel::Confidential,
+                    "restricted" => SensitivityLevel::Restricted,
+                    _ => {
+                        self.annotation_refusal(
+                            annotation.span,
+                            &annotation.name.text,
+                            path,
+                            "`level` must be `internal`, `confidential`, or `restricted`",
+                        );
+                        return None;
+                    }
+                };
+                Some(DataAnnotation::Sensitive(level))
+            }
+            "secret" => {
+                self.require_annotation_arguments(annotation, path, &arguments, &[])?;
+                Some(DataAnnotation::Secret)
+            }
+            "measure" => {
+                self.require_annotation_arguments(annotation, path, &arguments, &["id"])?;
+                let id =
+                    self.annotation_symbol(annotation, path, arguments.get("id").copied()?, "id")?;
+                let id = match MeasureId::new(id) {
+                    Ok(id) => id,
+                    Err(error) => {
+                        self.annotation_refusal(
+                            annotation.span,
+                            &annotation.name.text,
+                            path,
+                            &error.to_string(),
+                        );
+                        return None;
+                    }
+                };
+                let Some(spec) = measure_spec(&id) else {
+                    self.annotation_refusal(
+                        annotation.span,
+                        &annotation.name.text,
+                        path,
+                        &format!("measure id `{}` is not in the pinned registry", id.as_str()),
+                    );
+                    return None;
+                };
+                if spec.source() != MeasureSource::Field {
+                    self.annotation_refusal(
+                        annotation.span,
+                        &annotation.name.text,
+                        path,
+                        "this registry entry is a runtime instrument, not a field annotation",
+                    );
+                    return None;
+                }
+                let DataAnnotationTarget::Type(ty) = target else {
+                    self.annotation_refusal(
+                        annotation.span,
+                        &annotation.name.text,
+                        path,
+                        "a semantic measure targets a typed field, not a union case",
+                    );
+                    return None;
+                };
+                let carrier_holds = match spec.carrier() {
+                    MeasureCarrier::Integer => matches!(ty, DataType::Integer(_)),
+                    MeasureCarrier::Duration => *ty == &DataType::DURATION,
+                };
+                if !carrier_holds {
+                    self.annotation_refusal(
+                        annotation.span,
+                        &annotation.name.text,
+                        path,
+                        &format!("the registered measure cannot be carried by `{ty}`"),
+                    );
+                    return None;
+                }
+                Some(DataAnnotation::Measure(id))
+            }
+            "cost" => self.resolve_cost_annotation(annotation, target, path, &arguments),
+            _ => {
+                self.annotation_refusal(
+                    annotation.span,
+                    &annotation.name.text,
+                    path,
+                    "unknown data annotation",
+                );
+                None
+            }
+        }
+    }
+
+    fn resolve_cost_annotation(
+        &mut self,
+        annotation: &SynSchemaAnnotation,
+        target: &DataAnnotationTarget<'_>,
+        path: &SchemaPath,
+        arguments: &BTreeMap<&str, &SchemaAnnotationConstant>,
+    ) -> Option<DataAnnotation> {
+        let DataAnnotationTarget::Type(ty) = target else {
+            self.annotation_refusal(
+                annotation.span,
+                &annotation.name.text,
+                path,
+                "a cost targets a decimal or canonical Money value, not a union case",
+            );
+            return None;
+        };
+        let is_money = money_type_holds(ty);
+        let required = if is_money {
+            &["basis"][..]
+        } else {
+            &["basis", "currency"][..]
+        };
+        self.require_annotation_arguments(annotation, path, arguments, required)?;
+        let basis =
+            self.annotation_symbol(annotation, path, arguments.get("basis").copied()?, "basis")?;
+        let basis = match basis.as_str() {
+            "provider_reported" => CostBasis::ProviderReported,
+            "pricebook_calculated" => CostBasis::PricebookCalculated,
+            _ => {
+                self.annotation_refusal(
+                    annotation.span,
+                    &annotation.name.text,
+                    path,
+                    "`basis` must be `provider_reported` or `pricebook_calculated`",
+                );
+                return None;
+            }
+        };
+        if is_money {
+            return Some(DataAnnotation::Cost(CostAnnotation::money(basis)));
+        }
+        if !matches!(ty, DataType::Decimal(_)) {
+            self.annotation_refusal(
+                annotation.span,
+                &annotation.name.text,
+                path,
+                &format!("a scalar cost requires decimal, found `{ty}`"),
+            );
+            return None;
+        }
+        let currency = self.annotation_symbol(
+            annotation,
+            path,
+            arguments.get("currency").copied()?,
+            "currency",
+        )?;
+        let currency = match CurrencyCode::new(currency) {
+            Ok(currency) => currency,
+            Err(error) => {
+                self.annotation_refusal(
+                    annotation.span,
+                    &annotation.name.text,
+                    path,
+                    &error.to_string(),
+                );
+                return None;
+            }
+        };
+        if !is_iso_4217_currency(&currency) {
+            self.annotation_refusal(
+                annotation.span,
+                &annotation.name.text,
+                path,
+                &format!(
+                    "currency code `{}` is not in the pinned ISO 4217 registry",
+                    currency.as_str()
+                ),
+            );
+            return None;
+        }
+        Some(DataAnnotation::Cost(CostAnnotation::scalar(
+            currency, basis,
+        )))
+    }
+
+    fn annotation_arguments<'annotation>(
+        &mut self,
+        annotation: &'annotation SynSchemaAnnotation,
+        path: &SchemaPath,
+    ) -> Option<BTreeMap<&'annotation str, &'annotation SchemaAnnotationConstant>> {
+        let mut arguments = BTreeMap::new();
+        for argument in &annotation.arguments {
+            if arguments
+                .insert(argument.name.text.as_str(), &argument.value)
+                .is_some()
+            {
+                self.annotation_refusal(
+                    argument.name.span,
+                    &annotation.name.text,
+                    path,
+                    &format!("argument `{}` appears twice", argument.name.text),
+                );
+                return None;
+            }
+        }
+        Some(arguments)
+    }
+
+    fn require_annotation_arguments(
+        &mut self,
+        annotation: &SynSchemaAnnotation,
+        path: &SchemaPath,
+        arguments: &BTreeMap<&str, &SchemaAnnotationConstant>,
+        required: &[&str],
+    ) -> Option<()> {
+        if let Some(unexpected) = arguments
+            .keys()
+            .find(|argument| !required.contains(argument))
+        {
+            self.annotation_refusal(
+                annotation.span,
+                &annotation.name.text,
+                path,
+                &format!("unexpected argument `{unexpected}`"),
+            );
+            return None;
+        }
+        if let Some(missing) = required
+            .iter()
+            .find(|argument| !arguments.contains_key(**argument))
+        {
+            self.annotation_refusal(
+                annotation.span,
+                &annotation.name.text,
+                path,
+                &format!("missing required argument `{missing}`"),
+            );
+            return None;
+        }
+        Some(())
+    }
+
+    fn annotation_symbol(
+        &mut self,
+        annotation: &SynSchemaAnnotation,
+        path: &SchemaPath,
+        value: &SchemaAnnotationConstant,
+        argument: &str,
+    ) -> Option<String> {
+        let SchemaAnnotationConstant::Symbol(names) = value else {
+            self.annotation_refusal(
+                annotation.span,
+                &annotation.name.text,
+                path,
+                &format!("argument `{argument}` must be a symbolic plan constant"),
+            );
+            return None;
+        };
+        Some(
+            names
+                .iter()
+                .map(|name| name.text.as_str())
+                .collect::<Vec<_>>()
+                .join("."),
+        )
+    }
+
+    fn annotation_refusal(
+        &mut self,
+        span: Span,
+        annotation: &str,
+        path: &SchemaPath,
+        detail: &str,
+    ) {
+        if !self.reported_annotation_refusals.insert(span) {
+            return;
+        }
+        self.bag.push(
+            Diagnostic::new(E_DATA_ANNOTATION, Phase::Check, detail)
+                .with_span(span)
+                .with_field("annotation", annotation.to_string())
+                .with_field("path", path.to_string())
+                .with_field("detail", detail.to_string()),
+        );
     }
 
     fn type_constructor_refusal(&mut self, span: Span, error: TypeError) {
@@ -5325,9 +6029,14 @@ impl Checker<'_, '_> {
             match statement {
                 SynStatement::Val(val) => {
                     if self.bindable(&val.name, &signature) {
-                        let expected = match &val.ty {
-                            Some(ty) => self.resolve_type_ref(ty),
-                            None => None,
+                        let (expected, annotations) = match &val.ty {
+                            Some(ty) => match self.resolve_annotated_schema(ty) {
+                                Some(schema) => {
+                                    (Some(schema.ty().clone()), schema.annotations().clone())
+                                }
+                                None => (None, AnnotationTable::empty()),
+                            },
+                            None => (None, AnnotationTable::empty()),
                         };
                         if val.ty.is_some() && expected.is_none() {
                             continue;
@@ -5343,6 +6052,7 @@ impl Checker<'_, '_> {
                             statements.push(Statement::Let {
                                 name: val.name.text.clone(),
                                 value: tree,
+                                annotations,
                             });
                         }
                     }
@@ -5685,6 +6395,7 @@ impl Checker<'_, '_> {
             let mut hops = 0usize;
             while let Some(ty) = self.type_decls.get(&current) {
                 let pure_alias = !ty.optional
+                    && ty.annotations.is_empty()
                     && ty.alternatives.len() == 1
                     && matches!(
                         &ty.alternatives[0],
@@ -5724,8 +6435,12 @@ impl Checker<'_, '_> {
             .map(|(name, ty)| (name.clone(), ty.clone()))
             .collect();
         for (name, ty) in declarations {
-            if let Some(resolved) = self.resolve_type_ref(&ty) {
-                self.resolved_types.insert(name, resolved);
+            if let Some(schema) = self.resolve_annotated_schema(&ty) {
+                self.resolved_types
+                    .insert(name.clone(), schema.ty().clone());
+                if !schema.annotations().is_empty() {
+                    self.resolved_named_schemas.insert(name, schema);
+                }
             }
         }
     }
@@ -8053,7 +8768,7 @@ fn loop_proof_handlers(graph: &Graph) -> Vec<crate::plan::Handler> {
                 .body
                 .iter()
                 .map(|statement| match statement {
-                    Statement::Let { name, value } => crate::plan::Step::Let {
+                    Statement::Let { name, value, .. } => crate::plan::Step::Let {
                         name: name.clone(),
                         expr: value.clone(),
                     },
@@ -8079,6 +8794,30 @@ fn is_bare_word(text: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
         && !text.as_bytes()[0].is_ascii_digit()
         && !matches!(text, "true" | "false" | "null")
+}
+
+fn money_type_holds(ty: &DataType) -> bool {
+    let DataType::Struct(structure) = ty else {
+        return false;
+    };
+    if structure.fields().len() != 2 {
+        return false;
+    }
+    let amount = structure
+        .fields()
+        .iter()
+        .find(|field| field.name() == "amount")
+        .map(crate::datatype::TypeField::ty);
+    let currency = structure
+        .fields()
+        .iter()
+        .find(|field| field.name() == "currency")
+        .map(crate::datatype::TypeField::ty);
+    matches!(
+        amount,
+        Some(DataType::Decimal(decimal))
+            if decimal.precision() == 38 && decimal.scale() == 18
+    ) && currency == Some(&DataType::Text)
 }
 
 fn direction_words(direction: Direction) -> &'static str {
@@ -9520,12 +10259,330 @@ graph g : App {
     #[test]
     fn recognized_data_annotations_refuse_until_the_v15_transport_exists() {
         let source = "type Prompt = text @sensitive(level = confidential)\ngraph g : App {\n  operator o {\n    input in: Prompt\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
-        let (_, bag) = check_source(source);
+        let (hir, bag) = check_source(source);
         assert!(bag.has_errors(), "policy metadata must never be ignored");
-        assert!(bag.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code() == E_CHECK_DEFERRED
-                && diagnostic.fields()[0].1 == "a data annotation before categorical package v15"
-        }));
+        assert_eq!(
+            diagnostic_codes(&bag),
+            [E_CHECK_DEFERRED],
+            "a valid annotation reaches exactly the categorical transport gate"
+        );
+        assert_eq!(
+            bag.diagnostics()[0].fields()[0].1,
+            "categorical package v15 data-annotation transport"
+        );
+        let hir = hir.expect("A1 still returns checked HIR behind the transport gate");
+        assert_eq!(hir.named_schemas.len(), 1);
+        assert!(!hir.named_schemas[0].1.annotations().is_empty());
+        assert_eq!(hir.app.nodes[0].port_annotations.len(), 1);
+    }
+
+    #[test]
+    fn aliases_expand_annotations_to_exact_collection_and_union_paths() {
+        let source = r#"
+type TokenCount = int @measure(id = gen_ai.usage.input_tokens)
+type Result = union {
+  Done @sensitive(level = internal) {
+    counts: array<TokenCount>
+  },
+  Empty
+}
+graph g : App {
+  operator o {
+    input in: Result
+    on in { out = . }
+  }
+  . -> o -> .
+}
+"#;
+        let (hir, bag) = check_source(source);
+        assert_eq!(diagnostic_codes(&bag), [E_CHECK_DEFERRED]);
+        let hir = hir.expect("the annotated schema is checked into HIR");
+        let result = hir
+            .named_schemas
+            .iter()
+            .find(|(name, _)| name == "Result")
+            .map(|(_, schema)| schema)
+            .expect("Result schema");
+        let paths: Vec<String> = result
+            .annotations()
+            .entries()
+            .keys()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "$.tagged_union_case(\"Done\")",
+                "$.tagged_union_case(\"Done\").field(\"counts\").array_element",
+            ]
+        );
+        let port_paths: Vec<String> = hir.app.nodes[0].port_annotations[0]
+            .1
+            .entries()
+            .keys()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(port_paths, paths, "the alias is expanded at its port use");
+    }
+
+    #[test]
+    fn annotated_aliases_keep_the_canonical_structural_union_branch() {
+        let source = r#"
+type Classified = text @sensitive(level = confidential)
+type Choice = Classified | int
+graph g : App {
+  operator o {
+    input in: Choice
+    on in { out = . }
+  }
+  . -> o -> .
+}
+"#;
+        let (hir, bag) = check_source(source);
+        assert_eq!(diagnostic_codes(&bag), [E_CHECK_DEFERRED]);
+        let hir = hir.expect("the structural-union annotation reaches checked HIR");
+        let choice = hir
+            .named_schemas
+            .iter()
+            .find(|(name, _)| name == "Choice")
+            .map(|(_, schema)| schema)
+            .expect("Choice schema");
+        let paths: Vec<String> = choice
+            .annotations()
+            .entries()
+            .keys()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(paths, ["$.structural_union_branch(1)"]);
+        assert_eq!(
+            hir.app.nodes[0].port_annotations[0]
+                .1
+                .entries()
+                .keys()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            paths,
+            "the canonical branch survives alias use at a typed port"
+        );
+    }
+
+    #[test]
+    fn cost_and_secret_contracts_reach_checked_hir_without_changing_types() {
+        let source = r#"
+type ScalarCost = decimal(38,18) @cost(currency = EUR, basis = provider_reported)
+type Money = struct { amount: decimal(38,18), currency: text }
+             @cost(basis = pricebook_calculated)
+type Credential = text @sensitive(level = restricted) @secret
+graph g : App {}
+"#;
+        let (hir, bag) = check_source(source);
+        assert_eq!(diagnostic_codes(&bag), [E_CHECK_DEFERRED]);
+        let hir = hir.expect("the checked schemas survive until the v15 gate");
+        let scalar = hir
+            .named_schemas
+            .iter()
+            .find(|(name, _)| name == "ScalarCost")
+            .map(|(_, schema)| schema)
+            .expect("ScalarCost schema");
+        assert!(matches!(scalar.ty(), DataType::Decimal(_)));
+        let scalar_annotations = scalar
+            .annotations()
+            .entries()
+            .get(&SchemaPath::root())
+            .expect("root scalar annotations")
+            .annotations();
+        assert!(matches!(
+            scalar_annotations,
+            [DataAnnotation::Cost(cost)]
+                if cost.currency().map(CurrencyCode::as_str) == Some("EUR")
+                    && cost.basis() == CostBasis::ProviderReported
+        ));
+
+        let money = hir
+            .named_schemas
+            .iter()
+            .find(|(name, _)| name == "Money")
+            .map(|(_, schema)| schema)
+            .expect("Money schema");
+        assert!(matches!(money.ty(), DataType::Struct(_)));
+        assert!(matches!(
+            money.annotations()
+                .entries()
+                .get(&SchemaPath::root())
+                .expect("root Money annotations")
+                .annotations(),
+            [DataAnnotation::Cost(cost)]
+                if cost.currency().is_none()
+                    && cost.basis() == CostBasis::PricebookCalculated
+        ));
+
+        let credential = hir
+            .named_schemas
+            .iter()
+            .find(|(name, _)| name == "Credential")
+            .map(|(_, schema)| schema)
+            .expect("Credential schema");
+        assert_eq!(credential.ty(), &DataType::Text);
+        assert_eq!(
+            credential
+                .annotations()
+                .entries()
+                .get(&SchemaPath::root())
+                .expect("root credential annotations")
+                .annotations(),
+            [
+                DataAnnotation::Sensitive(SensitivityLevel::Restricted),
+                DataAnnotation::Secret,
+            ]
+        );
+    }
+
+    #[test]
+    fn explicit_binding_types_retain_their_annotation_tables_in_hir() {
+        let source = r#"
+graph g : App {
+  val label: text @sensitive(level = internal) = "demo"
+  operator o {
+    var credential: text @secret = "placeholder"
+    on in {
+      val tokens: int @measure(id = gen_ai.usage.output_tokens) = 1
+      out = .
+    }
+  }
+  . -> o -> .
+}
+"#;
+        let (hir, bag) = check_source(source);
+        assert_eq!(diagnostic_codes(&bag), [E_CHECK_DEFERRED]);
+        let hir = hir.expect("binding annotations reach checked HIR");
+        assert!(!hir.app.vals[0].annotations.is_empty());
+        assert!(!hir.app.nodes[0].vars[0].annotations.is_empty());
+        assert!(matches!(
+            &hir.app.nodes[0].handlers[0].body[0],
+            Statement::Let { annotations, .. } if !annotations.is_empty()
+        ));
+    }
+
+    #[test]
+    fn invalid_data_annotations_refuse_by_annotation_and_exact_path() {
+        let cases = [
+            (
+                "type X = struct { field: text @unknown }\ngraph g : App {}\n",
+                "unknown",
+                "$.field(\"field\")",
+                "unknown data annotation",
+            ),
+            (
+                "type X = array<text @secret @secret>\ngraph g : App {}\n",
+                "secret",
+                "$.array_element",
+                "appears twice",
+            ),
+            (
+                "type X = int @measure(id = data)\ngraph g : App {}\n",
+                "measure",
+                "$",
+                "not in the pinned registry",
+            ),
+            (
+                "type X = int @measure(id = env(\"MEASURE\"))\ngraph g : App {}\n",
+                "measure",
+                "$",
+                "symbolic plan constant",
+            ),
+            (
+                "type X = struct { prompt: text @measure(id = gen_ai.usage.input_tokens) }\ngraph g : App {}\n",
+                "measure",
+                "$.field(\"prompt\")",
+                "cannot be carried",
+            ),
+            (
+                "type X = union { Done @cost(basis = provider_reported) }\ngraph g : App {}\n",
+                "cost",
+                "$.tagged_union_case(\"Done\")",
+                "not a union case",
+            ),
+            (
+                "type X = text @sensitive(level = internal, level = restricted)\ngraph g : App {}\n",
+                "sensitive",
+                "$",
+                "argument `level` appears twice",
+            ),
+            (
+                "type X = text @sensitive\ngraph g : App {}\n",
+                "sensitive",
+                "$",
+                "missing required argument `level`",
+            ),
+            (
+                "type X = text @secret(level = restricted)\ngraph g : App {}\n",
+                "secret",
+                "$",
+                "unexpected argument `level`",
+            ),
+            (
+                "type X = int @measure(id = http.client.request.duration)\ngraph g : App {}\n",
+                "measure",
+                "$",
+                "runtime instrument",
+            ),
+            (
+                "type X = decimal(38,18) @cost(currency = ZZZ, basis = provider_reported)\ngraph g : App {}\n",
+                "cost",
+                "$",
+                "not in the pinned ISO 4217 registry",
+            ),
+            (
+                "type X = struct { amount: decimal(38,18), currency: text } @cost(currency = EUR, basis = provider_reported)\ngraph g : App {}\n",
+                "cost",
+                "$",
+                "unexpected argument `currency`",
+            ),
+        ];
+        for (source, annotation, path, detail) in cases {
+            let (_, bag) = check_source(source);
+            let diagnostic = bag
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.code() == E_DATA_ANNOTATION)
+                .unwrap_or_else(|| {
+                    panic!("missing annotation diagnostic: {:#?}", bag.diagnostics())
+                });
+            assert_eq!(diagnostic.fields()[0].1, annotation);
+            assert_eq!(diagnostic.fields()[1].1, path);
+            assert!(
+                diagnostic.fields()[2].1.contains(detail),
+                "{source}: {diagnostic:#?}"
+            );
+            assert!(
+                bag.diagnostics()
+                    .iter()
+                    .all(|diagnostic| diagnostic.code() != E_CHECK_DEFERRED),
+                "an invalid annotation must not also claim to have reached A2"
+            );
+        }
+    }
+
+    #[test]
+    fn one_faulty_alias_annotation_speaks_once_across_all_uses() {
+        let source = r#"
+type Bad = text @unknown
+graph g : App {
+  operator o {
+    input left: Bad
+    input right: Bad
+  }
+}
+"#;
+        let (_, bag) = check_source(source);
+        let annotation_diagnostics: Vec<_> = bag
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.code() == E_DATA_ANNOTATION)
+            .collect();
+        assert_eq!(annotation_diagnostics.len(), 1, "{:#?}", bag.diagnostics());
+        assert_eq!(annotation_diagnostics[0].fields()[0].1, "unknown");
+        assert_eq!(annotation_diagnostics[0].fields()[1].1, "$");
     }
 
     #[test]

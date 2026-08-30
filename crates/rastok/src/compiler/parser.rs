@@ -2143,22 +2143,46 @@ impl<'src> Parser<'src, '_> {
     fn schema_annotation_constant(&mut self) -> Option<SchemaAnnotationConstant> {
         let token = self.peek();
         match token.kind {
-            TokenKind::Ident => Some(SchemaAnnotationConstant::Symbol(
-                self.dotted_names("an annotation constant")?,
-            )),
+            TokenKind::Ident => {
+                let start = token.span.range().start;
+                let names = self.dotted_names("an annotation constant")?;
+                if matches!(self.peek().kind, TokenKind::Comma | TokenKind::RParen) {
+                    Some(SchemaAnnotationConstant::Symbol(names))
+                } else {
+                    Some(SchemaAnnotationConstant::Dynamic(
+                        self.expr_from(start, &PAREN_POSITION),
+                    ))
+                }
+            }
             TokenKind::Str => {
+                let start = token.span.range().start;
                 self.bump();
-                Some(SchemaAnnotationConstant::Text {
+                let constant = SchemaAnnotationConstant::Text {
                     text: token.text[1..token.text.len().saturating_sub(1)].to_string(),
                     span: token.span,
-                })
+                };
+                if matches!(self.peek().kind, TokenKind::Comma | TokenKind::RParen) {
+                    Some(constant)
+                } else {
+                    Some(SchemaAnnotationConstant::Dynamic(
+                        self.expr_from(start, &PAREN_POSITION),
+                    ))
+                }
             }
             TokenKind::Int => {
+                let start = token.span.range().start;
                 self.bump();
-                Some(SchemaAnnotationConstant::Integer(IntLit {
+                let constant = SchemaAnnotationConstant::Integer(IntLit {
                     text: String::from(token.text),
                     span: token.span,
-                }))
+                });
+                if matches!(self.peek().kind, TokenKind::Comma | TokenKind::RParen) {
+                    Some(constant)
+                } else {
+                    Some(SchemaAnnotationConstant::Dynamic(
+                        self.expr_from(start, &PAREN_POSITION),
+                    ))
+                }
             }
             _ => {
                 self.error_expected("an annotation constant");
@@ -2342,6 +2366,7 @@ fn simple_scalar(word: &str) -> Option<ScalarType> {
         "bool" => ScalarType::Bool,
         "int" => ScalarType::Int,
         "long" => ScalarType::Long,
+        "uint" => ScalarType::Uint,
         "float" => ScalarType::Float,
         "double" => ScalarType::Double,
         "number" => ScalarType::Number,
@@ -3209,6 +3234,41 @@ mod tests {
                 if path.iter().map(|name| name.text.as_str()).collect::<Vec<_>>()
                     == ["gen_ai", "usage", "input_tokens"]
         ));
+    }
+
+    #[test]
+    fn dynamic_annotation_arguments_reach_the_checker_as_one_expression() {
+        let source = "type Usage = uint @measure(id = env(\"MEASURE\"))\n";
+        let tree = parse_clean(source);
+        let TopDecl::Type(decl) = &tree.decls[0] else {
+            panic!("expected a type declaration");
+        };
+        assert!(matches!(
+            decl.ty.alternatives[0],
+            BaseType::Scalar(ScalarType::Uint)
+        ));
+        let SchemaAnnotationConstant::Dynamic(expression) =
+            &decl.ty.annotations[0].arguments[0].value
+        else {
+            panic!("expected the dynamic annotation argument");
+        };
+        assert_eq!(expression.text, "env(\"MEASURE\")");
+        assert_eq!(&source[expression.span.range()], expression.text);
+    }
+
+    #[test]
+    fn signed_annotation_integer_constants_keep_their_exact_span() {
+        let source = "type Usage = int @future(code = -12)\n";
+        let tree = parse_clean(source);
+        let TopDecl::Type(decl) = &tree.decls[0] else {
+            panic!("expected a type declaration");
+        };
+        let SchemaAnnotationConstant::Integer(integer) = &decl.ty.annotations[0].arguments[0].value
+        else {
+            panic!("expected the signed integer annotation constant");
+        };
+        assert_eq!(integer.text, "-12");
+        assert_eq!(&source[integer.span.range()], integer.text);
     }
 
     #[test]

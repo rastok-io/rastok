@@ -49,6 +49,10 @@ A decimal cost annotation fixes an ISO currency in its constant arguments; a
 Money-shaped value carries the validated currency itself. Provider-reported
 and pricebook-calculated bases remain distinct, missing prices remain
 `unpriced`, and reports never add currencies or apply an implicit FX rate.
+The pinned ISO 4217 Maintenance Agency List One snapshot fetched on 2026-08-30
+has SHA-256
+`838dfb991648cf36df939edd5fe3811737962b75a32252847d239cedd1e291c9`;
+adopting a later current-code list is an explicit registry migration.
 Human deployment configuration is parsed only in the hosted crate (JSON is
 already an exact-pinned production dependency there); the no-std core receives
 typed `DeploymentProfile`/`BootBindings` values and parses no JSON, TOML or

@@ -712,6 +712,10 @@ pub enum SchemaAnnotationConstant {
     },
     /// Integer constant, preserved as written.
     Integer(IntLit),
+    /// A syntactically complete expression retained so the checker can reject
+    /// dynamic annotation arguments with the annotation diagnostic family,
+    /// rather than cascading from the host parser.
+    Dynamic(ExprSource),
 }
 
 /// One base type of a union.
@@ -782,6 +786,8 @@ pub enum ScalarType {
     Int,
     /// `long`
     Long,
+    /// `uint`
+    Uint,
     /// `float`
     Float,
     /// `double`

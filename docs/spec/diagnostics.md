@@ -61,6 +61,7 @@ no public diagnostic contract ever carried the old code.
 | E-META-SYS-READONLY | error | check | [envelope.md](envelope.md) | a write reaching the read-only `meta.sys` namespace (§6: there is no write) |
 | E-EXPR | error | check | [grammar.md](grammar.md) | a Rastok expression fault, adapted from the isolated expression compiler; field `detail` |
 | E-CHECK-DEFERRED | error | check | [grammar.md](grammar.md) | grammar admitted but outside the executable subset of this build; field `construct` |
+| E-DATA-ANNOTATION | error | check | [observability.md](observability.md) | a data annotation is unknown, duplicated, malformed, dynamically parameterized, absent from its pinned registry, or illegal at its resolved canonical target; fields `annotation`, `path`, `detail` |
 | E-NODE-ANNOTATION | error | check | [aspects.md](aspects.md) | a NodeType/NodeAspect symbol is unknown, duplicated, misordered, or incompatible with the declaration kind; fields `name`, `detail` |
 | E-INSTANCE | error | check | [instances.md](instances.md) | a malformed or repeated `instance`/`lifetime` attribute, a superseded `instances`/`partition`/`per` spelling, or an instance key without one total canonical type; field `detail`; post-solver type variants additionally carry `name` |
 | E-LOOP | error | check | [loop.md](loop.md) | a malformed, duplicate, misplaced, removed, or non-finite `Loop` attribute/contract; field `detail` |

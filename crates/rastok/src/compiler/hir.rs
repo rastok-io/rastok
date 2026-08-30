@@ -12,6 +12,7 @@
 use crate::datatype::DataType;
 use crate::expr;
 use crate::node;
+use crate::schema_annotation::{AnnotatedSchema, AnnotationTable};
 
 /// The checked unit: the single `: App` graph of the deployed unit,
 /// and its lab corpus. Labs are never identity material — the
@@ -31,6 +32,11 @@ pub struct Hir {
     pub ext_schema: Vec<(String, DataType)>,
     /// The build-time assets the checker resolved (D-2026-08-10-5).
     pub assets: Vec<crate::plan::AssetBlob>,
+    /// Resolved annotated aliases, keyed by source name. Aliases remain
+    /// structural sugar for ordinary typing; this side table is the A1 proof
+    /// that their policy metadata survived expansion into canonical paths.
+    /// It cannot lower until categorical package v15 exists.
+    pub named_schemas: Vec<(String, AnnotatedSchema)>,
 }
 
 pub use crate::node::Direction;
@@ -57,6 +63,8 @@ pub struct Graph {
     /// Boundary ports declared on the graph itself; the defaults `in`
     /// and `out` exist implicitly. Identity material.
     pub boundary: Vec<crate::plan::PortDecl>,
+    /// Sparse annotation tables beside the graph ports that declare policy.
+    pub boundary_annotations: Vec<(node::Port, AnnotationTable)>,
     /// Graph-level constant bindings, in declaration order.
     pub vals: Vec<Val>,
     /// Graph-owned handlers. They use the same checked statement algebra as
@@ -123,6 +131,9 @@ pub struct Val {
     pub name: String,
     /// The bound constant.
     pub value: Const,
+    /// Policy attached to the binding's explicit resolved type, empty when
+    /// the binding was inferred or unannotated.
+    pub annotations: AnnotationTable,
 }
 
 /// Family-specific facts attached to one checked node.
@@ -166,6 +177,8 @@ pub struct Node {
     /// every conventional port with its active logical type and routing
     /// policy; operators materialize every port their body can use.
     pub ports: Vec<crate::plan::PortDecl>,
+    /// Sparse annotation tables beside explicitly typed Node ports.
+    pub port_annotations: Vec<(node::Port, AnnotationTable)>,
     /// Checked handlers, in declaration order.
     pub handlers: Vec<Handler>,
     /// Node-owned instance addressing and lifetime. Absence means the
@@ -271,6 +284,8 @@ pub struct Var {
     /// The initial value, when declared; identity material — the
     /// recovery fold reads defaults.
     pub init: Option<Const>,
+    /// Sparse policy table beside the state cell's logical type.
+    pub annotations: AnnotationTable,
 }
 
 /// One checked handler.
@@ -299,6 +314,8 @@ pub enum Statement {
         name: String,
         /// The compiled expression.
         value: expr::Tree,
+        /// Sparse policy table beside the local binding's explicit type.
+        annotations: AnnotationTable,
     },
     /// Emission on a port.
     Emit {

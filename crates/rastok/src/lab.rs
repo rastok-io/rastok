@@ -548,7 +548,7 @@ impl MockOutboundConnectorDriver {
         let mut outputs = Vec::new();
         for statement in &handler.body {
             match statement {
-                Statement::Let { name, value } => match self.lazy_eval(value, &env, slot) {
+                Statement::Let { name, value, .. } => match self.lazy_eval(value, &env, slot) {
                     Ok(value) => {
                         env.insert(name.clone(), value);
                     }

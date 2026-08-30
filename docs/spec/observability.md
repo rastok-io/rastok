@@ -1,9 +1,9 @@
 # Data policy, observations and cost
 
-> **Status: normative M1.8 target under D-2026-08-30-1.** A1 is open but no
+> **Status: normative M1.8 target under D-2026-08-30-1.** A1 is closed but no
 > annotation is executable and categorical package v14 remains current. The
-> host retains recognized syntax and the core owns its canonical side-table;
-> every use refuses by name until the complete resolver and v15 transport are
+> host resolves the closed family into canonical checked-HIR side-tables;
+> every valid use reaches the single named v15 transport gate until A2 is
 > independently validated.
 
 This document owns data classification, typed runtime observations and their
@@ -150,6 +150,12 @@ field requires a constant ISO currency. A canonical Money-shaped struct
 contains `amount: decimal(38,18)` and `currency: text`; its currency value is
 validated and a redundant constant argument refuses. Costs of different basis
 or currency remain separate observations.
+
+The source compiler checks membership against the ISO 4217 Maintenance
+Agency's current List One snapshot fetched on 2026-08-30 (SHA-256
+`838dfb991648cf36df939edd5fe3811737962b75a32252847d239cedd1e291c9`). A
+registry update is an explicit semantic migration; it is never inherited from
+the host or a dependency.
 
 `Money` is a carrier convention, not a `DataType` constructor. Arithmetic is
 checked exact decimal arithmetic. Overflow, excess precision, a malformed

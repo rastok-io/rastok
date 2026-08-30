@@ -429,6 +429,12 @@ fn flat_edge_text(edge: &FlatEdge) -> String {
 
 /// Lowers a checked graph into the shipped plan and its symbol table.
 pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
+    if !hir.named_schemas.is_empty() || graph_has_data_annotations(&hir.app) {
+        return Err(LowerError {
+            owner: hir.app.path.to_string(),
+            detail: "checked data annotations require categorical package v15 transport",
+        });
+    }
     let nodes = sorted_nodes(hir);
     for graph in sorted_graphs(hir) {
         let expected = if graph.path.is_root() {
@@ -690,7 +696,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                     .body
                     .iter()
                     .map(|statement| match statement {
-                        HirStatement::Let { name, value } => Step::Let {
+                        HirStatement::Let { name, value, .. } => Step::Let {
                             name: name.clone(),
                             expr: subst(value),
                         },
@@ -780,6 +786,31 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
     Ok((plan, symbols))
 }
 
+fn graph_has_data_annotations(graph: &HirGraph) -> bool {
+    !graph.boundary_annotations.is_empty()
+        || graph
+            .vals
+            .iter()
+            .any(|value| !value.annotations.is_empty())
+        || graph.nodes.iter().any(|node| {
+            !node.port_annotations.is_empty()
+                || node
+                    .vals
+                    .iter()
+                    .any(|value| !value.annotations.is_empty())
+                || node
+                    .vars
+                    .iter()
+                    .any(|cell| !cell.annotations.is_empty())
+                || node.handlers.iter().any(|handler| {
+                    handler.body.iter().any(|statement| {
+                        matches!(statement, HirStatement::Let { annotations, .. } if !annotations.is_empty())
+                    })
+                })
+        })
+        || graph.graphs.iter().any(graph_has_data_annotations)
+}
+
 fn lower_owner_values(values: &[crate::compiler::hir::Val]) -> Vec<OwnerValue> {
     let mut lowered: Vec<_> = values
         .iter()
@@ -821,7 +852,7 @@ fn lower_loop_spec(
 
 fn lower_statement(statement: &HirStatement, subst: &impl Fn(&expr::Tree) -> expr::Tree) -> Step {
     match statement {
-        HirStatement::Let { name, value } => Step::Let {
+        HirStatement::Let { name, value, .. } => Step::Let {
             name: name.clone(),
             expr: subst(value),
         },
@@ -1496,7 +1527,7 @@ impl Writer<'_> {
         self.count(handler.body.len());
         for statement in &handler.body {
             match statement {
-                HirStatement::Let { name, value } => {
+                HirStatement::Let { name, value, .. } => {
                     self.tag(1);
                     self.str(name);
                     self.tree(value);
@@ -1882,6 +1913,7 @@ mod tests {
     use super::DataType;
     use crate::compiler::compile;
     use crate::contract::ContractCatalog;
+    use crate::diagnostics::{Bag, SourceId};
     use crate::node;
     use crate::plan::{AttrSetting, Emission, GraphVersion, Manifest, Step};
 
@@ -1962,6 +1994,30 @@ graph m0_probe : App {
                 .expect("the operator output")
                 .ty(),
             &DataType::Text
+        );
+    }
+
+    #[test]
+    fn annotated_hir_cannot_cross_the_v14_lowering_belt() {
+        let source = "type Secret = text @secret\ngraph app : App { input in: Secret }\n";
+        let registry = ContractCatalog::try_m0().expect("the standard catalogue holds");
+        let source_id = SourceId::new(0);
+        let mut bag = Bag::new();
+        let tree = crate::compiler::parser::parse(source_id, source, &registry, &mut bag);
+        let unit = crate::compiler::check::Unit {
+            files: vec![(source_id, tree)],
+        };
+        let hir = crate::compiler::check::check(&unit, &registry, &mut bag, None)
+            .expect("A1 retains checked HIR behind its named transport refusal");
+        assert!(
+            bag.has_errors(),
+            "the public compiler stops before lowering"
+        );
+
+        let error = super::lower(&hir).expect_err("v14 cannot erase checked policy metadata");
+        assert_eq!(
+            error.detail,
+            "checked data annotations require categorical package v15 transport"
         );
     }
 
