@@ -6,7 +6,7 @@
 > journal records.
 >
 > The registry below retains the executable v7 value registry inside
-> categorical plan-package v14. V12 introduced the
+> categorical plan-package v15. V12 introduced the
 > open `media_type` scalar and its constructor, and specifies the M1.4 instance-address
 > extension under D-2026-08-18-1. V9 refuses the old unpublished v8
 > named-partition draft and carries the parent-linked owner tree, scoped edges,
@@ -48,6 +48,10 @@
 > proof adds `rastok.loop-proof.r1`. No existing causal record moves.
 > L7 adds public composition evidence and fixes runtime expression bindings,
 > but moves no semantic hash, plan package, or causal record.
+> M1.8 A2 moves every package container categorically to v15 for canonical
+> schema-policy side-tables. Unannotated bodies and semantic hashes remain
+> byte-identical; annotated programs alone gain `rastok.metering.r1`. No
+> causal record moves.
 > D-2026-08-14-1
 > transports the canonical `DataType` registry, complete resolved port types
 > and structural/tagged unions together. Decode re-derives the effective table
@@ -369,6 +373,29 @@ Loop, instance, Call and Closing forms. Categorical v14 bytes and checksums,
 semantic hashes and every existing causal trace are therefore byte-identical
 to L6. Echo/spike remains `e50026ee…`, JSONL remains `036f7ea5…`, and the
 connector-free gauge remains `0d3ad43d…`. No golden is re-blessed for L7.
+
+**M1.8 A2 annotation-transport checkpoint (2026-08-30).**
+D-2026-08-30-1 moves every package container categorically from v14 to v15.
+Sparse policy tables sit beside, rather than inside, `DataType`; the type and
+value tag registries do not move. `SchemaPath` segment tags are extend-only:
+`1 = field`, `2 = array element`, `3 = map key`, `4 = map value`,
+`5 = structural-union branch`, `6 = tagged-union case`. Annotation tags are
+likewise extend-only: `1 = sensitive` (levels 1 internal, 2 confidential,
+3 restricted), `2 = secret`, `3 = measure`, `4 = cost` (basis 1 provider-
+reported, 2 pricebook-calculated; optional currency). Root is the empty path.
+
+The version/checksum-only move leaves echo/spike at 988 B, JSONL at 1,032 B
+and gauge at 323 B. Their v15 categorical checksums are respectively
+`73ea33a7b0a9a4f25a109748b4a012c885d04cdf5aab91cc765052195394847a`,
+`3805f1eb650f74d705eaaa83ef7af48f5df85ebd6c559d130414be813008bd26`
+and `a7e7e5743273b5a31ba3c3c616bde8fd260750acce753c7c750ea3186a45adcb`.
+Echo `e50026ee…`, JSONL `036f7ea5…` and gauge `0d3ad43d…` remain exact
+unannotated semantic witnesses. Only an actual resolved table adds the
+`rastok.metering.r1` stream; its first pinned semantic witness is
+`f984f003953161e8fa93025787bd92a44fd18a8615aee1a0fbe4b9f1ba22defe`.
+Every existing causal trace remains byte-identical. Registry-free validation
+re-derives the table, while A3 remains the separately named execution-policy
+gate.
 
 ## 2. `graph_version` and the manifest
 
@@ -787,10 +814,10 @@ executions differ on this field ?* Yes → annotation. No → core.
 |---|---|
 | record kind ; full `meta.sys` (id, parent_id, origin_id, role, graph_version) ; port ; `emission_index` ; the causal record fields (consumed set, state delta, ordered emissions, call/session identities and transitions) ; every typed port payload ; explicit transaction `logical_time` when `now()` is observable | scheduler arming/due time (derivable — annotation, simulation-semantics §6.1) ; wall-clock `committed_at` ; execution durations ; cost / metrics ; host info ; runtime version ; thread ids ; socket ids ; negotiated protocol ; all non-normative diagnostics |
 
-**M1.8 target.** Source data annotations are different from the record
+**M1.8 A2 checkpoint.** Source data annotations are different from the record
 annotation ring: their canonical resolved side-table is semantic identity
-because it changes handling and accounting policy. A2 will transport that
-table categorically in package v15 without adding a `DataType` tag. Concrete
+because it changes handling and accounting policy. A2 transports that table
+categorically in package v15 without adding a `DataType` tag. Concrete
 secret values, deployment bindings, cost profiles and exporter configuration
 remain outside graph identity; run-affecting versions/digests use the boot
 attestation rule above. Typed measure/cost samples remain in the non-causal

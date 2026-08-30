@@ -2043,6 +2043,7 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
         direction: Direction::Input,
         unwired: rastok::plan::UnwiredPolicy::RequireWire,
         ty: Some(DataType::Text),
+        annotations: Default::default(),
     });
     probe
         .ports

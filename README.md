@@ -97,7 +97,8 @@ ngtcp2/Autobahn qualifications without conflating them with workspace tests.
 
 M1.7 is closed. `Loop` is the first aspect with a closed categorical plan
 contract and Registry-free control and termination proofs. Fuel-bounded and
-directly ranked Loops cross source, typed HIR and v14 round-trip with typed
+directly ranked Loops cross source, typed HIR and the v14 proof form retained
+by current v15, with typed
 `in`, aspect-owned
 `next`/`expired`, domain terminal outputs and ordinary Graph handlers. Every
 completed body application proves exactly one continuation or explicit
@@ -115,13 +116,15 @@ bounded Process retry with multi-frame data, exact exhaustion, and stale-wake
 fencing across instance Closing. See the
 [M1.7 exit report](docs/architecture/m1.7-exit-report.md).
 
-M1.8 A0-A1 are closed while categorical v14 remains current. The source
-front end recognizes the closed `@sensitive`/`@secret`/`@measure`/`@cost`
-family, resolves aliases into canonical schema paths and retains the sparse
-policy tables in checked HIR. Invalid annotations refuse through one exact
-diagnostic family; valid annotations stop at the named v15 transport gate, so
-no policy can be silently ignored or partially executed. The ordered work is
-tracked in the [M1.8 backlog](docs/architecture/m1.8-observability-backlog.md).
+M1.8 A0–A2 are closed on categorical package v15. The source front end
+recognizes the closed `@sensitive`/`@secret`/`@measure`/`@cost` family,
+resolves aliases into canonical schema paths and transports the sparse policy
+tables through checked HIR, package decode and Registry-free validation.
+Invalid or forged annotations refuse by exact path. Until A3 lands propagation
+and redaction, the VM rejects annotated plans before mutation rather than
+silently ignoring policy. Unannotated semantic hashes and all existing causal
+traces remain unchanged. The ordered work is tracked in the
+[M1.8 backlog](docs/architecture/m1.8-observability-backlog.md).
 
 The standalone runner links Process by default. Hosted features add the
 selected HTTP/WebSocket families through one registry assembly. Pass

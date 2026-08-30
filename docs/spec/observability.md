@@ -1,10 +1,11 @@
 # Data policy, observations and cost
 
-> **Status: normative M1.8 target under D-2026-08-30-1.** A1 is closed but no
-> annotation is executable and categorical package v14 remains current. The
-> host resolves the closed family into canonical checked-HIR side-tables;
-> every valid use reaches the single named v15 transport gate until A2 is
-> independently validated.
+> **Status: normative; transport is executable through M1.8 A2 under
+> D-2026-08-30-1.** Categorical package v15 transports the closed family as
+> canonical side-tables and Registry-free validation re-derives every local
+> path, target and registry claim. Policy execution remains fail-closed at the
+> VM until A3 lands propagation and redaction; annotations are never accepted
+> as inert decoration.
 
 This document owns data classification, typed runtime observations and their
 accounting projections. Logical values and assignability remain owned by
@@ -44,6 +45,15 @@ Field and case names use the same canonical name rules as `DataType`.
 Structural branch indexes refer to the canonical branch order, never source
 order. A path must resolve in the adjacent type tree; dead or mistyped paths
 refuse after decode.
+
+Categorical v15 carries this sparse table locally beside every transported
+schema that can own policy: raw and resolved port rows, nested-Graph ports,
+owner values, Node state cells and handler-local typed bindings. Empty tables
+are omitted. The decoder reconstructs the table from its structural wire form;
+validation resolves every path against the adjacent `DataType`, verifies the
+closed registry and requires raw and independently derived resolved port tables
+to agree exactly. This is A2's **type-resolution propagation evidence**. The
+operation-level rules in §4 remain the A3 gate.
 
 ## 2. Source form
 
@@ -174,6 +184,12 @@ currency and any required rounding refuse; float conversion is never implicit.
 The hosted checker derives the output table. Categorical validation derives it
 again from canonical operations and requires equality. The VM never repairs,
 guesses or reinterprets an annotation name.
+
+Until that derivation lands, a v15 plan containing any non-empty annotation
+table is valid transport but not executable policy. VM boot caches the first
+such location once; every execution entry point refuses with
+`UnsupportedDataPolicy` before journal or state mutation. An unannotated plan
+therefore performs no annotation-table walk on the transaction hot path.
 
 ## 5. Deployment bindings and secrets
 

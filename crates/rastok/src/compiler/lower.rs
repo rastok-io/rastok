@@ -27,6 +27,9 @@ use crate::plan::{
     LoopSpec as PlanLoopSpec, Node, NodeExecution, Owner, OwnerKind, OwnerPath, OwnerSlot,
     OwnerValue, PlanConstant, SemanticHash, Slot, Step, SymbolTable, VarCell,
 };
+use crate::schema_annotation::{
+    AnnotationTable, CostBasis, DataAnnotation, SchemaPathSegment, SensitivityLevel,
+};
 
 /// Computes the semantic hash of a checked graph.
 #[must_use]
@@ -53,6 +56,7 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
                 writer.ty(ty);
             }
         }
+        writer.annotations(&decl.annotations);
     }
     let mut vals: Vec<_> = hir.app.vals.iter().collect();
     vals.sort_by(|a, b| a.name.cmp(&b.name));
@@ -60,6 +64,7 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
     for val in vals {
         writer.str(&val.name);
         writer.expr(&val.value.tree.root);
+        writer.annotations(&val.annotations);
     }
     let mut nodes: Vec<_> = sorted_nodes(hir);
     writer.count(nodes.len());
@@ -93,6 +98,7 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
                         writer.ty(&ty);
                     }
                 }
+                writer.annotations(&decl.annotations);
             }
             let mut vals: Vec<_> = graph.vals.iter().collect();
             vals.sort_by(|left, right| left.name.cmp(&right.name));
@@ -100,6 +106,7 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
             for val in vals {
                 writer.str(&val.name);
                 writer.expr(&val.value.tree.root);
+                writer.annotations(&val.annotations);
             }
         }
     }
@@ -429,12 +436,6 @@ fn flat_edge_text(edge: &FlatEdge) -> String {
 
 /// Lowers a checked graph into the shipped plan and its symbol table.
 pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
-    if !hir.named_schemas.is_empty() || graph_has_data_annotations(&hir.app) {
-        return Err(LowerError {
-            owner: hir.app.path.to_string(),
-            detail: "checked data annotations require categorical package v15 transport",
-        });
-    }
     let nodes = sorted_nodes(hir);
     for graph in sorted_graphs(hir) {
         let expected = if graph.path.is_root() {
@@ -634,6 +635,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                 name: var.name.clone(),
                 ty: var.ty.clone(),
                 init: var.init.as_ref().map(|init| init.value.clone()),
+                annotations: var.annotations.clone(),
             })
             .collect();
         vars.sort_by(|a, b| a.name.cmp(&b.name));
@@ -696,9 +698,14 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                     .body
                     .iter()
                     .map(|statement| match statement {
-                        HirStatement::Let { name, value, .. } => Step::Let {
+                        HirStatement::Let {
+                            name,
+                            value,
+                            annotations,
+                        } => Step::Let {
                             name: name.clone(),
                             expr: subst(value),
+                            annotations: annotations.clone(),
                         },
                         HirStatement::SetVar { name, value } => Step::SetVar {
                             name: name.clone(),
@@ -786,31 +793,6 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
     Ok((plan, symbols))
 }
 
-fn graph_has_data_annotations(graph: &HirGraph) -> bool {
-    !graph.boundary_annotations.is_empty()
-        || graph
-            .vals
-            .iter()
-            .any(|value| !value.annotations.is_empty())
-        || graph.nodes.iter().any(|node| {
-            !node.port_annotations.is_empty()
-                || node
-                    .vals
-                    .iter()
-                    .any(|value| !value.annotations.is_empty())
-                || node
-                    .vars
-                    .iter()
-                    .any(|cell| !cell.annotations.is_empty())
-                || node.handlers.iter().any(|handler| {
-                    handler.body.iter().any(|statement| {
-                        matches!(statement, HirStatement::Let { annotations, .. } if !annotations.is_empty())
-                    })
-                })
-        })
-        || graph.graphs.iter().any(graph_has_data_annotations)
-}
-
 fn lower_owner_values(values: &[crate::compiler::hir::Val]) -> Vec<OwnerValue> {
     let mut lowered: Vec<_> = values
         .iter()
@@ -819,6 +801,7 @@ fn lower_owner_values(values: &[crate::compiler::hir::Val]) -> Vec<OwnerValue> {
             site: EvaluationSite::Plan,
             expr: value.value.tree.clone(),
             resolved: Some(value.value.value.clone()),
+            annotations: value.annotations.clone(),
         })
         .collect();
     lowered.sort_by(|left, right| left.name.cmp(&right.name));
@@ -852,9 +835,14 @@ fn lower_loop_spec(
 
 fn lower_statement(statement: &HirStatement, subst: &impl Fn(&expr::Tree) -> expr::Tree) -> Step {
     match statement {
-        HirStatement::Let { name, value, .. } => Step::Let {
+        HirStatement::Let {
+            name,
+            value,
+            annotations,
+        } => Step::Let {
             name: name.clone(),
             expr: subst(value),
+            annotations: annotations.clone(),
         },
         HirStatement::SetVar { name, value } => Step::SetVar {
             name: name.clone(),
@@ -1203,6 +1191,70 @@ impl Writer<'_> {
         });
     }
 
+    /// Conditional semantic framing for policy metadata. Empty tables write
+    /// no byte, preserving every pre-M1.8 semantic identity exactly.
+    fn annotations(&mut self, table: &AnnotationTable) {
+        if table.is_empty() {
+            return;
+        }
+        self.str("rastok.metering.r1");
+        self.count(table.entries().len());
+        for (path, set) in table.entries() {
+            self.count(path.segments().len());
+            for segment in path.segments() {
+                match segment {
+                    SchemaPathSegment::Field(name) => {
+                        self.tag(1);
+                        self.str(name);
+                    }
+                    SchemaPathSegment::ArrayElement => self.tag(2),
+                    SchemaPathSegment::MapKey => self.tag(3),
+                    SchemaPathSegment::MapValue => self.tag(4),
+                    SchemaPathSegment::StructuralUnionBranch(index) => {
+                        self.tag(5);
+                        self.u32(u32::from(*index));
+                    }
+                    SchemaPathSegment::TaggedUnionCase(name) => {
+                        self.tag(6);
+                        self.str(name);
+                    }
+                }
+            }
+            self.count(set.annotations().len());
+            for annotation in set.annotations() {
+                match annotation {
+                    DataAnnotation::Sensitive(level) => {
+                        self.tag(1);
+                        self.tag(match level {
+                            SensitivityLevel::Internal => 1,
+                            SensitivityLevel::Confidential => 2,
+                            SensitivityLevel::Restricted => 3,
+                        });
+                    }
+                    DataAnnotation::Secret => self.tag(2),
+                    DataAnnotation::Measure(id) => {
+                        self.tag(3);
+                        self.str(id.as_str());
+                    }
+                    DataAnnotation::Cost(cost) => {
+                        self.tag(4);
+                        self.tag(match cost.basis() {
+                            CostBasis::ProviderReported => 1,
+                            CostBasis::PricebookCalculated => 2,
+                        });
+                        match cost.currency() {
+                            None => self.tag(0),
+                            Some(currency) => {
+                                self.tag(1);
+                                self.str(currency.as_str());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Stable domain tags for the logical data-type vocabulary — never a Rust
     /// `Debug` rendering, which renames could silently change.
     fn ty(&mut self, ty: &DataType) {
@@ -1427,6 +1479,7 @@ impl Writer<'_> {
         for val in vals {
             self.str(&val.name);
             self.tree(&val.value.tree);
+            self.annotations(&val.annotations);
         }
         let mut attributes: Vec<_> = node.attributes().iter().collect();
         attributes.sort_by(|a, b| a.name.cmp(&b.name));
@@ -1462,6 +1515,7 @@ impl Writer<'_> {
                     self.tree(&init.tree);
                 }
             }
+            self.annotations(&var.annotations);
         }
         let mut ports: Vec<_> = node.ports.iter().collect();
         ports.sort_by_key(|decl| (decl.port.name(), decl.direction));
@@ -1483,6 +1537,7 @@ impl Writer<'_> {
                     self.ty(ty);
                 }
             }
+            self.annotations(&decl.annotations);
         }
         // Sorted by activation key: the identity is insensitive to
         // declaration order between handlers (identity.md) — only
@@ -1527,10 +1582,15 @@ impl Writer<'_> {
         self.count(handler.body.len());
         for statement in &handler.body {
             match statement {
-                HirStatement::Let { name, value, .. } => {
+                HirStatement::Let {
+                    name,
+                    value,
+                    annotations,
+                } => {
                     self.tag(1);
                     self.str(name);
                     self.tree(value);
+                    self.annotations(annotations);
                 }
                 HirStatement::Emit { port, value } => {
                     self.tag(2);
@@ -1998,7 +2058,7 @@ graph m0_probe : App {
     }
 
     #[test]
-    fn annotated_hir_cannot_cross_the_v14_lowering_belt() {
+    fn annotated_schema_crosses_source_hir_v15_and_decode_exactly() {
         let source = "type Secret = text @secret\ngraph app : App { input in: Secret }\n";
         let registry = ContractCatalog::try_m0().expect("the standard catalogue holds");
         let source_id = SourceId::new(0);
@@ -2008,17 +2068,118 @@ graph m0_probe : App {
             files: vec![(source_id, tree)],
         };
         let hir = crate::compiler::check::check(&unit, &registry, &mut bag, None)
-            .expect("A1 retains checked HIR behind its named transport refusal");
-        assert!(
-            bag.has_errors(),
-            "the public compiler stops before lowering"
+            .expect("the annotated program checks");
+        assert!(!bag.has_errors(), "v15 owns the transport gate");
+        let hash = super::semantic_hash(&hir);
+        let (raw, _) = super::lower(&hir).expect("annotations lower beside their schema");
+        let plan = crate::plan::ValidatedExecutionPlan::try_from_lowered(raw)
+            .expect("the core revalidates the annotation table");
+        let bytes = crate::plan::encode(&plan, &hash);
+        let (decoded, decoded_hash) =
+            crate::plan::decode(&bytes).expect("the v15 package reads back");
+        assert_eq!(decoded_hash, hash);
+        assert_eq!(decoded, plan);
+        let annotations = &decoded.plan().boundary[0].annotations;
+        assert!(!annotations.is_empty());
+        assert_eq!(
+            decoded.resolved_ports().boundary()[0].annotations(),
+            annotations,
+            "the raw and independently derived resolved schemas agree"
         );
 
-        let error = super::lower(&hir).expect_err("v14 cannot erase checked policy metadata");
-        assert_eq!(
-            error.detail,
-            "checked data annotations require categorical package v15 transport"
+        let mut vm = crate::runtime::vm::Vm::boot(&decoded, GraphVersion(1));
+        let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
+        assert!(matches!(
+            vm.step(&mut journal),
+            Err(crate::runtime::vm::VmError::UnsupportedDataPolicy { .. })
+        ));
+    }
+
+    #[test]
+    fn v15_transports_val_var_and_let_annotations_at_their_own_schema_sites() {
+        let source = r#"
+graph app : App {
+  input in: text
+  val label: text @sensitive(level = internal) = "demo"
+  operator o {
+    var credential: text @secret = "placeholder"
+    on in {
+      val tokens: int @measure(id = gen_ai.usage.output_tokens) = 1
+      out = .
+    }
+  }
+  . -> o -> .
+}
+"#;
+        let registry = ContractCatalog::try_m0().expect("the standard catalogue holds");
+        let compilation = compile(&[source], &registry).expect("the annotated program compiles");
+        assert!(
+            !compilation.plan.plan().owners[0].vals[0]
+                .annotations
+                .is_empty()
         );
+        assert!(
+            !compilation.plan.plan().nodes[0].vars[0]
+                .annotations
+                .is_empty()
+        );
+        assert!(matches!(
+            &compilation.plan.plan().handlers[0].body[0],
+            Step::Let { annotations, .. } if !annotations.is_empty()
+        ));
+
+        let bytes = crate::plan::encode(&compilation.plan, &compilation.hash);
+        let (decoded, hash) = crate::plan::decode(&bytes).expect("v15 reads every schema site");
+        assert_eq!(hash, compilation.hash);
+        assert_eq!(decoded, compilation.plan);
+    }
+
+    #[test]
+    fn annotations_move_only_annotated_semantic_identity() {
+        let registry = ContractCatalog::try_m0().expect("the standard catalogue holds");
+        let source = |annotation: &str| {
+            format!(
+                "graph app : App {{\n  operator o {{\n    input in: text{annotation}\n    on in {{ out = data }}\n  }}\n  . -> o -> .\n}}\n"
+            )
+        };
+        let plain =
+            compile(&[source("").as_str()], &registry).expect("the unannotated program compiles");
+        let internal = compile(
+            &[source(" @sensitive(level = internal)").as_str()],
+            &registry,
+        )
+        .expect("the annotated program compiles");
+        let spaced = compile(
+            &[source(" @sensitive( level = internal )").as_str()],
+            &registry,
+        )
+        .expect("formatting is not identity");
+        let restricted = compile(
+            &[source(" @sensitive(level = restricted)").as_str()],
+            &registry,
+        )
+        .expect("the second policy compiles");
+        assert_ne!(plain.hash, internal.hash);
+        assert_eq!(internal.hash, spaced.hash);
+        assert_ne!(internal.hash, restricted.hash);
+        assert_eq!(
+            internal.hash.to_string(),
+            "f984f003953161e8fa93025787bd92a44fd18a8615aee1a0fbe4b9f1ba22defe",
+            "the rastok.metering.r1 spelling is identity material"
+        );
+    }
+
+    #[test]
+    fn an_unused_annotated_alias_remains_structural_sugar() {
+        let registry = ContractCatalog::try_m0().expect("the standard catalogue holds");
+        let plain = compile(&["graph app : App {}\n"], &registry).expect("the empty App compiles");
+        let alias = compile(
+            &["type Secret = text @secret\ngraph app : App {}\n"],
+            &registry,
+        )
+        .expect("an unused structural alias compiles");
+        assert_eq!(plain.hash, alias.hash);
+        assert_eq!(plain.plan, alias.plan);
     }
 
     #[test]

@@ -16,6 +16,7 @@ use crate::plan::{
     Emission, EndpointRef, EvaluationSite, ExecutionPlan, HandlerOwner, InstanceLifetime, Node,
     NodeExecution, OwnerKind, OwnerSlot, Slot, Step,
 };
+use crate::schema_annotation::{AnnotatedSchema, AnnotationTable, SchemaAnnotationError};
 
 /// Why a plan is not executable — one named invariant violation. The
 /// variants are semantic, not prose: a caller can match on the class
@@ -495,6 +496,14 @@ pub enum PlanValidationError {
         /// The violated type invariant.
         reason: TypeError,
     },
+    /// Sparse policy metadata does not hold against its adjacent resolved
+    /// logical schema or a pinned semantic registry.
+    InvalidSchemaAnnotations {
+        /// Stable plan location of the annotated schema.
+        location: String,
+        /// Exact structural, target, carrier, or registry failure.
+        reason: SchemaAnnotationError,
+    },
     /// Lowering left an `asset()` call in an executable expression instead of
     /// binding it to the plan's content-addressed asset table.
     UnboundAssetCall,
@@ -894,6 +903,12 @@ impl core::fmt::Display for PlanValidationError {
             Self::InvalidDataType { location, reason } => {
                 write!(f, "invalid plan: type at {location} is invalid: {reason}")
             }
+            Self::InvalidSchemaAnnotations { location, reason } => {
+                write!(
+                    f,
+                    "invalid plan: annotations at {location} are invalid: {reason}"
+                )
+            }
             Self::UnboundAssetCall => write!(
                 f,
                 "invalid plan: an asset() call was not bound to the plan asset table"
@@ -1034,6 +1049,7 @@ impl ValidatedExecutionPlan {
         validate(&plan)?;
         let resolved_ports = super::type_resolution::resolve(&plan)?;
         verify_instance_key_types(&mut plan, &resolved_ports, key_mode)?;
+        annotations_well_formed(&plan, &resolved_ports)?;
         let depth = super::serialization::deepest_level_with_resolved(&plan, &resolved_ports);
         if depth >= crate::canonical_cbor::MAX_NESTING {
             return Err(PlanValidationError::NestingBudgetExceeded {
@@ -1511,6 +1527,90 @@ fn data_type_at(ty: &DataType, location: String) -> Result<(), PlanValidationErr
         .map_err(|reason| PlanValidationError::InvalidDataType { location, reason })
 }
 
+fn annotated_schema_at(
+    ty: &DataType,
+    annotations: &AnnotationTable,
+    location: String,
+) -> Result<(), PlanValidationError> {
+    if annotations.is_empty() {
+        return Ok(());
+    }
+    AnnotatedSchema::new(ty.clone(), annotations.clone())
+        .map(|_| ())
+        .map_err(|reason| PlanValidationError::InvalidSchemaAnnotations { location, reason })
+}
+
+fn annotations_well_formed(
+    plan: &ExecutionPlan,
+    resolved: &super::type_resolution::ResolvedPortTable,
+) -> Result<(), PlanValidationError> {
+    for port in resolved.boundary() {
+        annotated_schema_at(
+            port.ty(),
+            port.annotations(),
+            format!("boundary port `{}`", port.port()),
+        )?;
+    }
+    for (index, node) in plan.nodes.iter().enumerate() {
+        let slot = Slot::new(u32::try_from(index).unwrap_or(u32::MAX));
+        if let Some(ports) = resolved.node(slot) {
+            for port in ports {
+                annotated_schema_at(
+                    port.ty(),
+                    port.annotations(),
+                    format!("port `{}.{}`", node.path, port.port()),
+                )?;
+            }
+        }
+        for var in &node.vars {
+            annotated_schema_at(
+                &var.ty,
+                &var.annotations,
+                format!("var `{}.{}`", node.path, var.name),
+            )?;
+        }
+    }
+    for owner in &plan.owners {
+        for port in &owner.ports {
+            let location = format!("Graph port `{}.{}`", owner.path, port.port);
+            match &port.ty {
+                Some(ty) => annotated_schema_at(ty, &port.annotations, location)?,
+                None if !port.annotations.is_empty() => {
+                    return Err(PlanValidationError::InvalidSchemaAnnotations {
+                        location,
+                        reason: SchemaAnnotationError::MissingLogicalType,
+                    });
+                }
+                None => {}
+            }
+        }
+        for value in &owner.vals {
+            annotated_schema_at(
+                &value.expr.ty,
+                &value.annotations,
+                format!("value `{}.{}`", owner.path, value.name),
+            )?;
+        }
+    }
+    for (handler_index, handler) in plan.handlers.iter().enumerate() {
+        for step in &handler.body {
+            if let Step::Let {
+                name,
+                expr,
+                annotations,
+            } = step
+            {
+                annotated_schema_at(
+                    &expr.ty,
+                    annotations,
+                    format!("handler {handler_index} let `{name}`"),
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn tree_type_at(tree: &expr::Tree, location: String) -> Result<(), PlanValidationError> {
     data_type_at(&tree.ty, location)?;
     let holds = match &tree.root {
@@ -1891,7 +1991,7 @@ fn validate_network_connector(
 }
 
 /// Every type-bearing plan position passes this audit before the infallible
-/// v14 encoder can observe the plan.
+/// v15 encoder can observe the plan.
 fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     for (field, ty) in &plan.app_schema {
         data_type_at(ty, format!("meta.app.{field}"))?;
@@ -3488,7 +3588,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             validate_network_connector(node, spec)?;
             // Built-in sheets above retain their more specific missing-row
             // diagnostics. Foreign families still cannot bypass the generic
-            // exchange lifecycle retained by v14.
+            // exchange lifecycle retained by v15.
             let exits = node
                 .ports
                 .iter()
@@ -4089,7 +4189,7 @@ fn validate_graph_handler(
     }
     for step in &handler.body {
         match step {
-            Step::Let { name, expr } => {
+            Step::Let { name, expr, .. } => {
                 let ty = check_tree(expr, &signature)?;
                 signature = signature.with(name, ty);
             }

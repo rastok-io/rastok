@@ -15,6 +15,7 @@ use crate::envelope::WriteTarget;
 use crate::expr;
 use crate::node;
 use crate::plan::{Emission, EndpointRef, ExecutionPlan, PlanValidationError, Slot, Step};
+use crate::schema_annotation::AnnotationTable;
 
 /// Why one effective port type holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +32,7 @@ pub struct ResolvedPort {
     port: node::Port,
     direction: node::Direction,
     ty: DataType,
+    annotations: AnnotationTable,
     origin: TypeOrigin,
 }
 
@@ -51,6 +53,12 @@ impl ResolvedPort {
     #[must_use]
     pub const fn ty(&self) -> &DataType {
         &self.ty
+    }
+
+    /// Sparse policy metadata beside the effective logical type.
+    #[must_use]
+    pub const fn annotations(&self) -> &AnnotationTable {
+        &self.annotations
     }
 
     /// Whether the effective constraint was declared or inferred.
@@ -113,6 +121,7 @@ struct PortState {
     key: PortKey,
     direction: node::Direction,
     declared: Option<DataType>,
+    annotations: AnnotationTable,
     produced: Option<DataType>,
     required: Option<TypeRequirement>,
 }
@@ -180,6 +189,7 @@ impl<'plan> Solver<'plan> {
             key: key.clone(),
             direction,
             declared: None,
+            annotations: AnnotationTable::empty(),
             produced: None,
             required: None,
         });
@@ -204,6 +214,7 @@ impl<'plan> Solver<'plan> {
     fn collect(mut self) -> Result<Self, PlanValidationError> {
         for decl in &self.plan.boundary {
             let index = self.ensure(None, &decl.port, decl.direction);
+            self.states[index].annotations = decl.annotations.clone();
             if let Some(ty) = &decl.ty {
                 self.declare(index, ty.clone())?;
             }
@@ -211,6 +222,7 @@ impl<'plan> Solver<'plan> {
         for (node_index, planned) in self.plan.nodes.iter().enumerate() {
             for decl in &planned.ports {
                 let index = self.ensure(Some(node_index), &decl.port, decl.direction);
+                self.states[index].annotations = decl.annotations.clone();
                 if let Some(ty) = &decl.ty {
                     self.declare(index, ty.clone())?;
                 }
@@ -229,7 +241,7 @@ impl<'plan> Solver<'plan> {
         }
         for handler in &self.plan.handlers {
             let Some(node) = handler.owner.node() else {
-                // Graph boundaries carried by v14 are fully pinned and their
+                // Graph boundaries carried by v15 are fully pinned and their
                 // handlers are verified against that contract by plan
                 // validation. They do not participate in the flattened Node
                 // port fixed point.
@@ -453,6 +465,7 @@ impl<'plan> Solver<'plan> {
                 port: state.key.port,
                 direction: state.direction,
                 ty,
+                annotations: state.annotations,
                 origin: if state.declared.is_some() {
                     TypeOrigin::Declared
                 } else {

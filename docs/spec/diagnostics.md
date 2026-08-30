@@ -11,7 +11,7 @@ ordinary typed port payloads, hashed through their resolved types and
 compared in the causal core. They live in their home specs, not here.
 
 The current `E-EXPR` and `IDENT!` rows describe the expression registry first
-published in v7; categorical package v14 retains it (v12 added only the
+published in v7; categorical package v15 retains it (v12 added only the
 `media_type(text)` constructor). New or
 renamed checks are registered only when their focused negative tests
 land, never pre-allocated by a planning pass.

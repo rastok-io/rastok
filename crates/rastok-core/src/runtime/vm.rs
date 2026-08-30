@@ -53,6 +53,13 @@ use core::fmt;
 /// A machine-integrity refusal — never a business error.
 #[derive(Debug, Clone, PartialEq)]
 pub enum VmError {
+    /// Categorical policy metadata reached execution before the checker and
+    /// boundary enforcement protocol landed. Transport may precede policy,
+    /// but annotations can never execute as inert decoration.
+    UnsupportedDataPolicy {
+        /// First deterministic annotated schema site.
+        location: String,
+    },
     /// A categorical NodeAspect reached the machine before its execution
     /// gate. Transport may precede execution, but it can never degrade to the
     /// underlying plain Graph semantics.
@@ -201,6 +208,10 @@ fn expression_roots(expression: &crate::expr::Expr, roots: &mut Vec<String>) {
 impl fmt::Display for VmError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::UnsupportedDataPolicy { location } => write!(
+                f,
+                "schema annotations at {location} require the M1.8 A3 policy gate"
+            ),
             Self::UnsupportedAspect { owner, aspect } => write!(
                 f,
                 "Graph `{owner}` carries `{aspect}`, whose VM protocol has not landed"
@@ -837,6 +848,9 @@ impl Scheduler {
 #[derive(Debug)]
 pub struct Vm<'plan> {
     plan: &'plan ValidatedExecutionPlan,
+    /// First annotated schema, computed once at boot. Until A3 lands, this is
+    /// the fail-closed execution belt; unannotated transactions pay no walk.
+    unsupported_data_policy: Option<String>,
     /// Plan-derived owner chains, indexed once so route selection allocates
     /// only the dynamic reference chain it must commit.
     owner_chains: Vec<Option<Vec<OwnerSlot>>>,
@@ -895,6 +909,53 @@ pub struct Vm<'plan> {
     outputs: Vec<BoundaryOutput>,
     errors: Vec<Envelope>,
     observed: Vec<Observed>,
+}
+
+fn first_annotation_location(plan: &ValidatedExecutionPlan) -> Option<String> {
+    for port in plan.resolved_ports().boundary() {
+        if !port.annotations().is_empty() {
+            return Some(format!("boundary port `{}`", port.port()));
+        }
+    }
+    for (index, planned) in plan.nodes.iter().enumerate() {
+        let slot = Slot::new(u32::try_from(index).unwrap_or(u32::MAX));
+        if let Some(ports) = plan.resolved_ports().node(slot) {
+            for port in ports {
+                if !port.annotations().is_empty() {
+                    return Some(format!("port `{}.{}`", planned.path, port.port()));
+                }
+            }
+        }
+        for var in &planned.vars {
+            if !var.annotations.is_empty() {
+                return Some(format!("var `{}.{}`", planned.path, var.name));
+            }
+        }
+    }
+    for owner in &plan.owners {
+        for port in &owner.ports {
+            if !port.annotations.is_empty() {
+                return Some(format!("Graph port `{}.{}`", owner.path, port.port));
+            }
+        }
+        for value in &owner.vals {
+            if !value.annotations.is_empty() {
+                return Some(format!("value `{}.{}`", owner.path, value.name));
+            }
+        }
+    }
+    for (handler_index, handler) in plan.handlers.iter().enumerate() {
+        for step in &handler.body {
+            if let crate::plan::Step::Let {
+                name, annotations, ..
+            } = step
+                && !annotations.is_empty()
+            {
+                return Some(format!("handler {handler_index} let `{name}`"));
+            }
+        }
+    }
+    None
 }
 
 impl<'plan> Vm<'plan> {
@@ -960,7 +1021,12 @@ impl<'plan> Vm<'plan> {
         }
     }
 
-    fn unsupported_aspect(&self) -> Option<VmError> {
+    fn unsupported_feature(&self) -> Option<VmError> {
+        if let Some(location) = &self.unsupported_data_policy {
+            return Some(VmError::UnsupportedDataPolicy {
+                location: location.clone(),
+            });
+        }
         self.plan
             .owners
             .iter()
@@ -1031,6 +1097,7 @@ impl<'plan> Vm<'plan> {
         }
         Self {
             plan,
+            unsupported_data_policy: first_annotation_location(plan),
             owner_chains,
             has_join_activations: plan
                 .handlers
@@ -1079,7 +1146,7 @@ impl<'plan> Vm<'plan> {
     /// an address which cannot be re-derived from its recorded state, or a
     /// recovery batch larger than the bounded Worker queue.
     pub fn recover_loop_runs(&mut self, journal: &dyn Journal) -> Result<(), VmError> {
-        if let Some(error) = self.unsupported_aspect() {
+        if let Some(error) = self.unsupported_feature() {
             return Err(error);
         }
         let runs = journal.open_loop_runs().map_err(VmError::Journal)?;
@@ -1419,7 +1486,7 @@ impl<'plan> Vm<'plan> {
         session: Option<InboundSession>,
         connector_path: Option<node::Path>,
     ) -> Result<InboundAcceptance, VmError> {
-        if let Some(error) = self.unsupported_aspect() {
+        if let Some(error) = self.unsupported_feature() {
             return Err(error);
         }
         let session_admission = session;
@@ -1882,7 +1949,7 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         bindings: &mut B,
     ) -> Result<bool, VmError> {
-        if let Some(error) = self.unsupported_aspect() {
+        if let Some(error) = self.unsupported_feature() {
             return Err(error);
         }
         self.progress_closures();
@@ -2090,7 +2157,7 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         bindings: &mut B,
     ) -> Result<PumpReport, VmError> {
-        if let Some(error) = self.unsupported_aspect() {
+        if let Some(error) = self.unsupported_feature() {
             return Err(error);
         }
         let mut report = core::mem::take(&mut self.buffered_pump);

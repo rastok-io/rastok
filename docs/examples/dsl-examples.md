@@ -15,7 +15,7 @@ these concepts concretely. Stdlib aliases (`HttpClient`, `Process`,
 the primitive `operator` / `connector` keywords stand on their own
 when no alias fits.
 
-The parser is a forward lexeme stream. Categorical plan-package v14 retains
+The parser is a forward lexeme stream. Categorical plan-package v15 retains
 v9's lexical owners, Node-owned instance policy, scoped edges and phased
 immutable expressions plus the complete v7 M1.3 type/value/expression
 registry, extended by H4.1's `media_type`; it also carries stable Connector

@@ -59,13 +59,29 @@ typed `DeploymentProfile`/`BootBindings` values and parses no JSON, TOML or
 YAML. `serde_json` remains dev-only in `rastok-core`; `serde_yaml_ng` remains
 hosted OpenAPI input only.
 
-Categorical package v15 is reserved for the annotation side-table and registry
-references but does not exist until A2 lands its independent decoder and
-sabotage evidence. The `DataType` registry and tags remain unchanged. Only
-annotated programs gain the `rastok.metering.r1` semantic extension; concrete
-secret values, deployment profiles, price profiles and exporter settings do
-not become graph identity. Costs, metrics, host facts and export loss remain
-outside causal identity as already required by `identity.md`.
+Categorical package v15 carries the annotation side-table and registry
+references. A2 lands an independent decoder and Registry-free validation of
+the adjacent logical type, canonical path, target, measure carrier, currency
+authority, ordering and raw/resolved port equality. The `DataType` registry
+and tags remain unchanged. Only annotated programs gain the
+`rastok.metering.r1` semantic extension; concrete secret values, deployment
+profiles, price profiles and exporter settings do not become graph identity.
+Costs, metrics, host facts and export loss remain outside causal identity as
+already required by `identity.md`. Until A3 derives operation-level
+propagation, the VM rejects any non-empty table before mutation; transport
+never degrades into inert decoration.
+
+The A2 categorical move changes the version byte and checksum of every
+package, but no unannotated body or semantic identity. Echo/spike remains 988 B
+with v15 checksum `73ea33a7b0a9a4f25a109748b4a012c885d04cdf5aab91cc765052195394847a`;
+JSONL remains 1,032 B with
+`3805f1eb650f74d705eaaa83ef7af48f5df85ebd6c559d130414be813008bd26`;
+gauge remains 323 B with
+`a7e7e5743273b5a31ba3c3c616bde8fd260750acce753c7c750ea3186a45adcb`.
+Their semantic witnesses stay `e50026ee…`, `036f7ea5…` and `0d3ad43d…`, and
+all existing causal traces are byte-identical. The exact first annotated
+semantic witness under `rastok.metering.r1` is
+`f984f003953161e8fa93025787bd92a44fd18a8615aee1a0fbe4b9f1ba22defe`.
 
 Budget enforcement is deliberately outside M1.8. The draft aspect would need
 dynamic deployment policy, pre-effect reservation, plan-shaped typed refusal
@@ -84,7 +100,7 @@ control authority; blocking an execution thread on export; redacting with a
 post-format regex; treating unknown usage or price as zero; float money;
 implicit FX; putting live budget amounts in source; moving YAML or another
 human configuration parser into the core; serializing placeholder empty
-annotation tables before the v15 gate; and reserving Budget identities merely
+annotation tables before A2; and reserving Budget identities merely
 to preserve a design draft.
 
 ## D-2026-08-28-8 — Loop closes on public composition evidence, not a wider theorem claim

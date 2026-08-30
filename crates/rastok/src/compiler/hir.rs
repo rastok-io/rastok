@@ -35,7 +35,8 @@ pub struct Hir {
     /// Resolved annotated aliases, keyed by source name. Aliases remain
     /// structural sugar for ordinary typing; this side table is the A1 proof
     /// that their policy metadata survived expansion into canonical paths.
-    /// It cannot lower until categorical package v15 exists.
+    /// Uses of an alias lower their expanded table beside the concrete schema;
+    /// the alias declaration itself never becomes a second runtime authority.
     pub named_schemas: Vec<(String, AnnotatedSchema)>,
 }
 
@@ -63,8 +64,6 @@ pub struct Graph {
     /// Boundary ports declared on the graph itself; the defaults `in`
     /// and `out` exist implicitly. Identity material.
     pub boundary: Vec<crate::plan::PortDecl>,
-    /// Sparse annotation tables beside the graph ports that declare policy.
-    pub boundary_annotations: Vec<(node::Port, AnnotationTable)>,
     /// Graph-level constant bindings, in declaration order.
     pub vals: Vec<Val>,
     /// Graph-owned handlers. They use the same checked statement algebra as
@@ -177,8 +176,6 @@ pub struct Node {
     /// every conventional port with its active logical type and routing
     /// policy; operators materialize every port their body can use.
     pub ports: Vec<crate::plan::PortDecl>,
-    /// Sparse annotation tables beside explicitly typed Node ports.
-    pub port_annotations: Vec<(node::Port, AnnotationTable)>,
     /// Checked handlers, in declaration order.
     pub handlers: Vec<Handler>,
     /// Node-owned instance addressing and lifetime. Absence means the

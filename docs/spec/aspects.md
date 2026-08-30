@@ -1,7 +1,8 @@
 # Node kinds, types, and aspects
 
 > **Status:** normative taxonomy. `node::Kind` and `node::Type` are executable.
-> `Loop` has categorical v14 transport, Registry-free finite-control and
+> `Loop` has categorical v14 transport retained unchanged by v15,
+> Registry-free finite-control and
 > direct-integer termination validation, plus dated and publicly composed
 > execution through closed M1.7. `Saga` is recognized but
 > remains a named execution gate.
@@ -218,7 +219,7 @@ aspect wins over another. Any unqualified collision refuses.
 
 ## 8. Transport and identity
 
-The v14 plan still derives every NodeType from existing categorical facts and
+The v15 plan still derives every NodeType from existing categorical facts and
 does not serialize a duplicate claim:
 
 - parentless Graph owner → `App`;

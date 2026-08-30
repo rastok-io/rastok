@@ -186,7 +186,8 @@ The repository opens publicly with this milestone (15 October 2026).
   `node::{Kind, Type, Aspect}` are separate,
   Reducer/Router remain patterns, source spelling is singular
   `instance = { key = ... }`, and positive `Loop.fuel` plus closed
-  `Loop.delay` cross checked HIR and categorical v14. The exact Loop boundary,
+  `Loop.delay` cross checked HIR and the categorical v14 form retained by v15.
+  The exact Loop boundary,
   closed aspect contract, ordinary Graph-owned handlers, and the finite
   progress decision are re-derived Registry-free. Immediate persistent
   root-Graph Loops now execute through a per-root journal fold: exact fuel,
@@ -209,7 +210,7 @@ The repository opens publicly with this milestone (15 October 2026).
   timeline and from civil `Calendar`. L6 now admits the first proof-only Loop:
   a direct signed-integer `Loop.measure`, positive on every recurrent direct
   input path and updated as `measure - k`, produces evidence which the
-  deterministic `no_std` core re-derives after v14 decode. Non-trivial
+  deterministic `no_std` core re-derives after current decode. Non-trivial
   invariants, computed/lexicographic measures and Connector-dependent progress
   remain named theorem gates. L7 exercises the final public composition
   surface: singleton and keyed concurrent runs, ordinary nested Graphs,
@@ -230,10 +231,11 @@ The repository opens publicly with this milestone (15 October 2026).
   the calendar-safe OpenTelemetry cut are in the
   [M1.8 backlog](docs/architecture/m1.8-observability-backlog.md); the explored
   post-M1 reservation model is preserved separately in the
-  [Budget draft](docs/architecture/budget-governance-draft.md). A0-A1 are
-  closed: the source checker resolves the four contracts into canonical sparse
-  HIR side-tables and rejects every invalid form by exact path, while v14
-  execution remains fail-closed pending A2's categorical transport.
+  [Budget draft](docs/architecture/budget-governance-draft.md). A0–A2 are
+  closed: categorical v15 carries the four contracts as canonical sparse
+  side-tables through independent decode and Registry-free validation.
+  Unannotated semantic hashes and causal traces remain fixed; annotated
+  execution refuses before mutation pending A3 propagation and redaction.
 - A live view of the running graph, fed by the journal.
 - A guided example gallery seeded by the benchmark's reference
   solutions, closed by the October demo flow.

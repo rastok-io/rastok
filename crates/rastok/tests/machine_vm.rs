@@ -1402,6 +1402,7 @@ graph dynamic_binding : App {
             ty: rastok::datatype::DataType::Text,
         },
         resolved: None,
+        annotations: Default::default(),
     });
     let shell = raw
         .nodes
@@ -1493,6 +1494,7 @@ graph failing_bundle : App {
             ty: rastok::datatype::DataType::INT,
         },
         resolved: None,
+        annotations: Default::default(),
     });
     let plan = ValidatedExecutionPlan::try_new(raw)
         .expect("division is a well-typed instance expression even when this value faults");

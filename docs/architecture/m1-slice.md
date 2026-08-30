@@ -450,7 +450,10 @@ step touches `vm.rs` once.
     gaps. Export remains optional for M1 closure; Budget enforcement, FX,
     FOCUS and OpenCost are later consumers. See the ordered
     [M1.8 backlog](m1.8-observability-backlog.md) and the non-normative
-    [Budget draft](budget-governance-draft.md).
+    [Budget draft](budget-governance-draft.md). A0–A2 are closed:
+    categorical v15 transports and independently validates every local policy
+    table, while annotated execution remains fail-closed until A3 propagation
+    and redaction.
 10. **`--watch`** — the HTML+SSE mini-visualization, strictly a
     journal subscriber; the observation plane stays outside the
     core by construction.

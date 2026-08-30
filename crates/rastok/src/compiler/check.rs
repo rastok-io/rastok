@@ -30,7 +30,7 @@ use crate::node;
 use crate::schema_annotation::{
     AnnotatedSchema, AnnotationSet, AnnotationTable, CostAnnotation, CostBasis, CurrencyCode,
     DataAnnotation, MeasureCarrier, MeasureId, MeasureSource, SchemaPath, SchemaPathSegment,
-    SensitivityLevel, is_iso_4217_currency, measure_spec,
+    SensitivityLevel, is_iso_4217_currency, is_money_type, measure_spec,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -245,7 +245,6 @@ pub fn check(
         resolved_types: BTreeMap::new(),
         resolved_named_schemas: BTreeMap::new(),
         type_stack: Vec::new(),
-        first_resolved_annotation: None,
         reported_annotation_refusals: BTreeSet::new(),
         pending_instances: Vec::new(),
         pending_connector_attributes: Vec::new(),
@@ -390,11 +389,6 @@ pub fn check(
         .iter()
         .map(|field| (field.clone(), DataType::Variant))
         .collect();
-    if !checker.bag.has_errors()
-        && let Some(span) = checker.first_resolved_annotation
-    {
-        checker.deferred("categorical package v15 data-annotation transport", span);
-    }
     let named_schemas = checker.resolved_named_schemas.into_iter().collect();
     Some(Hir {
         app: checked_app,
@@ -442,9 +436,6 @@ struct Checker<'bag, 'registry> {
     resolved_named_schemas: BTreeMap<String, AnnotatedSchema>,
     /// The expansion stack — a name on it twice is a cycle.
     type_stack: Vec<String>,
-    /// First successfully resolved annotation. One fail-closed transport
-    /// diagnostic is emitted after all specific A1 judgements have run.
-    first_resolved_annotation: Option<Span>,
     /// Alias expansion may visit one faulty source annotation at several use
     /// sites. The source fault speaks once, at its own stable span.
     reported_annotation_refusals: BTreeSet<Span>,
@@ -1660,7 +1651,6 @@ impl Checker<'_, '_> {
             loop_spec: None,
             path: path.clone(),
             boundary: Vec::new(),
-            boundary_annotations: Vec::new(),
             vals: Vec::new(),
             handlers: Vec::new(),
             nodes: Vec::new(),
@@ -1746,16 +1736,12 @@ impl Checker<'_, '_> {
                         } else {
                             match node::Port::new(port.name.text.clone()) {
                                 Ok(declared) => {
-                                    if !annotations.is_empty() {
-                                        graph
-                                            .boundary_annotations
-                                            .push((declared.clone(), annotations.clone()));
-                                    }
                                     graph.boundary.push(crate::plan::PortDecl {
                                         port: declared,
                                         direction,
                                         unwired: crate::plan::UnwiredPolicy::RequireWire,
                                         ty: pinned,
+                                        annotations,
                                     });
                                 }
                                 Err(invalid) => self.bag.push(
@@ -1791,16 +1777,12 @@ impl Checker<'_, '_> {
                     }
                     match node::Port::new(port.name.text.clone()) {
                         Ok(declared) => {
-                            if !annotations.is_empty() {
-                                graph
-                                    .boundary_annotations
-                                    .push((declared.clone(), annotations));
-                            }
                             graph.boundary.push(crate::plan::PortDecl {
                                 port: declared,
                                 direction,
                                 unwired: crate::plan::UnwiredPolicy::RequireWire,
                                 ty: pinned,
+                                annotations,
                             });
                         }
                         Err(invalid) => self.bag.push(
@@ -2002,12 +1984,14 @@ impl Checker<'_, '_> {
             direction: Direction::Output,
             unwired: crate::plan::UnwiredPolicy::RequireWire,
             ty: Some(state_type),
+            annotations: AnnotationTable::empty(),
         });
         graph.boundary.push(crate::plan::PortDecl {
             port: expired,
             direction: Direction::Output,
             unwired: crate::plan::UnwiredPolicy::RequireWire,
             ty: Some(expired_type),
+            annotations: AnnotationTable::empty(),
         });
         true
     }
@@ -2030,7 +2014,6 @@ impl Checker<'_, '_> {
             vals: graph.vals.clone(),
             vars: Vec::new(),
             ports: graph.boundary.clone(),
-            port_annotations: graph.boundary_annotations.clone(),
             handlers: Vec::new(),
             instance: None,
         };
@@ -2284,6 +2267,7 @@ impl Checker<'_, '_> {
                 direction,
                 unwired: crate::plan::UnwiredPolicy::RequireWire,
                 ty: None,
+                annotations: AnnotationTable::empty(),
             });
         }
     }
@@ -2320,6 +2304,7 @@ impl Checker<'_, '_> {
                 port,
                 direction,
                 ty: None,
+                annotations: AnnotationTable::empty(),
             });
         }
     }
@@ -3632,7 +3617,6 @@ impl Checker<'_, '_> {
             vals: Vec::new(),
             vars: Vec::new(),
             ports: Vec::new(),
-            port_annotations: Vec::new(),
             handlers: Vec::new(),
             instance: None,
         };
@@ -3752,7 +3736,6 @@ impl Checker<'_, '_> {
             vals: Vec::new(),
             vars: Vec::new(),
             ports: Vec::new(),
-            port_annotations: Vec::new(),
             handlers: Vec::new(),
             instance: None,
         };
@@ -3821,6 +3804,7 @@ impl Checker<'_, '_> {
                 direction: declared.direction,
                 unwired: declared.unwired,
                 ty: None,
+                annotations: AnnotationTable::empty(),
             });
         }
         node.ports = recovery_ports;
@@ -4370,10 +4354,12 @@ impl Checker<'_, '_> {
                         continue;
                     }
                     self.add_port(node, &port.name, direction, pinned, "declared");
-                    if !annotations.is_empty()
-                        && let Ok(port_name) = node::Port::new(port.name.text.clone())
+                    if let Some(decl) = node
+                        .ports
+                        .iter_mut()
+                        .find(|decl| decl.port.name() == port.name.text)
                     {
-                        node.port_annotations.push((port_name, annotations));
+                        decl.annotations = annotations;
                     }
                 }
                 OperatorItem::Val(val) => {
@@ -4531,6 +4517,7 @@ impl Checker<'_, '_> {
                         crate::plan::UnwiredPolicy::RequireWire
                     },
                     ty,
+                    annotations: AnnotationTable::empty(),
                 });
                 true
             } else {
@@ -5334,9 +5321,6 @@ impl Checker<'_, '_> {
                 annotation.span,
                 &annotation.name.text,
             )?;
-            if self.first_resolved_annotation.is_none() {
-                self.first_resolved_annotation = Some(annotation.span);
-            }
         }
         Some(())
     }
@@ -5494,7 +5478,7 @@ impl Checker<'_, '_> {
             );
             return None;
         };
-        let is_money = money_type_holds(ty);
+        let is_money = is_money_type(ty);
         let required = if is_money {
             &["basis"][..]
         } else {
@@ -8768,9 +8752,14 @@ fn loop_proof_handlers(graph: &Graph) -> Vec<crate::plan::Handler> {
                 .body
                 .iter()
                 .map(|statement| match statement {
-                    Statement::Let { name, value, .. } => crate::plan::Step::Let {
+                    Statement::Let {
+                        name,
+                        value,
+                        annotations,
+                    } => crate::plan::Step::Let {
                         name: name.clone(),
                         expr: value.clone(),
+                        annotations: annotations.clone(),
                     },
                     Statement::Emit { port, value } => crate::plan::Step::Emit {
                         port: port.clone(),
@@ -8794,30 +8783,6 @@ fn is_bare_word(text: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
         && !text.as_bytes()[0].is_ascii_digit()
         && !matches!(text, "true" | "false" | "null")
-}
-
-fn money_type_holds(ty: &DataType) -> bool {
-    let DataType::Struct(structure) = ty else {
-        return false;
-    };
-    if structure.fields().len() != 2 {
-        return false;
-    }
-    let amount = structure
-        .fields()
-        .iter()
-        .find(|field| field.name() == "amount")
-        .map(crate::datatype::TypeField::ty);
-    let currency = structure
-        .fields()
-        .iter()
-        .find(|field| field.name() == "currency")
-        .map(crate::datatype::TypeField::ty);
-    matches!(
-        amount,
-        Some(DataType::Decimal(decimal))
-            if decimal.precision() == 38 && decimal.scale() == 18
-    ) && currency == Some(&DataType::Text)
 }
 
 fn direction_words(direction: Direction) -> &'static str {
@@ -10257,23 +10222,22 @@ graph g : App {
     }
 
     #[test]
-    fn recognized_data_annotations_refuse_until_the_v15_transport_exists() {
+    fn recognized_data_annotations_reach_the_annotated_port_schema() {
         let source = "type Prompt = text @sensitive(level = confidential)\ngraph g : App {\n  operator o {\n    input in: Prompt\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
         let (hir, bag) = check_source(source);
-        assert!(bag.has_errors(), "policy metadata must never be ignored");
-        assert_eq!(
-            diagnostic_codes(&bag),
-            [E_CHECK_DEFERRED],
-            "a valid annotation reaches exactly the categorical transport gate"
-        );
-        assert_eq!(
-            bag.diagnostics()[0].fields()[0].1,
-            "categorical package v15 data-annotation transport"
-        );
-        let hir = hir.expect("A1 still returns checked HIR behind the transport gate");
+        assert!(!bag.has_errors(), "v15 carries valid policy metadata");
+        let hir = hir.expect("the annotation reaches checked HIR");
         assert_eq!(hir.named_schemas.len(), 1);
         assert!(!hir.named_schemas[0].1.annotations().is_empty());
-        assert_eq!(hir.app.nodes[0].port_annotations.len(), 1);
+        assert!(
+            !hir.app.nodes[0]
+                .ports
+                .iter()
+                .find(|decl| decl.port.name() == "in")
+                .expect("input port")
+                .annotations
+                .is_empty()
+        );
     }
 
     #[test]
@@ -10295,7 +10259,7 @@ graph g : App {
 }
 "#;
         let (hir, bag) = check_source(source);
-        assert_eq!(diagnostic_codes(&bag), [E_CHECK_DEFERRED]);
+        assert!(!bag.has_errors());
         let hir = hir.expect("the annotated schema is checked into HIR");
         let result = hir
             .named_schemas
@@ -10316,8 +10280,12 @@ graph g : App {
                 "$.tagged_union_case(\"Done\").field(\"counts\").array_element",
             ]
         );
-        let port_paths: Vec<String> = hir.app.nodes[0].port_annotations[0]
-            .1
+        let port_paths: Vec<String> = hir.app.nodes[0]
+            .ports
+            .iter()
+            .find(|decl| decl.port.name() == "in")
+            .expect("input port")
+            .annotations
             .entries()
             .keys()
             .map(ToString::to_string)
@@ -10339,7 +10307,7 @@ graph g : App {
 }
 "#;
         let (hir, bag) = check_source(source);
-        assert_eq!(diagnostic_codes(&bag), [E_CHECK_DEFERRED]);
+        assert!(!bag.has_errors());
         let hir = hir.expect("the structural-union annotation reaches checked HIR");
         let choice = hir
             .named_schemas
@@ -10355,8 +10323,12 @@ graph g : App {
             .collect();
         assert_eq!(paths, ["$.structural_union_branch(1)"]);
         assert_eq!(
-            hir.app.nodes[0].port_annotations[0]
-                .1
+            hir.app.nodes[0]
+                .ports
+                .iter()
+                .find(|decl| decl.port.name() == "in")
+                .expect("input port")
+                .annotations
                 .entries()
                 .keys()
                 .map(ToString::to_string)
@@ -10376,8 +10348,8 @@ type Credential = text @sensitive(level = restricted) @secret
 graph g : App {}
 "#;
         let (hir, bag) = check_source(source);
-        assert_eq!(diagnostic_codes(&bag), [E_CHECK_DEFERRED]);
-        let hir = hir.expect("the checked schemas survive until the v15 gate");
+        assert!(!bag.has_errors());
+        let hir = hir.expect("the checked schemas survive resolution");
         let scalar = hir
             .named_schemas
             .iter()
@@ -10453,7 +10425,7 @@ graph g : App {
 }
 "#;
         let (hir, bag) = check_source(source);
-        assert_eq!(diagnostic_codes(&bag), [E_CHECK_DEFERRED]);
+        assert!(!bag.has_errors());
         let hir = hir.expect("binding annotations reach checked HIR");
         assert!(!hir.app.vals[0].annotations.is_empty());
         assert!(!hir.app.nodes[0].vars[0].annotations.is_empty());

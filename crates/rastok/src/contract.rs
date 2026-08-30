@@ -348,6 +348,7 @@ impl ConnectorContract {
                 direction: contract.direction,
                 unwired: contract.unwired,
                 ty: Some(ty),
+                annotations: crate::schema_annotation::AnnotationTable::empty(),
             });
         }
         Ok(ports)

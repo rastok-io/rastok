@@ -1157,7 +1157,7 @@ does not claim implementation or release status.
 | Fanout pattern | atomic multi-emit statement `(a, b, c) = x` | executable; no NodeType |
 | Dispatch pattern | Graph carrying `instance.key` | executable; no NodeType |
 | `Saga` (aspect) | Saga aspect — opt-in scoping for long-running compensation-based workflows (model in [`effects-and-sagas.md`](effects-and-sagas.md), generic mechanism in [`aspects.md`](aspects.md)) | grammar specified; runtime manager requires effective `durability >= local` |
-| `Loop` (aspect) | Loop aspect — bounded tail-recursive iteration (retry / convergent / counted), spec in [`loop.md`](loop.md) | closed M1.7 source/check/v14/runtime contract; named later limits remain fail-closed |
+| `Loop` (aspect) | Loop aspect — bounded tail-recursive iteration (retry / convergent / counted), spec in [`loop.md`](loop.md) | closed M1.7 source/check/runtime contract retained by v15; named later limits remain fail-closed |
 | `-> nothing` | Discard sink (built-in) | not a node — `nothing` as an edge target ; non-blocking drain |
 | `RequestReply` | Correlated call pattern | design intent ; may lower to Connector + Operator composition |
 | `Metrics` | Sink Connector | future |
@@ -1621,7 +1621,7 @@ field_decl        ::= field_name ":" type_ref
 tagged_case       ::= IDENT data_annotation* ( "{" ( field_decl ( ","? field_decl )* )? "}" )?
 field_name        ::= IDENT | TYPE_KW                                 // field NAMES may reuse type words (`text: text`,
                                                                       //   `kind: text`) — position disambiguates
-data_annotation   ::= "@" IDENT annotation_arguments?                // M1.8 closed data-policy family; resolved into checked HIR now, executable only after v15
+data_annotation   ::= "@" IDENT annotation_arguments?                // M1.8 closed family; transported by v15, executable only after A3 policy proof
 annotation_arguments ::= "(" named_annotation_argument ( "," named_annotation_argument )* ")"
 named_annotation_argument ::= IDENT "=" annotation_constant
 annotation_constant ::= IDENT ( "." IDENT )* | STRING | SIGNED_INT  // plan constants only; no expression or positional argument

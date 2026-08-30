@@ -571,6 +571,7 @@ fn another_contracts_codec_vocabulary_is_untouched() {
                     direction: rastok::node::Direction::Input,
                     unwired: rastok::plan::UnwiredPolicy::RequireWire,
                     ty: Some(rastok::datatype::DataType::Variant),
+                    annotations: Default::default(),
                 },
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("out").expect("a conventional port"),
@@ -579,6 +580,7 @@ fn another_contracts_codec_vocabulary_is_untouched() {
                     ty: Some(rastok::datatype::DataType::array(
                         rastok::datatype::DataType::Variant,
                     )),
+                    annotations: Default::default(),
                 },
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::conventional_exit(),
@@ -588,6 +590,7 @@ fn another_contracts_codec_vocabulary_is_untouched() {
                         rastok::boundary::process_exit_type()
                             .expect("the standard terminal type is valid"),
                     ),
+                    annotations: Default::default(),
                 },
             ];
             node.ports

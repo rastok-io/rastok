@@ -98,7 +98,7 @@ fn the_round_trip_preserves_the_plan_and_its_identity() {
 }
 
 #[test]
-fn v14_carries_one_closed_loop_and_its_spatial_graph_semantics() {
+fn v15_retains_one_closed_loop_and_its_spatial_graph_semantics() {
     let (compiled, hash, bytes) = packaged_loop();
     let root = compiled.owners.first().expect("the root owner");
     let [rastok::plan::AspectSpec::Loop(spec)] = root.aspects.as_slice() else {
@@ -129,7 +129,7 @@ fn v14_carries_one_closed_loop_and_its_spatial_graph_semantics() {
         ]
     ));
 
-    let (decoded, declared) = plan::decode(&bytes).expect("v14 revalidates Loop Registry-free");
+    let (decoded, declared) = plan::decode(&bytes).expect("v15 revalidates Loop Registry-free");
     assert_eq!(decoded, compiled);
     assert_eq!(declared, hash);
 
@@ -173,7 +173,7 @@ fn v14_carries_one_closed_loop_and_its_spatial_graph_semantics() {
 }
 
 #[test]
-fn v14_round_trips_the_checked_loop_proof() {
+fn v15_round_trips_the_checked_loop_proof() {
     let (compiled, hash, bytes) = packaged_measure_loop();
     let (decoded, declared) = plan::decode(&bytes).expect("the proof-bearing package opens");
     assert_eq!(decoded, compiled, "the certificate survives categorically");
@@ -191,7 +191,7 @@ fn v14_round_trips_the_checked_loop_proof() {
 }
 
 #[test]
-fn a_partial_foreign_or_false_loop_spec_never_enters_a_v14_plan() {
+fn a_partial_foreign_or_false_loop_spec_never_enters_a_v15_plan() {
     let (_, _, bytes) = packaged_loop();
     let mutate_aspect = |body: &mut std::collections::BTreeMap<u64, Cbor>,
                          edit: &dyn Fn(&mut Vec<Cbor>)| {
@@ -256,7 +256,7 @@ fn a_partial_foreign_or_false_loop_spec_never_enters_a_v14_plan() {
 }
 
 #[test]
-fn v14_round_trips_tagged_structural_and_narrowing_expressions() {
+fn v15_round_trips_tagged_structural_and_narrowing_expressions() {
     let sources = [
         r#"
 type Failure = union { Broken { message: text } }
@@ -296,16 +296,16 @@ graph g : App {
             &[source],
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
-        .expect("a valid v14 program");
+        .expect("a valid v15 program");
         let bytes = plan::encode(&compilation.plan, &compilation.hash);
-        let (decoded, hash) = plan::decode(&bytes).expect("the v14 package opens");
+        let (decoded, hash) = plan::decode(&bytes).expect("the v15 package opens");
         assert_eq!(decoded, compilation.plan);
         assert_eq!(hash, compilation.hash);
     }
 }
 
 #[test]
-fn v14_round_trips_the_categorical_instance_contract() {
+fn v15_round_trips_the_categorical_instance_contract() {
     let source = r#"
 graph g : App {
   input in: text
@@ -347,7 +347,7 @@ graph g : App {
     }));
 
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
-    let (decoded, hash) = plan::decode(&bytes).expect("the v14 package opens");
+    let (decoded, hash) = plan::decode(&bytes).expect("the v15 package opens");
     assert_eq!(decoded, compilation.plan);
     assert_eq!(hash, compilation.hash);
 }
@@ -407,7 +407,7 @@ graph g : App {
 }
 
 #[test]
-fn v14_round_trips_a_bounded_join_activation_without_a_second_key_authority() {
+fn v15_round_trips_a_bounded_join_activation_without_a_second_key_authority() {
     let source = r#"
 type JoinExpiry = union { JoinExpired {} }
 graph g : App {
@@ -468,6 +468,8 @@ fn the_example_package_matches_its_golden() {
     // every container categorically to v12. M1.7 L2 moves containers to v13
     // so Graph aspect contracts and their ordinary handlers can travel. L6
     // moves containers to v14 so optional checked Loop proofs are explicit.
+    // M1.8 A2 moves containers to v15 for sparse schema-policy tables. This
+    // example has none, so only the categorical version/checksum change.
     let (_, _, bytes) = packaged_example();
     let rendered: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/echo.rkp");
@@ -611,9 +613,9 @@ fn every_refusal_is_typed() {
     // v9 replaced it rather than assigning two meanings to one version; v10
     // then replaced source Connector names with stable ids, v11 adds the
     // mandatory exchange lifecycle, v12 adds the media-type registry, and
-    // v13 adds categorical Graph-aspect transport and v14 adds checked Loop
-    // proof transport.
-    for draft in [2u64, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] {
+    // v13 adds categorical Graph-aspect transport, v14 adds checked Loop
+    // proof transport, and v15 adds schema-policy side-tables.
+    for draft in [2u64, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] {
         let retired = reframe(&bytes, |pairs| {
             pairs.insert(1, Cbor::Uint(draft));
         });
@@ -780,11 +782,11 @@ fn a_non_canonical_envelope_refuses() {
     // Reordered header keys: same fields, same checksum coverage,
     // different bytes — not the canonical encoding. Raw splice,
     // because the canonical encoder itself refuses to write an
-    // unsorted map: entry (1, uint 14) is bytes 5..7, entry
+    // unsorted map: entry (1, uint 15) is bytes 5..7, entry
     // (2, bytes32) is the 35 bytes after it; swap them.
     assert_eq!(
         &bytes[4..7],
-        &[0xa4, 0x01, 0x0e],
+        &[0xa4, 0x01, 0x0f],
         "the envelope head is stable"
     );
     assert_eq!(&bytes[7..10], &[0x02, 0x58, 0x20], "the hash entry follows");
@@ -799,16 +801,16 @@ fn a_non_canonical_envelope_refuses() {
         DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))
     ));
 
-    // A non-minimal integer in the header: uint 14 written on two
-    // bytes (0x18 0x0e) instead of one. The checksum still holds —
+    // A non-minimal integer in the header: uint 15 written on two
+    // bytes (0x18 0x0f) instead of one. The checksum still holds —
     // the VALUE is unchanged — so only the canonicity check refuses.
     assert_eq!(
         &bytes[4..7],
-        &[0xa4, 0x01, 0x0e],
+        &[0xa4, 0x01, 0x0f],
         "the envelope head is stable"
     );
     let mut widened = bytes.clone();
-    widened.splice(6..7, [0x18, 0x0e]);
+    widened.splice(6..7, [0x18, 0x0f]);
     assert!(matches!(
         plan::decode(&widened).unwrap_err(),
         DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))

@@ -108,7 +108,7 @@ fn all_four_network_contracts_cross_the_source_to_validated_plan_boundary() {
         assert!(spec.attribute("versions").is_some());
         let package = rastok::plan::encode(&compilation.plan, &compilation.hash);
         let (decoded, hash) = rastok::plan::decode(&package)
-            .unwrap_or_else(|error| panic!("the {kind} v14 package must decode: {error}"));
+            .unwrap_or_else(|error| panic!("the {kind} v15 package must decode: {error}"));
         assert_eq!(hash, compilation.hash);
         assert_eq!(*decoded, *compilation.plan);
         assert_eq!(
@@ -1552,24 +1552,28 @@ fn the_global_binder_requires_callable_connectors_but_skips_pure_outbound_source
                     direction: rastok::node::Direction::Input,
                     unwired: UnwiredPolicy::RequireWire,
                     ty: Some(rastok::datatype::DataType::Text),
+                    annotations: Default::default(),
                 },
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("out").expect("a conventional port"),
                     direction: rastok::node::Direction::Output,
                     unwired: UnwiredPolicy::RequireWire,
                     ty: Some(rastok::datatype::DataType::Text),
+                    annotations: Default::default(),
                 },
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("err").expect("a conventional port"),
                     direction: rastok::node::Direction::Output,
                     unwired: UnwiredPolicy::RootSink,
                     ty: Some(rastok::datatype::DataType::Variant),
+                    annotations: Default::default(),
                 },
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("exit").expect("a conventional port"),
                     direction: rastok::node::Direction::Output,
                     unwired: UnwiredPolicy::RootSink,
                     ty: Some(rastok::datatype::DataType::Variant),
+                    annotations: Default::default(),
                 },
             ];
             node.ports

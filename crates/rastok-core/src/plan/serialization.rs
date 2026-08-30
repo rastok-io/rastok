@@ -1,7 +1,7 @@
 //! The plan package — the transportable, verifiable serialization
 //! of an [`ExecutionPlan`], per `docs/architecture/plan-package.md`.
 //!
-//! Format v14: the 4-byte magic `RKPB`, then one canonical CBOR map —
+//! Format v15: the 4-byte magic `RKPB`, then one canonical CBOR map —
 //! format version, the plan's semantic hash, the body as an embedded
 //! byte string, and a blake3 checksum over the domain-framed
 //! association `domain ‖ version ‖ semantic_hash ‖ body`, so a
@@ -35,17 +35,21 @@ use crate::plan::{
     OwnerValue, PlanConstant, PlanValidationError, PortDecl, SemanticHash, Slot, Step,
     ValidatedExecutionPlan, VarCell,
 };
+use crate::schema_annotation::{
+    AnnotationSet, AnnotationTable, CostAnnotation, CostBasis, CurrencyCode, DataAnnotation,
+    MeasureId, SchemaPath, SchemaPathSegment, SensitivityLevel,
+};
 use crate::value::Value;
 
 /// The package's leading magic.
 pub const MAGIC: [u8; 4] = *b"RKPB";
 
-/// The format version this module writes and reads. V13 retains v12's complete
-/// type and Connector transport, then adds categorical Graph boundaries,
-/// closed aspect specifications, and Graph-owned ordinary handlers.
+/// The format version this module writes and reads. V15 retains v14's complete
+/// type, Connector, Graph, and Loop transport, then carries canonical sparse
+/// annotation tables beside every annotated resolved schema.
 /// A new format is a new version, and an old decoder refuses it by name,
 /// exactly as the format note promises.
-pub const FORMAT_VERSION: u32 = 14;
+pub const FORMAT_VERSION: u32 = 15;
 
 /// The checksum domain — fixed-width framing, so the covered fields
 /// cannot slide into one another.
@@ -279,7 +283,7 @@ fn resolved_table_tree(table: &super::ResolvedPortTable) -> Cbor {
             ports
                 .iter()
                 .map(|port| {
-                    Cbor::Array(vec![
+                    let mut fields = vec![
                         Cbor::Text(port.port().name().to_string()),
                         Cbor::Uint(match port.direction() {
                             node::Direction::Input => 1,
@@ -290,7 +294,11 @@ fn resolved_table_tree(table: &super::ResolvedPortTable) -> Cbor {
                             super::TypeOrigin::Declared => 1,
                             super::TypeOrigin::Inferred => 2,
                         }),
-                    ])
+                    ];
+                    if !port.annotations().is_empty() {
+                        fields.push(annotation_table_tree(port.annotations()));
+                    }
+                    Cbor::Array(fields)
                 })
                 .collect(),
         )
@@ -311,14 +319,28 @@ fn resolved_table_from(tree: &Cbor) -> Result<Cbor, DecodeError> {
     fn row(tree: &Cbor) -> Result<Cbor, DecodeError> {
         let mut decoded = Vec::new();
         for port in array_of(tree, "resolved port row")? {
-            let [
-                Cbor::Text(name),
-                Cbor::Uint(direction),
-                ty,
-                Cbor::Uint(origin),
-            ] = array_of(port, "resolved port")?
-            else {
-                return Err(err("resolved port"));
+            let parts = array_of(port, "resolved port")?;
+            let (name, direction, ty, origin, annotations) = match parts {
+                [
+                    Cbor::Text(name),
+                    Cbor::Uint(direction),
+                    ty,
+                    Cbor::Uint(origin),
+                ] => (name, direction, ty, origin, AnnotationTable::empty()),
+                [
+                    Cbor::Text(name),
+                    Cbor::Uint(direction),
+                    ty,
+                    Cbor::Uint(origin),
+                    annotations,
+                ] => (
+                    name,
+                    direction,
+                    ty,
+                    origin,
+                    annotation_table_from(annotations)?,
+                ),
+                _ => return Err(err("resolved port")),
             };
             node::Port::new(name.clone()).map_err(|_| err("resolved port name"))?;
             if !matches!(direction, 1 | 2) {
@@ -327,12 +349,16 @@ fn resolved_table_from(tree: &Cbor) -> Result<Cbor, DecodeError> {
             if !matches!(origin, 1 | 2) {
                 return Err(err("resolved port origin"));
             }
-            decoded.push(Cbor::Array(vec![
+            let mut fields = vec![
                 Cbor::Text(name.clone()),
                 Cbor::Uint(*direction),
                 type_tree(&type_from(ty)?),
                 Cbor::Uint(*origin),
-            ]));
+            ];
+            if !annotations.is_empty() {
+                fields.push(annotation_table_tree(&annotations));
+            }
+            decoded.push(Cbor::Array(fields));
         }
         Ok(Cbor::Array(decoded))
     }
@@ -505,6 +531,9 @@ fn owner_value_tree(value: &OwnerValue) -> Cbor {
     if let Some(resolved) = &value.resolved {
         fields.insert(4, value_tagged(resolved));
     }
+    if !value.annotations.is_empty() {
+        fields.insert(5, annotation_table_tree(&value.annotations));
+    }
     Cbor::Map(fields)
 }
 
@@ -569,6 +598,14 @@ fn port_decl_tree(decl: &PortDecl) -> Cbor {
     // and canonical form stays one form per table.
     if let Some(ty) = &decl.ty {
         parts.push(type_tree(ty));
+    } else if !decl.annotations.is_empty() {
+        // The sparse table belongs beside the effective resolved schema. A
+        // foreign frontend may annotate an inferred port, so `null` preserves
+        // the raw inference variable without making the table ambiguous.
+        parts.push(Cbor::Null);
+    }
+    if !decl.annotations.is_empty() {
+        parts.push(annotation_table_tree(&decl.annotations));
     }
     Cbor::Array(parts)
 }
@@ -577,6 +614,9 @@ fn var_tree(var: &VarCell) -> Cbor {
     let mut pairs = BTreeMap::from([(1, Cbor::Text(var.name.clone())), (2, type_tree(&var.ty))]);
     if let Some(init) = &var.init {
         pairs.insert(3, value_tagged(init));
+    }
+    if !var.annotations.is_empty() {
+        pairs.insert(4, annotation_table_tree(&var.annotations));
     }
     Cbor::Map(pairs)
 }
@@ -667,11 +707,17 @@ const fn lifecycle_tag(lifecycle: node::Lifecycle) -> u64 {
 
 fn step_tree(step: &Step) -> Cbor {
     match step {
-        Step::Let { name, expr } => Cbor::Array(vec![
-            Cbor::Uint(1),
-            Cbor::Text(name.clone()),
-            tree_tree(expr),
-        ]),
+        Step::Let {
+            name,
+            expr,
+            annotations,
+        } => {
+            let mut fields = vec![Cbor::Uint(1), Cbor::Text(name.clone()), tree_tree(expr)];
+            if !annotations.is_empty() {
+                fields.push(annotation_table_tree(annotations));
+            }
+            Cbor::Array(fields)
+        }
         Step::Emit { port, value } => Cbor::Array(vec![
             Cbor::Uint(2),
             Cbor::Text(port.name().to_string()),
@@ -716,6 +762,73 @@ fn target_tree(target: &WriteTarget) -> Cbor {
         WriteTarget::App(field) => Cbor::Array(vec![Cbor::Uint(2), Cbor::Text(field.clone())]),
         WriteTarget::Ext(field) => Cbor::Array(vec![Cbor::Uint(5), Cbor::Text(field.clone())]),
     }
+}
+
+fn annotation_table_tree(table: &AnnotationTable) -> Cbor {
+    Cbor::Array(
+        table
+            .entries()
+            .iter()
+            .map(|(path, set)| Cbor::Array(vec![schema_path_tree(path), annotation_set_tree(set)]))
+            .collect(),
+    )
+}
+
+fn schema_path_tree(path: &SchemaPath) -> Cbor {
+    Cbor::Array(
+        path.segments()
+            .iter()
+            .map(|segment| match segment {
+                SchemaPathSegment::Field(name) => {
+                    Cbor::Array(vec![Cbor::Uint(1), Cbor::Text(name.clone())])
+                }
+                SchemaPathSegment::ArrayElement => Cbor::Array(vec![Cbor::Uint(2)]),
+                SchemaPathSegment::MapKey => Cbor::Array(vec![Cbor::Uint(3)]),
+                SchemaPathSegment::MapValue => Cbor::Array(vec![Cbor::Uint(4)]),
+                SchemaPathSegment::StructuralUnionBranch(index) => {
+                    Cbor::Array(vec![Cbor::Uint(5), Cbor::Uint(u64::from(*index))])
+                }
+                SchemaPathSegment::TaggedUnionCase(name) => {
+                    Cbor::Array(vec![Cbor::Uint(6), Cbor::Text(name.clone())])
+                }
+            })
+            .collect(),
+    )
+}
+
+fn annotation_set_tree(set: &AnnotationSet) -> Cbor {
+    Cbor::Array(
+        set.annotations()
+            .iter()
+            .map(|annotation| match annotation {
+                DataAnnotation::Sensitive(level) => Cbor::Array(vec![
+                    Cbor::Uint(1),
+                    Cbor::Uint(match level {
+                        SensitivityLevel::Internal => 1,
+                        SensitivityLevel::Confidential => 2,
+                        SensitivityLevel::Restricted => 3,
+                    }),
+                ]),
+                DataAnnotation::Secret => Cbor::Array(vec![Cbor::Uint(2)]),
+                DataAnnotation::Measure(id) => {
+                    Cbor::Array(vec![Cbor::Uint(3), Cbor::Text(id.as_str().to_string())])
+                }
+                DataAnnotation::Cost(cost) => {
+                    let mut fields = vec![
+                        Cbor::Uint(4),
+                        Cbor::Uint(match cost.basis() {
+                            CostBasis::ProviderReported => 1,
+                            CostBasis::PricebookCalculated => 2,
+                        }),
+                    ];
+                    if let Some(currency) = cost.currency() {
+                        fields.push(Cbor::Text(currency.as_str().to_string()));
+                    }
+                    Cbor::Array(fields)
+                }
+            })
+            .collect(),
+    )
 }
 
 fn tree_tree(tree: &expr::Tree) -> Cbor {
@@ -1041,6 +1154,13 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
         tree(&constant.expr, level + 2, stack);
         stack.push(Item::Val(&constant.resolved, level + 1));
     }
+    /// An annotation table at `level`: row, path/set, and segment/annotation
+    /// arrays add four fixed levels. Path length changes width, never depth.
+    fn annotations(table: &AnnotationTable, level: usize, max: &mut usize) {
+        if !table.is_empty() {
+            *max = (*max).max(level + 4);
+        }
+    }
     // The root map's table arrays sit at level 1.
     let mut max = 1usize;
     let mut stack: Vec<Item<'_>> = Vec::new();
@@ -1074,6 +1194,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
             if let Some(ty) = &decl.ty {
                 stack.push(Item::Ty(ty, 5));
             }
+            annotations(&decl.annotations, 5, &mut max);
         }
         for var in &node.vars {
             // var map at 4, its fields at 5.
@@ -1082,6 +1203,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
             if let Some(init) = &var.init {
                 stack.push(Item::Val(init, 5));
             }
+            annotations(&var.annotations, 5, &mut max);
         }
     }
     for owner in &plan.owners {
@@ -1096,12 +1218,14 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
             if let Some(resolved) = &value.resolved {
                 stack.push(Item::Val(resolved, 5));
             }
+            annotations(&value.annotations, 5, &mut max);
         }
         for decl in &owner.ports {
             // owner port array at 3, declaration array at 4, fields at 5.
             if let Some(ty) = &decl.ty {
                 stack.push(Item::Ty(ty, 5));
             }
+            annotations(&decl.annotations, 5, &mut max);
         }
         for aspect in &owner.aspects {
             let AspectSpec::Loop(spec) = aspect;
@@ -1138,6 +1262,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
         if let Some(ty) = &decl.ty {
             stack.push(Item::Ty(ty, 3));
         }
+        annotations(&decl.annotations, 3, &mut max);
     }
     if !plan.edges.is_empty() {
         // edge array at 2, endpoint arrays at 3, their fields at 4.
@@ -1154,7 +1279,15 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
             // step array at 4, tag and name at 5.
             max = max.max(5);
             match step {
-                Step::Let { expr, .. } | Step::SetVar { expr, .. } => tree(expr, 6, &mut stack),
+                Step::Let {
+                    expr,
+                    annotations: table,
+                    ..
+                } => {
+                    tree(expr, 6, &mut stack);
+                    annotations(table, 5, &mut max);
+                }
+                Step::SetVar { expr, .. } => tree(expr, 6, &mut stack),
                 Step::Stop => {}
                 Step::Emit { value, .. } => match value {
                     // emission array at 5, its tag at 6.
@@ -1366,12 +1499,18 @@ pub(crate) fn deepest_level_with_resolved(
     let mut max = deepest_level(plan).max(2);
     for port in resolved.boundary() {
         max = max.max(4 + data_type_level(port.ty()));
+        if !port.annotations().is_empty() {
+            max = max.max(8);
+        }
     }
     let mut slot = 0_u32;
     while let Some(row) = resolved.node(Slot::new(slot)) {
         max = max.max(3);
         for port in row {
             max = max.max(5 + data_type_level(port.ty()));
+            if !port.annotations().is_empty() {
+                max = max.max(9);
+            }
         }
         let Some(next) = slot.checked_add(1) else {
             break;
@@ -1728,6 +1867,83 @@ fn site_from(tree: &Cbor) -> Result<EvaluationSite, DecodeError> {
     }
 }
 
+fn annotation_table_from(tree: &Cbor) -> Result<AnnotationTable, DecodeError> {
+    let entries = array_of(tree, "annotation table")?
+        .iter()
+        .map(|entry| match array_of(entry, "annotation row")? {
+            [path, annotations] => Ok((schema_path_from(path)?, annotation_set_from(annotations)?)),
+            _ => Err(err("annotation row")),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    AnnotationTable::new(entries)
+        .map_err(|error| DecodeError::Malformed(format!("invalid annotation table: {error}")))
+}
+
+fn schema_path_from(tree: &Cbor) -> Result<SchemaPath, DecodeError> {
+    let segments = array_of(tree, "schema path")?
+        .iter()
+        .map(|segment| match array_of(segment, "schema path segment")? {
+            [Cbor::Uint(1), Cbor::Text(name)] => Ok(SchemaPathSegment::Field(name.clone())),
+            [Cbor::Uint(2)] => Ok(SchemaPathSegment::ArrayElement),
+            [Cbor::Uint(3)] => Ok(SchemaPathSegment::MapKey),
+            [Cbor::Uint(4)] => Ok(SchemaPathSegment::MapValue),
+            [Cbor::Uint(5), Cbor::Uint(index)] => Ok(SchemaPathSegment::StructuralUnionBranch(
+                u16::try_from(*index).map_err(|_| err("structural union branch index"))?,
+            )),
+            [Cbor::Uint(6), Cbor::Text(name)] => {
+                Ok(SchemaPathSegment::TaggedUnionCase(name.clone()))
+            }
+            _ => Err(err("schema path segment")),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(SchemaPath::new(segments))
+}
+
+fn annotation_set_from(tree: &Cbor) -> Result<AnnotationSet, DecodeError> {
+    let annotations = array_of(tree, "annotation set")?
+        .iter()
+        .map(annotation_from)
+        .collect::<Result<Vec<_>, _>>()?;
+    AnnotationSet::new(annotations)
+        .map_err(|error| DecodeError::Malformed(format!("invalid annotation set: {error}")))
+}
+
+fn annotation_from(tree: &Cbor) -> Result<DataAnnotation, DecodeError> {
+    match array_of(tree, "annotation")? {
+        [Cbor::Uint(1), Cbor::Uint(level)] => Ok(DataAnnotation::Sensitive(match level {
+            1 => SensitivityLevel::Internal,
+            2 => SensitivityLevel::Confidential,
+            3 => SensitivityLevel::Restricted,
+            _ => return Err(err("sensitivity level")),
+        })),
+        [Cbor::Uint(2)] => Ok(DataAnnotation::Secret),
+        [Cbor::Uint(3), Cbor::Text(id)] => Ok(DataAnnotation::Measure(
+            MeasureId::new(id.clone())
+                .map_err(|error| DecodeError::Malformed(format!("invalid measure id: {error}")))?,
+        )),
+        [Cbor::Uint(4), Cbor::Uint(basis)] => Ok(DataAnnotation::Cost(CostAnnotation::money(
+            cost_basis_from(*basis)?,
+        ))),
+        [Cbor::Uint(4), Cbor::Uint(basis), Cbor::Text(currency)] => {
+            Ok(DataAnnotation::Cost(CostAnnotation::scalar(
+                CurrencyCode::new(currency.clone()).map_err(|error| {
+                    DecodeError::Malformed(format!("invalid currency code: {error}"))
+                })?,
+                cost_basis_from(*basis)?,
+            )))
+        }
+        _ => Err(err("annotation")),
+    }
+}
+
+fn cost_basis_from(tag: u64) -> Result<CostBasis, DecodeError> {
+    match tag {
+        1 => Ok(CostBasis::ProviderReported),
+        2 => Ok(CostBasis::PricebookCalculated),
+        _ => Err(err("cost basis")),
+    }
+}
+
 fn owner_value_from(tree: &Cbor) -> Result<OwnerValue, DecodeError> {
     let fields = map_of(tree, "owner value")?;
     Ok(OwnerValue {
@@ -1735,6 +1951,10 @@ fn owner_value_from(tree: &Cbor) -> Result<OwnerValue, DecodeError> {
         site: site_from(get(fields, 2, "owner value site")?)?,
         expr: tree_from(get(fields, 3, "owner value expression")?)?,
         resolved: find(fields, 4).map(value_from).transpose()?,
+        annotations: find(fields, 5)
+            .map(annotation_table_from)
+            .transpose()?
+            .unwrap_or_else(AnnotationTable::empty),
     })
 }
 
@@ -1809,9 +2029,25 @@ fn attr_from(tree: &Cbor) -> Result<AttrSetting, DecodeError> {
 }
 
 fn port_decl_from(tree: &Cbor) -> Result<PortDecl, DecodeError> {
-    let (name, direction, ty) = match array_of(tree, "port declaration")? {
-        [Cbor::Text(name), Cbor::Uint(direction)] => (name, direction, None),
-        [Cbor::Text(name), Cbor::Uint(direction), ty] => (name, direction, Some(type_from(ty)?)),
+    let (name, direction, ty, annotations) = match array_of(tree, "port declaration")? {
+        [Cbor::Text(name), Cbor::Uint(direction)] => {
+            (name, direction, None, AnnotationTable::empty())
+        }
+        [Cbor::Text(name), Cbor::Uint(direction), ty] => (
+            name,
+            direction,
+            Some(type_from(ty)?),
+            AnnotationTable::empty(),
+        ),
+        [Cbor::Text(name), Cbor::Uint(direction), ty, annotations] => (
+            name,
+            direction,
+            match ty {
+                Cbor::Null => None,
+                ty => Some(type_from(ty)?),
+            },
+            annotation_table_from(annotations)?,
+        ),
         _ => return Err(err("port declaration")),
     };
     let (direction, unwired) = match direction {
@@ -1826,6 +2062,7 @@ fn port_decl_from(tree: &Cbor) -> Result<PortDecl, DecodeError> {
         direction,
         unwired,
         ty,
+        annotations,
     })
 }
 
@@ -1837,7 +2074,16 @@ fn var_from(tree: &Cbor) -> Result<VarCell, DecodeError> {
         Some(value) => Some(value_from(value)?),
         None => None,
     };
-    Ok(VarCell { name, ty, init })
+    let annotations = find(pairs, 4)
+        .map(annotation_table_from)
+        .transpose()?
+        .unwrap_or_else(AnnotationTable::empty);
+    Ok(VarCell {
+        name,
+        ty,
+        init,
+        annotations,
+    })
 }
 
 fn edge_from(tree: &Cbor) -> Result<Edge, DecodeError> {
@@ -1960,6 +2206,12 @@ fn step_from(tree: &Cbor) -> Result<Step, DecodeError> {
         [Cbor::Uint(1), Cbor::Text(name), expr] => Ok(Step::Let {
             name: name.clone(),
             expr: tree_from(expr)?,
+            annotations: AnnotationTable::empty(),
+        }),
+        [Cbor::Uint(1), Cbor::Text(name), expr, annotations] => Ok(Step::Let {
+            name: name.clone(),
+            expr: tree_from(expr)?,
+            annotations: annotation_table_from(annotations)?,
         }),
         [Cbor::Uint(2), Cbor::Text(port), emission] => Ok(Step::Emit {
             port: node::Port::new(port.clone()).map_err(|_| err("emit port"))?,
@@ -2671,6 +2923,419 @@ mod tests {
         bytes
     }
 
+    fn one_annotation(annotation: DataAnnotation) -> AnnotationSet {
+        AnnotationSet::new(vec![annotation])
+            .unwrap_or_else(|error| panic!("one annotation is canonical: {error}"))
+    }
+
+    fn annotated_boundary_schema(
+        ty: DataType,
+        annotations: AnnotationTable,
+    ) -> ValidatedExecutionPlan {
+        ValidatedExecutionPlan::try_new(ExecutionPlan {
+            owners: vec![root_owner()],
+            nodes: vec![],
+            boundary: vec![PortDecl {
+                port: port("in"),
+                direction: node::Direction::Input,
+                unwired: crate::plan::UnwiredPolicy::RequireWire,
+                ty: Some(ty),
+                annotations,
+            }],
+            edges: vec![],
+            handlers: vec![],
+            app_schema: vec![],
+            ext_schema: vec![],
+            assets: vec![],
+        })
+        .unwrap_or_else(|error| panic!("annotated boundary plan validates: {error}"))
+    }
+
+    fn annotated_boundary_plan(annotation: DataAnnotation) -> ValidatedExecutionPlan {
+        let annotations =
+            AnnotationTable::new(vec![(SchemaPath::root(), one_annotation(annotation))])
+                .unwrap_or_else(|error| panic!("one annotation row is canonical: {error}"));
+        annotated_boundary_schema(DataType::INT, annotations)
+    }
+
+    #[test]
+    fn v15_annotation_registry_and_structural_paths_have_one_wire_spelling() {
+        let eur = CurrencyCode::new("EUR")
+            .unwrap_or_else(|error| panic!("registered currency spelling: {error}"));
+        let measure = MeasureId::new("gen_ai.usage.input_tokens")
+            .unwrap_or_else(|error| panic!("registered measure spelling: {error}"));
+        let root = AnnotationSet::new(vec![
+            DataAnnotation::Sensitive(SensitivityLevel::Restricted),
+            DataAnnotation::Secret,
+            DataAnnotation::Measure(measure),
+            DataAnnotation::Cost(CostAnnotation::scalar(eur, CostBasis::ProviderReported)),
+        ])
+        .unwrap_or_else(|error| panic!("closed annotation set: {error}"));
+        let sensitive = || one_annotation(DataAnnotation::Sensitive(SensitivityLevel::Internal));
+        let table = AnnotationTable::new(vec![
+            (SchemaPath::root(), root),
+            (
+                SchemaPath::new(vec![SchemaPathSegment::Field(text("field"))]),
+                sensitive(),
+            ),
+            (
+                SchemaPath::new(vec![SchemaPathSegment::ArrayElement]),
+                sensitive(),
+            ),
+            (
+                SchemaPath::new(vec![SchemaPathSegment::MapKey]),
+                sensitive(),
+            ),
+            (
+                SchemaPath::new(vec![SchemaPathSegment::MapValue]),
+                sensitive(),
+            ),
+            (
+                SchemaPath::new(vec![SchemaPathSegment::StructuralUnionBranch(7)]),
+                sensitive(),
+            ),
+            (
+                SchemaPath::new(vec![SchemaPathSegment::TaggedUnionCase(text("Done"))]),
+                sensitive(),
+            ),
+        ])
+        .unwrap_or_else(|error| panic!("distinct structural paths: {error}"));
+        let wire = annotation_table_tree(&table);
+        assert_eq!(
+            wire,
+            Cbor::Array(vec![
+                Cbor::Array(vec![
+                    Cbor::Array(vec![]),
+                    Cbor::Array(vec![
+                        Cbor::Array(vec![Cbor::Uint(1), Cbor::Uint(3)]),
+                        Cbor::Array(vec![Cbor::Uint(2)]),
+                        Cbor::Array(vec![
+                            Cbor::Uint(3),
+                            Cbor::Text(text("gen_ai.usage.input_tokens")),
+                        ]),
+                        Cbor::Array(vec![Cbor::Uint(4), Cbor::Uint(1), Cbor::Text(text("EUR")),]),
+                    ]),
+                ]),
+                Cbor::Array(vec![
+                    Cbor::Array(vec![Cbor::Array(vec![
+                        Cbor::Uint(1),
+                        Cbor::Text(text("field")),
+                    ])]),
+                    Cbor::Array(vec![Cbor::Array(vec![Cbor::Uint(1), Cbor::Uint(1)])]),
+                ]),
+                Cbor::Array(vec![
+                    Cbor::Array(vec![Cbor::Array(vec![Cbor::Uint(2)])]),
+                    Cbor::Array(vec![Cbor::Array(vec![Cbor::Uint(1), Cbor::Uint(1)])]),
+                ]),
+                Cbor::Array(vec![
+                    Cbor::Array(vec![Cbor::Array(vec![Cbor::Uint(3)])]),
+                    Cbor::Array(vec![Cbor::Array(vec![Cbor::Uint(1), Cbor::Uint(1)])]),
+                ]),
+                Cbor::Array(vec![
+                    Cbor::Array(vec![Cbor::Array(vec![Cbor::Uint(4)])]),
+                    Cbor::Array(vec![Cbor::Array(vec![Cbor::Uint(1), Cbor::Uint(1)])]),
+                ]),
+                Cbor::Array(vec![
+                    Cbor::Array(vec![Cbor::Array(vec![Cbor::Uint(5), Cbor::Uint(7)])]),
+                    Cbor::Array(vec![Cbor::Array(vec![Cbor::Uint(1), Cbor::Uint(1)])]),
+                ]),
+                Cbor::Array(vec![
+                    Cbor::Array(vec![Cbor::Array(vec![
+                        Cbor::Uint(6),
+                        Cbor::Text(text("Done")),
+                    ])]),
+                    Cbor::Array(vec![Cbor::Array(vec![Cbor::Uint(1), Cbor::Uint(1)])]),
+                ]),
+            ])
+        );
+        assert_eq!(annotation_table_from(&wire), Ok(table));
+    }
+
+    #[test]
+    fn v15_round_trips_annotations_in_raw_and_resolved_port_tables() {
+        let plan = annotated_boundary_plan(DataAnnotation::Measure(
+            MeasureId::new("gen_ai.usage.input_tokens")
+                .unwrap_or_else(|error| panic!("registered measure: {error}")),
+        ));
+        let package = encode(&plan, &SemanticHash::from_bytes([0; 32]));
+        let (decoded, _) = decode(&package).expect("v15 annotations read back");
+        assert_eq!(decoded, plan);
+        assert_eq!(
+            decoded.plan().boundary[0].annotations,
+            *decoded.resolved_ports().boundary()[0].annotations()
+        );
+    }
+
+    #[test]
+    fn v15_sabotage_cannot_erase_or_forge_resolved_annotations() {
+        let plan =
+            annotated_boundary_plan(DataAnnotation::Sensitive(SensitivityLevel::Confidential));
+        let package = encode(&plan, &SemanticHash::from_bytes([0; 32]));
+
+        let erase_claim = mutate_package_body(&package, |body| {
+            let Cbor::Array(table) = body.get_mut(&8).unwrap_or_else(|| panic!("resolved table"))
+            else {
+                panic!("resolved table array");
+            };
+            let Cbor::Array(boundary) = &mut table[0] else {
+                panic!("resolved boundary");
+            };
+            let Cbor::Array(port) = &mut boundary[0] else {
+                panic!("resolved port");
+            };
+            let _ = port.pop();
+        });
+        assert_eq!(
+            decode(&erase_claim),
+            Err(DecodeError::ResolvedPortTableMismatch)
+        );
+
+        let erase_source = mutate_package_body(&package, |body| {
+            let Cbor::Array(boundary) = body.get_mut(&2).unwrap_or_else(|| panic!("boundary"))
+            else {
+                panic!("boundary array");
+            };
+            let Cbor::Array(port) = &mut boundary[0] else {
+                panic!("port declaration");
+            };
+            let _ = port.pop();
+        });
+        assert_eq!(
+            decode(&erase_source),
+            Err(DecodeError::ResolvedPortTableMismatch)
+        );
+    }
+
+    #[test]
+    fn v15_sabotage_rederives_annotation_paths_and_measure_membership() {
+        let plan = annotated_boundary_plan(DataAnnotation::Measure(
+            MeasureId::new("gen_ai.usage.input_tokens")
+                .unwrap_or_else(|error| panic!("registered measure: {error}")),
+        ));
+        let package = encode(&plan, &SemanticHash::from_bytes([0; 32]));
+
+        let bad_path = mutate_package_body(&package, |body| {
+            let Cbor::Array(boundary) = body.get_mut(&2).unwrap_or_else(|| panic!("boundary"))
+            else {
+                panic!("boundary array");
+            };
+            let Cbor::Array(port) = &mut boundary[0] else {
+                panic!("port declaration");
+            };
+            let Cbor::Array(rows) = &mut port[3] else {
+                panic!("annotation table");
+            };
+            let Cbor::Array(row) = &mut rows[0] else {
+                panic!("annotation row");
+            };
+            row[0] = Cbor::Array(vec![Cbor::Array(vec![Cbor::Uint(2)])]);
+        });
+        assert!(matches!(
+            decode(&bad_path),
+            Err(DecodeError::Invalid(
+                PlanValidationError::InvalidSchemaAnnotations {
+                    reason: crate::schema_annotation::SchemaAnnotationError::InvalidPath { .. },
+                    ..
+                }
+            ))
+        ));
+
+        let unknown_measure = mutate_package_body(&package, |body| {
+            let Cbor::Array(boundary) = body.get_mut(&2).unwrap_or_else(|| panic!("boundary"))
+            else {
+                panic!("boundary array");
+            };
+            let Cbor::Array(port) = &mut boundary[0] else {
+                panic!("port declaration");
+            };
+            let Cbor::Array(rows) = &mut port[3] else {
+                panic!("annotation table");
+            };
+            let Cbor::Array(row) = &mut rows[0] else {
+                panic!("annotation row");
+            };
+            let Cbor::Array(annotations) = &mut row[1] else {
+                panic!("annotation set");
+            };
+            let Cbor::Array(measure) = &mut annotations[0] else {
+                panic!("measure annotation");
+            };
+            measure[1] = Cbor::Text(text("rastok.unknown"));
+        });
+        assert!(matches!(
+            decode(&unknown_measure),
+            Err(DecodeError::Invalid(
+                PlanValidationError::InvalidSchemaAnnotations {
+                    reason: crate::schema_annotation::SchemaAnnotationError::UnknownMeasureId(_),
+                    ..
+                }
+            ))
+        ));
+    }
+
+    #[test]
+    fn v15_sabotage_cannot_detach_graph_policy_from_its_type() {
+        let mut nested = root_owner();
+        nested.path =
+            OwnerPath::new(["nested"]).unwrap_or_else(|error| panic!("nested owner path: {error}"));
+        nested.parent = Some(OwnerSlot::new(0));
+        nested.ports = vec![PortDecl {
+            port: port("in"),
+            direction: node::Direction::Input,
+            unwired: crate::plan::UnwiredPolicy::RequireWire,
+            ty: Some(DataType::Text),
+            annotations: AnnotationTable::new(vec![(
+                SchemaPath::root(),
+                one_annotation(DataAnnotation::Secret),
+            )])
+            .unwrap_or_else(|error| panic!("one policy row: {error}")),
+        }];
+        let plan = ValidatedExecutionPlan::try_new(ExecutionPlan {
+            owners: vec![root_owner(), nested],
+            nodes: vec![],
+            boundary: vec![],
+            edges: vec![],
+            handlers: vec![],
+            app_schema: vec![],
+            ext_schema: vec![],
+            assets: vec![],
+        })
+        .unwrap_or_else(|error| panic!("typed nested Graph policy validates: {error}"));
+        let package = encode(&plan, &SemanticHash::from_bytes([0; 32]));
+        let detached = mutate_package_body(&package, |body| {
+            let Cbor::Array(owners) = body.get_mut(&9).unwrap_or_else(|| panic!("owners")) else {
+                panic!("owner array");
+            };
+            let Cbor::Map(nested) = &mut owners[1] else {
+                panic!("nested owner");
+            };
+            let Cbor::Array(ports) = nested.get_mut(&6).unwrap_or_else(|| panic!("Graph ports"))
+            else {
+                panic!("Graph port array");
+            };
+            let Cbor::Array(port) = &mut ports[0] else {
+                panic!("Graph port declaration");
+            };
+            port[2] = Cbor::Null;
+        });
+        assert!(matches!(
+            decode(&detached),
+            Err(DecodeError::Invalid(
+                PlanValidationError::InvalidSchemaAnnotations {
+                    reason: crate::schema_annotation::SchemaAnnotationError::MissingLogicalType,
+                    ..
+                }
+            ))
+        ));
+    }
+
+    #[test]
+    fn v15_sabotage_cannot_reorder_annotation_paths_or_kinds() {
+        let ty = DataType::Struct(
+            StructType::new(vec![
+                TypeField::new("a", DataType::Text),
+                TypeField::new("b", DataType::Text),
+            ])
+            .unwrap_or_else(|error| panic!("closed probe struct: {error}")),
+        );
+        let root = AnnotationSet::new(vec![
+            DataAnnotation::Secret,
+            DataAnnotation::Sensitive(SensitivityLevel::Restricted),
+        ])
+        .unwrap_or_else(|error| panic!("root annotation set: {error}"));
+        let annotations = AnnotationTable::new(vec![
+            (SchemaPath::root(), root),
+            (
+                SchemaPath::new(vec![SchemaPathSegment::Field(text("a"))]),
+                one_annotation(DataAnnotation::Sensitive(SensitivityLevel::Internal)),
+            ),
+            (
+                SchemaPath::new(vec![SchemaPathSegment::Field(text("b"))]),
+                one_annotation(DataAnnotation::Sensitive(SensitivityLevel::Confidential)),
+            ),
+        ])
+        .unwrap_or_else(|error| panic!("ordered annotation table: {error}"));
+        let plan = annotated_boundary_schema(ty, annotations);
+        let package = encode(&plan, &SemanticHash::from_bytes([0; 32]));
+
+        let mutate_both_tables = |edit: fn(&mut [Cbor])| {
+            mutate_package_body(&package, |body| {
+                let Cbor::Array(boundary) = body.get_mut(&2).unwrap_or_else(|| panic!("boundary"))
+                else {
+                    panic!("boundary array");
+                };
+                let Cbor::Array(port) = &mut boundary[0] else {
+                    panic!("port declaration");
+                };
+                let Cbor::Array(raw_rows) = &mut port[3] else {
+                    panic!("raw annotation table");
+                };
+                edit(raw_rows);
+
+                let Cbor::Array(resolved) =
+                    body.get_mut(&8).unwrap_or_else(|| panic!("resolved table"))
+                else {
+                    panic!("resolved table array");
+                };
+                let Cbor::Array(resolved_boundary) = &mut resolved[0] else {
+                    panic!("resolved boundary");
+                };
+                let Cbor::Array(resolved_port) = &mut resolved_boundary[0] else {
+                    panic!("resolved port");
+                };
+                let Cbor::Array(resolved_rows) = &mut resolved_port[4] else {
+                    panic!("resolved annotation table");
+                };
+                edit(resolved_rows);
+            })
+        };
+
+        fn reverse_rows(rows: &mut [Cbor]) {
+            rows.reverse();
+        }
+        let reordered_paths = mutate_both_tables(reverse_rows);
+        assert_eq!(
+            decode(&reordered_paths),
+            Err(DecodeError::NonCanonical(
+                "the body is not the canonical encoding of its plan"
+            ))
+        );
+
+        fn reverse_root_kind_order(rows: &mut [Cbor]) {
+            let Cbor::Array(root) = &mut rows[0] else {
+                panic!("root annotation row");
+            };
+            let Cbor::Array(kinds) = &mut root[1] else {
+                panic!("root annotation set");
+            };
+            kinds.reverse();
+        }
+        let reordered_kinds = mutate_both_tables(reverse_root_kind_order);
+        assert_eq!(
+            decode(&reordered_kinds),
+            Err(DecodeError::NonCanonical(
+                "the body is not the canonical encoding of its plan"
+            ))
+        );
+    }
+
+    #[test]
+    fn v15_categorically_refuses_a_v14_envelope() {
+        let package = encode(
+            &annotated_boundary_plan(DataAnnotation::Sensitive(SensitivityLevel::Internal)),
+            &SemanticHash::from_bytes([0; 32]),
+        );
+        let (Cbor::Map(mut envelope), _) =
+            canonical_cbor::decode(&package[MAGIC.len()..]).expect("v15 envelope")
+        else {
+            panic!("map envelope");
+        };
+        envelope.insert(1, Cbor::Uint(14));
+        let mut v14 = MAGIC.to_vec();
+        v14.extend_from_slice(&canonical_cbor::encode(&Cbor::Map(envelope)));
+        assert_eq!(decode(&v14), Err(DecodeError::UnsupportedVersion(14)));
+    }
+
     fn instance_mut(body: &mut BTreeMap<u64, Cbor>) -> &mut BTreeMap<u64, Cbor> {
         let Cbor::Array(owners) = body.get_mut(&9).expect("owners") else {
             panic!("owner table");
@@ -2685,7 +3350,7 @@ mod tests {
     }
 
     #[test]
-    fn v14_retains_one_spelling_for_owner_lifetimes_sites_and_dynamic_attributes() {
+    fn v15_retains_one_spelling_for_owner_lifetimes_sites_and_dynamic_attributes() {
         let lifetimes = [
             InstanceLifetime::Persistent,
             InstanceLifetime::Idle(1),
@@ -2749,13 +3414,14 @@ mod tests {
                     ty: DataType::Text,
                 },
                 resolved: None,
+                annotations: AnnotationTable::empty(),
             }],
         };
         assert_eq!(owner_from(&owner_tree(&owner)).unwrap(), owner);
     }
 
     #[test]
-    fn v14_package_sabotage_cannot_change_an_instance_key_or_lifetime() {
+    fn v15_package_sabotage_cannot_change_an_instance_key_or_lifetime() {
         let package = instance_package();
 
         let lying_key_type = mutate_package_body(&package, |body| {
@@ -2862,12 +3528,14 @@ mod tests {
                             direction: node::Direction::Input,
                             unwired: crate::plan::UnwiredPolicy::RequireWire,
                             ty: Some(DataType::text_map(DataType::array(DataType::Text))),
+                            annotations: AnnotationTable::empty(),
                         },
                     ],
                     vars: vec![VarCell {
                         name: text("seen"),
                         ty: DataType::text_map(DataType::array(DataType::INT)),
                         init: Some(map_value.clone()),
+                        annotations: AnnotationTable::empty(),
                     }],
                     owner: OwnerSlot::new(1),
                 },
@@ -2898,6 +3566,7 @@ mod tests {
                     direction: node::Direction::Input,
                     unwired: crate::plan::UnwiredPolicy::RequireWire,
                     ty: Some(DataType::array(DataType::INT)),
+                    annotations: AnnotationTable::empty(),
                 },
                 PortDecl::untyped(port("feed"), node::Direction::Output),
             ],
@@ -2930,6 +3599,7 @@ mod tests {
                     Step::Let {
                         name: text("x"),
                         expr: tree(expr.clone()),
+                        annotations: AnnotationTable::empty(),
                     },
                     Step::SetVar {
                         name: text("seen"),
@@ -3001,6 +3671,7 @@ mod tests {
                 body: vec![Step::Let {
                     name: text("x"),
                     expr: tree(root),
+                    annotations: AnnotationTable::empty(),
                 }],
             }],
             app_schema: vec![],
@@ -3501,6 +4172,7 @@ mod tests {
                 ty: nested_type.clone(),
                 root: expr::Expr::Literal(Value::Null),
             },
+            annotations: AnnotationTable::empty(),
         }];
         let payload = StructType::new(vec![TypeField::new("message", DataType::Text)]).unwrap();
         let union = TaggedUnionType::new(vec![TaggedCase::new("Failed", payload.clone()).unwrap()])
@@ -3536,6 +4208,11 @@ mod tests {
                 }),
             },
         )]);
+        let policy = AnnotationTable::new(vec![(
+            SchemaPath::root(),
+            one_annotation(DataAnnotation::Sensitive(SensitivityLevel::Internal)),
+        )])
+        .unwrap_or_else(|error| panic!("one policy row: {error}"));
         let mut categorical = rich_plan();
         categorical.owners[0].instance.key = Some(tree(expr::Expr::Literal(Value::Int(7))));
         categorical.owners[0].vals = vec![OwnerValue {
@@ -3543,6 +4220,7 @@ mod tests {
             site: EvaluationSite::Plan,
             expr: tree(expr::Expr::Literal(Value::Int(42))),
             resolved: Some(Value::Int(42)),
+            annotations: policy.clone(),
         }];
         let NodeExecution::Connector(spec) = &mut categorical.nodes[1].execution else {
             panic!("the rich plan's second node is a connector");
@@ -3560,6 +4238,7 @@ mod tests {
             direction: node::Direction::Input,
             unwired: crate::plan::UnwiredPolicy::RequireWire,
             ty: Some(nested_type.clone()),
+            annotations: policy.clone(),
         });
         categorical.owners[0].aspects = vec![AspectSpec::Loop(LoopSpec {
             fuel: Some(PlanConstant {
@@ -3614,6 +4293,7 @@ mod tests {
                 direction: node::Direction::Input,
                 unwired: crate::plan::UnwiredPolicy::RequireWire,
                 ty: Some(nested_type),
+                annotations: policy,
             }],
             edges: vec![],
             handlers: vec![],

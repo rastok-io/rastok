@@ -438,16 +438,20 @@ pub struct AnnotatedSchema {
 }
 
 impl AnnotatedSchema {
-    /// Verifies every sparse path against the adjacent logical type.
+    /// Verifies every sparse path and annotation contract against the
+    /// adjacent logical type and pinned registries.
     ///
     /// # Errors
     ///
-    /// Returns the first canonical path that cannot be traversed. Annotation
-    /// target legality and registry membership are later checker/validator
-    /// judgements; this constructor owns structural correspondence only.
+    /// Returns the first canonical path, target, carrier, source or registry
+    /// membership that does not hold. This is the Registry-free authority
+    /// reused by package validation after decode.
     pub fn new(ty: DataType, annotations: AnnotationTable) -> Result<Self, SchemaAnnotationError> {
-        for path in annotations.entries().keys() {
-            validate_path(&ty, path)?;
+        for (path, set) in annotations.entries() {
+            let target = validate_path(&ty, path)?;
+            for annotation in set.annotations() {
+                validate_annotation(annotation, &target, path)?;
+            }
         }
         Ok(Self { ty, annotations })
     }
@@ -470,7 +474,15 @@ enum PathCursor<'a> {
     Struct(&'a StructType),
 }
 
-fn validate_path(ty: &DataType, path: &SchemaPath) -> Result<(), SchemaAnnotationError> {
+enum AnnotationTarget<'a> {
+    Type(&'a DataType),
+    TaggedUnionCase,
+}
+
+fn validate_path<'a>(
+    ty: &'a DataType,
+    path: &SchemaPath,
+) -> Result<AnnotationTarget<'a>, SchemaAnnotationError> {
     let mut cursor = PathCursor::Type(ty);
     for (position, segment) in path.segments().iter().enumerate() {
         cursor = match (cursor, segment) {
@@ -526,7 +538,107 @@ fn validate_path(ty: &DataType, path: &SchemaPath) -> Result<(), SchemaAnnotatio
             }
         };
     }
-    Ok(())
+    Ok(match cursor {
+        PathCursor::Type(ty) => AnnotationTarget::Type(ty),
+        PathCursor::Struct(_) => AnnotationTarget::TaggedUnionCase,
+    })
+}
+
+fn validate_annotation(
+    annotation: &DataAnnotation,
+    target: &AnnotationTarget<'_>,
+    path: &SchemaPath,
+) -> Result<(), SchemaAnnotationError> {
+    match annotation {
+        DataAnnotation::Sensitive(_) | DataAnnotation::Secret => Ok(()),
+        DataAnnotation::Measure(id) => {
+            let Some(spec) = measure_spec(id) else {
+                return Err(SchemaAnnotationError::UnknownMeasureId(id.as_str().into()));
+            };
+            if spec.source() != MeasureSource::Field {
+                return Err(SchemaAnnotationError::MeasureIsNotAField(
+                    id.as_str().into(),
+                ));
+            }
+            let AnnotationTarget::Type(ty) = target else {
+                return Err(SchemaAnnotationError::IllegalAnnotationTarget {
+                    path: path.clone(),
+                    kind: AnnotationKind::Measure,
+                });
+            };
+            let carrier_holds = match spec.carrier() {
+                MeasureCarrier::Integer => matches!(ty, DataType::Integer(_)),
+                MeasureCarrier::Duration => **ty == DataType::DURATION,
+            };
+            if !carrier_holds {
+                return Err(SchemaAnnotationError::MeasureCarrierMismatch {
+                    path: path.clone(),
+                    id: id.as_str().into(),
+                });
+            }
+            Ok(())
+        }
+        DataAnnotation::Cost(cost) => {
+            let AnnotationTarget::Type(ty) = target else {
+                return Err(SchemaAnnotationError::IllegalAnnotationTarget {
+                    path: path.clone(),
+                    kind: AnnotationKind::Cost,
+                });
+            };
+            if is_money_type(ty) {
+                if cost.currency().is_some() {
+                    return Err(SchemaAnnotationError::InvalidCostCurrencyAuthority {
+                        path: path.clone(),
+                    });
+                }
+                return Ok(());
+            }
+            let Some(currency) = cost.currency() else {
+                return Err(SchemaAnnotationError::IllegalAnnotationTarget {
+                    path: path.clone(),
+                    kind: AnnotationKind::Cost,
+                });
+            };
+            if !matches!(ty, DataType::Decimal(_)) {
+                return Err(SchemaAnnotationError::IllegalAnnotationTarget {
+                    path: path.clone(),
+                    kind: AnnotationKind::Cost,
+                });
+            }
+            if !is_iso_4217_currency(currency) {
+                return Err(SchemaAnnotationError::UnknownCurrencyCode(
+                    currency.as_str().into(),
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Whether a logical type is the exact canonical Money carrier.
+#[must_use]
+pub fn is_money_type(ty: &DataType) -> bool {
+    let DataType::Struct(structure) = ty else {
+        return false;
+    };
+    if structure.fields().len() != 2 {
+        return false;
+    }
+    let amount = structure
+        .fields()
+        .iter()
+        .find(|field| field.name() == "amount")
+        .map(crate::datatype::TypeField::ty);
+    let currency = structure
+        .fields()
+        .iter()
+        .find(|field| field.name() == "currency")
+        .map(crate::datatype::TypeField::ty);
+    matches!(
+        amount,
+        Some(DataType::Decimal(decimal))
+            if decimal.precision() == 38 && decimal.scale() == 18
+    ) && currency == Some(&DataType::Text)
 }
 
 /// Invalid schema annotation metadata.
@@ -549,6 +661,34 @@ pub enum SchemaAnnotationError {
     InvalidMeasureId(String),
     /// Currency spelling is not three uppercase ASCII letters.
     InvalidCurrencyCode(String),
+    /// A canonical measure name is absent from the pinned registry.
+    UnknownMeasureId(String),
+    /// A runtime instrument was forged into a field annotation.
+    MeasureIsNotAField(String),
+    /// A registered field measure targets an incompatible logical carrier.
+    MeasureCarrierMismatch {
+        /// Exact offending path.
+        path: SchemaPath,
+        /// Registered measure identity.
+        id: String,
+    },
+    /// An annotation kind cannot target this canonical schema position.
+    IllegalAnnotationTarget {
+        /// Exact offending path.
+        path: SchemaPath,
+        /// Closed annotation kind.
+        kind: AnnotationKind,
+    },
+    /// A canonical currency spelling is absent from the pinned ISO registry.
+    UnknownCurrencyCode(String),
+    /// A scalar cost omitted currency or a Money value redundantly fixed it.
+    InvalidCostCurrencyAuthority {
+        /// Exact offending path.
+        path: SchemaPath,
+    },
+    /// Policy metadata was carried without any adjacent effective logical
+    /// schema against which it could be checked.
+    MissingLogicalType,
 }
 
 impl fmt::Display for SchemaAnnotationError {
@@ -570,6 +710,27 @@ impl fmt::Display for SchemaAnnotationError {
                     f,
                     "currency code {code:?} is not three uppercase ASCII letters"
                 )
+            }
+            Self::UnknownMeasureId(id) => {
+                write!(f, "measure id `{id}` is not in the pinned registry")
+            }
+            Self::MeasureIsNotAField(id) => {
+                write!(f, "measure id `{id}` names an instrument, not a field")
+            }
+            Self::MeasureCarrierMismatch { path, id } => {
+                write!(f, "measure id `{id}` cannot be carried at {path}")
+            }
+            Self::IllegalAnnotationTarget { path, kind } => {
+                write!(f, "annotation kind {kind:?} cannot target {path}")
+            }
+            Self::UnknownCurrencyCode(code) => {
+                write!(f, "currency code `{code}` is not in the pinned registry")
+            }
+            Self::InvalidCostCurrencyAuthority { path } => {
+                write!(f, "cost currency authority is invalid at {path}")
+            }
+            Self::MissingLogicalType => {
+                f.write_str("an annotation table has no adjacent logical type")
             }
         }
     }
@@ -729,6 +890,100 @@ mod tests {
             })
         );
         assert_eq!(measure_spec(&unknown), None);
+    }
+
+    #[test]
+    fn annotated_schema_rechecks_measure_registry_source_and_carrier() {
+        let schema = |ty: DataType, id: &str| {
+            let id = MeasureId::new(id)
+                .unwrap_or_else(|error| panic!("canonical measure spelling: {error}"));
+            let set = AnnotationSet::new(vec![DataAnnotation::Measure(id)])
+                .unwrap_or_else(|error| panic!("one annotation: {error}"));
+            AnnotatedSchema::new(
+                ty,
+                AnnotationTable::new(vec![(SchemaPath::root(), set)])
+                    .unwrap_or_else(|error| panic!("one row: {error}")),
+            )
+        };
+        assert_eq!(
+            schema(DataType::INT, "rastok.unknown"),
+            Err(SchemaAnnotationError::UnknownMeasureId(String::from(
+                "rastok.unknown"
+            )))
+        );
+        assert_eq!(
+            schema(DataType::DURATION, "http.client.request.duration"),
+            Err(SchemaAnnotationError::MeasureIsNotAField(String::from(
+                "http.client.request.duration"
+            )))
+        );
+        assert_eq!(
+            schema(DataType::Text, "gen_ai.usage.input_tokens"),
+            Err(SchemaAnnotationError::MeasureCarrierMismatch {
+                path: SchemaPath::root(),
+                id: String::from("gen_ai.usage.input_tokens"),
+            })
+        );
+    }
+
+    #[test]
+    fn annotated_schema_rechecks_cost_target_and_currency_authority() {
+        let cost_schema = |ty: DataType, cost: CostAnnotation| {
+            let set = AnnotationSet::new(vec![DataAnnotation::Cost(cost)])
+                .unwrap_or_else(|error| panic!("one annotation: {error}"));
+            AnnotatedSchema::new(
+                ty,
+                AnnotationTable::new(vec![(SchemaPath::root(), set)])
+                    .unwrap_or_else(|error| panic!("one row: {error}")),
+            )
+        };
+        let decimal = DataType::Decimal(
+            crate::datatype::DecimalType::new(38, 18)
+                .unwrap_or_else(|error| panic!("valid decimal: {error}")),
+        );
+        let unknown = CurrencyCode::new("ZZZ")
+            .unwrap_or_else(|error| panic!("canonical currency spelling: {error}"));
+        assert_eq!(
+            cost_schema(
+                decimal.clone(),
+                CostAnnotation::scalar(unknown, CostBasis::ProviderReported),
+            ),
+            Err(SchemaAnnotationError::UnknownCurrencyCode(String::from(
+                "ZZZ"
+            )))
+        );
+        assert_eq!(
+            cost_schema(decimal, CostAnnotation::money(CostBasis::ProviderReported)),
+            Err(SchemaAnnotationError::IllegalAnnotationTarget {
+                path: SchemaPath::root(),
+                kind: AnnotationKind::Cost,
+            })
+        );
+
+        let money = DataType::Struct(
+            StructType::new(vec![
+                TypeField::new(
+                    "amount",
+                    DataType::Decimal(
+                        crate::datatype::DecimalType::new(38, 18)
+                            .unwrap_or_else(|error| panic!("valid decimal: {error}")),
+                    ),
+                ),
+                TypeField::new("currency", DataType::Text),
+            ])
+            .unwrap_or_else(|error| panic!("valid Money: {error}")),
+        );
+        let eur =
+            CurrencyCode::new("EUR").unwrap_or_else(|error| panic!("registered currency: {error}"));
+        assert_eq!(
+            cost_schema(
+                money,
+                CostAnnotation::scalar(eur, CostBasis::ProviderReported),
+            ),
+            Err(SchemaAnnotationError::InvalidCostCurrencyAuthority {
+                path: SchemaPath::root(),
+            })
+        );
     }
 
     #[test]

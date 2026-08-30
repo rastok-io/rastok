@@ -1,7 +1,8 @@
 # Loop — finite temporal recursion
 
 > **Status: normative and executable through M1.7 L7.** Fuel-bounded and
-> directly ranked `Loop`s cross source, checked HIR and categorical v14 with
+> directly ranked `Loop`s cross source, checked HIR and categorical v14,
+> retained unchanged by v15, with
 > their exact boundary and ordinary Graph-owned
 > handlers. Registry-free validation re-derives the contract, finite progress
 > decision and proof certificate after decode. The VM
@@ -270,7 +271,7 @@ An admitted Loop has at least one termination witness:
 
 All four rows are now enforced. A proof-bearing source is accepted only after
 the hosted checker derives a certificate and the small `no_std` core can
-derive the same evidence from the canonical handler table. Categorical v14
+derive the same evidence from the canonical handler table. Categorical v15
 transports the checked measure, optional invariant and sorted multiset of exact
 decrements. Decode validation ignores that list as authority: it re-runs the
 verifier and requires exact agreement. These expressions never degrade into

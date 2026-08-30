@@ -190,7 +190,8 @@ private to `rastok::connectors::network`; the same core still builds for the
 three established no-std targets.
 
 M1.7 keeps temporal recursion on that same deterministic boundary. The
-`Loop` manager consumes a categorical v14 aspect contract and folds ordinary
+`Loop` manager consumes the categorical aspect contract introduced by v14 and
+retained by v15, then folds ordinary
 journal facts; optional dated re-entry uses the generic scheduler, not a
 thread sleep or a spatial cycle. The compiler and Registry-free core prove a
 finite control verdict plus either positive fuel or the admitted integer

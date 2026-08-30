@@ -1441,7 +1441,8 @@ journaled:
   integer measure above: every recurrent `on in` path proves it positive and
   writes exactly `measure - k` for a positive literal. The hosted compiler
   derives a certificate and the deterministic `no_std` core derives it again
-  after v14 decode; richer invariants, computed measures and external-progress
+  after v15 decode (the proof form introduced by v14 is unchanged); richer
+  invariants, computed measures and external-progress
   claims fail closed. Optional `Loop.delay` dates
   re-entry without changing fuel, call timeout, or instance lifetime; a typed
   Call exit selects recurrence before the independent Loop delay begins
@@ -2837,7 +2838,7 @@ families through one exact-id/role registry and one VM boundary; the Lab
 composes both through the same binding and protocol. Static Driver selection is
 implemented. A data-only capability manifest proves the future discovery seam,
 but no plugin loader or native ABI is claimed. Four exact HTTP/WebSocket
-  contracts now cross source, checked v14 plan, Registry-free validation and
+  contracts now cross source, checked v15 plan, Registry-free validation and
 family-owned Lab binding with codec-selected ports, lossless protocol metadata
 and typed terminal unions. H3 pins one bounded private hosted
 pump, Hyper/Rustls for HTTP/1.1-2, quiche/BoringSSL for HTTP/3 and Tungstenite
@@ -2870,7 +2871,8 @@ Closed M1.7 has made `Loop` the first aspect with categorical transport,
 Registry-free finite-control proof and a checked termination certificate.
 Fuel-bounded and directly ranked Loops carry their fixed state/progress
 boundary, domain-named terminal outputs, closed delay policy and ordinary
-Graph-owned handlers from source through v14. Every reachable completed
+Graph-owned handlers from source through the v14 proof form retained by v15.
+Every reachable completed
 traversal proves one `next` or explicit termination by ordinary output(s) or
 `stop`; immediate and delayed recurrence execute through one journal-derived
 run fold. A proof-only direct integer countdown derives its safe body budget
@@ -2882,6 +2884,16 @@ Unsupported mathematics, nested Loop owners, direct spatial boundary verdicts,
 explicit Loop `stop` and spatial recovery still refuse before execution,
 preserving the rule that a recognized policy never silently runs as a plain
 Graph.
+
+M1.8 A2 now carries the closed `@sensitive`, `@secret`, `@measure` and
+`@cost` family through source, checked HIR and categorical v15 as canonical
+side-tables beside logical schemas. Independent package validation re-derives
+every local structural path, legal target, registered measure carrier,
+currency authority and resolved-port policy claim without changing
+`DataType` assignability. Unannotated semantic identities and causal traces
+remain fixed. Operation-level propagation and redaction are the next explicit
+gate: until they land, the VM refuses an annotated plan before mutation rather
+than treating policy as decoration.
 
 This white paper is designed to outlive individual releases. The DSL
 grammar, runtime traits, and feature set will evolve; the conceptual

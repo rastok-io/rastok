@@ -80,6 +80,9 @@ fn compilation() -> rastok::compiler::Compilation {
 // DELIBERATE CONTAINER MOVE 2026-08-28 (M1.7 L6): categorical v14 makes
 // optional Loop proof transport explicit. This graph has no Loop, so only its
 // container version/checksum move; semantic hash and trace remain identical.
+// DELIBERATE CONTAINER MOVE 2026-08-30 (M1.8 A2): categorical v15 adds
+// sparse schema-policy tables. This graph is unannotated, so its body,
+// semantic hash and causal trace remain identical; only version/checksum move.
 const JSONL_HASH: &str = "036f7ea5346fac883a3bad155fbdf41b303f6e54bef93f8c850ff5f138f769de";
 
 #[test]

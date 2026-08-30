@@ -269,6 +269,7 @@ pub use validation::{PlanValidationError, ValidatedExecutionPlan};
 use crate::datatype::DataType;
 use crate::expr;
 use crate::node;
+use crate::schema_annotation::AnnotationTable;
 use crate::value::Value;
 use alloc::format;
 use alloc::string::String;
@@ -326,6 +327,8 @@ pub struct PortDecl {
     pub unwired: UnwiredPolicy,
     /// The pinned type, when annotated.
     pub ty: Option<DataType>,
+    /// Sparse data-policy metadata beside the effective logical type.
+    pub annotations: AnnotationTable,
 }
 
 impl PortDecl {
@@ -337,6 +340,7 @@ impl PortDecl {
             direction,
             unwired: UnwiredPolicy::RequireWire,
             ty: None,
+            annotations: AnnotationTable::empty(),
         }
     }
 
@@ -348,6 +352,7 @@ impl PortDecl {
             direction: node::Direction::Output,
             unwired: UnwiredPolicy::RootSink,
             ty,
+            annotations: AnnotationTable::empty(),
         }
     }
 
@@ -783,6 +788,8 @@ pub struct OwnerValue {
     pub expr: expr::Tree,
     /// Present exactly for [`EvaluationSite::Plan`].
     pub resolved: Option<Value>,
+    /// Sparse policy beside the expression's resolved result type.
+    pub annotations: AnnotationTable,
 }
 
 /// A connector's planned configuration.
@@ -842,6 +849,8 @@ pub struct VarCell {
     pub ty: DataType,
     /// The boot-time default, when declared.
     pub init: Option<Value>,
+    /// Sparse policy beside the cell's logical type.
+    pub annotations: AnnotationTable,
 }
 
 /// One planned handler: a triggered, ordered statement body.
@@ -913,6 +922,8 @@ pub enum Step {
         name: String,
         /// The expression.
         expr: expr::Tree,
+        /// Sparse policy beside the binding's resolved result type.
+        annotations: AnnotationTable,
     },
     /// Emission on a port.
     Emit {

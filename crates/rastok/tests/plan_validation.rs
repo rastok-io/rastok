@@ -148,7 +148,7 @@ graph app : App {
         "lexical App constants are substituted before categorical transport"
     );
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
-    let (decoded, declared) = plan::decode(&bytes).expect("v14 re-derives inherited val types");
+    let (decoded, declared) = plan::decode(&bytes).expect("v15 re-derives inherited val types");
     assert_eq!(decoded, compilation.plan);
     assert_eq!(declared, compilation.hash);
 
@@ -460,7 +460,7 @@ graph g : App {
     assert_eq!(boundary.origin(), plan::TypeOrigin::Declared);
 
     let package = plan::encode(&compilation.plan, &compilation.hash);
-    let (decoded, _) = plan::decode(&package).expect("the source pin survives v14");
+    let (decoded, _) = plan::decode(&package).expect("the source pin survives v15");
     assert_eq!(
         decoded
             .resolved_ports()
@@ -717,6 +717,7 @@ fn closing_budgets_and_stop_recursion_are_registry_free_invariants() {
         direction: Direction::Input,
         unwired: plan::UnwiredPolicy::RequireWire,
         ty: Some(DataType::INT),
+        annotations: Default::default(),
     });
     recursive.handlers.push(plan::Handler {
         owner: plan::HandlerOwner::Node(Slot::new(0)),
@@ -810,6 +811,7 @@ fn an_owner_value_cannot_lie_about_its_evaluation_site() {
             ty: DataType::Text,
         },
         resolved: Some(rastok::value::Value::Text(String::from("/tmp"))),
+        annotations: Default::default(),
     });
 
     assert_eq!(
@@ -832,6 +834,7 @@ fn a_plan_owner_value_cannot_lie_about_its_reduction() {
             ty: DataType::INT,
         },
         resolved: Some(rastok::value::Value::Int(42)),
+        annotations: Default::default(),
     });
 
     assert_eq!(
@@ -854,6 +857,7 @@ fn an_owner_value_cannot_read_outside_its_lexical_environment() {
             ty: DataType::INT,
         },
         resolved: Some(rastok::value::Value::Int(42)),
+        annotations: Default::default(),
     });
 
     assert_eq!(
@@ -882,6 +886,7 @@ fn owner_value_dependencies_are_order_free_but_never_cyclic() {
                 ty: DataType::INT,
             },
             resolved: Some(rastok::value::Value::Int(2)),
+            annotations: Default::default(),
         },
         plan::OwnerValue {
             name: String::from("b"),
@@ -891,6 +896,7 @@ fn owner_value_dependencies_are_order_free_but_never_cyclic() {
                 ty: DataType::INT,
             },
             resolved: Some(rastok::value::Value::Int(1)),
+            annotations: Default::default(),
         },
     ];
     ValidatedExecutionPlan::try_new(raw.clone())
@@ -918,6 +924,7 @@ fn an_owner_value_cannot_claim_a_later_phase_for_a_literal() {
             ty: DataType::Text,
         },
         resolved: None,
+        annotations: Default::default(),
     });
 
     assert_eq!(
@@ -1017,6 +1024,7 @@ fn instance_values_and_authorized_connector_settings_share_one_phase_judge() {
             ty: DataType::Text,
         },
         resolved: None,
+        annotations: Default::default(),
     });
     let shell = raw
         .nodes
@@ -2028,6 +2036,7 @@ fn an_extra_process_port_refuses_without_a_registry() {
         direction: Direction::Output,
         unwired: plan::UnwiredPolicy::RequireWire,
         ty: Some(DataType::Variant),
+        annotations: Default::default(),
     });
     shell
         .ports
@@ -2190,6 +2199,7 @@ fn complete_expression_result_types_round_trip_through_v7() {
             root: expr::Expr::Literal(rastok::value::Value::Int(i64::MAX)),
             ty: DataType::LONG,
         },
+        annotations: Default::default(),
     };
     let validated = ValidatedExecutionPlan::try_new(plan).expect("int64 trees are representable");
     let bytes = plan::encode(&validated, &plan::SemanticHash::from_bytes([2; 32]));
@@ -2223,6 +2233,7 @@ fn narrowing_expressions_round_trip_through_v7() {
                     DataType::INT
                 },
             },
+            annotations: Default::default(),
         };
         let validated = ValidatedExecutionPlan::try_new(plan).expect("narrowing is a v7 form");
         let bytes = plan::encode(&validated, &plan::SemanticHash::from_bytes([3; 32]));
@@ -2254,6 +2265,7 @@ fn constructed_values_round_trip_through_v7() {
         plan.handlers[0].body[0] = Step::Let {
             name: String::from("constructed"),
             expr: expr::Tree { root, ty },
+            annotations: Default::default(),
         };
         let validated = ValidatedExecutionPlan::try_new(plan).expect("constructors are v7 forms");
         let bytes = plan::encode(&validated, &plan::SemanticHash::from_bytes([4; 32]));

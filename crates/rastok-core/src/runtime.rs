@@ -954,7 +954,7 @@ impl<'plan> TransactionExecutor<'plan> {
         let mut close_requested = false;
         for step in &handler.body {
             match step {
-                Step::Let { name, expr } => {
+                Step::Let { name, expr, .. } => {
                     let value = eval_with_slots(expr, &base(&lets), &payloads, &self.plan.assets)?;
                     lets.insert(name.clone(), value);
                 }
@@ -1165,7 +1165,7 @@ impl<'plan> TransactionExecutor<'plan> {
         let mut close_requested = false;
         for step in &handler.body {
             match step {
-                Step::Let { name, expr } => {
+                Step::Let { name, expr, .. } => {
                     let value = eval_with_slots(
                         expr,
                         &base(&scratch, &lets),

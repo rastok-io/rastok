@@ -124,6 +124,18 @@
 > tables; L7 merely lets the existing Registry-free control walk follow that
 > complete contained DAG. No package, semantic hash or causal trace moves.
 >
+> **M1.8 A2 is categorical format v15.** D-2026-08-30-1 adds a sparse
+> canonical annotation table beside every schema owner that can carry data
+> policy: raw and resolved ports, nested-Graph ports, owner values, Node state
+> cells and handler-local typed bindings. The table uses structural paths and
+> a closed annotation registry; it does not allocate a `DataType` or value
+> tag. V14 cannot represent these facts and is categorically refused. Empty
+> tables are omitted, so an unannotated body and semantic hash remain
+> byte-identical; only the outer version and checksum move. Registry-free
+> validation re-derives every local claim. Until A3 derives transform policy,
+> the VM refuses a non-empty table before mutation rather than executing it as
+> inert metadata.
+>
 > The lifetime rows are one closed transport and executable registry: v9
 > validation admits `persistent`, `idle`, `fixed`, `single_pass`, and
 > processing-time `tumbling` on Graph and Node owners. R5 adds the optional
@@ -302,7 +314,14 @@ invariants the runtime dereferences without checking. Refusals are
 typed and total; there is no silent migration — a new format is a
 new version, and an old decoder refuses it by name.
 
-## Body tables (format v14)
+V15 applies the same rule to data policy without consulting the compiler
+catalogue: every local table is reconstructed, resolved against its adjacent
+logical type and checked against the closed measure/currency registries.
+Resolved-port policy is a derived claim and must equal the raw row exactly.
+Operation-level propagation is deliberately not inferred by the decoder in
+A2; execution refuses until A3 supplies that separate proof.
+
+## Body tables (format v15)
 
 The body is one canonical CBOR value encoding the `ExecutionPlan`.
 Compound values use fixed-shape arrays with a leading numeric
@@ -352,7 +371,7 @@ owner_kind := [1]                                 — graph
               // sole boundary authority; it is the complete canonical
               // boundary on a nested Graph and empty on a Node owner.
               // Key 7 is a canonical closed aspect list on Graphs and empty
-              // on Node owners. V14 admits at most Loop.
+              // on Node owners. V15 retains Loop as the sole executable aspect.
 
 aspect_spec := [1, loop_spec]                     — Loop
 loop_spec   := {1: fuel?, 2: delay?, 3: proof?}
@@ -396,7 +415,7 @@ closing    := [drain_for_ns (int), settle_for_ns (int)]
               // owner bytes when no closing policy is written.
 
 owner_val  := {1: name (text), 2: evaluation_site, 3: tree,
-               4: tagged_value?}
+               4: tagged_value?, 5: annotation_table?}
               // Field 4 is present exactly at Plan. Validation derives the
               // earliest site from lexical dependencies, rejects cycles and
               // shadowing, re-evaluates Plan trees (including assets), and
@@ -425,7 +444,7 @@ attr       := [1, word (text)] | [2, tagged_value]
               // unknown contract or attribute refuses closed.
               // Form 3 may not claim Plan: a plan result uses form 2.
 evaluation_site := uint: 1 plan · 2 boot · 3 instance · 4 invocation
-port_decl  := [name (text), mode, type?]
+port_decl  := [name (text), mode, type?, annotation_table?]
 mode       := uint: 1 input/require-wire · 2 output/require-wire ·
                     3 output/root-sink
               // mode 4 (input/root-sink) is decoder-recognized only so a
@@ -446,15 +465,41 @@ mode       := uint: 1 input/require-wire · 2 output/require-wire ·
               — since B5, every Connector contract row is present and typed;
               Operator/Graph rows may still be source constraints; their
               mandatory effective type is carried by resolved_ports
+              — v15 appends the table only when non-empty. If an inferred raw
+              port owns policy, element 3 is explicit null so element 4 is
+              unambiguous; its effective type remains mandatory below.
 resolved_ports := [boundary_resolved, [node_resolved*]]
                                                    // one row per executable
                                                    // Node Slot, not per owner
-resolved_port := [name (text), direction, type, origin]
+resolved_port := [name (text), direction, type, origin, annotation_table?]
 direction    := uint: 1 input · 2 output
 origin       := uint: 1 declared · 2 inferred
               // rows use the same canonical (name,direction) order as the
-              // derived table; node row count equals the Node table
-var        := {1: name (text), 2: type, 3: init (tagged_value)?}
+              // derived table; node row count equals the Node table. V15
+              // requires its policy table to equal the raw re-derived row.
+var        := {1: name (text), 2: type, 3: init (tagged_value)?,
+               4: annotation_table?}
+
+annotation_table := [[schema_path, annotation_set]*]
+schema_path := [path_segment*]                   // empty array = root
+path_segment := [1, field (text)]                — struct field
+              | [2]                              — array element
+              | [3]                              — map key
+              | [4]                              — map value
+              | [5, branch (uint)]               — canonical structural branch
+              | [6, case (text)]                 — tagged-union case
+annotation_set := [data_annotation+]
+data_annotation := [1, sensitivity]
+                 | [2]
+                 | [3, measure_id (text)]
+                 | [4, cost_basis, currency (text)?]
+sensitivity := uint: 1 internal · 2 confidential · 3 restricted
+cost_basis  := uint: 1 provider-reported · 2 pricebook-calculated
+              // Tables sort paths structurally and sets sort annotation tags.
+              // Decode reconstructs the closed domain, then validation resolves
+              // every path against the adjacent type and rechecks its target,
+              // measure carrier/source and currency authority. Empty tables
+              // have no wire spelling at an owning schema site.
 
 edge       := [scope (owner_slot), endpoint, endpoint | null]
               // scope is the lexical Graph that owns the source edge;
@@ -486,7 +531,7 @@ lifecycle  := uint: 1 start · 2 stop · 3 compensate · 4 next ·
               // activates start/stop. `reply` is an internal inbound-Call
               // transaction and is never admitted as a source handler;
               // aspect/supervision rows remain governed by their gates
-step       := [1, name (text), tree]              — let
+step       := [1, name (text), tree, annotation_table?] — let
             | [2, port (text), emission]          — emit
             | [3, name (text), tree]              — set var
             | [4]                                 — stop current instance

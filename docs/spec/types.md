@@ -11,7 +11,7 @@
 > structural-union and tagged-union targets is executable in memory. Tagged
 > constructors and contextual structural-union wrapping are checked,
 > executable and transported; `err` uses the same emission path as any port.
-> Categorical plan-package v14 retains v9's owner model and v7's complete
+> Categorical plan-package v15 retains v9's owner model and v7's complete
 > type/value/expression registry and total effective port table, then adds the
 > parent-linked lexical owner tree plus instance-key/lifetime descriptors
 > without changing this logical algebra. The unpublished named-partition v8
@@ -459,7 +459,7 @@ checked and reviewable.
 
 This schema adapter is distinct from:
 
-- a package-format reader (the current v14 rejects older `.rkp` versions rather than
+- a package-format reader (the current v15 rejects older `.rkp` versions rather than
   translating application schemas);
 - an internal representation codec;
 - a journal-format decoder.
@@ -481,5 +481,9 @@ adds no recursive wrapper to this type tree. `Money` likewise remains the
 canonical struct shape `{ amount: decimal(38,18), currency: text }`, not a new
 `DataType` family. The source form, path vocabulary, propagation rules,
 secret boundary and observation semantics are normative in
-[observability.md](observability.md). Categorical package v14 carries no
-annotation table; the v15 transport remains fail-closed until M1.8 A2 lands.
+[observability.md](observability.md). Categorical package v15 carries the
+sparse table beside every owning schema without allocating a `DataType` tag.
+Registry-free validation resolves each path against that adjacent type and
+requires raw/resolved port policy to agree. The VM still refuses annotated
+plans before mutation until M1.8 A3 lands the separate propagation and sink-
+policy judgement.
