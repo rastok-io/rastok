@@ -977,7 +977,8 @@ pub fn network_payload_bytes(codec: &str, data: &envelope::Data) -> Result<Vec<u
             "the text codec requires materialized text; the payload is {encoding:?}-encoded"
         )),
         ("text", Data::Materialized(other)) => Err(alloc::format!(
-            "the text codec requires text; the payload is {other:?}"
+            "the text codec requires text; the payload is {:?}",
+            crate::value::ValueKind::of(other)
         )),
         ("json", Data::Materialized(value)) => crate::json::write_value(value)
             .map(String::into_bytes)
@@ -1063,7 +1064,8 @@ pub fn bytes_payload(data: &envelope::Data) -> Result<&[u8], String> {
             "the bytes codec requires raw bytes; the request is {encoding:?}-encoded"
         )),
         Data::Materialized(other) => Err(alloc::format!(
-            "the bytes codec requires bytes; the request data is {other:?}"
+            "the bytes codec requires bytes; the request data is {:?}",
+            crate::value::ValueKind::of(other)
         )),
     }
 }
@@ -1115,7 +1117,8 @@ pub fn prepare_lines(data: &envelope::Data) -> Result<PreparedRequest, String> {
         }
         Data::Materialized(other) => {
             return Err(alloc::format!(
-                "the lines codec frames text; the request data is {other:?}"
+                "the lines codec frames text; the request data is {:?}",
+                crate::value::ValueKind::of(other)
             ));
         }
     };
@@ -2620,6 +2623,24 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn codec_refusals_describe_value_kinds_without_formatting_payloads() {
+        use crate::envelope::{Data, Value};
+        let sentinel = "classified-payload-must-not-escape";
+        let payload = Data::materialized(Value::Map(alloc::collections::BTreeMap::from([(
+            String::from(sentinel),
+            Value::Int(1),
+        )])));
+        for refusal in [
+            network_payload_bytes("text", &payload).expect_err("map is not text"),
+            bytes_payload(&payload).expect_err("map is not bytes"),
+            prepare_lines(&payload).expect_err("map is not lines"),
+        ] {
+            assert!(refusal.contains("Map"));
+            assert!(!refusal.contains(sentinel));
+        }
     }
 
     #[test]

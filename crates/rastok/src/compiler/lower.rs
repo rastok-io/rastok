@@ -600,11 +600,12 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                 detail: "a checked Node path did not form an owner path",
             })?;
         let graph_path = owner_path.parent().unwrap_or_else(OwnerPath::root);
-        let mut constants = graph_constant_environment(hir, &graph_path);
+        let mut constants = graph_runtime_constant_environment(hir, &graph_path);
         constants.extend(
             hir_node
                 .vals
                 .iter()
+                .filter(|value| value.annotations.is_empty())
                 .map(|value| (value.name.clone(), value.value.value.clone())),
         );
         // Declaratively unordered collections ship in canonical order,
@@ -670,18 +671,21 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
     }
     for hir_node in &nodes {
         let slot = slot_of(&hir_node.path);
-        // The plan must carry its whole semantics: every constant a
-        // handler references is substituted into the shipped trees, so
-        // no binding is left behind in the compiler.
+        // Plain constants are substituted into shipped trees. Annotated
+        // constants deliberately remain owner-value paths so the independent
+        // policy pass can prove that dependency instead of losing it in a
+        // literal rewrite.
         let graph_path = OwnerPath::from(&hir_node.path)
             .parent()
             .ok_or_else(|| LowerError {
                 owner: hir_node.path.to_string(),
                 detail: "an executable Node cannot own the root Graph path",
             })?;
-        let mut consts = graph_constant_environment(hir, &graph_path);
+        let mut consts = graph_runtime_constant_environment(hir, &graph_path);
         for val in &hir_node.vals {
-            consts.insert(val.name.clone(), val.value.value.clone());
+            if val.annotations.is_empty() {
+                consts.insert(val.name.clone(), val.value.value.clone());
+            }
         }
         let subst = |tree: &expr::Tree| substitute_tree(tree, &consts);
         // Declaration order between handlers carries no semantics and
@@ -726,7 +730,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
             owner: graph.path.to_string(),
             detail: "the canonical owner table omitted a Graph handler owner",
         })?;
-        let constants = graph_constant_environment(hir, &graph.path);
+        let constants = graph_runtime_constant_environment(hir, &graph.path);
         let subst = |tree: &expr::Tree| substitute_tree(tree, &constants);
         let mut handlers: Vec<_> = graph
             .handlers
@@ -1098,6 +1102,36 @@ fn graph_constant_environment(
                 graph
                     .vals
                     .iter()
+                    .map(|value| (value.name.clone(), value.value.value.clone())),
+            );
+        }
+    }
+    values
+}
+
+/// Constants safe to substitute into a runtime expression without erasing a
+/// policy dependency. Annotated values stay as lexical paths: their runtime
+/// value already lives in the owner bundle, and the categorical validator
+/// must still be able to derive their policy from that binding.
+fn graph_runtime_constant_environment(
+    hir: &Hir,
+    path: &crate::plan::OwnerPath,
+) -> std::collections::BTreeMap<String, crate::value::Value> {
+    let mut values = std::collections::BTreeMap::new();
+    let mut cursor = Some(path.clone());
+    let mut chain = Vec::new();
+    while let Some(path) = cursor {
+        chain.push(path.clone());
+        cursor = path.parent();
+    }
+    chain.reverse();
+    for path in chain {
+        if let Some(graph) = graph_for_path(&hir.app, &path) {
+            values.extend(
+                graph
+                    .vals
+                    .iter()
+                    .filter(|value| value.annotations.is_empty())
                     .map(|value| (value.name.clone(), value.value.value.clone())),
             );
         }
@@ -1976,6 +2010,7 @@ mod tests {
     use crate::diagnostics::{Bag, SourceId};
     use crate::node;
     use crate::plan::{AttrSetting, Emission, GraphVersion, Manifest, Step};
+    use crate::schema_annotation::{AnnotationKind, DataAnnotation, SchemaPath, SensitivityLevel};
 
     const M0_PROBE: &str = r#"
 graph m0_probe : App {
@@ -2167,6 +2202,335 @@ graph app : App {
             "f984f003953161e8fa93025787bd92a44fd18a8615aee1a0fbe4b9f1ba22defe",
             "the rastok.metering.r1 spelling is identity material"
         );
+    }
+
+    #[test]
+    fn exact_data_policy_crosses_copy_projection_and_categorical_decode() {
+        let source = r#"
+type Usage = struct {
+  prompt: text @sensitive(level = confidential)
+  tokens: int @measure(id = gen_ai.usage.input_tokens)
+}
+graph app : App {
+  input in: Usage
+  output out: int
+  operator relay {
+    input in: Usage
+    output out: Usage
+    on in { out = data }
+  }
+  operator project {
+    input in: Usage
+    output out: int
+    on in { out = data.tokens }
+  }
+  . -> relay -> project -> .
+}
+"#;
+        let registry = ContractCatalog::try_m0().expect("the standard catalogue holds");
+        let compilation = compile(&[source], &registry).expect("exact policy copy compiles");
+        let input = compilation
+            .plan
+            .resolved_ports()
+            .boundary()
+            .iter()
+            .find(|port| port.port().name() == "in")
+            .expect("boundary input");
+        let relay_slot = compilation
+            .plan
+            .plan()
+            .nodes
+            .iter()
+            .position(|node| node.path.to_string() == "relay")
+            .map(|index| crate::plan::Slot::new(u32::try_from(index).expect("small plan")))
+            .expect("relay node");
+        let relay_output = compilation
+            .plan
+            .resolved_ports()
+            .node(relay_slot)
+            .expect("relay port row")
+            .iter()
+            .find(|port| port.port().name() == "out")
+            .expect("relay output");
+        assert_eq!(relay_output.annotations(), input.annotations());
+
+        let output = compilation
+            .plan
+            .resolved_ports()
+            .boundary()
+            .iter()
+            .find(|port| port.port().name() == "out")
+            .expect("boundary output");
+        assert!(matches!(
+            output
+                .annotations()
+                .entries()
+                .get(&SchemaPath::root())
+                .map(|set| set.annotations()),
+            Some([DataAnnotation::Measure(_)])
+        ));
+
+        let bytes = crate::plan::encode(&compilation.plan, &compilation.hash);
+        let (decoded, hash) = crate::plan::decode(&bytes).expect("v15 re-derives policy flow");
+        assert_eq!(hash, compilation.hash);
+        assert_eq!(decoded, compilation.plan);
+    }
+
+    #[test]
+    fn a_calculation_retains_security_but_drops_accounting_meaning() {
+        let source = r#"
+type Count = int
+  @sensitive(level = internal)
+  @measure(id = gen_ai.usage.input_tokens)
+graph app : App {
+  input in: Count
+  output out: int
+  operator increment {
+    on in { out = data + 1 }
+  }
+  . -> increment -> .
+}
+"#;
+        let compilation = compile(
+            &[source],
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("the derived value has one honest policy");
+        let output = compilation
+            .plan
+            .resolved_ports()
+            .boundary()
+            .iter()
+            .find(|port| port.port().name() == "out")
+            .expect("boundary output");
+        let root = output
+            .annotations()
+            .entries()
+            .get(&SchemaPath::root())
+            .expect("the security taint reaches the result");
+        assert_eq!(
+            root.annotations(),
+            [DataAnnotation::Sensitive(SensitivityLevel::Internal)]
+        );
+        assert!(root.annotations().iter().all(|annotation| {
+            !matches!(
+                annotation.kind(),
+                AnnotationKind::Measure | AnnotationKind::Cost
+            )
+        }));
+    }
+
+    #[test]
+    fn a_sensitive_guard_taints_the_selected_output() {
+        let source = r#"
+type Input = struct {
+  allow: bool @sensitive(level = restricted)
+  payload: text
+}
+graph app : App {
+  input in: Input
+  output out: text
+  operator gate {
+    input in: Input
+    output out: text
+    on in where data.allow { out = data.payload }
+  }
+  . -> gate -> .
+}
+"#;
+        let compilation = compile(
+            &[source],
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("control dependence is policy dependence");
+        let output = compilation
+            .plan
+            .resolved_ports()
+            .boundary()
+            .iter()
+            .find(|port| port.port().name() == "out")
+            .expect("boundary output");
+        assert!(matches!(
+            output
+                .annotations()
+                .entries()
+                .get(&SchemaPath::root())
+                .map(|set| set.annotations()),
+            Some([DataAnnotation::Sensitive(SensitivityLevel::Restricted)])
+        ));
+    }
+
+    #[test]
+    fn an_app_val_keeps_its_policy_inside_a_child_node() {
+        let source = r#"
+graph app : App {
+  input in: text
+  output out: text
+  val label: text @sensitive(level = confidential) = "classified label"
+  operator relay {
+    input in: text
+    output out: text
+    on in { out = label }
+  }
+  . -> relay -> .
+}
+"#;
+        let compilation = compile(
+            &[source],
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("App vals are lexical policy bindings for child Nodes");
+        let output = compilation
+            .plan
+            .resolved_ports()
+            .boundary()
+            .iter()
+            .find(|port| port.port().name() == "out")
+            .expect("boundary output");
+        assert!(
+            matches!(
+                output
+                    .annotations()
+                    .entries()
+                    .get(&SchemaPath::root())
+                    .map(|set| set.annotations()),
+                Some([DataAnnotation::Sensitive(SensitivityLevel::Confidential)])
+            ),
+            "{:?}",
+            output.annotations()
+        );
+    }
+
+    #[test]
+    fn incompatible_accounting_producers_refuse_as_source_policy() {
+        let source = r#"
+type Tokens = int @measure(id = gen_ai.usage.input_tokens)
+graph app : App {
+  input metered: Tokens
+  input plain: int
+  output out: int
+  operator merge {
+    input metered: Tokens
+    input plain: int
+    output out: int
+    on metered { out = data }
+    on plain { out = data }
+  }
+  .metered -> merge.metered
+  .plain -> merge.plain
+  merge.out -> .out
+}
+"#;
+        let diagnostics = compile(
+            &[source],
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect_err("one port cannot sometimes mean tokens and sometimes not");
+        let diagnostic = diagnostics
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code() == crate::compiler::check::E_DATA_ANNOTATION)
+            .expect("the policy diagnostic");
+        assert_eq!(diagnostic.fields()[0].1, "propagation");
+        assert!(diagnostic.message().contains("cannot be derived"));
+        assert!(diagnostic.fields()[2].1.contains("Measure"));
+        assert!(
+            diagnostics
+                .diagnostics()
+                .iter()
+                .all(|diagnostic| diagnostic.code() != crate::compiler::E_INTERNAL_PLAN)
+        );
+    }
+
+    #[test]
+    fn derived_policy_does_not_masquerade_as_a_source_declaration() {
+        let source = r#"
+type Classified = text @sensitive(level = confidential)
+graph app : App {
+  input in: Classified
+  operator relay { on in { out = data } }
+  . -> relay -> .
+}
+"#;
+        let compilation = compile(
+            &[source],
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("the policy reaches the boundary output");
+        let raw_output = compilation
+            .plan
+            .plan()
+            .boundary
+            .iter()
+            .find(|port| port.port.name() == "out");
+        assert!(
+            raw_output.is_none_or(|port| port.annotations.is_empty()),
+            "lowering must not rewrite a derived verdict into source authority"
+        );
+        let resolved_output = compilation
+            .plan
+            .resolved_ports()
+            .boundary()
+            .iter()
+            .find(|port| port.port().name() == "out")
+            .expect("the effective output is total");
+        assert!(!resolved_output.annotations().is_empty());
+
+        let bytes = crate::plan::encode(&compilation.plan, &compilation.hash);
+        let (decoded, _) = crate::plan::decode(&bytes)
+            .expect("decode independently reconstructs the effective verdict");
+        assert_eq!(decoded, compilation.plan);
+    }
+
+    #[test]
+    fn sensitive_policy_executes_while_secret_policy_stays_fail_closed() {
+        let source = r#"
+type Classified = text @sensitive(level = confidential)
+graph app : App {
+  input in: Classified
+  operator relay { on in { out = data } }
+  . -> relay -> .
+}
+"#;
+        let compilation = compile(
+            &[source],
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("sensitive policy is executable after A3");
+        let mut vm = crate::runtime::vm::Vm::boot(&compilation.plan, GraphVersion(1));
+        let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
+        let submission = crate::boundary::InboundSubmission {
+            provenance: crate::boundary::InboundEnvelopeProvenance::single(
+                node::Path::new(["test"]).expect("valid provenance path"),
+            ),
+            port: node::Port::new("in").expect("valid port"),
+            draft: crate::boundary::Draft {
+                data: crate::envelope::Data::materialized(crate::value::Value::Text(String::from(
+                    "classified",
+                ))),
+                ext: crate::envelope::Namespace::new(),
+            },
+            sequence: crate::boundary::SubmissionSequence::Next,
+        };
+        vm.inject(&mut journal, submission)
+            .expect("the classified envelope is admitted");
+        vm.drain(&mut journal)
+            .expect("A3 executes a proved sensitive flow");
+        assert_eq!(vm.outputs().len(), 1);
+        let annotations = vm
+            .boundary_annotations(&node::Port::new("out").expect("valid output"))
+            .expect("the presentation boundary owns its verdict");
+        let value = vm.outputs()[0]
+            .envelope
+            .data()
+            .materialized_value()
+            .expect("the output stays materialized");
+        let rendered = format!(
+            "{:?}",
+            crate::data_policy::RedactedValue::new(value, annotations)
+        );
+        assert_eq!(rendered, "[REDACTED]");
+        assert!(!rendered.contains("classified"));
     }
 
     #[test]

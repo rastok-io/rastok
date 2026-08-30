@@ -2924,7 +2924,11 @@ fn malformed_terminal_facts_are_refused_loudly() {
     // can still settle it honestly.
     assert_eq!(report.settled, 0);
     assert_eq!(report.rejected.len(), 2);
-    assert!(report.rejected[0].1.contains("MadeUp"));
+    assert!(report.rejected[0].1.contains("undeclared tagged case"));
+    assert!(
+        !report.rejected[0].1.contains("MadeUp"),
+        "a malformed classified discriminant is never formatted"
+    );
     assert!(report.rejected[1].1.contains("materialized"));
     assert_eq!(journal.open_calls().len(), 1, "no garbage closure");
     vm.drain(&mut journal).unwrap();

@@ -676,7 +676,10 @@ impl<'plan> TransactionExecutor<'plan> {
             Value::Bool(value) => Ok(value),
             other => Err(Fault::Eval(expr::Error {
                 kind: expr::ErrorKind::Evaluation,
-                message: format!("the guard evaluated to {other:?}"),
+                message: format!(
+                    "the guard evaluated to {:?}",
+                    crate::value::ValueKind::of(&other)
+                ),
             })),
         }
     }
@@ -920,7 +923,10 @@ impl<'plan> TransactionExecutor<'plan> {
                         other => {
                             return Err(Fault::Eval(expr::Error {
                                 kind: expr::ErrorKind::Evaluation,
-                                message: format!("the guard evaluated to {other:?}"),
+                                message: format!(
+                                    "the guard evaluated to {:?}",
+                                    crate::value::ValueKind::of(&other)
+                                ),
                             }));
                         }
                     }
@@ -1156,7 +1162,10 @@ impl<'plan> TransactionExecutor<'plan> {
                 other => {
                     return Err(Fault::Eval(expr::Error {
                         kind: expr::ErrorKind::Evaluation,
-                        message: format!("the guard evaluated to {other:?}"),
+                        message: format!(
+                            "the guard evaluated to {:?}",
+                            crate::value::ValueKind::of(&other)
+                        ),
                     }));
                 }
             }
@@ -2557,9 +2566,9 @@ pub fn to_meta_value(value: &Value) -> Result<MetaValue, Fault> {
                 .collect::<Result<alloc::collections::BTreeMap<_, _>, _>>()?;
             MetaValue::Map(entries)
         }
-        other => {
-            return Err(Fault::Unrepresentable(format!(
-                "{other:?} in a flat meta namespace"
+        _ => {
+            return Err(Fault::Unrepresentable(String::from(
+                "a non-map value in a flat meta namespace",
             )));
         }
     })

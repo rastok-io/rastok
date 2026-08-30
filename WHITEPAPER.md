@@ -2885,15 +2885,17 @@ explicit Loop `stop` and spatial recovery still refuse before execution,
 preserving the rule that a recognized policy never silently runs as a plain
 Graph.
 
-M1.8 A2 now carries the closed `@sensitive`, `@secret`, `@measure` and
+M1.8 A3 now executes the closed `@sensitive`, `@secret`, `@measure` and
 `@cost` family through source, checked HIR and categorical v15 as canonical
 side-tables beside logical schemas. Independent package validation re-derives
 every local structural path, legal target, registered measure carrier,
-currency authority and resolved-port policy claim without changing
-`DataType` assignability. Unannotated semantic identities and causal traces
-remain fixed. Operation-level propagation and redaction are the next explicit
-gate: until they land, the VM refuses an annotated plan before mutation rather
-than treating policy as decoration.
+currency authority and effective resolved-port policy through canonical
+operations without changing `DataType` assignability. Exact transforms retain
+meaning; calculations and control dependencies retain security taint but do
+not invent accounting meaning; incompatible producers refuse. Presentation
+redacts before formatting, while clear secret payloads remain fail-closed for
+A4's reference boundary. Unannotated semantic identities and causal traces
+remain fixed.
 
 This white paper is designed to outlive individual releases. The DSL
 grammar, runtime traits, and feature set will evolve; the conceptual

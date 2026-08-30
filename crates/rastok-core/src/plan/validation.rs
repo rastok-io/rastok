@@ -504,6 +504,15 @@ pub enum PlanValidationError {
         /// Exact structural, target, carrier, or registry failure.
         reason: SchemaAnnotationError,
     },
+    /// A canonical operation cannot derive the policy table transported at
+    /// its result, or alternative producers disagree on exact accounting
+    /// meaning.
+    InvalidAnnotationPropagation {
+        /// Stable plan location of the operation or result.
+        location: String,
+        /// Exact propagation invariant that failed.
+        reason: crate::data_policy::PropagationError,
+    },
     /// Lowering left an `asset()` call in an executable expression instead of
     /// binding it to the plan's content-addressed asset table.
     UnboundAssetCall,
@@ -909,6 +918,10 @@ impl core::fmt::Display for PlanValidationError {
                     "invalid plan: annotations at {location} are invalid: {reason}"
                 )
             }
+            Self::InvalidAnnotationPropagation { location, reason } => write!(
+                f,
+                "invalid plan: annotation propagation at {location} failed: {reason}"
+            ),
             Self::UnboundAssetCall => write!(
                 f,
                 "invalid plan: an asset() call was not bound to the plan asset table"
@@ -1047,8 +1060,16 @@ impl ValidatedExecutionPlan {
         key_mode: InstanceKeyTypeMode,
     ) -> Result<Self, PlanValidationError> {
         validate(&plan)?;
-        let resolved_ports = super::type_resolution::resolve(&plan)?;
-        verify_instance_key_types(&mut plan, &resolved_ports, key_mode)?;
+        let declared_ports = super::type_resolution::resolve(&plan)?;
+        verify_instance_key_types(&mut plan, &declared_ports, key_mode)?;
+        annotations_well_formed(&plan, &declared_ports)?;
+        let resolved_ports = super::annotation_resolution::resolve(&plan, &declared_ports)
+            .map_err(|error| PlanValidationError::InvalidAnnotationPropagation {
+                location: error.location,
+                reason: error.reason,
+            })?;
+        // Raw tables remain declarations; the resolved table is the separately
+        // derived effective policy transported as categorical evidence.
         annotations_well_formed(&plan, &resolved_ports)?;
         let depth = super::serialization::deepest_level_with_resolved(&plan, &resolved_ports);
         if depth >= crate::canonical_cbor::MAX_NESTING {
@@ -1074,8 +1095,9 @@ impl ValidatedExecutionPlan {
     /// Effective logical types of every graph-boundary and node port.
     ///
     /// Unlike raw source declarations, this table contains no inference
-    /// variable and no recovery hole. Format v10 carries it and the decoder
-    /// derives it again from the raw constraints before requiring equality.
+    /// variable or recovery hole and includes effective data policy derived
+    /// through canonical operations. Categorical transport carries it and the
+    /// decoder reconstructs it from raw constraints before requiring equality.
     #[must_use]
     pub const fn resolved_ports(&self) -> &super::type_resolution::ResolvedPortTable {
         &self.resolved_ports

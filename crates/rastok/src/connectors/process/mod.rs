@@ -261,8 +261,8 @@ impl core::fmt::Display for ProcessSettingsError {
             ),
             Self::CwdNotText => write!(f, "the cwd attribute is not text"),
             Self::EnvNotMap => write!(f, "the env attribute is not a text-keyed map"),
-            Self::EnvValueNotText(name) => {
-                write!(f, "the env entry `{name}` is not text")
+            Self::EnvValueNotText(_) => {
+                write!(f, "one env entry is not text")
             }
             Self::UnknownCodec(word) => {
                 write!(f, "`{word}` is outside the Process framing domains")
@@ -354,7 +354,12 @@ impl ProcessSettings {
                 for item in items {
                     match item {
                         crate::value::Value::Text(text) => args.push(text.clone()),
-                        other => return Err(E::ArgNotText(format!("{other:?}"))),
+                        other => {
+                            return Err(E::ArgNotText(format!(
+                                "{:?}",
+                                crate::value::ValueKind::of(other)
+                            )));
+                        }
                     }
                 }
                 args

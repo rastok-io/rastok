@@ -277,6 +277,32 @@ impl From<Value> for EvalValue {
 }
 
 impl EvalValue {
+    fn kind_name(&self) -> &'static str {
+        match self {
+            Self::Bool(_) => "bool",
+            Self::Int(_) | Self::Uint(_) => "integer",
+            Self::Double(_) => "double",
+            Self::Text(_) => "text",
+            Self::Bytes(_) => "bytes",
+            Self::Duration(_) => "duration",
+            Self::Timestamp(_) => "timestamp",
+            Self::Date(_) => "date",
+            Self::Time(_) => "time",
+            Self::TimestampNtz(_) => "timestamp_ntz",
+            Self::Interval { .. } => "interval",
+            Self::Uuid(_) => "uuid",
+            Self::Null => "null",
+            Self::List(_) => "list",
+            Self::Map(_) | Self::KeyedMap(_) => "map",
+            Self::Struct(_) => "struct",
+            Self::Decimal { .. } => "decimal",
+            Self::Enum(_) => "enum",
+            Self::StructuralUnion { .. } => "structural union",
+            Self::TaggedUnion { .. } => "tagged union",
+            Self::Payload(_) => "unmaterialized payload",
+        }
+    }
+
     /// Converts an evaluator result into the materialized value algebra.
     ///
     /// # Errors
@@ -2391,7 +2417,10 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
                     .checked_neg()
                     .map(EvalValue::Duration)
                     .ok_or_else(|| fault(String::from("duration overflow"))),
-                (_, other) => Err(fault(format!("operator does not accept {other:?}"))),
+                (_, other) => Err(fault(format!(
+                    "operator does not accept {}",
+                    other.kind_name()
+                ))),
             }
         }
         Expr::Binary { op, left, right } => eval_binary(*op, left, right, bindings),
@@ -2402,7 +2431,10 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
         } => match concrete(eval_expr(cond, bindings)?, bindings)? {
             EvalValue::Bool(true) => eval_expr(then, bindings),
             EvalValue::Bool(false) => eval_expr(otherwise, bindings),
-            other => Err(fault(format!("the condition evaluated to {other:?}"))),
+            other => Err(fault(format!(
+                "the condition evaluated to {}",
+                other.kind_name()
+            ))),
         },
         Expr::Index { base, index } => {
             let base = concrete(eval_expr(base, bindings)?, bindings)?;
@@ -2420,16 +2452,20 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
                     .into_iter()
                     .find(|(name, _)| name == &key)
                     .map(|(_, value)| value)
-                    .ok_or_else(|| fault(format!("no member `{key}`"))),
+                    .ok_or_else(|| fault(String::from("no member with that name"))),
                 (EvalValue::Map(mut map), EvalValue::Text(key)) => map
                     .remove(&key)
-                    .ok_or_else(|| fault(format!("no such key `{key}`"))),
+                    .ok_or_else(|| fault(String::from("no such map key"))),
                 (EvalValue::KeyedMap(entries), key) => entries
                     .into_iter()
                     .find(|(candidate, _)| values_equal(candidate, &key))
                     .map(|(_, value)| value)
                     .ok_or_else(|| fault(String::from("no such canonical map key"))),
-                (base, index) => Err(fault(format!("cannot index {base:?} with {index:?}"))),
+                (base, index) => Err(fault(format!(
+                    "cannot index {} with {}",
+                    base.kind_name(),
+                    index.kind_name()
+                ))),
             }
         }
         Expr::Call { function, args } => {
@@ -2455,7 +2491,7 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
                             Ok(EvalValue::Decimal { unscaled, scale })
                         }
                         Err(reason) => Err(fault(alloc::format!(
-                            "`{text}` is not an exact decimal: {reason}"
+                            "the text is not an exact decimal: {reason}"
                         ))),
                     }
                 }
@@ -2464,7 +2500,7 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
                         .map(EvalValue::Text)
                         .map_err(|reason| {
                             fault(alloc::format!(
-                                "`{text}` is not a concrete media type: {reason}"
+                                "the text is not a concrete media type: {reason}"
                             ))
                         })
                 }
@@ -2484,9 +2520,14 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
                 (Function::Size, [EvalValue::Struct(fields)]) => {
                     Ok(EvalValue::Int(fields.len() as i64))
                 }
-                (function, values) => {
-                    Err(fault(format!("{function:?} does not accept {values:?}")))
-                }
+                (function, values) => Err(fault(format!(
+                    "{function:?} does not accept [{}]",
+                    values
+                        .iter()
+                        .map(EvalValue::kind_name)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))),
             }
         }
         Expr::List(items) => {
@@ -2709,7 +2750,11 @@ fn compare(lhs: &EvalValue, rhs: &EvalValue) -> Result<core::cmp::Ordering, Erro
         (EvalValue::Text(a), EvalValue::Text(b)) => Ok(a.cmp(b)),
         (EvalValue::Duration(a), EvalValue::Duration(b)) => Ok(a.cmp(b)),
         (EvalValue::Timestamp(a), EvalValue::Timestamp(b)) => Ok(a.cmp(b)),
-        (lhs, rhs) => Err(fault(format!("cannot order {lhs:?} against {rhs:?}"))),
+        (lhs, rhs) => Err(fault(format!(
+            "cannot order {} against {}",
+            lhs.kind_name(),
+            rhs.kind_name()
+        ))),
     }
 }
 
@@ -2777,7 +2822,11 @@ fn arithmetic(op: BinaryOp, lhs: EvalValue, rhs: EvalValue) -> Result<EvalValue,
             .checked_sub(b)
             .map(EvalValue::Duration)
             .ok_or_else(overflow),
-        (op, lhs, rhs) => Err(fault(format!("{op:?} does not accept {lhs:?} and {rhs:?}"))),
+        (op, lhs, rhs) => Err(fault(format!(
+            "{op:?} does not accept {} and {}",
+            lhs.kind_name(),
+            rhs.kind_name()
+        ))),
     }
 }
 
@@ -2801,7 +2850,7 @@ fn narrowing_fault(reason: NarrowingFailure) -> Error {
 /// compound and fractional segments, optional leading sign. `min`,
 /// `d`, and `w` are not accepted.
 fn parse_duration(text: &str) -> Result<i64, Error> {
-    let bad = || fault(format!("`{text}` is not a valid duration"));
+    let bad = || fault(String::from("the text is not a valid duration"));
     let (negative, rest) = match text.strip_prefix('-') {
         Some(rest) => (true, rest),
         None => (false, text),
@@ -2843,7 +2892,7 @@ fn parse_duration(text: &str) -> Result<i64, Error> {
 /// Parses an RFC 3339 UTC timestamp (`Z` suffix only) to nanoseconds
 /// since the Unix epoch.
 fn parse_timestamp(text: &str) -> Result<i64, Error> {
-    let bad = || fault(format!("`{text}` is not a valid UTC timestamp"));
+    let bad = || fault(String::from("the text is not a valid UTC timestamp"));
     // RFC 3339 has fixed widths; checking them first also bounds every
     // component before any arithmetic, so nothing below can overflow.
     let field = |part: Option<&str>, width: usize| -> Result<i64, Error> {
@@ -3247,6 +3296,23 @@ mod tests {
             eval(&overflow, &BTreeMap::new()).unwrap_err().message,
             "integer overflow"
         );
+    }
+
+    #[test]
+    fn runtime_faults_describe_kinds_without_formatting_values() {
+        let sentinel = "classified-value-must-not-escape";
+        let tree = Tree {
+            root: Expr::Index {
+                base: Box::new(Expr::Literal(Value::Map(BTreeMap::new()))),
+                index: Box::new(Expr::Literal(Value::Text(String::from(sentinel)))),
+            },
+            ty: DataType::Variant,
+        };
+        let message = eval(&tree, &BTreeMap::new())
+            .expect_err("the missing map key faults")
+            .message;
+        assert_eq!(message, "no such map key");
+        assert!(!message.contains(sentinel));
     }
 
     #[test]

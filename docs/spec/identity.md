@@ -374,7 +374,7 @@ semantic hashes and every existing causal trace are therefore byte-identical
 to L6. Echo/spike remains `e50026ee…`, JSONL remains `036f7ea5…`, and the
 connector-free gauge remains `0d3ad43d…`. No golden is re-blessed for L7.
 
-**M1.8 A2 annotation-transport checkpoint (2026-08-30).**
+**M1.8 A2–A3 data-policy checkpoint (2026-08-30).**
 D-2026-08-30-1 moves every package container categorically from v14 to v15.
 Sparse policy tables sit beside, rather than inside, `DataType`; the type and
 value tag registries do not move. `SchemaPath` segment tags are extend-only:
@@ -394,8 +394,14 @@ unannotated semantic witnesses. Only an actual resolved table adds the
 `rastok.metering.r1` stream; its first pinned semantic witness is
 `f984f003953161e8fa93025787bd92a44fd18a8615aee1a0fbe4b9f1ba22defe`.
 Every existing causal trace remains byte-identical. Registry-free validation
-re-derives the table, while A3 remains the separately named execution-policy
-gate.
+re-derives every local declaration. A3 adds no new wire tag or identity
+stream: it derives effective resolved-port policy through exact copy,
+projection, construction, calculation, guards, state and Loop recurrence, and
+compares that result with the already transported resolved table. Raw source
+rows are never rewritten with derived verdicts. Annotated immutable bindings
+remain as paths in executable trees so their policy dependency is provable;
+this may change only annotated package bodies. Unannotated bodies and the
+three semantic witnesses above remain exact, and no causal trace moves.
 
 ## 2. `graph_version` and the manifest
 

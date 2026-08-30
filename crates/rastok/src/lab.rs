@@ -269,10 +269,8 @@ fn check_expectation(expectation: &Expectation, window: &[Observed]) -> Option<S
                 match expr::eval(tree, &env) {
                     Ok(expr::EvalValue::Bool(true)) => matches += 1,
                     Ok(expr::EvalValue::Bool(false)) => {}
-                    Ok(other) => {
-                        return Some(format!(
-                            "expect {name}: the predicate is not a bool (got {other:?})"
-                        ));
+                    Ok(_) => {
+                        return Some(format!("expect {name}: the predicate is not a bool"));
                     }
                     Err(error) => {
                         return Some(format!("expect {name}: the predicate faulted: {error}"));
@@ -505,9 +503,9 @@ impl MockOutboundConnectorDriver {
                         // A faulting or non-boolean guard is a fault
                         // of the scenario, never a silent
                         // fall-through to the next branch.
-                        Ok(other) => {
+                        Ok(_) => {
                             self.fault(format!(
-                                "a mock guard of `{}` is not a bool (got {other:?})",
+                                "a mock guard of `{}` is not a bool",
                                 intent.connector_path
                             ));
                             return None;
@@ -660,9 +658,9 @@ impl MockOutboundConnectorDriver {
                         }
                         // A reply carries data only: its envelope is
                         // minted by the connector's own transaction.
-                        other => {
-                            return Err(format!(
-                                "the mock faulted: a reply cannot write {other:?}"
+                        _ => {
+                            return Err(String::from(
+                                "the mock faulted: a reply can write data only",
                             ));
                         }
                     }

@@ -231,11 +231,12 @@ The repository opens publicly with this milestone (15 October 2026).
   the calendar-safe OpenTelemetry cut are in the
   [M1.8 backlog](docs/architecture/m1.8-observability-backlog.md); the explored
   post-M1 reservation model is preserved separately in the
-  [Budget draft](docs/architecture/budget-governance-draft.md). A0–A2 are
+  [Budget draft](docs/architecture/budget-governance-draft.md). A0–A3 are
   closed: categorical v15 carries the four contracts as canonical sparse
-  side-tables through independent decode and Registry-free validation.
-  Unannotated semantic hashes and causal traces remain fixed; annotated
-  execution refuses before mutation pending A3 propagation and redaction.
+  side-tables; Registry-free validation derives their effective result through
+  canonical operations, and presentation redacts before formatting.
+  Unannotated semantic hashes and causal traces remain fixed. Clear secret
+  payloads stay fail-closed pending A4's reference boundary.
 - A live view of the running graph, fed by the journal.
 - A guided example gallery seeded by the benchmark's reference
   solutions, closed by the October demo flow.

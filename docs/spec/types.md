@@ -484,6 +484,7 @@ secret boundary and observation semantics are normative in
 [observability.md](observability.md). Categorical package v15 carries the
 sparse table beside every owning schema without allocating a `DataType` tag.
 Registry-free validation resolves each path against that adjacent type and
-requires raw/resolved port policy to agree. The VM still refuses annotated
-plans before mutation until M1.8 A3 lands the separate propagation and sink-
-policy judgement.
+independently derives effective resolved-port policy from raw declarations and
+canonical operations. A3 executes sensitivity and accounting policy without
+rewriting a derived verdict into source authority. Clear `@secret` payloads
+still refuse before mutation until A4 lands the reference-only boundary.

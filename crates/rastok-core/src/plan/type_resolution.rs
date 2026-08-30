@@ -109,6 +109,25 @@ impl ResolvedPortTable {
             .find(|resolved| &resolved.port == port)
             .map(ResolvedPort::ty)
     }
+
+    pub(super) fn set_annotations(
+        &mut self,
+        node: Option<Slot>,
+        port: &node::Port,
+        annotations: AnnotationTable,
+    ) -> bool {
+        let row = match node {
+            Some(slot) => self.nodes.get_mut(slot.index()),
+            None => Some(&mut self.boundary),
+        };
+        let Some(resolved) =
+            row.and_then(|row| row.iter_mut().find(|resolved| resolved.port() == port))
+        else {
+            return false;
+        };
+        resolved.annotations = annotations;
+        true
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

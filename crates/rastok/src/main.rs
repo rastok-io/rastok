@@ -384,12 +384,18 @@ fn print_new_outputs(vm: &Vm<'_>, printed_outputs: &mut usize, printed_errors: &
             out,
             "{}: {}",
             output.port,
-            render_data(output.envelope.data())
+            render_data(
+                output.envelope.data(),
+                vm.boundary_annotations(&output.port),
+            )
         );
     }
     *printed_outputs = vm.outputs().len();
+    let err_annotations = node::Port::new("err")
+        .ok()
+        .and_then(|port| vm.boundary_annotations(&port));
     for envelope in &vm.errors()[*printed_errors..] {
-        eprintln!("err: {}", render_data(envelope.data()));
+        eprintln!("err: {}", render_data(envelope.data(), err_annotations));
     }
     *printed_errors = vm.errors().len();
 }
@@ -510,7 +516,21 @@ fn parse_stored(rendered: &str) -> Option<rastok::golden::Trace> {
 
 /// A boundary envelope for a terminal: text prints bare, raw bytes
 /// print lossily, anything else prints in its debug shape.
-fn render_data(data: &Data) -> String {
+fn render_data(
+    data: &Data,
+    annotations: Option<&rastok::schema_annotation::AnnotationTable>,
+) -> String {
+    if let Some(annotations) = annotations
+        && rastok::data_policy::requires_redaction(annotations)
+    {
+        return match data {
+            Data::Materialized(value) => format!(
+                "{:?}",
+                rastok::data_policy::RedactedValue::new(value, annotations)
+            ),
+            Data::Encoded { .. } => String::from("[REDACTED]"),
+        };
+    }
     match data {
         Data::Materialized(Value::Text(text)) => text.trim_end_matches('\n').to_string(),
         Data::Encoded {

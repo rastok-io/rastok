@@ -2762,8 +2762,12 @@ fn a_duplicated_struct_field_refuses_at_the_door() {
         )
         .unwrap_err();
     assert!(
-        error.to_string().contains("`twin` appears twice"),
+        error.to_string().contains("one field appears twice"),
         "typed, never first-found: {error}"
+    );
+    assert!(
+        !error.to_string().contains("twin"),
+        "runtime field names are not formatted before policy: {error}"
     );
     assert_eq!(journal.records().len(), 0, "refused before the append");
 }

@@ -20,6 +20,7 @@ extern crate std;
 pub mod boundary;
 pub mod canonical_cbor;
 pub mod connector;
+pub mod data_policy;
 pub mod datatype;
 pub mod envelope;
 pub mod expr;

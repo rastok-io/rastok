@@ -161,6 +161,7 @@ pub fn compile_with_assets(
             | PlanValidationError::MissingClosingPolicy { .. }
             | PlanValidationError::AmbiguousJoinMetadataRead { .. }
             | PlanValidationError::AmbiguousInboundCallCorrelation { .. }
+            | PlanValidationError::InvalidAnnotationPropagation { .. }
             | PlanValidationError::InvalidLoopControl { .. }
             | PlanValidationError::WiringCycle { .. }),
         ) => {
@@ -296,6 +297,18 @@ fn type_resolution_diagnostic(error: &PlanValidationError) -> Diagnostic {
         )
         .with_field("node", node.to_string())
         .with_field("attribute", "correlate"),
+        PlanValidationError::InvalidAnnotationPropagation { location, reason } => {
+            Diagnostic::new(
+                check::E_DATA_ANNOTATION,
+                Phase::Check,
+                format!(
+                    "data policy at {location} cannot be derived from every producer: {reason}"
+                ),
+            )
+            .with_field("annotation", "propagation")
+            .with_field("path", location)
+            .with_field("detail", reason.to_string())
+        }
         PlanValidationError::InvalidLoopControl {
             owner,
             path,

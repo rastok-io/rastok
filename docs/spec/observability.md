@@ -1,11 +1,11 @@
 # Data policy, observations and cost
 
-> **Status: normative; transport is executable through M1.8 A2 under
+> **Status: normative and executable through M1.8 A3 under
 > D-2026-08-30-1.** Categorical package v15 transports the closed family as
-> canonical side-tables and Registry-free validation re-derives every local
-> path, target and registry claim. Policy execution remains fail-closed at the
-> VM until A3 lands propagation and redaction; annotations are never accepted
-> as inert decoration.
+> canonical side-tables. Registry-free validation re-derives every local
+> claim and the effective policy of canonical operations; presentation
+> redacts before formatting. Clear `@secret` payloads remain fail-closed until
+> A4 lands the reference-only boundary.
 
 This document owns data classification, typed runtime observations and their
 accounting projections. Logical values and assignability remain owned by
@@ -50,10 +50,12 @@ Categorical v15 carries this sparse table locally beside every transported
 schema that can own policy: raw and resolved port rows, nested-Graph ports,
 owner values, Node state cells and handler-local typed bindings. Empty tables
 are omitted. The decoder reconstructs the table from its structural wire form;
-validation resolves every path against the adjacent `DataType`, verifies the
-closed registry and requires raw and independently derived resolved port tables
-to agree exactly. This is A2's **type-resolution propagation evidence**. The
-operation-level rules in §4 remain the A3 gate.
+validation resolves every path against the adjacent `DataType` and verifies
+the closed registry. Raw rows remain source declarations. The separately
+transported resolved-port table is an effective verdict: A3 reconstructs it
+from raw declarations and canonical operations, then requires exact equality.
+A derived verdict is never copied back into a raw row and cannot masquerade as
+source authority.
 
 ## 2. Source form
 
@@ -185,11 +187,26 @@ The hosted checker derives the output table. Categorical validation derives it
 again from canonical operations and requires equality. The VM never repairs,
 guesses or reinterprets an annotation name.
 
-Until that derivation lands, a v15 plan containing any non-empty annotation
-table is valid transport but not executable policy. VM boot caches the first
-such location once; every execution entry point refuses with
-`UnsupportedDataPolicy` before journal or state mutation. An unannotated plan
-therefore performs no annotation-table walk on the transaction hot path.
+A3 covers boundary and Node ports, nested-Graph boundaries, owner `val`s,
+Node-owned `var`s, handler-local `let`s, guards, field writes, Loop recurrence
+and `LoopExpired.last_state`. Control dependence carries the strongest
+security taint. Alternative producers must agree exactly on measure and cost
+meaning; disagreement is `E-DATA-ANNOTATION`, never a first-wins choice.
+Metadata has no data-policy schema in M1, so writing classified data into
+`meta.app` or `meta.ext` refuses rather than losing its policy.
+
+Opaque guest execution remains a named gate. No guest form can execute around
+this judgement; a future guest boundary must use the same conservative
+security-taint rule and discard accounting meaning before admission.
+
+If the raw plan has no annotation declaration, validation returns the ordinary
+resolved table without walking operation trees. Annotated plans pay the fixed
+derivation once at validation; transactions do no policy reconstruction. VM
+boot caches only whether a clear secret-classified site remains and refuses it
+with `UnsupportedDataPolicy` before journal or state mutation pending A4.
+Sensitivity, measure and cost policy otherwise execute. CLI and Lab fault
+paths never format a runtime value before consulting policy or reducing the
+message to a value category.
 
 ## 5. Deployment bindings and secrets
 

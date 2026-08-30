@@ -6,6 +6,7 @@
 //! taken earlier, over the canonical HIR (`identity.md` §1), and rides
 //! beside the plan as [`SemanticHash`].
 
+mod annotation_resolution;
 mod serialization;
 mod type_resolution;
 mod validation;

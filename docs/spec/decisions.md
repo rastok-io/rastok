@@ -62,14 +62,17 @@ hosted OpenAPI input only.
 Categorical package v15 carries the annotation side-table and registry
 references. A2 lands an independent decoder and Registry-free validation of
 the adjacent logical type, canonical path, target, measure carrier, currency
-authority, ordering and raw/resolved port equality. The `DataType` registry
-and tags remain unchanged. Only annotated programs gain the
+authority, ordering and local declaration claims. A3 keeps raw declarations
+separate and independently derives the effective resolved-port table through
+canonical operations before requiring exact equality with the transported
+claim. The `DataType` registry and tags remain unchanged. Only annotated programs gain the
 `rastok.metering.r1` semantic extension; concrete secret values, deployment
 profiles, price profiles and exporter settings do not become graph identity.
 Costs, metrics, host facts and export loss remain outside causal identity as
-already required by `identity.md`. Until A3 derives operation-level
-propagation, the VM rejects any non-empty table before mutation; transport
-never degrades into inert decoration.
+already required by `identity.md`. A3 executes sensitivity and accounting
+policy; only clear secret-classified data remains rejected before mutation
+until A4 supplies its reference-only boundary. Transport never degrades into
+inert decoration.
 
 The A2 categorical move changes the version byte and checksum of every
 package, but no unannotated body or semantic identity. Echo/spike remains 988 B
@@ -82,6 +85,21 @@ Their semantic witnesses stay `e50026ee…`, `036f7ea5…` and `0d3ad43d…`, an
 all existing causal traces are byte-identical. The exact first annotated
 semantic witness under `rastok.metering.r1` is
 `f984f003953161e8fa93025787bd92a44fd18a8615aee1a0fbe4b9f1ba22defe`.
+
+A3 adds no categorical tag, semantic extension or causal-record field. Exact
+copy, projection and construction preserve policy; calculations and guards
+retain the strongest security taint but do not infer measure or cost meaning;
+alternative producers with incompatible accounting meaning refuse. Raw source
+rows remain declarations while the resolved-port table carries the effective
+derived verdict. Validation repeats the complete derivation without a
+`ContractCatalog`, and execution never repairs it. Annotated immutable values
+remain lexical paths in runtime trees so this dependency stays provable after
+decode; unannotated constants keep their literal substitution and all
+unannotated package bodies, semantic witnesses and causal traces stay exact.
+Presentation redacts classified fields before formatting, and runtime faults
+name value categories rather than payload contents. A plan with no declaration
+takes an operation-tree zero-walk path. Opaque guests remain refused until
+their boundary can apply the same conservative taint rule.
 
 Budget enforcement is deliberately outside M1.8. The draft aspect would need
 dynamic deployment policy, pre-effect reservation, plan-shaped typed refusal

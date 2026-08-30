@@ -132,9 +132,10 @@
 > tag. V14 cannot represent these facts and is categorically refused. Empty
 > tables are omitted, so an unannotated body and semantic hash remain
 > byte-identical; only the outer version and checksum move. Registry-free
-> validation re-derives every local claim. Until A3 derives transform policy,
-> the VM refuses a non-empty table before mutation rather than executing it as
-> inert metadata.
+> validation re-derives every local claim. A3 now derives effective transform
+> policy independently and compares the transported resolved table exactly;
+> raw declarations remain unchanged. Only clear `@secret` payloads retain the
+> fail-closed A4 boundary.
 >
 > The lifetime rows are one closed transport and executable registry: v9
 > validation admits `persistent`, `idle`, `fixed`, `single_pass`, and
@@ -316,10 +317,11 @@ new version, and an old decoder refuses it by name.
 
 V15 applies the same rule to data policy without consulting the compiler
 catalogue: every local table is reconstructed, resolved against its adjacent
-logical type and checked against the closed measure/currency registries.
-Resolved-port policy is a derived claim and must equal the raw row exactly.
-Operation-level propagation is deliberately not inferred by the decoder in
-A2; execution refuses until A3 supplies that separate proof.
+logical type and checked against the closed measure/currency registries. A raw
+port row is a declaration; resolved-port policy is a separately transported
+effective claim. A3 follows the canonical operation graph and requires that
+claim to equal its independent derivation exactly. It never rewrites the raw
+row or recovers meaning from payload strings.
 
 ## Body tables (format v15)
 

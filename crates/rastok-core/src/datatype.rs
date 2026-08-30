@@ -898,14 +898,15 @@ impl fmt::Display for NarrowingFailure {
             Self::NonTextDiscriminator { field } => {
                 write!(f, "the discriminator field `{field}` is not text")
             }
-            Self::UnknownDiscriminator { value } => {
-                write!(f, "the discriminator value `{value}` maps to no case")
+            Self::UnknownDiscriminator { .. } => {
+                f.write_str("the discriminator value maps to no case")
             }
-            Self::UnknownCase { case } => {
-                write!(f, "the discriminator selects undeclared case `{case}`")
-            }
-            Self::CaseMismatch { expected, found } => {
-                write!(f, "case `{found}` cannot be narrowed to case `{expected}`")
+            Self::UnknownCase { .. } => f.write_str("the discriminator selects an undeclared case"),
+            Self::CaseMismatch { expected, .. } => {
+                write!(
+                    f,
+                    "the carried case cannot be narrowed to case `{expected}`"
+                )
             }
             Self::CasePayload { case, violation } => {
                 write!(f, "case `{case}` has an invalid payload: {violation}")
@@ -2276,10 +2277,10 @@ impl fmt::Display for ConformanceViolation {
             match segment {
                 ValuePathSegment::Field(name) => write!(f, ".{name}")?,
                 ValuePathSegment::Index(index) => write!(f, "[{index}]")?,
-                ValuePathSegment::MapKey(key) => write!(f, "<key:{key}>")?,
-                ValuePathSegment::MapValue(key) => write!(f, "[{key:?}]")?,
+                ValuePathSegment::MapKey(_) => f.write_str("<key>")?,
+                ValuePathSegment::MapValue(_) => f.write_str("[*]")?,
                 ValuePathSegment::UnionBranch(branch) => write!(f, "<branch:{branch}>")?,
-                ValuePathSegment::TaggedField { case, field } => write!(f, "<{case}>.{field}")?,
+                ValuePathSegment::TaggedField { field, .. } => write!(f, "<case>.{field}")?,
             }
         }
         match &self.reason {
@@ -2294,11 +2295,11 @@ impl fmt::Display for ConformanceViolation {
             ConformanceReason::InvalidMediaType => {
                 write!(f, "` is not a canonical concrete media type")
             }
-            ConformanceReason::SignedIntegerOutOfRange { value, bits } => {
-                write!(f, "` is an int{bits}; {value} leaves that range")
+            ConformanceReason::SignedIntegerOutOfRange { bits, .. } => {
+                write!(f, "` contains a value outside the int{bits} range")
             }
-            ConformanceReason::UnsignedIntegerOutOfRange { value, bits } => {
-                write!(f, "` is a uint{bits}; {value} leaves that range")
+            ConformanceReason::UnsignedIntegerOutOfRange { bits, .. } => {
+                write!(f, "` contains a value outside the uint{bits} range")
             }
             ConformanceReason::FloatNotRepresentable { bits } => {
                 write!(
@@ -2321,34 +2322,33 @@ impl fmt::Display for ConformanceViolation {
                 "` does not have the component shape required by {}",
                 interval_unit_name(*unit)
             ),
-            ConformanceReason::Length { expected, found } => {
-                write!(f, "` has length {found}; the type requires {expected}")
+            ConformanceReason::Length { expected, .. } => {
+                write!(f, "` has the wrong length; the type requires {expected}")
             }
-            ConformanceReason::DecimalScale { expected, found } => {
+            ConformanceReason::DecimalScale { expected, .. } => {
                 write!(
                     f,
-                    "` carries decimal scale {found}; the type requires {expected}"
+                    "` has the wrong decimal scale; the type requires {expected}"
                 )
             }
-            ConformanceReason::DecimalPrecision { precision, digits } => write!(
-                f,
-                "` carries {digits} decimal digits; precision is {precision}"
-            ),
+            ConformanceReason::DecimalPrecision { precision, .. } => {
+                write!(f, "` exceeds the declared decimal precision {precision}")
+            }
             ConformanceReason::MissingField(field) => {
                 write!(f, "` is missing declared field `{field}`")
             }
-            ConformanceReason::UnexpectedField(field) => {
-                write!(f, "` contains undeclared field `{field}`")
+            ConformanceReason::UnexpectedField(_) => {
+                write!(f, "` contains an undeclared field")
             }
-            ConformanceReason::UnknownEnumSymbol(symbol) => {
-                write!(f, "` contains undeclared enum symbol `{symbol}`")
+            ConformanceReason::UnknownEnumSymbol(_) => {
+                write!(f, "` contains an undeclared enum symbol")
             }
-            ConformanceReason::UnionBranchOutOfRange { branch, branches } => write!(
+            ConformanceReason::UnionBranchOutOfRange { branches, .. } => write!(
                 f,
-                "` selects union branch {branch}; the type declares {branches} branches"
+                "` selects a union branch outside the {branches} declared branches"
             ),
-            ConformanceReason::UnknownTaggedCase(case) => {
-                write!(f, "` contains undeclared tagged case `{case}`")
+            ConformanceReason::UnknownTaggedCase(_) => {
+                write!(f, "` contains an undeclared tagged case")
             }
         }
     }
@@ -2471,8 +2471,34 @@ mod tests {
         assert_eq!(violation.found, ValueKind::Text);
         assert_eq!(
             violation.to_string(),
-            "`payload[\"items\"][1]` is declared int32; a text cannot enter it"
+            "`payload[*][1]` is declared int32; a text cannot enter it"
         );
+    }
+
+    #[test]
+    fn conformance_display_never_formats_runtime_discriminants_or_map_keys() {
+        let sentinel = String::from("classified-value-must-not-escape");
+        let ty = DataType::text_map(DataType::INT);
+        let value = Value::Map(BTreeMap::from([(
+            sentinel.clone(),
+            Value::Text(sentinel.clone()),
+        )]));
+        let rendered = ty
+            .violation("payload", &value)
+            .expect("text is not int")
+            .to_string();
+        assert_eq!(
+            rendered,
+            "`payload[*]` is declared int32; a text cannot enter it"
+        );
+        assert!(!rendered.contains(&sentinel));
+
+        let narrowing = NarrowingFailure::UnknownDiscriminator {
+            value: sentinel.clone(),
+        }
+        .to_string();
+        assert_eq!(narrowing, "the discriminator value maps to no case");
+        assert!(!narrowing.contains(&sentinel));
     }
 
     #[test]

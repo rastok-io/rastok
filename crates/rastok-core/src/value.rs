@@ -345,15 +345,14 @@ pub enum ValueDefect {
 impl fmt::Display for ValueDefect {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::DecimalOutOfDomain { unscaled, scale } => write!(
-                f,
-                "decimal({unscaled}, scale {scale}) is outside the decimal128 domain"
-            ),
-            Self::DuplicateStructField(name) => {
-                write!(f, "a struct whose field `{name}` appears twice")
+            Self::DecimalOutOfDomain { .. } => {
+                f.write_str("a decimal outside the decimal128 domain")
             }
-            Self::DuplicateMapKey(key) => {
-                write!(f, "a map whose canonical key `{key}` appears twice")
+            Self::DuplicateStructField(_) => {
+                f.write_str("a struct in which one field appears twice")
+            }
+            Self::DuplicateMapKey(_) => {
+                f.write_str("a map in which one canonical key appears twice")
             }
             Self::NonCanonicalMapKey(ValueKind::Text) => {
                 f.write_str("a keyed map whose text key must use the text-map representation")
@@ -383,10 +382,10 @@ impl fmt::Display for ValueError {
             match segment {
                 ValuePathSegment::Field(name) => write!(f, ".{name}")?,
                 ValuePathSegment::Index(index) => write!(f, "[{index}]")?,
-                ValuePathSegment::MapKey(key) => write!(f, "<key:{key}>")?,
-                ValuePathSegment::MapValue(key) => write!(f, "[{key:?}]")?,
+                ValuePathSegment::MapKey(_) => f.write_str("<key>")?,
+                ValuePathSegment::MapValue(_) => f.write_str("[*]")?,
                 ValuePathSegment::UnionBranch(branch) => write!(f, "<branch:{branch}>")?,
-                ValuePathSegment::TaggedField { case, field } => write!(f, "<{case}>.{field}")?,
+                ValuePathSegment::TaggedField { field, .. } => write!(f, "<case>.{field}")?,
             }
         }
         write!(f, " contains {}", self.defect)
@@ -605,7 +604,7 @@ mod tests {
         );
         assert_eq!(
             error.to_string(),
-            "value[0] contains a struct whose field `amount` appears twice"
+            "value[0] contains a struct in which one field appears twice"
         );
     }
 
