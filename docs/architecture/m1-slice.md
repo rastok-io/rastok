@@ -460,7 +460,9 @@ step touches `vm.rs` once.
     payloads remain fail-closed. A5 retains typed transaction/Call/Session
     correlations beside the journal and projects optional JSON logs through a
     bounded never-block lane; payloads are omitted unless explicitly requested
-    and then redacted before formatting.
+    and then redacted before formatting. A6 explicitly defers the optional
+    OpenTelemetry transport until exact temporal facts exist; A7 remains the
+    mandatory report gate.
 10. **`--watch`** — the HTML+SSE mini-visualization, strictly a
     journal subscriber; the observation plane stays outside the
     core by construction.

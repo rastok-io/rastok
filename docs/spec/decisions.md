@@ -5,6 +5,45 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-30-5 — Hosted OTLP waits for exact temporal observations
+
+M1.8 A6 qualifies but does not add a hosted OpenTelemetry dependency. The
+candidate official stack observed on 2026-08-30 is `opentelemetry 0.32.0`,
+`opentelemetry_sdk 0.32.1` and `opentelemetry-otlp 0.32.0`. All three declare
+Apache-2.0 and Rust 1.75. The intended minimal transport is OTLP/HTTP protobuf
+with a blocking client confined to a disposable exporter thread; default
+features, logs and an application-wide async runtime are not part of the
+candidate. The official Rust status page still labels traces, metrics and logs
+Beta, and the 0.32 SDK retains semver-moving exporter and processor APIs.
+
+A5 deliberately refuses to assign exporter wall time to a causal commit. Its
+structural observation therefore has exact correlation but no `committed_at`
+or duration. Constructing SDK spans now would either invent those facts at
+projection time or add a second eager hot-path record which the Cortex-M33
+gate has already rejected. Neither is an acceptable qualification result.
+OTLP integration resumes only after a retained observation owns the exact
+temporal facts it exports; it must then record the exact selected dependency
+features and transitive tree, binary delta, bounded-queue behavior, shutdown
+behavior and an independent hermetic Collector transcript before landing.
+
+This is the calendar-safe deferral authorized by A6's exit criterion, not an
+OpenTelemetry substitute. No crate, feature, CLI flag, package byte, semantic
+hash or causal record changes. JSON logging and the deterministic report plane
+remain executable; M1.8 proceeds to A7. The removal strategy stays trivial
+until the future gate: OTel types may exist only in one optional hosted module,
+behind the existing typed `RecordObservation` seam.
+
+Primary qualification references:
+
+- <https://opentelemetry.io/docs/languages/rust/>;
+- <https://opentelemetry.io/docs/languages/rust/exporters/>;
+- <https://github.com/open-telemetry/opentelemetry-rust/tree/main/opentelemetry-otlp>.
+
+**Rejected:** timestamps sampled by the exporter; zero-duration spans
+presented as measured transactions; a dependency landing without an
+independent Collector; OTel types in `rastok-core`; and delaying the exact
+`CostReport` foundation merely to ship an optional transport first.
+
 ## D-2026-08-30-4 — Retained observations and disposable logs are different planes
 
 M1.8 A5 adds one typed `RecordObservation` beside every committed causal

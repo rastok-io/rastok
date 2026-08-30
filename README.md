@@ -139,6 +139,9 @@ redacted before JSON formatting. Export loss changes neither execution nor
 the retained accounting plane. The ordered work is
 tracked in the
 [M1.8 backlog](docs/architecture/m1.8-observability-backlog.md).
+The optional OpenTelemetry transport is explicitly deferred until exact
+temporal observations exist; no exporter timestamp is presented as commit
+time.
 
 For hosted execution or simulation, `--deployment <profile.json>` supplies
 typed boot values, versioned secret coordinates and the optional privacy

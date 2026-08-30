@@ -242,7 +242,9 @@ The repository opens publicly with this milestone (15 October 2026).
   semantic hashes and causal traces remain fixed. Typed record correlations
   are retained beside causal history, and the opt-in JSON exporter is bounded,
   never-block and payload-free by default; saturation changes neither
-  execution nor accounting.
+  execution nor accounting. A6 qualifies and explicitly defers the optional
+  OpenTelemetry transport rather than fabricating timestamps; A7 owns the
+  exact report foundation next.
 - A live view of the running graph, fed by the journal.
 - A guided example gallery seeded by the benchmark's reference
   solutions, closed by the October demo flow.

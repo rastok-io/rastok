@@ -1,7 +1,7 @@
 # Data policy, privacy, observations and cost
 
-> **Status: normative and executable through M1.8 A4 under
-> D-2026-08-30-1 through D-2026-08-30-3.** Categorical package v15 transports the closed family as
+> **Status: normative and executable through M1.8 A5 under
+> D-2026-08-30-1 through D-2026-08-30-5.** Categorical package v15 transports the closed family as
 > canonical side-tables. Registry-free validation re-derives every local
 > claim and the effective policy of canonical operations; presentation
 > redacts before formatting. A4 admits personal data only under an attested
