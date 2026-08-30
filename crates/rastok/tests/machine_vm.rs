@@ -3422,6 +3422,13 @@ impl FlakyJournal {
 }
 
 impl Journal for FlakyJournal {
+    fn retained_observations_from(
+        &self,
+        start: usize,
+    ) -> Vec<rastok::observation::RecordObservation> {
+        self.inner.retained_observations_from(start)
+    }
+
     fn prepare_inbound(
         &self,
         submission: InboundSubmission,

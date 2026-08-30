@@ -450,14 +450,17 @@ step touches `vm.rs` once.
     gaps. Export remains optional for M1 closure; Budget enforcement, FX,
     FOCUS and OpenCost are later consumers. See the ordered
     [M1.8 backlog](m1.8-observability-backlog.md) and the non-normative
-    [Budget draft](budget-governance-draft.md). A0–A4 are closed:
+    [Budget draft](budget-governance-draft.md). A0–A5 are closed:
     categorical v15 transports every local policy table and independently
     derives effective policy through canonical operations; presentation
     redacts before formatting. Personal data remains independent of
     confidentiality and carries its GDPR legal/identifier flags. Exact
     HttpClient boot references now bind through real and scripted Drivers;
     personal data requires an attested run-scoped profile and raw secret
-    payloads remain fail-closed.
+    payloads remain fail-closed. A5 retains typed transaction/Call/Session
+    correlations beside the journal and projects optional JSON logs through a
+    bounded never-block lane; payloads are omitted unless explicitly requested
+    and then redacted before formatting.
 10. **`--watch`** — the HTML+SSE mini-visualization, strictly a
     journal subscriber; the observation plane stays outside the
     core by construction.

@@ -1,7 +1,7 @@
 # Component blueprint
 
 > Implementation blueprint — non-normative. Originally written ahead
-> of the build; updated 2026-08-30 for the M1.8 A2 closure. The
+> of the build; updated 2026-08-30 for the M1.8 A5 closure. The
 > former named-partition P1-P3 implementation is superseded; categorical v15
 > owner transport and hierarchical instance routing are executable evidence.
 > The M0 deviations remain recorded in
@@ -79,6 +79,7 @@ canonical record projection ─▶ golden compare
 | `boundary::{Intent,SessionOpenIntent,SessionWriteIntent}` (open OUTBOUND) | `runtime` | dispatcher/bindings → exchange-specific `boundary::OutboundConnectorDriver` views | canonical Call or Session effect fields and already-resolved non-plan settings; each causal open/write record seals its emitting id, connector path and exact request/message digest before Driver effect, while settings remain execution material rather than a parallel causal field ([delivery-semantics.md §4](../spec/delivery-semantics.md); [identity.md §3](../spec/identity.md)) |
 | `boundary::Completion` | `connectors` or the Lab's mock Driver | `runtime` (as an input event) | returns ordered ordinary port drafts plus one final typed `exit`, correlated by the internal `CallRef` — never by the business key; a Driver only answers and never decides a timeout or mints journal records |
 | `journal::Record` | **runtime mechanics only** | recovery, `golden::Trace` | Drivers and mocks supply events, never records; causal core and observation annotations kept separable ([identity.md §3](../spec/identity.md)) |
+| `observation::RecordObservation` | semantic journal query | deterministic reports and disposable hosted projections | typed correlation is derived only from causal history, retained outside its seal, and never consulted by execution or replay ([observability.md §6–7](../spec/observability.md)) |
 | `diagnostics::Diagnostic` | every phase | entry points | stable code, spans, structured fields; accumulated values — never prints, never panics |
 | golden projection | `golden::Trace` (project, seal, diff) | evidence compare | deterministic bytes: same scope, same bytes ([simulation-semantics.md §6](../spec/simulation-semantics.md)) |
 
@@ -92,7 +93,7 @@ crates/rastok-core/src/       # the kernel — #![no_std] + alloc (split at M0.5
 ├── identity.rs               # canonical instance address/reference
 │   └── identity/encoding.rs  # tagged-value identity registry
 ├── json.rs, trivia.rs        # shared exact JSON and lexical-comment facts
-├── journal.rs                # records (+ armed timers), trait, ids, MemJournal
+├── journal.rs, observation.rs # causal records plus retained typed correlation
 ├── boundary.rs               # host vocabulary, request framing, five traits
 └── runtime.rs, runtime/vm.rs # the machine
 
@@ -120,8 +121,10 @@ crates/rastok/src/            # the std layer — re-exports the kernel
 │   └── network/      # private sockets/TLS/pumps/protocol codecs
 ├── conformance.rs    # Driver contract harness over the production seam
 ├── lab.rs            # run → ScenarioRun { report, records } ; mock Drivers
+├── observability.rs  # bounded never-block structured-log projection
 ├── render.rs         # Sources + rustc-shaped diagnostic rendering
-└── main.rs           # thin bin : check | run | simulate | --resolve-open-api
+└── main.rs           # thin bin : check | run | simulate | --resolve-open-api;
+                      # optional --json-logs exporter
 ```
 
 Two deviations from the pre-build sketch, both deliberate: the golden
@@ -365,7 +368,7 @@ Ownership rules that the types must make unrepresentable:
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`Journal`** | the typed logical records and their order; `MemJournal` in-memory first | **semantic operations**, not bare appends: `prepare_inbound` mints the final root envelope without consuming its sequence; `commit_inbound` atomically advances that sequence with producer-sealed routes; `instance_ref_for_admission` folds lifecycle history; `commit(Transaction)` verifies firing/parent/route/closing generations; `open_outbound` is journal-before-effect; `close_outbound` and `abandon_outbound` return `Won \| AlreadyClosed` | [delivery-semantics.md §1, §4, §6](../spec/delivery-semantics.md); [envelope.md §2, §5](../spec/envelope.md); [instances.md](../spec/instances.md) | M0 base; M1.4 R5 closing authority |
+| **`Journal`** | the typed logical records and their order plus retained typed `RecordObservation` correlation outside the causal seal; `MemJournal` in-memory first | **semantic operations**, not bare appends: `prepare_inbound` mints the final root envelope without consuming its sequence; `commit_inbound` atomically advances that sequence with producer-sealed routes; `instance_ref_for_admission` folds lifecycle history; `commit(Transaction)` verifies firing/parent/route/closing generations; `open_outbound` is journal-before-effect; `close_outbound` and `abandon_outbound` return `Won \| AlreadyClosed`; `retained_observations` feeds reports/export without exposing physical layout | [delivery-semantics.md §1, §4, §6](../spec/delivery-semantics.md); [observability.md §6–7](../spec/observability.md); [envelope.md §2, §5](../spec/envelope.md); [instances.md](../spec/instances.md) | M0 base; M1.4 R5 closing; M1.8 A5 observation plane |
 | **Id derivation** | derived envelope and record ids — zero per-envelope randomness | recipe inputs → `envelope::Id` | [envelope.md §2–3](../spec/envelope.md) | M0 |
 | **`RecoveryFold`** | journal → state, dated obligations, open-effect triage; at recovery it may use the same `OutcomeUnknown`/`Abandoned` operation already exercised by bounded Closing; snapshots are derived accelerations, never causal | records → recovered runtime state | [delivery-semantics.md §4.4, §6–7](../spec/delivery-semantics.md) | next |
 | *(golden projection)* | moved to its own `golden` module as built — see §3.6b | | | |

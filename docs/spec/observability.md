@@ -368,10 +368,11 @@ stable attestation reference; the analogous rule applies to Article 10.
 
 ## 6. Record observations
 
-A causal journal record may carry a typed, non-causal observation ring:
+A causal journal record may carry a typed, non-causal observation stream:
 
 ```text
-RecordObservation = committed_at
+RecordObservation = record transition + typed correlation
+                  | committed_at
                   | duration
                   | measure
                   | cost
@@ -384,6 +385,13 @@ amount can affect graph control, it must instead enter as ordinary typed
 envelope data and therefore becomes causal. Observation-only cost can never
 drive a branch.
 
+The structural observation of a committed record carries correlation already
+owned by causal history: `origin_id`, owner/instance, Connector and a typed
+inbound/outbound Call or Session/write reference. Stream order associates it
+with record order; no second ordinal or placement fact is invented. The VM's
+payload-bearing `Observed` delivery log is a distinct Lab/debugger surface,
+not this retained accounting plane.
+
 The journal is the accounting authority. `CostReport` is a deterministic fold
 over retained observations, grouped by `origin_id` and optionally instance,
 Node, Connector, provider/model, basis and currency. A missing price produces
@@ -393,7 +401,7 @@ explicit FX authority.
 ## 7. Projection
 
 ```text
-journal + observation ring
+journal + retained observation stream
        +-- deterministic fold ------> CostReport
        `-- bounded try-send --------> logs / OpenTelemetry
 ```
@@ -412,6 +420,12 @@ High-cardinality refs such as origin, instance, Call and Session are available
 on spans/logs and in reports. They are not metric labels by default. Standard
 OTel instrument names and attribute definitions are used verbatim when
 applicable; only uncovered project concepts use `rastok.*`.
+
+The hosted runner exposes this projection through `--json-logs`. Export occurs
+on a separate thread; its blocking terminal I/O is never executed by the VM
+producer. Event names are Rastok-specific (`rastok.inbound.committed`,
+`rastok.transaction.committed`, `rastok.call.*`, `rastok.session.*`) while
+standard measure instruments remain governed by the registry in §3.4.
 
 ## 8. Named later work
 

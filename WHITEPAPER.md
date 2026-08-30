@@ -2888,7 +2888,7 @@ explicit Loop `stop` and spatial recovery still refuse before execution,
 preserving the rule that a recognized policy never silently runs as a plain
 Graph.
 
-M1.8 A4 now executes the closed `@sensitive`, `@secret`, `@personal`,
+M1.8 A5 now executes the closed `@sensitive`, `@secret`, `@personal`,
 `@measure` and `@cost` family through source, checked HIR and categorical v15 as canonical
 side-tables beside logical schemas. Independent package validation re-derives
 every local structural path, legal target, registered measure carrier,
@@ -2902,7 +2902,12 @@ data-subject identifier facts. Personal data is admitted only with a complete
 run-scoped privacy attestation; exact HttpClient environment/secret references
 bind through one real/Lab request descriptor while clear credentials stay out
 of graph and causal artifacts. Raw incoming `@secret` fields remain
-fail-closed. Unannotated semantic identities and causal traces remain fixed.
+fail-closed. Every causal record also yields a typed retained observation with
+flow, logical instance and direction-safe Call/Session correlation. The hosted
+JSON log lane consumes only bounded disposable copies, omits payload by
+default and redacts classified values before formatting; its saturation or
+failure cannot change execution or accounting. Unannotated semantic identities
+and causal traces remain fixed.
 
 This white paper is designed to outlive individual releases. The DSL
 grammar, runtime traits, and feature set will evolve; the conceptual

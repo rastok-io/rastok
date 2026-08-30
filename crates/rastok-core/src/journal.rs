@@ -26,6 +26,9 @@ use crate::boundary::{
 use crate::envelope::{Envelope, Id, Meta, MetaSys};
 use crate::identity::{InstanceAddress, InstanceRef};
 use crate::node;
+use crate::observation::{
+    ExchangeCorrelation, RecordCorrelation, RecordObservation, RecordObservationKind,
+};
 use crate::plan::{GraphVersion, OwnerPath};
 use crate::value::Value;
 use alloc::boxed::Box;
@@ -335,6 +338,221 @@ fn recorded_envelope(records: &[Record], id: Id) -> Option<&Envelope> {
             }),
         Record::Inbound(_) | Record::Outbound(_) => None,
     })
+}
+
+fn recorded_origin(records: &[Record], id: Id) -> Option<Id> {
+    recorded_envelope(records, id).map(|envelope| envelope.meta().sys().origin_id())
+}
+
+fn inbound_exchange_context(
+    records: &[Record],
+    exchange: InboundExchangeExitRecord,
+) -> (Option<Id>, Option<node::Path>) {
+    let inbound = records.iter().rev().find_map(|record| {
+        let Record::Inbound(inbound) = record else {
+            return None;
+        };
+        let matches = match (exchange, inbound.exchange.as_deref()) {
+            (
+                InboundExchangeExitRecord::Call(expected),
+                Some(InboundExchangeRecord::Call(actual)),
+            ) => expected == actual.reference,
+            (
+                InboundExchangeExitRecord::Session(expected),
+                Some(InboundExchangeRecord::Session(
+                    SessionIngressRecord::Open(actual) | SessionIngressRecord::Message(actual),
+                )),
+            ) => expected == *actual,
+            _ => false,
+        };
+        matches.then(|| {
+            (
+                Some(inbound.envelope.meta().sys().origin_id()),
+                inbound.connector_path.clone(),
+            )
+        })
+    });
+    if let Some(context) = inbound {
+        return context;
+    }
+    let InboundExchangeExitRecord::Session(session) = exchange else {
+        return (None, None);
+    };
+    let connector = records.iter().rev().find_map(|record| match record {
+        Record::Outbound(OutboundRecord::Session(recorded)) if recorded.session_ref == session => {
+            Some(recorded.connector_path.clone())
+        }
+        _ => None,
+    });
+    (session_origin(records, session, None), connector)
+}
+
+fn session_origin(
+    records: &[Record],
+    session: SessionRef,
+    write: Option<SessionWriteRef>,
+) -> Option<Id> {
+    records.iter().rev().find_map(|record| {
+        let Record::Outbound(OutboundRecord::Session(recorded)) = record else {
+            return None;
+        };
+        if recorded.session_ref != session {
+            return None;
+        }
+        let emitting = match (&recorded.status, write) {
+            (SessionStatus::Opening(intent), None) => Some(intent.emitting_id),
+            (SessionStatus::WriteOpen(intent), Some(expected)) if intent.write_ref == expected => {
+                Some(intent.emitting_id)
+            }
+            _ => None,
+        }?;
+        recorded_origin(records, emitting)
+    })
+}
+
+fn transaction_origin(records: &[Record], transaction: &TransactionRecord) -> Option<Id> {
+    transaction
+        .emissions
+        .first()
+        .map(|emission| emission.envelope.meta().sys().origin_id())
+        .or_else(|| {
+            transaction
+                .loop_fact
+                .as_deref()
+                .and_then(|fact| match fact {
+                    LoopFact::Open { state, .. } | LoopFact::Next { state, .. } => {
+                        Some(state.meta().sys().origin_id())
+                    }
+                    LoopFact::Expired { output, .. } => Some(output.meta().sys().origin_id()),
+                    LoopFact::Admit { .. } | LoopFact::Close { .. } => None,
+                })
+        })
+        .or_else(|| {
+            transaction
+                .cause
+                .and_then(|id| recorded_origin(records, id))
+        })
+        .or_else(|| {
+            transaction
+                .join_inputs
+                .first()
+                .and_then(|id| recorded_origin(records, *id))
+        })
+        .or_else(|| {
+            transaction
+                .exchange_exit
+                .as_deref()
+                .and_then(|exchange| inbound_exchange_context(records, *exchange).0)
+        })
+}
+
+fn observation_for_record(records: &[Record], record: &Record) -> RecordObservation {
+    match record {
+        Record::Inbound(inbound) => {
+            let mut correlation =
+                RecordCorrelation::new(Some(inbound.envelope.meta().sys().origin_id()))
+                    .with_connector(inbound.connector_path.clone());
+            match inbound.exchange.as_deref() {
+                Some(InboundExchangeRecord::Call(call)) => {
+                    correlation = correlation
+                        .with_instance(call.instance.clone())
+                        .with_exchange(Some(ExchangeCorrelation::InboundCall(call.reference)));
+                }
+                Some(InboundExchangeRecord::Session(
+                    SessionIngressRecord::Open(session) | SessionIngressRecord::Message(session),
+                )) => {
+                    correlation = correlation.with_exchange(Some(ExchangeCorrelation::Session {
+                        session: *session,
+                        write: None,
+                    }));
+                }
+                None => {}
+            }
+            RecordObservation::new(RecordObservationKind::InboundCommitted, correlation)
+        }
+        Record::Transaction(transaction) => {
+            let exchange = transaction
+                .exchange_exit
+                .as_deref()
+                .map(|exchange| match exchange {
+                    InboundExchangeExitRecord::Call(reference) => {
+                        ExchangeCorrelation::InboundCall(*reference)
+                    }
+                    InboundExchangeExitRecord::Session(reference) => ExchangeCorrelation::Session {
+                        session: *reference,
+                        write: None,
+                    },
+                });
+            let connector = transaction
+                .exchange_exit
+                .as_deref()
+                .and_then(|exchange| inbound_exchange_context(records, *exchange).1);
+            let correlation = RecordCorrelation::new(transaction_origin(records, transaction))
+                .with_owner(transaction.owner_path.clone())
+                .with_instance(transaction.instance.clone())
+                .with_connector(connector)
+                .with_exchange(exchange);
+            RecordObservation::new(RecordObservationKind::TransactionCommitted, correlation)
+        }
+        Record::Outbound(OutboundRecord::Call(call)) => {
+            let kind = match call.status {
+                OutboundStatus::Open => RecordObservationKind::CallOpened,
+                OutboundStatus::Closed(_) => RecordObservationKind::CallClosed,
+                OutboundStatus::Abandoned => RecordObservationKind::CallAbandoned,
+            };
+            let correlation =
+                RecordCorrelation::new(recorded_origin(records, call.intent.emitting_id))
+                    .with_connector(Some(call.intent.connector_path.clone()))
+                    .with_exchange(Some(ExchangeCorrelation::OutboundCall(
+                        call.intent.call_ref,
+                    )));
+            RecordObservation::new(kind, correlation)
+        }
+        Record::Outbound(OutboundRecord::Session(session)) => {
+            let (kind, write, direct_emitting) = match &session.status {
+                SessionStatus::Opening(intent) => (
+                    RecordObservationKind::SessionOpening,
+                    None,
+                    Some(intent.emitting_id),
+                ),
+                SessionStatus::Opened => (RecordObservationKind::SessionOpened, None, None),
+                SessionStatus::WriteOpen(intent) => (
+                    RecordObservationKind::SessionWriteOpened,
+                    Some(intent.write_ref),
+                    Some(intent.emitting_id),
+                ),
+                SessionStatus::WriteSettled(reference) => (
+                    RecordObservationKind::SessionWriteSettled,
+                    Some(*reference),
+                    None,
+                ),
+                SessionStatus::WriteAbandoned(reference) => (
+                    RecordObservationKind::SessionWriteAbandoned,
+                    Some(*reference),
+                    None,
+                ),
+            };
+            let origin = direct_emitting
+                .and_then(|id| recorded_origin(records, id))
+                .or_else(|| session_origin(records, session.session_ref, write));
+            let correlation = RecordCorrelation::new(origin)
+                .with_connector(Some(session.connector_path.clone()))
+                .with_exchange(Some(ExchangeCorrelation::Session {
+                    session: session.session_ref,
+                    write,
+                }));
+            RecordObservation::new(kind, correlation)
+        }
+    }
+}
+
+fn observations_for_records_from(records: &[Record], start: usize) -> Vec<RecordObservation> {
+    records
+        .iter()
+        .enumerate()
+        .skip(start)
+        .map(|(index, record)| observation_for_record(&records[..index], record))
+        .collect()
 }
 
 fn envelope_descends_from(records: &[Record], descendant: Id, ancestor: Id) -> bool {
@@ -1326,6 +1544,22 @@ pub trait Journal {
         None
     }
 
+    /// Typed non-causal observations retained beside causal history, starting
+    /// at one semantic stream offset.
+    ///
+    /// A physical journal may index or reconstruct this stream however it
+    /// chooses. Export queues are disposable consumers of this query; they do
+    /// not become another accounting authority. An offset at or beyond the
+    /// current end returns an empty suffix.
+    #[must_use]
+    fn retained_observations_from(&self, start: usize) -> Vec<RecordObservation>;
+
+    /// Returns the complete retained observation stream.
+    #[must_use]
+    fn retained_observations(&self) -> Vec<RecordObservation> {
+        self.retained_observations_from(0)
+    }
+
     /// Mints the complete ingress envelope without committing it. The result
     /// is a read-only reservation: only [`Self::commit_inbound`] consumes the
     /// sequence.
@@ -2131,6 +2365,10 @@ impl Journal for MemJournal {
 
     fn privacy_retention(&self) -> Option<crate::deployment::PrivacyRetention> {
         Some(crate::deployment::PrivacyRetention::RunScoped)
+    }
+
+    fn retained_observations_from(&self, start: usize) -> Vec<RecordObservation> {
+        observations_for_records_from(&self.records, start)
     }
 
     fn prepare_inbound(&self, submission: InboundSubmission) -> Result<PreparedInbound, Error> {
@@ -2975,6 +3213,127 @@ mod tests {
         let mut record = lifecycle_transaction(reference.clone(), node::Lifecycle::Closing);
         record.close_scope = Some(reference);
         journal.commit(record).expect("Closing is durable");
+    }
+
+    #[test]
+    fn retained_observations_correlate_records_without_entering_causal_history() {
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let inbound = journal
+            .append_inbound(submission("cli", SubmissionSequence::Next))
+            .expect("the root commits");
+        let origin = inbound.envelope.meta().sys().origin_id();
+        activate_root(&mut journal);
+
+        let connector_path = node::Path::new(["remote"]).expect("valid connector path");
+        let edge = String::from("app.out>remote.in");
+        let prepared = crate::boundary::PreparedRequest::seal(vec![1, 2, 3]);
+        let call_ref = ids::call_ref(
+            ids::delivery_ref(&edge, inbound.envelope.meta().sys().id()),
+            prepared.digest(),
+        );
+        journal
+            .open_outbound(Intent {
+                call_ref,
+                emitting_id: inbound.envelope.meta().sys().id(),
+                edge,
+                connector_path: connector_path.clone(),
+                prepared,
+                idempotency_key: None,
+                effect: node::EffectClass::Idempotent,
+                resolved_settings: BTreeMap::new(),
+                logical_time: 0,
+            })
+            .expect("the Call opens");
+        journal
+            .abandon_outbound(&call_ref)
+            .expect("the Call closes abandoned");
+
+        let prepared = crate::boundary::PreparedRequest::seal(vec![4, 5, 6]);
+        let session_ref = ids::outbound_session_ref(
+            &connector_path,
+            inbound.envelope.meta().sys().id(),
+            prepared.digest(),
+        );
+        journal
+            .open_outbound_session(SessionOpenIntent {
+                session_ref,
+                emitting_id: inbound.envelope.meta().sys().id(),
+                connector_path: connector_path.clone(),
+                prepared,
+            })
+            .expect("the Session opens");
+        journal
+            .confirm_session_open(&session_ref)
+            .expect("the Session becomes live");
+        let prepared = crate::boundary::PreparedRequest::seal(vec![7, 8, 9]);
+        let write_ref = ids::session_write_ref(
+            session_ref,
+            inbound.envelope.meta().sys().id(),
+            prepared.digest(),
+        );
+        journal
+            .open_session_write(SessionWriteIntent {
+                write_ref,
+                session_ref,
+                emitting_id: inbound.envelope.meta().sys().id(),
+                connector_path: connector_path.clone(),
+                prepared,
+            })
+            .expect("the write opens");
+        journal
+            .settle_session_write(&write_ref, false)
+            .expect("the write settles");
+
+        let observations = journal.retained_observations();
+        assert_eq!(journal.records().len(), observations.len());
+        assert_eq!(
+            observations[0].kind(),
+            RecordObservationKind::InboundCommitted
+        );
+        assert_eq!(
+            observations[1].kind(),
+            RecordObservationKind::TransactionCommitted
+        );
+        assert_eq!(
+            observations[1].correlation().owner(),
+            Some(&OwnerPath::root())
+        );
+        let call = &observations[2..4];
+        assert_eq!(call[0].kind(), RecordObservationKind::CallOpened);
+        assert_eq!(call[1].kind(), RecordObservationKind::CallAbandoned);
+        assert!(call.iter().all(|observation| {
+            observation.correlation().origin_id() == Some(origin)
+                && observation.correlation().connector() == Some(&connector_path)
+                && observation.correlation().exchange()
+                    == Some(&ExchangeCorrelation::OutboundCall(call_ref))
+        }));
+        let session = &observations[4..8];
+        assert_eq!(session[0].kind(), RecordObservationKind::SessionOpening);
+        assert_eq!(session[1].kind(), RecordObservationKind::SessionOpened);
+        assert_eq!(session[2].kind(), RecordObservationKind::SessionWriteOpened);
+        assert_eq!(
+            session[3].kind(),
+            RecordObservationKind::SessionWriteSettled
+        );
+        assert!(session.iter().all(|observation| {
+            observation.correlation().origin_id() == Some(origin)
+                && observation.correlation().connector() == Some(&connector_path)
+        }));
+        assert_eq!(
+            session[3].correlation().exchange(),
+            Some(&ExchangeCorrelation::Session {
+                session: session_ref,
+                write: Some(write_ref),
+            })
+        );
+
+        assert_eq!(Journal::retained_observations(&journal), observations);
+        assert_eq!(journal.retained_observations_from(2), observations[2..]);
+        assert!(
+            journal
+                .retained_observations_from(observations.len())
+                .is_empty()
+        );
     }
 
     #[test]

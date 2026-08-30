@@ -39,7 +39,7 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
 
 - Firmware: `spikes/rp2350-emu` — a standalone crate outside the
   product workspace (its embedded runtime dependencies are
-  spike-only). Its current M1.8 A3 transaction-time measurement embeds the
+  spike-only). Its current M1.8 A5 transaction-time measurement embeds the
   blessed **v15 policy-capable package** of `examples/echo.rkg` as a `static`,
   opens it with
   `rastok_core::plan::decode` — which now validates
@@ -49,8 +49,8 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
   lazy lifecycle transaction, the harness identifies the exact `relay` / `in`
   transaction from the journal actor and trigger; lifecycle turns execute but
   are not mislabeled as relay samples. R5's bounded-Closing machinery, R6's
-  join dispatcher, R7's keyed-descendant drain path, and A3's closed schema-
-  annotation registry, propagation verifier and redactor are linked and decoded
+  join dispatcher, R7's keyed-descendant drain path, and A3–A5's closed schema-
+  annotation, deployment and typed-observation registries are linked and decoded
   even though this persistent echo run neither requests a close nor declares a
   join.
 - Target: `thumbv8m.main-none-eabihf` on QEMU `mps2-an505`
@@ -84,15 +84,15 @@ peripheral or silicon claim.
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
-| `plan::decode` (988-byte v15 package; re-measured at the M1.8 A3 closure on 2026-08-30) | 17 838 | 891.9 k | 5.95 ms |
+| `plan::decode` (988-byte v15 package; re-measured at the M1.8 A5 closure on 2026-08-30) | 17 844 | 892.2 k | 5.95 ms |
 | — re-measured 2026-08-09, rounds four and five: +109 decode ticks (the pinned-edge audit at validation) and ~14 per relay transaction (the crossing-pin judge at construction + the pre-commit choke point scanning for watching pins; the FINAL gate converts the value only when a pin watches its fan-out — construction-level checks and expression bindings still materialize handler values as they always did) — priced, no criterion near | | | |
-| relay transaction (avg of 32 exact actor/trigger samples; re-measured at M1.8 A3) | 2 713 (min 2 622 / max 2 965) | **135.7 k avg / 148.3 k max** | **0.904 ms avg / 0.988 ms max** |
+| relay transaction (avg of 32 exact actor/trigger samples; re-measured at M1.8 A5) | 2 713 (min 2 622 / max 2 966) | **135.7 k avg / 148.3 k max** | **0.904 ms avg / 0.989 ms max** |
 | blake3 id, 64-byte frame (avg of 1000) | 91.0 | 4.6 k | 30 µs |
 
 | Resource | Value | Criterion |
 |---|---|---|
-| Heap high-water mark (allocator-tracked, 32 journaled relay rounds plus their owner lifecycle facts; re-measured at M1.8 A3) | 129 972 B (126.9 KiB) | < 128 KiB ✓ |
-| Flash `.text` + `.rodata` (opt-level=z + LTO) | 663 364 + 60 344 = 723 708 B (706.7 KiB; re-measured at M1.8 A3) | < 1 MiB ✓ |
+| Heap high-water mark (allocator-tracked, 32 journaled relay rounds plus their owner lifecycle facts; re-measured at M1.8 A5) | 129 972 B (126.9 KiB) | < 128 KiB ✓ |
+| Flash `.text` + `.rodata` (opt-level=z + LTO) | 668 652 + 60 496 = 729 148 B (712.1 KiB; re-measured at M1.8 A5) | < 1 MiB ✓ |
 | Dependencies patched to build | none | none ✓ |
 
 Notes the numbers carry:
@@ -345,6 +345,16 @@ Notes the numbers carry:
   `.text + .rodata` at 729 116 B (712.0 KiB). `SPIKE_OK` keeps the same witness;
   the relay maximum remains about 148.3 k calibrated instructions below the
   150 k criterion.
+- M1.8 A5 initially retained a second owned correlation object per causal
+  record. The spike rejected that design: relay maximum rose to 3 150 ticks
+  and heap to 138 312 B, crossing both pre-engaged limits. Structural
+  correlation is already a deterministic fold of causal history, so
+  `Journal::retained_observations` now reconstructs it only for a report or
+  exporter. The no-export rerun restores the A4 relay and heap measurements
+  exactly (2 713 average / 2 966 maximum; 129 972 B), while the public typed
+  vocabulary adds only 32 linked bytes (729 148 B total). Package, semantic
+  witness, 67-record causal trace and `SPIKE_OK` remain unchanged; hosted JSON,
+  channels and threads do not enter this image.
 - Flash grew from 193 KiB to 516.4 KiB (`.text` 481 404 B +
   `.rodata` 47 356 B, re-measured after C1 on 2026-08-22): the consolidated
   reform's decoders, the jsonl codec's canonical writer and now the
@@ -401,13 +411,13 @@ llvm-objdump -d target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350 \
 ## Verdict
 
 **GO (provisional), re-issued 2026-08-07 on the corrected
-instrumentation and last re-measured 2026-08-30 at the M1.8 A4 closure.**
+instrumentation and last re-measured 2026-08-30 at the M1.8 A5 closure.**
 These measurements price complete hierarchical routing, causal instance
 references, the executable lifetime machine, bounded Closing, joins, and the
 R7 closure-only keyed drain. All four
 criteria of record hold: no patched dependencies, 148.3 k instructions for
 the slowest measured relay transaction against the 150 k bound (1.011×), a
-126.9 KiB true high-water mark against 128 KiB, and 712.0 KiB of flash against
+126.9 KiB true high-water mark against 128 KiB, and 712.1 KiB of flash against
 1 MiB. The
 margins are thinner than first
 claimed and are reported as measured. The option stays dormant as

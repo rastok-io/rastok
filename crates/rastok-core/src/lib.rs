@@ -30,6 +30,7 @@ pub mod journal;
 pub mod json;
 pub mod loop_proof;
 pub mod node;
+pub mod observation;
 pub mod plan;
 pub mod runtime;
 pub mod schema_annotation;

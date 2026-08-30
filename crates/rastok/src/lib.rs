@@ -11,7 +11,7 @@
 // crate boundary is real, the surface is unchanged.
 pub use rastok_core::{
     boundary, canonical_cbor, connector, data_policy, datatype, deployment, envelope, expr,
-    identity, journal, loop_proof, node, plan, runtime, schema_annotation, value,
+    identity, journal, loop_proof, node, observation, plan, runtime, schema_annotation, value,
 };
 
 pub mod compiler;
@@ -22,6 +22,7 @@ pub mod deployment_config;
 pub mod diagnostics;
 pub mod golden;
 pub mod lab;
+pub mod observability;
 pub mod openapi;
 pub mod render;
 pub mod schema_projection;

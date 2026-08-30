@@ -5,6 +5,55 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-30-4 — Retained observations and disposable logs are different planes
+
+M1.8 A5 adds one typed `RecordObservation` beside every committed causal
+record. The observation names the exact record transition and carries only
+correlation derivable from causal history: `origin_id`, logical owner and
+instance, Connector path, and a direction-safe outbound/inbound Call or
+Session/write reference. It never contains Host, Worker, socket, thread or
+exporter identity. The observation stream has the same order as its causal
+records, so it does not duplicate a mutable or host-width record ordinal. Each
+coordinate is optional when that individual causal record owns no direct fact;
+the projector never guesses one from placement or arrival time.
+
+The retained stream is accounting input and belongs to `Journal` even though
+it is excluded from causal encoding, replay decisions and trace fingerprints.
+`Journal::retained_observations` is a semantic query returning owned values;
+its suffix form accepts the consumer's semantic stream offset so an exporter
+does not rescan or reformat the complete prefix on each pump. A durable
+implementation may store, index or reconstruct observations without exposing
+a physical record layout. `MemJournal` reconstructs structural correlation
+lazily from the immutable record prefix. That keeps the default and embedded
+commit path byte-for-byte and allocation-for-allocation unchanged; only a
+report or exporter pays the projection. Correlation for a record sees only
+earlier history, never the record being summarized or a future fact.
+The existing VM `Observed` delivery log remains a Lab/debugger surface with
+payloads and is not renamed or reused as accounting authority.
+
+Hosted structured logging consumes only copies of that retained stream. One
+bounded synchronous channel separates a never-block `try_send` producer from
+the possibly blocking exporter thread. A full or disconnected channel drops
+the projection, advances the exporter cursor and saturating-increments one
+counter; it cannot create retry backlog, fail a transaction or change the
+journal. `--json-logs` opts the standalone runner into this lane. Payload is
+absent by default. An explicit payload projection consults the resolved sparse
+annotation table and applies `RedactedValue` before JSON construction;
+classified encoded data becomes one marker rather than being decoded by the
+presentation layer. Empty annotation tables take the direct zero-walk path.
+
+A5 adds no categorical field, semantic extension or causal record key. Every
+existing package, semantic witness and causal trace therefore stays
+byte-identical. Exact committed-time, duration, measure and monetary
+observations extend this typed plane in A7 (and the optional A6 exporter)
+instead of being guessed from projection time.
+
+**Rejected:** an untyped string map; logs as the only copy of accounting
+facts; blocking or retrying on exporter pressure; making log loss a VM error;
+reusing the payload-bearing Lab observation log; including payloads by
+default; post-format regex redaction; and assigning exporter wall time to a
+journal commit.
+
 ## D-2026-08-30-3 — Deployment binds references and privacy before effects
 
 M1.8 A4 opens one deliberately narrow boot boundary. `env("NAME")` and

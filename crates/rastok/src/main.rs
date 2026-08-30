@@ -23,7 +23,7 @@ use rastok::{connectors, lab, node};
 use std::io::{BufRead, Write as _};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: rastok check <file.rkg>...\n       rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>]\n       rastok simulate <file.rkg>... [--deployment <profile.json>] [--golden <dir>] [--bless]\n       rastok --resolve-open-api <project-dir> [--check]";
+const USAGE: &str = "usage: rastok check <file.rkg>...\n       rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs]\n       rastok simulate <file.rkg>... [--deployment <profile.json>] [--golden <dir>] [--bless]\n       rastok --resolve-open-api <project-dir> [--check]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -41,6 +41,7 @@ fn main() -> ExitCode {
             let mut files = Vec::new();
             let mut file_root: Option<std::path::PathBuf> = None;
             let mut deployment: Option<std::path::PathBuf> = None;
+            let mut json_logs = false;
             let mut rest = paths.iter();
             while let Some(argument) = rest.next() {
                 match argument.as_str() {
@@ -60,6 +61,11 @@ fn main() -> ExitCode {
                             return ExitCode::from(2);
                         }
                     },
+                    "--json-logs" if !json_logs => json_logs = true,
+                    "--json-logs" => {
+                        eprintln!("error: --json-logs may be supplied only once");
+                        return ExitCode::from(2);
+                    }
                     _ => files.push(argument.clone()),
                 }
             }
@@ -75,7 +81,7 @@ fn main() -> ExitCode {
                 }
                 None => None,
             };
-            run(&files, file_root.as_deref(), boot.as_ref())
+            run(&files, file_root.as_deref(), boot.as_ref(), json_logs)
         }
         "simulate" => {
             let mut files = Vec::new();
@@ -261,6 +267,7 @@ fn run(
     paths: &[String],
     file_root: Option<&std::path::Path>,
     boot: Option<&rastok::deployment::BootBindings>,
+    json_logs: bool,
 ) -> ExitCode {
     let Ok((compilation, _)) = load(paths) else {
         return ExitCode::FAILURE;
@@ -291,6 +298,35 @@ fn run(
         || MemJournal::new(version),
         |boot| MemJournal::new_with_deployment(version, boot.attestation().clone()),
     );
+    let mut log_projector = if json_logs {
+        match rastok::observability::json_log_channel(256) {
+            Ok((sink, receiver)) => {
+                let exporter = std::thread::Builder::new()
+                    .name(String::from("rastok-json-logs"))
+                    .spawn(move || {
+                        let stderr = std::io::stderr();
+                        let mut stderr = stderr.lock();
+                        while let Some(line) = receiver.recv() {
+                            if writeln!(stderr, "{line}").is_err() {
+                                break;
+                            }
+                        }
+                    });
+                if let Err(error) = exporter {
+                    eprintln!(
+                        "warning: structured-log exporter unavailable; observations will be dropped: {error}"
+                    );
+                }
+                Some(rastok::observability::JournalLogProjector::new(sink))
+            }
+            Err(error) => {
+                eprintln!("warning: structured-log exporter unavailable: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let time = match HostedTimeSource::start() {
         Ok(time) => time,
         Err(error) => {
@@ -373,6 +409,9 @@ fn run(
                 eprintln!("error: {error}");
                 return ExitCode::FAILURE;
             }
+        }
+        if let Some(projector) = &mut log_projector {
+            let _ = projector.project_journal(&journal);
         }
         print_new_outputs(&vm, &mut printed_outputs, &mut printed_errors);
 

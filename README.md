@@ -116,7 +116,7 @@ bounded Process retry with multi-frame data, exact exhaustion, and stale-wake
 fencing across instance Closing. See the
 [M1.7 exit report](docs/architecture/m1.7-exit-report.md).
 
-M1.8 A0–A4 are closed on categorical package v15. The source front end
+M1.8 A0–A5 are closed on categorical package v15. The source front end
 recognizes the closed `@sensitive`/`@secret`/`@personal`/`@measure`/`@cost` family,
 resolves aliases into canonical schema paths and transports the sparse policy
 tables through checked HIR, package decode and Registry-free validation.
@@ -131,7 +131,12 @@ data only with a complete attested run-scoped privacy profile. Exact
 the same real/Lab descriptor; physical secret bytes enter neither source,
 profile JSON, CLI, `Value`, package nor journal. Raw incoming `@secret` fields
 remain fail-closed. Unannotated semantic
-hashes and all existing causal traces remain unchanged. The ordered work is
+hashes and all existing causal traces remain unchanged. Every causal record
+also yields a typed retained observation with exact flow/instance/Call/Session
+correlation. `rastok run --json-logs` projects that stream through a bounded
+never-block queue; payloads are omitted by default and classified values are
+redacted before JSON formatting. Export loss changes neither execution nor
+the retained accounting plane. The ordered work is
 tracked in the
 [M1.8 backlog](docs/architecture/m1.8-observability-backlog.md).
 
@@ -146,6 +151,10 @@ selected HTTP/WebSocket families through one registry assembly. Pass
 `--file-root <dir>` to `rastok run` to add the real File Driver with an
 explicit deployment root; that root is neither inferred from the graph nor
 part of plan identity.
+
+Pass `--json-logs` to `rastok run` for newline-delimited structured events on
+stderr. Boundary outputs remain on stdout. Logging is deliberately lossy under
+exporter pressure; the journal-backed report input is not.
 
 For projects described by OpenAPI 3.0 or 3.1, run
 `rastok --resolve-open-api <project-dir>` to discover static HTTP endpoints
