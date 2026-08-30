@@ -6,7 +6,17 @@
 > real systems** — compiled, simulated against mocks, golden-traced,
 > watched live.
 
-**Current checkpoint (2026-08-27): items 1, 2 and the replacement item 3 are landed, as are
+**Current checkpoint (2026-08-31): items 1–9 are closed.** M1.4 owns keyed
+instances, lifetimes, Closing and joins; M1.5 owns the generic Driver boundary
+and File; M1.6 owns Event/Call/Session plus HTTP/1.1–3 and WebSocket; M1.7 owns
+finite temporal recursion; M1.8 owns the five data policies, deployment
+secret/privacy boundary, retained observations and exact per-flow accounting.
+The optional OpenTelemetry transport is an explicit post-M1 gate rather than
+a fabricated temporal claim. The remaining ordered items are `--watch` and
+the usage/gallery/demo closure. Detailed evidence lives in the corresponding
+exit reports.
+
+**Historical checkpoint (2026-08-27): items 1, 2 and the replacement item 3 are landed, as are
 the contract and parser/compiler interludes recorded under item 2.
 M1.4 has been normatively rebased by D-2026-08-18-1 before public release.
 The executable P0–P3 named-`partition` / `per` draft is not the target source
@@ -450,7 +460,7 @@ step touches `vm.rs` once.
     gaps. Export remains optional for M1 closure; Budget enforcement, FX,
     FOCUS and OpenCost are later consumers. See the ordered
     [M1.8 backlog](m1.8-observability-backlog.md) and the non-normative
-    [Budget draft](budget-governance-draft.md). A0–A5 are closed:
+    [Budget draft](budget-governance-draft.md). M1.8 is closed:
     categorical v15 transports every local policy table and independently
     derives effective policy through canonical operations; presentation
     redacts before formatting. Personal data remains independent of
@@ -461,8 +471,14 @@ step touches `vm.rs` once.
     correlations beside the journal and projects optional JSON logs through a
     bounded never-block lane; payloads are omitted unless explicitly requested
     and then redacted before formatting. A6 explicitly defers the optional
-    OpenTelemetry transport until exact temporal facts exist; A7 remains the
-    mandatory report gate.
+    OpenTelemetry transport until exact temporal facts exist. A7 now folds
+    exact annotated quantities and monetary facts into one public per-flow
+    report, keeps cache/reasoning subsets out of inclusive-token double counts,
+    preserves currency and evidence, and exposes unknown prices as `unpriced`.
+    An optional deployment price profile is attested outside graph and causal
+    identity. A8 closes the three-register identity audit, independent
+    interop, three `no_std` ISA builds and Cortex-M33 evidence; see the
+    [exit report](m1.8-exit-report.md).
 10. **`--watch`** — the HTML+SSE mini-visualization, strictly a
     journal subscriber; the observation plane stays outside the
     core by construction.

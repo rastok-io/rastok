@@ -116,7 +116,7 @@ bounded Process retry with multi-frame data, exact exhaustion, and stale-wake
 fencing across instance Closing. See the
 [M1.7 exit report](docs/architecture/m1.7-exit-report.md).
 
-M1.8 A0–A5 are closed on categorical package v15. The source front end
+M1.8 is closed on categorical package v15. The source front end
 recognizes the closed `@sensitive`/`@secret`/`@personal`/`@measure`/`@cost` family,
 resolves aliases into canonical schema paths and transports the sparse policy
 tables through checked HIR, package decode and Registry-free validation.
@@ -136,9 +136,18 @@ also yields a typed retained observation with exact flow/instance/Call/Session
 correlation. `rastok run --json-logs` projects that stream through a bounded
 never-block queue; payloads are omitted by default and classified values are
 redacted before JSON formatting. Export loss changes neither execution nor
-the retained accounting plane. The ordered work is
-tracked in the
-[M1.8 backlog](docs/architecture/m1.8-observability-backlog.md).
+the retained accounting plane. A7 reconstructs a public per-flow
+`CostReport` lazily from the same causal records and validated schemas. Token
+subset relations prevent cache/reasoning double counting; positive quantities
+without a matching deployment price stay `unpriced`. Provider-reported and
+pricebook-calculated amounts retain exact decimal values, evidence and
+currency, and no cross-currency total exists. Optional Connector/provider/model
+price rows live in the deployment profile; only their stable reference and
+digest enter the run header, never graph identity or causal bytes. The ordered
+work is tracked in the
+[M1.8 backlog](docs/architecture/m1.8-observability-backlog.md), and the
+[exit report](docs/architecture/m1.8-exit-report.md) owns the identity,
+portability and remaining-limit ledger.
 The optional OpenTelemetry transport is explicitly deferred until exact
 temporal observations exist; no exporter timestamp is presented as commit
 time.

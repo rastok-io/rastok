@@ -308,7 +308,7 @@ pub enum Record {
     Outbound(OutboundRecord),
 }
 
-fn recorded_envelope(records: &[Record], id: Id) -> Option<&Envelope> {
+pub(crate) fn recorded_envelope(records: &[Record], id: Id) -> Option<&Envelope> {
     records.iter().find_map(|record| match record {
         Record::Inbound(inbound) if inbound.envelope.meta().sys().id() == id => {
             Some(&inbound.envelope)
@@ -546,7 +546,10 @@ fn observation_for_record(records: &[Record], record: &Record) -> RecordObservat
     }
 }
 
-fn observations_for_records_from(records: &[Record], start: usize) -> Vec<RecordObservation> {
+pub(crate) fn observations_for_records_from(
+    records: &[Record],
+    start: usize,
+) -> Vec<RecordObservation> {
     records
         .iter()
         .enumerate()

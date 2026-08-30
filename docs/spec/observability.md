@@ -1,7 +1,7 @@
 # Data policy, privacy, observations and cost
 
-> **Status: normative and executable through M1.8 A5 under
-> D-2026-08-30-1 through D-2026-08-30-5.** Categorical package v15 transports the closed family as
+> **Status: normative and executable through closed M1.8 under
+> D-2026-08-30-1 through D-2026-08-30-6.** Categorical package v15 transports the closed family as
 > canonical side-tables. Registry-free validation re-derives every local
 > claim and the effective policy of canonical operations; presentation
 > redacts before formatting. A4 admits personal data only under an attested
@@ -179,7 +179,8 @@ The initial standard field identities are:
 - `gen_ai.usage.cache_creation.input_tokens`;
 - `gen_ai.usage.reasoning.output_tokens`;
 
-The initial standard instruments are:
+The following standard instruments are pinned for the later hosted projection;
+they are not field annotations and A6 remains explicitly deferred:
 
 - `gen_ai.client.token.usage`;
 - `gen_ai.client.operation.duration`;
@@ -196,12 +197,20 @@ not add a subset to its total. When a provider distinguishes consumed from
 billable token counts, the pinned OTel rule preferring billable usage applies;
 the observation retains its provider-reported provenance.
 
-Rastok-specific operational measures use `rastok.*`, including flow envelope
-count/payload size, generic Connector calls and duration, mailbox depth, edge
-lag, instance count/eviction, journal size/low-water mark and dropped
-observation projections. A future OTel convention that exactly covers one of
-these requires an explicit registry migration; two aliases are never emitted
-silently.
+The registry owns an exact internal unit as well as the carrier. Token fields
+use `token`; HTTP body sizes use bytes; retained durations use integer
+nanoseconds and are rescaled only by an exporter. Field measures are
+non-negative additive samples. A negative value, carrier mismatch or overflow
+refuses the report rather than being skipped.
+
+Rastok-specific operational instruments will use `rastok.*`, including flow
+envelope count/payload size, generic Connector calls and duration, mailbox
+depth, edge lag, instance count/eviction, journal size/low-water mark and
+dropped observation projections. Their final spellings are allocated only
+when their retained facts and exporter land; A7 does not pretend that an
+exporter counter is an annotated field measure. A future OTel convention that
+exactly covers one requires an explicit registry migration; two aliases are
+never emitted silently.
 
 ### 3.5 `@cost`
 
@@ -357,6 +366,20 @@ controller-owned stable identifiers, not free-form legal prose):
     "recipients": ["recipient/model-provider"],
     "transfer_safeguards": ["transfer/scc-2021"],
     "retention": "run_scoped"
+  },
+  "cost_profile": {
+    "reference": "pricing/model-api@2026-08-30",
+    "prices": [
+      {
+        "connector": "model",
+        "provider": "example-ai",
+        "model": "large-v1",
+        "measure": "gen_ai.usage.input_tokens",
+        "units": 1000000,
+        "amount": "2.50",
+        "currency": "USD"
+      }
+    ]
   }
 }
 ```
@@ -368,22 +391,20 @@ stable attestation reference; the analogous rule applies to Article 10.
 
 ## 6. Record observations
 
-A causal journal record may carry a typed, non-causal observation stream:
+A causal journal record has one typed structural observation, and accounting
+may enrich an annotated envelope lazily:
 
 ```text
-RecordObservation = record transition + typed correlation
-                  | committed_at
-                  | duration
-                  | measure
-                  | cost
-                  | runtime/host fact
-                  | dropped/late diagnostic fact
+RecordObservation     = record transition + typed correlation
+AccountingObservation = RecordObservation + envelope id
+                       + exact measure/cost samples + flow scope
 ```
 
-These facts are recorded when useful but excluded from the causal seal. If an
-amount can affect graph control, it must instead enter as ordinary typed
-envelope data and therefore becomes causal. Observation-only cost can never
-drive a branch.
+Both are excluded from the causal seal. Exact committed time, duration,
+runtime/host facts and late diagnostics remain future typed extensions; M1.8
+does not synthesize them at projection time. If an amount can affect graph
+control, it must instead enter as ordinary typed envelope data and therefore
+becomes causal. Observation-only cost can never drive a branch.
 
 The structural observation of a committed record carries correlation already
 owned by causal history: `origin_id`, owner/instance, Connector and a typed
@@ -406,9 +427,11 @@ journal + retained observation stream
        `-- bounded try-send --------> logs / OpenTelemetry
 ```
 
-The export path is never-block. A full queue drops the projection and increments
-`rastok.observation.dropped`; it cannot delay or fail a transaction. Redaction
-runs before output formatting. Payload content is omitted by default.
+The export path is never-block. A full queue drops the projection and
+saturating-increments its local typed drop counter; it cannot delay or fail a
+transaction. A future A6 exporter allocates the final `rastok.*` instrument
+name only with its retained fact and projection. Redaction runs before output
+formatting. Payload content is omitted by default.
 
 `meta.sys.origin_id` supplies the OpenTelemetry trace id. One logical
 transaction becomes one span; an outbound Call becomes its child only when the
@@ -427,6 +450,61 @@ producer. Event names are Rastok-specific (`rastok.inbound.committed`,
 `rastok.transaction.committed`, `rastok.call.*`, `rastok.session.*`) while
 standard measure instruments remain governed by the registry in §3.4.
 
+### 7.1 Exact report fold
+
+A7 enriches a structural `RecordObservation` lazily at each annotated envelope
+and port. The typed accounting observation carries the structural observation,
+the envelope id, canonical annotation path, measure/cost value and exact flow
+scope. The complete grouping key is origin, instance generation, owner, Node,
+Connector, port, typed exchange and optional deployment provider/model. This
+is deliberately a per-flow report: copying one measured value through three
+ports yields three clearly different rows, never one graph-wide total which a
+caller might mistake for new consumption.
+
+For a dynamically typed boundary, the field annotation can become visible
+only after an ordinary typed decoding Operator. The Connector dimension is
+then the nearest Connector producer in the envelope's sealed parent chain,
+while Node and port continue to name the current flow point. Exact
+copy/projection is the only way accounting meaning reaches that point;
+calculations drop it. The lineage walk ends at the current record, so a future
+fact can never explain an earlier observation. Attribution never guesses from
+graph topology or a Connector name.
+
+`CostReport::from_journal` folds those observations directly from causal
+records and the validated plan while checking any supplied price profile
+against the immutable run header. The lower-level `from_records` form is for
+already authenticated record sets: its caller owns that external provenance.
+Provider-reported fields retain their exact basis and
+currency. An optional deployment `CostProfile` calculates additional costs
+from registered measures. It is a closed canonical table keyed by Connector
+path and measure; every rule fixes provider, model/SKU, a positive power-of-ten
+unit quantity, exact decimal price and ISO currency. Its stable reference and
+digest are recorded in the immutable run header. The profile is not graph
+identity and cannot change causal bytes.
+An annotated `pricebook_calculated` field requires at least one profile row
+for its sealed causal Connector; a merely present but unrelated profile is not
+evidence.
+
+Subset-aware pricing prevents token double counting. If cache tokens have a
+special price, they are subtracted from inclusive input tokens and priced
+separately; otherwise the inclusive input rule covers them. The same rule
+holds for reasoning/output tokens. A subset larger than its inclusive parent
+is invalid within each observed envelope and cannot be hidden by aggregation
+with a later valid sample. Every positive remainder without a matching rule is
+emitted as `unpriced`. An explicit zero price is a real price and remains
+distinguishable from that state.
+
+Amounts normalize as exact decimal values. Addition and multiplication are
+checked; division by a unit bundle changes scale only. Any required rounding,
+precision overflow or scale beyond canonical Money refuses. Cost rows with
+different provider/pricebook evidence, currency or source measure never merge.
+No API exposes a cross-currency total.
+
+An annotated envelope retained only as encoded bytes cannot be interpreted by
+a reporting-only decoder and therefore refuses until its normal codec has
+materialized the logical value. This is fail-closed accounting, not missing
+data disguised as zero.
+
 ## 8. Named later work
 
 - Budget/quota aspects and pre-effect reservation;
@@ -437,6 +515,8 @@ standard measure instruments remain governed by the registry in §3.4.
 - hot secret rotation and encrypted durable-journal storage;
 - durable personal-data journaling until erasure/externalization is proved;
 - provider-specific exporter plugins.
+- exact retained commit time and duration, followed by the qualified hosted
+  OpenTelemetry transport and independent Collector evidence.
 
 The non-normative reservation exploration lives in
 [`budget-governance-draft.md`](../architecture/budget-governance-draft.md).

@@ -230,11 +230,27 @@ pub enum MeasureCarrier {
     Duration,
 }
 
+/// Canonical exact unit owned by one registered measure.
+///
+/// Hosted OpenTelemetry projection may rescale nanoseconds to the standard
+/// presentation unit, but the retained accounting fold never uses a float.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MeasureUnit {
+    /// One model token.
+    Token,
+    /// One byte.
+    Byte,
+    /// One nanosecond.
+    Nanosecond,
+}
+
 /// One entry of the pinned M1.8 semantic-measure registry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MeasureSpec {
     source: MeasureSource,
     carrier: MeasureCarrier,
+    unit: MeasureUnit,
+    subset_of: Option<&'static str>,
 }
 
 impl MeasureSpec {
@@ -249,6 +265,18 @@ impl MeasureSpec {
     pub const fn carrier(self) -> MeasureCarrier {
         self.carrier
     }
+
+    /// Exact unit used by the retained fold.
+    #[must_use]
+    pub const fn unit(self) -> MeasureUnit {
+        self.unit
+    }
+
+    /// Inclusive parent quantity, when this measure is a semantic subset.
+    #[must_use]
+    pub const fn subset_of(self) -> Option<&'static str> {
+        self.subset_of
+    }
 }
 
 /// Looks up the pinned OpenTelemetry-first M1.8 registry.
@@ -258,25 +286,58 @@ impl MeasureSpec {
 /// user-defined metrics by accident.
 #[must_use]
 pub fn measure_spec(id: &MeasureId) -> Option<MeasureSpec> {
-    let (source, carrier) = match id.as_str() {
-        "gen_ai.usage.input_tokens"
-        | "gen_ai.usage.output_tokens"
-        | "gen_ai.usage.cache_read.input_tokens"
-        | "gen_ai.usage.cache_creation.input_tokens"
-        | "gen_ai.usage.reasoning.output_tokens" => (MeasureSource::Field, MeasureCarrier::Integer),
-        "gen_ai.client.token.usage"
-        | "http.client.request.body.size"
+    let (source, carrier, unit, subset_of) = match id.as_str() {
+        "gen_ai.usage.input_tokens" | "gen_ai.usage.output_tokens" => (
+            MeasureSource::Field,
+            MeasureCarrier::Integer,
+            MeasureUnit::Token,
+            None,
+        ),
+        "gen_ai.usage.cache_read.input_tokens" | "gen_ai.usage.cache_creation.input_tokens" => (
+            MeasureSource::Field,
+            MeasureCarrier::Integer,
+            MeasureUnit::Token,
+            Some("gen_ai.usage.input_tokens"),
+        ),
+        "gen_ai.usage.reasoning.output_tokens" => (
+            MeasureSource::Field,
+            MeasureCarrier::Integer,
+            MeasureUnit::Token,
+            Some("gen_ai.usage.output_tokens"),
+        ),
+        "gen_ai.client.token.usage" => (
+            MeasureSource::Instrument,
+            MeasureCarrier::Integer,
+            MeasureUnit::Token,
+            None,
+        ),
+        "http.client.request.body.size"
         | "http.client.response.body.size"
         | "http.server.request.body.size"
-        | "http.server.response.body.size" => (MeasureSource::Instrument, MeasureCarrier::Integer),
+        | "http.server.response.body.size" => (
+            MeasureSource::Instrument,
+            MeasureCarrier::Integer,
+            MeasureUnit::Byte,
+            None,
+        ),
         "gen_ai.client.operation.duration"
         | "gen_ai.client.operation.time_to_first_chunk"
         | "gen_ai.client.operation.time_per_output_chunk"
         | "http.client.request.duration"
-        | "http.server.request.duration" => (MeasureSource::Instrument, MeasureCarrier::Duration),
+        | "http.server.request.duration" => (
+            MeasureSource::Instrument,
+            MeasureCarrier::Duration,
+            MeasureUnit::Nanosecond,
+            None,
+        ),
         _ => return None,
     };
-    Some(MeasureSpec { source, carrier })
+    Some(MeasureSpec {
+        source,
+        carrier,
+        unit,
+        subset_of,
+    })
 }
 
 /// Exact monetary-field interpretation.
@@ -978,6 +1039,8 @@ mod tests {
             Some(MeasureSpec {
                 source: MeasureSource::Field,
                 carrier: MeasureCarrier::Integer,
+                unit: MeasureUnit::Token,
+                subset_of: None,
             })
         );
         assert_eq!(
@@ -985,6 +1048,8 @@ mod tests {
             Some(MeasureSpec {
                 source: MeasureSource::Instrument,
                 carrier: MeasureCarrier::Duration,
+                unit: MeasureUnit::Nanosecond,
+                subset_of: None,
             })
         );
         assert_eq!(measure_spec(&unknown), None);

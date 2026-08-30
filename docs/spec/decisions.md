@@ -5,6 +5,84 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-30-6 — CostReport is an exact per-flow journal fold
+
+M1.8 A7 derives accounting observations lazily from causal envelopes and the
+independently validated effective annotation tables. It does not add an eager
+metrics store to the VM or journal commit path. Each observation retains its
+A5 `RecordObservation`, exact envelope id and full flow point: origin,
+instance generation, owner, Node, Connector, port and typed Call/Session
+correlation. A deployment price profile may add provider/model dimensions;
+those are attested deployment facts, never inferred from a string in payload
+data. Reports aggregate only equal complete flow points. They expose no
+misleading graph-wide total which would count an exact-copy measure once at
+each port it traverses.
+
+Dynamic-codec Connector ports remain `variant`, so a declared measure may
+first become structurally visible in the typed decoding Operator immediately
+after the boundary. In that case the report follows the sealed envelope-parent
+chain, bounded by the current committed record, to the nearest causal
+Connector producer. A later record can never explain an earlier observation.
+Exact copy/projection retains
+the annotation and this attribution; a calculation already drops accounting
+meaning under A3 and therefore cannot inherit a stale provider. The current
+Node and port remain separate flow dimensions. No topology search, name match
+or “only Connector in the graph” fallback is allowed.
+
+The pinned measure registry now owns carrier, exact internal unit and subset
+relation. GenAI cache-read and cache-creation tokens are subsets of inclusive
+input tokens; reasoning tokens are a subset of inclusive output tokens. Every
+sample remains visible. Pricing carves out a subset only when that subset has
+its own matching rule, then prices the inclusive remainder separately. A
+contradictory subset greater than its total refuses. Without a rule, a
+positive remainder becomes typed `unpriced`; it is never a zero monetary row.
+An explicitly declared zero unit price remains distinguishable and does
+produce an exact zero calculated cost.
+
+All monetary arithmetic uses normalized exact decimals and one pinned ISO
+currency. `Money` remains the canonical struct convention, not a `DataType`.
+Unit-price denominators are positive powers of ten, so division is represented
+by decimal scale. A rule or result which exceeds `decimal(38,18)`, overflows or
+requires rounding refuses. Provider-reported amounts and
+pricebook-calculated amounts retain different evidence. Costs are aggregated
+only when flow, basis, currency, priced measure and price-profile evidence all
+agree; there is no cross-currency total or implicit FX rate.
+
+The optional hosted deployment `cost_profile` is a closed list keyed by exact
+Connector path and registered measure. Each row fixes provider, model/SKU,
+units, decimal amount and currency. Rules for one Connector must agree on its
+provider/model dimensions; duplicate Connector/measure rules refuse. The
+profile has a stable reference and a digest over its canonical typed content.
+An annotated `pricebook_calculated` field has that evidence only when the
+profile contains a row for its sealed causal Connector; an unrelated or empty
+profile cannot attest the amount.
+Only that reference/digest enters the immutable run-header attestation. A
+profile supplied while replaying a run must match the attestation; changing a
+profile starts different deployment evidence but never changes graph identity.
+An already typed accounting stream also carries those provider/model
+dimensions and refuses if a caller attempts to reprice it with a profile that
+names different dimensions.
+
+The public `CostReport` can also omit an attested profile deliberately, in
+which case exact usage remains and calculable quantities become `unpriced`.
+
+Annotated encoded bytes without a materialized logical value refuse reporting
+rather than disappearing or being decoded by an accounting-specific codec.
+The initial executable field measures are non-negative. Missing, negative,
+malformed, overflowed and unattested facts all stay distinct typed refusals.
+
+A7 allocates no package tag, semantic extension, causal-record key or golden
+move. The profile attestation is non-causal run metadata. Unannotated programs
+still take the empty-table fast path; the M33 relay path performs no accounting
+walk unless a caller explicitly requests a report.
+
+**Rejected:** exporter metrics as accounting authority; floating-point money;
+implicit rounding or FX; summing cache/reasoning subsets into their inclusive
+parents twice; silently dropping undecoded annotated data; treating an
+unknown price as zero; one global total across copied flow points; and putting
+deployment prices in graph/package identity; pricing a dynamic-codec value by
+an unsealed topology guess instead of its causal ancestry.
+
 ## D-2026-08-30-5 — Hosted OTLP waits for exact temporal observations
 
 M1.8 A6 qualifies but does not add a hosted OpenTelemetry dependency. The

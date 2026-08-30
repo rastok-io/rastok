@@ -35,6 +35,8 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
   three-register identity, portability and Cortex-M33 closure evidence;
 - [`m1.8-observability-backlog.md`](m1.8-observability-backlog.md) for the
   ordered data-policy, secret, observation and exact-cost foundation;
+- [`m1.8-exit-report.md`](m1.8-exit-report.md) for the policy, accounting,
+  identity, portability and interoperability closure evidence;
 - [`release-qualification.md`](release-qualification.md) for the single
   inventory of executed third-party interoperability evidence and external
   qualifications still required before a public release;

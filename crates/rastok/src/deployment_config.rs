@@ -9,12 +9,15 @@
 //! values. Secret contents are never accepted by this format: a profile names
 //! one process-environment coordinate and its separately attested version.
 
+use crate::accounting::{CostProfile, CostProfileRef, ExactDecimal, UnitPrice};
 use crate::deployment::{
     BootBindings, DeploymentError, DeploymentProfile, EnvironmentName, PolicyRef, PrivacyProfile,
     PrivacyProfileRef, PrivacyRetention, RecipientPolicy, SecretBinding, SecretMaterial,
     SecretProvider, SecretProviderError, SecretProviderId, SecretRef, SecretVersion,
     TransferPolicy,
 };
+use crate::node;
+use crate::schema_annotation::{CurrencyCode, MeasureId};
 use crate::value::Value;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -75,7 +78,75 @@ fn parse(text: &str) -> Result<DeploymentProfile, DeploymentConfigError> {
     }
 
     let privacy = raw.privacy.map(privacy_profile).transpose()?;
-    DeploymentProfile::new(environment, secrets, privacy).map_err(DeploymentConfigError::Profile)
+    let cost_profile = raw.cost_profile.map(cost_profile).transpose()?;
+    let profile = DeploymentProfile::new(environment, secrets, privacy)
+        .map_err(DeploymentConfigError::Profile)?;
+    Ok(match cost_profile {
+        Some(cost_profile) => profile.with_cost_profile(cost_profile),
+        None => profile,
+    })
+}
+
+fn cost_profile(raw: RawCostProfile) -> Result<CostProfile, DeploymentConfigError> {
+    let mut rules = Vec::with_capacity(raw.prices.len());
+    for raw in raw.prices {
+        let connector = node::Path::new(raw.connector.split('.').map(String::from))
+            .map_err(|_| DeploymentConfigError::InvalidConnectorPath(raw.connector.clone()))?;
+        let measure = MeasureId::new(raw.measure).map_err(DeploymentConfigError::Annotation)?;
+        let currency =
+            CurrencyCode::new(raw.currency).map_err(DeploymentConfigError::Annotation)?;
+        rules.push(
+            UnitPrice::new(
+                connector,
+                raw.provider,
+                raw.model,
+                measure,
+                raw.units,
+                parse_exact_decimal(&raw.amount)?,
+                currency,
+            )
+            .map_err(DeploymentConfigError::Accounting)?,
+        );
+    }
+    CostProfile::new(
+        CostProfileRef::new(raw.reference).map_err(DeploymentConfigError::Accounting)?,
+        rules,
+    )
+    .map_err(DeploymentConfigError::Accounting)
+}
+
+fn parse_exact_decimal(text: &str) -> Result<ExactDecimal, DeploymentConfigError> {
+    let (negative, digits) = text
+        .strip_prefix('-')
+        .map_or((false, text), |digits| (true, digits));
+    let mut pieces = digits.split('.');
+    let whole = pieces.next().unwrap_or_default();
+    let fraction = pieces.next();
+    if pieces.next().is_some()
+        || whole.is_empty()
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || fraction
+            .is_some_and(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return Err(DeploymentConfigError::InvalidDecimal(text.to_string()));
+    }
+    let fraction = fraction.unwrap_or_default();
+    let mut unscaled = 0_i128;
+    for byte in whole.bytes().chain(fraction.bytes()) {
+        unscaled = unscaled
+            .checked_mul(10)
+            .and_then(|value| value.checked_add(i128::from(byte - b'0')))
+            .ok_or_else(|| DeploymentConfigError::InvalidDecimal(text.to_string()))?;
+    }
+    if negative {
+        unscaled = unscaled
+            .checked_neg()
+            .ok_or_else(|| DeploymentConfigError::InvalidDecimal(text.to_string()))?;
+    }
+    let scale = i32::try_from(fraction.len())
+        .map_err(|_| DeploymentConfigError::InvalidDecimal(text.to_string()))?;
+    ExactDecimal::new(unscaled, scale)
+        .map_err(|_| DeploymentConfigError::InvalidDecimal(text.to_string()))
 }
 
 fn privacy_profile(raw: RawPrivacy) -> Result<PrivacyProfile, DeploymentConfigError> {
@@ -150,6 +221,26 @@ struct RawDeployment {
     #[serde(default)]
     secrets: Vec<RawSecret>,
     privacy: Option<RawPrivacy>,
+    cost_profile: Option<RawCostProfile>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawCostProfile {
+    reference: String,
+    prices: Vec<RawUnitPrice>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawUnitPrice {
+    connector: String,
+    provider: String,
+    model: String,
+    measure: String,
+    units: u64,
+    amount: String,
+    currency: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -198,6 +289,14 @@ pub enum DeploymentConfigError {
     DuplicateSecret(SecretRef),
     /// M1 admits only run-scoped in-memory personal-data retention.
     UnsupportedRetention(String),
+    /// Cost profile contains an invalid typed accounting rule.
+    Accounting(crate::accounting::AccountingError),
+    /// Measure or currency spelling is outside the closed registry.
+    Annotation(crate::schema_annotation::SchemaAnnotationError),
+    /// A price names no canonical Node path.
+    InvalidConnectorPath(String),
+    /// A price amount is not a plain exact decimal.
+    InvalidDecimal(String),
     /// Physical secret resolution failed without exposing material.
     Secret(SecretProviderError),
 }
@@ -222,6 +321,14 @@ impl fmt::Display for DeploymentConfigError {
                 formatter,
                 "privacy retention `{retention}` is unsupported; M1 requires `run_scoped`"
             ),
+            Self::Accounting(error) => error.fmt(formatter),
+            Self::Annotation(error) => error.fmt(formatter),
+            Self::InvalidConnectorPath(path) => {
+                write!(formatter, "invalid cost-profile Connector path `{path}`")
+            }
+            Self::InvalidDecimal(amount) => {
+                write!(formatter, "invalid exact price amount `{amount}`")
+            }
             Self::Secret(error) => error.fmt(formatter),
         }
     }
@@ -291,5 +398,41 @@ mod tests {
             parse(r#"{"environment":[],"secrets":[],"surprise":1}"#),
             Err(DeploymentConfigError::Json(_))
         ));
+    }
+
+    #[test]
+    fn an_exact_cost_profile_is_typed_and_attested_outside_graph_identity() {
+        let profile = parse(
+            r#"{
+  "environment": [],
+  "secrets": [],
+  "cost_profile": {
+    "reference": "pricing/openai@2026-08-30",
+    "prices": [{
+      "connector": "agent.model",
+      "provider": "openai",
+      "model": "gpt-5",
+      "measure": "gen_ai.usage.input_tokens",
+      "units": 1000000,
+      "amount": "2.50",
+      "currency": "USD"
+    }]
+  }
+}"#,
+        )
+        .expect("the exact price profile parses");
+        let boot = BootBindings::resolve(profile, &FixedProvider)
+            .expect("a profile without secrets resolves");
+        let cost = boot.cost_profile().expect("typed price profile");
+        let attested = boot
+            .attestation()
+            .cost_profile
+            .as_ref()
+            .expect("run header cost attestation");
+        assert_eq!(cost.reference().as_str(), "pricing/openai@2026-08-30");
+        assert_eq!(attested.reference, *cost.reference());
+        assert_eq!(attested.digest, *cost.digest());
+        assert_eq!(cost.rules()[0].price_money().amount().unscaled(), 25);
+        assert_eq!(cost.rules()[0].price_money().amount().scale(), 1);
     }
 }

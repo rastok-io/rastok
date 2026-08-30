@@ -39,7 +39,7 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
 
 - Firmware: `spikes/rp2350-emu` — a standalone crate outside the
   product workspace (its embedded runtime dependencies are
-  spike-only). Its current M1.8 A5 transaction-time measurement embeds the
+  spike-only). Its current M1.8 A8 transaction-time measurement embeds the
   blessed **v15 policy-capable package** of `examples/echo.rkg` as a `static`,
   opens it with
   `rastok_core::plan::decode` — which now validates
@@ -84,23 +84,23 @@ peripheral or silicon claim.
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
-| `plan::decode` (988-byte v15 package; re-measured at the M1.8 A5 closure on 2026-08-30) | 17 844 | 892.2 k | 5.95 ms |
+| `plan::decode` (988-byte v15 package; re-measured at the M1.8 A8 closure on 2026-08-31) | 17 844 | 892.2 k | 5.95 ms |
 | — re-measured 2026-08-09, rounds four and five: +109 decode ticks (the pinned-edge audit at validation) and ~14 per relay transaction (the crossing-pin judge at construction + the pre-commit choke point scanning for watching pins; the FINAL gate converts the value only when a pin watches its fan-out — construction-level checks and expression bindings still materialize handler values as they always did) — priced, no criterion near | | | |
-| relay transaction (avg of 32 exact actor/trigger samples; re-measured at M1.8 A5) | 2 713 (min 2 622 / max 2 966) | **135.7 k avg / 148.3 k max** | **0.904 ms avg / 0.989 ms max** |
+| relay transaction (avg of 32 exact actor/trigger samples; re-measured at M1.8 A8) | 2 713 (min 2 622 / max 2 966) | **135.7 k avg / 148.3 k max** | **0.904 ms avg / 0.989 ms max** |
 | blake3 id, 64-byte frame (avg of 1000) | 91.0 | 4.6 k | 30 µs |
 
 | Resource | Value | Criterion |
 |---|---|---|
-| Heap high-water mark (allocator-tracked, 32 journaled relay rounds plus their owner lifecycle facts; re-measured at M1.8 A5) | 129 972 B (126.9 KiB) | < 128 KiB ✓ |
-| Flash `.text` + `.rodata` (opt-level=z + LTO) | 668 652 + 60 496 = 729 148 B (712.1 KiB; re-measured at M1.8 A5) | < 1 MiB ✓ |
+| Heap high-water mark (allocator-tracked, 32 journaled relay rounds plus their owner lifecycle facts; re-measured at M1.8 A8) | 129 972 B (126.9 KiB) | < 128 KiB ✓ |
+| Flash `.text` + `.rodata` (opt-level=z + LTO) | 668 660 + 60 496 = 729 156 B (712.1 KiB; re-measured at M1.8 A8) | < 1 MiB ✓ |
 | Dependencies patched to build | none | none ✓ |
 
 Notes the numbers carry:
 
-- The slowest measured relay transaction meets its criterion with a **1.012× margin**,
+- The slowest measured relay transaction meets its criterion with a **1.011× margin**,
   not the 3× the withdrawn verdict claimed. The claim shrank; the
   fact held.
-- Package decode grew from v1's 1 468 ticks to 17 838 across the
+- Package decode grew from v1's 1 468 ticks to 17 844 across the
   review campaign: structural validation of every announced
   invariant (directions, canonical orders, global uniqueness, the
   nesting budget, the domain-order audits) and the canonicity
@@ -355,6 +355,13 @@ Notes the numbers carry:
   vocabulary adds only 32 linked bytes (729 148 B total). Package, semantic
   witness, 67-record causal trace and `SPIKE_OK` remain unchanged; hosted JSON,
   channels and threads do not enter this image.
+- M1.8 A7–A8 add the exact accounting API as an explicit lazy fold over the
+  journal and validated sparse schemas. Echo declares no annotation and no
+  caller requests a report, so package decode, relay distribution, heap peak,
+  semantic witness and 67-record trace reproduce A5 exactly. Dead-code layout
+  changes linked `.text` by 8 B; `.rodata` is unchanged. The three-register
+  audit and independent interop reruns add no embedded path, and `SPIKE_OK`
+  keeps the same witness.
 - Flash grew from 193 KiB to 516.4 KiB (`.text` 481 404 B +
   `.rodata` 47 356 B, re-measured after C1 on 2026-08-22): the consolidated
   reform's decoders, the jsonl codec's canonical writer and now the
@@ -411,7 +418,7 @@ llvm-objdump -d target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350 \
 ## Verdict
 
 **GO (provisional), re-issued 2026-08-07 on the corrected
-instrumentation and last re-measured 2026-08-30 at the M1.8 A5 closure.**
+instrumentation and last re-measured 2026-08-31 at the M1.8 A8 closure.**
 These measurements price complete hierarchical routing, causal instance
 references, the executable lifetime machine, bounded Closing, joins, and the
 R7 closure-only keyed drain. All four

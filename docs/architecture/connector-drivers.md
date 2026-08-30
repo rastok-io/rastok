@@ -225,6 +225,17 @@ small Registry-free core mirror and a product test proving every sheet row
 agrees with it. Unsupported modes refuse by name rather than executing a
 nearby behavior.
 
+When a boundary returns a provider quantity or amount, expose it as ordinary
+typed payload data and annotate the exact field with the matching standard
+`@measure` or `@cost` contract. Use an OpenTelemetry semantic name whenever
+its definition matches; use no Connector-local alias. Cache/reasoning token
+subsets must remain separate fields because the report registry owns their
+inclusion relation. Never put a credential value in such a payload: Connector
+authentication consumes a `secret()` reference at its declared setting, and
+raw `@secret` envelope fields remain fail-closed. Physical price rows belong
+to the deployment `CostProfile`, keyed by the exact Connector path, rather
+than to Driver code or graph identity.
+
 ### 2. Separate pure exchange protocol from the effect
 
 Put the family under `crates/rastok/src/connectors/<family>/`. Binding resolves

@@ -10,6 +10,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
 
+use crate::accounting::{CostProfile, CostProfileRef};
 use crate::canonical_cbor::{Value as Cbor, encode};
 use crate::value::Value;
 
@@ -496,6 +497,15 @@ pub struct PrivacyAttestation {
     pub digest: [u8; 32],
 }
 
+/// Cost-profile identity stored in the run header, never in graph identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CostProfileAttestation {
+    /// Stable deployment profile reference.
+    pub reference: CostProfileRef,
+    /// Digest of every price and dimension in force.
+    pub digest: [u8; 32],
+}
+
 /// Digest of one non-secret boot value fixed before execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnvironmentAttestation {
@@ -515,6 +525,8 @@ pub struct DeploymentAttestation {
     pub secrets: Vec<SecretBinding>,
     /// Privacy profile identity when personal data is admitted.
     pub privacy: Option<PrivacyAttestation>,
+    /// Optional exact price profile used only for non-causal reporting.
+    pub cost_profile: Option<CostProfileAttestation>,
 }
 
 /// Typed physical configuration before providers return any material.
@@ -523,6 +535,7 @@ pub struct DeploymentProfile {
     environment: BTreeMap<EnvironmentName, Value>,
     secrets: BTreeMap<SecretRef, SecretBinding>,
     privacy: Option<PrivacyProfile>,
+    cost_profile: Option<CostProfile>,
 }
 
 impl DeploymentProfile {
@@ -546,7 +559,16 @@ impl DeploymentProfile {
             environment,
             secrets,
             privacy,
+            cost_profile: None,
         })
+    }
+
+    /// Attaches one optional exact price profile without changing graph
+    /// identity. Its reference and digest enter the run attestation at boot.
+    #[must_use]
+    pub fn with_cost_profile(mut self, profile: CostProfile) -> Self {
+        self.cost_profile = Some(profile);
+        self
     }
 
     /// Empty profile for graphs with no boot dependency.
@@ -562,6 +584,7 @@ pub struct BootBindings {
     environment: BTreeMap<EnvironmentName, Value>,
     secrets: BTreeMap<SecretRef, SecretMaterial>,
     privacy: Option<PrivacyProfile>,
+    cost_profile: Option<CostProfile>,
     attestation: DeploymentAttestation,
 }
 
@@ -595,11 +618,19 @@ impl BootBindings {
                 reference: privacy.reference().clone(),
                 digest: *privacy.digest(),
             }),
+            cost_profile: profile
+                .cost_profile
+                .as_ref()
+                .map(|cost| CostProfileAttestation {
+                    reference: cost.reference().clone(),
+                    digest: *cost.digest(),
+                }),
         };
         Ok(Self {
             environment: profile.environment,
             secrets,
             privacy: profile.privacy,
+            cost_profile: profile.cost_profile,
             attestation,
         })
     }
@@ -611,6 +642,7 @@ impl BootBindings {
             environment: BTreeMap::new(),
             secrets: BTreeMap::new(),
             privacy: None,
+            cost_profile: None,
             attestation: DeploymentAttestation::default(),
         }
     }
@@ -642,6 +674,12 @@ impl BootBindings {
         self.privacy.as_ref()
     }
 
+    /// Optional deployment pricing used by [`crate::accounting::CostReport`].
+    #[must_use]
+    pub fn cost_profile(&self) -> Option<&CostProfile> {
+        self.cost_profile.as_ref()
+    }
+
     /// Run-header facts corresponding exactly to these bindings.
     #[must_use]
     pub fn attestation(&self) -> &DeploymentAttestation {
@@ -656,6 +694,7 @@ impl fmt::Debug for BootBindings {
             .field("environment", &self.environment.keys().collect::<Vec<_>>())
             .field("secrets", &self.secrets.keys().collect::<Vec<_>>())
             .field("privacy", &self.attestation.privacy)
+            .field("cost_profile", &self.attestation.cost_profile)
             .finish()
     }
 }

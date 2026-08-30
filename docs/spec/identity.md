@@ -853,3 +853,13 @@ privacy-profile reference and digest before personal data is admitted. It is
 control metadata outside the causal record array. A4 allocates no package
 version, semantic extension, record key or value/type tag; every earlier
 package, witness and trace remains byte-identical.
+
+**M1.8 A7 accounting checkpoint.** The optional deployment cost profile is
+fixed in the same immutable run header as `(stable profile reference,
+canonical digest)`. Price rows, provider/model dimensions and calculated cost
+remain outside graph/package and causal-record identity. Replaying with a
+supplied profile whose reference or digest differs from the header refuses;
+omitting the profile keeps exact usage and yields typed `unpriced` remainders.
+Accounting observations are derived lazily from sealed envelopes plus the
+validated annotation table, so A7 adds no record key and moves no existing
+package, semantic witness or causal trace.

@@ -2888,7 +2888,7 @@ explicit Loop `stop` and spatial recovery still refuse before execution,
 preserving the rule that a recognized policy never silently runs as a plain
 Graph.
 
-M1.8 A5 now executes the closed `@sensitive`, `@secret`, `@personal`,
+Closed M1.8 executes the `@sensitive`, `@secret`, `@personal`,
 `@measure` and `@cost` family through source, checked HIR and categorical v15 as canonical
 side-tables beside logical schemas. Independent package validation re-derives
 every local structural path, legal target, registered measure carrier,
@@ -2907,7 +2907,14 @@ flow, logical instance and direction-safe Call/Session correlation. The hosted
 JSON log lane consumes only bounded disposable copies, omits payload by
 default and redacts classified values before formatting; its saturation or
 failure cannot change execution or accounting. Unannotated semantic identities
-and causal traces remain fixed.
+and causal traces remain fixed. Exact field measures and provider-reported
+money are reconstructed lazily at each flow point from those same records and
+schemas. A deployment price profile can add exact calculated rows without
+entering graph identity; token subset relations prevent cache/reasoning double
+counting, unmatched positive quantities stay `unpriced`, and currencies are
+never combined without an explicit later FX authority. The retained report is
+independent from the bounded JSON projection; the optional OpenTelemetry
+transport remains explicitly deferred until exact temporal observations exist.
 
 This white paper is designed to outlive individual releases. The DSL
 grammar, runtime traits, and feature set will evolve; the conceptual

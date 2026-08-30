@@ -37,7 +37,7 @@ pub enum RecordObservationKind {
 }
 
 /// Exchange identity carried by an observation when one exists.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ExchangeCorrelation {
     /// A graph-to-world bounded Call.
     OutboundCall(CallRef),
