@@ -232,7 +232,8 @@ its definition matches; use no Connector-local alias. Cache/reasoning token
 subsets must remain separate fields because the report registry owns their
 inclusion relation. Never put a credential value in such a payload: Connector
 authentication consumes a `secret()` reference at its declared setting, and
-raw `@secret` envelope fields remain fail-closed. Physical price rows belong
+raw `@secret` envelope fields refuse at source check and remain fail-closed at
+VM boot for foreign packages. Physical price rows belong
 to the deployment `CostProfile`, keyed by the exact Connector path, rather
 than to Driver code or graph identity.
 

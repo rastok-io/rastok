@@ -9,6 +9,13 @@ use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+/// Live listener proofs are independent product processes, but macOS can
+/// reset a just-opened handshake while two test-owned listeners start at
+/// once. Serialize only these real-network CLI probes; all pure and
+/// subprocess-only CLI tests remain parallel.
+#[cfg(any(feature = "hosted-http12", feature = "hosted-websocket"))]
+static LIVE_NETWORK_CLI_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn example() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/echo.rkg")
 }
@@ -125,6 +132,9 @@ fn run_can_bind_the_real_file_driver_with_an_explicit_root() {
 fn run_polls_an_inbound_http_server_without_a_stdin_submission() {
     use std::io::Read as _;
 
+    let _network_guard = LIVE_NETWORK_CLI_TEST
+        .lock()
+        .expect("a prior live-network CLI test did not panic");
     let reserved = std::net::TcpListener::bind("127.0.0.1:0").expect("a local port is available");
     let address = reserved
         .local_addr()
@@ -192,6 +202,9 @@ fn run_polls_an_inbound_http_server_without_a_stdin_submission() {
 #[cfg(feature = "hosted-websocket")]
 #[test]
 fn run_composes_a_live_websocket_gateway_with_process() {
+    let _network_guard = LIVE_NETWORK_CLI_TEST
+        .lock()
+        .expect("a prior live-network CLI test did not panic");
     let reserved =
         std::net::TcpListener::bind("127.0.0.1:0").expect("a local WebSocket port is available");
     let address = reserved

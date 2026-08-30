@@ -2018,7 +2018,10 @@ mod tests {
     use crate::diagnostics::{Bag, SourceId};
     use crate::node;
     use crate::plan::{AttrSetting, Emission, GraphVersion, Manifest, Step};
-    use crate::schema_annotation::{AnnotationKind, DataAnnotation, SchemaPath, SensitivityLevel};
+    use crate::schema_annotation::{
+        AnnotationKind, AnnotationSet, AnnotationTable, DataAnnotation, SchemaPath,
+        SensitivityLevel,
+    };
 
     const M0_PROBE: &str = r#"
 graph m0_probe : App {
@@ -2102,7 +2105,7 @@ graph m0_probe : App {
 
     #[test]
     fn annotated_schema_crosses_source_hir_v15_and_decode_exactly() {
-        let source = "type Secret = text @secret\ngraph app : App { input in: Secret }\n";
+        let source = "type Classified = text @sensitive(level = restricted)\ngraph app : App { input in: Classified }\n";
         let registry = ContractCatalog::try_m0().expect("the standard catalogue holds");
         let source_id = SourceId::new(0);
         let mut bag = Bag::new();
@@ -2132,10 +2135,41 @@ graph m0_probe : App {
 
         let mut vm = crate::runtime::vm::Vm::boot(&decoded, GraphVersion(1));
         let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
+        assert_eq!(vm.step(&mut journal), Ok(false));
+        assert!(journal.records().is_empty());
+    }
+
+    #[test]
+    fn a_forged_secret_policy_stays_fail_closed_before_mutation() {
+        let registry = ContractCatalog::try_m0().expect("the standard catalogue holds");
+        let source_id = SourceId::new(0);
+        let source = "graph app : App { input in: text @sensitive(level = restricted) }\n";
+        let mut bag = Bag::new();
+        let tree = crate::compiler::parser::parse(source_id, source, &registry, &mut bag);
+        let unit = crate::compiler::check::Unit {
+            files: vec![(source_id, tree)],
+        };
+        let mut hir = crate::compiler::check::check(&unit, &registry, &mut bag, None)
+            .expect("the non-secret source checks");
+        hir.app.boundary[0].annotations = AnnotationTable::new(vec![(
+            SchemaPath::root(),
+            AnnotationSet::new(vec![DataAnnotation::Secret])
+                .expect("one secret annotation is canonical"),
+        )])
+        .expect("the forged policy table is structurally valid");
+        let hash = super::semantic_hash(&hir);
+        let (raw, _) = super::lower(&hir).expect("the forged HIR lowers for validation defense");
+        let plan = crate::plan::ValidatedExecutionPlan::try_from_lowered(raw)
+            .expect("categorical validation retains the defensive secret policy");
+        let bytes = crate::plan::encode(&plan, &hash);
+        let (decoded, _) = crate::plan::decode(&bytes).expect("the forged package decodes");
+        let mut vm = crate::runtime::vm::Vm::boot(&decoded, GraphVersion(1));
+        let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
         assert!(matches!(
             vm.step(&mut journal),
             Err(crate::runtime::vm::VmError::UnsupportedDataPolicy { .. })
         ));
+        assert!(journal.records().is_empty());
     }
 
     #[test]
@@ -2145,7 +2179,7 @@ graph app : App {
   input in: text
   val label: text @sensitive(level = internal) = "demo"
   operator o {
-    var credential: text @secret = "placeholder"
+    var credential: text @sensitive(level = restricted) = "placeholder"
     on in {
       val tokens: int @measure(id = gen_ai.usage.output_tokens) = 1
       out = .
@@ -2491,7 +2525,7 @@ graph app : App {
     }
 
     #[test]
-    fn sensitive_policy_executes_while_secret_policy_stays_fail_closed() {
+    fn sensitive_policy_executes_and_redacts() {
         let source = r#"
 type Classified = text @sensitive(level = confidential)
 graph app : App {

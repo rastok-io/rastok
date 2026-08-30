@@ -54,7 +54,9 @@ Expression availability is phase-checked. The target phase model gives
 unit/App boot `val`s and effective settings bound at boot exact `env()` /
 `secret()` references. M1.8 A4 executes only the declared HttpClient URL and
 bearer settings; unit/App boot values and all other boot consumers refuse by
-name. A Node-level per-instance
+name. Outside those settings, `env()` and `secret()` are recognized reserved
+boot functions whose diagnostic names the compatible site; they are never
+misreported as unknown expression functions. A Node-level per-instance
 `val`, or an effective Connector setting bound at the instance site, may use
 enclosing immutable bindings and that owner's local key but not `data`, `meta`,
 or `var`. Handler expressions have their ordinary transaction bindings;

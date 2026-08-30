@@ -1849,6 +1849,24 @@ impl<'a> ExprParser<'_, 'a> {
             "size" => Function::Size,
             "decimal" => Function::Decimal,
             "media_type" => Function::MediaType,
+            "env" => {
+                return Err(Diagnostic {
+                    kind: DiagnosticKind::General,
+                    message: String::from(
+                        "`env()` is admitted only for a declared environment-compatible Connector setting (in M1: `HttpClient.url`)",
+                    ),
+                    range,
+                });
+            }
+            "secret" => {
+                return Err(Diagnostic {
+                    kind: DiagnosticKind::General,
+                    message: String::from(
+                        "`secret()` is admitted only for a declared secret-compatible Connector setting (in M1: `HttpClient.auth_bearer`)",
+                    ),
+                    range,
+                });
+            }
             other if UNSUPPORTED_FUNCTIONS.contains(&other) => {
                 return Err(Diagnostic {
                     kind: DiagnosticKind::General,
@@ -3937,6 +3955,23 @@ mod tests {
         assert_eq!(boot_reference(&tree.root), Ok(Some(secret)));
         assert!(parse_boot_reference("secret(\"token\") + \"leak\"").is_err());
         assert_eq!(parse_boot_reference("size(data)"), Ok(None));
+    }
+
+    #[test]
+    fn boot_reference_functions_report_their_declared_scope() {
+        for (source, setting) in [
+            ("secret(\"logical/path\")", "HttpClient.auth_bearer"),
+            ("env(\"SERVICE_URL\")", "HttpClient.url"),
+        ] {
+            let diagnostics = compile(source, &Signature::new())
+                .expect_err("a boot reference is not an ordinary expression call");
+            assert!(
+                diagnostics[0].message.contains("admitted only")
+                    && diagnostics[0].message.contains(setting),
+                "{diagnostics:?}"
+            );
+            assert!(!diagnostics[0].message.contains("unknown function"));
+        }
     }
 
     #[test]

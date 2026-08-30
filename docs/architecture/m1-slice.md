@@ -466,8 +466,9 @@ step touches `vm.rs` once.
     redacts before formatting. Personal data remains independent of
     confidentiality and carries its GDPR legal/identifier flags. Exact
     HttpClient boot references now bind through real and scripted Drivers;
-    personal data requires an attested run-scoped profile and raw secret
-    payloads remain fail-closed. A5 retains typed transaction/Call/Session
+    personal data requires an attested run-scoped profile. Unused schemas may
+    describe secret policy, while every source-executable raw-secret site
+    defers at check and the VM keeps a forged-package belt. A5 retains typed transaction/Call/Session
     correlations beside the journal and projects optional JSON logs through a
     bounded never-block lane; payloads are omitted unless explicitly requested
     and then redacted before formatting. A6 explicitly defers the optional

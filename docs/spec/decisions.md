@@ -5,6 +5,37 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-31-1 — Executable clear-secret schemas refuse at source check
+
+An unused named schema may describe `@secret` data because the declaration is
+structural vocabulary and does not enter an executable plan. Every use of that
+schema at an executable owner — Graph or Node port, owner `val`, Node `var`, or
+handler `let` — refuses with the named `E-CHECK-DEFERRED` gate until
+field-level externalization can replace clear material with a reference before
+causal admission. This is deliberately stronger than waiting for a decode or
+VM boundary: M1 has no deployment capability under which such a source
+program could execute, so producing a plan would violate the rule that every
+not-yet-executable construct refuses during checking.
+
+Categorical validation continues to accept and prove the closed annotation
+vocabulary, and VM boot retains `UnsupportedDataPolicy` as defense in depth
+for a decoded or otherwise forged plan carrying clear-secret policy. That
+defense is not a source-language execution path. When field externalization
+lands, this one checker gate becomes a capability judgement; the package and
+runtime defenses do not need a second policy model.
+
+`env()` and `secret()` are reserved boot-reference functions, not unknown
+expression functions. Outside a declared compatible Connector setting their
+diagnostic names the restriction and the two M1 sites (`HttpClient.url` and
+`HttpClient.auth_bearer`). This changes only refusal timing and diagnostics:
+no valid package, semantic identity, causal record, or registry allocation
+moves.
+
+**Rejected:** compiling a source program that every current deployment must
+reject at boot; erasing `@secret` to make it executable; treating
+`secret()` as an unknown spelling; and removing the package/VM belt merely
+because the source checker now owns the ordinary path.
+
 ## D-2026-08-30-6 — CostReport is an exact per-flow journal fold
 
 M1.8 A7 derives accounting observations lazily from causal envelopes and the

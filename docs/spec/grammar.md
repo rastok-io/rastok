@@ -1106,7 +1106,8 @@ The DSL has no `${…}` interpolation token.
   `HttpClient.auth_bearer = secret(...)`; unit/App boot `val`s and every other
   setting remain named gates until their consumers land. Using either form in an instance key,
   per-instance `val`, guard, handler-local binding, or state expression is a
-  compile error — the language has explicit phases (boot → instance →
+  compile error which names the compatible setting rather than reporting an
+  unknown function — the language has explicit phases (boot → instance →
   transaction → frontend region).
 - **Instance phase** : a Node-level `val` is derived once for each new
   instance from enclosing immutable `val`s and its local `instance.key`; it
@@ -1628,7 +1629,7 @@ field_decl        ::= field_name ":" type_ref
 tagged_case       ::= IDENT data_annotation* ( "{" ( field_decl ( ","? field_decl )* )? "}" )?
 field_name        ::= IDENT | TYPE_KW                                 // field NAMES may reuse type words (`text: text`,
                                                                       //   `kind: text`) — position disambiguates
-data_annotation   ::= "@" IDENT annotation_arguments?                // M1.8 closed family; A4 admits attested personal data, raw @secret fields still refuse
+data_annotation   ::= "@" IDENT annotation_arguments?                // M1.8 closed family; A4 admits attested personal data, executable raw @secret sites defer at check
 annotation_arguments ::= "(" named_annotation_argument ( "," named_annotation_argument )* ")"
 named_annotation_argument ::= IDENT "=" annotation_constant
 annotation_constant ::= IDENT ( "." IDENT )* | STRING | SIGNED_INT  // plan constants only; no expression or positional argument

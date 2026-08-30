@@ -1683,7 +1683,7 @@ impl Checker<'_, '_> {
                     // complete logical type algebra.
                     let (pinned, annotations) = match &port.ty {
                         None => (None, AnnotationTable::empty()),
-                        Some(type_ref) => match self.resolve_annotated_schema(type_ref) {
+                        Some(type_ref) => match self.resolve_executable_schema(type_ref) {
                             Some(schema) => (
                                 Some(schema.ty().clone()),
                                 schema.annotations().clone(),
@@ -3651,7 +3651,7 @@ impl Checker<'_, '_> {
     ) -> Option<(Const, AnnotationTable)> {
         let (expected, annotations) = match &val.ty {
             Some(ty) => {
-                let schema = self.resolve_annotated_schema(ty)?;
+                let schema = self.resolve_executable_schema(ty)?;
                 (Some(schema.ty().clone()), schema.annotations().clone())
             }
             None => (None, AnnotationTable::empty()),
@@ -4397,7 +4397,7 @@ impl Checker<'_, '_> {
                     }
                     let (pinned, annotations) = match &port.ty {
                         None => (None, AnnotationTable::empty()),
-                        Some(type_ref) => match self.resolve_annotated_schema(type_ref) {
+                        Some(type_ref) => match self.resolve_executable_schema(type_ref) {
                             Some(schema) => {
                                 (Some(schema.ty().clone()), schema.annotations().clone())
                             }
@@ -4707,7 +4707,7 @@ impl Checker<'_, '_> {
         if !self.guard_binding_name(&decl.name, "a var") {
             return None;
         }
-        let schema = self.resolve_annotated_schema(&decl.ty)?;
+        let schema = self.resolve_executable_schema(&decl.ty)?;
         let ty = schema.ty().clone();
         let annotations = schema.annotations().clone();
         let init = match &decl.value {
@@ -4911,6 +4911,22 @@ impl Checker<'_, '_> {
                 None
             }
         }
+    }
+
+    /// Resolves policy metadata at a site that can reach an executable plan.
+    /// Named declarations may describe future secret-bearing schemas, but no
+    /// clear secret may enter today's journal until field-level
+    /// externalization can replace it with a reference before admission.
+    fn resolve_executable_schema(&mut self, ty: &TypeRef) -> Option<AnnotatedSchema> {
+        let schema = self.resolve_annotated_schema(ty)?;
+        if crate::data_policy::contains_secret(schema.annotations()) {
+            self.deferred(
+                "source-executable `@secret` data before field-level externalization",
+                ty.span,
+            );
+            return None;
+        }
+        Some(schema)
     }
 
     fn resolve_plain_type_ref(&mut self, ty: &TypeRef) -> Option<DataType> {
@@ -6157,7 +6173,7 @@ impl Checker<'_, '_> {
                 SynStatement::Val(val) => {
                     if self.bindable(&val.name, &signature) {
                         let (expected, annotations) = match &val.ty {
-                            Some(ty) => match self.resolve_annotated_schema(ty) {
+                            Some(ty) => match self.resolve_executable_schema(ty) {
                                 Some(schema) => {
                                     (Some(schema.ty().clone()), schema.annotations().clone())
                                 }
@@ -10694,7 +10710,7 @@ graph app : App {
 graph g : App {
   val label: text @sensitive(level = internal) = "demo"
   operator o {
-    var credential: text @secret = "placeholder"
+    var credential: text @sensitive(level = restricted) = "placeholder"
     on in {
       val tokens: int @measure(id = gen_ai.usage.output_tokens) = 1
       out = .
@@ -10712,6 +10728,56 @@ graph g : App {
             &hir.app.nodes[0].handlers[0].body[0],
             Statement::Let { annotations, .. } if !annotations.is_empty()
         ));
+    }
+
+    #[test]
+    fn executable_secret_schemas_refuse_until_fields_can_be_externalized() {
+        let cases = [
+            "type Secret = text @secret\ngraph g : App { input in: Secret }\n",
+            "type Secret = text @secret\ngraph g : App { operator o { input in: Secret } }\n",
+            "type Secret = text @secret\ngraph g : App { val token: Secret = \"x\" }\n",
+            "type Secret = text @secret\ngraph g : App { operator o { var token: Secret = \"x\" } }\n",
+            "type Secret = text @secret\ngraph g : App { operator o { on in { val token: Secret = \"x\"; out = . } } . -> o -> . }\n",
+        ];
+        for source in cases {
+            let (_, bag) = check_source(source);
+            let refusals = bag
+                .diagnostics()
+                .iter()
+                .filter(|diagnostic| {
+                    diagnostic.code() == E_CHECK_DEFERRED
+                        && diagnostic.message().contains("field-level externalization")
+                })
+                .count();
+            assert_eq!(refusals, 1, "{source}\n{:#?}", bag.diagnostics());
+        }
+    }
+
+    #[test]
+    fn boot_reference_functions_name_their_restricted_positions() {
+        for (function, setting) in [
+            (
+                "secret(\"providers/openai/token\")",
+                "HttpClient.auth_bearer",
+            ),
+            ("env(\"SERVICE_URL\")", "HttpClient.url"),
+        ] {
+            let source = format!(
+                "graph g : App {{ operator o {{ on in {{ out = {function} }} }} . -> o -> . }}\n"
+            );
+            let (_, bag) = check_source(&source);
+            let diagnostic = bag
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.code() == E_EXPR)
+                .expect("the reserved boot function refuses as an expression");
+            assert!(
+                diagnostic.message().contains("admitted only")
+                    && diagnostic.message().contains(setting),
+                "{diagnostic:#?}"
+            );
+            assert!(!diagnostic.message().contains("unknown function"));
+        }
     }
 
     #[test]

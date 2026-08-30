@@ -100,6 +100,9 @@ Notes the numbers carry:
 - The slowest measured relay transaction meets its criterion with a **1.011× margin**,
   not the 3× the withdrawn verdict claimed. The claim shrank; the
   fact held.
+- Heap is the narrowest resource margin: **1,100 B**, **0.84%**, or
+  **1.008×** below the 128 KiB ceiling. The next change touching the embedded
+  path must re-measure this bound before making any later acceptance claim.
 - Package decode grew from v1's 1 468 ticks to 17 844 across the
   review campaign: structural validation of every announced
   invariant (directions, canonical orders, global uniqueness, the
@@ -362,6 +365,11 @@ Notes the numbers carry:
   changes linked `.text` by 8 B; `.rodata` is unchanged. The three-register
   audit and independent interop reruns add no embedded path, and `SPIKE_OK`
   keeps the same witness.
+- The post-closure adversarial correction moves executable clear-secret source
+  uses into a hosted checker gate and improves reserved boot-function
+  diagnostics. Per the new heap-margin rule, the Cortex-M33 proof was rebuilt
+  and executed before any later acceptance claim: decode, relay distribution,
+  129 972 B heap peak, semantic witness and 67 records reproduce A8 exactly.
 - Flash grew from 193 KiB to 516.4 KiB (`.text` 481 404 B +
   `.rodata` 47 356 B, re-measured after C1 on 2026-08-22): the consolidated
   reform's decoders, the jsonl codec's canonical writer and now the
@@ -424,7 +432,8 @@ references, the executable lifetime machine, bounded Closing, joins, and the
 R7 closure-only keyed drain. All four
 criteria of record hold: no patched dependencies, 148.3 k instructions for
 the slowest measured relay transaction against the 150 k bound (1.011×), a
-126.9 KiB true high-water mark against 128 KiB, and 712.1 KiB of flash against
+126.9 KiB true high-water mark against 128 KiB (1,100 B / 0.84% / 1.008×
+margin), and 712.1 KiB of flash against
 1 MiB. The
 margins are thinner than first
 claimed and are reported as measured. The option stays dormant as

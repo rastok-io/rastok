@@ -1,12 +1,13 @@
 # Data policy, privacy, observations and cost
 
 > **Status: normative and executable through closed M1.8 under
-> D-2026-08-30-1 through D-2026-08-30-6.** Categorical package v15 transports the closed family as
+> D-2026-08-30-1 through D-2026-08-30-6 and D-2026-08-31-1.** Categorical package v15 transports the closed family as
 > canonical side-tables. Registry-free validation re-derives every local
 > claim and the effective policy of canonical operations; presentation
 > redacts before formatting. A4 admits personal data only under an attested
 > run-scoped privacy profile and resolves reference-origin credentials only at
-> declared Driver settings. Raw `@secret` envelope fields remain fail-closed.
+> declared Driver settings. Executable raw `@secret` sites defer at source
+> check, and VM boot keeps foreign packages fail-closed.
 
 This document owns data classification, typed runtime observations and their
 accounting projections. Logical values and assignability remain owned by
@@ -110,9 +111,12 @@ secret("path") -> SecretRef -> secret-compatible Connector setting
 
 The clear value is never a `Value` and never enters source, plan, package,
 journal, diagnostic, log or trace. Provider, logical path and version are
-attested in the run header before use. A raw input schema field carrying
-`@secret` refuses at its decode boundary until a later externalization protocol
-can replace clear input with a reference before the causal commit.
+attested in the run header before use. An unused named alias may describe
+`@secret` data, but attaching it to any source-executable schema site refuses
+at check with `E-CHECK-DEFERRED`. A later externalization protocol may replace
+clear input with a reference before the causal commit and thereby open that
+gate. VM boot retains the same refusal for foreign or forged packages; it is
+defense in depth, not a delayed source-language judgement.
 
 ### 3.3 `@personal`
 
@@ -259,8 +263,10 @@ security-taint rule and discard accounting meaning before admission.
 If the raw plan has no annotation declaration, validation returns the ordinary
 resolved table without walking operation trees. Annotated plans pay the fixed
 derivation once at validation; transactions do no policy reconstruction. VM
-boot caches whether a raw clear-secret site remains and refuses it with
-`UnsupportedDataPolicy` before journal or state mutation. A personal-data site
+boot caches whether a raw clear-secret site remains in a decoded or forged
+plan and refuses it with `UnsupportedDataPolicy` before journal or state
+mutation. The source checker has already refused that executable use; named
+aliases which are never used remain harmless structural vocabulary. A personal-data site
 is admitted only when the booted profile covers every ordinary/Article 9/
 Article 10 requirement and the journal exposes the exact same deployment
 attestation. Sensitivity, measure and cost policy otherwise execute. CLI and

@@ -135,8 +135,9 @@
 > validation re-derives every local claim. A3 now derives effective transform
 > policy independently and compares the transported resolved table exactly;
 > raw declarations remain unchanged. D-2026-08-30-2 appends `@personal` to
-> that registry without changing v15 or any previous spelling. Clear
-> `@secret` and `@personal` payloads retain the fail-closed A4 boundary.
+> that registry without changing v15 or any previous spelling. The source
+> checker refuses every executable clear `@secret` site; decoded packages keep
+> the VM belt. `@personal` requires the exact attested A4 privacy boundary.
 >
 > The lifetime rows are one closed transport and executable registry: v9
 > validation admits `persistent`, `idle`, `fixed`, `single_pass`, and
