@@ -48,14 +48,19 @@ paths redact before JSON construction, `@secret` never renders, and scalar or
 opaque roots disclose only type/known size. No commit time or duration is
 invented.
 
-The topology view follows the seed notation: Graph boundaries are amber,
-Operators green and Connectors blue. Its envelope badge on each exact edge is
-a cumulative fold of retained INBOUND/TRANSACTION routing facts, including
-committed boundary/discard emissions derived against the validated plan. The
-last-Step highlight is separately physical: an authored Lab action names
-itself and says that no Node fired, while a transaction names its exact owner
-and trigger. Lifecycle transactions remain visible instead of being skipped
-to manufacture a more dramatic animation.
+The topology view is a compound graph derived from the validated lexical owner
+table: the root `App` frame contains its direct Nodes and nested Graph frames,
+recursively. It never guesses containment from dotted paths. Operators remain
+green and Connectors blue, but compact cards carry only name, NodeType and
+NodeAspects; the former circle/square/cross seed glyphs are superseded. A white
+disk is an input port and a black disk is an output port, and exact edges attach
+to those disks. Each edge's envelope badge is a cumulative fold of retained
+INBOUND/TRANSACTION routing facts, including committed boundary/discard
+emissions derived against the validated plan. The last-Step highlight is
+separately physical: an authored Lab action names itself and says that no Node
+fired, while a transaction names its exact owner and trigger. Lifecycle
+transactions remain visible instead of being skipped to manufacture a more
+dramatic animation.
 
 Selecting a Graph or Node opens its exact authored declaration, including
 attributes, handlers and guards. These excerpts live in the compiler's

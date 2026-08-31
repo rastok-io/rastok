@@ -138,10 +138,15 @@ client or a closed browser cannot delay, fail or alter execution.
 
 The initial HTTP snapshot describes:
 
-- the validated Graph/Node/edge topology, with the cumulative number of
-  envelopes carried by every exact edge and the Graph/Node owner of the last
-  stepped transaction; selecting a Graph or Node exposes its exact authored
-  declaration, including ports, attributes, handlers and guard expressions;
+- the validated Graph/Node/edge topology as a compound graph: the root `App`
+  contains its direct Nodes and nested Graph scopes, and each nested Graph
+  recursively contains its own direct children. Compact Node cards expose only
+  declaration name, effective NodeType and NodeAspects. A white disk denotes
+  an input port and a black disk denotes an output port; exact edges attach to
+  those disks and carry their cumulative envelope count. The Graph/Node owner
+  of the last stepped transaction is highlighted; selecting a Graph frame or
+  Node exposes its exact authored declaration, including ports, attributes,
+  handlers and guard expressions;
 - controller and execution state;
 - current logical instances, lifecycle and Node-private `var` cells;
 - retained causal observations with Call/Session correlation;
@@ -167,6 +172,10 @@ but it never reverse-engineers source from the categorical plan and never
 treats source text as execution authority. A deployment that has stripped
 that physical side table still exposes topology and reports that source is
 unavailable.
+
+Containment is likewise read from the validated lexical owner table. The
+browser does not infer nesting from dotted paths or edge geometry. Graph
+frames are presentation of that existing authority and add no runtime scope.
 
 ## 7. Payload and state presentation
 

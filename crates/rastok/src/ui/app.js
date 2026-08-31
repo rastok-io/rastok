@@ -156,35 +156,8 @@ function renderTopology(topology) {
   activityText.textContent = activity?.detail || "No Step has run yet.";
   activityPanel.append(activityLabel, activityText);
 
-  const ownerStrip = document.createElement("div");
-  ownerStrip.className = "graph-owners";
-  for (const owner of topology.owners || []) {
-    const chip = document.createElement("button");
-    chip.type = "button";
-    const active = activity?.kind === "transaction" && activity.node === owner.path;
-    const selected = selectedTopologyItem === owner.id;
-    chip.className = `graph-owner${active ? " active" : ""}${selected ? " selected" : ""}`;
-    chip.setAttribute("aria-pressed", String(selected));
-    chip.setAttribute("aria-label", `Inspect ${owner.path || "App"} Graph definition`);
-    chip.addEventListener("click", () => selectTopologyItem(owner.id));
-    const mark = document.createElement("span");
-    mark.className = "graph-owner-mark";
-    mark.textContent = "×";
-    const label = document.createElement("strong");
-    label.textContent = owner.label || "App";
-    const count = document.createElement("span");
-    count.textContent = `${owner.transaction_count || "0"} tx`;
-    chip.append(mark, label, count);
-    if (active) {
-      const ran = document.createElement("b");
-      ran.textContent = "JUST RAN";
-      chip.append(ran);
-    }
-    ownerStrip.append(chip);
-  }
-
   const graph = materializeGraph(topology);
-  const layout = layoutGraph(graph.nodes, graph.edges);
+  const layout = layoutGraph(graph.nodes, graph.edges, topology.owners || []);
   const canvas = document.createElement("div");
   canvas.className = "graph-canvas";
   const svg = svgElement("svg", {
@@ -219,12 +192,74 @@ function renderTopology(topology) {
   definitions.append(marker, activeMarker);
   svg.append(definitions);
 
+  const scopeLayer = svgElement("g", { class: "graph-scope-layer" });
+  const orderedOwners = [...(topology.owners || [])]
+    .sort((left, right) => (layout.scopes.get(left.id)?.depth || 0) - (layout.scopes.get(right.id)?.depth || 0));
+  for (const owner of orderedOwners) {
+    const position = layout.scopes.get(owner.id);
+    if (!position) continue;
+    const active = activity?.kind === "transaction" && activity.node === owner.path;
+    const selectable = Boolean(owner.definition);
+    const selected = selectedTopologyItem === owner.id;
+    const group = svgElement("g", {
+      class: `graph-scope${position.depth === 0 ? " root" : " nested"}${active ? " active" : ""}${selectable ? " selectable" : ""}${selected ? " selected" : ""}`,
+    });
+    if (selectable) {
+      group.setAttribute("role", "button");
+      group.setAttribute("tabindex", "0");
+      group.setAttribute("aria-pressed", String(selected));
+      group.setAttribute("aria-label", `Inspect ${owner.path || "App"} Graph definition`);
+      group.addEventListener("click", () => selectTopologyItem(owner.id));
+      group.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          selectTopologyItem(owner.id);
+        }
+      });
+    }
+    const title = svgElement("title");
+    title.textContent = `${owner.label || "App"} · ${itemDescriptor(owner)}`;
+    const body = svgElement("rect", {
+      class: "graph-scope-body",
+      x: position.x,
+      y: position.y,
+      width: position.width,
+      height: position.height,
+      rx: position.depth === 0 ? "16" : "12",
+    });
+    const header = svgElement("line", {
+      class: "graph-scope-header-line",
+      x1: position.x,
+      y1: position.y + 34,
+      x2: position.x + position.width,
+      y2: position.y + 34,
+    });
+    const name = svgElement("text", {
+      class: "graph-scope-name",
+      x: position.x + 14,
+      y: position.y + 22,
+    });
+    name.textContent = truncate(owner.label || "App", 28);
+    const type = svgElement("text", {
+      class: "graph-scope-type",
+      x: position.x + position.width - 14,
+      y: position.y + 22,
+      "text-anchor": "end",
+    });
+    type.textContent = truncate(itemDescriptor(owner), 34);
+    group.append(title, body, header, name, type);
+    scopeLayer.append(group);
+  }
+  svg.append(scopeLayer);
+
   const edgeLayer = svgElement("g", { class: "graph-edge-layer" });
   const activeRecords = activity?.records || null;
   for (const edge of graph.edges) {
-    const source = layout.positions.get(edge.source.id);
-    const destination = layout.positions.get(edge.target.id);
-    if (!source || !destination) continue;
+    const source = graph.byId.get(edge.source.id);
+    const destination = graph.byId.get(edge.target.id);
+    const sourcePosition = layout.positions.get(edge.source.id);
+    const destinationPosition = layout.positions.get(edge.target.id);
+    if (!source || !destination || !sourcePosition || !destinationPosition) continue;
     const active = activeRecords
       && edge.last_envelope_record !== null
       && edge.last_envelope_record !== undefined
@@ -234,10 +269,12 @@ function renderTopology(topology) {
       class: `graph-edge${active ? " active" : ""}`,
       "data-route": edge.route,
     });
-    const startX = source.x + source.width;
-    const startY = source.y + source.height / 2;
-    const endX = destination.x;
-    const endY = destination.y + destination.height / 2;
+    const sourcePort = portAnchor(source, sourcePosition, edge.source.port, "output");
+    const targetPort = portAnchor(destination, destinationPosition, edge.target.port, "input");
+    const startX = sourcePort.x + 7;
+    const startY = sourcePort.y;
+    const endX = targetPort.x - 7;
+    const endY = targetPort.y;
     const bend = Math.max(56, (endX - startX) * 0.48);
     const path = svgElement("path", {
       d: `M ${startX} ${startY} C ${startX + bend} ${startY}, ${endX - bend} ${endY}, ${endX} ${endY}`,
@@ -260,20 +297,20 @@ function renderTopology(topology) {
     badge.append(counter);
     group.append(badge);
 
-    const sourcePort = svgElement("text", {
+    const sourcePortLabel = svgElement("text", {
       class: "edge-port source-port",
       x: startX + 8,
       y: startY - 9,
     });
-    sourcePort.textContent = edge.source.port || "";
-    const targetPort = svgElement("text", {
+    sourcePortLabel.textContent = edge.source.port || "";
+    const targetPortLabel = svgElement("text", {
       class: "edge-port target-port",
       x: endX - 8,
       y: endY - 9,
       "text-anchor": "end",
     });
-    targetPort.textContent = edge.target.port || "";
-    group.append(sourcePort, targetPort);
+    targetPortLabel.textContent = edge.target.port || "";
+    group.append(sourcePortLabel, targetPortLabel);
     edgeLayer.append(group);
   }
   svg.append(edgeLayer);
@@ -285,6 +322,7 @@ function renderTopology(topology) {
     const active = activity?.kind === "transaction" && activity.node === node.path;
     const selectable = Boolean(node.definition);
     const selected = selectedTopologyItem === node.id;
+    const boundary = node.kind === "boundary" || node.kind === "discard";
     const group = svgElement("g", {
       class: `graph-node graph-node-${node.kind}${active ? " active" : ""}${selectable ? " selectable" : ""}${selected ? " selected" : ""}`,
       transform: `translate(${position.x} ${position.y})`,
@@ -304,42 +342,62 @@ function renderTopology(topology) {
     }
     const title = svgElement("title");
     title.textContent = node.path
-      ? `${node.path} · ${node.type}`
+      ? `${node.path} · ${itemDescriptor(node)}`
       : `${node.label} · ${node.kind}`;
+    group.append(title);
+    if (boundary) {
+      const direction = node.direction || (node.kind === "discard" ? "discard" : "input");
+      const diskX = direction === "input" ? position.width - 10 : 10;
+      const disk = svgElement("circle", {
+        class: `graph-port graph-port-${direction}`,
+        cx: diskX,
+        cy: position.height / 2,
+        r: "6",
+      });
+      const label = svgElement("text", {
+        class: "graph-boundary-label",
+        x: direction === "input" ? diskX - 12 : diskX + 12,
+        y: position.height / 2 + 4,
+        "text-anchor": direction === "input" ? "end" : "start",
+      });
+      label.textContent = truncate(node.label || node.ports?.[0]?.name || "boundary", 16);
+      group.append(disk, label);
+      nodeLayer.append(group);
+      continue;
+    }
     const body = svgElement("rect", {
       class: "graph-node-body",
       width: position.width,
       height: position.height,
-      rx: node.kind === "operator" || node.kind === "connector" ? "12" : "8",
+      rx: "10",
     });
-    group.append(title, body);
-    const icon = svgElement("text", { class: "graph-node-icon", x: "18", y: "29" });
-    icon.textContent = node.kind === "operator" ? "○" : node.kind === "connector" ? "□" : "×";
-    const name = svgElement("text", { class: "graph-node-name", x: "43", y: "29" });
-    name.textContent = truncate(node.path || node.label || node.id, 24);
-    const type = svgElement("text", { class: "graph-node-type", x: "18", y: "56" });
-    type.textContent = truncate(node.type || node.kind, 29);
-    group.append(icon, name, type);
-    if (node.firing_count !== undefined) {
-      const transactions = svgElement("text", {
-        class: "graph-node-count",
-        x: position.width - 14,
-        y: position.height - 14,
-        "text-anchor": "end",
+    const name = svgElement("text", {
+      class: "graph-node-name",
+      x: position.width / 2,
+      y: "22",
+      "text-anchor": "middle",
+    });
+    name.textContent = truncate(node.label || node.path || node.id, 22);
+    const type = svgElement("text", {
+      class: "graph-node-type",
+      x: position.width / 2,
+      y: "41",
+      "text-anchor": "middle",
+    });
+    type.textContent = truncate(itemDescriptor(node), 27);
+    group.append(body, name, type);
+    for (const port of node.ports || []) {
+      const anchor = portAnchor(node, { x: 0, y: 0, ...position }, port.name, port.direction);
+      const disk = svgElement("circle", {
+        class: `graph-port graph-port-${port.direction}`,
+        cx: anchor.x - position.x,
+        cy: anchor.y - position.y,
+        r: "5.5",
       });
-      transactions.textContent = `${node.firing_count} tx`;
-      group.append(transactions);
-    }
-    if (active) {
-      const ran = svgElement("g", {
-        class: "node-ran",
-        transform: `translate(${position.width - 83} -10)`,
-      });
-      ran.append(svgElement("rect", { width: "76", height: "22", rx: "11" }));
-      const label = svgElement("text", { x: "38", y: "15", "text-anchor": "middle" });
-      label.textContent = "JUST RAN";
-      ran.append(label);
-      group.append(ran);
+      const portTitle = svgElement("title");
+      portTitle.textContent = `${port.direction} port ${port.name}`;
+      disk.append(portTitle);
+      group.append(disk);
     }
     nodeLayer.append(group);
   }
@@ -361,7 +419,7 @@ function renderTopology(topology) {
 
   const legend = document.createElement("div");
   legend.className = "graph-legend";
-  for (const [kind, label] of [["operator", "Operator"], ["connector", "Connector"], ["boundary", "Graph boundary"]]) {
+  for (const [kind, label] of [["operator", "Operator"], ["connector", "Connector"], ["scope", "Graph scope"], ["input", "Input"], ["output", "Output"]]) {
     const item = document.createElement("span");
     item.className = `legend-${kind}`;
     item.textContent = label;
@@ -373,7 +431,7 @@ function renderTopology(topology) {
   legend.append(evidence);
 
   target.className = "topology";
-  target.replaceChildren(activityPanel, ownerStrip, workbench, legend);
+  target.replaceChildren(activityPanel, workbench, legend);
 }
 
 function selectTopologyItem(id) {
@@ -445,23 +503,36 @@ function svgElement(name, attributes = {}) {
 }
 
 function materializeGraph(topology) {
-  const nodes = new Map((topology.nodes || []).map((node) => [node.id, { ...node }]));
+  const rootOwner = (topology.owners || []).find((owner) => owner.parent === null)?.id || "owner:0";
+  const nodes = new Map((topology.nodes || []).map((node) => [node.id, {
+    ...node,
+    owner: node.owner || rootOwner,
+    ports: node.ports || [],
+  }]));
   for (const edge of topology.edges || []) {
     for (const endpoint of [edge.source, edge.target]) {
       if (!endpoint || nodes.has(endpoint.id)) continue;
+      const direction = endpoint.kind === "output"
+        ? "output"
+        : endpoint.kind === "discard"
+          ? "discard"
+          : "input";
       nodes.set(endpoint.id, {
         id: endpoint.id,
         kind: endpoint.kind === "discard" ? "discard" : "boundary",
-        label: endpoint.label || endpoint.port || "Boundary",
+        label: endpoint.port || endpoint.label || "Boundary",
         path: null,
         type: endpoint.kind === "discard" ? "sink" : endpoint.kind,
+        direction,
+        owner: endpoint.owner || rootOwner,
+        ports: endpoint.port ? [{ name: endpoint.port, direction }] : [],
       });
     }
   }
-  return { nodes: [...nodes.values()], edges: topology.edges || [] };
+  return { nodes: [...nodes.values()], byId: nodes, edges: topology.edges || [] };
 }
 
-function layoutGraph(nodes, edges) {
+function layoutGraph(nodes, edges, owners) {
   const byId = new Map(nodes.map((node, index) => [node.id, { node, index }]));
   const incoming = new Map(nodes.map((node) => [node.id, 0]));
   const outgoing = new Map(nodes.map((node) => [node.id, []]));
@@ -492,30 +563,181 @@ function layoutGraph(nodes, edges) {
   for (const group of groups.values()) {
     group.sort((left, right) => byId.get(left.id).index - byId.get(right.id).index);
   }
-  const nodeWidth = 196;
-  const nodeHeight = 78;
-  const columnGap = 142;
-  const rowGap = 56;
-  const marginX = 38;
-  const marginY = 44;
-  const levels = Math.max(0, ...groups.keys()) + 1;
-  const maximumRows = Math.max(1, ...[...groups.values()].map((group) => group.length));
-  const height = marginY * 2 + maximumRows * nodeHeight + (maximumRows - 1) * rowGap;
-  const width = marginX * 2 + levels * nodeWidth + (levels - 1) * columnGap;
-  const positions = new Map();
+
+  const dimensions = new Map(nodes.map((node) => {
+    if (node.kind === "boundary" || node.kind === "discard") {
+      return [node.id, { width: 104, height: 34 }];
+    }
+    const inputs = (node.ports || []).filter((port) => port.direction === "input").length;
+    const outputs = (node.ports || []).filter((port) => port.direction === "output").length;
+    return [node.id, {
+      width: 174,
+      height: Math.max(54, (Math.max(inputs, outputs) + 1) * 14),
+    }];
+  }));
+  const columnGap = 118;
+  const rankWidths = new Map();
   for (const [level, group] of groups) {
-    const groupHeight = group.length * nodeHeight + Math.max(0, group.length - 1) * rowGap;
-    const startY = (height - groupHeight) / 2;
-    group.forEach((node, index) => {
-      positions.set(node.id, {
-        x: marginX + level * (nodeWidth + columnGap),
-        y: startY + index * (nodeHeight + rowGap),
-        width: nodeWidth,
-        height: nodeHeight,
-      });
+    rankWidths.set(level, Math.max(...group.map((node) => dimensions.get(node.id).width)));
+  }
+  const rankX = new Map();
+  let nextX = 72;
+  const maximumRank = Math.max(0, ...groups.keys());
+  for (let level = 0; level <= maximumRank; level += 1) {
+    rankX.set(level, nextX);
+    nextX += (rankWidths.get(level) || 174) + columnGap;
+  }
+
+  const ownerMap = new Map(owners.map((owner, index) => [owner.id, { ...owner, index }]));
+  const rootOwner = owners.find((owner) => owner.parent === null) || owners[0] || {
+    id: "owner:0",
+    parent: null,
+    label: "App",
+  };
+  if (!ownerMap.has(rootOwner.id)) ownerMap.set(rootOwner.id, rootOwner);
+  const children = new Map([...ownerMap.keys()].map((id) => [id, []]));
+  for (const owner of ownerMap.values()) {
+    if (owner.parent && children.has(owner.parent)) children.get(owner.parent).push(owner.id);
+  }
+  for (const childIds of children.values()) {
+    childIds.sort((left, right) => (ownerMap.get(left)?.index || 0) - (ownerMap.get(right)?.index || 0));
+  }
+  const directNodes = new Map([...ownerMap.keys()].map((id) => [id, []]));
+  for (const node of nodes) {
+    const owner = directNodes.has(node.owner) ? node.owner : rootOwner.id;
+    directNodes.get(owner).push(node);
+  }
+  for (const ownerNodes of directNodes.values()) {
+    ownerNodes.sort((left, right) => byId.get(left.id).index - byId.get(right.id).index);
+  }
+
+  const rowGap = 24;
+  const scopeGap = 20;
+  const scopeHeader = 34;
+  const scopePadding = 20;
+  const measured = new Map();
+  const directHeight = new Map();
+  function measureOwner(ownerId) {
+    if (measured.has(ownerId)) return measured.get(ownerId);
+    const ownerGroups = new Map();
+    for (const node of directNodes.get(ownerId) || []) {
+      const level = rank.get(node.id) || 0;
+      if (!ownerGroups.has(level)) ownerGroups.set(level, []);
+      ownerGroups.get(level).push(node);
+    }
+    const bandHeight = Math.max(0, ...[...ownerGroups.values()].map((group) =>
+      group.reduce((sum, node) => sum + dimensions.get(node.id).height, 0)
+        + Math.max(0, group.length - 1) * rowGap));
+    directHeight.set(ownerId, bandHeight);
+    const childIds = children.get(ownerId) || [];
+    const childHeight = childIds.reduce((sum, childId) => sum + measureOwner(childId), 0)
+      + Math.max(0, childIds.length - 1) * scopeGap;
+    const contentGap = bandHeight > 0 && childHeight > 0 ? scopeGap : 0;
+    const height = scopeHeader + scopePadding * 2 + Math.max(36, bandHeight + contentGap + childHeight);
+    measured.set(ownerId, height);
+    return height;
+  }
+  measureOwner(rootOwner.id);
+
+  const positions = new Map();
+  const scopeVertical = new Map();
+  function placeOwner(ownerId, top, depth) {
+    const height = measured.get(ownerId);
+    scopeVertical.set(ownerId, { y: top, height, depth });
+    let cursorY = top + scopeHeader + scopePadding;
+    const bandHeight = directHeight.get(ownerId) || 0;
+    const ownerGroups = new Map();
+    for (const node of directNodes.get(ownerId) || []) {
+      const level = rank.get(node.id) || 0;
+      if (!ownerGroups.has(level)) ownerGroups.set(level, []);
+      ownerGroups.get(level).push(node);
+    }
+    for (const [level, group] of ownerGroups) {
+      const groupHeight = group.reduce((sum, node) => sum + dimensions.get(node.id).height, 0)
+        + Math.max(0, group.length - 1) * rowGap;
+      let nodeY = cursorY + (bandHeight - groupHeight) / 2;
+      for (const node of group) {
+        const size = dimensions.get(node.id);
+        positions.set(node.id, {
+          x: rankX.get(level),
+          y: nodeY,
+          width: size.width,
+          height: size.height,
+        });
+        nodeY += size.height + rowGap;
+      }
+    }
+    cursorY += bandHeight;
+    const childIds = children.get(ownerId) || [];
+    if (bandHeight > 0 && childIds.length > 0) cursorY += scopeGap;
+    for (const childId of childIds) {
+      placeOwner(childId, cursorY, depth + 1);
+      cursorY += measured.get(childId) + scopeGap;
+    }
+  }
+  placeOwner(rootOwner.id, 18, 0);
+
+  const scopes = new Map();
+  function placeHorizontalScope(ownerId) {
+    const components = [];
+    for (const node of directNodes.get(ownerId) || []) {
+      const position = positions.get(node.id);
+      if (position) components.push({ left: position.x, right: position.x + position.width });
+    }
+    for (const childId of children.get(ownerId) || []) {
+      placeHorizontalScope(childId);
+      const child = scopes.get(childId);
+      components.push({ left: child.x, right: child.x + child.width });
+    }
+    let left = components.length ? Math.min(...components.map((component) => component.left)) - 26 : 48;
+    let right = components.length ? Math.max(...components.map((component) => component.right)) + 26 : left + 220;
+    if (right - left < 220) {
+      const extension = (220 - (right - left)) / 2;
+      left -= extension;
+      right += extension;
+    }
+    const vertical = scopeVertical.get(ownerId);
+    scopes.set(ownerId, {
+      x: left,
+      y: vertical.y,
+      width: right - left,
+      height: vertical.height,
+      depth: vertical.depth,
     });
   }
-  return { width, height, positions };
+  placeHorizontalScope(rootOwner.id);
+  const rootScope = scopes.get(rootOwner.id);
+  const shiftX = rootScope.x < 18 ? 18 - rootScope.x : 0;
+  if (shiftX > 0) {
+    for (const position of positions.values()) position.x += shiftX;
+    for (const scope of scopes.values()) scope.x += shiftX;
+  }
+  const width = Math.max(...[...scopes.values()].map((scope) => scope.x + scope.width), nextX) + 18;
+  const height = rootScope.y + rootScope.height + 18;
+  return { width, height, positions, scopes };
+}
+
+function portAnchor(node, position, portName, expectedDirection) {
+  if (node.kind === "boundary" || node.kind === "discard") {
+    const direction = node.direction || expectedDirection;
+    return {
+      x: direction === "input" ? position.x + position.width - 10 : position.x + 10,
+      y: position.y + position.height / 2,
+    };
+  }
+  const candidates = (node.ports || []).filter((port) => port.direction === expectedDirection);
+  const index = Math.max(0, candidates.findIndex((port) => port.name === portName));
+  const count = Math.max(1, candidates.length);
+  return {
+    x: expectedDirection === "input" ? position.x : position.x + position.width,
+    y: position.y + position.height * (index + 1) / (count + 1),
+  };
+}
+
+function itemDescriptor(item) {
+  return [item.type || item.kind, ...(item.aspects || []).map((aspect) => `+${aspect}`)]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function truncate(value, maximum) {

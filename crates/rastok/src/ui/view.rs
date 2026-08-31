@@ -275,6 +275,7 @@ fn topology(
     journal: &MemJournal,
     activity: Option<&ActivityView>,
 ) -> JsonValue {
+    let resolved_ports = plan.resolved_ports();
     let plan = plan.plan();
     let definitions_by_owner = definitions
         .iter()
@@ -351,13 +352,27 @@ fn topology(
                 .iter()
                 .map(|aspect| aspect.aspect().source_name())
                 .collect::<Vec<_>>();
+            let containing_owner = plan.owners[node.owner.index()]
+                .parent
+                .map(|owner| format!("owner:{}", owner.index()));
+            let ports = resolved_ports
+                .node(crate::plan::Slot::new(
+                    u32::try_from(index).unwrap_or(u32::MAX),
+                ))
+                .unwrap_or_default()
+                .iter()
+                .map(|port| port_json(port.port(), port.direction()))
+                .collect::<Vec<_>>();
             json!({
                 "slot": index,
                 "id": format!("node:{index}"),
                 "path": node.path.to_string(),
+                "label": node.path.segments().last(),
+                "owner": containing_owner,
                 "kind": kind,
                 "type": ty,
                 "aspects": aspects,
+                "ports": ports,
                 "definition": definition.map(source_definition_json),
                 "firing_count": firing.count.to_string(),
                 "last_firing_record": firing.last_record,
@@ -378,17 +393,36 @@ fn topology(
                 .get(&owner.path.to_string())
                 .copied()
                 .filter(|definition| definition.kind == crate::node::Kind::Graph);
+            let ports = if owner.path.is_root() {
+                resolved_ports
+                    .boundary()
+                    .iter()
+                    .map(|port| port_json(port.port(), port.direction()))
+                    .collect::<Vec<_>>()
+            } else {
+                owner
+                    .ports
+                    .iter()
+                    .map(|port| port_json(&port.port, port.direction))
+                    .collect::<Vec<_>>()
+            };
             json!({
                 "id": format!("owner:{index}"),
                 "path": owner.path.to_string(),
                 "label": if owner.path.is_root() {
                     String::from("App")
                 } else {
-                    owner.path.to_string()
+                    owner
+                        .path
+                        .segments()
+                        .last()
+                        .cloned()
+                        .unwrap_or_else(|| String::from("Graph"))
                 },
                 "parent": owner.parent.map(|parent| format!("owner:{}", parent.index())),
                 "type": if owner.path.is_root() { "App" } else { "Graph" },
                 "aspects": owner.aspects.iter().map(|aspect| aspect.aspect().source_name()).collect::<Vec<_>>(),
+                "ports": ports,
                 "definition": definition.map(source_definition_json),
                 "transaction_count": activity.count.to_string(),
                 "last_transaction_record": activity.last_record,
@@ -409,9 +443,10 @@ fn topology(
                 "source": endpoint_json(&edge.from, true),
                 "target": edge.to.as_ref().map_or_else(
                     || json!({
-                        "id": "discard",
+                        "id": format!("discard:{index}"),
                         "kind": "discard",
                         "label": "Discard",
+                        "owner": format!("owner:{}", edge.scope.index()),
                         "port": JsonValue::Null,
                     }),
                     |target| endpoint_json(target, false),
@@ -454,6 +489,16 @@ fn record_traffic(traffic: &mut BTreeMap<String, Traffic>, edge: &str, record_in
     traffic.last_record = Some(record_index);
 }
 
+fn port_json(port: &crate::node::Port, direction: crate::node::Direction) -> JsonValue {
+    json!({
+        "name": port.name(),
+        "direction": match direction {
+            crate::node::Direction::Input => "input",
+            crate::node::Direction::Output => "output",
+        },
+    })
+}
+
 fn endpoint_json(endpoint: &crate::plan::EndpointRef, source: bool) -> JsonValue {
     match endpoint.node {
         Some(slot) => json!({
@@ -470,6 +515,7 @@ fn endpoint_json(endpoint: &crate::plan::EndpointRef, source: bool) -> JsonValue
             ),
             "kind": if source { "input" } else { "output" },
             "label": if source { "App input" } else { "App output" },
+            "owner": "owner:0",
             "port": endpoint.port.name(),
         }),
     }
@@ -936,10 +982,17 @@ mod tests {
 graph inspected : App {
   input in: text
   output out: text
-  operator relay {
-    on in where size(data) > 0 { out = . }
+
+  graph inner {
+    input in: text
+    output out: text
+
+    operator relay {
+      on in where size(data) > 0 { out = . }
+    }
+    . -> relay -> .
   }
-  . -> relay -> .
+  . -> inner -> .
 }
 "#;
         let compilation = crate::compiler::compile(
@@ -961,7 +1014,24 @@ graph inspected : App {
                 .as_str()
                 .is_some_and(|code| code.starts_with("graph inspected : App"))
         );
-        assert_eq!(value["nodes"][0]["path"], "relay");
+        assert_eq!(value["owners"][1]["label"], "inner");
+        assert_eq!(value["owners"][1]["parent"], "owner:0");
+        assert_eq!(value["nodes"][0]["path"], "inner.relay");
+        assert_eq!(value["nodes"][0]["label"], "relay");
+        assert_eq!(value["nodes"][0]["owner"], "owner:1");
+        let ports = value["nodes"][0]["ports"]
+            .as_array()
+            .expect("the resolved port row is exposed");
+        assert!(
+            ports
+                .iter()
+                .any(|port| { port["name"] == "in" && port["direction"] == "input" })
+        );
+        assert!(
+            ports
+                .iter()
+                .any(|port| { port["name"] == "out" && port["direction"] == "output" })
+        );
         assert!(
             value["nodes"][0]["definition"]["code"]
                 .as_str()
