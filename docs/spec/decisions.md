@@ -68,6 +68,27 @@ physical debug side table: the browser neither parses source nor reconstructs
 it from the plan, and a stripped deployment may omit them without changing
 execution.
 
+The pedagogical surface follows an envelope from boundary to boundary without
+splitting a transaction. The compact sticky bar always names `Rastok UI`, the
+execution mode and state; transport controls use labelled icons and the page
+follows the host light/dark preference. Generic operating instructions are not
+embedded in the page. Graph ports, including the root App ports, sit on their
+owner frame, and the selected envelope is presented as the two normative
+zones `META` and `DATA`, never as an ambiguous UI-only “payload”.
+
+One narrow simulation edit seam refines the original no-manual-injection rule.
+When the next authored action is `inject`, the UI may replace only that
+action's materialized `DATA` while it is still a draft before `App.in`. The
+editor is generated from the resolved App-port `DataType`; the execution owner
+reconstructs and validates the value before replacing the draft. `meta.ext`,
+sequence and provenance remain authored, `meta.sys` does not exist until the
+ordinary admission mints it, and an admitted envelope is immutable. `Reset`
+restores the source-authored action. Dynamic or classified trees are
+read-only, real runs expose no editor, and no ad-hoc action, internal-edge edit
+or second ingress path exists. The edit is physical scenario input selection:
+it adds no plan or journal form and makes an edited run intentionally distinct
+from its authored golden until reset.
+
 This is a package/semantic/causal non-move. Port, capability, browser state,
 view revisions and physical timing enter no identity recipe. A later UI crate,
 remote administration, hot reload, breakpoints, state mutation, durable
@@ -84,7 +105,9 @@ crate changes no Rastok protocol or identity.
 unauthenticated localhost controls; all tabs racing commands; auto-opening a
 browser; pausing by cancelling Calls or Sessions; real-run reset; a second
 journal/accounting store; forcing payload materialization; post-format regex
-redaction; and reusing `File.watch` vocabulary.
+redaction; free-form/manual envelope injection outside a checked scenario;
+editing `META` or committed envelopes; stepping individual edges inside one
+atomic transaction; and reusing `File.watch` vocabulary.
 
 ## D-2026-08-31-1 — Executable clear-secret schemas refuse at source check
 

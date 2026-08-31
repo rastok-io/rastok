@@ -88,6 +88,26 @@ pub enum ScenarioStepError {
     Boundary(String),
 }
 
+/// Editable world-authored input which has not crossed the App boundary yet.
+///
+/// The UI may replace `data` while this draft is pending. Admission still
+/// mints the immutable envelope and remains the only path into the VM.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScenarioInjectionDraft {
+    /// App input port selected by the authored scenario action.
+    pub port: node::Port,
+    /// Effective logical type which the edited value must inhabit.
+    pub ty: crate::datatype::DataType,
+    /// Exact annotation table used for policy-safe presentation.
+    pub annotations: crate::schema_annotation::AnnotationTable,
+    /// Materialized DATA waiting outside the graph.
+    pub data: Data,
+    /// World-owned `meta.ext` fields waiting outside the graph.
+    pub ext: Namespace,
+    /// Whether DATA differs from the authored scenario value.
+    pub edited: bool,
+}
+
 impl ScenarioStepError {
     /// Whether retrying the same reserved VM transaction is safe.
     #[must_use]
@@ -110,6 +130,7 @@ impl core::fmt::Display for ScenarioStepError {
 /// UI cannot acquire a second simulation semantics.
 #[derive(Debug)]
 pub struct ScenarioSession<'plan, 'scenario> {
+    plan: &'plan ValidatedExecutionPlan,
     simulation: String,
     scenario: &'scenario Scenario,
     vm: Vm<'plan>,
@@ -121,6 +142,7 @@ pub struct ScenarioSession<'plan, 'scenario> {
     next_action: usize,
     quiescent: bool,
     last_action: Option<ScenarioActionKind>,
+    next_injection_override: Option<Draft>,
 }
 
 impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
@@ -157,6 +179,7 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
         let empty_boot = crate::deployment::BootBindings::empty();
         let (driver, faults) = mock_bindings(plan, mocks, boot.unwrap_or(&empty_boot))?;
         Ok(Self {
+            plan,
             simulation: String::from(simulation),
             scenario,
             vm,
@@ -168,6 +191,7 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
             next_action: 0,
             quiescent: true,
             last_action: None,
+            next_injection_override: None,
         })
     }
 
@@ -238,6 +262,90 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
         &self.failures
     }
 
+    /// Returns the next authored injection as an editable pre-admission
+    /// draft. Other action kinds expose no draft.
+    ///
+    /// # Errors
+    ///
+    /// An invalid authored injection or a missing resolved App input refuses
+    /// the projection instead of inventing a type in the browser.
+    pub fn next_injection_draft(&self) -> Result<Option<ScenarioInjectionDraft>, String> {
+        if !self.quiescent {
+            return Ok(None);
+        }
+        let Some(ScenarioStep::Inject { port, value, .. }) =
+            self.scenario.steps.get(self.next_action)
+        else {
+            return Ok(None);
+        };
+        let resolved = self
+            .plan
+            .resolved_ports()
+            .boundary()
+            .iter()
+            .find(|resolved| {
+                resolved.port() == port && resolved.direction() == node::Direction::Input
+            })
+            .ok_or_else(|| format!("the next injection has no resolved App input `{port}`"))?;
+        let (draft, edited) = self.next_injection_override.as_ref().map_or_else(
+            || draft(value).map(|draft| (draft, false)),
+            |draft| Ok((draft.clone(), true)),
+        )?;
+        Ok(Some(ScenarioInjectionDraft {
+            port: port.clone(),
+            ty: resolved.ty().clone(),
+            annotations: resolved.annotations().clone(),
+            data: draft.data,
+            ext: draft.ext,
+            edited,
+        }))
+    }
+
+    /// Replaces only the `data` of the next authored injection before it is
+    /// admitted. The scenario's `meta.ext`, provenance and sequence remain
+    /// authored facts; an admitted envelope is never mutated.
+    ///
+    /// # Errors
+    ///
+    /// Refuses outside a quiescent injection boundary or when the value does
+    /// not inhabit the resolved App input type.
+    pub fn replace_next_injection_data(&mut self, value: Value) -> Result<(), String> {
+        if !self.quiescent {
+            return Err(String::from(
+                "input data can be edited only before the next scenario action",
+            ));
+        }
+        let Some(ScenarioStep::Inject {
+            port,
+            value: authored,
+            ..
+        }) = self.scenario.steps.get(self.next_action)
+        else {
+            return Err(String::from("the next scenario action is not an injection"));
+        };
+        let resolved = self
+            .plan
+            .resolved_ports()
+            .boundary()
+            .iter()
+            .find(|resolved| {
+                resolved.port() == port && resolved.direction() == node::Direction::Input
+            })
+            .ok_or_else(|| format!("the next injection has no resolved App input `{port}`"))?;
+        if let Some(violation) = resolved.ty().violation("edited input data", &value) {
+            return Err(format!(
+                "the edited input does not match `{port}`: {violation}"
+            ));
+        }
+        let mut replacement = self
+            .next_injection_override
+            .take()
+            .map_or_else(|| draft(authored), Ok)?;
+        replacement.data = Data::materialized(value);
+        self.next_injection_override = Some(replacement);
+        Ok(())
+    }
+
     /// Current verdict projection without consuming the inspectable world.
     #[must_use]
     pub fn report(&self) -> ScenarioReport {
@@ -278,7 +386,11 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
         let kind = match step {
             ScenarioStep::Inject { port, value, seq } => {
                 self.window_start = self.vm.observations().len();
-                match draft(value) {
+                let candidate = self
+                    .next_injection_override
+                    .take()
+                    .map_or_else(|| draft(value), Ok);
+                match candidate {
                     Ok(draft) => {
                         let submission = InboundSubmission {
                             provenance: InboundEnvelopeProvenance::single(
@@ -1288,6 +1400,66 @@ lab m0_probe {
                 scenario.name
             );
         }
+    }
+
+    #[test]
+    fn an_edited_injection_is_validated_before_admission_and_never_mutates_the_scenario() {
+        let compilation = compile(
+            &[PROBE_WITH_LAB],
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("a valid unit");
+        let simulation = &compilation.labs[0].simulations[0];
+        let scenario = &simulation.scenarios[0];
+        let new_session = || {
+            ScenarioSession::try_new(
+                &compilation.plan,
+                GraphVersion(1),
+                &simulation.name,
+                &simulation.mocks,
+                scenario,
+                None,
+            )
+            .expect("the scripted world binds")
+        };
+        let mut session = new_session();
+        let authored = session
+            .next_injection_draft()
+            .expect("the draft evaluates")
+            .expect("the first action injects");
+        assert!(!authored.edited);
+        assert!(
+            session
+                .replace_next_injection_data(Value::Text(String::from("wrong shape")))
+                .is_err(),
+            "the resolved struct type is the edit authority"
+        );
+        session
+            .replace_next_injection_data(Value::Struct(vec![(
+                String::from("text"),
+                Value::Text(String::from("edited")),
+            )]))
+            .expect("the typed replacement conforms");
+        assert!(
+            session
+                .next_injection_draft()
+                .expect("the edited draft projects")
+                .expect("the injection remains pending")
+                .edited
+        );
+        assert_eq!(session.next_action(), Ok(Some(ScenarioActionKind::Inject)));
+        assert!(matches!(
+            session.vm().observations().first().map(|observed| observed.envelope.data()),
+            Some(Data::Materialized(Value::Struct(fields)))
+                if fields == &vec![(String::from("text"), Value::Text(String::from("edited")))]
+        ));
+
+        let reset = new_session();
+        let reset = reset
+            .next_injection_draft()
+            .expect("the authored draft still evaluates")
+            .expect("the first action still injects");
+        assert!(!reset.edited, "a fresh world restores authored DATA");
     }
 
     #[test]

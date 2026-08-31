@@ -2,7 +2,8 @@ use super::UiSnapshot;
 use crate::accounting::{CostEvidence, CostReport};
 use crate::compiler::SourceDefinition;
 use crate::data_policy::is_redacted_path;
-use crate::envelope::{Data, Value};
+use crate::datatype::{DataType, IntegerType, TemporalType};
+use crate::envelope::{Data, MetaValue, Namespace, Scalar, Value};
 use crate::identity::InstanceRef;
 use crate::journal::{Journal, MemJournal, Record};
 use crate::observation::ExchangeCorrelation;
@@ -13,7 +14,7 @@ use crate::runtime::vm::{
 };
 use crate::schema_annotation::{AnnotationTable, MeasureUnit, SchemaPath, SchemaPathSegment};
 use serde_json::{Map, Value as JsonValue, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 static EMPTY_ANNOTATIONS: AnnotationTable = AnnotationTable::empty();
 
@@ -48,7 +49,7 @@ impl ExecutionState {
 /// Helpful, redaction-safe description of one faulting transaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FaultView {
-    /// Typed engine or boundary error rendered without payload secrets.
+    /// Typed engine or boundary error rendered without DATA secrets.
     pub message: String,
     /// Concrete next-action guidance.
     pub help: String,
@@ -226,11 +227,20 @@ fn legal_commands(
         ExecutionState::Running => vec!["pause"],
         ExecutionState::PauseRequested => vec!["resume"],
         ExecutionState::Faulted => {
+            let mut commands = Vec::new();
             if fault.is_some_and(|fault| fault.retryable) {
-                vec!["retry-step"]
-            } else {
-                Vec::new()
+                commands.push("retry-step");
             }
+            let editable_draft = scenario
+                .and_then(|scenario| scenario.get("current"))
+                .and_then(|current| current.get("draft"))
+                .and_then(|draft| draft.get("editable"))
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false);
+            if editable_draft {
+                commands.push("edit-next-injection");
+            }
+            commands
         }
         ExecutionState::Completed => Vec::new(),
         ExecutionState::Paused if mode == "run" => {
@@ -251,6 +261,14 @@ fn legal_commands(
                 commands.extend(["resume", "step", "run-until-assertion", "run-to-completion"]);
                 if quiescent {
                     commands.push("next-scenario-action");
+                    let editable_draft = current
+                        .and_then(|current| current.get("draft"))
+                        .and_then(|draft| draft.get("editable"))
+                        .and_then(JsonValue::as_bool)
+                        .unwrap_or(false);
+                    if editable_draft {
+                        commands.push("edit-next-injection");
+                    }
                 }
             }
             commands
@@ -546,7 +564,8 @@ fn history(plan: &ValidatedExecutionPlan, vm: &Vm<'_>, journal: &MemJournal) -> 
                 "port": observed.port.name(),
                 "envelope_id": observed.envelope.meta().sys().id().to_string(),
                 "origin_id": observed.envelope.meta().sys().origin_id().to_string(),
-                "payload": data_json(observed.envelope.data(), annotations),
+                "meta": meta_json(observed.envelope.meta()),
+                "data": data_json(observed.envelope.data(), annotations),
             })
         })
         .collect::<Vec<_>>();
@@ -767,6 +786,71 @@ fn instance_ref_json(reference: &InstanceRef) -> JsonValue {
     })
 }
 
+fn meta_json(meta: &crate::envelope::Meta) -> JsonValue {
+    json!({
+        "sys": {
+            "id": meta.sys().id().to_string(),
+            "parent_id": meta.sys().parent_id().map(|id| id.to_string()),
+            "origin_id": meta.sys().origin_id().to_string(),
+            "role": meta.sys().role().to_string(),
+            "graph_version": meta.sys().graph_version(),
+        },
+        "app": namespace_json(meta.app()),
+        "ext": namespace_json(meta.ext()),
+    })
+}
+
+fn draft_meta_json(ext: &Namespace) -> JsonValue {
+    json!({
+        "sys": { "pending": "minted on admission" },
+        "app": {},
+        "ext": namespace_json(ext),
+    })
+}
+
+fn namespace_json(namespace: &Namespace) -> JsonValue {
+    JsonValue::Object(
+        namespace
+            .iter()
+            .map(|(name, value)| (name.clone(), meta_value_json(value)))
+            .collect(),
+    )
+}
+
+fn meta_value_json(value: &MetaValue) -> JsonValue {
+    match value {
+        MetaValue::Scalar(value) => scalar_json(value),
+        MetaValue::Array(values) => JsonValue::Array(values.iter().map(scalar_json).collect()),
+        MetaValue::Map(values) => JsonValue::Object(
+            values
+                .iter()
+                .map(|(name, values)| {
+                    (
+                        name.clone(),
+                        JsonValue::Array(values.iter().map(scalar_json).collect()),
+                    )
+                })
+                .collect(),
+        ),
+    }
+}
+
+fn scalar_json(value: &Scalar) -> JsonValue {
+    match value {
+        Scalar::Bool(value) => JsonValue::Bool(*value),
+        Scalar::Int(value) => json_integer(i128::from(*value), "int"),
+        Scalar::Double(value) if value.is_finite() => JsonValue::from(*value),
+        Scalar::Double(value) => json!({ "kind": "double", "exact": value.to_string() }),
+        Scalar::Text(value) => JsonValue::String(value.clone()),
+        Scalar::Bytes(value) => json!({ "kind": "bytes", "hex": hex(value) }),
+        Scalar::Decimal { unscaled, scale } => json!({
+            "kind": "decimal",
+            "unscaled": unscaled.to_string(),
+            "scale": scale,
+        }),
+    }
+}
+
 fn data_json(data: &Data, annotations: &AnnotationTable) -> JsonValue {
     let Some(value) = data.materialized_value() else {
         return match data {
@@ -782,6 +866,537 @@ fn data_json(data: &Data, annotations: &AnnotationTable) -> JsonValue {
         };
     };
     materialized_value_json(value, annotations)
+}
+
+/// Projects one pending Lab injection into the typed, pre-admission editor
+/// model. Classified or dynamic trees remain visible under the ordinary
+/// redaction rules but are not editable in M1.
+#[must_use]
+pub fn scenario_injection_json(draft: &crate::lab::ScenarioInjectionDraft) -> JsonValue {
+    let value = draft.data.materialized_value();
+    let editable = value.is_some()
+        && schema_is_editable(&draft.ty)
+        && !draft
+            .annotations
+            .entries()
+            .keys()
+            .any(|path| is_redacted_path(&draft.annotations, path));
+    json!({
+        "position": "before-app-input",
+        "port": draft.port.name(),
+        "edited": draft.edited,
+        "editable": editable,
+        "type": type_json(&draft.ty),
+        "meta": draft_meta_json(&draft.ext),
+        "data": if editable {
+            value.and_then(|value| editable_value_json(&draft.ty, value).ok())
+                .unwrap_or(JsonValue::Null)
+        } else {
+            data_json(&draft.data, &draft.annotations)
+        },
+    })
+}
+
+/// Decodes the typed editor wire shape against one resolved App input type.
+/// The caller still admits the resulting value through the ordinary Lab/VM
+/// boundary; this function cannot mint or mutate an envelope.
+///
+/// # Errors
+///
+/// Malformed JSON, an unsupported dynamic tree, or any exact conformance
+/// violation refuses before the scenario draft changes.
+pub fn parse_edited_data(text: &str, ty: &DataType) -> Result<Value, String> {
+    if text.len() > super::MAX_EDIT_BODY_BYTES {
+        return Err(String::from("the edited DATA tree exceeds 256 KiB"));
+    }
+    let json = serde_json::from_str::<JsonValue>(text)
+        .map_err(|error| format!("the edited DATA tree is not valid JSON: {error}"))?;
+    let value = editable_json_value(ty, &json, "DATA")?;
+    if let Some(violation) = ty.violation("edited input data", &value) {
+        return Err(format!(
+            "the edited DATA tree does not conform: {violation}"
+        ));
+    }
+    Ok(value)
+}
+
+fn schema_is_editable(ty: &DataType) -> bool {
+    match ty {
+        DataType::Variant => false,
+        DataType::Struct(structure) => structure
+            .fields()
+            .iter()
+            .all(|field| schema_is_editable(field.ty())),
+        DataType::Map(map) => schema_is_editable(map.key()) && schema_is_editable(map.value()),
+        DataType::Array(array) => schema_is_editable(array.element()),
+        DataType::StructuralUnion(union) => union.branches().iter().all(schema_is_editable),
+        DataType::TaggedUnion(union) => union.cases().iter().all(|case| {
+            case.payload()
+                .fields()
+                .iter()
+                .all(|field| schema_is_editable(field.ty()))
+        }),
+        _ => true,
+    }
+}
+
+fn type_json(ty: &DataType) -> JsonValue {
+    let label = ty.to_string();
+    match ty {
+        DataType::Null => json!({ "kind": "null", "label": label }),
+        DataType::Bool => json!({ "kind": "bool", "label": label }),
+        DataType::Integer(integer) => json!({
+            "kind": "integer",
+            "label": label,
+            "signed": matches!(integer, IntegerType::Signed(_)),
+        }),
+        DataType::Float(_) => json!({ "kind": "float", "label": label }),
+        DataType::Decimal(decimal) => json!({
+            "kind": "decimal",
+            "label": label,
+            "precision": decimal.precision(),
+            "scale": decimal.scale(),
+        }),
+        DataType::Number => json!({ "kind": "number", "label": label }),
+        DataType::Text => json!({ "kind": "text", "label": label }),
+        DataType::MediaType => json!({ "kind": "media-type", "label": label }),
+        DataType::Bytes(binary) => json!({
+            "kind": "bytes",
+            "label": label,
+            "length": match binary {
+                crate::datatype::BinaryType::Variable => None,
+                crate::datatype::BinaryType::Fixed(length) => Some(length.get()),
+            },
+        }),
+        DataType::Temporal(temporal) => json!({
+            "kind": "temporal",
+            "label": label,
+            "family": format!("{temporal:?}"),
+        }),
+        DataType::Uuid => json!({ "kind": "uuid", "label": label }),
+        DataType::Struct(structure) => json!({
+            "kind": "struct",
+            "label": label,
+            "fields": structure.fields().iter().map(|field| json!({
+                "name": field.name(),
+                "type": type_json(field.ty()),
+            })).collect::<Vec<_>>(),
+        }),
+        DataType::Map(map) => json!({
+            "kind": "map",
+            "label": label,
+            "key": type_json(map.key()),
+            "value": type_json(map.value()),
+        }),
+        DataType::Array(array) => json!({
+            "kind": "array",
+            "label": label,
+            "element": type_json(array.element()),
+            "length": array.length().map(crate::datatype::ArrayLength::get),
+        }),
+        DataType::Enum(enumeration) => json!({
+            "kind": "enum",
+            "label": label,
+            "symbols": enumeration.symbols(),
+        }),
+        DataType::StructuralUnion(union) => json!({
+            "kind": "structural-union",
+            "label": label,
+            "branches": union.branches().iter().map(type_json).collect::<Vec<_>>(),
+        }),
+        DataType::TaggedUnion(union) => json!({
+            "kind": "tagged-union",
+            "label": label,
+            "cases": union.cases().iter().map(|case| json!({
+                "name": case.name(),
+                "type": type_json(&DataType::Struct(case.payload().clone())),
+            })).collect::<Vec<_>>(),
+        }),
+        DataType::Variant => json!({
+            "kind": "variant",
+            "label": label,
+            "editable": false,
+        }),
+    }
+}
+
+fn editable_value_json(ty: &DataType, value: &Value) -> Result<JsonValue, String> {
+    match (ty, value) {
+        (DataType::Null, Value::Null) => Ok(JsonValue::Null),
+        (DataType::Bool, Value::Bool(value)) => Ok(JsonValue::Bool(*value)),
+        (DataType::Integer(IntegerType::Signed(_)), Value::Int(value)) => {
+            Ok(JsonValue::String(value.to_string()))
+        }
+        (DataType::Integer(IntegerType::Unsigned(_)), Value::Uint(value)) => {
+            Ok(JsonValue::String(value.to_string()))
+        }
+        (DataType::Float(_), Value::Double(value)) => Ok(JsonValue::String(value.to_string())),
+        (DataType::Decimal(_), Value::Decimal { unscaled, scale })
+        | (DataType::Number, Value::Decimal { unscaled, scale }) => Ok(JsonValue::String(format!(
+            "{unscaled}e{}",
+            scale.saturating_neg()
+        ))),
+        (DataType::Number, Value::Int(value)) => Ok(JsonValue::String(value.to_string())),
+        (DataType::Number, Value::Uint(value)) => Ok(JsonValue::String(value.to_string())),
+        (DataType::Text | DataType::MediaType, Value::Text(value))
+        | (DataType::Enum(_), Value::Enum(value)) => Ok(JsonValue::String(value.clone())),
+        (DataType::Bytes(_), Value::Bytes(value)) => Ok(JsonValue::String(hex(value))),
+        (DataType::Temporal(TemporalType::Date(_)), Value::Date(value))
+        | (DataType::Temporal(TemporalType::Time(_)), Value::Time(value))
+        | (DataType::Temporal(TemporalType::Timestamp { .. }), Value::Timestamp(value))
+        | (DataType::Temporal(TemporalType::TimestampNtz(_)), Value::TimestampNtz(value))
+        | (DataType::Temporal(TemporalType::Duration(_)), Value::Duration(value)) => {
+            Ok(JsonValue::String(value.to_string()))
+        }
+        (
+            DataType::Temporal(TemporalType::Interval(_)),
+            Value::Interval {
+                months,
+                days,
+                nanoseconds,
+            },
+        ) => Ok(json!({
+            "months": months.to_string(),
+            "days": days.to_string(),
+            "nanoseconds": nanoseconds.to_string(),
+        })),
+        (DataType::Uuid, Value::Uuid(value)) => Ok(JsonValue::String(hex(value))),
+        (DataType::Struct(structure), Value::Struct(fields)) => {
+            let fields = fields
+                .iter()
+                .map(|(name, value)| (name.as_str(), value))
+                .collect::<BTreeMap<_, _>>();
+            let mut json = Map::new();
+            for field in structure.fields() {
+                let value = fields
+                    .get(field.name())
+                    .ok_or_else(|| format!("the value has no field `{}`", field.name()))?;
+                json.insert(
+                    field.name().to_string(),
+                    editable_value_json(field.ty(), value)?,
+                );
+            }
+            Ok(JsonValue::Object(json))
+        }
+        (DataType::Map(map), Value::Map(entries)) if map.key() == &DataType::Text => {
+            Ok(JsonValue::Array(
+                entries
+                    .iter()
+                    .map(|(key, value)| {
+                        Ok(json!({
+                            "key": key,
+                            "value": editable_value_json(map.value(), value)?,
+                        }))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?,
+            ))
+        }
+        (DataType::Map(map), Value::KeyedMap(entries)) => Ok(JsonValue::Array(
+            entries
+                .iter()
+                .map(|(key, value)| {
+                    Ok(json!({
+                        "key": editable_value_json(map.key(), key)?,
+                        "value": editable_value_json(map.value(), value)?,
+                    }))
+                })
+                .collect::<Result<Vec<_>, String>>()?,
+        )),
+        (DataType::Array(array), Value::Array(items)) => Ok(JsonValue::Array(
+            items
+                .iter()
+                .map(|item| editable_value_json(array.element(), item))
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        (DataType::StructuralUnion(union), Value::StructuralUnion { branch, value }) => {
+            let branch_type = union
+                .branches()
+                .get(usize::from(*branch))
+                .ok_or_else(|| String::from("the structural-union branch is out of range"))?;
+            Ok(json!({
+                "branch": branch,
+                "value": editable_value_json(branch_type, value)?,
+            }))
+        }
+        (DataType::TaggedUnion(union), Value::TaggedUnion(tagged)) => {
+            let case = union
+                .cases()
+                .iter()
+                .find(|case| case.name() == tagged.case)
+                .ok_or_else(|| format!("unknown tagged case `{}`", tagged.case))?;
+            Ok(json!({
+                "case": tagged.case,
+                "value": editable_value_json(
+                    &DataType::Struct(case.payload().clone()),
+                    &Value::Struct(tagged.payload.clone()),
+                )?,
+            }))
+        }
+        _ => Err(format!("the value does not inhabit `{ty}`")),
+    }
+}
+
+fn editable_json_value(ty: &DataType, json: &JsonValue, path: &str) -> Result<Value, String> {
+    let scalar = |expected: &str| {
+        json.as_str()
+            .map(String::from)
+            .or_else(|| json.as_i64().map(|value| value.to_string()))
+            .or_else(|| json.as_u64().map(|value| value.to_string()))
+            .or_else(|| json.as_f64().map(|value| value.to_string()))
+            .ok_or_else(|| format!("{path} must be edited as {expected}"))
+    };
+    match ty {
+        DataType::Null if json.is_null() => Ok(Value::Null),
+        DataType::Null => Err(format!("{path} must be null")),
+        DataType::Bool => json
+            .as_bool()
+            .map(Value::Bool)
+            .ok_or_else(|| format!("{path} must be a boolean")),
+        DataType::Integer(IntegerType::Signed(_)) => scalar("a signed integer")?
+            .parse::<i64>()
+            .map(Value::Int)
+            .map_err(|_| format!("{path} is not a signed 64-bit integer")),
+        DataType::Integer(IntegerType::Unsigned(_)) => scalar("an unsigned integer")?
+            .parse::<u64>()
+            .map(Value::Uint)
+            .map_err(|_| format!("{path} is not an unsigned 64-bit integer")),
+        DataType::Float(_) => scalar("a floating-point number")?
+            .parse::<f64>()
+            .map(Value::Double)
+            .map_err(|_| format!("{path} is not a floating-point number")),
+        DataType::Decimal(_) | DataType::Number => {
+            let text = scalar("an exact number")?;
+            let value = match rastok_core::json::parse_declared_number(&text)
+                .map_err(|error| format!("{path} is not an exact number: {error}"))?
+            {
+                rastok_core::json::DeclaredNumber::Int(value) => Value::Int(value),
+                rastok_core::json::DeclaredNumber::Decimal { unscaled, scale } => {
+                    Value::Decimal { unscaled, scale }
+                }
+            };
+            ty.narrow(value, None)
+                .map_err(|error| format!("{path} does not fit `{ty}`: {error}"))
+        }
+        DataType::Text | DataType::MediaType => json
+            .as_str()
+            .map(|value| Value::Text(value.to_string()))
+            .ok_or_else(|| format!("{path} must be text")),
+        DataType::Bytes(_) => parse_hex(&scalar("hexadecimal bytes")?)
+            .map(Value::Bytes)
+            .map_err(|error| format!("{path}: {error}")),
+        DataType::Temporal(temporal) => match temporal {
+            TemporalType::Date(_) => parse_i64(json, path).map(Value::Date),
+            TemporalType::Time(_) => parse_i64(json, path).map(Value::Time),
+            TemporalType::Timestamp { .. } => parse_i64(json, path).map(Value::Timestamp),
+            TemporalType::TimestampNtz(_) => parse_i64(json, path).map(Value::TimestampNtz),
+            TemporalType::Duration(_) => parse_i64(json, path).map(Value::Duration),
+            TemporalType::Interval(_) => {
+                let object = json
+                    .as_object()
+                    .ok_or_else(|| format!("{path} must be an interval object"))?;
+                Ok(Value::Interval {
+                    months: parse_i64(
+                        required(object, "months", path)?,
+                        &format!("{path}.months"),
+                    )?,
+                    days: parse_i64(required(object, "days", path)?, &format!("{path}.days"))?,
+                    nanoseconds: parse_i64(
+                        required(object, "nanoseconds", path)?,
+                        &format!("{path}.nanoseconds"),
+                    )?,
+                })
+            }
+        },
+        DataType::Uuid => {
+            let bytes = parse_hex(&scalar("a 16-byte UUID in hexadecimal")?)
+                .map_err(|error| format!("{path}: {error}"))?;
+            let bytes: [u8; 16] = bytes
+                .try_into()
+                .map_err(|_| format!("{path} must contain exactly 16 bytes"))?;
+            Ok(Value::Uuid(bytes))
+        }
+        DataType::Struct(structure) => {
+            let object = json
+                .as_object()
+                .ok_or_else(|| format!("{path} must be a struct"))?;
+            let expected = structure
+                .fields()
+                .iter()
+                .map(|field| field.name())
+                .collect::<BTreeSet<_>>();
+            if let Some(extra) = object.keys().find(|name| !expected.contains(name.as_str())) {
+                return Err(format!("{path} has undeclared field `{extra}`"));
+            }
+            structure
+                .fields()
+                .iter()
+                .map(|field| {
+                    let child = format!("{path}.{}", field.name());
+                    Ok((
+                        field.name().to_string(),
+                        editable_json_value(
+                            field.ty(),
+                            required(object, field.name(), path)?,
+                            &child,
+                        )?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, String>>()
+                .map(Value::Struct)
+        }
+        DataType::Map(map) => {
+            let entries = json
+                .as_array()
+                .ok_or_else(|| format!("{path} must be a list of map entries"))?;
+            if map.key() == &DataType::Text {
+                let mut values = BTreeMap::new();
+                for (index, entry) in entries.iter().enumerate() {
+                    let entry = entry
+                        .as_object()
+                        .ok_or_else(|| format!("{path}[{index}] must be a map entry"))?;
+                    let key = required(entry, "key", path)?
+                        .as_str()
+                        .ok_or_else(|| format!("{path}[{index}].key must be text"))?
+                        .to_string();
+                    let value = editable_json_value(
+                        map.value(),
+                        required(entry, "value", path)?,
+                        &format!("{path}[{index}].value"),
+                    )?;
+                    if values.insert(key.clone(), value).is_some() {
+                        return Err(format!("{path} contains duplicate key `{key}`"));
+                    }
+                }
+                Ok(Value::Map(values))
+            } else {
+                entries
+                    .iter()
+                    .enumerate()
+                    .map(|(index, entry)| {
+                        let entry = entry
+                            .as_object()
+                            .ok_or_else(|| format!("{path}[{index}] must be a map entry"))?;
+                        Ok((
+                            editable_json_value(
+                                map.key(),
+                                required(entry, "key", path)?,
+                                &format!("{path}[{index}].key"),
+                            )?,
+                            editable_json_value(
+                                map.value(),
+                                required(entry, "value", path)?,
+                                &format!("{path}[{index}].value"),
+                            )?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, String>>()
+                    .map(Value::KeyedMap)
+            }
+        }
+        DataType::Array(array) => json
+            .as_array()
+            .ok_or_else(|| format!("{path} must be an array"))?
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                editable_json_value(array.element(), value, &format!("{path}[{index}]"))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Value::Array),
+        DataType::Enum(enumeration) => {
+            let value = json
+                .as_str()
+                .ok_or_else(|| format!("{path} must be an enum symbol"))?;
+            if !enumeration.symbols().iter().any(|symbol| symbol == value) {
+                return Err(format!("{path} is not a declared enum symbol"));
+            }
+            Ok(Value::Enum(value.to_string()))
+        }
+        DataType::StructuralUnion(union) => {
+            let object = json
+                .as_object()
+                .ok_or_else(|| format!("{path} must select one union branch"))?;
+            let branch = required(object, "branch", path)?
+                .as_u64()
+                .and_then(|branch| u16::try_from(branch).ok())
+                .ok_or_else(|| format!("{path}.branch must be an unsigned branch index"))?;
+            let branch_type = union
+                .branches()
+                .get(usize::from(branch))
+                .ok_or_else(|| format!("{path}.branch is out of range"))?;
+            Ok(Value::StructuralUnion {
+                branch,
+                value: Box::new(editable_json_value(
+                    branch_type,
+                    required(object, "value", path)?,
+                    &format!("{path}.value"),
+                )?),
+            })
+        }
+        DataType::TaggedUnion(union) => {
+            let object = json
+                .as_object()
+                .ok_or_else(|| format!("{path} must select one tagged case"))?;
+            let case_name = required(object, "case", path)?
+                .as_str()
+                .ok_or_else(|| format!("{path}.case must be text"))?;
+            let case = union
+                .cases()
+                .iter()
+                .find(|case| case.name() == case_name)
+                .ok_or_else(|| format!("{path} selects undeclared case `{case_name}`"))?;
+            let payload = editable_json_value(
+                &DataType::Struct(case.payload().clone()),
+                required(object, "value", path)?,
+                &format!("{path}.{case_name}"),
+            )?;
+            let Value::Struct(payload) = payload else {
+                return Err(format!("{path}.{case_name} must be a struct"));
+            };
+            Ok(Value::TaggedUnion(Box::new(
+                crate::value::TaggedUnionValue {
+                    case: case_name.to_string(),
+                    payload,
+                },
+            )))
+        }
+        DataType::Variant => Err(format!(
+            "{path} has type `variant`; M1 edits only statically typed DATA trees"
+        )),
+    }
+}
+
+fn required<'a>(
+    object: &'a Map<String, JsonValue>,
+    field: &str,
+    path: &str,
+) -> Result<&'a JsonValue, String> {
+    object
+        .get(field)
+        .ok_or_else(|| format!("{path} has no field `{field}`"))
+}
+
+fn parse_i64(json: &JsonValue, path: &str) -> Result<i64, String> {
+    json.as_str()
+        .and_then(|value| value.parse().ok())
+        .or_else(|| json.as_i64())
+        .ok_or_else(|| format!("{path} must be a signed 64-bit integer"))
+}
+
+fn parse_hex(text: &str) -> Result<Vec<u8>, String> {
+    if !text.len().is_multiple_of(2) || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(String::from(
+            "hexadecimal bytes need an even number of hex digits",
+        ));
+    }
+    text.as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            let digits = core::str::from_utf8(pair)
+                .map_err(|_| String::from("hexadecimal bytes must be ASCII"))?;
+            u8::from_str_radix(digits, 16).map_err(|_| String::from("invalid hexadecimal byte"))
+        })
+        .collect()
 }
 
 fn materialized_value_json(value: &Value, annotations: &AnnotationTable) -> JsonValue {
@@ -972,6 +1587,7 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datatype::{StructType, TypeField};
     use crate::schema_annotation::{
         AnnotationSet, DataAnnotation, PersonalDataClass, SensitivityLevel,
     };
@@ -1016,6 +1632,19 @@ graph inspected : App {
         );
         assert_eq!(value["owners"][1]["label"], "inner");
         assert_eq!(value["owners"][1]["parent"], "owner:0");
+        for owner in [&value["owners"][0]["ports"], &value["owners"][1]["ports"]] {
+            let ports = owner.as_array().expect("Graph ports are explicit");
+            assert!(
+                ports
+                    .iter()
+                    .any(|port| { port["name"] == "in" && port["direction"] == "input" })
+            );
+            assert!(
+                ports
+                    .iter()
+                    .any(|port| { port["name"] == "out" && port["direction"] == "output" })
+            );
+        }
         assert_eq!(value["nodes"][0]["path"], "inner.relay");
         assert_eq!(value["nodes"][0]["label"], "relay");
         assert_eq!(value["nodes"][0]["owner"], "owner:1");
@@ -1081,5 +1710,84 @@ graph inspected : App {
         let rendered = materialized_value_json(&value, &annotations).to_string();
         assert!(!rendered.contains("alice@example.test"));
         assert!(rendered.contains("redacted"));
+    }
+
+    #[test]
+    fn a_pending_injection_exposes_one_typed_edit_tree_before_meta_sys_exists() {
+        let ty = DataType::Struct(
+            StructType::new(vec![
+                TypeField::new("count", DataType::INT),
+                TypeField::new("name", DataType::Text),
+            ])
+            .expect("two fields"),
+        );
+        let draft = crate::lab::ScenarioInjectionDraft {
+            port: crate::node::Port::new("in").expect("conventional port"),
+            ty: ty.clone(),
+            annotations: AnnotationTable::empty(),
+            data: Data::materialized(Value::Struct(vec![
+                (String::from("count"), Value::Int(3)),
+                (String::from("name"), Value::Text(String::from("alice"))),
+            ])),
+            ext: Namespace::new(),
+            edited: false,
+        };
+        let rendered = scenario_injection_json(&draft);
+        assert_eq!(rendered["position"], "before-app-input");
+        assert_eq!(rendered["meta"]["sys"]["pending"], "minted on admission");
+        assert_eq!(rendered["type"]["kind"], "struct");
+        assert_eq!(rendered["data"]["count"], "3");
+        assert_eq!(rendered["data"]["name"], "alice");
+
+        let edited = parse_edited_data(r#"{"count":"9","name":"bob"}"#, &ty)
+            .expect("the schema-guided tree decodes exactly");
+        assert_eq!(
+            edited,
+            Value::Struct(vec![
+                (String::from("count"), Value::Int(9)),
+                (String::from("name"), Value::Text(String::from("bob"))),
+            ])
+        );
+        assert!(parse_edited_data(r#"{"count":"wide","name":"bob"}"#, &ty).is_err());
+
+        let unsigned_number = crate::lab::ScenarioInjectionDraft {
+            port: crate::node::Port::new("in").expect("conventional port"),
+            ty: DataType::Number,
+            annotations: AnnotationTable::empty(),
+            data: Data::materialized(Value::Uint(u64::MAX)),
+            ext: Namespace::new(),
+            edited: false,
+        };
+        let rendered = scenario_injection_json(&unsigned_number);
+        assert_eq!(rendered["data"], u64::MAX.to_string());
+        assert!(parse_edited_data(&rendered["data"].to_string(), &DataType::Number).is_ok());
+    }
+
+    #[test]
+    fn a_classified_pending_tree_is_redacted_and_not_editable() {
+        let annotations = AnnotationTable::new(vec![(
+            SchemaPath::root(),
+            AnnotationSet::new(vec![DataAnnotation::Sensitive(
+                SensitivityLevel::Confidential,
+            )])
+            .expect("one classification"),
+        )])
+        .expect("one canonical path");
+        let draft = crate::lab::ScenarioInjectionDraft {
+            port: crate::node::Port::new("in").expect("conventional port"),
+            ty: DataType::Struct(
+                StructType::new(vec![TypeField::new("name", DataType::Text)]).expect("one field"),
+            ),
+            annotations,
+            data: Data::materialized(Value::Struct(vec![(
+                String::from("name"),
+                Value::Text(String::from("alice")),
+            )])),
+            ext: Namespace::new(),
+            edited: false,
+        };
+        let rendered = scenario_injection_json(&draft);
+        assert_eq!(rendered["editable"], false);
+        assert!(!rendered.to_string().contains("alice"));
     }
 }

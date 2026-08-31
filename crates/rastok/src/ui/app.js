@@ -9,10 +9,13 @@ let currentSnapshot = null;
 let historyLimit = 100;
 let selectedTopologyItem = null;
 
-async function post(path) {
+async function post(path, body = null) {
+  const headers = { "X-Rastok-Controller": controller };
+  if (body !== null) headers["Content-Type"] = "application/json";
   const response = await fetch(path, {
     method: "POST",
-    headers: { "X-Rastok-Controller": controller },
+    headers,
+    body: body === null ? undefined : body,
   });
   if (!response.ok) throw new Error(await response.text());
   return response;
@@ -40,10 +43,9 @@ async function refresh() {
 function renderSnapshot(snapshot) {
   const execution = snapshot.execution || {};
   const state = execution.state || "paused";
-  text("title", `Execution ${state.replace("-", " ")}`);
   text("execution-state", state);
   document.querySelector("#execution-state").className = `pill state-${state}`;
-  text("mode", snapshot.mode || "—");
+  text("mode", snapshot.mode === "simulate" ? "SIMULATION" : (snapshot.mode || "—").toUpperCase());
   text("logical-time", formatNanoseconds(execution.logical_time_ns));
   text("awaiting-calls", String(execution.awaiting_outbound_calls || 0));
 
@@ -52,13 +54,11 @@ function renderSnapshot(snapshot) {
     element.hidden = !simulation;
   }
   const scenario = snapshot.scenario?.current;
-  text(
-    "step",
-    simulation && scenario && !scenario.complete && scenario.quiescent
-      ? "Step: next action"
-      : "Step: next transaction",
-  );
-  renderGuidance(state, execution.awaiting_outbound_calls || 0, simulation);
+  const stepLabel = simulation && scenario && !scenario.complete && scenario.quiescent
+    ? "Step to next scenario action"
+    : "Step one atomic transaction";
+  document.querySelector("#step").title = stepLabel;
+  document.querySelector("#step").setAttribute("aria-label", stepLabel);
   renderFault(snapshot.fault);
   renderScenario(snapshot.scenario, simulation);
   renderTopology(snapshot.topology);
@@ -67,21 +67,6 @@ function renderSnapshot(snapshot) {
   renderExchanges(snapshot.exchanges);
   renderCost(snapshot.cost_report);
   updateControls();
-}
-
-function renderGuidance(state, awaiting, simulation) {
-  const messages = {
-    paused: simulation
-      ? "Paused at a semantic boundary. Step advances one scenario action or one VM transaction, never both."
-      : "Paused at a semantic boundary. Resume continuously or advance one atomic transaction.",
-    running: "Running until completion, an assertion boundary, a fault, or a safe pause request.",
-    "pause-requested": awaiting > 0
-      ? `Safe pause requested; waiting for ${awaiting} open Call outcome${awaiting === 1 ? "" : "s"} without consuming it.`
-      : "Safe pause requested; finishing the current transaction boundary.",
-    faulted: "The failing transaction committed nothing. Inspect the fault before retrying or closing.",
-    completed: "Execution is complete. The retained in-memory history remains inspectable until Close UI.",
-  };
-  text("guidance", messages[state] || "Execution state unavailable.");
 }
 
 function updateControls() {
@@ -98,6 +83,7 @@ function renderFault(fault) {
   const panel = document.querySelector("#fault-panel");
   panel.hidden = !fault;
   if (!fault) return;
+  text("fault-title", fault.commit?.includes("draft") ? "Input edit refused" : "Execution fault");
   text("fault-message", fault.message || "The transaction faulted.");
   text("fault-help", fault.help || "Inspect the retained state before choosing a legal action.");
   text("fault-commit", fault.commit || "Nothing from the faulting transaction was committed.");
@@ -248,6 +234,25 @@ function renderTopology(topology) {
     });
     type.textContent = truncate(itemDescriptor(owner), 34);
     group.append(title, body, header, name, type);
+    if (position.depth > 0) {
+      for (const port of owner.ports || []) {
+        const anchor = scopePortAnchor(owner, position, port);
+        const disk = svgElement("circle", {
+          class: `graph-port graph-port-${port.direction}`,
+          cx: anchor.x,
+          cy: anchor.y,
+          r: "5.5",
+        });
+        const label = svgElement("text", {
+          class: "graph-scope-port-label",
+          x: anchor.x + (port.direction === "input" ? 9 : -9),
+          y: anchor.y + 3.5,
+          "text-anchor": port.direction === "input" ? "start" : "end",
+        });
+        label.textContent = port.name;
+        group.append(disk, label);
+      }
+    }
     scopeLayer.append(group);
   }
   svg.append(scopeLayer);
@@ -356,9 +361,9 @@ function renderTopology(topology) {
       });
       const label = svgElement("text", {
         class: "graph-boundary-label",
-        x: direction === "input" ? diskX - 12 : diskX + 12,
+        x: direction === "input" ? diskX + 12 : diskX - 12,
         y: position.height / 2 + 4,
-        "text-anchor": direction === "input" ? "end" : "start",
+        "text-anchor": direction === "input" ? "start" : "end",
       });
       label.textContent = truncate(node.label || node.ports?.[0]?.name || "boundary", 16);
       group.append(disk, label);
@@ -415,7 +420,10 @@ function renderTopology(topology) {
   }
   const workbench = document.createElement("div");
   workbench.className = "graph-workbench";
-  workbench.append(canvas, definitionPanel(selected));
+  const inspectors = document.createElement("div");
+  inspectors.className = "inspection-stack";
+  inspectors.append(envelopePanel(currentSnapshot), definitionPanel(selected));
+  workbench.append(canvas, inspectors);
 
   const legend = document.createElement("div");
   legend.className = "graph-legend";
@@ -439,6 +447,337 @@ function selectTopologyItem(id) {
   renderTopology(currentSnapshot?.topology);
 }
 
+function envelopePanel(snapshot) {
+  const panel = document.createElement("aside");
+  panel.className = "envelope-inspector";
+  panel.setAttribute("aria-label", "Current envelope boundary");
+  const draft = snapshot?.scenario?.current?.draft;
+  const deliveries = snapshot?.history?.deliveries || [];
+  const delivery = deliveries.at(-1) || null;
+  const heading = document.createElement("div");
+  heading.className = "envelope-heading";
+  const identity = document.createElement("div");
+  const position = document.createElement("p");
+  position.className = "envelope-position";
+  const title = document.createElement("h3");
+  identity.append(position, title);
+  heading.append(identity);
+  panel.append(heading);
+
+  if (draft?.position === "before-app-input") {
+    position.textContent = "Before admission";
+    title.textContent = `App.${draft.port}`;
+    const badges = document.createElement("div");
+    badges.className = "envelope-badges";
+    badges.append(typeBadge(draft.type?.label || "unknown"));
+    if (draft.edited) {
+      const edited = document.createElement("span");
+      edited.className = "edited-badge";
+      edited.textContent = "edited draft";
+      badges.append(edited);
+    }
+    panel.append(badges);
+    const zones = envelopeZones(draft.meta, null);
+    const dataZone = zones.querySelector("[data-zone='data']");
+    if (draft.editable) {
+      let editorValue = cloneJson(draft.data);
+      const tree = typedNode(draft.type, editorValue, "DATA", (next) => { editorValue = next; });
+      tree.classList.add("typed-tree");
+      dataZone.append(tree);
+      const actions = document.createElement("div");
+      actions.className = "envelope-actions";
+      const save = document.createElement("button");
+      save.type = "button";
+      save.textContent = "Apply DATA draft";
+      save.disabled = !controls || !(snapshot.execution?.legal_commands || []).includes("edit-next-injection");
+      save.addEventListener("click", async () => {
+        try {
+          await post("/api/command/edit-next-injection", JSON.stringify(editorValue));
+          setCommandStatus("DATA draft accepted for validation.");
+        } catch (error) {
+          setCommandStatus(`DATA edit refused: ${error.message}`);
+        }
+      });
+      actions.append(save);
+      dataZone.append(actions);
+    } else {
+      appendValue(dataZone, draft.data);
+    }
+    panel.append(zones);
+    return panel;
+  }
+
+  if (delivery) {
+    position.textContent = "Latest envelope boundary";
+    title.textContent = `${delivery.node || "App"}.${delivery.port || "?"}`;
+    const badges = document.createElement("div");
+    badges.className = "envelope-badges";
+    for (const label of [delivery.envelope_id, delivery.origin_id && `origin ${delivery.origin_id}`]) {
+      if (!label) continue;
+      const badge = document.createElement("span");
+      badge.textContent = label;
+      badges.append(badge);
+    }
+    panel.append(badges, envelopeZones(delivery.meta, delivery.data));
+    return panel;
+  }
+
+  position.textContent = "Envelope";
+  title.textContent = "No boundary selected";
+  return panel;
+}
+
+function envelopeZones(meta, data) {
+  const zones = document.createElement("div");
+  zones.className = "envelope-zones";
+  for (const [name, value] of [["META", meta], ["DATA", data]]) {
+    const zone = document.createElement("div");
+    zone.className = "envelope-zone";
+    zone.dataset.zone = name.toLowerCase();
+    const title = document.createElement("h4");
+    title.textContent = name;
+    zone.append(title);
+    if (value !== null && value !== undefined) appendValue(zone, value);
+    zones.append(zone);
+  }
+  return zones;
+}
+
+function typedNode(schema, value, name, setValue) {
+  const kind = schema?.kind || "variant";
+  if (kind === "struct") {
+    const fieldset = typedFieldset(name, schema.label);
+    const children = document.createElement("div");
+    children.className = "typed-items";
+    for (const field of schema.fields || []) {
+      children.append(typedNode(field.type, value?.[field.name], field.name, (next) => {
+        value[field.name] = next;
+        setValue(value);
+      }));
+    }
+    fieldset.append(children);
+    return fieldset;
+  }
+  if (kind === "array") {
+    const fieldset = typedFieldset(name, schema.label);
+    const items = document.createElement("div");
+    items.className = "typed-items";
+    const renderItems = () => {
+      items.replaceChildren(...value.map((item, index) => {
+        const row = document.createElement("div");
+        row.className = "typed-item";
+        row.append(typedNode(schema.element, item, `[${index}]`, (next) => {
+          value[index] = next;
+          setValue(value);
+        }));
+        if (schema.length === null || schema.length === undefined) {
+          const remove = tinyButton("−", `Remove item ${index}`);
+          remove.addEventListener("click", () => {
+            value.splice(index, 1);
+            setValue(value);
+            renderItems();
+          });
+          row.append(remove);
+        }
+        return row;
+      }));
+    };
+    renderItems();
+    fieldset.append(items);
+    if (schema.length === null || schema.length === undefined) {
+      const add = tinyButton("+", "Add item");
+      add.addEventListener("click", () => {
+        value.push(defaultValue(schema.element));
+        setValue(value);
+        renderItems();
+      });
+      fieldset.append(add);
+    }
+    return fieldset;
+  }
+  if (kind === "map") {
+    const fieldset = typedFieldset(name, schema.label);
+    const items = document.createElement("div");
+    items.className = "typed-items";
+    const renderItems = () => {
+      items.replaceChildren(...value.map((entry, index) => {
+        const row = document.createElement("div");
+        row.className = "typed-item";
+        const pair = typedFieldset(`entry ${index}`, "key → value");
+        pair.append(
+          typedNode(schema.key, entry.key, "key", (next) => { entry.key = next; setValue(value); }),
+          typedNode(schema.value, entry.value, "value", (next) => { entry.value = next; setValue(value); }),
+        );
+        const remove = tinyButton("−", `Remove entry ${index}`);
+        remove.addEventListener("click", () => {
+          value.splice(index, 1);
+          setValue(value);
+          renderItems();
+        });
+        row.append(pair, remove);
+        return row;
+      }));
+    };
+    renderItems();
+    const add = tinyButton("+", "Add map entry");
+    add.addEventListener("click", () => {
+      value.push({ key: defaultValue(schema.key), value: defaultValue(schema.value) });
+      setValue(value);
+      renderItems();
+    });
+    fieldset.append(items, add);
+    return fieldset;
+  }
+  if (kind === "structural-union") {
+    const fieldset = typedFieldset(name, schema.label);
+    const select = document.createElement("select");
+    for (const [index, branch] of (schema.branches || []).entries()) {
+      const option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = branch.label;
+      option.selected = Number(value?.branch || 0) === index;
+      select.append(option);
+    }
+    const body = document.createElement("div");
+    const renderBranch = () => {
+      const index = Number(select.value);
+      body.replaceChildren(typedNode(schema.branches[index], value.value, "value", (next) => {
+        value.value = next;
+        setValue(value);
+      }));
+    };
+    select.addEventListener("change", () => {
+      value = { branch: Number(select.value), value: defaultValue(schema.branches[Number(select.value)]) };
+      setValue(value);
+      renderBranch();
+    });
+    renderBranch();
+    fieldset.append(select, body);
+    return fieldset;
+  }
+  if (kind === "tagged-union") {
+    const fieldset = typedFieldset(name, schema.label);
+    const select = document.createElement("select");
+    for (const item of schema.cases || []) {
+      const option = document.createElement("option");
+      option.value = item.name;
+      option.textContent = item.name;
+      option.selected = value?.case === item.name;
+      select.append(option);
+    }
+    const body = document.createElement("div");
+    const renderCase = () => {
+      const item = (schema.cases || []).find((candidate) => candidate.name === select.value);
+      body.replaceChildren(typedNode(item.type, value.value, item.name, (next) => {
+        value.value = next;
+        setValue(value);
+      }));
+    };
+    select.addEventListener("change", () => {
+      const item = (schema.cases || []).find((candidate) => candidate.name === select.value);
+      value = { case: item.name, value: defaultValue(item.type) };
+      setValue(value);
+      renderCase();
+    });
+    renderCase();
+    fieldset.append(select, body);
+    return fieldset;
+  }
+  if (kind === "temporal" && value !== null && typeof value === "object") {
+    const fieldset = typedFieldset(name, schema.label);
+    for (const field of ["months", "days", "nanoseconds"]) {
+      fieldset.append(typedLeaf({ kind: "integer", label: "int64" }, value[field], field, (next) => {
+        value[field] = next;
+        setValue(value);
+      }));
+    }
+    return fieldset;
+  }
+  return typedLeaf(schema, value, name, setValue);
+}
+
+function typedLeaf(schema, value, name, setValue) {
+  const row = document.createElement("label");
+  row.className = "typed-leaf";
+  const label = document.createElement("span");
+  label.className = "typed-leaf-label";
+  label.append(document.createTextNode(name), typeBadge(schema?.label || schema?.kind || "unknown"));
+  let input;
+  if (schema?.kind === "bool") {
+    input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = Boolean(value);
+    input.addEventListener("change", () => setValue(input.checked));
+  } else if (schema?.kind === "enum") {
+    input = document.createElement("select");
+    for (const symbol of schema.symbols || []) {
+      const option = document.createElement("option");
+      option.value = symbol;
+      option.textContent = symbol;
+      option.selected = symbol === value;
+      input.append(option);
+    }
+    input.addEventListener("change", () => setValue(input.value));
+  } else {
+    input = document.createElement("input");
+    input.type = "text";
+    input.value = schema?.kind === "null" ? "null" : String(value ?? "");
+    input.disabled = schema?.kind === "null" || schema?.kind === "variant";
+    input.addEventListener("input", () => setValue(input.value));
+  }
+  row.append(label, input);
+  return row;
+}
+
+function typedFieldset(name, type) {
+  const fieldset = document.createElement("fieldset");
+  fieldset.className = "typed-fieldset";
+  const legend = document.createElement("legend");
+  legend.append(document.createTextNode(name), typeBadge(type));
+  fieldset.append(legend);
+  return fieldset;
+}
+
+function typeBadge(label) {
+  const badge = document.createElement("span");
+  badge.className = "type-badge";
+  badge.textContent = label || "unknown";
+  return badge;
+}
+
+function tinyButton(label, accessible) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "tiny-button";
+  button.textContent = label;
+  button.setAttribute("aria-label", accessible);
+  button.title = accessible;
+  return button;
+}
+
+function defaultValue(schema) {
+  switch (schema?.kind) {
+    case "null": return null;
+    case "bool": return false;
+    case "integer": case "float": case "decimal": case "number": return "0";
+    case "temporal": return String(schema.family || "").startsWith("Interval")
+      ? { months: "0", days: "0", nanoseconds: "0" }
+      : "0";
+    case "text": case "media-type": case "bytes": case "uuid": return "";
+    case "enum": return schema.symbols?.[0] || "";
+    case "struct": return Object.fromEntries((schema.fields || []).map((field) => [field.name, defaultValue(field.type)]));
+    case "array": return Array.from({ length: schema.length || 0 }, () => defaultValue(schema.element));
+    case "map": return [];
+    case "structural-union": return { branch: 0, value: defaultValue(schema.branches?.[0]) };
+    case "tagged-union": return { case: schema.cases?.[0]?.name || "", value: defaultValue(schema.cases?.[0]?.type) };
+    default: return null;
+  }
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
 function definitionPanel(item) {
   const panel = document.createElement("aside");
   panel.className = `node-definition${item ? " populated" : " empty"}`;
@@ -446,9 +785,7 @@ function definitionPanel(item) {
   if (!item?.definition) {
     const title = document.createElement("h3");
     title.textContent = "Node definition";
-    const help = document.createElement("p");
-    help.textContent = "Select a Node or Graph to inspect its ports, attributes, handlers and guard expressions.";
-    panel.append(title, help);
+    panel.append(title);
     return panel;
   }
 
@@ -571,11 +908,11 @@ function layoutGraph(nodes, edges, owners) {
     const inputs = (node.ports || []).filter((port) => port.direction === "input").length;
     const outputs = (node.ports || []).filter((port) => port.direction === "output").length;
     return [node.id, {
-      width: 174,
-      height: Math.max(54, (Math.max(inputs, outputs) + 1) * 14),
+      width: 150,
+      height: Math.max(50, (Math.max(inputs, outputs) + 1) * 13),
     }];
   }));
-  const columnGap = 118;
+  const columnGap = 104;
   const rankWidths = new Map();
   for (const [level, group] of groups) {
     rankWidths.set(level, Math.max(...group.map((node) => dimensions.get(node.id).width)));
@@ -585,7 +922,7 @@ function layoutGraph(nodes, edges, owners) {
   const maximumRank = Math.max(0, ...groups.keys());
   for (let level = 0; level <= maximumRank; level += 1) {
     rankX.set(level, nextX);
-    nextX += (rankWidths.get(level) || 174) + columnGap;
+    nextX += (rankWidths.get(level) || 150) + columnGap;
   }
 
   const ownerMap = new Map(owners.map((owner, index) => [owner.id, { ...owner, index }]));
@@ -712,9 +1049,32 @@ function layoutGraph(nodes, edges, owners) {
     for (const position of positions.values()) position.x += shiftX;
     for (const scope of scopes.values()) scope.x += shiftX;
   }
+  for (const node of nodes.filter((node) => node.kind === "boundary" || node.kind === "discard")) {
+    const scope = scopes.get(node.owner || rootOwner.id) || scopes.get(rootOwner.id);
+    const position = positions.get(node.id);
+    if (!scope || !position) continue;
+    const direction = node.direction || (node.kind === "discard" ? "discard" : "input");
+    const peers = nodes.filter((candidate) =>
+      (candidate.owner || rootOwner.id) === (node.owner || rootOwner.id)
+      && (candidate.direction || (candidate.kind === "discard" ? "discard" : "input")) === direction);
+    const index = Math.max(0, peers.findIndex((candidate) => candidate.id === node.id));
+    position.y = scope.y + 34 + (scope.height - 34) * (index + 1) / (peers.length + 1) - position.height / 2;
+    position.x = direction === "input"
+      ? scope.x - position.width + 10
+      : scope.x + scope.width - 10;
+  }
   const width = Math.max(...[...scopes.values()].map((scope) => scope.x + scope.width), nextX) + 18;
   const height = rootScope.y + rootScope.height + 18;
   return { width, height, positions, scopes };
+}
+
+function scopePortAnchor(owner, position, port) {
+  const peers = (owner.ports || []).filter((candidate) => candidate.direction === port.direction);
+  const index = Math.max(0, peers.findIndex((candidate) => candidate.name === port.name));
+  return {
+    x: port.direction === "input" ? position.x : position.x + position.width,
+    y: position.y + 34 + (position.height - 34) * (index + 1) / (peers.length + 1),
+  };
 }
 
 function portAnchor(node, position, portName, expectedDirection) {
@@ -758,7 +1118,7 @@ function renderHistory(history) {
   const start = Math.max(0, records.length - historyLimit);
   const fragment = document.createDocumentFragment();
   fragment.append(historyTable("Causal records", records.slice(start), ["record_index", "event", "owner", "connector", "origin_id"]));
-  fragment.append(historyTable("Observed deliveries", deliveries.slice(Math.max(0, deliveries.length - historyLimit)), ["index", "node", "port", "envelope_id", "payload"]));
+  fragment.append(historyTable("Observed envelopes", deliveries.slice(Math.max(0, deliveries.length - historyLimit)), ["index", "node", "port", "envelope_id", "meta", "data"]));
   target.className = "history-stack";
   target.replaceChildren(fragment);
   const older = document.querySelector("#show-older");
@@ -777,7 +1137,9 @@ function historyTable(label, rows, columns) {
   for (const column of columns) {
     const cell = document.createElement("th");
     cell.scope = "col";
-    cell.textContent = column.replaceAll("_", " ");
+    cell.textContent = ["meta", "data"].includes(column)
+      ? column.toUpperCase()
+      : column.replaceAll("_", " ");
     header.append(cell);
   }
   head.append(header);
@@ -895,6 +1257,12 @@ function text(id, value) {
   document.querySelector(`#${id}`).textContent = value;
 }
 
+function setCommandStatus(message) {
+  const status = document.querySelector("#command-status");
+  status.textContent = message;
+  status.hidden = !message;
+}
+
 function formatNanoseconds(value) {
   return value === undefined || value === null ? "—" : `${value} ns`;
 }
@@ -904,7 +1272,7 @@ for (const button of document.querySelectorAll("button[data-command]")) {
     try {
       await post(`/api/command/${button.dataset.command}`);
     } catch (error) {
-      text("guidance", `UI command refused: ${error.message}`);
+      setCommandStatus(`UI command refused: ${error.message}`);
     }
   });
 }
@@ -920,16 +1288,16 @@ document.querySelector("#select-scenario").addEventListener("click", async () =>
   try {
     await post(`/api/command/select-scenario?simulation=${encodeURIComponent(simulation)}&scenario=${encodeURIComponent(scenario)}`);
   } catch (error) {
-    text("guidance", `Scenario selection refused: ${error.message}`);
+    setCommandStatus(`Scenario selection refused: ${error.message}`);
   }
 });
 
 const events = new EventSource("/api/events");
-events.addEventListener("revision", () => refresh().catch((error) => text("guidance", error.message)));
+events.addEventListener("revision", () => refresh().catch((error) => setCommandStatus(error.message)));
 events.onerror = () => {
   text("role", "reconnecting");
   controls = false;
   updateControls();
 };
 
-claim().then(refresh).catch((error) => text("guidance", error.message));
+claim().then(refresh).catch((error) => setCommandStatus(error.message));

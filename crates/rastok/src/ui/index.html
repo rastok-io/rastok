@@ -3,64 +3,61 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Rastok execution UI</title>
+  <title>Rastok UI</title>
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-  <header>
-    <div>
-      <p class="eyebrow">Rastok execution UI</p>
-      <h1 id="title">Execution paused</h1>
-      <p id="guidance" class="guidance" aria-live="polite">Claiming local control…</p>
-    </div>
-    <div class="header-badges">
+  <svg class="icon-sprite" aria-hidden="true">
+    <symbol id="icon-play" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></symbol>
+    <symbol id="icon-pause" viewBox="0 0 24 24"><path d="M6 4h4v16H6zm8 0h4v16h-4z"/></symbol>
+    <symbol id="icon-step" viewBox="0 0 24 24"><path d="M5 4l11 8-11 8zm12 0h3v16h-3z"/></symbol>
+    <symbol id="icon-retry" viewBox="0 0 24 24"><path d="M19 7V2l-2.2 2.2A9 9 0 1 0 21 12h-3a6 6 0 1 1-2.9-5.1L12 10h7z"/></symbol>
+    <symbol id="icon-complete" viewBox="0 0 24 24"><path d="M3 4l8 8-8 8zm9 0l8 8-8 8zm8 0h2v16h-2z"/></symbol>
+    <symbol id="icon-action" viewBox="0 0 24 24"><path d="M4 5h3v14H4zm5 7l10-7v14z"/></symbol>
+    <symbol id="icon-assert" viewBox="0 0 24 24"><path d="M5 3h2v18H5zm3 2h11l-3 4 3 4H8z"/></symbol>
+    <symbol id="icon-reset" viewBox="0 0 24 24"><path d="M12 5a7 7 0 1 1-6.7 9H2a10 10 0 1 0 2.9-7.1L2 4v7h7L7 9a7 7 0 0 1 5-2z"/></symbol>
+    <symbol id="icon-control" viewBox="0 0 24 24"><path d="M8 11a5 5 0 1 1 4 2H9v3H6v3H3v-5l6-6a5 5 0 0 1-1 3zm8-5a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24"><path d="M5 5l14 14m0-14L5 19" fill="none" stroke="currentColor" stroke-width="3"/></symbol>
+  </svg>
+
+  <header class="app-bar">
+    <div class="brand-block">
+      <strong class="brand">Rastok UI</strong>
+      <span id="mode" class="mode-badge">—</span>
       <span id="execution-state" class="pill state-paused">paused</span>
-      <span id="role" class="pill">connecting</span>
     </div>
+    <nav class="transport" aria-label="Execution controls">
+      <button data-command="resume" class="icon-button" title="Resume" aria-label="Resume"><svg><use href="#icon-play"/></svg></button>
+      <button data-command="pause" class="icon-button" title="Pause safely" aria-label="Pause safely"><svg><use href="#icon-pause"/></svg></button>
+      <button id="step" data-command="step" class="icon-button primary" title="Step to next boundary" aria-label="Step to next boundary"><svg><use href="#icon-step"/></svg></button>
+      <button data-command="retry-step" class="icon-button" title="Retry transaction" aria-label="Retry transaction"><svg><use href="#icon-retry"/></svg></button>
+      <button data-command="run-to-completion" class="icon-button" title="Run to completion" aria-label="Run to completion"><svg><use href="#icon-complete"/></svg></button>
+      <span class="transport-divider simulation-only" hidden></span>
+      <button data-command="next-scenario-action" class="icon-button simulation-only" hidden title="Next scenario action" aria-label="Next scenario action"><svg><use href="#icon-action"/></svg></button>
+      <button data-command="run-until-assertion" class="icon-button simulation-only" hidden title="Run until assertion" aria-label="Run until assertion"><svg><use href="#icon-assert"/></svg></button>
+      <button data-command="reset-scenario" class="icon-button simulation-only" hidden title="Reset scenario" aria-label="Reset scenario"><svg><use href="#icon-reset"/></svg></button>
+    </nav>
+    <div class="bar-status">
+      <span><b id="logical-time">—</b> logical</span>
+      <span><b id="awaiting-calls">0</b> calls</span>
+      <span id="scenario-progress" class="simulation-only" hidden>—</span>
+      <span id="role" class="role-badge">connecting</span>
+      <button id="take-control" class="icon-button quiet" title="Take control" aria-label="Take control"><svg><use href="#icon-control"/></svg></button>
+      <button data-command="close" class="icon-button danger" title="Close UI" aria-label="Close UI"><svg><use href="#icon-close"/></svg></button>
+    </div>
+    <div id="command-status" class="command-status" aria-live="polite" hidden></div>
   </header>
-
-  <nav aria-label="Execution controls">
-    <div class="control-group">
-      <button data-command="resume">Resume</button>
-      <button data-command="pause">Pause safely</button>
-      <button id="step" data-command="step">Step: next transaction</button>
-      <button data-command="retry-step">Retry transaction</button>
-      <button data-command="run-to-completion">Run to completion</button>
-    </div>
-    <div id="simulation-controls" class="control-group simulation-only" hidden>
-      <button data-command="next-scenario-action">Next scenario action</button>
-      <button data-command="run-until-assertion">Run until assertion</button>
-      <button data-command="reset-scenario" class="secondary">Reset scenario</button>
-    </div>
-    <div class="control-group right-controls">
-      <button id="take-control" class="secondary">Take control</button>
-      <button data-command="close" class="danger">Close UI</button>
-    </div>
-  </nav>
-
-  <aside id="run-summary" aria-label="Current execution summary">
-    <dl>
-      <div><dt>Mode</dt><dd id="mode">—</dd></div>
-      <div><dt>Logical time</dt><dd id="logical-time">—</dd></div>
-      <div><dt>Calls awaiting outcome</dt><dd id="awaiting-calls">0</dd></div>
-      <div class="simulation-only" hidden><dt>Scenario</dt><dd id="scenario-progress">—</dd></div>
-    </dl>
-  </aside>
 
   <main>
     <section id="fault-panel" class="wide fault-panel" hidden aria-live="assertive">
-      <h2>Transaction fault</h2>
+      <h2 id="fault-title">Execution fault</h2>
       <p id="fault-message" class="fault-message"></p>
       <p id="fault-help"></p>
       <p id="fault-commit" class="commit-note"></p>
     </section>
-
-    <section id="scenario-panel" class="wide simulation-only" hidden>
+    <section id="scenario-panel" class="wide simulation-only compact-section" hidden>
       <div class="section-heading">
-        <div>
-          <h2>Simulation</h2>
-          <p id="scenario-status" class="section-summary"></p>
-        </div>
+        <div><h2>Scenario</h2><p id="scenario-status" class="section-summary"></p></div>
         <div class="scenario-picker">
           <label for="scenario-select">Checked scenario</label>
           <select id="scenario-select"></select>
@@ -69,40 +66,20 @@
       </div>
       <div id="scenario" class="empty">No scenario selected.</div>
     </section>
-
-    <section class="wide">
-      <div class="section-heading">
-        <div>
-          <h2>Graph</h2>
-          <p class="section-summary">Validated spatial DAG with journal-derived envelope traffic. Select a Node or Graph to inspect its source definition.</p>
-        </div>
-      </div>
+    <section class="wide graph-section">
+      <div class="section-heading"><h2>Graph</h2></div>
       <div id="graph" class="empty">Waiting for a validated topology.</div>
     </section>
-
     <section class="wide">
       <div class="section-heading">
-        <div>
-          <h2>Causal history</h2>
-          <p id="history-summary" class="section-summary">No committed records.</p>
-        </div>
+        <div><h2>Causal history</h2><p id="history-summary" class="section-summary">No committed records.</p></div>
         <button id="show-older" class="secondary" hidden>Show older records</button>
       </div>
       <div id="history" class="empty">No committed records.</div>
     </section>
-
-    <section>
-      <h2>Instances and private state</h2>
-      <div id="state" class="empty">No active instance.</div>
-    </section>
-    <section>
-      <h2>Calls and Sessions</h2>
-      <div id="exchanges" class="empty">No open exchange.</div>
-    </section>
-    <section class="wide">
-      <h2>Cost report</h2>
-      <div id="cost" class="empty">No measured cost.</div>
-    </section>
+    <section><h2>Instances and private state</h2><div id="state" class="empty">No active instance.</div></section>
+    <section><h2>Calls and Sessions</h2><div id="exchanges" class="empty">No open exchange.</div></section>
+    <section class="wide"><h2>Cost report</h2><div id="cost" class="empty">No measured cost.</div></section>
   </main>
   <script src="/app.js" defer></script>
 </body>

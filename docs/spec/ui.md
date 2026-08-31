@@ -30,6 +30,10 @@ never opens a browser automatically.
 The page is embedded in the binary as self-contained HTML, CSS and JavaScript.
 M1 uses no Node/npm build and no filesystem asset lookup. A later `rastok-ui`
 crate may own the same protocol and assets without changing this surface.
+The compact sticky bar names `Rastok UI`, shows `SIMULATION` or `RUN` beside the
+execution state, and uses accessible icon transport controls. Its colors follow
+the host `prefers-color-scheme`; light and dark are both first-class. The page
+contains status and typed diagnostics, not generic operating instructions.
 
 ## 2. Capability-protected loopback server
 
@@ -126,7 +130,26 @@ present in the Lab:
 
 The page labels the next `Step` as an action or transaction before it runs and
 keeps the specialized controls available. An assertion never becomes a graph
-transaction, and stepping never rewrites the authored scenario.
+transaction. Highlighting follows the exact committed edge or edge set from
+one boundary to the next, but fan-out and every other atomic transaction stay
+one step rather than being fragmented for animation.
+
+Immediately before a next authored `inject`, the page exposes its pending
+position as `before App.<port>`. It displays the future envelope zones as
+`META` and `DATA`: `meta.ext` is the authored world context, `meta.app` is
+empty, and `meta.sys` is explicitly pending because admission has not minted
+it. Only `DATA` may be edited. The editor is a small typed tree derived from
+the resolved App input `DataType`; the execution owner decodes and judges the
+submitted tree against that same type before replacing the draft. A refusal
+changes neither draft nor VM.
+
+This is not a second injection mechanism. The next action still passes the
+draft through the ordinary Lab and VM admission, which mints the immutable
+envelope and journal fact. The authored port, sequence, `meta.ext` and
+provenance cannot be edited. Once admitted, the envelope and every internal
+edge are read-only. `Reset` recreates the scenario and restores the authored
+value. Editing is unavailable in `run`, for non-`inject` actions, for dynamic
+`variant` trees, and whenever redaction policy would hide any edited path.
 
 ## 6. Read model
 
@@ -143,13 +166,16 @@ The initial HTTP snapshot describes:
   recursively contains its own direct children. Compact Node cards expose only
   declaration name, effective NodeType and NodeAspects. A white disk denotes
   an input port and a black disk denotes an output port; exact edges attach to
-  those disks and carry their cumulative envelope count. The Graph/Node owner
+  those disks and carry their cumulative envelope count. Graph ports live on
+  their Graph frame border, including the root App input and output ports. The Graph/Node owner
   of the last stepped transaction is highlighted; selecting a Graph frame or
   Node exposes its exact authored declaration, including ports, attributes,
   handlers and guard expressions;
 - controller and execution state;
 - current logical instances, lifecycle and Node-private `var` cells;
 - retained causal observations with Call/Session correlation;
+- the current pre-admission draft or latest observed envelope, with `META`
+  (`sys`, `app`, `ext`) and `DATA` shown as distinct normative zones;
 - the exact `CostReport`, including separate currencies and `unpriced` rows.
 
 SSE then announces monotonically increasing view revisions. Reconnection asks
@@ -177,13 +203,20 @@ Containment is likewise read from the validated lexical owner table. The
 browser does not infer nesting from dotted paths or edge geometry. Graph
 frames are presentation of that existing authority and add no runtime scope.
 
-## 7. Payload and state presentation
+## 7. DATA, META and state presentation
 
-M1 displays payload content only when it is already materialized and its root
+M1 displays committed `DATA` content only when it is already materialized and its root
 is a struct, map, array or union. Scalar leaves inside that structure remain
-visible. A scalar root or encoded/opaque payload exposes only its logical kind
+visible. A scalar root or encoded/opaque DATA value exposes only its logical kind
 and known byte size; the UI never forces decoding or materialization merely
-for presentation.
+for presentation. The one exception is the still-uncommitted simulation draft:
+its scalar value may be shown in the typed editor because the authored action
+already materialized it and no causal envelope exists yet.
+
+`META` is displayed separately. After admission it includes the exact
+read-only `meta.sys` spine and the `app`/`ext` namespaces. Before admission it
+shows only authored `meta.ext`, an empty `meta.app`, and a pending marker in
+place of `meta.sys`; the UI never fabricates an id for a draft.
 
 Node state uses the same structured-only rule. Presentation consults the exact
 resolved annotation table before building JSON:
@@ -205,5 +238,6 @@ identity recipe.
 
 M1.9 does not provide remote binding, TLS, user accounts, durable history,
 cross-process attachment, source hot reload, breakpoints, state mutation,
-manual envelope injection, `File.watch`, exact commit timestamps or an OTLP
-exporter. Those are separate decisions, not hidden approximations.
+ad-hoc envelope injection outside the next checked Lab action, editing META or
+committed envelopes, `File.watch`, exact commit timestamps or an OTLP exporter.
+Those are separate decisions, not hidden approximations.

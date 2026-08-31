@@ -28,7 +28,10 @@ use tokio::sync::{RwLock, mpsc, watch};
 
 mod view;
 
-pub use view::{ActivityView, ExecutionState, FaultView, SnapshotInput, snapshot};
+pub use view::{
+    ActivityView, ExecutionState, FaultView, SnapshotInput, parse_edited_data,
+    scenario_injection_json, snapshot,
+};
 
 const INDEX_HTML: &str = include_str!("index.html");
 const APP_CSS: &str = include_str!("app.css");
@@ -36,6 +39,7 @@ const APP_JS: &str = include_str!("app.js");
 const COMMAND_CAPACITY: usize = 32;
 const SNAPSHOT_CAPACITY: usize = 1;
 const SSE_CAPACITY: usize = 8;
+pub(super) const MAX_EDIT_BODY_BYTES: usize = 256 * 1024;
 
 type HttpBody = http_body_util::combinators::UnsyncBoxBody<Bytes, Infallible>;
 
@@ -64,6 +68,11 @@ pub enum UiCommand {
         simulation: String,
         /// Checked scenario name.
         scenario: String,
+    },
+    /// Replace the typed DATA tree of the next pre-admission Lab injection.
+    EditNextInjection {
+        /// Schema-guided editor JSON, interpreted by the execution owner.
+        data: String,
     },
     /// End the hosted UI session.
     Close,
@@ -321,7 +330,8 @@ async fn handle(
             (&Method::POST, "/api/control/take") => control_claim(&request, &context, true),
             (&Method::POST, "/api/control/release") => control_release(&request, &context),
             (&Method::POST, path) if path.starts_with("/api/command/") => {
-                command(&request, &context, &path[13..])
+                let spelling = String::from(&path[13..]);
+                command(request, &context, &spelling).await
             }
             _ => response(
                 StatusCode::NOT_FOUND,
@@ -459,45 +469,57 @@ fn control_release(request: &Request<Incoming>, context: &ServerContext) -> Resp
     }
 }
 
-fn command(
-    request: &Request<Incoming>,
+async fn command(
+    request: Request<Incoming>,
     context: &ServerContext,
     spelling: &str,
 ) -> Response<HttpBody> {
-    if !same_origin(request, context) {
+    if !same_origin(&request, context) {
         return response(
             StatusCode::FORBIDDEN,
             "text/plain; charset=utf-8",
             "bad origin",
         );
     }
-    let Some(candidate) = controller_id(request) else {
+    let Some(candidate) = controller_id(&request) else {
         return response(
             StatusCode::BAD_REQUEST,
             "text/plain; charset=utf-8",
             "missing controller",
         );
     };
-    let Ok(controller) = context.controller.lock() else {
-        return response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "text/plain; charset=utf-8",
-            "controller unavailable",
-        );
+    let is_controller = match context.controller.lock() {
+        Ok(controller) => controller.as_deref() == Some(candidate),
+        Err(_) => {
+            return response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "text/plain; charset=utf-8",
+                "controller unavailable",
+            );
+        }
     };
-    if controller.as_deref() != Some(candidate) {
+    if !is_controller {
         return response(
             StatusCode::CONFLICT,
             "text/plain; charset=utf-8",
             "stale controller",
         );
     }
-    let Some(command) = command_from_request(spelling, request) else {
-        return response(
-            StatusCode::BAD_REQUEST,
-            "text/plain; charset=utf-8",
-            "unknown command",
-        );
+    let command = if spelling == "edit-next-injection" {
+        let body = match read_edit_body(request.into_body()).await {
+            Ok(body) => body,
+            Err(response) => return response,
+        };
+        UiCommand::EditNextInjection { data: body }
+    } else {
+        let Some(command) = command_from_request(spelling, &request) else {
+            return response(
+                StatusCode::BAD_REQUEST,
+                "text/plain; charset=utf-8",
+                "unknown command",
+            );
+        };
+        command
     };
     match context.command_tx.try_send(command) {
         Ok(()) => response(
@@ -516,6 +538,37 @@ fn command(
             "execution ended",
         ),
     }
+}
+
+async fn read_edit_body(mut body: Incoming) -> Result<String, Response<HttpBody>> {
+    let mut bytes = Vec::new();
+    while let Some(frame) = body.frame().await {
+        let frame = frame.map_err(|_| {
+            response(
+                StatusCode::BAD_REQUEST,
+                "text/plain; charset=utf-8",
+                "the edited DATA body could not be read",
+            )
+        })?;
+        let Ok(data) = frame.into_data() else {
+            continue;
+        };
+        if bytes.len().saturating_add(data.len()) > MAX_EDIT_BODY_BYTES {
+            return Err(response(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "text/plain; charset=utf-8",
+                "the edited DATA tree exceeds 256 KiB",
+            ));
+        }
+        bytes.extend_from_slice(&data);
+    }
+    String::from_utf8(bytes).map_err(|_| {
+        response(
+            StatusCode::BAD_REQUEST,
+            "text/plain; charset=utf-8",
+            "the edited DATA tree must be UTF-8 JSON",
+        )
+    })
 }
 
 fn command_from_request(spelling: &str, request: &Request<Incoming>) -> Option<UiCommand> {
@@ -700,7 +753,7 @@ mod tests {
             ),
         );
         assert!(authorized.starts_with("HTTP/1.1 200"), "{authorized}");
-        assert!(authorized.contains("Rastok execution UI"));
+        assert!(authorized.contains("Rastok UI"));
         assert!(authorized.contains("SameSite=Strict"));
         let body = authorized
             .split_once("\r\n\r\n")
@@ -757,6 +810,45 @@ mod tests {
         assert_eq!(server.try_command(), Some(UiCommand::Step));
         assert!(post("/api/command/next-scenario-action", "second").starts_with("HTTP/1.1 202"));
         assert_eq!(server.try_command(), Some(UiCommand::NextScenarioAction));
+    }
+
+    #[test]
+    fn a_controller_can_queue_one_bounded_typed_input_edit() {
+        let server = UiServer::start(None, initial()).expect("server starts");
+        let headers = |path: &str, body: &str| {
+            request(
+                server.address,
+                &format!(
+                    "POST {path}?token={} HTTP/1.1\r\nHost: {}\r\nOrigin: http://{}\r\nX-Rastok-Controller: editor\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    server.capability,
+                    server.address,
+                    server.address,
+                    body.len(),
+                ),
+            )
+        };
+        assert!(
+            headers("/api/control/claim", "").starts_with("HTTP/1.1 200"),
+            "the editor owns control"
+        );
+        let body = r#"{"name":"alice","count":"7"}"#;
+        assert!(headers("/api/command/edit-next-injection", body).starts_with("HTTP/1.1 202"));
+        assert_eq!(
+            server.try_command(),
+            Some(UiCommand::EditNextInjection {
+                data: String::from(body),
+            })
+        );
+    }
+
+    #[test]
+    fn embedded_ui_uses_system_theme_and_compact_transport_controls() {
+        assert!(APP_CSS.contains("prefers-color-scheme: dark"));
+        assert!(INDEX_HTML.contains("class=\"transport\""));
+        assert!(INDEX_HTML.contains("#icon-step"));
+        assert!(!INDEX_HTML.contains("id=\"guidance\""));
+        assert!(APP_JS.contains("Before admission"));
+        assert!(APP_JS.contains("[\"META\", meta], [\"DATA\", data]"));
     }
 
     #[test]

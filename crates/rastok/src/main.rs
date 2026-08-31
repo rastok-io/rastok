@@ -653,6 +653,7 @@ fn run_with_ui<'plan>(
                 | UiCommand::RunUntilAssertion
                 | UiCommand::ResetScenario
                 | UiCommand::SelectScenario { .. }
+                | UiCommand::EditNextInjection { .. }
                 | UiCommand::Pause
                 | UiCommand::Step
                 | UiCommand::RetryStep
@@ -1237,12 +1238,46 @@ fn simulate_with_ui(
                     }
                     dirty = true;
                 }
+                UiCommand::EditNextInjection { data }
+                    if matches!(state, ExecutionState::Paused | ExecutionState::Faulted) =>
+                {
+                    let edited = session
+                        .next_injection_draft()
+                        .and_then(|draft| {
+                            let draft = draft.ok_or_else(|| {
+                                String::from("the next scenario action is not an injection")
+                            })?;
+                            rastok::ui::parse_edited_data(&data, &draft.ty)
+                        })
+                        .and_then(|value| session.replace_next_injection_data(value));
+                    match edited {
+                        Ok(()) => {
+                            fault = None;
+                            state = ExecutionState::Paused;
+                        }
+                        Err(message) => {
+                            fault = Some(FaultView {
+                                message,
+                                help: String::from(
+                                    "Correct the typed DATA tree or reset the scenario to restore its authored input.",
+                                ),
+                                commit: String::from(
+                                    "the draft was not changed and no envelope was admitted",
+                                ),
+                                retryable: false,
+                            });
+                            state = ExecutionState::Faulted;
+                        }
+                    }
+                    dirty = true;
+                }
                 UiCommand::Close => close_requested = true,
                 UiCommand::Pause
                 | UiCommand::Step
                 | UiCommand::RetryStep
                 | UiCommand::NextScenarioAction
                 | UiCommand::RunUntilAssertion
+                | UiCommand::EditNextInjection { .. }
                 | UiCommand::Resume
                 | UiCommand::RunToCompletion => {}
             }
@@ -1446,6 +1481,11 @@ fn simulation_view(
     session: &lab::ScenarioSession<'_, '_>,
     golden_failures: &[String],
 ) -> serde_json::Value {
+    let draft = match session.next_injection_draft() {
+        Ok(Some(draft)) => rastok::ui::scenario_injection_json(&draft),
+        Ok(None) => serde_json::Value::Null,
+        Err(error) => serde_json::json!({ "error": error }),
+    };
     let available = compilation
         .labs
         .iter()
@@ -1472,6 +1512,7 @@ fn simulation_view(
             "last_action": session.last_action_kind().map(scenario_action_name),
             "quiescent": session.is_quiescent(),
             "complete": session.is_complete(),
+            "draft": draft,
             "failures": session.failures(),
             "golden_failures": golden_failures,
         },
