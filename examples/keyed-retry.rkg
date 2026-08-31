@@ -1,0 +1,105 @@
+// An executable UI tour: two tenants enter one keyed finite Loop, traverse a
+// nested audit Graph, time out once at a mocked Process boundary, then retry
+// independently and complete with structured DATA.
+
+type Attempt = struct {
+  tenant: text
+  prompt: text
+  attempt: int
+}
+
+type Answer = struct {
+  tenant: text
+  prompt: text
+  attempts: int
+}
+
+graph agent_retry : App + Loop {
+  input in: Attempt
+  output done: Answer
+  output failed: text
+
+  instance = { key = data.tenant }
+  Loop.fuel = 2
+  Loop.delay = { kind = fixed; after = duration("1s") }
+
+  graph audit {
+    input in: Attempt
+
+    operator observe {
+      input in: Attempt
+      output out: text
+
+      on in { out = data.tenant }
+    }
+
+    . -> observe
+    observe.out -> nothing
+  }
+
+  connector model : Process {
+    mode = job
+    command = "cat"
+    codec = jsonl
+    effect = idempotent
+    behavior = probabilistic
+    timeout = duration("1s")
+    max_output = "1 MiB"
+  }
+
+  . -> audit
+  . -> model
+  model.out -> nothing
+  model.err -> nothing
+
+  on model.exit where data is TimeoutExpired {
+    next = {
+      tenant = Loop.state.data.tenant
+      prompt = Loop.state.data.prompt
+      attempt = Loop.state.data.attempt + 1
+    }
+  }
+  on model.exit where data is Exited {
+    done = {
+      tenant = Loop.state.data.tenant
+      prompt = Loop.state.data.prompt
+      attempts = Loop.state.data.attempt + 1
+    }
+  }
+  on model.exit where data is CaptureFailed  { failed = "capture" }
+  on model.exit where data is DecodeFailed   { failed = "decode" }
+  on model.exit where data is OutcomeUnknown { failed = "unknown" }
+  on model.exit where data is OutputOverflow { failed = "overflow" }
+  on model.exit where data is SpawnFailed    { failed = "spawn" }
+}
+
+lab agent_retry {
+  simulation ui_tour on app {
+    mock model {
+      on in where data is Attempt && data.attempt == 0 {
+        out = nothing
+      }
+      on in {
+        out = { kind = "delta"; text = "thinking"; sequence = 1 }
+        out = { kind = "delta"; text = "complete"; sequence = 2 }
+        exit = Exited { exit_code = 0; signal = null }
+      }
+    }
+
+    scenario two_tenants "two keyed retries progress independently" {
+      app.in = { tenant = "alice"; prompt = "Explain causal replay"; attempt = 0 }
+      expect nothing app.done
+
+      app.in = { tenant = "bob"; prompt = "Explain typed envelopes"; attempt = 0 }
+      expect nothing app.done
+
+      advance duration("1s")
+      expect nothing app.done
+
+      advance duration("1s")
+      expect app.done count == 1 where data.tenant == "alice" && data.attempts == 2
+      expect app.done count == 1 where data.tenant == "bob" && data.attempts == 2
+      expect nothing app.failed
+    }
+  }
+}

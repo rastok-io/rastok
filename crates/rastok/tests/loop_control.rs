@@ -294,6 +294,15 @@ fn public_lab_composes_keyed_retry_nested_graphs_and_process_frames() {
 }
 
 #[test]
+fn the_keyed_retry_ui_tour_remains_executable() {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/keyed-retry.rkg");
+    let source = std::fs::read_to_string(path).expect("the public UI tour is readable");
+    let runs = run_lab(&source);
+    assert_eq!(runs.len(), 1);
+}
+
+#[test]
 fn public_lab_observes_fuel_exhaustion_and_closing_generation_fencing() {
     assert_eq!(run_lab(LOOP_EXHAUSTION_LAB).len(), 1);
     assert_eq!(run_lab(LOOP_CLOSING_LAB).len(), 1);

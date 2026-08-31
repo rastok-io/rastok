@@ -190,6 +190,13 @@ cargo run -p rastok --features hosted-ui -- run app.rkg --ui
 cargo run -p rastok --features hosted-ui -- simulate app.rkg --ui
 ```
 
+The executable UI tour combines structured DATA, keyed Loop retries, a nested
+Graph, an Operator and a mocked Process boundary:
+
+```sh
+cargo run -p rastok --features hosted-ui -- simulate examples/keyed-retry.rkg --ui
+```
+
 Add `--ui-port PORT` to request one explicit non-zero loopback port. The CLI
 prints the authorized URL and never opens a browser automatically.
 
