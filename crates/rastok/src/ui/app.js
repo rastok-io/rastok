@@ -294,11 +294,11 @@ function renderTopology(topology) {
     const midpointY = (startY + endY) / 2;
     const badge = svgElement("g", {
       class: "edge-counter",
-      transform: `translate(${midpointX - 27} ${midpointY - 13})`,
+      transform: `translate(${midpointX - 17} ${midpointY - 13})`,
     });
-    badge.append(svgElement("rect", { width: "54", height: "26", rx: "13" }));
-    const counter = svgElement("text", { x: "27", y: "17", "text-anchor": "middle" });
-    counter.textContent = `✉ ${edge.envelope_count || "0"}`;
+    badge.append(svgElement("rect", { width: "34", height: "26", rx: "13" }));
+    const counter = svgElement("text", { x: "17", y: "17", "text-anchor": "middle" });
+    counter.textContent = edge.envelope_count || "0";
     badge.append(counter);
     group.append(badge);
 
@@ -435,7 +435,7 @@ function renderTopology(topology) {
   }
   const evidence = document.createElement("span");
   evidence.className = "legend-evidence";
-  evidence.textContent = "✉ cumulative envelopes from causal records";
+  evidence.textContent = "edge counts from causal records";
   legend.append(evidence);
 
   target.className = "topology";
@@ -501,7 +501,7 @@ function envelopePanel(snapshot) {
       actions.append(save);
       dataZone.append(actions);
     } else {
-      appendValue(dataZone, draft.data);
+      appendDataTree(dataZone, draft.data);
     }
     panel.append(zones);
     return panel;
@@ -537,7 +537,7 @@ function envelopeZones(meta, data) {
     const title = document.createElement("h4");
     title.textContent = name;
     zone.append(title);
-    if (value !== null && value !== undefined) appendValue(zone, value);
+    if (value !== null && value !== undefined) appendDataTree(zone, value);
     zones.append(zone);
   }
   return zones;
@@ -1148,7 +1148,11 @@ function historyTable(label, rows, columns) {
     const line = document.createElement("tr");
     for (const column of columns) {
       const cell = document.createElement("td");
-      appendValue(cell, row[column]);
+      if (["meta", "data"].includes(column)) {
+        appendDataTree(cell, row[column]);
+      } else {
+        appendValue(cell, row[column]);
+      }
       line.append(cell);
     }
     body.append(line);
@@ -1246,6 +1250,72 @@ function appendValue(target, value) {
   const code = document.createElement("code");
   code.textContent = value === undefined ? "—" : String(value);
   target.append(code);
+}
+
+function appendDataTree(target, value) {
+  const tree = document.createElement("div");
+  tree.className = "data-tree";
+  if (value !== null && typeof value === "object") {
+    appendDataTreeEntries(tree, value, 0);
+  } else {
+    tree.append(dataTreeLeaf(null, value));
+  }
+  target.append(tree);
+}
+
+function appendDataTreeEntries(target, value, depth) {
+  const entries = Array.isArray(value)
+    ? value.map((item, index) => [`[${index}]`, item])
+    : Object.entries(value);
+  if (!entries.length) {
+    const emptyValue = document.createElement("span");
+    emptyValue.className = "data-tree-empty";
+    emptyValue.textContent = Array.isArray(value) ? "empty array" : "empty object";
+    target.append(emptyValue);
+    return;
+  }
+  for (const [name, child] of entries) {
+    if (child !== null && typeof child === "object") {
+      const branch = document.createElement("details");
+      branch.className = "data-tree-branch";
+      branch.open = depth < 1;
+      const summary = document.createElement("summary");
+      const key = document.createElement("span");
+      key.className = "data-tree-key";
+      key.textContent = name;
+      const size = document.createElement("span");
+      size.className = "data-tree-size";
+      const count = Array.isArray(child) ? child.length : Object.keys(child).length;
+      size.textContent = Array.isArray(child)
+        ? `${count} item${count === 1 ? "" : "s"}`
+        : `${count} field${count === 1 ? "" : "s"}`;
+      summary.append(key, size);
+      const children = document.createElement("div");
+      children.className = "data-tree-children";
+      appendDataTreeEntries(children, child, depth + 1);
+      branch.append(summary, children);
+      target.append(branch);
+    } else {
+      target.append(dataTreeLeaf(name, child));
+    }
+  }
+}
+
+function dataTreeLeaf(name, value) {
+  const row = document.createElement("div");
+  row.className = "data-tree-leaf";
+  if (name !== null) {
+    const key = document.createElement("span");
+    key.className = "data-tree-key";
+    key.textContent = name;
+    row.append(key);
+  }
+  const content = document.createElement("code");
+  const kind = value === null ? "null" : typeof value;
+  content.className = `data-tree-value data-tree-value-${kind}`;
+  content.textContent = value === undefined ? "—" : value === null ? "null" : String(value);
+  row.append(content);
+  return row;
 }
 
 function empty(target, message) {

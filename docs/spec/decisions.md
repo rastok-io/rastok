@@ -42,11 +42,12 @@ omit the entire physical capability while reading the same plans.
 The journal remains the only causal authority and `CostReport` remains the
 only accounting fold. Snapshot/SSE state, controller ownership and rendering
 are disposable hosted projections. The UI shows the full in-memory history,
-validated topology, logical instances, Node-private state and structured
-materialized payloads; it never forces decoding. `@sensitive` and `@personal`
-paths redact before JSON construction, `@secret` never renders, and scalar or
-opaque roots disclose only type/known size. No commit time or duration is
-invented.
+validated topology, logical instances, Node-private state and materialized
+DATA; it never forces decoding. `@sensitive` and `@personal` paths redact
+before projection and `@secret` never renders. An unclassified materialized
+scalar discloses its content beside `kind` and `materialized`; an unmaterialized
+encoded root still discloses only representation metadata and known size. No
+commit time or duration is invented.
 
 The topology view is a compound graph derived from the validated lexical owner
 table: the root `App` frame contains its direct Nodes and nested Graph frames,
@@ -54,7 +55,7 @@ recursively. It never guesses containment from dotted paths. Operators remain
 green and Connectors blue, but compact cards carry only name, NodeType and
 NodeAspects; the former circle/square/cross seed glyphs are superseded. A white
 disk is an input port and a black disk is an output port, and exact edges attach
-to those disks. Each edge's envelope badge is a cumulative fold of retained
+to those disks. Each edge's count badge is a cumulative fold of retained
 INBOUND/TRANSACTION routing facts, including committed boundary/discard
 emissions derived against the validated plan. The last-Step highlight is
 separately physical: an authored Lab action names itself and says that no Node

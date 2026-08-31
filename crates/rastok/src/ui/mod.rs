@@ -849,6 +849,8 @@ mod tests {
         assert!(!INDEX_HTML.contains("id=\"guidance\""));
         assert!(APP_JS.contains("Before admission"));
         assert!(APP_JS.contains("[\"META\", meta], [\"DATA\", data]"));
+        assert!(APP_JS.contains("appendDataTree(zone, value)"));
+        assert!(!APP_JS.contains('✉'));
     }
 
     #[test]

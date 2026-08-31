@@ -1400,17 +1400,10 @@ fn parse_hex(text: &str) -> Result<Vec<u8>, String> {
 }
 
 fn materialized_value_json(value: &Value, annotations: &AnnotationTable) -> JsonValue {
-    if !is_composite(value) {
-        return json!({
-            "kind": crate::value::ValueKind::of(value).to_string(),
-            "materialized": true,
-            "content": "hidden for scalar roots",
-        });
-    }
     json!({
         "kind": crate::value::ValueKind::of(value).to_string(),
         "materialized": true,
-        "value": value_json(value, annotations, &SchemaPath::root(), !annotations.is_empty()),
+        "content": value_json(value, annotations, &SchemaPath::root(), !annotations.is_empty()),
     })
 }
 
@@ -1544,18 +1537,6 @@ fn value_json(
     }
 }
 
-fn is_composite(value: &Value) -> bool {
-    matches!(
-        value,
-        Value::Array(_)
-            | Value::Map(_)
-            | Value::KeyedMap(_)
-            | Value::Struct(_)
-            | Value::StructuralUnion { .. }
-            | Value::TaggedUnion(_)
-    )
-}
-
 fn json_integer(value: i128, kind: &'static str) -> JsonValue {
     const JS_EXACT_MAX: i128 = 9_007_199_254_740_991;
     if (-JS_EXACT_MAX..=JS_EXACT_MAX).contains(&value) {
@@ -1669,7 +1650,7 @@ graph inspected : App {
     }
 
     #[test]
-    fn structured_rendering_redacts_before_json_and_hides_scalar_roots() {
+    fn materialized_data_exposes_unclassified_scalars_and_redacts_before_projection() {
         let annotations = AnnotationTable::new(vec![(
             SchemaPath::new(vec![SchemaPathSegment::Field(String::from("private"))]),
             AnnotationSet::new(vec![DataAnnotation::Sensitive(
@@ -1683,14 +1664,29 @@ graph inspected : App {
             (String::from("private"), Value::Text(String::from("secret"))),
         ]);
         let rendered = materialized_value_json(&value, &annotations);
-        assert_eq!(rendered["value"]["public"], JsonValue::from(7));
-        assert_eq!(rendered["value"]["private"], json!({"redacted": true}));
+        assert_eq!(rendered["kind"], "struct");
+        assert_eq!(rendered["materialized"], true);
+        assert_eq!(rendered["content"]["public"], JsonValue::from(7));
+        assert_eq!(rendered["content"]["private"], json!({"redacted": true}));
         assert!(!rendered.to_string().contains("secret"));
 
-        let scalar_value = Value::Text(String::from("hidden"));
+        let scalar_value = Value::Text(String::from("visible"));
         let scalar = materialized_value_json(&scalar_value, &EMPTY_ANNOTATIONS);
-        assert_eq!(scalar["content"], "hidden for scalar roots");
-        assert!(!scalar.to_string().contains("hidden\""));
+        assert_eq!(scalar["kind"], "text");
+        assert_eq!(scalar["materialized"], true);
+        assert_eq!(scalar["content"], "visible");
+
+        let classified = AnnotationTable::new(vec![(
+            SchemaPath::root(),
+            AnnotationSet::new(vec![DataAnnotation::Sensitive(
+                SensitivityLevel::Confidential,
+            )])
+            .expect("one root classification"),
+        )])
+        .expect("one canonical root");
+        let scalar = materialized_value_json(&scalar_value, &classified);
+        assert_eq!(scalar["content"], json!({"redacted": true}));
+        assert!(!scalar.to_string().contains("visible"));
     }
 
     #[test]

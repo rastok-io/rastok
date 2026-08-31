@@ -187,6 +187,22 @@ select, input, textarea { min-width: 0; padding: .48rem .58rem; border-color: va
 .envelope-actions { display: flex; align-items: center; gap: .45rem; margin-top: .55rem; }
 .edited-badge { color: var(--accent); font-size: .7rem; font-weight: 750; }
 
+.data-tree { display: grid; gap: .18rem; min-width: 0; font-size: .72rem; }
+.data-tree-leaf { display: grid; grid-template-columns: minmax(4.25rem, .36fr) minmax(0, 1fr); gap: .45rem; align-items: baseline; min-width: 0; padding: .12rem .2rem; border-radius: .25rem; }
+.data-tree-leaf:hover { background: var(--surface-soft); }
+.data-tree-leaf > .data-tree-value:first-child { grid-column: 1 / -1; }
+.data-tree-key { min-width: 0; color: var(--muted); font-weight: 680; overflow-wrap: anywhere; }
+.data-tree-value { min-width: 0; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.data-tree-value-string { color: var(--primary); }
+.data-tree-value-boolean { color: var(--purple); }
+.data-tree-value-null, .data-tree-empty, .data-tree-size { color: var(--muted); }
+.data-tree-branch { min-width: 0; padding: .08rem .2rem; }
+.data-tree-branch > summary { padding: .08rem 0; list-style-position: inside; }
+.data-tree-branch > summary::marker { color: var(--muted); }
+.data-tree-size { float: right; margin-left: .5rem; font-size: .62rem; font-weight: 560; }
+.data-tree-children { display: grid; gap: .14rem; margin: .18rem 0 .12rem .38rem; padding-left: .48rem; border-left: 1px solid var(--border); }
+.data-tree-empty { padding: .14rem .2rem; font-style: italic; }
+
 .typed-tree { display: grid; gap: .4rem; }
 .typed-fieldset { min-width: 0; margin: 0; padding: .45rem .5rem .5rem; border: 1px solid var(--border); border-radius: .4rem; }
 .typed-fieldset legend { max-width: 100%; padding: 0 .25rem; color: var(--text); font-size: .73rem; font-weight: 720; }

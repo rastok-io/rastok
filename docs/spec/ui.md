@@ -205,26 +205,29 @@ frames are presentation of that existing authority and add no runtime scope.
 
 ## 7. DATA, META and state presentation
 
-M1 displays committed `DATA` content only when it is already materialized and its root
-is a struct, map, array or union. Scalar leaves inside that structure remain
-visible. A scalar root or encoded/opaque DATA value exposes only its logical kind
-and known byte size; the UI never forces decoding or materialization merely
-for presentation. The one exception is the still-uncommitted simulation draft:
-its scalar value may be shown in the typed editor because the authored action
-already materialized it and no causal envelope exists yet.
+M1 displays committed `DATA` content whenever it is already materialized,
+whether its root is scalar, struct, map, array or union. The presentation keeps
+the technical `kind` and `materialized` fields beside one `content` branch, so
+plain text remains visibly text rather than becoming an opaque placeholder.
+An unmaterialized encoded DATA value exposes only representation metadata and
+known byte size; the UI never forces decoding or materialization merely for
+presentation. The still-uncommitted simulation draft uses its resolved type in
+the editable tree because the authored action already materialized it and no
+causal envelope exists yet.
 
 `META` is displayed separately. After admission it includes the exact
 read-only `meta.sys` spine and the `app`/`ext` namespaces. Before admission it
 shows only authored `meta.ext`, an empty `meta.app`, and a pending marker in
 place of `meta.sys`; the UI never fabricates an id for a draft.
 
-Node state uses the same structured-only rule. Presentation consults the exact
-resolved annotation table before building JSON:
+Node state remains structured-only. DATA and state presentation consult the
+exact resolved annotation table before building their read model:
 
 - `@secret` content is impossible on the executable source path and is never
   rendered for a forged package;
 - `@sensitive` and `@personal` paths are redacted with no reveal control;
-- unclassified structured descendants render through a typed JSON tree.
+- unclassified DATA renders as a compact DOM tree rather than formatted JSON;
+  structured state descendants retain their typed projection.
 
 Redaction happens before serialization. String search or post-format masking
 is not an acceptable implementation.
