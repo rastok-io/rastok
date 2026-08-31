@@ -28,7 +28,7 @@ use tokio::sync::{RwLock, mpsc, watch};
 
 mod view;
 
-pub use view::{ExecutionState, FaultView, SnapshotInput, snapshot};
+pub use view::{ActivityView, ExecutionState, FaultView, SnapshotInput, snapshot};
 
 const INDEX_HTML: &str = include_str!("index.html");
 const APP_CSS: &str = include_str!("app.css");

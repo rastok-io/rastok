@@ -68,6 +68,10 @@ Simulation has an additional authored-action boundary. Its primary `Step`
 advances exactly the next available boundary: one `inject`, `advance` or
 `expect` while the VM is quiescent, otherwise one ready VM transaction. One
 click never applies an action and executes its resulting transaction together.
+The page names that last boundary explicitly. An authored action says that no
+Node fired; a transaction names its exact journal owner and trigger, including
+Graph or Node lifecycle transactions rather than skipping them for visual
+convenience.
 
 `Pause` takes effect at a transaction boundary. No new inbound proposal is
 admitted and no further handler starts. An outbound Call already opened may
@@ -134,7 +138,9 @@ client or a closed browser cannot delay, fail or alter execution.
 
 The initial HTTP snapshot describes:
 
-- the validated Graph/Node/edge topology;
+- the validated Graph/Node/edge topology, with the cumulative number of
+  envelopes carried by every exact edge and the Graph/Node owner of the last
+  stepped transaction;
 - controller and execution state;
 - current logical instances, lifecycle and Node-private `var` cells;
 - retained causal observations with Call/Session correlation;
@@ -144,6 +150,15 @@ SSE then announces monotonically increasing view revisions. Reconnection asks
 for the current snapshot; no wall-clock timestamp or exporter duration is
 invented. The browser virtualizes large tables, but every record retained by
 the in-memory journal remains addressable for that run.
+
+Edge counters are causal projections, not browser counters. INBOUND and
+TRANSACTION route facts increment their exact canonical edge; an emission to
+the App boundary or explicit discard is derived from that same committed
+transaction and the validated plan. A scenario `inject` may therefore light
+an input edge while correctly reporting that no Node ran. The highlighted
+record range is disposable controller state; cumulative counts and Node
+transaction totals are reconstructed from the complete journal after every
+refresh.
 
 ## 7. Payload and state presentation
 

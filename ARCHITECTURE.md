@@ -207,7 +207,10 @@ M1.9 keeps interactive execution outside that boundary. The optional
 whose `Step` command invokes exactly one existing VM transaction during a real
 run. In simulation the same primary gesture advances exactly one authored
 action or one ready VM transaction, never both. It derives history, structured
-redacted values and `CostReport` from existing read seams; capabilities,
+redacted values and `CostReport` from existing read seams. Its layered graph
+folds exact route facts into cumulative edge-envelope counts and identifies
+the owner of the latest transaction without hiding lifecycle steps;
+capabilities,
 controller ownership, browser revisions and port numbers enter no package,
 semantic or causal identity. Reduced and embedded builds omit the server and
 assets entirely.

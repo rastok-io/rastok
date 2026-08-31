@@ -48,6 +48,15 @@ paths redact before JSON construction, `@secret` never renders, and scalar or
 opaque roots disclose only type/known size. No commit time or duration is
 invented.
 
+The topology view follows the seed notation: Graph boundaries are amber,
+Operators green and Connectors blue. Its envelope badge on each exact edge is
+a cumulative fold of retained INBOUND/TRANSACTION routing facts, including
+committed boundary/discard emissions derived against the validated plan. The
+last-Step highlight is separately physical: an authored Lab action names
+itself and says that no Node fired, while a transaction names its exact owner
+and trigger. Lifecycle transactions remain visible instead of being skipped
+to manufacture a more dramatic animation.
+
 This is a package/semantic/causal non-move. Port, capability, browser state,
 view revisions and physical timing enter no identity recipe. A later UI crate,
 remote administration, hot reload, breakpoints, state mutation, durable

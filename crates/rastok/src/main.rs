@@ -577,11 +577,12 @@ fn run_with_ui<'plan>(
     printed_outputs: &mut usize,
     printed_errors: &mut usize,
 ) -> ExitCode {
-    use rastok::ui::{ExecutionState, FaultView, UiCommand, UiServer};
+    use rastok::ui::{ActivityView, ExecutionState, FaultView, UiCommand, UiServer};
 
     let mut state = ExecutionState::Paused;
     let mut revision = 0_u64;
     let mut fault: Option<FaultView> = None;
+    let mut activity: Option<ActivityView> = None;
     let initial = match rastok::ui::snapshot(rastok::ui::SnapshotInput {
         revision,
         mode: "run",
@@ -591,6 +592,7 @@ fn run_with_ui<'plan>(
         journal,
         cost_profile: boot.and_then(rastok::deployment::BootBindings::cost_profile),
         fault: None,
+        activity: None,
         scenario: None,
     }) {
         Ok(snapshot) => snapshot,
@@ -782,6 +784,9 @@ fn run_with_ui<'plan>(
         dirty |= before_outputs != *printed_outputs || before_errors != *printed_errors;
         dirty |= records_before != journal.records().len()
             || observations_before != vm.observations().len();
+        if records_before != journal.records().len() {
+            activity = ActivityView::journal_change(journal, records_before);
+        }
 
         if dirty {
             revision = revision.saturating_add(1);
@@ -794,6 +799,7 @@ fn run_with_ui<'plan>(
                 journal,
                 cost_profile: boot.and_then(rastok::deployment::BootBindings::cost_profile),
                 fault: fault.as_ref(),
+                activity: activity.as_ref(),
                 scenario: None,
             }) {
                 Ok(snapshot) => server.publish(snapshot),
@@ -1036,7 +1042,7 @@ fn simulate_with_ui(
     boot: Option<&rastok::deployment::BootBindings>,
     options: UiOptions,
 ) -> ExitCode {
-    use rastok::ui::{ExecutionState, FaultView, UiCommand, UiServer};
+    use rastok::ui::{ActivityView, ExecutionState, FaultView, UiCommand, UiServer};
 
     let Some((simulation, scenario)) = compilation
         .labs
@@ -1069,6 +1075,7 @@ fn simulate_with_ui(
     let mut state = ExecutionState::Paused;
     let mut revision = 0_u64;
     let mut fault: Option<FaultView> = None;
+    let mut activity: Option<ActivityView> = None;
     let initial = match rastok::ui::snapshot(rastok::ui::SnapshotInput {
         revision,
         mode: "simulate",
@@ -1078,6 +1085,7 @@ fn simulate_with_ui(
         journal: session.journal(),
         cost_profile: boot.and_then(rastok::deployment::BootBindings::cost_profile),
         fault: None,
+        activity: None,
         scenario: Some(simulation_view(compilation, &session, &[])),
     }) {
         Ok(snapshot) => snapshot,
@@ -1152,11 +1160,18 @@ fn simulate_with_ui(
                 UiCommand::Step | UiCommand::NextScenarioAction
                     if state == ExecutionState::Paused =>
                 {
+                    let action_records_before = session.journal().records().len();
                     match session.next_action() {
-                        Ok(_) => {
+                        Ok(Some(action)) => {
                             fault = None;
                             reported = false;
+                            activity = Some(ActivityView::scenario_action(
+                                scenario_action_name(action),
+                                session.journal(),
+                                action_records_before,
+                            ));
                         }
+                        Ok(None) => {}
                         Err(error) => {
                             fault = Some(FaultView {
                                 message: error,
@@ -1181,6 +1196,7 @@ fn simulate_with_ui(
                             session = recreated;
                             state = ExecutionState::Paused;
                             fault = None;
+                            activity = None;
                             reported = false;
                             any_failed = false;
                             golden_failures.clear();
@@ -1198,6 +1214,7 @@ fn simulate_with_ui(
                             session = selected;
                             state = ExecutionState::Paused;
                             fault = None;
+                            activity = None;
                             reported = false;
                             any_failed = false;
                             golden_failures.clear();
@@ -1236,8 +1253,15 @@ fn simulate_with_ui(
         }
 
         if step_requested && state == ExecutionState::Paused {
+            let transaction_records_before = session.journal().records().len();
             match session.step_transaction() {
-                Ok(_) => {
+                Ok(ran) => {
+                    if ran {
+                        activity = ActivityView::journal_change(
+                            session.journal(),
+                            transaction_records_before,
+                        );
+                    }
                     state = if session.vm().awaiting_outbound_calls() == 0 {
                         ExecutionState::Paused
                     } else {
@@ -1291,8 +1315,16 @@ fn simulate_with_ui(
                 until_assertion = false;
                 dirty = true;
             } else if session.is_quiescent() {
+                let action_records_before = session.journal().records().len();
                 match session.next_action() {
-                    Ok(Some(_)) => dirty = true,
+                    Ok(Some(action)) => {
+                        activity = Some(ActivityView::scenario_action(
+                            scenario_action_name(action),
+                            session.journal(),
+                            action_records_before,
+                        ));
+                        dirty = true;
+                    }
                     Ok(None) => {
                         state = ExecutionState::Completed;
                         dirty = true;
@@ -1304,8 +1336,17 @@ fn simulate_with_ui(
                     }
                 }
             } else {
+                let transaction_records_before = session.journal().records().len();
                 match session.step_transaction() {
-                    Ok(_) => dirty = true,
+                    Ok(ran) => {
+                        if ran {
+                            activity = ActivityView::journal_change(
+                                session.journal(),
+                                transaction_records_before,
+                            );
+                        }
+                        dirty = true;
+                    }
                     Err(error) => {
                         fault = Some(if error.retryable() {
                             transaction_fault(error.to_string())
@@ -1352,6 +1393,7 @@ fn simulate_with_ui(
                 journal: session.journal(),
                 cost_profile: boot.and_then(rastok::deployment::BootBindings::cost_profile),
                 fault: fault.as_ref(),
+                activity: activity.as_ref(),
                 scenario: Some(simulation_view(compilation, &session, &golden_failures)),
             }) {
                 Ok(snapshot) => server.publish(snapshot),

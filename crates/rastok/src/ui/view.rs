@@ -3,7 +3,7 @@ use crate::accounting::{CostEvidence, CostReport};
 use crate::data_policy::is_redacted_path;
 use crate::envelope::{Data, Value};
 use crate::identity::InstanceRef;
-use crate::journal::{Journal, MemJournal};
+use crate::journal::{Journal, MemJournal, Record};
 use crate::observation::ExchangeCorrelation;
 use crate::plan::{NodeExecution, Slot, ValidatedExecutionPlan};
 use crate::runtime::vm::{
@@ -12,6 +12,7 @@ use crate::runtime::vm::{
 };
 use crate::schema_annotation::{AnnotationTable, MeasureUnit, SchemaPath, SchemaPathSegment};
 use serde_json::{Map, Value as JsonValue, json};
+use std::collections::BTreeMap;
 
 static EMPTY_ANNOTATIONS: AnnotationTable = AnnotationTable::empty();
 
@@ -56,6 +57,90 @@ pub struct FaultView {
     pub retryable: bool,
 }
 
+/// Physical description of the most recently advanced UI boundary.
+///
+/// This value only selects a slice of already-retained causal records for
+/// presentation. It is never written to the plan or journal and therefore
+/// carries no semantic authority of its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivityView {
+    kind: &'static str,
+    detail: String,
+    node: Option<String>,
+    records: Option<(usize, usize)>,
+}
+
+impl ActivityView {
+    /// Describes one authored Lab action, which is explicitly not a Node
+    /// transaction even when it admits an envelope onto a graph edge.
+    #[must_use]
+    pub fn scenario_action(
+        action: &'static str,
+        journal: &MemJournal,
+        records_before: usize,
+    ) -> Self {
+        let records = committed_range(journal, records_before);
+        Self {
+            kind: "scenario-action",
+            detail: format!("scenario action `{action}`; no Node fired"),
+            node: None,
+            records,
+        }
+    }
+
+    /// Describes records retained while advancing one execution boundary.
+    ///
+    /// The last committed transaction owns the highlight. A pure inbound or
+    /// Connector-boundary change remains visible without inventing a Node
+    /// firing.
+    #[must_use]
+    pub fn journal_change(journal: &MemJournal, records_before: usize) -> Option<Self> {
+        let records = committed_range(journal, records_before)?;
+        let changed = &journal.records()[records.0..=records.1];
+        if let Some(transaction) = changed.iter().rev().find_map(|record| match record {
+            Record::Transaction(transaction) => Some(transaction),
+            Record::Inbound(_) | Record::Outbound(_) => None,
+        }) {
+            let owner = transaction.owner_path.to_string();
+            let label = if owner.is_empty() { "app" } else { &owner };
+            return Some(Self {
+                kind: "transaction",
+                detail: format!(
+                    "Node `{label}` committed one `{}` transaction",
+                    transaction.trigger
+                ),
+                node: Some(owner),
+                records: Some(records),
+            });
+        }
+        let (kind, detail) = if changed
+            .iter()
+            .any(|record| matches!(record, Record::Inbound(_)))
+        {
+            (
+                "inbound",
+                String::from("an inbound envelope was admitted; no Node fired"),
+            )
+        } else {
+            (
+                "connector-boundary",
+                String::from("a Connector boundary fact was retained; no Node fired"),
+            )
+        };
+        Some(Self {
+            kind,
+            detail,
+            node: None,
+            records: Some(records),
+        })
+    }
+}
+
+fn committed_range(journal: &MemJournal, records_before: usize) -> Option<(usize, usize)> {
+    let records_after = journal.records().len();
+    (records_after > records_before).then_some((records_before, records_after - 1))
+}
+
 /// Inputs for one complete disposable UI projection.
 #[derive(Debug)]
 pub struct SnapshotInput<'a> {
@@ -75,6 +160,8 @@ pub struct SnapshotInput<'a> {
     pub cost_profile: Option<&'a crate::accounting::CostProfile>,
     /// Current redaction-safe fault, when execution refused.
     pub fault: Option<&'a FaultView>,
+    /// Most recently advanced physical UI boundary.
+    pub activity: Option<&'a ActivityView>,
     /// Interactive Lab projection, absent in real-run mode.
     pub scenario: Option<JsonValue>,
 }
@@ -95,6 +182,7 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
         journal,
         cost_profile,
         fault,
+        activity,
         scenario,
     } = input;
     let legal_commands = legal_commands(mode, state, fault, scenario.as_ref());
@@ -107,7 +195,7 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
             "awaiting_outbound_calls": vm.awaiting_outbound_calls(),
             "legal_commands": legal_commands,
         },
-        "topology": topology(plan),
+        "topology": topology(plan, journal, activity),
         "history": history(plan, vm, journal),
         "instances": instances(plan, vm),
         "exchanges": exchanges(vm),
@@ -170,8 +258,67 @@ fn legal_commands(
     commands
 }
 
-fn topology(plan: &ValidatedExecutionPlan) -> JsonValue {
+#[derive(Debug, Clone, Copy, Default)]
+struct Traffic {
+    count: u64,
+    last_record: Option<usize>,
+}
+
+fn topology(
+    plan: &ValidatedExecutionPlan,
+    journal: &MemJournal,
+    activity: Option<&ActivityView>,
+) -> JsonValue {
     let plan = plan.plan();
+    let mut traffic = plan
+        .edges
+        .iter()
+        .map(|edge| (plan.edge_text(edge), Traffic::default()))
+        .collect::<BTreeMap<_, _>>();
+    let mut owner_transactions = plan
+        .owners
+        .iter()
+        .map(|owner| (owner.path.to_string(), Traffic::default()))
+        .collect::<BTreeMap<_, _>>();
+    let node_slots = plan
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(slot, node)| (node.path.to_string(), slot))
+        .collect::<BTreeMap<_, _>>();
+
+    for (record_index, record) in journal.records().iter().enumerate() {
+        match record {
+            Record::Inbound(inbound) => {
+                for route in &inbound.routes {
+                    record_traffic(&mut traffic, &route.edge, record_index);
+                }
+            }
+            Record::Transaction(transaction) => {
+                let owner = transaction.owner_path.to_string();
+                record_traffic(&mut owner_transactions, &owner, record_index);
+                let firing_slot = node_slots.get(&owner).copied();
+                for route in &transaction.routes {
+                    record_traffic(&mut traffic, &route.edge, record_index);
+                }
+                if let Some(slot) = firing_slot {
+                    for emission in &transaction.emissions {
+                        for edge in &plan.edges {
+                            let leaves_graph = edge.to.as_ref().is_none_or(|to| to.node.is_none());
+                            if edge.from.node.is_some_and(|source| source.index() == slot)
+                                && edge.from.port == emission.port
+                                && leaves_graph
+                            {
+                                record_traffic(&mut traffic, &plan.edge_text(edge), record_index);
+                            }
+                        }
+                    }
+                }
+            }
+            Record::Outbound(_) => {}
+        }
+    }
+
     let nodes = plan
         .nodes
         .iter()
@@ -181,11 +328,42 @@ fn topology(plan: &ValidatedExecutionPlan) -> JsonValue {
                 NodeExecution::Operator => ("operator", String::from("Operator")),
                 NodeExecution::Connector(spec) => ("connector", spec.contract.to_string()),
             };
+            let firing = owner_transactions
+                .get(&node.path.to_string())
+                .copied()
+                .unwrap_or_default();
             json!({
                 "slot": index,
+                "id": format!("node:{index}"),
                 "path": node.path.to_string(),
                 "kind": kind,
                 "type": ty,
+                "firing_count": firing.count.to_string(),
+                "last_firing_record": firing.last_record,
+            })
+        })
+        .collect::<Vec<_>>();
+    let owners = plan
+        .owners
+        .iter()
+        .enumerate()
+        .filter(|(_, owner)| owner.kind == crate::plan::OwnerKind::Graph)
+        .map(|(index, owner)| {
+            let activity = owner_transactions
+                .get(&owner.path.to_string())
+                .copied()
+                .unwrap_or_default();
+            json!({
+                "id": format!("owner:{index}"),
+                "path": owner.path.to_string(),
+                "label": if owner.path.is_root() {
+                    String::from("App")
+                } else {
+                    owner.path.to_string()
+                },
+                "parent": owner.parent.map(|parent| format!("owner:{}", parent.index())),
+                "transaction_count": activity.count.to_string(),
+                "last_transaction_record": activity.last_record,
             })
         })
         .collect::<Vec<_>>();
@@ -194,14 +372,70 @@ fn topology(plan: &ValidatedExecutionPlan) -> JsonValue {
         .iter()
         .enumerate()
         .map(|(index, edge)| {
+            let route = plan.edge_text(edge);
+            let traffic = traffic.get(&route).copied().unwrap_or_default();
             json!({
                 "index": index,
-                "route": plan.edge_text(edge),
+                "route": route,
                 "scope": plan.owners[edge.scope.index()].path.to_string(),
+                "source": endpoint_json(&edge.from, true),
+                "target": edge.to.as_ref().map_or_else(
+                    || json!({
+                        "id": "discard",
+                        "kind": "discard",
+                        "label": "Discard",
+                        "port": JsonValue::Null,
+                    }),
+                    |target| endpoint_json(target, false),
+                ),
+                "envelope_count": traffic.count.to_string(),
+                "last_envelope_record": traffic.last_record,
             })
         })
         .collect::<Vec<_>>();
-    json!({ "nodes": nodes, "edges": edges })
+    json!({
+        "nodes": nodes,
+        "owners": owners,
+        "edges": edges,
+        "activity": activity.map(|activity| json!({
+            "kind": activity.kind,
+            "detail": activity.detail,
+            "node": activity.node,
+            "records": activity.records.map(|(from, through)| json!({
+                "from": from,
+                "through": through,
+            })),
+        })),
+    })
+}
+
+fn record_traffic(traffic: &mut BTreeMap<String, Traffic>, edge: &str, record_index: usize) {
+    let Some(traffic) = traffic.get_mut(edge) else {
+        return;
+    };
+    traffic.count = traffic.count.saturating_add(1);
+    traffic.last_record = Some(record_index);
+}
+
+fn endpoint_json(endpoint: &crate::plan::EndpointRef, source: bool) -> JsonValue {
+    match endpoint.node {
+        Some(slot) => json!({
+            "id": format!("node:{}", slot.index()),
+            "kind": "node",
+            "label": JsonValue::Null,
+            "port": endpoint.port.name(),
+        }),
+        None => json!({
+            "id": format!(
+                "boundary:{}:{}",
+                if source { "input" } else { "output" },
+                endpoint.port.name(),
+            ),
+            "kind": if source { "input" } else { "output" },
+            "label": if source { "App input" } else { "App output" },
+            "port": endpoint.port.name(),
+        }),
+    }
 }
 
 fn history(plan: &ValidatedExecutionPlan, vm: &Vm<'_>, journal: &MemJournal) -> JsonValue {

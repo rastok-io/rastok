@@ -141,6 +141,13 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
             .is_some_and(|commands| commands.iter().any(|command| command == "step")),
         "the primary Step control is usable at the initial scenario boundary: {snapshot}"
     );
+    assert!(snapshot["topology"]["activity"].is_null());
+    assert!(
+        snapshot["topology"]["edges"]
+            .as_array()
+            .is_some_and(|edges| edges.iter().all(|edge| edge["envelope_count"] == "0")),
+        "a fresh graph starts with no invented edge traffic: {snapshot}"
+    );
 
     let origin = format!("http://{address}");
     let headers = [
@@ -168,6 +175,16 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
         transactions_before_action,
         "the initial Step applies one authored action without also running a VM transaction"
     );
+    assert_eq!(
+        after_action["topology"]["activity"]["kind"],
+        "scenario-action"
+    );
+    assert!(after_action["topology"]["activity"]["node"].is_null());
+    assert_eq!(
+        topology_edge(&after_action, ".in>relay.in")["envelope_count"],
+        "1",
+        "the admitted envelope is visible on its exact edge"
+    );
     let transactions_before = transaction_observation_count(&after_action);
     let step = ui_http(
         address,
@@ -182,6 +199,49 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
         transaction_observation_count(&after_step),
         transactions_before + 1,
         "one Next transaction command commits one VM transaction"
+    );
+    assert_eq!(after_step["topology"]["activity"]["kind"], "transaction");
+    assert_eq!(
+        after_step["topology"]["activity"]["node"], "",
+        "the first VM transaction starts the root App instance"
+    );
+    assert_eq!(
+        topology_edge(&after_step, "relay.out>shell.in")["envelope_count"],
+        "0",
+        "a lifecycle transaction does not invent an emitted envelope"
+    );
+
+    for _ in 0..4 {
+        if topology_edge(&after_step, "relay.out>shell.in")["envelope_count"] == "1" {
+            break;
+        }
+        let prior_revision = after_step["revision"].as_u64();
+        let prior_transactions = transaction_observation_count(&after_step);
+        let step = ui_http(
+            address,
+            &format!("POST /api/command/step?token={token}"),
+            &headers,
+        );
+        assert!(step.starts_with("HTTP/1.1 202"), "{step}");
+        after_step = wait_ui_snapshot(address, token, |snapshot| {
+            snapshot["revision"].as_u64() > prior_revision
+        });
+        assert_eq!(
+            transaction_observation_count(&after_step),
+            prior_transactions + 1,
+            "each click still advances exactly one VM transaction"
+        );
+    }
+    assert_eq!(after_step["topology"]["activity"]["node"], "relay");
+    assert_eq!(
+        topology_node(&after_step, "relay")["firing_count"],
+        "2",
+        "the Node lifecycle start and input handler are both exact transactions"
+    );
+    assert_eq!(
+        topology_edge(&after_step, "relay.out>shell.in")["envelope_count"],
+        "1",
+        "the transaction's emitted envelope is visible on its exact edge"
     );
 
     for _ in 0..16 {
@@ -422,6 +482,24 @@ fn transaction_observation_count(snapshot: &serde_json::Value) -> usize {
         .flatten()
         .filter(|record| record["event"] == "rastok.transaction.committed")
         .count()
+}
+
+#[cfg(feature = "hosted-ui")]
+#[allow(clippy::panic)]
+fn topology_edge<'a>(snapshot: &'a serde_json::Value, route: &str) -> &'a serde_json::Value {
+    snapshot["topology"]["edges"]
+        .as_array()
+        .and_then(|edges| edges.iter().find(|edge| edge["route"] == route))
+        .unwrap_or_else(|| panic!("topology has no edge `{route}`: {snapshot}"))
+}
+
+#[cfg(feature = "hosted-ui")]
+#[allow(clippy::panic)]
+fn topology_node<'a>(snapshot: &'a serde_json::Value, path: &str) -> &'a serde_json::Value {
+    snapshot["topology"]["nodes"]
+        .as_array()
+        .and_then(|nodes| nodes.iter().find(|node| node["path"] == path))
+        .unwrap_or_else(|| panic!("topology has no node `{path}`: {snapshot}"))
 }
 
 #[cfg(feature = "hosted-ui")]
