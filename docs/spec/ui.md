@@ -140,7 +140,8 @@ The initial HTTP snapshot describes:
 
 - the validated Graph/Node/edge topology, with the cumulative number of
   envelopes carried by every exact edge and the Graph/Node owner of the last
-  stepped transaction;
+  stepped transaction; selecting a Graph or Node exposes its exact authored
+  declaration, including ports, attributes, handlers and guard expressions;
 - controller and execution state;
 - current logical instances, lifecycle and Node-private `var` cells;
 - retained causal observations with Call/Session correlation;
@@ -159,6 +160,13 @@ an input edge while correctly reporting that no Node ran. The highlighted
 record range is disposable controller state; cumulative counts and Node
 transaction totals are reconstructed from the complete journal after every
 refresh.
+
+Source definitions are compiler debug side-table data, not plan data. The UI
+may show the exact declaration span retained by the successful compilation,
+but it never reverse-engineers source from the categorical plan and never
+treats source text as execution authority. A deployment that has stripped
+that physical side table still exposes topology and reports that source is
+unavailable.
 
 ## 7. Payload and state presentation
 

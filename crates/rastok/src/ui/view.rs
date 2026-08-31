@@ -1,5 +1,6 @@
 use super::UiSnapshot;
 use crate::accounting::{CostEvidence, CostReport};
+use crate::compiler::SourceDefinition;
 use crate::data_policy::is_redacted_path;
 use crate::envelope::{Data, Value};
 use crate::identity::InstanceRef;
@@ -152,6 +153,9 @@ pub struct SnapshotInput<'a> {
     pub state: ExecutionState,
     /// Validated static topology and resolved annotations.
     pub plan: &'a ValidatedExecutionPlan,
+    /// Source-faithful physical definitions retained by the compiler. They
+    /// enrich inspection only and never become execution authority.
+    pub definitions: &'a [SourceDefinition],
     /// Read-only mutable-machine inspection source.
     pub vm: &'a Vm<'a>,
     /// Complete in-memory causal authority.
@@ -178,6 +182,7 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
         mode,
         state,
         plan,
+        definitions,
         vm,
         journal,
         cost_profile,
@@ -195,7 +200,7 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
             "awaiting_outbound_calls": vm.awaiting_outbound_calls(),
             "legal_commands": legal_commands,
         },
-        "topology": topology(plan, journal, activity),
+        "topology": topology(plan, definitions, journal, activity),
         "history": history(plan, vm, journal),
         "instances": instances(plan, vm),
         "exchanges": exchanges(vm),
@@ -266,10 +271,15 @@ struct Traffic {
 
 fn topology(
     plan: &ValidatedExecutionPlan,
+    definitions: &[SourceDefinition],
     journal: &MemJournal,
     activity: Option<&ActivityView>,
 ) -> JsonValue {
     let plan = plan.plan();
+    let definitions_by_owner = definitions
+        .iter()
+        .map(|definition| (definition.owner.to_string(), definition))
+        .collect::<BTreeMap<_, _>>();
     let mut traffic = plan
         .edges
         .iter()
@@ -332,12 +342,23 @@ fn topology(
                 .get(&node.path.to_string())
                 .copied()
                 .unwrap_or_default();
+            let definition = definitions_by_owner
+                .get(&node.path.to_string())
+                .copied()
+                .filter(|definition| definition.kind == node.kind());
+            let aspects = plan.owners[node.owner.index()]
+                .aspects
+                .iter()
+                .map(|aspect| aspect.aspect().source_name())
+                .collect::<Vec<_>>();
             json!({
                 "slot": index,
                 "id": format!("node:{index}"),
                 "path": node.path.to_string(),
                 "kind": kind,
                 "type": ty,
+                "aspects": aspects,
+                "definition": definition.map(source_definition_json),
                 "firing_count": firing.count.to_string(),
                 "last_firing_record": firing.last_record,
             })
@@ -353,6 +374,10 @@ fn topology(
                 .get(&owner.path.to_string())
                 .copied()
                 .unwrap_or_default();
+            let definition = definitions_by_owner
+                .get(&owner.path.to_string())
+                .copied()
+                .filter(|definition| definition.kind == crate::node::Kind::Graph);
             json!({
                 "id": format!("owner:{index}"),
                 "path": owner.path.to_string(),
@@ -362,6 +387,9 @@ fn topology(
                     owner.path.to_string()
                 },
                 "parent": owner.parent.map(|parent| format!("owner:{}", parent.index())),
+                "type": if owner.path.is_root() { "App" } else { "Graph" },
+                "aspects": owner.aspects.iter().map(|aspect| aspect.aspect().source_name()).collect::<Vec<_>>(),
+                "definition": definition.map(source_definition_json),
                 "transaction_count": activity.count.to_string(),
                 "last_transaction_record": activity.last_record,
             })
@@ -406,6 +434,15 @@ fn topology(
                 "through": through,
             })),
         })),
+    })
+}
+
+fn source_definition_json(definition: &SourceDefinition) -> JsonValue {
+    json!({
+        "source_index": definition.source.index(),
+        "first_line": definition.first_line,
+        "last_line": definition.last_line,
+        "code": definition.code,
     })
 }
 
@@ -892,6 +929,45 @@ mod tests {
     use crate::schema_annotation::{
         AnnotationSet, DataAnnotation, PersonalDataClass, SensitivityLevel,
     };
+
+    #[test]
+    fn topology_exposes_exact_source_for_selectable_nodes_and_graphs() {
+        let source = r#"
+graph inspected : App {
+  input in: text
+  output out: text
+  operator relay {
+    on in where size(data) > 0 { out = . }
+  }
+  . -> relay -> .
+}
+"#;
+        let compilation = crate::compiler::compile(
+            &[source],
+            &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("the inspection fixture compiles");
+        let journal = MemJournal::new(crate::plan::GraphVersion(1));
+
+        let value = topology(
+            &compilation.plan,
+            &compilation.source_definitions,
+            &journal,
+            None,
+        );
+        assert_eq!(value["owners"][0]["definition"]["first_line"], 2);
+        assert!(
+            value["owners"][0]["definition"]["code"]
+                .as_str()
+                .is_some_and(|code| code.starts_with("graph inspected : App"))
+        );
+        assert_eq!(value["nodes"][0]["path"], "relay");
+        assert!(
+            value["nodes"][0]["definition"]["code"]
+                .as_str()
+                .is_some_and(|code| code.contains("where size(data) > 0"))
+        );
+    }
 
     #[test]
     fn structured_rendering_redacts_before_json_and_hides_scalar_roots() {

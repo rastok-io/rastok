@@ -7,6 +7,7 @@ history.replaceState(null, "", location.pathname);
 let controls = false;
 let currentSnapshot = null;
 let historyLimit = 100;
+let selectedTopologyItem = null;
 
 async function post(path) {
   const response = await fetch(path, {
@@ -158,9 +159,14 @@ function renderTopology(topology) {
   const ownerStrip = document.createElement("div");
   ownerStrip.className = "graph-owners";
   for (const owner of topology.owners || []) {
-    const chip = document.createElement("div");
+    const chip = document.createElement("button");
+    chip.type = "button";
     const active = activity?.kind === "transaction" && activity.node === owner.path;
-    chip.className = `graph-owner${active ? " active" : ""}`;
+    const selected = selectedTopologyItem === owner.id;
+    chip.className = `graph-owner${active ? " active" : ""}${selected ? " selected" : ""}`;
+    chip.setAttribute("aria-pressed", String(selected));
+    chip.setAttribute("aria-label", `Inspect ${owner.path || "App"} Graph definition`);
+    chip.addEventListener("click", () => selectTopologyItem(owner.id));
     const mark = document.createElement("span");
     mark.className = "graph-owner-mark";
     mark.textContent = "×";
@@ -277,10 +283,25 @@ function renderTopology(topology) {
     const position = layout.positions.get(node.id);
     if (!position) continue;
     const active = activity?.kind === "transaction" && activity.node === node.path;
+    const selectable = Boolean(node.definition);
+    const selected = selectedTopologyItem === node.id;
     const group = svgElement("g", {
-      class: `graph-node graph-node-${node.kind}${active ? " active" : ""}`,
+      class: `graph-node graph-node-${node.kind}${active ? " active" : ""}${selectable ? " selectable" : ""}${selected ? " selected" : ""}`,
       transform: `translate(${position.x} ${position.y})`,
     });
+    if (selectable) {
+      group.setAttribute("role", "button");
+      group.setAttribute("tabindex", "0");
+      group.setAttribute("aria-pressed", String(selected));
+      group.setAttribute("aria-label", `Inspect ${node.path} definition`);
+      group.addEventListener("click", () => selectTopologyItem(node.id));
+      group.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          selectTopologyItem(node.id);
+        }
+      });
+    }
     const title = svgElement("title");
     title.textContent = node.path
       ? `${node.path} · ${node.type}`
@@ -325,6 +346,19 @@ function renderTopology(topology) {
   svg.append(nodeLayer);
   canvas.append(svg);
 
+  const selectableItems = [
+    ...(topology.owners || []).map((owner) => ({ ...owner, kind: "graph" })),
+    ...graph.nodes.filter((node) => node.definition),
+  ];
+  let selected = selectableItems.find((item) => item.id === selectedTopologyItem) || null;
+  if (selectedTopologyItem && !selected) {
+    selectedTopologyItem = null;
+    selected = null;
+  }
+  const workbench = document.createElement("div");
+  workbench.className = "graph-workbench";
+  workbench.append(canvas, definitionPanel(selected));
+
   const legend = document.createElement("div");
   legend.className = "graph-legend";
   for (const [kind, label] of [["operator", "Operator"], ["connector", "Connector"], ["boundary", "Graph boundary"]]) {
@@ -339,7 +373,65 @@ function renderTopology(topology) {
   legend.append(evidence);
 
   target.className = "topology";
-  target.replaceChildren(activityPanel, ownerStrip, canvas, legend);
+  target.replaceChildren(activityPanel, ownerStrip, workbench, legend);
+}
+
+function selectTopologyItem(id) {
+  selectedTopologyItem = selectedTopologyItem === id ? null : id;
+  renderTopology(currentSnapshot?.topology);
+}
+
+function definitionPanel(item) {
+  const panel = document.createElement("aside");
+  panel.className = `node-definition${item ? " populated" : " empty"}`;
+  panel.setAttribute("aria-label", "Selected Node definition");
+  if (!item?.definition) {
+    const title = document.createElement("h3");
+    title.textContent = "Node definition";
+    const help = document.createElement("p");
+    help.textContent = "Select a Node or Graph to inspect its ports, attributes, handlers and guard expressions.";
+    panel.append(title, help);
+    return panel;
+  }
+
+  const heading = document.createElement("div");
+  heading.className = "node-definition-heading";
+  const identity = document.createElement("div");
+  const eyebrow = document.createElement("p");
+  eyebrow.className = "node-definition-kind";
+  eyebrow.textContent = item.kind || "node";
+  const title = document.createElement("h3");
+  title.textContent = item.path || item.label || "App";
+  identity.append(eyebrow, title);
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "node-definition-close secondary";
+  close.textContent = "Close";
+  close.setAttribute("aria-label", "Close Node definition");
+  close.addEventListener("click", () => selectTopologyItem(item.id));
+  heading.append(identity, close);
+
+  const badges = document.createElement("div");
+  badges.className = "node-definition-badges";
+  for (const label of [item.type, ...(item.aspects || []).map((aspect) => `+ ${aspect}`)]) {
+    if (!label) continue;
+    const badge = document.createElement("span");
+    badge.textContent = label;
+    badges.append(badge);
+  }
+  const location = document.createElement("p");
+  location.className = "node-definition-location";
+  const lineLabel = item.definition.first_line === item.definition.last_line
+    ? `line ${item.definition.first_line}`
+    : `lines ${item.definition.first_line}–${item.definition.last_line}`;
+  location.textContent = `Source ${Number(item.definition.source_index) + 1} · ${lineLabel}`;
+  const pre = document.createElement("pre");
+  pre.className = "node-definition-code";
+  const code = document.createElement("code");
+  code.textContent = item.definition.code;
+  pre.append(code);
+  panel.append(heading, badges, location, pre);
+  return panel;
 }
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";

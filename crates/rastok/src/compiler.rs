@@ -21,6 +21,7 @@ pub use syntax::SyntaxTree;
 
 use crate::contract;
 use crate::diagnostics::{Bag, Code, Diagnostic, Phase, SourceId};
+use crate::node;
 use crate::plan::{PlanValidationError, SemanticHash, SymbolTable, ValidatedExecutionPlan};
 
 /// The lowering emitted a plan the validator refuses — a compiler
@@ -48,6 +49,31 @@ pub struct Compilation {
     /// The checked lab corpus — executable by the lab runner, never
     /// identity material.
     pub labs: Vec<hir::Lab>,
+    /// Source-faithful Node and Graph definitions for diagnostics and hosted
+    /// inspection. This side table never enters the plan or any identity
+    /// recipe.
+    pub source_definitions: Vec<SourceDefinition>,
+}
+
+/// One exact source declaration retained beside a successful compilation.
+///
+/// The validated plan remains the execution authority. This side table only
+/// lets physical tools show the code which produced an owner, including its
+/// authored attributes, handlers and guards.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceDefinition {
+    /// Root-relative owner path. The App Graph uses the empty root path.
+    pub owner: crate::plan::OwnerPath,
+    /// Structural declaration family.
+    pub kind: node::Kind,
+    /// Source table index handed to [`compile`].
+    pub source: SourceId,
+    /// First one-based source line covered by the declaration.
+    pub first_line: usize,
+    /// Last one-based source line covered by the declaration.
+    pub last_line: usize,
+    /// Exact declaration text, including every handler and guard.
+    pub code: String,
 }
 
 /// Compiles `.rkg` sources against a contract registry.
@@ -110,6 +136,7 @@ pub fn compile_with_assets(
     if bag.has_errors() {
         return Err(bag);
     }
+    let source_definitions = source_definitions(&unit, sources);
     let hash = lower::semantic_hash(&hir);
     let (plan, symbols) = match lower::lower(&hir) {
         Ok(lowered) => lowered,
@@ -179,7 +206,118 @@ pub fn compile_with_assets(
         hash,
         warnings: bag.into_diagnostics(),
         labs: hir.labs,
+        source_definitions,
     })
+}
+
+fn source_definitions(unit: &Unit, sources: &[&str]) -> Vec<SourceDefinition> {
+    let mut definitions = Vec::new();
+    for (_, tree) in &unit.files {
+        let Some(app) = tree.decls.iter().find_map(|decl| match decl {
+            syntax::TopDecl::Graph(graph)
+                if graph.annotation.as_ref().is_some_and(|annotation| {
+                    annotation
+                        .symbols
+                        .first()
+                        .is_some_and(|symbol| symbol.text == "App")
+                }) =>
+            {
+                Some(graph)
+            }
+            _ => None,
+        }) else {
+            continue;
+        };
+        collect_graph_definitions(
+            app,
+            crate::plan::OwnerPath::root(),
+            sources,
+            &mut definitions,
+        );
+    }
+    definitions
+}
+
+fn collect_graph_definitions(
+    graph: &syntax::GraphDecl,
+    path: crate::plan::OwnerPath,
+    sources: &[&str],
+    definitions: &mut Vec<SourceDefinition>,
+) {
+    push_source_definition(
+        definitions,
+        path.clone(),
+        node::Kind::Graph,
+        graph.span,
+        sources,
+    );
+    for item in &graph.body {
+        let (name, kind, span) = match item {
+            syntax::GraphItem::Operator(decl) => (&decl.name.text, node::Kind::Operator, decl.span),
+            syntax::GraphItem::Connector(decl) => {
+                (&decl.name.text, node::Kind::Connector, decl.span)
+            }
+            syntax::GraphItem::Graph(decl) => {
+                let Some(child) = child_owner_path(&path, &decl.name.text) else {
+                    continue;
+                };
+                collect_graph_definitions(decl, child, sources, definitions);
+                continue;
+            }
+            syntax::GraphItem::Port(_)
+            | syntax::GraphItem::RemovedPartition(_)
+            | syntax::GraphItem::Val(_)
+            | syntax::GraphItem::Edge(_)
+            | syntax::GraphItem::Defaults(_)
+            | syntax::GraphItem::Attribute(_)
+            | syntax::GraphItem::Handler(_)
+            | syntax::GraphItem::Error(_) => continue,
+        };
+        if let Some(child) = child_owner_path(&path, name) {
+            push_source_definition(definitions, child, kind, span, sources);
+        }
+    }
+}
+
+fn child_owner_path(parent: &crate::plan::OwnerPath, name: &str) -> Option<crate::plan::OwnerPath> {
+    let mut segments = parent.segments().to_vec();
+    segments.push(name.to_owned());
+    crate::plan::OwnerPath::new(segments).ok()
+}
+
+fn push_source_definition(
+    definitions: &mut Vec<SourceDefinition>,
+    owner: crate::plan::OwnerPath,
+    kind: node::Kind,
+    span: crate::diagnostics::Span,
+    sources: &[&str],
+) {
+    let Some(source) = sources.get(span.source().index() as usize) else {
+        return;
+    };
+    let range = span.range();
+    let Some(code) = source.get(range.clone()) else {
+        return;
+    };
+    let first_line = source.as_bytes()[..range.start]
+        .iter()
+        .filter(|byte| **byte == b'\n')
+        .count()
+        + 1;
+    let final_offset = range.end.saturating_sub(1).max(range.start);
+    let last_line = source.as_bytes()[..final_offset]
+        .iter()
+        .filter(|byte| **byte == b'\n')
+        .count()
+        + 1;
+    definitions.push(SourceDefinition {
+        owner,
+        kind,
+        source: span.source(),
+        first_line,
+        last_line,
+        code: code.to_owned(),
+    });
 }
 
 fn type_resolution_diagnostic(error: &PlanValidationError) -> Diagnostic {
@@ -365,6 +503,61 @@ mod tests {
                 String::from("invalid plan: `nodes` is not in canonical order"),
             )]
         );
+    }
+
+    #[test]
+    fn successful_compilation_retains_source_faithful_owner_definitions() {
+        let source = r#"
+graph inspected : App {
+  input in: text
+  output out: text
+  operator relay {
+    on in where size(data) > 0 { out = . }
+  }
+
+  graph nested {
+    input in: text
+    output out: text
+    operator inner {
+      on in { out = . }
+    }
+    . -> inner -> .
+  }
+
+  . -> relay -> nested -> .
+}
+"#;
+        let compilation = compile(
+            &[source],
+            &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("the inspection fixture compiles");
+
+        assert_eq!(compilation.source_definitions.len(), 4);
+        let app = &compilation.source_definitions[0];
+        assert!(app.owner.is_root());
+        assert_eq!(app.kind, node::Kind::Graph);
+        assert_eq!(app.first_line, 2);
+        assert_eq!(app.last_line, 19);
+        assert!(app.code.starts_with("graph inspected : App"));
+
+        let relay = &compilation.source_definitions[1];
+        assert_eq!(relay.owner.to_string(), "relay");
+        assert_eq!(relay.kind, node::Kind::Operator);
+        assert_eq!(relay.first_line, 5);
+        assert_eq!(relay.last_line, 7);
+        assert_eq!(
+            relay.code,
+            "operator relay {\n    on in where size(data) > 0 { out = . }\n  }"
+        );
+
+        let nested = &compilation.source_definitions[2];
+        assert_eq!(nested.owner.to_string(), "nested");
+        assert_eq!(nested.kind, node::Kind::Graph);
+        let inner = &compilation.source_definitions[3];
+        assert_eq!(inner.owner.to_string(), "nested.inner");
+        assert_eq!(inner.kind, node::Kind::Operator);
+        assert!(inner.code.contains("on in { out = . }"));
     }
 
     #[test]

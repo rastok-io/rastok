@@ -57,6 +57,12 @@ itself and says that no Node fired, while a transaction names its exact owner
 and trigger. Lifecycle transactions remain visible instead of being skipped
 to manufacture a more dramatic animation.
 
+Selecting a Graph or Node opens its exact authored declaration, including
+attributes, handlers and guards. These excerpts live in the compiler's
+physical debug side table: the browser neither parses source nor reconstructs
+it from the plan, and a stripped deployment may omit them without changing
+execution.
+
 This is a package/semantic/causal non-move. Port, capability, browser state,
 view revisions and physical timing enter no identity recipe. A later UI crate,
 remote administration, hot reload, breakpoints, state mutation, durable
