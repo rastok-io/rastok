@@ -5,6 +5,63 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-31-2 — `--ui` is a capability-protected journal debugger
+
+The M1 live visualization is named `--ui`, not `--watch`: watch is already a
+deferred File profile and commonly means source reload. The option applies to
+`run` and `simulate`; `check` keeps its direct textual result. Every UI session
+starts paused and advances at the VM's existing atomic transaction boundary.
+Simulation additionally exposes its authored action boundary, so `inject`,
+`advance` and `expect` never masquerade as Node transactions.
+
+Retry belongs only to a VM transaction refusal whose work remains reserved and
+whose failed attempt committed nothing. A Driver/polling failure may arrive
+after an earlier transaction committed; the controller reports that distinct
+state, preserves the history and refuses retry instead of replaying committed
+work.
+
+Pause is a safe-point request. New external admissions and handler firings
+stop at the transaction boundary; already-open outbound Calls remain polled
+until their typed terminal outcomes are retained, then wait unconsumed for the
+next step. Long-lived Sessions stay open and rely on their existing bounded
+transport/mailbox backpressure. A real run may retry an uncommitted fault but
+cannot reset effects already visible to the world; simulation reset creates a
+fresh complete world.
+
+The hosted page is embedded and self-contained behind an independent Cargo
+feature. It binds loopback only, uses an OS-random capability on every request,
+allows one controller plus read-only observers, and never opens a browser
+automatically. The default port is OS-selected; `--ui-port` requests one exact
+port and fails before execution if unavailable. Minimal and embedded images
+omit the entire physical capability while reading the same plans.
+
+The journal remains the only causal authority and `CostReport` remains the
+only accounting fold. Snapshot/SSE state, controller ownership and rendering
+are disposable hosted projections. The UI shows the full in-memory history,
+validated topology, logical instances, Node-private state and structured
+materialized payloads; it never forces decoding. `@sensitive` and `@personal`
+paths redact before JSON construction, `@secret` never renders, and scalar or
+opaque roots disclose only type/known size. No commit time or duration is
+invented.
+
+This is a package/semantic/causal non-move. Port, capability, browser state,
+view revisions and physical timing enter no identity recipe. A later UI crate,
+remote administration, hot reload, breakpoints, state mutation, durable
+history and OTLP each require their own decision.
+
+**Dependency decision:** the feature reuses the already pinned Hyper/Tokio
+HTTP/1.1 server boundary. The standard library has no portable CSPRNG, so the
+feature directly pins `getrandom 0.4.3` (Rust 1.85; MIT OR Apache-2.0; already
+present transitively in the all-feature lock) solely to mint the local control
+capability. Its public seam is an opaque token; removing or replacing the
+crate changes no Rastok protocol or identity.
+
+**Rejected:** a Git feature branch; `check --ui`; binding beyond loopback;
+unauthenticated localhost controls; all tabs racing commands; auto-opening a
+browser; pausing by cancelling Calls or Sessions; real-run reset; a second
+journal/accounting store; forcing payload materialization; post-format regex
+redaction; and reusing `File.watch` vocabulary.
+
 ## D-2026-08-31-1 — Executable clear-secret schemas refuse at source check
 
 An unused named schema may describe `@secret` data because the declaration is

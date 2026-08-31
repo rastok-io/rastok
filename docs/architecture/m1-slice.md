@@ -4,7 +4,7 @@
 > October 2026: the repository goes public with this milestone, and
 > its closing demonstration is **a complete flow running without the
 > real systems** — compiled, simulated against mocks, golden-traced,
-> watched live.
+> inspected live at deterministic transaction boundaries.
 
 **Current checkpoint (2026-08-31): items 1–9 are closed.** M1.4 owns keyed
 instances, lifetimes, Closing and joins; M1.5 owns the generic Driver boundary
@@ -12,9 +12,11 @@ and File; M1.6 owns Event/Call/Session plus HTTP/1.1–3 and WebSocket; M1.7 own
 finite temporal recursion; M1.8 owns the five data policies, deployment
 secret/privacy boundary, retained observations and exact per-flow accounting.
 The optional OpenTelemetry transport is an explicit post-M1 gate rather than
-a fabricated temporal claim. The remaining ordered items are `--watch` and
-the usage/gallery/demo closure. Detailed evidence lives in the corresponding
-exit reports.
+a fabricated temporal claim. M1.9 owns the optional capability-protected
+`--ui` debugger for `run` and `simulate`; it consumes the existing journal,
+inspection and accounting folds and starts paused. The remaining ordered item
+is the usage/gallery/demo closure. Detailed evidence lives in the
+corresponding exit reports.
 
 **Historical checkpoint (2026-08-27): items 1, 2 and the replacement item 3 are landed, as are
 the contract and parser/compiler interludes recorded under item 2.
@@ -480,9 +482,12 @@ step touches `vm.rs` once.
     identity. A8 closes the three-register identity audit, independent
     interop, three `no_std` ISA builds and Cortex-M33 evidence; see the
     [exit report](m1.8-exit-report.md).
-10. **`--watch`** — the HTML+SSE mini-visualization, strictly a
-    journal subscriber; the observation plane stays outside the
-    core by construction.
+10. **M1.9 `--ui`** — an optional capability-protected loopback HTML+SSE
+    debugger for `run` and `simulate`. It starts paused, steps at the VM's
+    atomic transaction boundary, exposes authored Lab actions separately,
+    and consumes the journal, redacted structured inspection and public
+    `CostReport` without becoming another authority. See the ordered
+    [M1.9 backlog](m1.9-ui-backlog.md) and [`ui.md`](../spec/ui.md).
 11. **Usage review and the example gallery** — continuous, seeded by
     the benchmark's twenty reference solutions, closed by the
     October demo flow: one realistic end-to-end graph (ingest →

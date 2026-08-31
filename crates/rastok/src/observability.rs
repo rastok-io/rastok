@@ -214,7 +214,10 @@ fn event_name(kind: RecordObservationKind) -> &'static str {
     }
 }
 
-fn observation_json(observation: &RecordObservation, payload: Option<String>) -> JsonValue {
+pub(crate) fn observation_json(
+    observation: &RecordObservation,
+    payload: Option<String>,
+) -> JsonValue {
     let mut fields = Map::new();
     fields.insert(
         String::from("event"),

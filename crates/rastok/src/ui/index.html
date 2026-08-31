@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rastok execution UI</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header>
+    <div>
+      <p class="eyebrow">Rastok execution UI</p>
+      <h1 id="title">Execution paused</h1>
+      <p id="guidance" class="guidance" aria-live="polite">Claiming local control…</p>
+    </div>
+    <div class="header-badges">
+      <span id="execution-state" class="pill state-paused">paused</span>
+      <span id="role" class="pill">connecting</span>
+    </div>
+  </header>
+
+  <nav aria-label="Execution controls">
+    <div class="control-group">
+      <button data-command="resume">Resume</button>
+      <button data-command="pause">Pause safely</button>
+      <button data-command="step">Next transaction</button>
+      <button data-command="retry-step">Retry transaction</button>
+      <button data-command="run-to-completion">Run to completion</button>
+    </div>
+    <div id="simulation-controls" class="control-group simulation-only" hidden>
+      <button data-command="next-scenario-action">Next scenario action</button>
+      <button data-command="run-until-assertion">Run until assertion</button>
+      <button data-command="reset-scenario" class="secondary">Reset scenario</button>
+    </div>
+    <div class="control-group right-controls">
+      <button id="take-control" class="secondary">Take control</button>
+      <button data-command="close" class="danger">Close UI</button>
+    </div>
+  </nav>
+
+  <aside id="run-summary" aria-label="Current execution summary">
+    <dl>
+      <div><dt>Mode</dt><dd id="mode">—</dd></div>
+      <div><dt>Logical time</dt><dd id="logical-time">—</dd></div>
+      <div><dt>Calls awaiting outcome</dt><dd id="awaiting-calls">0</dd></div>
+      <div class="simulation-only" hidden><dt>Scenario</dt><dd id="scenario-progress">—</dd></div>
+    </dl>
+  </aside>
+
+  <main>
+    <section id="fault-panel" class="wide fault-panel" hidden aria-live="assertive">
+      <h2>Transaction fault</h2>
+      <p id="fault-message" class="fault-message"></p>
+      <p id="fault-help"></p>
+      <p id="fault-commit" class="commit-note"></p>
+    </section>
+
+    <section id="scenario-panel" class="wide simulation-only" hidden>
+      <div class="section-heading">
+        <div>
+          <h2>Simulation</h2>
+          <p id="scenario-status" class="section-summary"></p>
+        </div>
+        <div class="scenario-picker">
+          <label for="scenario-select">Checked scenario</label>
+          <select id="scenario-select"></select>
+          <button id="select-scenario" class="secondary">Select</button>
+        </div>
+      </div>
+      <div id="scenario" class="empty">No scenario selected.</div>
+    </section>
+
+    <section class="wide">
+      <div class="section-heading">
+        <div>
+          <h2>Graph</h2>
+          <p class="section-summary">Validated topology; edges are spatial, never execution history.</p>
+        </div>
+      </div>
+      <div id="graph" class="empty">Waiting for a validated topology.</div>
+    </section>
+
+    <section class="wide">
+      <div class="section-heading">
+        <div>
+          <h2>Causal history</h2>
+          <p id="history-summary" class="section-summary">No committed records.</p>
+        </div>
+        <button id="show-older" class="secondary" hidden>Show older records</button>
+      </div>
+      <div id="history" class="empty">No committed records.</div>
+    </section>
+
+    <section>
+      <h2>Instances and private state</h2>
+      <div id="state" class="empty">No active instance.</div>
+    </section>
+    <section>
+      <h2>Calls and Sessions</h2>
+      <div id="exchanges" class="empty">No open exchange.</div>
+    </section>
+    <section class="wide">
+      <h2>Cost report</h2>
+      <div id="cost" class="empty">No measured cost.</div>
+    </section>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>

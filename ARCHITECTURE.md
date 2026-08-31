@@ -39,6 +39,7 @@ second engine:
   → synchronous one-worker execution over a causal journal
   → exact-id/role binding of Process, File and four live network Driver families
   → deterministic multi-family Lab scenarios and useful golden diffs
+  → optional loopback UI over the same transaction/journal/accounting seams
 ```
 
 The original proof remains in
@@ -48,8 +49,9 @@ the current state and evidence are indexed by
 [`ROADMAP.md`](ROADMAP.md) remains the source for milestone gates.
 
 The current slice does not require clustering, a durable disk journal, a live
-Saga manager, a complete Connector catalogue, a plugin loader, a web console,
-or enterprise deployment features. Those capabilities
+Saga manager, a complete Connector catalogue, a plugin loader, a remote web
+console, or enterprise deployment features. The local optional `--ui` surface
+is deliberately not a remote administration plane. Those capabilities
 must grow from demonstrated boundaries rather than be represented by
 empty crates.
 
@@ -95,6 +97,7 @@ promise of one crate per box:
 | Process, File and network Drivers | physical external interactions behind typed Contracts; flat family modules own binding and private `network` owns sockets/TLS/protocol engines | general runtime semantics, compiler schema projection or journal authority |
 | Project schema tooling | strict OpenAPI discovery/projection and deterministic generated Rastok source | a second runtime type system or authored-source mutation |
 | Lab runner | controlled handlers, virtual inputs, scripted faults | a second execution engine |
+| Hosted execution UI | paused transaction controls and disposable projections of validated topology, VM inspection, journal observations and accounting | execution authority, durable history, remote administration or unredacted classified data |
 | Diagnostics and golden diff | stable human-facing evidence | mutation of execution |
 
 The component-level blueprint refining this table — owned data forms,
@@ -198,6 +201,14 @@ finite control verdict plus either positive fuel or the admitted integer
 ranking certificate before the VM can execute the aspect. Public Lab and
 Cortex-M33 evidence are recorded in the
 [M1.7 exit report](docs/architecture/m1.7-exit-report.md).
+
+M1.9 keeps interactive execution outside that boundary. The optional
+`hosted-ui` feature embeds one loopback HTTP/SSE page and a physical controller
+whose `Step` command invokes exactly one existing VM transaction. It derives
+history, structured redacted values and `CostReport` from existing read seams;
+capabilities, controller ownership, browser revisions and port numbers enter
+no package, semantic or causal identity. Reduced and embedded builds omit the
+server and assets entirely.
 
 ## Views
 

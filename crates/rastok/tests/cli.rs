@@ -59,6 +59,361 @@ fn check_renders_a_semantic_refusal_in_the_rustc_shape() {
 }
 
 #[test]
+fn check_refuses_the_execution_ui_by_name() {
+    let output = rastok()
+        .arg("check")
+        .arg(example())
+        .arg("--ui")
+        .output()
+        .expect("the binary runs");
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--ui is available only for `run` and `simulate`"),
+        "{stderr}"
+    );
+}
+
+#[cfg(not(feature = "hosted-ui"))]
+#[test]
+fn a_reduced_binary_refuses_the_ui_capability_by_name() {
+    let output = rastok()
+        .arg("simulate")
+        .arg(example())
+        .arg("--ui")
+        .output()
+        .expect("the binary runs");
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("requires a build with the `hosted-ui` feature"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_ui_port_without_the_ui_is_a_usage_error() {
+    let output = rastok()
+        .arg("simulate")
+        .arg(example())
+        .args(["--ui-port", "8123"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--ui-port requires --ui"), "{stderr}");
+}
+
+#[cfg(feature = "hosted-ui")]
+#[test]
+fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
+    use std::io::{BufRead as _, Read as _};
+
+    let mut child = rastok()
+        .arg("simulate")
+        .arg(example())
+        .arg("--ui")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the UI binary starts");
+    let stdout = child.stdout.take().expect("stdout is piped");
+    let mut stdout = std::io::BufReader::new(stdout);
+    let mut url_line = String::new();
+    stdout
+        .read_line(&mut url_line)
+        .expect("the UI URL is printed");
+    let url = url_line
+        .trim()
+        .strip_prefix("ui: http://")
+        .expect("the URL uses the documented prefix");
+    let (address, token) = url
+        .split_once("/?token=")
+        .expect("the URL carries one capability");
+    let address: std::net::SocketAddr = address.parse().expect("the address parses");
+
+    let snapshot = ui_snapshot(address, token);
+    assert_eq!(snapshot["execution"]["state"], "paused");
+    assert_eq!(snapshot["mode"], "simulate");
+
+    let origin = format!("http://{address}");
+    let headers = [
+        ("Origin", origin.as_str()),
+        ("X-Rastok-Controller", "cli-test"),
+    ];
+    let claim = ui_http(
+        address,
+        &format!("POST /api/control/claim?token={token}"),
+        &headers,
+    );
+    assert!(claim.starts_with("HTTP/1.1 200"), "{claim}");
+    let action = ui_http(
+        address,
+        &format!("POST /api/command/next-scenario-action?token={token}"),
+        &headers,
+    );
+    assert!(action.starts_with("HTTP/1.1 202"), "{action}");
+    let after_action = wait_ui_snapshot(address, token, |snapshot| {
+        snapshot["scenario"]["current"]["next_action_index"] == 1
+    });
+    let transactions_before = transaction_observation_count(&after_action);
+    let step = ui_http(
+        address,
+        &format!("POST /api/command/step?token={token}"),
+        &headers,
+    );
+    assert!(step.starts_with("HTTP/1.1 202"), "{step}");
+    let mut after_step = wait_ui_snapshot(address, token, |snapshot| {
+        snapshot["revision"].as_u64() > after_action["revision"].as_u64()
+    });
+    assert_eq!(
+        transaction_observation_count(&after_step),
+        transactions_before + 1,
+        "one Next transaction command commits one VM transaction"
+    );
+
+    for _ in 0..16 {
+        if after_step["exchanges"]["calls"]
+            .as_array()
+            .is_some_and(|calls| calls.iter().any(|call| call["completion_retained"] == true))
+        {
+            break;
+        }
+        let prior_revision = after_step["revision"].as_u64();
+        let step = ui_http(
+            address,
+            &format!("POST /api/command/step?token={token}"),
+            &headers,
+        );
+        assert!(step.starts_with("HTTP/1.1 202"), "{step}");
+        after_step = wait_ui_snapshot(address, token, |snapshot| {
+            snapshot["revision"].as_u64() > prior_revision
+        });
+    }
+    assert!(
+        after_step["exchanges"]["calls"]
+            .as_array()
+            .is_some_and(|calls| { calls.iter().any(|call| call["completion_retained"] == true) }),
+        "the returned Call is inspectable before its settlement handler runs: {after_step}"
+    );
+    assert!(
+        after_step["history"]["deliveries"]
+            .as_array()
+            .is_some_and(|deliveries| !deliveries
+                .iter()
+                .any(|delivery| { delivery["node"].is_null() && delivery["port"] == "out" })),
+        "the retained completion has not yet reached the graph output"
+    );
+
+    let run = ui_http(
+        address,
+        &format!("POST /api/command/run-to-completion?token={token}"),
+        &headers,
+    );
+    assert!(run.starts_with("HTTP/1.1 202"), "{run}");
+
+    let completed = wait_ui_snapshot(address, token, |snapshot| {
+        snapshot["execution"]["state"] == "completed"
+    });
+    assert!(
+        completed["history"]["records"]
+            .as_array()
+            .is_some_and(|records| !records.is_empty()),
+        "completed history remains inspectable: {completed}"
+    );
+    let reset = ui_http(
+        address,
+        &format!("POST /api/command/reset-scenario?token={token}"),
+        &headers,
+    );
+    assert!(reset.starts_with("HTTP/1.1 202"), "{reset}");
+    let reset = wait_ui_snapshot(address, token, |snapshot| {
+        snapshot["execution"]["state"] == "paused"
+            && snapshot["history"]["records"] == serde_json::json!([])
+    });
+    assert_eq!(reset["scenario"]["current"]["next_action_index"], 0);
+    let close = ui_http(
+        address,
+        &format!("POST /api/command/close?token={token}"),
+        &headers,
+    );
+    assert!(close.starts_with("HTTP/1.1 202"), "{close}");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while child
+        .try_wait()
+        .expect("child status is readable")
+        .is_none()
+    {
+        if std::time::Instant::now() >= deadline {
+            child.kill().expect("a stuck UI can be stopped");
+            panic!("the UI process did not close");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let mut remainder = String::new();
+    stdout
+        .read_to_string(&mut remainder)
+        .expect("remaining verdict reads");
+    assert!(remainder.contains("PASS smoke.roundtrip"), "{remainder}");
+}
+
+#[cfg(feature = "hosted-ui")]
+#[test]
+fn run_ui_admits_no_stdin_before_resume_and_preserves_normal_output() {
+    use std::io::{BufRead as _, Read as _};
+
+    let mut child = rastok()
+        .arg("run")
+        .arg(example())
+        .arg("--ui")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the UI binary starts");
+    child
+        .stdin
+        .take()
+        .expect("stdin is piped")
+        .write_all(b"salut\n")
+        .expect("one input is available before resume");
+    let stdout = child.stdout.take().expect("stdout is piped");
+    let mut stdout = std::io::BufReader::new(stdout);
+    let mut url_line = String::new();
+    stdout
+        .read_line(&mut url_line)
+        .expect("the UI URL is printed");
+    let url = url_line
+        .trim()
+        .strip_prefix("ui: http://")
+        .expect("the URL uses the documented prefix");
+    let (address, token) = url
+        .split_once("/?token=")
+        .expect("the URL carries one capability");
+    let address: std::net::SocketAddr = address.parse().expect("the address parses");
+    let initial = ui_snapshot(address, token);
+    assert_eq!(initial["execution"]["state"], "paused");
+    assert_eq!(initial["history"]["records"], serde_json::json!([]));
+
+    let origin = format!("http://{address}");
+    let headers = [
+        ("Origin", origin.as_str()),
+        ("X-Rastok-Controller", "run-cli-test"),
+    ];
+    let claim = ui_http(
+        address,
+        &format!("POST /api/control/claim?token={token}"),
+        &headers,
+    );
+    assert!(claim.starts_with("HTTP/1.1 200"), "{claim}");
+    let run = ui_http(
+        address,
+        &format!("POST /api/command/run-to-completion?token={token}"),
+        &headers,
+    );
+    assert!(run.starts_with("HTTP/1.1 202"), "{run}");
+    let completed = wait_ui_snapshot(address, token, |snapshot| {
+        snapshot["execution"]["state"] == "completed"
+    });
+    assert!(
+        completed["history"]["records"]
+            .as_array()
+            .is_some_and(|records| !records.is_empty())
+    );
+    let close = ui_http(
+        address,
+        &format!("POST /api/command/close?token={token}"),
+        &headers,
+    );
+    assert!(close.starts_with("HTTP/1.1 202"), "{close}");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while child
+        .try_wait()
+        .expect("child status is readable")
+        .is_none()
+    {
+        if std::time::Instant::now() >= deadline {
+            child.kill().expect("a stuck UI can be stopped");
+            panic!("the UI process did not close");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let mut remainder = String::new();
+    stdout
+        .read_to_string(&mut remainder)
+        .expect("remaining output reads");
+    assert_eq!(remainder, "out: salut\n");
+}
+
+#[cfg(feature = "hosted-ui")]
+#[allow(clippy::expect_used)]
+fn ui_snapshot(address: std::net::SocketAddr, token: &str) -> serde_json::Value {
+    let response = ui_http(address, &format!("GET /api/snapshot?token={token}"), &[]);
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    let body = response
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .expect("the HTTP response has a body");
+    serde_json::from_str(body).expect("the snapshot is JSON")
+}
+
+#[cfg(feature = "hosted-ui")]
+fn wait_ui_snapshot(
+    address: std::net::SocketAddr,
+    token: &str,
+    condition: impl Fn(&serde_json::Value) -> bool,
+) -> serde_json::Value {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let snapshot = ui_snapshot(address, token);
+        if condition(&snapshot) {
+            return snapshot;
+        }
+        assert!(std::time::Instant::now() < deadline, "the UI view advances");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[cfg(feature = "hosted-ui")]
+fn transaction_observation_count(snapshot: &serde_json::Value) -> usize {
+    snapshot["history"]["records"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|record| record["event"] == "rastok.transaction.committed")
+        .count()
+}
+
+#[cfg(feature = "hosted-ui")]
+#[allow(clippy::expect_used)]
+fn ui_http(address: std::net::SocketAddr, request_line: &str, headers: &[(&str, &str)]) -> String {
+    use std::io::{Read as _, Write as _};
+
+    let mut stream = std::net::TcpStream::connect(address).expect("the UI accepts loopback");
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+        .expect("the UI probe is bounded");
+    let mut request = format!("{request_line} HTTP/1.1\r\nHost: {address}\r\n");
+    for (name, value) in headers {
+        request.push_str(name);
+        request.push_str(": ");
+        request.push_str(value);
+        request.push_str("\r\n");
+    }
+    request.push_str("Content-Length: 0\r\nConnection: close\r\n\r\n");
+    stream
+        .write_all(request.as_bytes())
+        .expect("the UI request writes");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .expect("the UI response reads");
+    response
+}
+
+#[test]
 fn run_echoes_a_line_through_a_real_child_process() {
     let mut child = rastok()
         .arg("run")

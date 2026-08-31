@@ -80,7 +80,7 @@ canonical record projection ─▶ golden compare
 | `boundary::Completion` | `connectors` or the Lab's mock Driver | `runtime` (as an input event) | returns ordered ordinary port drafts plus one final typed `exit`, correlated by the internal `CallRef` — never by the business key; a Driver only answers and never decides a timeout or mints journal records |
 | `journal::Record` | **runtime mechanics only** | recovery, `golden::Trace` | Drivers and mocks supply events, never records; causal core and observation annotations kept separable ([identity.md §3](../spec/identity.md)) |
 | `observation::RecordObservation` | semantic journal query | deterministic reports and disposable hosted projections | typed correlation is derived only from causal history, retained outside its seal, and never consulted by execution or replay ([observability.md §6–7](../spec/observability.md)) |
-| `accounting::{AccountingObservation,CostReport}` | lazy journal/schema fold | `--watch` and later FOCUS/OpenCost projections | exact measures, basis, currency, subset relations and explicit `unpriced` remainders; deployment prices must match run-header evidence and never enter causal identity ([observability.md §7.1](../spec/observability.md)) |
+| `accounting::{AccountingObservation,CostReport}` | lazy journal/schema fold | `--ui` and later FOCUS/OpenCost projections | exact measures, basis, currency, subset relations and explicit `unpriced` remainders; deployment prices must match run-header evidence and never enter causal identity ([observability.md §7.1](../spec/observability.md)) |
 | `diagnostics::Diagnostic` | every phase | entry points | stable code, spans, structured fields; accumulated values — never prints, never panics |
 | golden projection | `golden::Trace` (project, seal, diff) | evidence compare | deterministic bytes: same scope, same bytes ([simulation-semantics.md §6](../spec/simulation-semantics.md)) |
 
@@ -125,9 +125,11 @@ crates/rastok/src/            # the std layer — re-exports the kernel
 ├── conformance.rs    # Driver contract harness over the production seam
 ├── lab.rs            # run → ScenarioRun { report, records } ; mock Drivers
 ├── observability.rs  # bounded never-block structured-log projection
+├── ui/               # optional loopback HTTP/SSE controller and embedded page;
+│                     #   journal/inspection/accounting projection only
 ├── render.rs         # Sources + rustc-shaped diagnostic rendering
 └── main.rs           # thin bin : check | run | simulate | --resolve-open-api;
-                      # optional --json-logs exporter
+                      # optional --json-logs exporter and --ui controller
 ```
 
 Two deviations from the pre-build sketch, both deliberate: the golden
@@ -599,5 +601,6 @@ The chronological detail and commit evidence remain in
 - **M1.5 closure:** Process and File bind through one registry, conformance and
   Lab protocol path. `DriverManifest` proves the pre-load id/role seam without
   freezing discovery or ABI, and [connector-drivers.md](connector-drivers.md)
-  is the contributor path. Loop, counters, and `--watch` remain guarded
-  in the order recorded by [`m1-slice.md`](m1-slice.md).
+  is the contributor path. Later M1 slices have since landed Loop, policy and
+  accounting, and the optional `--ui` debugger in the order recorded by
+  [`m1-slice.md`](m1-slice.md).

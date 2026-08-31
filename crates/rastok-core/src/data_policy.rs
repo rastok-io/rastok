@@ -772,7 +772,12 @@ impl fmt::Debug for RedactedValue<'_> {
     }
 }
 
-fn path_is_hidden(table: &AnnotationTable, path: &SchemaPath) -> bool {
+/// Whether presentation policy hides this exact path or one of its ancestors.
+///
+/// Hosted renderers use this before constructing their output value. It does
+/// not reveal or transform data and performs no work when the table is empty.
+#[must_use]
+pub fn is_redacted_path(table: &AnnotationTable, path: &SchemaPath) -> bool {
     table.entries().iter().any(|(classified, set)| {
         path.segments().starts_with(classified.segments())
             && set.annotations().iter().any(|annotation| {
@@ -800,7 +805,7 @@ fn format_value(
     table: &AnnotationTable,
     path: &SchemaPath,
 ) -> fmt::Result {
-    if path_is_hidden(table, path) {
+    if is_redacted_path(table, path) {
         return f.write_str("[REDACTED]");
     }
     match value {
@@ -823,7 +828,7 @@ fn format_value(
                 if index != 0 {
                     f.write_str(", ")?;
                 }
-                if path_is_hidden(table, &key_path) {
+                if is_redacted_path(table, &key_path) {
                     f.write_str("[REDACTED]")?;
                 } else {
                     write!(f, "{name:?}")?;
@@ -871,7 +876,7 @@ fn format_value(
         ),
         Value::TaggedUnion(tagged) => {
             let case_path = path.child(SchemaPathSegment::TaggedUnionCase(tagged.case.clone()));
-            if path_is_hidden(table, &case_path) {
+            if is_redacted_path(table, &case_path) {
                 return f.write_str("[REDACTED]");
             }
             write!(f, "{} {{", tagged.case)?;

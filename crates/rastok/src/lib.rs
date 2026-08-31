@@ -28,3 +28,5 @@ pub mod openapi;
 pub mod render;
 pub mod schema_projection;
 pub mod stdlib;
+#[cfg(feature = "hosted-ui")]
+pub mod ui;

@@ -23,7 +23,48 @@ use rastok::{connectors, lab, node};
 use std::io::{BufRead, Write as _};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: rastok check <file.rkg>...\n       rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs]\n       rastok simulate <file.rkg>... [--deployment <profile.json>] [--golden <dir>] [--bless]\n       rastok --resolve-open-api <project-dir> [--check]";
+const USAGE: &str = "usage: rastok check <file.rkg>...\n       rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs] [--ui [--ui-port <port>]]\n       rastok simulate <file.rkg>... [--deployment <profile.json>] [--golden <dir>] [--bless] [--ui [--ui-port <port>]]\n       rastok --resolve-open-api <project-dir> [--check]";
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct UiOptions {
+    enabled: bool,
+    port: Option<u16>,
+}
+
+impl UiOptions {
+    fn enable(&mut self) -> Result<(), String> {
+        if self.enabled {
+            return Err(String::from("--ui may be supplied only once"));
+        }
+        self.enabled = true;
+        Ok(())
+    }
+
+    fn set_port(&mut self, spelling: Option<&str>) -> Result<(), String> {
+        if self.port.is_some() {
+            return Err(String::from("--ui-port may be supplied only once"));
+        }
+        let port = spelling
+            .and_then(|spelling| spelling.parse::<u16>().ok())
+            .filter(|port| *port != 0)
+            .ok_or_else(|| String::from("--ui-port requires one non-zero TCP port"))?;
+        self.port = Some(port);
+        Ok(())
+    }
+
+    fn validate(self) -> Result<Self, String> {
+        if self.port.is_some() && !self.enabled {
+            return Err(String::from("--ui-port requires --ui"));
+        }
+        #[cfg(not(feature = "hosted-ui"))]
+        if self.enabled {
+            return Err(String::from(
+                "--ui requires a build with the `hosted-ui` feature",
+            ));
+        }
+        Ok(self)
+    }
+}
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -36,12 +77,22 @@ fn main() -> ExitCode {
     };
     match command {
         "--resolve-open-api" => resolve_open_api(paths),
-        "check" => check(paths),
+        "check" => {
+            if paths
+                .iter()
+                .any(|argument| matches!(argument.as_str(), "--ui" | "--ui-port"))
+            {
+                eprintln!("error: --ui is available only for `run` and `simulate`");
+                return ExitCode::from(2);
+            }
+            check(paths)
+        }
         "run" => {
             let mut files = Vec::new();
             let mut file_root: Option<std::path::PathBuf> = None;
             let mut deployment: Option<std::path::PathBuf> = None;
             let mut json_logs = false;
+            let mut ui = UiOptions::default();
             let mut rest = paths.iter();
             while let Some(argument) = rest.next() {
                 match argument.as_str() {
@@ -66,6 +117,18 @@ fn main() -> ExitCode {
                         eprintln!("error: --json-logs may be supplied only once");
                         return ExitCode::from(2);
                     }
+                    "--ui" => {
+                        if let Err(error) = ui.enable() {
+                            eprintln!("error: {error}");
+                            return ExitCode::from(2);
+                        }
+                    }
+                    "--ui-port" => {
+                        if let Err(error) = ui.set_port(rest.next().map(String::as_str)) {
+                            eprintln!("error: {error}");
+                            return ExitCode::from(2);
+                        }
+                    }
                     _ => files.push(argument.clone()),
                 }
             }
@@ -81,13 +144,21 @@ fn main() -> ExitCode {
                 }
                 None => None,
             };
-            run(&files, file_root.as_deref(), boot.as_ref(), json_logs)
+            let ui = match ui.validate() {
+                Ok(ui) => ui,
+                Err(error) => {
+                    eprintln!("error: {error}");
+                    return ExitCode::from(2);
+                }
+            };
+            run(&files, file_root.as_deref(), boot.as_ref(), json_logs, ui)
         }
         "simulate" => {
             let mut files = Vec::new();
             let mut golden_dir: Option<std::path::PathBuf> = None;
             let mut bless = false;
             let mut deployment: Option<std::path::PathBuf> = None;
+            let mut ui = UiOptions::default();
             let mut rest = paths.iter();
             while let Some(argument) = rest.next() {
                 match argument.as_str() {
@@ -108,6 +179,18 @@ fn main() -> ExitCode {
                             return ExitCode::from(2);
                         }
                     },
+                    "--ui" => {
+                        if let Err(error) = ui.enable() {
+                            eprintln!("error: {error}");
+                            return ExitCode::from(2);
+                        }
+                    }
+                    "--ui-port" => {
+                        if let Err(error) = ui.set_port(rest.next().map(String::as_str)) {
+                            eprintln!("error: {error}");
+                            return ExitCode::from(2);
+                        }
+                    }
                     _ => files.push(argument.clone()),
                 }
             }
@@ -123,7 +206,14 @@ fn main() -> ExitCode {
                 }
                 None => None,
             };
-            simulate(&files, golden_dir.as_deref(), bless, boot.as_ref())
+            let ui = match ui.validate() {
+                Ok(ui) => ui,
+                Err(error) => {
+                    eprintln!("error: {error}");
+                    return ExitCode::from(2);
+                }
+            };
+            simulate(&files, golden_dir.as_deref(), bless, boot.as_ref(), ui)
         }
         _ => {
             eprintln!("{USAGE}");
@@ -268,6 +358,7 @@ fn run(
     file_root: Option<&std::path::Path>,
     boot: Option<&rastok::deployment::BootBindings>,
     json_logs: bool,
+    ui: UiOptions,
 ) -> ExitCode {
     let Ok((compilation, _)) = load(paths) else {
         return ExitCode::FAILURE;
@@ -355,6 +446,26 @@ fn run(
     });
     let mut printed_outputs = 0;
     let mut printed_errors = 0;
+    #[cfg(feature = "hosted-ui")]
+    if ui.enabled {
+        return run_with_ui(
+            &compilation,
+            boot,
+            ui,
+            &time,
+            &mut vm,
+            &mut journal,
+            &mut world,
+            &mut log_projector,
+            &inbound_path,
+            polls_inbound,
+            &input,
+            &mut printed_outputs,
+            &mut printed_errors,
+        );
+    }
+    #[cfg(not(feature = "hosted-ui"))]
+    let _ = ui;
     let mut stdin_open = true;
     loop {
         let mut progressed = false;
@@ -377,25 +488,7 @@ fn run(
                     return ExitCode::FAILURE;
                 }
             };
-            let submission = InboundSubmission {
-                provenance: InboundEnvelopeProvenance::single(inbound_path.clone()),
-                port: node::Port::new("in")
-                    .unwrap_or_else(|_| unreachable!("`in` is a valid port")),
-                draft: Draft {
-                    data: Data::materialized(Value::Text(line)),
-                    ext: {
-                        let mut ext = Namespace::new();
-                        ext.insert(
-                            String::from("content_type"),
-                            rastok::envelope::MetaValue::Scalar(rastok::envelope::Scalar::Text(
-                                String::from("text/plain"),
-                            )),
-                        );
-                        ext
-                    },
-                },
-                sequence: SubmissionSequence::Next,
-            };
+            let submission = cli_submission(&inbound_path, line);
             if let Err(error) = vm.inject(&mut journal, submission) {
                 eprintln!("error: the submission was refused: {error}");
                 return ExitCode::FAILURE;
@@ -467,6 +560,356 @@ fn drive_boundary<'plan>(
     Ok(progressed)
 }
 
+#[cfg(feature = "hosted-ui")]
+#[allow(clippy::too_many_arguments)]
+fn run_with_ui<'plan>(
+    compilation: &'plan Compilation,
+    boot: Option<&rastok::deployment::BootBindings>,
+    options: UiOptions,
+    time: &HostedTimeSource,
+    vm: &mut Vm<'plan>,
+    journal: &mut MemJournal,
+    world: &mut connectors::RuntimeBindings<'plan>,
+    log_projector: &mut Option<rastok::observability::JournalLogProjector>,
+    inbound_path: &node::Path,
+    polls_inbound: bool,
+    input: &std::sync::mpsc::Receiver<Option<std::io::Result<String>>>,
+    printed_outputs: &mut usize,
+    printed_errors: &mut usize,
+) -> ExitCode {
+    use rastok::ui::{ExecutionState, FaultView, UiCommand, UiServer};
+
+    let mut state = ExecutionState::Paused;
+    let mut revision = 0_u64;
+    let mut fault: Option<FaultView> = None;
+    let initial = match rastok::ui::snapshot(rastok::ui::SnapshotInput {
+        revision,
+        mode: "run",
+        state,
+        plan: &compilation.plan,
+        vm,
+        journal,
+        cost_profile: boot.and_then(rastok::deployment::BootBindings::cost_profile),
+        fault: None,
+        scenario: None,
+    }) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            eprintln!("error: the initial UI view could not be serialized: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut server = match UiServer::start(options.port, initial) {
+        Ok(server) => server,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!("ui: {}", server.url());
+
+    let mut stdin_open = true;
+    let mut step_requested = false;
+    let mut close_requested = false;
+    loop {
+        let records_before = journal.records().len();
+        let observations_before = vm.observations().len();
+        let mut dirty = false;
+        while let Some(command) = server.try_command() {
+            match command {
+                UiCommand::Resume | UiCommand::RunToCompletion
+                    if !matches!(state, ExecutionState::Faulted | ExecutionState::Completed) =>
+                {
+                    state = ExecutionState::Running;
+                    step_requested = false;
+                    dirty = true;
+                }
+                UiCommand::Pause if state == ExecutionState::Running => {
+                    state = if vm.awaiting_outbound_calls() == 0 {
+                        ExecutionState::Paused
+                    } else {
+                        ExecutionState::PauseRequested
+                    };
+                    dirty = true;
+                }
+                UiCommand::Step if state == ExecutionState::Paused => {
+                    step_requested = true;
+                    dirty = true;
+                }
+                UiCommand::RetryStep
+                    if state == ExecutionState::Faulted
+                        && fault.as_ref().is_some_and(|fault| fault.retryable) =>
+                {
+                    fault = None;
+                    state = ExecutionState::Paused;
+                    step_requested = true;
+                    dirty = true;
+                }
+                UiCommand::Close => close_requested = true,
+                UiCommand::NextScenarioAction
+                | UiCommand::RunUntilAssertion
+                | UiCommand::ResetScenario
+                | UiCommand::SelectScenario { .. }
+                | UiCommand::Pause
+                | UiCommand::Step
+                | UiCommand::RetryStep
+                | UiCommand::Resume
+                | UiCommand::RunToCompletion => {}
+            }
+        }
+        if close_requested {
+            return if state == ExecutionState::Faulted {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            };
+        }
+
+        let mut progressed = false;
+        let executing_one = step_requested && state == ExecutionState::Paused;
+        if state == ExecutionState::Running || executing_one {
+            match admit_one_run_input(vm, journal, world, inbound_path, input, &mut stdin_open) {
+                Ok(admitted) => progressed |= admitted,
+                Err(error) => {
+                    fault = Some(FaultView {
+                        message: error,
+                        help: String::from(
+                            "The refused admission committed nothing. Correct the input or close this run.",
+                        ),
+                        commit: String::from("the refused admission committed no input fact"),
+                        retryable: false,
+                    });
+                    state = ExecutionState::Faulted;
+                    step_requested = false;
+                    dirty = true;
+                }
+            }
+            if state != ExecutionState::Faulted {
+                match vm.step_with_bindings(journal, world) {
+                    Ok(ran) => {
+                        progressed |= ran;
+                        dirty |= ran;
+                        if !ran && state == ExecutionState::Running {
+                            let target = time.logical_now();
+                            if target > vm.now() {
+                                match vm.advance(journal, world, target) {
+                                    Ok(()) => {}
+                                    Err(error) => {
+                                        fault = Some(boundary_fault(error.to_string()));
+                                        state = ExecutionState::Faulted;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        fault = Some(transaction_fault(error.to_string()));
+                        state = ExecutionState::Faulted;
+                        dirty = true;
+                    }
+                }
+            }
+            if state != ExecutionState::Faulted {
+                match pump_run_boundaries(vm, journal, world, state == ExecutionState::Running) {
+                    Ok(boundary) => {
+                        progressed |= boundary;
+                        dirty |= boundary;
+                    }
+                    Err(error) => {
+                        fault = Some(boundary_fault(error));
+                        state = ExecutionState::Faulted;
+                        dirty = true;
+                    }
+                }
+            }
+            if executing_one && state != ExecutionState::Faulted {
+                step_requested = false;
+                state = if vm.awaiting_outbound_calls() == 0 {
+                    ExecutionState::Paused
+                } else {
+                    ExecutionState::PauseRequested
+                };
+                dirty = true;
+            }
+        } else if matches!(
+            state,
+            ExecutionState::Paused | ExecutionState::PauseRequested
+        ) {
+            // A durable open must be offered to its Driver, and Session
+            // transports retain their bounded contract, even while scheduling
+            // is paused. No completion transaction runs here.
+            match vm.pump(journal, world) {
+                Ok(report) => {
+                    if report.settled > 0
+                        || !report.rejected.is_empty()
+                        || !report.rejected_sessions.is_empty()
+                    {
+                        dirty = true;
+                        progressed = true;
+                    }
+                    for (_, reason) in &report.rejected {
+                        eprintln!("err: a reply was refused before closure: {reason}");
+                    }
+                }
+                Err(error) => {
+                    fault = Some(boundary_fault(error.to_string()));
+                    state = ExecutionState::Faulted;
+                    dirty = true;
+                }
+            }
+            if state == ExecutionState::PauseRequested && vm.awaiting_outbound_calls() == 0 {
+                state = ExecutionState::Paused;
+                dirty = true;
+            }
+        }
+
+        if state == ExecutionState::Running
+            && !stdin_open
+            && !polls_inbound
+            && !vm.has_open_obligations()
+            && !progressed
+        {
+            state = ExecutionState::Completed;
+            dirty = true;
+        }
+        if let Some(projector) = log_projector {
+            let batch = projector.project_journal(journal);
+            dirty |= batch.queued > 0 || batch.dropped > 0;
+        }
+        let before_outputs = *printed_outputs;
+        let before_errors = *printed_errors;
+        print_new_outputs(vm, printed_outputs, printed_errors);
+        dirty |= before_outputs != *printed_outputs || before_errors != *printed_errors;
+        dirty |= records_before != journal.records().len()
+            || observations_before != vm.observations().len();
+
+        if dirty {
+            revision = revision.saturating_add(1);
+            match rastok::ui::snapshot(rastok::ui::SnapshotInput {
+                revision,
+                mode: "run",
+                state,
+                plan: &compilation.plan,
+                vm,
+                journal,
+                cost_profile: boot.and_then(rastok::deployment::BootBindings::cost_profile),
+                fault: fault.as_ref(),
+                scenario: None,
+            }) {
+                Ok(snapshot) => server.publish(snapshot),
+                Err(error) => eprintln!("warning: the UI view was dropped: {error}"),
+            }
+        } else {
+            server.flush();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+}
+
+#[cfg(feature = "hosted-ui")]
+fn transaction_fault(message: String) -> rastok::ui::FaultView {
+    rastok::ui::FaultView {
+        message,
+        help: String::from(
+            "The faulting transaction committed nothing and still owns its work. Retry the step after correcting its external cause, or close the run.",
+        ),
+        commit: String::from("nothing from the faulting transaction was committed"),
+        retryable: true,
+    }
+}
+
+#[cfg(feature = "hosted-ui")]
+fn boundary_fault(message: String) -> rastok::ui::FaultView {
+    rastok::ui::FaultView {
+        message,
+        help: String::from(
+            "Execution stopped at the physical boundary. Inspect the retained history; close and restart rather than replaying an already committed transaction.",
+        ),
+        commit: String::from(
+            "transactions committed before this boundary failure remain committed",
+        ),
+        retryable: false,
+    }
+}
+
+#[cfg(feature = "hosted-ui")]
+fn admit_one_run_input<'plan>(
+    vm: &mut Vm<'plan>,
+    journal: &mut MemJournal,
+    world: &mut connectors::RuntimeBindings<'plan>,
+    inbound_path: &node::Path,
+    input: &std::sync::mpsc::Receiver<Option<std::io::Result<String>>>,
+    stdin_open: &mut bool,
+) -> Result<bool, String> {
+    if *stdin_open {
+        match input.try_recv() {
+            Ok(Some(Ok(line))) => {
+                vm.inject(journal, cli_submission(inbound_path, line))
+                    .map_err(|error| format!("the submission was refused: {error}"))?;
+                return Ok(true);
+            }
+            Ok(Some(Err(error))) => return Err(format!("stdin: {error}")),
+            Ok(None) => *stdin_open = false,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => *stdin_open = false,
+        }
+    }
+    world
+        .pump_inbound(vm, journal)
+        .map(|report| report.is_some())
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "hosted-ui")]
+fn pump_run_boundaries<'plan>(
+    vm: &mut Vm<'plan>,
+    journal: &mut MemJournal,
+    world: &mut connectors::RuntimeBindings<'plan>,
+    poll_inbound_protocols: bool,
+) -> Result<bool, String> {
+    let mut progressed = false;
+    if poll_inbound_protocols {
+        let responses = world
+            .pump_inbound_call_responses(vm)
+            .map_err(|error| error.to_string())?;
+        let timeouts = world
+            .pump_inbound_call_timeouts(vm)
+            .map_err(|error| error.to_string())?;
+        let events = world
+            .pump_inbound_call_events(vm)
+            .map_err(|error| error.to_string())?;
+        progressed |= responses.started > 0 || timeouts.started > 0 || events.queued > 0;
+    }
+    let report = vm.pump(journal, world).map_err(|error| error.to_string())?;
+    for (_, reason) in &report.rejected {
+        eprintln!("err: a reply was refused before closure: {reason}");
+    }
+    progressed |=
+        report.settled > 0 || !report.rejected.is_empty() || !report.rejected_sessions.is_empty();
+    Ok(progressed)
+}
+
+fn cli_submission(inbound_path: &node::Path, line: String) -> InboundSubmission {
+    InboundSubmission {
+        provenance: InboundEnvelopeProvenance::single(inbound_path.clone()),
+        port: node::Port::new("in").unwrap_or_else(|_| unreachable!("`in` is a valid port")),
+        draft: Draft {
+            data: Data::materialized(Value::Text(line)),
+            ext: {
+                let mut ext = Namespace::new();
+                ext.insert(
+                    String::from("content_type"),
+                    rastok::envelope::MetaValue::Scalar(rastok::envelope::Scalar::Text(
+                        String::from("text/plain"),
+                    )),
+                );
+                ext
+            },
+        },
+        sequence: SubmissionSequence::Next,
+    }
+}
+
 fn print_new_outputs(vm: &Vm<'_>, printed_outputs: &mut usize, printed_errors: &mut usize) {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
@@ -498,6 +941,7 @@ fn simulate(
     golden_dir: Option<&std::path::Path>,
     bless: bool,
     boot: Option<&rastok::deployment::BootBindings>,
+    ui: UiOptions,
 ) -> ExitCode {
     let Ok((compilation, _)) = load(paths) else {
         return ExitCode::FAILURE;
@@ -506,6 +950,12 @@ fn simulate(
         eprintln!("error: this unit declares no lab");
         return ExitCode::FAILURE;
     }
+    #[cfg(feature = "hosted-ui")]
+    if ui.enabled {
+        return simulate_with_ui(&compilation, golden_dir, bless, boot, ui);
+    }
+    #[cfg(not(feature = "hosted-ui"))]
+    let _ = ui;
     let mut failed = 0usize;
     let mut total = 0usize;
     for lab_decl in &compilation.labs {
@@ -575,6 +1025,467 @@ fn simulate(
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
+    }
+}
+
+#[cfg(feature = "hosted-ui")]
+fn simulate_with_ui(
+    compilation: &Compilation,
+    golden_dir: Option<&std::path::Path>,
+    bless: bool,
+    boot: Option<&rastok::deployment::BootBindings>,
+    options: UiOptions,
+) -> ExitCode {
+    use rastok::ui::{ExecutionState, FaultView, UiCommand, UiServer};
+
+    let Some((simulation, scenario)) = compilation
+        .labs
+        .iter()
+        .flat_map(|lab| &lab.simulations)
+        .find_map(|simulation| {
+            simulation
+                .scenarios
+                .first()
+                .map(|scenario| (simulation, scenario))
+        })
+    else {
+        eprintln!("error: this unit declares no scenario");
+        return ExitCode::FAILURE;
+    };
+    let mut session = match lab::ScenarioSession::try_new(
+        &compilation.plan,
+        GraphVersion(1),
+        &simulation.name,
+        &simulation.mocks,
+        scenario,
+        boot,
+    ) {
+        Ok(session) => session,
+        Err(error) => {
+            eprintln!("error: the Lab Driver composition refused: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut state = ExecutionState::Paused;
+    let mut revision = 0_u64;
+    let mut fault: Option<FaultView> = None;
+    let initial = match rastok::ui::snapshot(rastok::ui::SnapshotInput {
+        revision,
+        mode: "simulate",
+        state,
+        plan: &compilation.plan,
+        vm: session.vm(),
+        journal: session.journal(),
+        cost_profile: boot.and_then(rastok::deployment::BootBindings::cost_profile),
+        fault: None,
+        scenario: Some(simulation_view(compilation, &session, &[])),
+    }) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            eprintln!("error: the initial UI view could not be serialized: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut server = match UiServer::start(options.port, initial) {
+        Ok(server) => server,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!("ui: {}", server.url());
+
+    let mut step_requested = false;
+    let mut until_assertion = false;
+    let mut close_requested = false;
+    let mut reported = false;
+    let mut any_failed = false;
+    let mut golden_failures = Vec::new();
+    loop {
+        let records_before = session.journal().records().len();
+        let observations_before = session.vm().observations().len();
+        let failures_before = session.failures().len();
+        let mut dirty = false;
+        while let Some(command) = server.try_command() {
+            match command {
+                UiCommand::Resume | UiCommand::RunToCompletion
+                    if !matches!(state, ExecutionState::Faulted | ExecutionState::Completed) =>
+                {
+                    state = ExecutionState::Running;
+                    until_assertion = false;
+                    step_requested = false;
+                    fault = None;
+                    dirty = true;
+                }
+                UiCommand::RunUntilAssertion
+                    if !matches!(state, ExecutionState::Faulted | ExecutionState::Completed) =>
+                {
+                    state = ExecutionState::Running;
+                    until_assertion = true;
+                    step_requested = false;
+                    fault = None;
+                    dirty = true;
+                }
+                UiCommand::Pause if state == ExecutionState::Running => {
+                    state = if session.vm().awaiting_outbound_calls() == 0 {
+                        ExecutionState::Paused
+                    } else {
+                        ExecutionState::PauseRequested
+                    };
+                    until_assertion = false;
+                    dirty = true;
+                }
+                UiCommand::Step if state == ExecutionState::Paused => {
+                    step_requested = true;
+                    fault = None;
+                    dirty = true;
+                }
+                UiCommand::RetryStep
+                    if state == ExecutionState::Faulted
+                        && fault.as_ref().is_some_and(|fault| fault.retryable) =>
+                {
+                    fault = None;
+                    state = ExecutionState::Paused;
+                    step_requested = true;
+                    dirty = true;
+                }
+                UiCommand::NextScenarioAction if state == ExecutionState::Paused => {
+                    match session.next_action() {
+                        Ok(_) => {
+                            fault = None;
+                            reported = false;
+                        }
+                        Err(error) => {
+                            fault = Some(FaultView {
+                                message: error,
+                                help: String::from(
+                                    "Use Next transaction until the current action reaches a boundary.",
+                                ),
+                                commit: String::from("no scenario action was applied"),
+                                retryable: false,
+                            });
+                        }
+                    }
+                    dirty = true;
+                }
+                UiCommand::ResetScenario => {
+                    match recreate_scenario(
+                        compilation,
+                        session.simulation(),
+                        session.scenario(),
+                        boot,
+                    ) {
+                        Ok(recreated) => {
+                            session = recreated;
+                            state = ExecutionState::Paused;
+                            fault = None;
+                            reported = false;
+                            any_failed = false;
+                            golden_failures.clear();
+                        }
+                        Err(error) => fault = Some(boundary_fault(error)),
+                    }
+                    dirty = true;
+                }
+                UiCommand::SelectScenario {
+                    simulation,
+                    scenario,
+                } => {
+                    match recreate_scenario(compilation, &simulation, &scenario, boot) {
+                        Ok(selected) => {
+                            session = selected;
+                            state = ExecutionState::Paused;
+                            fault = None;
+                            reported = false;
+                            any_failed = false;
+                            golden_failures.clear();
+                        }
+                        Err(error) => {
+                            fault = Some(FaultView {
+                                message: error,
+                                help: String::from(
+                                    "Choose one of the checked simulation/scenario pairs listed by the UI.",
+                                ),
+                                commit: String::from(
+                                    "the current scenario world was left unchanged",
+                                ),
+                                retryable: false,
+                            });
+                        }
+                    }
+                    dirty = true;
+                }
+                UiCommand::Close => close_requested = true,
+                UiCommand::Pause
+                | UiCommand::Step
+                | UiCommand::RetryStep
+                | UiCommand::NextScenarioAction
+                | UiCommand::RunUntilAssertion
+                | UiCommand::Resume
+                | UiCommand::RunToCompletion => {}
+            }
+        }
+        if close_requested {
+            return if state == ExecutionState::Faulted || any_failed {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            };
+        }
+
+        if step_requested && state == ExecutionState::Paused {
+            match session.step_transaction() {
+                Ok(_) => {
+                    state = if session.vm().awaiting_outbound_calls() == 0 {
+                        ExecutionState::Paused
+                    } else {
+                        ExecutionState::PauseRequested
+                    };
+                }
+                Err(error) => {
+                    fault = Some(if error.retryable() {
+                        transaction_fault(error.to_string())
+                    } else {
+                        boundary_fault(error.to_string())
+                    });
+                    state = ExecutionState::Faulted;
+                }
+            }
+            step_requested = false;
+            dirty = true;
+        } else if state == ExecutionState::PauseRequested {
+            match session.poll_world() {
+                Ok(progressed) => dirty |= progressed,
+                Err(error) => {
+                    fault = Some(boundary_fault(error));
+                    state = ExecutionState::Faulted;
+                    dirty = true;
+                }
+            }
+            if state == ExecutionState::PauseRequested
+                && session.vm().awaiting_outbound_calls() == 0
+            {
+                state = ExecutionState::Paused;
+                dirty = true;
+            }
+        } else if state == ExecutionState::Paused {
+            // Scripted Session transports retain their normal bounded
+            // boundary behavior while the scheduler is paused. Polling may
+            // retain a terminal observation, but cannot consume its handler.
+            match session.poll_world() {
+                Ok(progressed) => dirty |= progressed,
+                Err(error) => {
+                    fault = Some(boundary_fault(error));
+                    state = ExecutionState::Faulted;
+                    dirty = true;
+                }
+            }
+        } else if state == ExecutionState::Running {
+            if until_assertion
+                && session.is_quiescent()
+                && session.next_action_kind() == Some(lab::ScenarioActionKind::Expect)
+            {
+                state = ExecutionState::Paused;
+                until_assertion = false;
+                dirty = true;
+            } else if session.is_quiescent() {
+                match session.next_action() {
+                    Ok(Some(_)) => dirty = true,
+                    Ok(None) => {
+                        state = ExecutionState::Completed;
+                        dirty = true;
+                    }
+                    Err(error) => {
+                        fault = Some(boundary_fault(error));
+                        state = ExecutionState::Faulted;
+                        dirty = true;
+                    }
+                }
+            } else {
+                match session.step_transaction() {
+                    Ok(_) => dirty = true,
+                    Err(error) => {
+                        fault = Some(if error.retryable() {
+                            transaction_fault(error.to_string())
+                        } else {
+                            boundary_fault(error.to_string())
+                        });
+                        state = ExecutionState::Faulted;
+                        dirty = true;
+                    }
+                }
+            }
+            if session.is_complete() {
+                state = ExecutionState::Completed;
+                dirty = true;
+            }
+        }
+
+        if state == ExecutionState::Completed && !reported {
+            let report = session.report();
+            golden_failures =
+                check_or_bless_golden(&report, session.journal().records(), golden_dir, bless);
+            let passed = report.passed() && golden_failures.is_empty();
+            any_failed |= !passed;
+            print_scenario_verdict(&report, &golden_failures);
+            reported = true;
+            dirty = true;
+        }
+        dirty |= records_before != session.journal().records().len()
+            || observations_before != session.vm().observations().len()
+            || failures_before != session.failures().len();
+        if dirty {
+            revision = revision.saturating_add(1);
+            match rastok::ui::snapshot(rastok::ui::SnapshotInput {
+                revision,
+                mode: "simulate",
+                state,
+                plan: &compilation.plan,
+                vm: session.vm(),
+                journal: session.journal(),
+                cost_profile: boot.and_then(rastok::deployment::BootBindings::cost_profile),
+                fault: fault.as_ref(),
+                scenario: Some(simulation_view(compilation, &session, &golden_failures)),
+            }) {
+                Ok(snapshot) => server.publish(snapshot),
+                Err(error) => eprintln!("warning: the UI view was dropped: {error}"),
+            }
+        } else {
+            server.flush();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+}
+
+#[cfg(feature = "hosted-ui")]
+fn recreate_scenario<'plan>(
+    compilation: &'plan Compilation,
+    simulation_name: &str,
+    scenario_name: &str,
+    boot: Option<&rastok::deployment::BootBindings>,
+) -> Result<lab::ScenarioSession<'plan, 'plan>, String> {
+    let simulation = compilation
+        .labs
+        .iter()
+        .flat_map(|lab| &lab.simulations)
+        .find(|simulation| simulation.name == simulation_name)
+        .ok_or_else(|| format!("unknown simulation `{simulation_name}`"))?;
+    let scenario = simulation
+        .scenarios
+        .iter()
+        .find(|scenario| scenario.name == scenario_name)
+        .ok_or_else(|| {
+            format!("simulation `{simulation_name}` has no scenario `{scenario_name}`")
+        })?;
+    lab::ScenarioSession::try_new(
+        &compilation.plan,
+        GraphVersion(1),
+        &simulation.name,
+        &simulation.mocks,
+        scenario,
+        boot,
+    )
+}
+
+#[cfg(feature = "hosted-ui")]
+fn simulation_view(
+    compilation: &Compilation,
+    session: &lab::ScenarioSession<'_, '_>,
+    golden_failures: &[String],
+) -> serde_json::Value {
+    let available = compilation
+        .labs
+        .iter()
+        .flat_map(|lab| &lab.simulations)
+        .map(|simulation| {
+            serde_json::json!({
+                "name": simulation.name,
+                "scenarios": simulation.scenarios.iter().map(|scenario| serde_json::json!({
+                    "name": scenario.name,
+                    "label": scenario.label,
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "available": available,
+        "current": {
+            "simulation": session.simulation(),
+            "scenario": session.scenario(),
+            "label": session.label(),
+            "next_action_index": session.next_action_index(),
+            "action_count": session.action_count(),
+            "next_action": session.next_action_kind().map(scenario_action_name),
+            "last_action": session.last_action_kind().map(scenario_action_name),
+            "quiescent": session.is_quiescent(),
+            "complete": session.is_complete(),
+            "failures": session.failures(),
+            "golden_failures": golden_failures,
+        },
+    })
+}
+
+#[cfg(feature = "hosted-ui")]
+const fn scenario_action_name(action: lab::ScenarioActionKind) -> &'static str {
+    match action {
+        lab::ScenarioActionKind::Inject => "inject",
+        lab::ScenarioActionKind::Advance => "advance",
+        lab::ScenarioActionKind::Expect => "expect",
+    }
+}
+
+#[cfg(feature = "hosted-ui")]
+fn check_or_bless_golden(
+    report: &lab::ScenarioReport,
+    records: &[rastok::journal::Record],
+    golden_dir: Option<&std::path::Path>,
+    bless: bool,
+) -> Vec<String> {
+    let Some(dir) = golden_dir else {
+        return Vec::new();
+    };
+    let trace = rastok::golden::project(records);
+    let rendered = render_trace(&trace);
+    let path = dir.join(format!("{}.{}.trace", report.simulation, report.scenario));
+    if bless {
+        return std::fs::create_dir_all(dir)
+            .and_then(|()| std::fs::write(&path, &rendered))
+            .err()
+            .map(|error| vec![format!("cannot bless `{}`: {error}", path.display())])
+            .unwrap_or_default();
+    }
+    match std::fs::read_to_string(&path) {
+        Err(_) => vec![format!(
+            "no golden at `{}`; bless with --bless",
+            path.display()
+        )],
+        Ok(stored) if stored != rendered => {
+            let divergence =
+                parse_stored(&stored).and_then(|stored| rastok::golden::diff(&trace, &stored));
+            vec![match divergence {
+                Some(divergence) => format!("golden divergence: {divergence}"),
+                None => String::from("the stored golden is unreadable by this build"),
+            }]
+        }
+        Ok(_) => Vec::new(),
+    }
+}
+
+#[cfg(feature = "hosted-ui")]
+fn print_scenario_verdict(report: &lab::ScenarioReport, golden_failures: &[String]) {
+    let passed = report.passed() && golden_failures.is_empty();
+    let verdict = if passed { "PASS" } else { "FAIL" };
+    match &report.label {
+        Some(label) => println!(
+            "{verdict} {}.{} — {label}",
+            report.simulation, report.scenario
+        ),
+        None => println!("{verdict} {}.{}", report.simulation, report.scenario),
+    }
+    if !passed {
+        for failure in report.failures.iter().chain(golden_failures) {
+            println!("     {failure}");
+        }
     }
 }
 

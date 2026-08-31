@@ -26,6 +26,7 @@ dependency of normal development or CI.
 | ngtcp2 client against live Rastok HTTP/3 server | current C++23 compiler, nghttp3, event loop and explicit supported TLS backend | pinned command, versions and successful terminal transcript |
 | Official Autobahn RFC 6455 client and server roles | container-capable host for the maintained frozen PyPy 2 runner | client/server HTML reports linked from the release record |
 | Marginal Connector implementation benchmark | one new representative Connector after M1.6, measured from empty family module to conformance | repeatable timing and scope record in the release report |
+| M1.9 hosted UI visual and interaction pass | a working real-browser controller on the reference host | initial-pause/control/reconnect/reset/completed-state transcript, keyboard pass and wide/narrow screenshots linked from the M1.9 report |
 
 Public Internet probes remain scheduled canaries, never replacements for these
 blocking local qualifications. The gallery, website and demonstration are M1

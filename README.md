@@ -69,6 +69,7 @@ Rastok DSL source
   -> state-machine execution in a native in-memory VM
   -> mixed real Process and File boundaries selected through one Driver registry
   -> journaled, auditable multi-family Lab scenarios with useful golden diffs
+  -> optional paused, transaction-steppable hosted inspection
 ```
 
 Connector contracts have stable semantic ids and inbound/outbound roles.
@@ -152,6 +153,17 @@ The optional OpenTelemetry transport is explicitly deferred until exact
 temporal observations exist; no exporter timestamp is presented as commit
 time.
 
+M1.9 adds an optional local execution UI without adding a second engine or
+history store. A binary built with `hosted-ui` accepts `--ui` on `run` and
+`simulate`, binds an OS-selected loopback port by default, prints a
+capability-bearing URL and starts paused before the first semantic
+transaction. The page separates Lab actions from VM transactions, retains the
+complete in-memory causal history after completion, and presents topology,
+logical instances, Calls/Sessions, structured redacted payload/state and the
+exact `CostReport`. Non-UI execution, plan identity and causal records are
+unchanged. See [`ui.md`](docs/spec/ui.md) and the
+[M1.9 backlog](docs/architecture/m1.9-ui-backlog.md).
+
 For hosted execution or simulation, `--deployment <profile.json>` supplies
 typed boot values, versioned secret coordinates and the optional privacy
 attestation. Secret material itself comes from the selected provider (the M1
@@ -167,6 +179,17 @@ part of plan identity.
 Pass `--json-logs` to `rastok run` for newline-delimited structured events on
 stderr. Boundary outputs remain on stdout. Logging is deliberately lossy under
 exporter pressure; the journal-backed report input is not.
+
+For a local paused debugger, build the optional hosted UI and use either
+execution mode:
+
+```sh
+cargo run -p rastok --features hosted-ui -- run app.rkg --ui
+cargo run -p rastok --features hosted-ui -- simulate app.rkg --ui
+```
+
+Add `--ui-port PORT` to request one explicit non-zero loopback port. The CLI
+prints the authorized URL and never opens a browser automatically.
 
 For projects described by OpenAPI 3.0 or 3.1, run
 `rastok --resolve-open-api <project-dir>` to discover static HTTP endpoints

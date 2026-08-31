@@ -252,7 +252,17 @@ The repository opens publicly with this milestone (15 October 2026).
   cross-layer audit, three-register identity ledger, independent interop,
   three-ISA `no_std` builds and Cortex-M33 evidence; see the
   [exit report](docs/architecture/m1.8-exit-report.md).
-- A live view of the running graph, fed by the journal.
+- M1.9 implements the optional hosted execution UI: `run --ui` and
+  `simulate --ui` start paused behind a capability-protected loopback page,
+  step at the VM transaction boundary, keep Lab actions distinct, and derive
+  topology, redacted structured state/payloads, Calls/Sessions, full in-memory
+  history and `CostReport` from existing authorities. Reduced builds omit the
+  complete capability without changing plans or execution semantics. See
+  [`ui.md`](docs/spec/ui.md) and the
+  [ordered M1.9 backlog](docs/architecture/m1.9-ui-backlog.md). Its code,
+  portability and protocol gates are green; the real-browser visual/keyboard
+  pass remains explicit in the release-qualification inventory before the
+  complete exit statement is claimed.
 - A guided example gallery seeded by the benchmark's reference
   solutions, closed by the October demo flow.
 

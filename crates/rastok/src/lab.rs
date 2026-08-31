@@ -67,6 +67,353 @@ pub struct ScenarioRun {
     pub records: Vec<Record>,
 }
 
+/// Authored action kind exposed separately from VM transactions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScenarioActionKind {
+    /// One root envelope is admitted.
+    Inject,
+    /// Virtual time advances to the authored target.
+    Advance,
+    /// One expectation is evaluated without becoming a VM transaction.
+    Expect,
+}
+
+/// Failure while interactively advancing one scenario transaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScenarioStepError {
+    /// The VM transaction refused before commit and remains reserved.
+    Transaction(String),
+    /// The scripted Driver boundary failed; an earlier transaction may have
+    /// committed and must not be replayed as though it had not.
+    Boundary(String),
+}
+
+impl ScenarioStepError {
+    /// Whether retrying the same reserved VM transaction is safe.
+    #[must_use]
+    pub const fn retryable(&self) -> bool {
+        matches!(self, Self::Transaction(_))
+    }
+}
+
+impl core::fmt::Display for ScenarioStepError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Transaction(message) | Self::Boundary(message) => formatter.write_str(message),
+        }
+    }
+}
+
+/// One explicit, resettable scenario world for interactive execution.
+///
+/// The batch Lab runner below is implemented in terms of this session, so the
+/// UI cannot acquire a second simulation semantics.
+#[derive(Debug)]
+pub struct ScenarioSession<'plan, 'scenario> {
+    simulation: String,
+    scenario: &'scenario Scenario,
+    vm: Vm<'plan>,
+    journal: MemJournal,
+    driver: RuntimeBindings<'plan>,
+    faults: MockFaults,
+    failures: Vec<String>,
+    window_start: usize,
+    next_action: usize,
+    quiescent: bool,
+    last_action: Option<ScenarioActionKind>,
+}
+
+impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
+    /// Creates a fresh VM, journal, virtual clock and scripted Driver world.
+    ///
+    /// # Errors
+    ///
+    /// Driver composition is proven before the session can accept an action.
+    pub fn try_new(
+        plan: &'plan ValidatedExecutionPlan,
+        graph_version: GraphVersion,
+        simulation: &str,
+        shared_mocks: &[Mock],
+        scenario: &'scenario Scenario,
+        boot: Option<&crate::deployment::BootBindings>,
+    ) -> Result<Self, String> {
+        // Nearest wins, whole-mock replacement: a scenario mock for a
+        // connector shadows the simulation-level one entirely.
+        let mut mocks: BTreeMap<node::Path, Mock> = BTreeMap::new();
+        for mock in shared_mocks {
+            mocks.insert(mock.connector.clone(), mock.clone());
+        }
+        for mock in &scenario.mocks {
+            mocks.insert(mock.connector.clone(), mock.clone());
+        }
+        let journal = boot.map_or_else(
+            || MemJournal::new(graph_version),
+            |boot| MemJournal::new_with_deployment(graph_version, boot.attestation().clone()),
+        );
+        let vm = boot.map_or_else(
+            || Vm::boot(plan, graph_version),
+            |boot| Vm::boot_with_deployment(plan, graph_version, boot),
+        );
+        let empty_boot = crate::deployment::BootBindings::empty();
+        let (driver, faults) = mock_bindings(plan, mocks, boot.unwrap_or(&empty_boot))?;
+        Ok(Self {
+            simulation: String::from(simulation),
+            scenario,
+            vm,
+            journal,
+            driver,
+            faults,
+            failures: Vec::new(),
+            window_start: 0,
+            next_action: 0,
+            quiescent: true,
+            last_action: None,
+        })
+    }
+
+    /// Owning simulation name.
+    #[must_use]
+    pub fn simulation(&self) -> &str {
+        &self.simulation
+    }
+
+    /// Scenario source name.
+    #[must_use]
+    pub fn scenario(&self) -> &str {
+        &self.scenario.name
+    }
+
+    /// Optional human label.
+    #[must_use]
+    pub fn label(&self) -> Option<&str> {
+        self.scenario.label.as_deref()
+    }
+
+    /// Index of the next authored action.
+    #[must_use]
+    pub const fn next_action_index(&self) -> usize {
+        self.next_action
+    }
+
+    /// Number of authored actions.
+    #[must_use]
+    pub fn action_count(&self) -> usize {
+        self.scenario.steps.len()
+    }
+
+    /// Next authored action without applying it.
+    #[must_use]
+    pub fn next_action_kind(&self) -> Option<ScenarioActionKind> {
+        self.scenario
+            .steps
+            .get(self.next_action)
+            .map(|step| match step {
+                ScenarioStep::Inject { .. } => ScenarioActionKind::Inject,
+                ScenarioStep::Advance { .. } => ScenarioActionKind::Advance,
+                ScenarioStep::Expect(_) => ScenarioActionKind::Expect,
+            })
+    }
+
+    /// Most recently applied authored action.
+    #[must_use]
+    pub const fn last_action_kind(&self) -> Option<ScenarioActionKind> {
+        self.last_action
+    }
+
+    /// Whether ready VM work from the current action has reached a boundary.
+    #[must_use]
+    pub const fn is_quiescent(&self) -> bool {
+        self.quiescent
+    }
+
+    /// Whether every authored action has been applied and ready work settled.
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        self.next_action == self.scenario.steps.len() && self.quiescent
+    }
+
+    /// Failures accumulated in occurrence order.
+    #[must_use]
+    pub fn failures(&self) -> &[String] {
+        &self.failures
+    }
+
+    /// Current verdict projection without consuming the inspectable world.
+    #[must_use]
+    pub fn report(&self) -> ScenarioReport {
+        ScenarioReport {
+            simulation: self.simulation.clone(),
+            scenario: self.scenario.name.clone(),
+            label: self.scenario.label.clone(),
+            failures: self.failures.clone(),
+        }
+    }
+
+    /// Read-only machine for journal-derived debugger projection.
+    #[must_use]
+    pub const fn vm(&self) -> &Vm<'plan> {
+        &self.vm
+    }
+
+    /// Read-only causal journal.
+    #[must_use]
+    pub const fn journal(&self) -> &MemJournal {
+        &self.journal
+    }
+
+    /// Applies one authored action without draining subsequent VM work.
+    ///
+    /// # Errors
+    ///
+    /// A caller must finish ready work from the preceding action first.
+    pub fn next_action(&mut self) -> Result<Option<ScenarioActionKind>, String> {
+        if !self.quiescent {
+            return Err(String::from(
+                "the current scenario action still has ready VM transactions",
+            ));
+        }
+        let Some(step) = self.scenario.steps.get(self.next_action) else {
+            return Ok(None);
+        };
+        let kind = match step {
+            ScenarioStep::Inject { port, value, seq } => {
+                self.window_start = self.vm.observations().len();
+                match draft(value) {
+                    Ok(draft) => {
+                        let submission = InboundSubmission {
+                            provenance: InboundEnvelopeProvenance::single(
+                                node::Path::new(["lab"])
+                                    .unwrap_or_else(|_| unreachable!("`lab` is a valid path")),
+                            ),
+                            port: port.clone(),
+                            draft,
+                            sequence: match seq {
+                                Some(seq) => SubmissionSequence::Explicit(*seq),
+                                None => SubmissionSequence::Next,
+                            },
+                        };
+                        if let Err(error) = self.vm.inject(&mut self.journal, submission) {
+                            self.failures
+                                .push(format!("the injection was refused: {error}"));
+                        }
+                    }
+                    Err(message) => self.failures.push(message),
+                }
+                self.quiescent = false;
+                ScenarioActionKind::Inject
+            }
+            ScenarioStep::Advance { nanos } => {
+                self.window_start = self.vm.observations().len();
+                let target = self.vm.now().saturating_add(*nanos);
+                if let Err(error) = self.vm.advance(&mut self.journal, &mut self.driver, target) {
+                    self.failures.push(format!("the advance faulted: {error}"));
+                }
+                self.collect_driver_faults();
+                self.quiescent = false;
+                ScenarioActionKind::Advance
+            }
+            ScenarioStep::Expect(expectation) => {
+                if let Some(message) =
+                    check_expectation(expectation, &self.vm.observations()[self.window_start..])
+                {
+                    self.failures.push(message);
+                }
+                self.quiescent = true;
+                ScenarioActionKind::Expect
+            }
+        };
+        self.next_action = self.next_action.saturating_add(1);
+        self.last_action = Some(kind);
+        Ok(Some(kind))
+    }
+
+    /// Executes at most one ready VM transaction and polls the scripted world
+    /// around it. Driver polling itself is not a graph transaction.
+    ///
+    /// # Errors
+    ///
+    /// A faulting transaction commits nothing and remains reserved for retry.
+    pub fn step_transaction(&mut self) -> Result<bool, ScenarioStepError> {
+        self.pump_driver().map_err(ScenarioStepError::Boundary)?;
+        let ran = self
+            .vm
+            .step_with_bindings(&mut self.journal, &mut self.driver)
+            .map_err(|error| ScenarioStepError::Transaction(format!("a step faulted: {error}")))?;
+        self.pump_driver().map_err(ScenarioStepError::Boundary)?;
+        self.quiescent = !self.vm.has_ready_transaction();
+        Ok(ran)
+    }
+
+    /// Polls scripted Driver outcomes without executing a graph transaction.
+    ///
+    /// This is the safe-pause seam: a Call may acquire a retained completion,
+    /// but its handler cannot run until an explicit transaction step.
+    pub fn poll_world(&mut self) -> Result<bool, String> {
+        let progressed = self.pump_driver()?;
+        self.quiescent = !self.vm.has_ready_transaction();
+        Ok(progressed)
+    }
+
+    /// Runs ready work to the same boundary used by the historical batch Lab.
+    pub fn settle_current_action(&mut self) {
+        settle(
+            &mut self.vm,
+            &mut self.journal,
+            &mut self.driver,
+            &self.faults,
+            &mut self.failures,
+        );
+        self.quiescent = true;
+    }
+
+    /// Applies every remaining action under the batch runner's established
+    /// settle-between-actions semantics.
+    pub fn run_to_completion(&mut self) {
+        while self.next_action < self.scenario.steps.len() {
+            if self.next_action().is_err() {
+                self.settle_current_action();
+                continue;
+            }
+            if !self.quiescent {
+                self.settle_current_action();
+            }
+        }
+    }
+
+    /// Consumes the session into the public batch result.
+    #[must_use]
+    pub fn finish(self) -> ScenarioRun {
+        ScenarioRun {
+            report: ScenarioReport {
+                simulation: self.simulation,
+                scenario: self.scenario.name.clone(),
+                label: self.scenario.label.clone(),
+                failures: self.failures,
+            },
+            records: self.journal.records().to_vec(),
+        }
+    }
+
+    fn pump_driver(&mut self) -> Result<bool, String> {
+        let report = self
+            .vm
+            .pump(&mut self.journal, &mut self.driver)
+            .map_err(|error| format!("the boundary round faulted: {error}"))?;
+        self.collect_driver_faults();
+        for (response, reason) in &report.rejected {
+            self.failures.push(format!(
+                "a reply to {:?} was refused before closure: {reason}",
+                response.call_ref
+            ));
+        }
+        Ok(report.settled > 0 || !report.rejected.is_empty())
+    }
+
+    fn collect_driver_faults(&mut self) {
+        self.failures.extend(self.faults.borrow_mut().drain(..));
+    }
+}
+
 /// Runs every scenario of a checked lab against its plan. Each
 /// scenario gets a fresh journal and a fresh machine — scenarios
 /// share nothing but the graph.
@@ -122,93 +469,27 @@ fn run_scenario(
     scenario: &Scenario,
     boot: Option<&crate::deployment::BootBindings>,
 ) -> ScenarioRun {
-    // Nearest wins, whole-mock replacement: a scenario mock for a
-    // connector shadows the simulation-level one entirely.
-    let mut mocks: BTreeMap<node::Path, Mock> = BTreeMap::new();
-    for mock in shared_mocks {
-        mocks.insert(mock.connector.clone(), mock.clone());
-    }
-    for mock in &scenario.mocks {
-        mocks.insert(mock.connector.clone(), mock.clone());
-    }
-    let mut journal = boot.map_or_else(
-        || MemJournal::new(graph_version),
-        |boot| MemJournal::new_with_deployment(graph_version, boot.attestation().clone()),
-    );
-    let mut vm = boot.map_or_else(
-        || Vm::boot(plan, graph_version),
-        |boot| Vm::boot_with_deployment(plan, graph_version, boot),
-    );
-    let mut failures = Vec::new();
-    let empty_boot = crate::deployment::BootBindings::empty();
-    let (mut driver, faults) = match mock_bindings(plan, mocks, boot.unwrap_or(&empty_boot)) {
-        Ok(bound) => bound,
-        Err(error) => {
-            failures.push(format!("the Lab Driver composition refused: {error}"));
-            return ScenarioRun {
-                report: ScenarioReport {
-                    simulation: String::from(simulation),
-                    scenario: scenario.name.clone(),
-                    label: scenario.label.clone(),
-                    failures,
-                },
-                records: Vec::new(),
-            };
+    match ScenarioSession::try_new(
+        plan,
+        graph_version,
+        simulation,
+        shared_mocks,
+        scenario,
+        boot,
+    ) {
+        Ok(mut session) => {
+            session.run_to_completion();
+            session.finish()
         }
-    };
-    let mut window_start = 0usize;
-    for step in &scenario.steps {
-        match step {
-            ScenarioStep::Inject { port, value, seq } => {
-                window_start = vm.observations().len();
-                match draft(value) {
-                    Ok(draft) => {
-                        let submission = InboundSubmission {
-                            provenance: InboundEnvelopeProvenance::single(
-                                node::Path::new(["lab"])
-                                    .unwrap_or_else(|_| unreachable!("`lab` is a valid path")),
-                            ),
-                            port: port.clone(),
-                            draft,
-                            sequence: match seq {
-                                Some(seq) => SubmissionSequence::Explicit(*seq),
-                                None => SubmissionSequence::Next,
-                            },
-                        };
-                        if let Err(error) = vm.inject(&mut journal, submission) {
-                            failures.push(format!("the injection was refused: {error}"));
-                            continue;
-                        }
-                        settle(&mut vm, &mut journal, &mut driver, &faults, &mut failures);
-                    }
-                    Err(message) => failures.push(message),
-                }
-            }
-            ScenarioStep::Advance { nanos } => {
-                window_start = vm.observations().len();
-                let target = vm.now().saturating_add(*nanos);
-                if let Err(error) = vm.advance(&mut journal, &mut driver, target) {
-                    failures.push(format!("the advance faulted: {error}"));
-                }
-                settle(&mut vm, &mut journal, &mut driver, &faults, &mut failures);
-            }
-            ScenarioStep::Expect(expectation) => {
-                if let Some(message) =
-                    check_expectation(expectation, &vm.observations()[window_start..])
-                {
-                    failures.push(message);
-                }
-            }
-        }
-    }
-    ScenarioRun {
-        report: ScenarioReport {
-            simulation: String::from(simulation),
-            scenario: scenario.name.clone(),
-            label: scenario.label.clone(),
-            failures,
+        Err(error) => ScenarioRun {
+            report: ScenarioReport {
+                simulation: String::from(simulation),
+                scenario: scenario.name.clone(),
+                label: scenario.label.clone(),
+                failures: vec![format!("the Lab Driver composition refused: {error}")],
+            },
+            records: Vec::new(),
         },
-        records: journal.records().to_vec(),
     }
 }
 
@@ -965,6 +1246,48 @@ lab m0_probe {
     #[test]
     fn the_lab_is_repeatable() {
         assert_eq!(reports(), reports());
+    }
+
+    #[test]
+    fn transaction_stepping_and_batch_execution_produce_one_scenario_history() {
+        let compilation = compile(
+            &[PROBE_WITH_LAB],
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("a valid unit");
+        let lab = &compilation.labs[0];
+        let batched = run(&compilation.plan, GraphVersion(1), lab);
+        let simulation = &lab.simulations[0];
+
+        for (scenario, expected) in simulation.scenarios.iter().zip(batched) {
+            let mut interactive = ScenarioSession::try_new(
+                &compilation.plan,
+                GraphVersion(1),
+                &simulation.name,
+                &simulation.mocks,
+                scenario,
+                None,
+            )
+            .expect("the scripted world binds");
+            while !interactive.is_complete() {
+                if interactive.is_quiescent() {
+                    interactive
+                        .next_action()
+                        .expect("the next authored action applies");
+                }
+                while !interactive.is_quiescent() {
+                    interactive
+                        .step_transaction()
+                        .expect("one interactive transaction runs");
+                }
+            }
+            assert_eq!(
+                interactive.finish(),
+                expected,
+                "scenario `{}`",
+                scenario.name
+            );
+        }
     }
 
     #[test]

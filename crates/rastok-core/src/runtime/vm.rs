@@ -796,6 +796,109 @@ pub struct Observed {
     pub envelope: Envelope,
 }
 
+/// Read-only lifecycle state exposed to hosted debuggers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstancePhaseInspection {
+    /// The instance accepts ordinary work.
+    Open,
+    /// External admission is closed while admitted work drains.
+    Draining,
+    /// Open effects are being settled under the closing budget.
+    Settling,
+    /// The terminal lifecycle transaction is waiting to commit.
+    Stopping,
+}
+
+/// One live logical instance and its Node-private state, if it owns a Node.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InstanceInspection {
+    /// Canonical logical address plus journal-derived generation.
+    pub reference: InstanceRef,
+    /// Static lexical owner.
+    pub owner: OwnerPath,
+    /// Current replay-derivable lifecycle phase.
+    pub phase: InstancePhaseInspection,
+    /// Executable Node at this owner, absent for a Graph owner.
+    pub node: Option<node::Path>,
+    /// Current Node-private cells with defaults applied.
+    pub state: BTreeMap<String, crate::value::Value>,
+}
+
+/// Direction of one retained Call obligation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallDirectionInspection {
+    /// Graph-to-world Call.
+    Outbound,
+    /// World-to-graph Call.
+    Inbound,
+}
+
+/// Typed identity of one retained Call obligation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CallReferenceInspection {
+    /// Graph-to-world Call identity.
+    Outbound(CallRef),
+    /// World-to-graph Call identity.
+    Inbound(InboundCallRef),
+}
+
+/// One Call held by the machine at the inspection boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallInspection {
+    /// Typed Call identity.
+    pub reference: CallReferenceInspection,
+    /// Direction relative to the graph.
+    pub direction: CallDirectionInspection,
+    /// Connector owning the protocol.
+    pub connector: node::Path,
+    /// Exact logical instance generation.
+    pub instance: InstanceRef,
+    /// Whether the terminal observation is retained but not yet consumed.
+    pub completion_retained: bool,
+}
+
+/// Direction in which one Session was opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionDirectionInspection {
+    /// Graph opened the Session toward the world.
+    Outbound,
+    /// World opened the Session toward the graph.
+    Inbound,
+}
+
+/// One long-lived Session held by the machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionInspection {
+    /// Logical Session identity.
+    pub reference: SessionRef,
+    /// Direction of the opening.
+    pub direction: SessionDirectionInspection,
+    /// Connector owning the protocol.
+    pub connector: node::Path,
+    /// Exact logical instance generation.
+    pub instance: InstanceRef,
+    /// Whether the opening handshake completed.
+    pub opened: bool,
+    /// Journaled writes not yet locally settled.
+    pub pending_writes: usize,
+    /// Whether a terminal observation is retained but not yet consumed.
+    pub completion_retained: bool,
+}
+
+/// Disposable read model over VM-owned mutable state.
+///
+/// It is deliberately a clone: a debugger can retain and format it without
+/// borrowing the scheduler or becoming an execution authority.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VmInspection {
+    /// Live logical instances in canonical reference order.
+    pub instances: Vec<InstanceInspection>,
+    /// Retained Call obligations in canonical identity order.
+    pub calls: Vec<CallInspection>,
+    /// Retained Sessions in canonical identity order.
+    pub sessions: Vec<SessionInspection>,
+}
+
 /// One won closure and the trigger its completion transaction fires
 /// under: `p:in` for a driver answer, `l:timeout` for an expired
 /// budget.
@@ -3297,6 +3400,118 @@ impl<'plan> Vm<'plan> {
         &self.observed
     }
 
+    /// Clones one read-only debugger view without changing scheduler state.
+    #[must_use]
+    pub fn inspection(&self) -> VmInspection {
+        let instances = self
+            .instances
+            .iter()
+            .map(|(reference, instance)| {
+                let owner = &self.plan.owners[instance.owner.index()];
+                let (node, state) = match owner.kind {
+                    OwnerKind::Graph => (None, BTreeMap::new()),
+                    OwnerKind::Node(slot) => (
+                        Some(self.plan.nodes[slot.index()].path.clone()),
+                        self.state.cell_unchecked(self.plan.plan(), slot, reference),
+                    ),
+                };
+                let phase = match instance.phase {
+                    InstancePhase::Open => InstancePhaseInspection::Open,
+                    InstancePhase::Closing {
+                        stage: ClosingStage::Draining,
+                        ..
+                    } => InstancePhaseInspection::Draining,
+                    InstancePhase::Closing {
+                        stage: ClosingStage::Settling,
+                        ..
+                    } => InstancePhaseInspection::Settling,
+                    InstancePhase::Stopping { .. } => InstancePhaseInspection::Stopping,
+                };
+                InstanceInspection {
+                    reference: reference.clone(),
+                    owner: owner.path.clone(),
+                    phase,
+                    node,
+                    state,
+                }
+            })
+            .collect();
+        let mut calls =
+            Vec::with_capacity(self.pending.len().saturating_add(self.inbound_calls.len()));
+        calls.extend(self.pending.iter().map(|(reference, pending)| {
+            CallInspection {
+                reference: CallReferenceInspection::Outbound(*reference),
+                direction: CallDirectionInspection::Outbound,
+                connector: self.plan.nodes[pending.slot.index()].path.clone(),
+                instance: pending.instance.clone(),
+                completion_retained: self
+                    .settled
+                    .iter()
+                    .any(|entry| entry.event.call_ref == *reference),
+            }
+        }));
+        calls.extend(self.inbound_calls.iter().map(|(reference, pending)| {
+            CallInspection {
+                reference: CallReferenceInspection::Inbound(*reference),
+                direction: CallDirectionInspection::Inbound,
+                connector: self.plan.nodes[pending.slot.index()].path.clone(),
+                instance: pending.instance.clone(),
+                completion_retained: self
+                    .settled_inbound_calls
+                    .iter()
+                    .any(|event| event.call_ref == *reference),
+            }
+        }));
+        calls.sort_by_key(|call| call.reference);
+        let sessions = self
+            .sessions
+            .iter()
+            .map(|(reference, session)| SessionInspection {
+                reference: *reference,
+                direction: if session.open_intent.is_some() {
+                    SessionDirectionInspection::Outbound
+                } else {
+                    SessionDirectionInspection::Inbound
+                },
+                connector: self.plan.nodes[session.slot.index()].path.clone(),
+                instance: session.instance.clone(),
+                opened: session.opened,
+                pending_writes: self
+                    .session_writes
+                    .values()
+                    .filter(|write| write.intent.session_ref == *reference)
+                    .count(),
+                completion_retained: self
+                    .settled_sessions
+                    .iter()
+                    .any(|settled| settled.session == *reference),
+            })
+            .collect();
+        VmInspection {
+            instances,
+            calls,
+            sessions,
+        }
+    }
+
+    /// Outbound Calls whose terminal observation is not retained yet.
+    ///
+    /// A hosted pause controller uses this distinction to keep polling the
+    /// world after an open, then stop before [`Self::step_with_bindings`]
+    /// consumes the retained completion.
+    #[must_use]
+    pub fn awaiting_outbound_calls(&self) -> usize {
+        self.pending
+            .keys()
+            .filter(|reference| {
+                !self
+                    .settled
+                    .iter()
+                    .any(|entry| entry.event.call_ref == **reference)
+            })
+            .count()
+    }
+
     /// Whether the machine is stable: no activation can run, no completion
     /// waits to commit, and no call is open. A partial join is retained
     /// mailbox state, not runnable work; it is therefore quiescent until a
@@ -3358,6 +3573,101 @@ impl<'plan> Vm<'plan> {
             after = Some((slot, instance));
         }
         true
+    }
+
+    /// Whether one call to [`Self::step_with_bindings`] can select semantic
+    /// work without waiting for the world or advancing logical time.
+    ///
+    /// Unlike [`Self::is_stable`], an open Call, Session or partial join does
+    /// not by itself make work ready. Hosted stepping and the interactive Lab
+    /// use this distinction to stop at a genuine transaction boundary.
+    #[must_use]
+    pub fn has_ready_transaction(&self) -> bool {
+        if !self.lifecycle.is_empty()
+            || !self.loop_work.is_empty()
+            || self.settled_inbound_calls.iter().any(|event| {
+                self.inbound_calls
+                    .get(&event.call_ref)
+                    .is_some_and(|pending| self.instances.contains_key(&pending.instance))
+            })
+            || self.settled_sessions.iter().any(|settled| {
+                self.sessions.get(&settled.session).is_some_and(|session| {
+                    self.instances.contains_key(&session.instance)
+                        && !self
+                            .session_writes
+                            .values()
+                            .any(|write| write.intent.session_ref == settled.session)
+                })
+            })
+            || self.settled.iter().any(|entry| {
+                self.pending
+                    .get(&entry.event.call_ref)
+                    .is_some_and(|pending| self.instances.contains_key(&pending.instance))
+            })
+        {
+            return true;
+        }
+        if !self.has_join_activations {
+            return self
+                .scheduler
+                .mailboxes
+                .peek_next_where(|_, reference| {
+                    matches!(
+                        self.instances.get(reference),
+                        Some(Instance {
+                            phase: InstancePhase::Open,
+                            ..
+                        }) | Some(Instance {
+                            phase: InstancePhase::Closing {
+                                stage: ClosingStage::Draining,
+                                ..
+                            },
+                            ..
+                        })
+                    )
+                })
+                .is_some();
+        }
+        let mut after = None;
+        while let Some((slot, instance, delivery)) =
+            self.scheduler
+                .mailboxes
+                .next_runnable_key(after.as_ref(), |_, reference| {
+                    matches!(
+                        self.instances.get(reference),
+                        Some(Instance {
+                            phase: InstancePhase::Open,
+                            ..
+                        }) | Some(Instance {
+                            phase: InstancePhase::Closing {
+                                stage: ClosingStage::Draining,
+                                ..
+                            },
+                            ..
+                        })
+                    )
+                })
+        {
+            after = Some((slot, instance.clone()));
+            if matches!(
+                self.plan.nodes[slot.index()].execution,
+                NodeExecution::Connector(_)
+            ) {
+                return true;
+            }
+            let join_owned = self.plan.handlers.iter().any(|handler| {
+                handler.owner.node() == Some(slot)
+                    && matches!(
+                        &handler.activation,
+                        node::HandlerActivation::Join { ports, .. }
+                            if ports.contains(&delivery.port)
+                    )
+            });
+            if !join_owned || !matches!(self.operator_work(slot, &instance), Ok(None)) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Whether calls are open against the world — work [`Self::drain`]

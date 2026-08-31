@@ -193,6 +193,7 @@ impl HttpClientRequestBindings {
         }
     }
 
+    #[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
     pub(crate) fn secret_references(&self) -> impl Iterator<Item = &crate::deployment::SecretRef> {
         self.boot_secrets.values()
     }
