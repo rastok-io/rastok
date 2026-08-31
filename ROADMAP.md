@@ -254,11 +254,13 @@ The repository opens publicly with this milestone (15 October 2026).
   [exit report](docs/architecture/m1.8-exit-report.md).
 - M1.9 implements the optional hosted execution UI: `run --ui` and
   `simulate --ui` start paused behind a capability-protected loopback page,
-  step at the VM transaction boundary, keep Lab actions distinct, and derive
-  compound topology, redacted structured state and separate `META`/`DATA`,
-  Calls/Sessions, full in-memory history and `CostReport` from existing
-  authorities. A typed pre-admission editor may replace only the next checked
-  Lab injection's DATA before the ordinary immutable-envelope admission.
+  freeze logical time during debugger suspension, step at the VM transaction
+  boundary, keep lifecycle facts and Lab actions distinct from port steps, and
+  derive compound topology, linked Graph/Node filters, redacted structured
+  state and separate `META`/`DATA`, Calls/Sessions, full in-memory history and
+  `CostReport` from existing authorities. A typed pre-admission editor may
+  replace only the next checked Lab injection's DATA before the ordinary
+  immutable-envelope admission.
   Reduced builds omit the
   complete capability without changing plans or execution semantics. See
   [`ui.md`](docs/spec/ui.md) and the

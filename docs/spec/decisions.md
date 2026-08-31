@@ -28,9 +28,13 @@ Pause is a safe-point request. New external admissions and handler firings
 stop at the transaction boundary; already-open outbound Calls remain polled
 until their typed terminal outcomes are retained, then wait unconsumed for the
 next step. Long-lived Sessions stay open and rely on their existing bounded
-transport/mailbox backpressure. A real run may retry an uncommitted fault but
-cannot reset effects already visible to the world; simulation reset creates a
-fresh complete world.
+transport/mailbox backpressure. While `Paused` or `PauseRequested`, the hosted
+wall-to-logical mapping is frozen: physical time spent inspecting the run does
+not age Call timeouts, instance lifetimes or delayed Loop continuations. A
+resume rebases that mapping at the frozen logical instant; retained external
+outcomes remain facts and are not rewritten. A real run may retry an
+uncommitted fault but cannot reset effects already visible to the world;
+simulation reset creates a fresh complete world.
 
 The hosted page is embedded and self-contained behind an independent Cargo
 feature. It binds loopback only, uses an OS-random capability on every request,
@@ -61,13 +65,19 @@ emissions derived against the validated plan. The last-Step highlight is
 separately physical: an authored Lab action names itself and says that no Node
 fired, while a transaction names its exact owner and trigger. Lifecycle
 transactions remain visible instead of being skipped to manufacture a more
-dramatic animation.
+dramatic animation. The read model exposes both their exact trigger and a
+human summary (`Instance opened`, `Instance closing`, `Instance stopped`), so
+universal lazy `l:start` facts cannot be mistaken for duplicate deliveries or
+port-handler steps.
 
 Selecting a Graph or Node opens its exact authored declaration, including
 attributes, handlers and guards. These excerpts live in the compiler's
 physical debug side table: the browser neither parses source nor reconstructs
 it from the plan, and a stripped deployment may omit them without changing
-execution.
+execution. The same disposable selection filters history, instances,
+Calls/Sessions and cost rows to the selected Node or lexical Graph subtree;
+clearing it restores the complete retained projection and never changes its
+authority.
 
 The pedagogical surface follows an envelope from boundary to boundary without
 splitting a transaction. The compact sticky bar always names `Rastok UI`, the
@@ -104,11 +114,13 @@ crate changes no Rastok protocol or identity.
 
 **Rejected:** a Git feature branch; `check --ui`; binding beyond loopback;
 unauthenticated localhost controls; all tabs racing commands; auto-opening a
-browser; pausing by cancelling Calls or Sessions; real-run reset; a second
-journal/accounting store; forcing payload materialization; post-format regex
-redaction; free-form/manual envelope injection outside a checked scenario;
-editing `META` or committed envelopes; stepping individual edges inside one
-atomic transaction; and reusing `File.watch` vocabulary.
+browser; starting live before the controller explicitly resumes; letting
+debugger suspension consume logical timeout or lifetime budgets; pausing by
+cancelling Calls or Sessions; real-run reset; a second journal/accounting
+store; forcing payload materialization; post-format regex redaction;
+free-form/manual envelope injection outside a checked scenario; editing
+`META` or committed envelopes; stepping individual edges inside one atomic
+transaction; and reusing `File.watch` vocabulary.
 
 ## D-2026-08-31-1 — Executable clear-secret schemas refuse at source check
 

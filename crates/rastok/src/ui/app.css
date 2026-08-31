@@ -128,7 +128,7 @@ select, input, textarea { min-width: 0; padding: .48rem .58rem; border-color: va
 
 .topology { display: grid; gap: .6rem; }
 .graph-activity { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .65rem; min-height: 2.35rem; padding: .48rem .65rem; border: 1px solid var(--border); border-radius: .45rem; background: var(--surface-soft); }
-.graph-activity.activity-transaction { border-color: var(--accent); background: var(--accent-soft); }
+.graph-activity.activity-transaction, .graph-activity.activity-lifecycle { border-color: var(--accent); background: var(--accent-soft); }
 .graph-activity.activity-scenario-action, .graph-activity.activity-inbound { border-color: var(--blue); background: var(--blue-soft); }
 .graph-activity-label { color: var(--muted); font-size: .63rem; font-weight: 820; letter-spacing: .1em; text-transform: uppercase; }
 .graph-activity strong { font-size: .82rem; }

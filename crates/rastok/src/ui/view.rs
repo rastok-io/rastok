@@ -5,7 +5,7 @@ use crate::data_policy::is_redacted_path;
 use crate::datatype::{DataType, IntegerType, TemporalType};
 use crate::envelope::{Data, MetaValue, Namespace, Scalar, Value};
 use crate::identity::InstanceRef;
-use crate::journal::{Journal, MemJournal, Record};
+use crate::journal::{Journal, MemJournal, OutboundRecord, OutboundStatus, Record, SessionStatus};
 use crate::observation::ExchangeCorrelation;
 use crate::plan::{NodeExecution, Slot, ValidatedExecutionPlan};
 use crate::runtime::vm::{
@@ -104,13 +104,13 @@ impl ActivityView {
             Record::Inbound(_) | Record::Outbound(_) => None,
         }) {
             let owner = transaction.owner_path.to_string();
-            let label = if owner.is_empty() { "app" } else { &owner };
+            let kind = match &transaction.trigger {
+                crate::node::Trigger::Port(_) => "transaction",
+                crate::node::Trigger::Lifecycle(_) => "lifecycle",
+            };
             return Some(Self {
-                kind: "transaction",
-                detail: format!(
-                    "Node `{label}` committed one `{}` transaction",
-                    transaction.trigger
-                ),
+                kind,
+                detail: transaction_summary(transaction),
                 node: Some(owner),
                 records: Some(records),
             });
@@ -540,14 +540,25 @@ fn endpoint_json(endpoint: &crate::plan::EndpointRef, source: bool) -> JsonValue
 }
 
 fn history(plan: &ValidatedExecutionPlan, vm: &Vm<'_>, journal: &MemJournal) -> JsonValue {
-    let records = journal
-        .retained_observations()
+    let observations = journal.retained_observations();
+    debug_assert_eq!(observations.len(), journal.records().len());
+    let records = observations
         .iter()
+        .zip(journal.records())
         .enumerate()
-        .map(|(index, observation)| {
+        .map(|(index, (observation, record))| {
             let mut value = crate::observability::observation_json(observation, None);
             if let JsonValue::Object(fields) = &mut value {
                 fields.insert(String::from("record_index"), JsonValue::from(index));
+                let (kind, trigger, summary) = history_record_description(record);
+                fields.insert(
+                    String::from("record_kind"),
+                    JsonValue::String(String::from(kind)),
+                );
+                fields.insert(String::from("summary"), JsonValue::String(summary));
+                if let Some(trigger) = trigger {
+                    fields.insert(String::from("trigger"), JsonValue::String(trigger));
+                }
             }
             value
         })
@@ -570,6 +581,95 @@ fn history(plan: &ValidatedExecutionPlan, vm: &Vm<'_>, journal: &MemJournal) -> 
         })
         .collect::<Vec<_>>();
     json!({ "records": records, "deliveries": deliveries })
+}
+
+fn history_record_description(record: &Record) -> (&'static str, Option<String>, String) {
+    match record {
+        Record::Inbound(inbound) => {
+            let source = inbound.connector_path.as_ref().map_or_else(
+                || String::from("App input"),
+                |connector| format!("Inbound · {connector}"),
+            );
+            ("inbound", None, format!("Input admitted · {source}"))
+        }
+        Record::Transaction(transaction) => {
+            let kind = match &transaction.trigger {
+                crate::node::Trigger::Port(_) => "step",
+                crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Start) => "instance-opened",
+                crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Stop) => "instance-stopped",
+                crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Closing) => {
+                    "instance-closing"
+                }
+                crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Next) => "loop-next",
+                crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Reply) => "call-reply",
+                crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Exit) => "session-exit",
+                crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Timeout) => "timeout",
+                crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Evict) => "eviction",
+                crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Recover) => "recovery",
+                crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Compensate) => {
+                    "compensation"
+                }
+            };
+            (
+                kind,
+                Some(transaction.trigger.to_string()),
+                transaction_summary(transaction),
+            )
+        }
+        Record::Outbound(OutboundRecord::Call(call)) => {
+            let (kind, verb) = match &call.status {
+                OutboundStatus::Open => ("call-opened", "Call opened"),
+                OutboundStatus::Closed(_) => ("call-closed", "Call closed"),
+                OutboundStatus::Abandoned => ("call-abandoned", "Call abandoned"),
+            };
+            (
+                kind,
+                None,
+                format!("{verb} · {}", call.intent.connector_path),
+            )
+        }
+        Record::Outbound(OutboundRecord::Session(session)) => {
+            let (kind, verb) = match &session.status {
+                SessionStatus::Opening(_) => ("session-opening", "Session opening"),
+                SessionStatus::Opened => ("session-opened", "Session opened"),
+                SessionStatus::WriteOpen(_) => ("session-write-opened", "Session write opened"),
+                SessionStatus::WriteSettled(_) => {
+                    ("session-write-settled", "Session write settled")
+                }
+                SessionStatus::WriteAbandoned(_) => {
+                    ("session-write-abandoned", "Session write abandoned")
+                }
+            };
+            (kind, None, format!("{verb} · {}", session.connector_path))
+        }
+    }
+}
+
+fn transaction_summary(transaction: &crate::journal::TransactionRecord) -> String {
+    let owner = if transaction.owner_path.segments().is_empty() {
+        String::from("App")
+    } else {
+        transaction.owner_path.to_string()
+    };
+    let generation = transaction.instance.generation();
+    match &transaction.trigger {
+        crate::node::Trigger::Port(port) => format!("Step · {owner} · {port}"),
+        crate::node::Trigger::Lifecycle(lifecycle) => {
+            let verb = match lifecycle {
+                crate::node::Lifecycle::Start => "Instance opened",
+                crate::node::Lifecycle::Stop => "Instance stopped",
+                crate::node::Lifecycle::Closing => "Instance closing",
+                crate::node::Lifecycle::Next => "Loop continued",
+                crate::node::Lifecycle::Reply => "Call reply",
+                crate::node::Lifecycle::Exit => "Session exit",
+                crate::node::Lifecycle::Timeout => "Timeout",
+                crate::node::Lifecycle::Evict => "State evicted",
+                crate::node::Lifecycle::Recover => "Recovery",
+                crate::node::Lifecycle::Compensate => "Compensation",
+            };
+            format!("{verb} · {owner} · gen {generation}")
+        }
+    }
 }
 
 fn observation_annotations<'a>(

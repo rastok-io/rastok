@@ -200,11 +200,18 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
         transactions_before + 1,
         "one Next transaction command commits one VM transaction"
     );
-    assert_eq!(after_step["topology"]["activity"]["kind"], "transaction");
+    assert_eq!(after_step["topology"]["activity"]["kind"], "lifecycle");
     assert_eq!(
         after_step["topology"]["activity"]["node"], "",
         "the first VM transaction starts the root App instance"
     );
+    let latest_record = after_step["history"]["records"]
+        .as_array()
+        .and_then(|records| records.last())
+        .expect("the lifecycle transaction is retained");
+    assert_eq!(latest_record["record_kind"], "instance-opened");
+    assert_eq!(latest_record["trigger"], "l:start");
+    assert_eq!(latest_record["summary"], "Instance opened · App · gen 0");
     assert_eq!(
         topology_edge(&after_step, "relay.out>shell.in")["envelope_count"],
         "0",

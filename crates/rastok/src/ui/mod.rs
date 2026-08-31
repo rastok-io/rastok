@@ -850,6 +850,10 @@ mod tests {
         assert!(APP_JS.contains("Before admission"));
         assert!(APP_JS.contains("[\"META\", meta], [\"DATA\", data]"));
         assert!(APP_JS.contains("appendDataTree(zone, value)"));
+        assert!(APP_JS.contains("[\"record_index\", \"summary\", \"trigger\", \"origin_id\"]"));
+        assert!(APP_JS.contains("selectedTopologyContext(snapshot.topology)"));
+        assert!(APP_JS.contains("ownerIds.has(item.owner)"));
+        assert!(!APP_JS.contains("path.startsWith(`${selection.path}.`)"));
         assert!(!APP_JS.contains('✉'));
     }
 

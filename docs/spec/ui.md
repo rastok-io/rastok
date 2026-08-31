@@ -82,7 +82,11 @@ admitted and no further handler starts. An outbound Call already opened may
 continue in the external world; the boundary keeps polling it until its typed
 terminal outcome is retained, then pauses before the corresponding handler
 consumes that outcome. The UI displays `PauseRequested` and every outstanding
-Call. Semantic time does not advance merely to make a paused timeout happen.
+Call. The hosted wall-to-logical mapping freezes on both `Paused` and
+`PauseRequested`: time spent inspecting the run does not age Call timeouts,
+instance lifetimes or delayed Loop continuations. Resume continues from the
+same logical instant. A real external outcome retained during the pause stays
+retained; freezing time never fabricates, discards or rewrites it.
 
 A Session is not a Call and may be intentionally long-lived. Pause never
 closes it or waits for its terminal exit. Its transport may continue filling
@@ -202,6 +206,15 @@ unavailable.
 Containment is likewise read from the validated lexical owner table. The
 browser does not infer nesting from dotted paths or edge geometry. Graph
 frames are presentation of that existing authority and add no runtime scope.
+
+Every causal-history row retains its generic observation event and also
+projects the exact trigger/kind plus a human action summary. Thus `l:start`
+renders as `Instance opened · <owner> · gen <n>`, while a port firing renders
+as `Step · <owner> · <port>`; neither is folded away or counted as another
+delivery. Selecting a Node filters history, instances, exchanges and cost to
+that exact path. Selecting a Graph filters the same panels to its lexical
+subtree. This filter is disposable browser state; clearing it restores every
+row retained by the in-memory authorities.
 
 ## 7. DATA, META and state presentation
 

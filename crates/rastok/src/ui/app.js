@@ -62,11 +62,16 @@ function renderSnapshot(snapshot) {
   renderFault(snapshot.fault);
   renderScenario(snapshot.scenario, simulation);
   renderTopology(snapshot.topology);
-  renderHistory(snapshot.history);
-  renderInstances(snapshot.instances);
-  renderExchanges(snapshot.exchanges);
-  renderCost(snapshot.cost_report);
+  renderRelatedPanels(snapshot);
   updateControls();
+}
+
+function renderRelatedPanels(snapshot) {
+  const selection = selectedTopologyContext(snapshot.topology);
+  renderHistory(snapshot.history, selection);
+  renderInstances(snapshot.instances, selection);
+  renderExchanges(snapshot.exchanges, selection);
+  renderCost(snapshot.cost_report, selection);
 }
 
 function updateControls() {
@@ -137,7 +142,11 @@ function renderTopology(topology) {
   activityPanel.className = `graph-activity${activity ? ` activity-${activity.kind}` : ""}`;
   const activityLabel = document.createElement("span");
   activityLabel.className = "graph-activity-label";
-  activityLabel.textContent = activity?.kind === "transaction" ? "Last Step" : "Latest boundary";
+  activityLabel.textContent = activity?.kind === "transaction"
+    ? "Last Step"
+    : activity?.kind === "lifecycle"
+      ? "Lifecycle"
+      : "Latest boundary";
   const activityText = document.createElement("strong");
   activityText.textContent = activity?.detail || "No Step has run yet.";
   activityPanel.append(activityLabel, activityText);
@@ -184,7 +193,7 @@ function renderTopology(topology) {
   for (const owner of orderedOwners) {
     const position = layout.scopes.get(owner.id);
     if (!position) continue;
-    const active = activity?.kind === "transaction" && activity.node === owner.path;
+    const active = ["transaction", "lifecycle"].includes(activity?.kind) && activity.node === owner.path;
     const selectable = Boolean(owner.definition);
     const selected = selectedTopologyItem === owner.id;
     const group = svgElement("g", {
@@ -324,7 +333,7 @@ function renderTopology(topology) {
   for (const node of graph.nodes) {
     const position = layout.positions.get(node.id);
     if (!position) continue;
-    const active = activity?.kind === "transaction" && activity.node === node.path;
+    const active = ["transaction", "lifecycle"].includes(activity?.kind) && activity.node === node.path;
     const selectable = Boolean(node.definition);
     const selected = selectedTopologyItem === node.id;
     const boundary = node.kind === "boundary" || node.kind === "discard";
@@ -445,6 +454,60 @@ function renderTopology(topology) {
 function selectTopologyItem(id) {
   selectedTopologyItem = selectedTopologyItem === id ? null : id;
   renderTopology(currentSnapshot?.topology);
+  if (currentSnapshot) renderRelatedPanels(currentSnapshot);
+}
+
+function selectedTopologyContext(topology) {
+  if (!selectedTopologyItem || !topology) return null;
+  const owner = (topology.owners || []).find((item) => item.id === selectedTopologyItem);
+  if (owner) {
+    const ownerIds = new Set([owner.id]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const candidate of topology.owners || []) {
+        if (!ownerIds.has(candidate.id) && ownerIds.has(candidate.parent)) {
+          ownerIds.add(candidate.id);
+          changed = true;
+        }
+      }
+    }
+    const paths = new Set([
+      ...(topology.owners || [])
+        .filter((item) => ownerIds.has(item.id))
+        .map((item) => item.path || ""),
+      ...(topology.nodes || [])
+        .filter((item) => ownerIds.has(item.owner))
+        .map((item) => item.path || ""),
+    ]);
+    return {
+      kind: "graph",
+      path: owner.path || "",
+      label: `Graph ${owner.label || "App"}`,
+      all: owner.parent === null,
+      paths,
+    };
+  }
+  const node = (topology.nodes || []).find((item) => item.id === selectedTopologyItem);
+  if (!node) return null;
+  return {
+    kind: "node",
+    path: node.path || "",
+    label: `Node ${node.path || node.label || "?"}`,
+    all: false,
+    paths: new Set([node.path || ""]),
+  };
+}
+
+function pathMatchesSelection(path, selection) {
+  if (!selection) return true;
+  if (selection.all) return true;
+  if (typeof path !== "string") return false;
+  return selection.paths.has(path);
+}
+
+function rowMatchesSelection(row, selection, fields) {
+  return !selection || fields.some((field) => pathMatchesSelection(row?.[field], selection));
 }
 
 function envelopePanel(snapshot) {
@@ -1105,19 +1168,22 @@ function truncate(value, maximum) {
   return text.length <= maximum ? text : `${text.slice(0, maximum - 1)}…`;
 }
 
-function renderHistory(history) {
+function renderHistory(history, selection) {
   const target = document.querySelector("#history");
-  const records = history?.records || [];
-  const deliveries = history?.deliveries || [];
-  text("history-summary", `${records.length} causal record${records.length === 1 ? "" : "s"}; ${deliveries.length} observed deliver${deliveries.length === 1 ? "y" : "ies"}.`);
+  const allRecords = history?.records || [];
+  const allDeliveries = history?.deliveries || [];
+  const records = allRecords.filter((row) => rowMatchesSelection(row, selection, ["owner", "connector"]));
+  const deliveries = allDeliveries.filter((row) => rowMatchesSelection(row, selection, ["node"]));
+  const suffix = selection ? ` Filtered by ${selection.label}.` : "";
+  text("history-summary", `${records.length} causal record${records.length === 1 ? "" : "s"}; ${deliveries.length} observed deliver${deliveries.length === 1 ? "y" : "ies"}.${suffix}`);
   if (!records.length && !deliveries.length) {
-    empty(target, "No committed records.");
+    empty(target, selection ? "No retained activity for this selection." : "No committed records.");
     document.querySelector("#show-older").hidden = true;
     return;
   }
   const start = Math.max(0, records.length - historyLimit);
   const fragment = document.createDocumentFragment();
-  fragment.append(historyTable("Causal records", records.slice(start), ["record_index", "event", "owner", "connector", "origin_id"]));
+  fragment.append(historyTable("Causal records", records.slice(start), ["record_index", "summary", "trigger", "origin_id"]));
   fragment.append(historyTable("Observed envelopes", deliveries.slice(Math.max(0, deliveries.length - historyLimit)), ["index", "node", "port", "envelope_id", "meta", "data"]));
   target.className = "history-stack";
   target.replaceChildren(fragment);
@@ -1162,14 +1228,16 @@ function historyTable(label, rows, columns) {
   return details;
 }
 
-function renderInstances(instances) {
+function renderInstances(instances, selection) {
   const target = document.querySelector("#state");
-  if (!(instances || []).length) {
-    empty(target, "No active instance.");
+  const visible = (instances || []).filter((instance) =>
+    rowMatchesSelection(instance, selection, ["owner", "node"]));
+  if (!visible.length) {
+    empty(target, selection ? "No active instance for this selection." : "No active instance.");
     return;
   }
   target.className = "card-stack";
-  target.replaceChildren(...instances.map((instance) => {
+  target.replaceChildren(...visible.map((instance) => {
     const card = document.createElement("article");
     card.className = "data-card";
     const heading = document.createElement("h3");
@@ -1183,12 +1251,14 @@ function renderInstances(instances) {
   }));
 }
 
-function renderExchanges(exchanges) {
+function renderExchanges(exchanges, selection) {
   const target = document.querySelector("#exchanges");
-  const calls = exchanges?.calls || [];
-  const sessions = exchanges?.sessions || [];
+  const calls = (exchanges?.calls || []).filter((call) =>
+    rowMatchesSelection(call, selection, ["connector"]));
+  const sessions = (exchanges?.sessions || []).filter((session) =>
+    rowMatchesSelection(session, selection, ["connector"]));
   if (!calls.length && !sessions.length) {
-    empty(target, "No open exchange.");
+    empty(target, selection ? "No open exchange for this selection." : "No open exchange.");
     return;
   }
   target.className = "card-stack";
@@ -1209,15 +1279,16 @@ function renderExchanges(exchanges) {
   }));
 }
 
-function renderCost(report) {
+function renderCost(report, selection) {
   if (report?.error) {
     renderGeneric("cost", report, "No measured cost.");
     return;
   }
+  const matches = (row) => rowMatchesSelection(row?.scope, selection, ["owner", "node", "connector"]);
   renderGeneric("cost", {
-    measures: report?.measures || [],
-    costs: report?.costs || [],
-    unpriced: report?.unpriced || [],
+    measures: (report?.measures || []).filter(matches),
+    costs: (report?.costs || []).filter(matches),
+    unpriced: (report?.unpriced || []).filter(matches),
   }, "No measured cost.");
 }
 

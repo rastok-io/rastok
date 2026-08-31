@@ -350,6 +350,45 @@ impl HostedTimeSource {
     }
 }
 
+/// Physical UI suspension excluded from the hosted-to-logical time mapping.
+///
+/// The VM remains the sole owner of logical time. This adapter only prevents
+/// time spent under debugger control from being presented as elapsed runtime
+/// when execution resumes.
+#[cfg(feature = "hosted-ui")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct UiLogicalClock {
+    hosted_offset: i64,
+    frozen_at: Option<i64>,
+}
+
+#[cfg(feature = "hosted-ui")]
+impl UiLogicalClock {
+    fn start_paused(hosted_now: i64, logical_now: i64) -> Self {
+        Self {
+            hosted_offset: hosted_now.saturating_sub(logical_now),
+            frozen_at: Some(logical_now),
+        }
+    }
+
+    fn logical_now(self, hosted_now: i64) -> i64 {
+        self.frozen_at
+            .unwrap_or_else(|| hosted_now.saturating_sub(self.hosted_offset))
+    }
+
+    fn pause(&mut self, hosted_now: i64) {
+        if self.frozen_at.is_none() {
+            self.frozen_at = Some(self.logical_now(hosted_now));
+        }
+    }
+
+    fn resume(&mut self, hosted_now: i64) {
+        if let Some(logical_now) = self.frozen_at.take() {
+            self.hosted_offset = hosted_now.saturating_sub(logical_now);
+        }
+    }
+}
+
 /// Runs the App against the real Drivers: each stdin line is one
 /// text submission; boundary envelopes print to stdout, root errors
 /// to stderr.
@@ -580,6 +619,7 @@ fn run_with_ui<'plan>(
     use rastok::ui::{ActivityView, ExecutionState, FaultView, UiCommand, UiServer};
 
     let mut state = ExecutionState::Paused;
+    let mut ui_time = UiLogicalClock::start_paused(time.logical_now(), vm.now());
     let mut revision = 0_u64;
     let mut fault: Option<FaultView> = None;
     let mut activity: Option<ActivityView> = None;
@@ -623,6 +663,7 @@ fn run_with_ui<'plan>(
                 UiCommand::Resume | UiCommand::RunToCompletion
                     if !matches!(state, ExecutionState::Faulted | ExecutionState::Completed) =>
                 {
+                    ui_time.resume(time.logical_now());
                     state = ExecutionState::Running;
                     step_requested = false;
                     dirty = true;
@@ -694,7 +735,7 @@ fn run_with_ui<'plan>(
                         progressed |= ran;
                         dirty |= ran;
                         if !ran && state == ExecutionState::Running {
-                            let target = time.logical_now();
+                            let target = ui_time.logical_now(time.logical_now());
                             if target > vm.now() {
                                 match vm.advance(journal, world, target) {
                                     Ok(()) => {}
@@ -775,6 +816,9 @@ fn run_with_ui<'plan>(
         {
             state = ExecutionState::Completed;
             dirty = true;
+        }
+        if state != ExecutionState::Running {
+            ui_time.pause(time.logical_now());
         }
         if let Some(projector) = log_projector {
             let batch = projector.project_journal(journal);
@@ -1646,5 +1690,26 @@ fn render_data(
             .trim_end_matches('\n')
             .to_string(),
         other => format!("{other:?}"),
+    }
+}
+
+#[cfg(all(test, feature = "hosted-ui"))]
+mod ui_time_tests {
+    use super::UiLogicalClock;
+
+    #[test]
+    fn debugger_suspension_never_becomes_logical_elapsed_time() {
+        let mut clock = UiLogicalClock::start_paused(100, 90);
+        assert_eq!(clock.logical_now(400), 90);
+
+        clock.resume(400);
+        assert_eq!(clock.logical_now(400), 90);
+        assert_eq!(clock.logical_now(450), 140);
+
+        clock.pause(450);
+        assert_eq!(clock.logical_now(900), 140);
+
+        clock.resume(900);
+        assert_eq!(clock.logical_now(930), 170);
     }
 }
