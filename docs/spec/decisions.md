@@ -12,7 +12,11 @@ deferred File profile and commonly means source reload. The option applies to
 `run` and `simulate`; `check` keeps its direct textual result. Every UI session
 starts paused and advances at the VM's existing atomic transaction boundary.
 Simulation additionally exposes its authored action boundary, so `inject`,
-`advance` and `expect` never masquerade as Node transactions.
+`advance` and `expect` never masquerade as Node transactions. Usability
+evidence refined the primary simulation `Step`: at a quiescent boundary it
+applies exactly one authored action; otherwise it executes exactly one ready
+VM transaction. It never combines both in one click, while the specialized
+controls retain the distinction for teaching and diagnosis.
 
 Retry belongs only to a VM transaction refusal whose work remains reserved and
 whose failed attempt committed nothing. A Driver/polling failure may arrive

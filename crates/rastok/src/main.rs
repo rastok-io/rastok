@@ -1135,7 +1135,7 @@ fn simulate_with_ui(
                     until_assertion = false;
                     dirty = true;
                 }
-                UiCommand::Step if state == ExecutionState::Paused => {
+                UiCommand::Step if state == ExecutionState::Paused && !session.is_quiescent() => {
                     step_requested = true;
                     fault = None;
                     dirty = true;
@@ -1149,7 +1149,9 @@ fn simulate_with_ui(
                     step_requested = true;
                     dirty = true;
                 }
-                UiCommand::NextScenarioAction if state == ExecutionState::Paused => {
+                UiCommand::Step | UiCommand::NextScenarioAction
+                    if state == ExecutionState::Paused =>
+                {
                     match session.next_action() {
                         Ok(_) => {
                             fault = None;
@@ -1159,7 +1161,7 @@ fn simulate_with_ui(
                             fault = Some(FaultView {
                                 message: error,
                                 help: String::from(
-                                    "Use Next transaction until the current action reaches a boundary.",
+                                    "Use Step until the current action reaches its next transaction boundary.",
                                 ),
                                 commit: String::from("no scenario action was applied"),
                                 retryable: false,
@@ -1319,6 +1321,11 @@ fn simulate_with_ui(
                 state = ExecutionState::Completed;
                 dirty = true;
             }
+        }
+
+        if state == ExecutionState::Paused && session.is_complete() {
+            state = ExecutionState::Completed;
+            dirty = true;
         }
 
         if state == ExecutionState::Completed && !reported {

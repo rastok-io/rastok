@@ -58,11 +58,16 @@ Paused --Resume--> Running --Pause--> PauseRequested --> Paused
                        Completed
 ```
 
-A step is exactly one atomic VM transaction: one handler firing, lifecycle
-transition, Loop continuation or Call settlement. It is never one expression
-instruction, source line or arbitrary journal record. Same-instant scheduler
-work which the execution model declares indivisible remains one dated batch
-and is labelled as such.
+A `run` step is exactly one atomic VM transaction: one handler firing,
+lifecycle transition, Loop continuation or Call settlement. It is never one
+expression instruction, source line or arbitrary journal record.
+Same-instant scheduler work which the execution model declares indivisible
+remains one dated batch and is labelled as such.
+
+Simulation has an additional authored-action boundary. Its primary `Step`
+advances exactly the next available boundary: one `inject`, `advance` or
+`expect` while the VM is quiescent, otherwise one ready VM transaction. One
+click never applies an action and executes its resulting transaction together.
 
 `Pause` takes effect at a transaction boundary. No new inbound proposal is
 admitted and no further handler starts. An outbound Call already opened may
@@ -108,14 +113,16 @@ scenario at a time. A fresh selection or `Reset` creates a fresh VM, journal,
 mock world and virtual clock. The controls distinguish the two levels already
 present in the Lab:
 
-- `Next scenario action` applies one `inject`, `advance` or `expect`;
-- `Next transaction` executes one ready VM transaction;
+- `Step: next action` / `Step: next transaction` labels and advances the next
+  available boundary, never both in one click;
+- `Next scenario action` explicitly applies one `inject`, `advance` or
+  `expect`, and refuses while VM work remains;
 - `Run until next assertion` stops immediately before the next `expect`;
 - `Run to completion` preserves the ordinary CLI verdict and golden rules.
 
-The page labels scenario actions and VM transactions separately. An assertion
-never becomes a graph transaction, and stepping never rewrites the authored
-scenario.
+The page labels the next `Step` as an action or transaction before it runs and
+keeps the specialized controls available. An assertion never becomes a graph
+transaction, and stepping never rewrites the authored scenario.
 
 ## 6. Read model
 

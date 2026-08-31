@@ -50,6 +50,13 @@ function renderSnapshot(snapshot) {
   for (const element of document.querySelectorAll(".simulation-only")) {
     element.hidden = !simulation;
   }
+  const scenario = snapshot.scenario?.current;
+  text(
+    "step",
+    simulation && scenario && !scenario.complete && scenario.quiescent
+      ? "Step: next action"
+      : "Step: next transaction",
+  );
   renderGuidance(state, execution.awaiting_outbound_calls || 0, simulation);
   renderFault(snapshot.fault);
   renderScenario(snapshot.scenario, simulation);
@@ -64,7 +71,7 @@ function renderSnapshot(snapshot) {
 function renderGuidance(state, awaiting, simulation) {
   const messages = {
     paused: simulation
-      ? "Paused at a semantic boundary. Scenario actions and VM transactions are separate controls."
+      ? "Paused at a semantic boundary. Step advances one scenario action or one VM transaction, never both."
       : "Paused at a semantic boundary. Resume continuously or advance one atomic transaction.",
     running: "Running until completion, an assertion boundary, a fault, or a safe pause request.",
     "pause-requested": awaiting > 0

@@ -135,6 +135,12 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
     let snapshot = ui_snapshot(address, token);
     assert_eq!(snapshot["execution"]["state"], "paused");
     assert_eq!(snapshot["mode"], "simulate");
+    assert!(
+        snapshot["execution"]["legal_commands"]
+            .as_array()
+            .is_some_and(|commands| commands.iter().any(|command| command == "step")),
+        "the primary Step control is usable at the initial scenario boundary: {snapshot}"
+    );
 
     let origin = format!("http://{address}");
     let headers = [
@@ -147,15 +153,21 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
         &headers,
     );
     assert!(claim.starts_with("HTTP/1.1 200"), "{claim}");
+    let transactions_before_action = transaction_observation_count(&snapshot);
     let action = ui_http(
         address,
-        &format!("POST /api/command/next-scenario-action?token={token}"),
+        &format!("POST /api/command/step?token={token}"),
         &headers,
     );
     assert!(action.starts_with("HTTP/1.1 202"), "{action}");
     let after_action = wait_ui_snapshot(address, token, |snapshot| {
         snapshot["scenario"]["current"]["next_action_index"] == 1
     });
+    assert_eq!(
+        transaction_observation_count(&after_action),
+        transactions_before_action,
+        "the initial Step applies one authored action without also running a VM transaction"
+    );
     let transactions_before = transaction_observation_count(&after_action);
     let step = ui_http(
         address,
@@ -232,6 +244,32 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
             && snapshot["history"]["records"] == serde_json::json!([])
     });
     assert_eq!(reset["scenario"]["current"]["next_action_index"], 0);
+    let mut manually_stepped = reset;
+    for _ in 0..64 {
+        manually_stepped = wait_ui_snapshot(address, token, |snapshot| {
+            matches!(
+                snapshot["execution"]["state"].as_str(),
+                Some("paused" | "completed")
+            )
+        });
+        if manually_stepped["execution"]["state"] == "completed" {
+            break;
+        }
+        let prior_revision = manually_stepped["revision"].as_u64();
+        let step = ui_http(
+            address,
+            &format!("POST /api/command/step?token={token}"),
+            &headers,
+        );
+        assert!(step.starts_with("HTTP/1.1 202"), "{step}");
+        manually_stepped = wait_ui_snapshot(address, token, |snapshot| {
+            snapshot["revision"].as_u64() > prior_revision
+        });
+    }
+    assert_eq!(
+        manually_stepped["execution"]["state"], "completed",
+        "repeated Step reaches the ordinary scenario verdict: {manually_stepped}"
+    );
     let close = ui_http(
         address,
         &format!("POST /api/command/close?token={token}"),

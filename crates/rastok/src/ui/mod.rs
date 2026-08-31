@@ -755,6 +755,8 @@ mod tests {
         assert!(post("/api/command/step", "first").starts_with("HTTP/1.1 409"));
         assert!(post("/api/command/step", "second").starts_with("HTTP/1.1 202"));
         assert_eq!(server.try_command(), Some(UiCommand::Step));
+        assert!(post("/api/command/next-scenario-action", "second").starts_with("HTTP/1.1 202"));
+        assert_eq!(server.try_command(), Some(UiCommand::NextScenarioAction));
     }
 
     #[test]

@@ -204,11 +204,13 @@ Cortex-M33 evidence are recorded in the
 
 M1.9 keeps interactive execution outside that boundary. The optional
 `hosted-ui` feature embeds one loopback HTTP/SSE page and a physical controller
-whose `Step` command invokes exactly one existing VM transaction. It derives
-history, structured redacted values and `CostReport` from existing read seams;
-capabilities, controller ownership, browser revisions and port numbers enter
-no package, semantic or causal identity. Reduced and embedded builds omit the
-server and assets entirely.
+whose `Step` command invokes exactly one existing VM transaction during a real
+run. In simulation the same primary gesture advances exactly one authored
+action or one ready VM transaction, never both. It derives history, structured
+redacted values and `CostReport` from existing read seams; capabilities,
+controller ownership, browser revisions and port numbers enter no package,
+semantic or causal identity. Reduced and embedded builds omit the server and
+assets entirely.
 
 ## Views
 

@@ -97,7 +97,7 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
         fault,
         scenario,
     } = input;
-    let legal_commands = legal_commands(mode, state, fault, scenario.as_ref(), vm);
+    let legal_commands = legal_commands(mode, state, fault, scenario.as_ref());
     let value = json!({
         "revision": revision,
         "mode": mode,
@@ -128,7 +128,6 @@ fn legal_commands(
     state: ExecutionState,
     fault: Option<&FaultView>,
     scenario: Option<&JsonValue>,
-    vm: &Vm<'_>,
 ) -> Vec<&'static str> {
     let mut commands = match state {
         ExecutionState::Running => vec!["pause"],
@@ -156,11 +155,9 @@ fn legal_commands(
                 .unwrap_or(true);
             let mut commands = Vec::new();
             if !complete {
-                commands.extend(["resume", "run-until-assertion", "run-to-completion"]);
+                commands.extend(["resume", "step", "run-until-assertion", "run-to-completion"]);
                 if quiescent {
                     commands.push("next-scenario-action");
-                } else if vm.has_ready_transaction() {
-                    commands.push("step");
                 }
             }
             commands
