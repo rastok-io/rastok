@@ -190,10 +190,16 @@ The initial HTTP snapshot describes:
   an input port and a black disk denotes an output port; exact edges attach to
   those disks. Each badge shows current downstream-mailbox occupancy in bold
   and the cumulative traversal count in muted text. Graph ports live in a
-  centred group on the corresponding Graph-frame side, including the root App
-  input and output ports. Edges follow horizontal/vertical lanes with rounded
-  corners and compact arrowheads; deterministic ordering and lane separation
-  reduce crossings without turning geometry into execution authority. Count
+  side-constrained group on the corresponding Graph-frame side, including the
+  root App input and output ports. Each pin may slide vertically and exchange
+  display order with peers toward the median of its connected endpoints.
+  Deterministic layer sweeps minimize crossings jointly across Node order and
+  Graph-frame pins; an interval-track pass then separates overlapping
+  orthogonal segments before compacting bends and Manhattan length. A
+  cross-hierarchy route traverses a nested Graph pin only when its retained
+  port identity is unique; an ambiguous flattened seam is never guessed.
+  Corners stay rounded and arrowheads compact without turning geometry into
+  execution authority. Count
   badges are placed by a deterministic obstacle scorer: candidates beside the
   longest route segments are rejected when they intersect a Node, Graph header,
   edge or earlier label, and a short leader preserves their attachment. Port

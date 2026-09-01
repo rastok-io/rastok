@@ -59,10 +59,15 @@ recursively. It never guesses containment from dotted paths. Operators remain
 green and Connectors blue, but compact cards carry only name, NodeType and
 NodeAspects; the former circle/square/cross seed glyphs are superseded. A white
 disk is an input port and a black disk is an output port, and exact edges attach
-to those disks. Ports on each Graph frame are grouped around the centre of the
-corresponding side. Edges use deterministic horizontal/vertical lanes with
-rounded corners, smaller terminal arrows and barycentric ordering to reduce
-avoidable crossings; geometry remains presentation only. A deterministic
+to those disks. A Graph port keeps its declared side but may slide vertically
+and exchange display order with peers: deterministic barycentric sweeps place
+Node cards and side pins jointly, then interval-colored orthogonal tracks avoid
+collinear overlap and minimize remaining crossings before compacting bends and
+length. A flattened cross-hierarchy edge passes through a nested Graph pin only
+when the retained port name identifies it uniquely (or that side has one port);
+geometry never guesses an ambiguous composition seam. The implementation is an
+original dependency-free hosted asset, not a linked graph-layout runtime.
+Rounded corners and smaller terminal arrows remain presentation only. A deterministic
 obstacle scorer places count badges beside, never deliberately over, route
 segments and keeps them clear of Nodes, Graph headers, other edges and prior
 labels; a short leader preserves association. Port names occur once at their

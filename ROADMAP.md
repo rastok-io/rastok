@@ -256,8 +256,9 @@ The repository opens publicly with this milestone (15 October 2026).
   `simulate --ui` start paused behind a capability-protected loopback page,
   freeze logical time during debugger suspension, step at the VM transaction
   boundary, keep lifecycle facts and Lab actions distinct from port steps, and
-  derive compound topology with collision-scored labels, orthogonal rounded
-  routes, live mailbox plus cumulative edge counts, a visible envelope motion
+  derive compound topology with collision-scored labels, movable side-constrained
+  Graph ports and overlap-separated orthogonal rounded routes, live mailbox plus
+  cumulative edge counts, a visible envelope motion
   and one explicit ordinal for each action/transaction shared by Play and Step,
   linked Graph/Node filters, redacted structured state
   and separate `META`/`DATA`, Calls/Sessions, full in-memory history and exact

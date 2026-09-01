@@ -35,6 +35,7 @@ pub use view::{
 
 const INDEX_HTML: &str = include_str!("index.html");
 const APP_CSS: &str = include_str!("app.css");
+const GRAPH_LAYOUT_JS: &str = include_str!("graph_layout.js");
 const APP_JS: &str = include_str!("app.js");
 const COMMAND_CAPACITY: usize = 32;
 const SNAPSHOT_CAPACITY: usize = 1;
@@ -318,6 +319,11 @@ async fn handle(
             (&Method::GET, "/app.css") => {
                 response(StatusCode::OK, "text/css; charset=utf-8", APP_CSS)
             }
+            (&Method::GET, "/graph-layout.js") => response(
+                StatusCode::OK,
+                "text/javascript; charset=utf-8",
+                GRAPH_LAYOUT_JS,
+            ),
             (&Method::GET, "/app.js") => {
                 response(StatusCode::OK, "text/javascript; charset=utf-8", APP_JS)
             }
@@ -846,6 +852,7 @@ mod tests {
         assert!(APP_CSS.contains("prefers-color-scheme: dark"));
         assert!(INDEX_HTML.contains("class=\"transport\""));
         assert!(INDEX_HTML.contains("#icon-step"));
+        assert!(INDEX_HTML.contains("src=\"/graph-layout.js\""));
         assert!(!INDEX_HTML.contains("id=\"guidance\""));
         assert!(APP_JS.contains("Before admission"));
         assert!(APP_JS.contains("[\"META\", meta], [\"DATA\", data]"));
@@ -854,14 +861,18 @@ mod tests {
         assert!(APP_JS.contains("selectedTopologyContext(snapshot.topology)"));
         assert!(APP_JS.contains("ownerIds.has(item.owner)"));
         assert!(!APP_JS.contains("path.startsWith(`${selection.path}.`)"));
-        assert!(APP_JS.contains("roundedOrthogonalPath(route.points, 10)"));
-        assert!(APP_JS.contains("placeEdgeLabels(routes, graph, layout)"));
-        assert!(APP_JS.contains("labelCollisionScore("));
+        assert!(APP_JS.contains("graphLayout.roundedOrthogonalPath(route.points, 10)"));
+        assert!(GRAPH_LAYOUT_JS.contains("minimizeAdjacentCrossings("));
+        assert!(GRAPH_LAYOUT_JS.contains("allocateSideItems("));
+        assert!(GRAPH_LAYOUT_JS.contains("occupiedVertical"));
+        assert!(GRAPH_LAYOUT_JS.contains("routingPortals("));
+        assert!(GRAPH_LAYOUT_JS.contains("placeEdgeLabels(routes, graph, layout)"));
+        assert!(GRAPH_LAYOUT_JS.contains("labelCollisionScore("));
         assert!(APP_JS.contains("animateMotion"));
         assert!(APP_JS.contains("activity?.routes"));
         assert!(APP_JS.contains("connector-boundary-packet"));
         assert!(APP_JS.contains("pendingCommandRevision"));
-        assert!(APP_JS.contains("centeredSideY(scope, index, peers.length)"));
+        assert!(GRAPH_LAYOUT_JS.contains("scopePortAnchors"));
         assert!(APP_JS.contains("edge.queued_count"));
         assert!(APP_JS.contains("`Σ${edge.traversal_count"));
         assert!(!APP_JS.contains("edge.envelope_count"));
