@@ -20,6 +20,10 @@ fn example() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/echo.rkg")
 }
 
+fn keyed_retry_example() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/keyed-retry.rkg")
+}
+
 fn rastok() -> Command {
     Command::new(env!("CARGO_BIN_EXE_rastok"))
 }
@@ -414,6 +418,112 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
         .read_to_string(&mut remainder)
         .expect("remaining verdict reads");
     assert!(remainder.contains("PASS smoke.roundtrip"), "{remainder}");
+}
+
+#[cfg(feature = "hosted-ui")]
+#[test]
+fn simulation_step_keeps_a_silent_call_paused_and_reaches_the_next_lab_action() {
+    use std::io::BufRead as _;
+
+    let mut child = rastok()
+        .arg("simulate")
+        .arg(keyed_retry_example())
+        .arg("--ui")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the UI binary starts");
+    let stdout = child.stdout.take().expect("stdout is piped");
+    let mut stdout = std::io::BufReader::new(stdout);
+    let mut url_line = String::new();
+    stdout
+        .read_line(&mut url_line)
+        .expect("the UI URL is printed");
+    let url = url_line
+        .trim()
+        .strip_prefix("ui: http://")
+        .expect("the URL uses the documented prefix");
+    let (address, token) = url
+        .split_once("/?token=")
+        .expect("the URL carries one capability");
+    let address: std::net::SocketAddr = address.parse().expect("the address parses");
+    let origin = format!("http://{address}");
+    let headers = [
+        ("Origin", origin.as_str()),
+        ("X-Rastok-Controller", "silent-call-cli-test"),
+    ];
+    let claim = ui_http(
+        address,
+        &format!("POST /api/control/claim?token={token}"),
+        &headers,
+    );
+    assert!(claim.starts_with("HTTP/1.1 200"), "{claim}");
+
+    let mut snapshot = ui_snapshot(address, token);
+    for _ in 0..16 {
+        if snapshot["execution"]["awaiting_outbound_calls"] == 1 {
+            break;
+        }
+        let prior_revision = snapshot["revision"].as_u64();
+        let step = ui_http(
+            address,
+            &format!("POST /api/command/step?token={token}"),
+            &headers,
+        );
+        assert!(step.starts_with("HTTP/1.1 202"), "{step}");
+        snapshot = wait_ui_snapshot(address, token, |candidate| {
+            candidate["revision"].as_u64() > prior_revision
+        });
+    }
+    assert_eq!(snapshot["execution"]["awaiting_outbound_calls"], 1);
+    assert_eq!(snapshot["execution"]["state"], "paused");
+    assert_eq!(snapshot["topology"]["activity"]["kind"], "call-boundary");
+    assert_eq!(snapshot["topology"]["activity"]["node"], "model");
+    assert_eq!(snapshot["topology"]["activity"]["motion"], "outbound");
+    assert_eq!(
+        snapshot["topology"]["activity"]["detail"],
+        "Call opened · model"
+    );
+    assert!(
+        snapshot["execution"]["legal_commands"]
+            .as_array()
+            .is_some_and(|commands| commands.iter().any(|command| command == "step")),
+        "a silent Call cannot strand manual stepping: {snapshot}"
+    );
+
+    let prior_revision = snapshot["revision"].as_u64();
+    let step = ui_http(
+        address,
+        &format!("POST /api/command/step?token={token}"),
+        &headers,
+    );
+    assert!(step.starts_with("HTTP/1.1 202"), "{step}");
+    let after_expect = wait_ui_snapshot(address, token, |candidate| {
+        candidate["revision"].as_u64() > prior_revision
+    });
+    assert_eq!(after_expect["execution"]["state"], "paused");
+    assert_eq!(after_expect["scenario"]["current"]["next_action_index"], 2);
+    assert_eq!(after_expect["scenario"]["current"]["last_action"], "expect");
+    assert_eq!(after_expect["execution"]["awaiting_outbound_calls"], 1);
+
+    let close = ui_http(
+        address,
+        &format!("POST /api/command/close?token={token}"),
+        &headers,
+    );
+    assert!(close.starts_with("HTTP/1.1 202"), "{close}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while child
+        .try_wait()
+        .expect("child status is readable")
+        .is_none()
+    {
+        if std::time::Instant::now() >= deadline {
+            child.kill().expect("a stuck UI can be stopped");
+            panic!("the UI process did not close");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 }
 
 #[cfg(feature = "hosted-ui")]

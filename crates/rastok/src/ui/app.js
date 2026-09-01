@@ -9,6 +9,7 @@ let currentSnapshot = null;
 let historyLimit = 100;
 let selectedTopologyItem = null;
 let lastAnimatedActivity = null;
+let pendingCommandRevision = null;
 
 async function post(path, body = null) {
   const headers = { "X-Rastok-Controller": controller };
@@ -42,6 +43,9 @@ async function refresh() {
 }
 
 function renderSnapshot(snapshot) {
+  if (pendingCommandRevision !== null && snapshot.revision > pendingCommandRevision) {
+    pendingCommandRevision = null;
+  }
   const execution = snapshot.execution || {};
   const state = execution.state || "paused";
   text("execution-state", state);
@@ -87,7 +91,7 @@ function renderRelatedPanels(snapshot) {
 function updateControls() {
   const legal = new Set(currentSnapshot?.execution?.legal_commands || []);
   for (const button of document.querySelectorAll("button[data-command]")) {
-    button.disabled = !controls || !legal.has(button.dataset.command);
+    button.disabled = pendingCommandRevision !== null || !controls || !legal.has(button.dataset.command);
   }
   document.querySelector("#select-scenario").disabled =
     !controls || !legal.has("select-scenario") || !document.querySelector("#scenario-select").value;
@@ -156,7 +160,11 @@ function renderTopology(topology, animateStep = false) {
     ? "transaction"
     : activity?.kind === "lifecycle"
       ? "lifecycle"
-      : "boundary";
+      : activity?.kind === "call-boundary"
+        ? "call"
+        : activity?.kind === "session-boundary"
+          ? "session"
+          : "boundary";
   activityLabel.textContent = activity
     ? activity.ordinal === null
       ? `External · ${activityKind}`
@@ -208,7 +216,7 @@ function renderTopology(topology, animateStep = false) {
   for (const owner of orderedOwners) {
     const position = layout.scopes.get(owner.id);
     if (!position) continue;
-    const active = ["transaction", "lifecycle"].includes(activity?.kind) && activity.node === owner.path;
+    const active = activity?.node === owner.path;
     const selectable = Boolean(owner.definition);
     const selected = selectedTopologyItem === owner.id;
     const group = svgElement("g", {
@@ -351,7 +359,7 @@ function renderTopology(topology, animateStep = false) {
   for (const node of graph.nodes) {
     const position = layout.positions.get(node.id);
     if (!position) continue;
-    const active = ["transaction", "lifecycle"].includes(activity?.kind) && activity.node === node.path;
+    const active = activity?.node === node.path;
     const selectable = Boolean(node.definition);
     const selected = selectedTopologyItem === node.id;
     const boundary = node.kind === "boundary" || node.kind === "discard";
@@ -421,6 +429,26 @@ function renderTopology(topology, animateStep = false) {
     });
     type.textContent = truncate(itemDescriptor(node), 27);
     group.append(body, name, type);
+    if (active && animateStep && ["inbound", "outbound"].includes(activity?.motion)) {
+      const outward = activity.motion === "outbound";
+      const from = outward ? position.width / 2 : position.width + 20;
+      const to = outward ? position.width + 20 : position.width / 2;
+      const packet = svgElement("circle", {
+        class: "connector-boundary-packet",
+        cx: String(from),
+        cy: String(position.height / 2),
+        r: "5",
+        "aria-hidden": "true",
+      });
+      packet.append(svgElement("animate", {
+        attributeName: "cx",
+        from: String(from),
+        to: String(to),
+        dur: "700ms",
+        fill: "freeze",
+      }));
+      group.append(packet);
+    }
     for (const port of node.ports || []) {
       const anchor = portAnchor(node, { x: 0, y: 0, ...position }, port.name, port.direction);
       const disk = svgElement("circle", {
@@ -1798,9 +1826,14 @@ function formatNanoseconds(value) {
 
 for (const button of document.querySelectorAll("button[data-command]")) {
   button.addEventListener("click", async () => {
+    if (pendingCommandRevision !== null) return;
+    pendingCommandRevision = currentSnapshot?.revision ?? 0;
+    updateControls();
     try {
       await post(`/api/command/${button.dataset.command}`);
     } catch (error) {
+      pendingCommandRevision = null;
+      updateControls();
       setCommandStatus(`UI command refused: ${error.message}`);
     }
   });

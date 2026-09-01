@@ -859,6 +859,8 @@ mod tests {
         assert!(APP_JS.contains("labelCollisionScore("));
         assert!(APP_JS.contains("animateMotion"));
         assert!(APP_JS.contains("activity?.routes"));
+        assert!(APP_JS.contains("connector-boundary-packet"));
+        assert!(APP_JS.contains("pendingCommandRevision"));
         assert!(APP_JS.contains("centeredSideY(scope, index, peers.length)"));
         assert!(APP_JS.contains("edge.queued_count"));
         assert!(APP_JS.contains("`Σ${edge.traversal_count"));

@@ -70,6 +70,7 @@ pub struct ActivityView {
     kind: &'static str,
     detail: String,
     node: Option<String>,
+    motion: Option<&'static str>,
     records: Option<(usize, usize)>,
 }
 
@@ -89,6 +90,7 @@ impl ActivityView {
             kind: "scenario-action",
             detail: format!("scenario action `{action}`; no Node fired"),
             node: None,
+            motion: None,
             records,
         }
     }
@@ -120,6 +122,49 @@ impl ActivityView {
                 kind,
                 detail: transaction_summary(transaction),
                 node: Some(owner),
+                motion: None,
+                records: Some(records),
+            });
+        }
+        if let Some((kind, node, motion, detail)) =
+            changed.iter().rev().find_map(|record| match record {
+                Record::Outbound(OutboundRecord::Call(call)) => {
+                    let motion = match &call.status {
+                        OutboundStatus::Open => "outbound",
+                        OutboundStatus::Closed(_) | OutboundStatus::Abandoned => "inbound",
+                    };
+                    let (_, _, detail) = history_record_description(record);
+                    Some((
+                        "call-boundary",
+                        call.intent.connector_path.to_string(),
+                        motion,
+                        detail,
+                    ))
+                }
+                Record::Outbound(OutboundRecord::Session(session)) => {
+                    let motion = match &session.status {
+                        SessionStatus::Opening(_) | SessionStatus::WriteOpen(_) => "outbound",
+                        SessionStatus::Opened
+                        | SessionStatus::WriteSettled(_)
+                        | SessionStatus::WriteAbandoned(_) => "inbound",
+                    };
+                    let (_, _, detail) = history_record_description(record);
+                    Some((
+                        "session-boundary",
+                        session.connector_path.to_string(),
+                        motion,
+                        detail,
+                    ))
+                }
+                Record::Inbound(_) | Record::Transaction(_) => None,
+            })
+        {
+            return Some(Self {
+                ordinal,
+                kind,
+                detail,
+                node: Some(node),
+                motion: Some(motion),
                 records: Some(records),
             });
         }
@@ -142,6 +187,7 @@ impl ActivityView {
             kind,
             detail,
             node: None,
+            motion: None,
             records: Some(records),
         })
     }
@@ -530,6 +576,7 @@ fn topology(
             "kind": activity.kind,
             "detail": activity.detail,
             "node": activity.node,
+            "motion": activity.motion,
             "records": activity.records.map(|(from, through)| json!({
                 "from": from,
                 "through": through,

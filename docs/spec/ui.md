@@ -77,6 +77,14 @@ Node fired; a transaction names its exact journal owner and trigger, including
 Graph or Node lifecycle transactions rather than skipping them for visual
 convenience.
 
+A manual `Step` begins and ends in `Paused`, even when that Step opens a Call.
+The open Call remains visible and its Driver may retain a real completion, but
+it does not turn the already-paused debugger into `PauseRequested`. This keeps
+scripted silence and timeout tests usable: later Lab `expect` and `advance`
+actions remain reachable one Step at a time. `PauseRequested` belongs only to
+an explicit `Pause` issued from `Running`; that command keeps its separate
+promise to wait for an already-open Call's safe return boundary.
+
 Each authored action or scheduled VM transaction receives one disposable,
 monotonically increasing `Step N` ordinal, reset with the run or scenario.
 `Play`, repeated `Step` and `Run to completion` invoke that same transition and
@@ -222,8 +230,10 @@ transaction totals from the complete journal after every refresh.
 The latest Step also projects its exact admitted, consumed and emitted routes.
 Those routes receive a short moving-envelope animation, while the firing Node
 or lifecycle owner pulses. A Step with no spatial route (for example an
-assertion or Connector settlement fact) pulses the boundary banner and never
-invents an envelope. Animation is disposable presentation state, restarts from
+assertion) pulses the boundary banner and never invents an envelope. A Call or
+Session boundary fact names and pulses its Connector, and a small marker moves
+outward for an opening/write or inward for a retained terminal outcome.
+Animation is disposable presentation state, restarts from
 the retained Step projection after refresh, and is disabled under
 `prefers-reduced-motion` without hiding the static highlight.
 

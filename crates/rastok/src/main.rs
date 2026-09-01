@@ -772,11 +772,10 @@ fn run_with_ui<'plan>(
             }
             if executing_one && state != ExecutionState::Faulted {
                 step_requested = false;
-                state = if vm.awaiting_outbound_calls() == 0 {
-                    ExecutionState::Paused
-                } else {
-                    ExecutionState::PauseRequested
-                };
+                // Step starts from an already-safe pause. It exposes an open
+                // Call at that boundary instead of silently turning into the
+                // stronger wait-for-return contract of an explicit Pause.
+                state = ExecutionState::Paused;
                 dirty = true;
             }
         } else if matches!(
@@ -1363,11 +1362,11 @@ fn simulate_with_ui(
                         );
                         activity_decided = true;
                     }
-                    state = if session.vm().awaiting_outbound_calls() == 0 {
-                        ExecutionState::Paused
-                    } else {
-                        ExecutionState::PauseRequested
-                    };
+                    // Step starts from an already-safe pause. An opened Call
+                    // remains inspectable there and may depend on a later Lab
+                    // `advance`; only an explicit Pause requested while
+                    // Running waits for outstanding Calls to settle.
+                    state = ExecutionState::Paused;
                 }
                 Err(error) => {
                     fault = Some(if error.retryable() {

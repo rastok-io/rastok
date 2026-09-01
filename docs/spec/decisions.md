@@ -86,8 +86,19 @@ labelled `External` instead of fabricating a Step. Play and repeated Step use
 the same transition and must retain the same causal sequence; history record
 count is explicitly not presented as Step count. Exact admitted, consumed and
 emitted routes animate one envelope marker, while route-less lifecycle or
-boundary work pulses its truthful owner/banner. These animations are never
-journal or scheduling facts and disappear under reduced motion.
+assertion work pulses its truthful owner/banner. Call and Session boundary
+facts name and pulse their Connector and move a small marker in the truthful
+outbound/inbound direction. These animations are never journal or scheduling
+facts and disappear under reduced motion.
+
+A Step requested from `Paused` returns to `Paused` after exactly one boundary,
+even if it opens a Call. That Call remains inspectable and later scripted
+`expect`/`advance` actions remain reachable; entering `PauseRequested` here
+would strand a deliberately silent Call while logical time is frozen. Only an
+explicit Pause requested from Running waits for already-open Calls to reach
+their safe retained outcome. The browser disables transport controls from
+command acceptance until the next snapshot revision, so rapid clicks cannot
+collapse or queue ambiguous user-visible Steps.
 
 Selecting a Graph or Node opens its exact authored declaration, including
 attributes, handlers and guards. These excerpts live in the compiler's
