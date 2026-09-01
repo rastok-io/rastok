@@ -162,11 +162,12 @@ timeout, lifetime or Loop-delay budgets. The page separates lifecycle facts,
 Lab actions and port transactions, retains the complete in-memory causal
 history after completion, and presents a compound topology, frame-owned ports,
 separate `META`/`DATA`, logical instances, Calls/Sessions, structured redacted
-state and the exact `CostReport`. Selecting a Node or Graph filters those
-linked views without truncating the retained authorities. Before a checked
-simulation `inject`, its typed `DATA` draft may be edited and is still admitted
-through the ordinary immutable-envelope path. Non-UI execution, plan identity
-and causal records are unchanged. See [`ui.md`](docs/spec/ui.md) and the
+state and the exact `CostReport`. Orthogonal rounded edges show live mailbox
+occupancy in bold beside muted cumulative traffic. Selecting a Node or Graph
+filters those linked views without truncating the retained authorities. Before
+a checked simulation `inject`, its typed `DATA` draft may be edited and is still
+admitted through the ordinary immutable-envelope path. Non-UI execution, plan
+identity and causal records are unchanged. See [`ui.md`](docs/spec/ui.md) and the
 [M1.9 backlog](docs/architecture/m1.9-ui-backlog.md).
 
 For hosted execution or simulation, `--deployment <profile.json>` supplies

@@ -10,7 +10,7 @@ use crate::observation::ExchangeCorrelation;
 use crate::plan::{NodeExecution, Slot, ValidatedExecutionPlan};
 use crate::runtime::vm::{
     CallDirectionInspection, CallReferenceInspection, InstancePhaseInspection,
-    SessionDirectionInspection, Vm,
+    SessionDirectionInspection, Vm, VmInspection,
 };
 use crate::schema_annotation::{AnnotationTable, MeasureUnit, SchemaPath, SchemaPathSegment};
 use serde_json::{Map, Value as JsonValue, json};
@@ -192,6 +192,7 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
         scenario,
     } = input;
     let legal_commands = legal_commands(mode, state, fault, scenario.as_ref());
+    let inspection = vm.inspection();
     let value = json!({
         "revision": revision,
         "mode": mode,
@@ -201,10 +202,10 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
             "awaiting_outbound_calls": vm.awaiting_outbound_calls(),
             "legal_commands": legal_commands,
         },
-        "topology": topology(plan, definitions, journal, activity),
+        "topology": topology(plan, definitions, &inspection, journal, activity),
         "history": history(plan, vm, journal),
-        "instances": instances(plan, vm),
-        "exchanges": exchanges(vm),
+        "instances": instances(plan, &inspection),
+        "exchanges": exchanges(&inspection),
         "cost_report": cost_report(plan, journal, cost_profile),
         "scenario": scenario,
         "fault": fault.map(|fault| json!({
@@ -290,6 +291,7 @@ struct Traffic {
 fn topology(
     plan: &ValidatedExecutionPlan,
     definitions: &[SourceDefinition],
+    inspection: &VmInspection,
     journal: &MemJournal,
     activity: Option<&ActivityView>,
 ) -> JsonValue {
@@ -454,6 +456,7 @@ fn topology(
         .map(|(index, edge)| {
             let route = plan.edge_text(edge);
             let traffic = traffic.get(&route).copied().unwrap_or_default();
+            let queued = inspection.queued_by_edge.get(&route).copied().unwrap_or(0);
             json!({
                 "index": index,
                 "route": route,
@@ -469,7 +472,8 @@ fn topology(
                     }),
                     |target| endpoint_json(target, false),
                 ),
-                "envelope_count": traffic.count.to_string(),
+                "queued_count": queued.to_string(),
+                "traversal_count": traffic.count.to_string(),
                 "last_envelope_record": traffic.last_record,
             })
         })
@@ -699,11 +703,11 @@ fn observation_annotations<'a>(
     }
 }
 
-fn instances(plan: &ValidatedExecutionPlan, vm: &Vm<'_>) -> JsonValue {
+fn instances(plan: &ValidatedExecutionPlan, inspection: &VmInspection) -> JsonValue {
     JsonValue::Array(
-        vm.inspection()
+        inspection
             .instances
-            .into_iter()
+            .iter()
             .map(|instance| {
                 let state = instance.node.as_ref().map_or_else(Map::new, |path| {
                     let annotations = plan
@@ -728,7 +732,7 @@ fn instances(plan: &ValidatedExecutionPlan, vm: &Vm<'_>) -> JsonValue {
                     "reference": instance_ref_json(&instance.reference),
                     "owner": instance.owner.to_string(),
                     "phase": phase(instance.phase),
-                    "node": instance.node.map(|path| path.to_string()),
+                    "node": instance.node.as_ref().map(|path| path.to_string()),
                     "state": state,
                 })
             })
@@ -736,11 +740,10 @@ fn instances(plan: &ValidatedExecutionPlan, vm: &Vm<'_>) -> JsonValue {
     )
 }
 
-fn exchanges(vm: &Vm<'_>) -> JsonValue {
-    let inspection = vm.inspection();
+fn exchanges(inspection: &VmInspection) -> JsonValue {
     let calls = inspection
         .calls
-        .into_iter()
+        .iter()
         .map(|call| {
             let (reference, direction) = match call.reference {
                 CallReferenceInspection::Outbound(reference) => (reference.to_string(), "outbound"),
@@ -764,7 +767,7 @@ fn exchanges(vm: &Vm<'_>) -> JsonValue {
         .collect::<Vec<_>>();
     let sessions = inspection
         .sessions
-        .into_iter()
+        .iter()
         .map(|session| {
             json!({
                 "reference": session.reference.to_string(),
@@ -1698,10 +1701,13 @@ graph inspected : App {
         )
         .expect("the inspection fixture compiles");
         let journal = MemJournal::new(crate::plan::GraphVersion(1));
+        let vm = Vm::boot(&compilation.plan, crate::plan::GraphVersion(1));
+        let inspection = vm.inspection();
 
         let value = topology(
             &compilation.plan,
             &compilation.source_definitions,
+            &inspection,
             &journal,
             None,
         );

@@ -854,6 +854,11 @@ mod tests {
         assert!(APP_JS.contains("selectedTopologyContext(snapshot.topology)"));
         assert!(APP_JS.contains("ownerIds.has(item.owner)"));
         assert!(!APP_JS.contains("path.startsWith(`${selection.path}.`)"));
+        assert!(APP_JS.contains("roundedOrthogonalPath(route.points, 10)"));
+        assert!(APP_JS.contains("centeredSideY(scope, index, peers.length)"));
+        assert!(APP_JS.contains("edge.queued_count"));
+        assert!(APP_JS.contains("`Σ${edge.traversal_count"));
+        assert!(!APP_JS.contains("edge.envelope_count"));
         assert!(!APP_JS.contains('✉'));
     }
 

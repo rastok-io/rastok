@@ -145,7 +145,9 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
     assert!(
         snapshot["topology"]["edges"]
             .as_array()
-            .is_some_and(|edges| edges.iter().all(|edge| edge["envelope_count"] == "0")),
+            .is_some_and(|edges| edges
+                .iter()
+                .all(|edge| { edge["queued_count"] == "0" && edge["traversal_count"] == "0" })),
         "a fresh graph starts with no invented edge traffic: {snapshot}"
     );
 
@@ -181,9 +183,14 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
     );
     assert!(after_action["topology"]["activity"]["node"].is_null());
     assert_eq!(
-        topology_edge(&after_action, ".in>relay.in")["envelope_count"],
+        topology_edge(&after_action, ".in>relay.in")["queued_count"],
         "1",
-        "the admitted envelope is visible on its exact edge"
+        "the admitted envelope is currently waiting on its exact edge"
+    );
+    assert_eq!(
+        topology_edge(&after_action, ".in>relay.in")["traversal_count"],
+        "1",
+        "the same admission contributes one cumulative traversal"
     );
     let transactions_before = transaction_observation_count(&after_action);
     let step = ui_http(
@@ -213,13 +220,13 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
     assert_eq!(latest_record["trigger"], "l:start");
     assert_eq!(latest_record["summary"], "Instance opened · App · gen 0");
     assert_eq!(
-        topology_edge(&after_step, "relay.out>shell.in")["envelope_count"],
+        topology_edge(&after_step, "relay.out>shell.in")["traversal_count"],
         "0",
         "a lifecycle transaction does not invent an emitted envelope"
     );
 
     for _ in 0..4 {
-        if topology_edge(&after_step, "relay.out>shell.in")["envelope_count"] == "1" {
+        if topology_edge(&after_step, "relay.out>shell.in")["traversal_count"] == "1" {
             break;
         }
         let prior_revision = after_step["revision"].as_u64();
@@ -246,9 +253,14 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
         "the Node lifecycle start and input handler are both exact transactions"
     );
     assert_eq!(
-        topology_edge(&after_step, "relay.out>shell.in")["envelope_count"],
+        topology_edge(&after_step, "relay.out>shell.in")["queued_count"],
         "1",
-        "the transaction's emitted envelope is visible on its exact edge"
+        "the emitted envelope is visibly waiting in the downstream mailbox"
+    );
+    assert_eq!(
+        topology_edge(&after_step, "relay.out>shell.in")["traversal_count"],
+        "1",
+        "current occupancy and cumulative traversal remain distinct"
     );
 
     for _ in 0..16 {
@@ -299,6 +311,17 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
             .as_array()
             .is_some_and(|records| !records.is_empty()),
         "completed history remains inspectable: {completed}"
+    );
+    assert!(
+        completed["topology"]["edges"]
+            .as_array()
+            .is_some_and(|edges| edges.iter().all(|edge| edge["queued_count"] == "0")),
+        "a completed run has no envelopes left in live mailboxes: {completed}"
+    );
+    assert_eq!(
+        topology_edge(&completed, "relay.out>shell.in")["traversal_count"],
+        "1",
+        "the causal traversal remains visible after the mailbox drains"
     );
     let reset = ui_http(
         address,

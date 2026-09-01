@@ -160,27 +160,27 @@ function renderTopology(topology) {
     width: layout.width,
     height: layout.height,
     role: "img",
-    "aria-label": "Validated Rastok graph with cumulative envelope traffic",
+    "aria-label": "Validated Rastok graph with current mailbox occupancy and cumulative traffic",
   });
   svg.classList.add("graph-svg");
   const definitions = svgElement("defs");
   const marker = svgElement("marker", {
     id: "graph-arrow",
     viewBox: "0 0 10 10",
-    refX: "9",
+    refX: "8.5",
     refY: "5",
-    markerWidth: "8",
-    markerHeight: "8",
+    markerWidth: "5.5",
+    markerHeight: "5.5",
     orient: "auto-start-reverse",
   });
   marker.append(svgElement("path", { d: "M 0 0 L 10 5 L 0 10 z" }));
   const activeMarker = svgElement("marker", {
     id: "graph-arrow-active",
     viewBox: "0 0 10 10",
-    refX: "9",
+    refX: "8.5",
     refY: "5",
-    markerWidth: "8",
-    markerHeight: "8",
+    markerWidth: "5.5",
+    markerHeight: "5.5",
     orient: "auto-start-reverse",
   });
   activeMarker.append(svgElement("path", { d: "M 0 0 L 10 5 L 0 10 z" }));
@@ -243,24 +243,22 @@ function renderTopology(topology) {
     });
     type.textContent = truncate(itemDescriptor(owner), 34);
     group.append(title, body, header, name, type);
-    if (position.depth > 0) {
-      for (const port of owner.ports || []) {
-        const anchor = scopePortAnchor(owner, position, port);
-        const disk = svgElement("circle", {
-          class: `graph-port graph-port-${port.direction}`,
-          cx: anchor.x,
-          cy: anchor.y,
-          r: "5.5",
-        });
-        const label = svgElement("text", {
-          class: "graph-scope-port-label",
-          x: anchor.x + (port.direction === "input" ? 9 : -9),
-          y: anchor.y + 3.5,
-          "text-anchor": port.direction === "input" ? "start" : "end",
-        });
-        label.textContent = port.name;
-        group.append(disk, label);
-      }
+    for (const port of owner.ports || []) {
+      const anchor = scopePortAnchor(owner, position, port);
+      const disk = svgElement("circle", {
+        class: `graph-port graph-port-${port.direction}`,
+        cx: anchor.x,
+        cy: anchor.y,
+        r: "5.5",
+      });
+      const label = svgElement("text", {
+        class: "graph-scope-port-label",
+        x: anchor.x + (port.direction === "input" ? 9 : -9),
+        y: anchor.y + 3.5,
+        "text-anchor": port.direction === "input" ? "start" : "end",
+      });
+      label.textContent = port.name;
+      group.append(disk, label);
     }
     scopeLayer.append(group);
   }
@@ -268,6 +266,7 @@ function renderTopology(topology) {
 
   const edgeLayer = svgElement("g", { class: "graph-edge-layer" });
   const activeRecords = activity?.records || null;
+  const edgeRoutes = routeGraphEdges(graph, layout);
   for (const edge of graph.edges) {
     const source = graph.byId.get(edge.source.id);
     const destination = graph.byId.get(edge.target.id);
@@ -283,44 +282,39 @@ function renderTopology(topology) {
       class: `graph-edge${active ? " active" : ""}`,
       "data-route": edge.route,
     });
-    const sourcePort = portAnchor(source, sourcePosition, edge.source.port, "output");
-    const targetPort = portAnchor(destination, destinationPosition, edge.target.port, "input");
-    const startX = sourcePort.x + 7;
-    const startY = sourcePort.y;
-    const endX = targetPort.x - 7;
-    const endY = targetPort.y;
-    const bend = Math.max(56, (endX - startX) * 0.48);
+    const route = edgeRoutes.get(edge.index);
+    if (!route) continue;
     const path = svgElement("path", {
-      d: `M ${startX} ${startY} C ${startX + bend} ${startY}, ${endX - bend} ${endY}, ${endX} ${endY}`,
+      d: roundedOrthogonalPath(route.points, 10),
       "marker-end": active ? "url(#graph-arrow-active)" : "url(#graph-arrow)",
     });
     const title = svgElement("title");
-    title.textContent = `${edge.route} · ${edge.envelope_count || "0"} envelope(s)`;
+    title.textContent = `${edge.route} · ${edge.queued_count || "0"} queued now · ${edge.traversal_count || "0"} traversals in this run`;
     path.append(title);
     group.append(path);
 
-    const midpointX = (startX + endX) / 2;
-    const midpointY = (startY + endY) / 2;
     const badge = svgElement("g", {
       class: "edge-counter",
-      transform: `translate(${midpointX - 17} ${midpointY - 13})`,
+      transform: `translate(${route.label.x - 25} ${route.label.y - 11})`,
     });
-    badge.append(svgElement("rect", { width: "34", height: "26", rx: "13" }));
-    const counter = svgElement("text", { x: "17", y: "17", "text-anchor": "middle" });
-    counter.textContent = edge.envelope_count || "0";
-    badge.append(counter);
+    badge.append(svgElement("rect", { width: "50", height: "22", rx: "11" }));
+    const queued = svgElement("text", { class: "edge-queued", x: "17", y: "15", "text-anchor": "middle" });
+    queued.textContent = edge.queued_count || "0";
+    const cumulative = svgElement("text", { class: "edge-cumulative", x: "34", y: "15", "text-anchor": "middle" });
+    cumulative.textContent = `Σ${edge.traversal_count || "0"}`;
+    badge.append(queued, cumulative);
     group.append(badge);
 
     const sourcePortLabel = svgElement("text", {
       class: "edge-port source-port",
-      x: startX + 8,
-      y: startY - 9,
+      x: route.start.x + 8,
+      y: route.start.y - 9,
     });
     sourcePortLabel.textContent = edge.source.port || "";
     const targetPortLabel = svgElement("text", {
       class: "edge-port target-port",
-      x: endX - 8,
-      y: endY - 9,
+      x: route.end.x - 8,
+      y: route.end.y - 9,
       "text-anchor": "end",
     });
     targetPortLabel.textContent = edge.target.port || "";
@@ -359,6 +353,9 @@ function renderTopology(topology) {
       ? `${node.path} · ${itemDescriptor(node)}`
       : `${node.label} · ${node.kind}`;
     group.append(title);
+    if (node.kind === "boundary") {
+      continue;
+    }
     if (boundary) {
       const direction = node.direction || (node.kind === "discard" ? "discard" : "input");
       const diskX = direction === "input" ? position.width - 10 : 10;
@@ -444,7 +441,7 @@ function renderTopology(topology) {
   }
   const evidence = document.createElement("span");
   evidence.className = "legend-evidence";
-  evidence.textContent = "edge counts from causal records";
+  evidence.textContent = "bold: queued now · gray Σ: traversed in this run";
   legend.append(evidence);
 
   target.className = "topology";
@@ -935,10 +932,12 @@ function materializeGraph(topology) {
 function layoutGraph(nodes, edges, owners) {
   const byId = new Map(nodes.map((node, index) => [node.id, { node, index }]));
   const incoming = new Map(nodes.map((node) => [node.id, 0]));
+  const predecessors = new Map(nodes.map((node) => [node.id, []]));
   const outgoing = new Map(nodes.map((node) => [node.id, []]));
   for (const edge of edges) {
     if (!byId.has(edge.source.id) || !byId.has(edge.target.id)) continue;
     outgoing.get(edge.source.id).push(edge.target.id);
+    predecessors.get(edge.target.id).push(edge.source.id);
     incoming.set(edge.target.id, (incoming.get(edge.target.id) || 0) + 1);
   }
   const rank = new Map(nodes.map((node) => [node.id, 0]));
@@ -963,6 +962,42 @@ function layoutGraph(nodes, edges, owners) {
   for (const group of groups.values()) {
     group.sort((left, right) => byId.get(left.id).index - byId.get(right.id).index);
   }
+  const maximumRank = Math.max(0, ...groups.keys());
+  const orderByNeighbors = (level, neighbors) => {
+    const group = groups.get(level);
+    if (!group || group.length < 2) return;
+    const order = new Map();
+    for (const ranked of groups.values()) {
+      ranked.forEach((node, index) => order.set(node.id, index));
+    }
+    const barycenter = (node) => {
+      const adjacent = neighbors.get(node.id) || [];
+      if (!adjacent.length) return null;
+      return adjacent.reduce((sum, id) => sum + (order.get(id) || 0), 0) / adjacent.length;
+    };
+    group.sort((left, right) => {
+      const leftCenter = barycenter(left);
+      const rightCenter = barycenter(right);
+      if (leftCenter !== null && rightCenter !== null && leftCenter !== rightCenter) {
+        return leftCenter - rightCenter;
+      }
+      return byId.get(left.id).index - byId.get(right.id).index;
+    });
+  };
+  // Two deterministic barycentric sweeps retain the authored order as the
+  // tie-break while reducing avoidable crossings between adjacent ranks.
+  for (let pass = 0; pass < 2; pass += 1) {
+    for (let level = 1; level <= maximumRank; level += 1) {
+      orderByNeighbors(level, predecessors);
+    }
+    for (let level = maximumRank - 1; level >= 0; level -= 1) {
+      orderByNeighbors(level, outgoing);
+    }
+  }
+  const rankOrder = new Map();
+  for (const [level, group] of groups) {
+    group.forEach((node, index) => rankOrder.set(node.id, [level, index]));
+  }
 
   const dimensions = new Map(nodes.map((node) => {
     if (node.kind === "boundary" || node.kind === "discard") {
@@ -975,14 +1010,13 @@ function layoutGraph(nodes, edges, owners) {
       height: Math.max(50, (Math.max(inputs, outputs) + 1) * 13),
     }];
   }));
-  const columnGap = 104;
+  const columnGap = 124;
   const rankWidths = new Map();
   for (const [level, group] of groups) {
     rankWidths.set(level, Math.max(...group.map((node) => dimensions.get(node.id).width)));
   }
   const rankX = new Map();
   let nextX = 72;
-  const maximumRank = Math.max(0, ...groups.keys());
   for (let level = 0; level <= maximumRank; level += 1) {
     rankX.set(level, nextX);
     nextX += (rankWidths.get(level) || 150) + columnGap;
@@ -1008,7 +1042,11 @@ function layoutGraph(nodes, edges, owners) {
     directNodes.get(owner).push(node);
   }
   for (const ownerNodes of directNodes.values()) {
-    ownerNodes.sort((left, right) => byId.get(left.id).index - byId.get(right.id).index);
+    ownerNodes.sort((left, right) => {
+      const [leftRank, leftOrder] = rankOrder.get(left.id) || [0, 0];
+      const [rightRank, rightOrder] = rankOrder.get(right.id) || [0, 0];
+      return leftRank - rightRank || leftOrder - rightOrder;
+    });
   }
 
   const rowGap = 24;
@@ -1033,7 +1071,13 @@ function layoutGraph(nodes, edges, owners) {
     const childHeight = childIds.reduce((sum, childId) => sum + measureOwner(childId), 0)
       + Math.max(0, childIds.length - 1) * scopeGap;
     const contentGap = bandHeight > 0 && childHeight > 0 ? scopeGap : 0;
-    const height = scopeHeader + scopePadding * 2 + Math.max(36, bandHeight + contentGap + childHeight);
+    const ownerPorts = ownerMap.get(ownerId)?.ports || [];
+    const portBand = Math.max(
+      ownerPorts.filter((port) => port.direction === "input").length,
+      ownerPorts.filter((port) => port.direction === "output").length,
+    ) * 20;
+    const height = scopeHeader + scopePadding * 2
+      + Math.max(36, portBand, bandHeight + contentGap + childHeight);
     measured.set(ownerId, height);
     return height;
   }
@@ -1117,18 +1161,121 @@ function layoutGraph(nodes, edges, owners) {
     const position = positions.get(node.id);
     if (!scope || !position) continue;
     const direction = node.direction || (node.kind === "discard" ? "discard" : "input");
-    const peers = nodes.filter((candidate) =>
-      (candidate.owner || rootOwner.id) === (node.owner || rootOwner.id)
-      && (candidate.direction || (candidate.kind === "discard" ? "discard" : "input")) === direction);
-    const index = Math.max(0, peers.findIndex((candidate) => candidate.id === node.id));
-    position.y = scope.y + 34 + (scope.height - 34) * (index + 1) / (peers.length + 1) - position.height / 2;
+    const owner = ownerMap.get(node.owner || rootOwner.id);
+    const ownerPorts = (owner?.ports || []).filter((port) => port.direction === direction);
+    const nodePort = node.ports?.[0]?.name;
+    const peers = node.kind === "boundary" && ownerPorts.length
+      ? ownerPorts
+      : nodes.filter((candidate) =>
+        (candidate.owner || rootOwner.id) === (node.owner || rootOwner.id)
+        && (candidate.direction || (candidate.kind === "discard" ? "discard" : "input")) === direction);
+    const index = Math.max(0, peers.findIndex((candidate) =>
+      node.kind === "boundary" ? candidate.name === nodePort : candidate.id === node.id));
+    position.y = centeredSideY(scope, index, peers.length) - position.height / 2;
     position.x = direction === "input"
       ? scope.x - position.width + 10
       : scope.x + scope.width - 10;
   }
   const width = Math.max(...[...scopes.values()].map((scope) => scope.x + scope.width), nextX) + 18;
   const height = rootScope.y + rootScope.height + 18;
-  return { width, height, positions, scopes };
+  return { width, height, positions, scopes, rank };
+}
+
+function routeGraphEdges(graph, layout) {
+  const candidates = [];
+  for (const edge of graph.edges) {
+    const source = graph.byId.get(edge.source.id);
+    const target = graph.byId.get(edge.target.id);
+    const sourcePosition = layout.positions.get(edge.source.id);
+    const targetPosition = layout.positions.get(edge.target.id);
+    if (!source || !target || !sourcePosition || !targetPosition) continue;
+    const sourcePort = portAnchor(source, sourcePosition, edge.source.port, "output");
+    const targetPort = portAnchor(target, targetPosition, edge.target.port, "input");
+    const start = { x: sourcePort.x + 7, y: sourcePort.y };
+    const end = { x: targetPort.x - 7, y: targetPort.y };
+    const sourceRank = layout.rank.get(edge.source.id) || 0;
+    const targetRank = layout.rank.get(edge.target.id) || 0;
+    candidates.push({ edge, start, end, sourceRank, targetRank });
+  }
+
+  const groups = new Map();
+  for (const candidate of candidates) {
+    const key = `${candidate.sourceRank}:${candidate.targetRank}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(candidate);
+  }
+
+  const routes = new Map();
+  for (const group of groups.values()) {
+    group.sort((left, right) =>
+      left.start.y - right.start.y
+      || left.end.y - right.end.y
+      || left.edge.index - right.edge.index);
+    group.forEach((candidate, index) => {
+      const { edge, start, end } = candidate;
+      const centeredIndex = index - (group.length - 1) / 2;
+      let points;
+      let label;
+      if (end.x - start.x >= 44) {
+        const midpoint = (start.x + end.x) / 2;
+        const available = Math.max(0, end.x - start.x - 36);
+        const spacing = Math.min(14, available / Math.max(1, group.length));
+        const lane = Math.max(start.x + 18, Math.min(end.x - 18, midpoint + centeredIndex * spacing));
+        points = [start, { x: lane, y: start.y }, { x: lane, y: end.y }, end];
+        label = Math.abs(end.y - start.y) >= 26
+          ? { x: lane, y: (start.y + end.y) / 2 }
+          : { x: (start.x + end.x) / 2, y: start.y };
+      } else {
+        const lane = Math.max(start.x, end.x) + 34 + index * 14;
+        points = [start, { x: lane, y: start.y }, { x: lane, y: end.y }, end];
+        label = { x: lane, y: (start.y + end.y) / 2 };
+      }
+      routes.set(edge.index, {
+        start,
+        end,
+        points,
+        label,
+      });
+    });
+  }
+  return routes;
+}
+
+function roundedOrthogonalPath(points, radius) {
+  const compact = [];
+  for (const point of points) {
+    const previous = compact.at(-1);
+    if (previous && previous.x === point.x && previous.y === point.y) continue;
+    compact.push(point);
+    while (compact.length >= 3) {
+      const [before, corner, after] = compact.slice(-3);
+      const collinear = (before.x === corner.x && corner.x === after.x)
+        || (before.y === corner.y && corner.y === after.y);
+      if (!collinear) break;
+      compact.splice(compact.length - 2, 1);
+    }
+  }
+  if (compact.length < 2) return "";
+  let path = `M ${compact[0].x} ${compact[0].y}`;
+  for (let index = 1; index < compact.length - 1; index += 1) {
+    const previous = compact[index - 1];
+    const corner = compact[index];
+    const next = compact[index + 1];
+    const incoming = Math.hypot(corner.x - previous.x, corner.y - previous.y);
+    const outgoing = Math.hypot(next.x - corner.x, next.y - corner.y);
+    const turnRadius = Math.min(radius, incoming / 2, outgoing / 2);
+    const before = {
+      x: corner.x - Math.sign(corner.x - previous.x) * turnRadius,
+      y: corner.y - Math.sign(corner.y - previous.y) * turnRadius,
+    };
+    const after = {
+      x: corner.x + Math.sign(next.x - corner.x) * turnRadius,
+      y: corner.y + Math.sign(next.y - corner.y) * turnRadius,
+    };
+    path += ` L ${before.x} ${before.y} Q ${corner.x} ${corner.y} ${after.x} ${after.y}`;
+  }
+  const end = compact.at(-1);
+  return `${path} L ${end.x} ${end.y}`;
 }
 
 function scopePortAnchor(owner, position, port) {
@@ -1136,8 +1283,15 @@ function scopePortAnchor(owner, position, port) {
   const index = Math.max(0, peers.findIndex((candidate) => candidate.name === port.name));
   return {
     x: port.direction === "input" ? position.x : position.x + position.width,
-    y: position.y + 34 + (position.height - 34) * (index + 1) / (peers.length + 1),
+    y: centeredSideY(position, index, peers.length),
   };
+}
+
+function centeredSideY(position, index, count) {
+  const header = 34;
+  const center = position.y + header + (position.height - header) / 2;
+  const spacing = 20;
+  return center + (index - (count - 1) / 2) * spacing;
 }
 
 function portAnchor(node, position, portName, expectedDirection) {

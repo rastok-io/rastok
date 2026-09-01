@@ -170,8 +170,12 @@ The initial HTTP snapshot describes:
   recursively contains its own direct children. Compact Node cards expose only
   declaration name, effective NodeType and NodeAspects. A white disk denotes
   an input port and a black disk denotes an output port; exact edges attach to
-  those disks and carry their cumulative envelope count. Graph ports live on
-  their Graph frame border, including the root App input and output ports. The Graph/Node owner
+  those disks. Each badge shows current downstream-mailbox occupancy in bold
+  and the cumulative traversal count in muted text. Graph ports live in a
+  centred group on the corresponding Graph-frame side, including the root App
+  input and output ports. Edges follow horizontal/vertical lanes with rounded
+  corners and compact arrowheads; deterministic ordering and lane separation
+  reduce crossings without turning geometry into execution authority. The Graph/Node owner
   of the last stepped transaction is highlighted; selecting a Graph frame or
   Node exposes its exact authored declaration, including ports, attributes,
   handlers and guard expressions;
@@ -187,14 +191,18 @@ for the current snapshot; no wall-clock timestamp or exporter duration is
 invented. The browser virtualizes large tables, but every record retained by
 the in-memory journal remains addressable for that run.
 
-Edge counters are causal projections, not browser counters. INBOUND and
-TRANSACTION route facts increment their exact canonical edge; an emission to
-the App boundary or explicit discard is derived from that same committed
-transaction and the validated plan. A scenario `inject` may therefore light
-an input edge while correctly reporting that no Node ran. The highlighted
-record range is disposable controller state; cumulative counts and Node
-transaction totals are reconstructed from the complete journal after every
-refresh.
+The two edge numbers are intentionally not one counter. The bold value is a
+read-only inspection of actual `Delivery` values currently retained in VM
+mailboxes, grouped by their canonical incoming edge; a claimed Call head still
+occupies its mailbox, and consuming a delivery decrements the value. An App
+output or discard has no downstream mailbox and therefore reads zero. The
+muted `Σ` value is the causal projection: INBOUND and TRANSACTION route facts
+increment their exact edge, while App-boundary and discard emissions are
+derived from the same committed transaction and validated plan. A scenario
+`inject` may therefore add one queued delivery while correctly reporting that
+no Node ran. The highlighted record range is disposable controller state;
+current occupancy is rebuilt from the VM and cumulative traffic and Node
+transaction totals from the complete journal after every refresh.
 
 Source definitions are compiler debug side-table data, not plan data. The UI
 may show the exact declaration span retained by the successful compilation,

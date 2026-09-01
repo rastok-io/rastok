@@ -893,6 +893,9 @@ pub struct SessionInspection {
 pub struct VmInspection {
     /// Live logical instances in canonical reference order.
     pub instances: Vec<InstanceInspection>,
+    /// Current mailbox occupancy grouped by canonical incoming edge. Unlike
+    /// journal traffic, these counts decrease when deliveries are consumed.
+    pub queued_by_edge: BTreeMap<String, usize>,
     /// Retained Call obligations in canonical identity order.
     pub calls: Vec<CallInspection>,
     /// Retained Sessions in canonical identity order.
@@ -3489,6 +3492,7 @@ impl<'plan> Vm<'plan> {
             .collect();
         VmInspection {
             instances,
+            queued_by_edge: self.scheduler.mailboxes.queued_by_edge(),
             calls,
             sessions,
         }

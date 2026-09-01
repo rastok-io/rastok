@@ -146,13 +146,15 @@ select, input, textarea { min-width: 0; padding: .48rem .58rem; border-color: va
 .graph-scope.selectable:focus { outline: none; }
 .graph-scope.selectable:focus-visible .graph-scope-body, .graph-scope.selected .graph-scope-body { stroke: var(--purple); stroke-width: 4; }
 .graph-scope.active .graph-scope-body { stroke: var(--accent); stroke-width: 4; filter: drop-shadow(0 3px 4px rgba(176, 108, 0, .18)); }
-.graph-edge path { fill: none; stroke: var(--muted); stroke-width: 2; }
+.graph-edge path { fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .graph-edge marker path, #graph-arrow path { fill: var(--muted); }
 #graph-arrow-active path { fill: var(--accent); }
 .graph-edge.active path { stroke: var(--accent); stroke-width: 4; }
 .edge-port, .graph-boundary-label, .graph-scope-port-label { fill: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9.5px; font-weight: 680; }
 .edge-counter rect { fill: var(--surface); stroke: var(--muted); stroke-width: 1.5; }
-.edge-counter text { fill: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; font-weight: 760; }
+.edge-counter text { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
+.edge-counter .edge-queued { fill: var(--text); font-size: 11px; font-weight: 820; }
+.edge-counter .edge-cumulative { fill: var(--muted); font-size: 8.5px; font-weight: 620; }
 .graph-edge.active .edge-counter rect { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2.5; }
 .graph-node-body { stroke-width: 2; }
 .graph-node-operator .graph-node-body { fill: var(--primary-soft); stroke: var(--primary); }

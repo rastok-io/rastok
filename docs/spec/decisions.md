@@ -59,9 +59,15 @@ recursively. It never guesses containment from dotted paths. Operators remain
 green and Connectors blue, but compact cards carry only name, NodeType and
 NodeAspects; the former circle/square/cross seed glyphs are superseded. A white
 disk is an input port and a black disk is an output port, and exact edges attach
-to those disks. Each edge's count badge is a cumulative fold of retained
-INBOUND/TRANSACTION routing facts, including committed boundary/discard
-emissions derived against the validated plan. The last-Step highlight is
+to those disks. Ports on each Graph frame are grouped around the centre of the
+corresponding side. Edges use deterministic horizontal/vertical lanes with
+rounded corners, smaller terminal arrows and barycentric ordering to reduce
+avoidable crossings; geometry remains presentation only. Each edge badge puts
+the current live mailbox occupancy in bold and the cumulative retained
+INBOUND/TRANSACTION traversal fold in muted text. The two values deliberately
+come from different authorities: current occupancy falls when work is consumed,
+whereas cumulative boundary/discard emissions remain derivable from the
+validated plan and journal. The last-Step highlight is
 separately physical: an authored Lab action names itself and says that no Node
 fired, while a transaction names its exact owner and trigger. Lifecycle
 transactions remain visible instead of being skipped to manufacture a more

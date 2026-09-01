@@ -256,8 +256,9 @@ The repository opens publicly with this milestone (15 October 2026).
   `simulate --ui` start paused behind a capability-protected loopback page,
   freeze logical time during debugger suspension, step at the VM transaction
   boundary, keep lifecycle facts and Lab actions distinct from port steps, and
-  derive compound topology, linked Graph/Node filters, redacted structured
-  state and separate `META`/`DATA`, Calls/Sessions, full in-memory history and
+  derive compound topology with orthogonal rounded routes, live mailbox plus
+  cumulative edge counts, linked Graph/Node filters, redacted structured state
+  and separate `META`/`DATA`, Calls/Sessions, full in-memory history and exact
   `CostReport` from existing authorities. A typed pre-admission editor may
   replace only the next checked Lab injection's DATA before the ordinary
   immutable-envelope admission.

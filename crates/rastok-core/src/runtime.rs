@@ -344,6 +344,19 @@ impl Mailboxes {
         self.queues.get(&(slot, instance.clone()))
     }
 
+    /// Current delivery occupancy grouped by the exact canonical edge each
+    /// envelope traversed. This is a debugger view over live mailbox state,
+    /// not a causal counter: consuming a delivery decrements the result.
+    #[must_use]
+    pub(crate) fn queued_by_edge(&self) -> BTreeMap<String, usize> {
+        let mut queued = BTreeMap::new();
+        for delivery in self.queues.values().flat_map(|queue| queue.iter()) {
+            let count = queued.entry(delivery.edge.clone()).or_insert(0_usize);
+            *count = count.saturating_add(1);
+        }
+        queued
+    }
+
     /// Finds one specific queued delivery by its full reference —
     /// the canonical edge it traveled AND its envelope id — without
     /// removing it: the reservation half of the expired-in-queue
