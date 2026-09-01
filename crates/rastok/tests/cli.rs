@@ -182,6 +182,15 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
         "scenario-action"
     );
     assert!(after_action["topology"]["activity"]["node"].is_null());
+    assert_eq!(after_action["topology"]["activity"]["ordinal"], 1);
+    assert!(
+        after_action["topology"]["activity"]["routes"]
+            .as_array()
+            .is_some_and(|routes| routes
+                .iter()
+                .any(|route| { route["route"] == ".in>relay.in" && route["phase"] == "admitted" })),
+        "the first Step names the exact moving envelope route: {after_action}"
+    );
     assert_eq!(
         topology_edge(&after_action, ".in>relay.in")["queued_count"],
         "1",
@@ -208,6 +217,12 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
         "one Next transaction command commits one VM transaction"
     );
     assert_eq!(after_step["topology"]["activity"]["kind"], "lifecycle");
+    assert_eq!(after_step["topology"]["activity"]["ordinal"], 2);
+    assert_eq!(
+        after_step["topology"]["activity"]["routes"],
+        serde_json::json!([]),
+        "a lifecycle Step pulses its owner without inventing envelope motion"
+    );
     assert_eq!(
         after_step["topology"]["activity"]["node"], "",
         "the first VM transaction starts the root App instance"
@@ -323,6 +338,9 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
         "1",
         "the causal traversal remains visible after the mailbox drains"
     );
+    let continuously_driven_records = completed["history"]["records"].clone();
+    let continuously_driven_deliveries = completed["history"]["deliveries"].clone();
+    let continuously_driven_steps = completed["topology"]["activity"]["ordinal"].clone();
     let reset = ui_http(
         address,
         &format!("POST /api/command/reset-scenario?token={token}"),
@@ -359,6 +377,18 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
     assert_eq!(
         manually_stepped["execution"]["state"], "completed",
         "repeated Step reaches the ordinary scenario verdict: {manually_stepped}"
+    );
+    assert_eq!(
+        manually_stepped["topology"]["activity"]["ordinal"], continuously_driven_steps,
+        "Play and repeated Step cross exactly the same number of UI boundaries"
+    );
+    assert_eq!(
+        manually_stepped["history"]["records"], continuously_driven_records,
+        "Play and repeated Step retain the same causal sequence"
+    );
+    assert_eq!(
+        manually_stepped["history"]["deliveries"], continuously_driven_deliveries,
+        "Play and repeated Step observe the same delivered envelopes"
     );
     let close = ui_http(
         address,

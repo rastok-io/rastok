@@ -855,10 +855,15 @@ mod tests {
         assert!(APP_JS.contains("ownerIds.has(item.owner)"));
         assert!(!APP_JS.contains("path.startsWith(`${selection.path}.`)"));
         assert!(APP_JS.contains("roundedOrthogonalPath(route.points, 10)"));
+        assert!(APP_JS.contains("placeEdgeLabels(routes, graph, layout)"));
+        assert!(APP_JS.contains("labelCollisionScore("));
+        assert!(APP_JS.contains("animateMotion"));
+        assert!(APP_JS.contains("activity?.routes"));
         assert!(APP_JS.contains("centeredSideY(scope, index, peers.length)"));
         assert!(APP_JS.contains("edge.queued_count"));
         assert!(APP_JS.contains("`Σ${edge.traversal_count"));
         assert!(!APP_JS.contains("edge.envelope_count"));
+        assert!(!APP_JS.contains("class: \"edge-port source-port\""));
         assert!(!APP_JS.contains('✉'));
     }
 

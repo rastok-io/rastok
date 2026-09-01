@@ -62,19 +62,32 @@ disk is an input port and a black disk is an output port, and exact edges attach
 to those disks. Ports on each Graph frame are grouped around the centre of the
 corresponding side. Edges use deterministic horizontal/vertical lanes with
 rounded corners, smaller terminal arrows and barycentric ordering to reduce
-avoidable crossings; geometry remains presentation only. Each edge badge puts
-the current live mailbox occupancy in bold and the cumulative retained
+avoidable crossings; geometry remains presentation only. A deterministic
+obstacle scorer places count badges beside, never deliberately over, route
+segments and keeps them clear of Nodes, Graph headers, other edges and prior
+labels; a short leader preserves association. Port names occur once at their
+owning pins with a background halo rather than once per edge. Each edge badge
+puts the current live mailbox occupancy in bold and the cumulative retained
 INBOUND/TRANSACTION traversal fold in muted text. The two values deliberately
 come from different authorities: current occupancy falls when work is consumed,
 whereas cumulative boundary/discard emissions remain derivable from the
-validated plan and journal. The last-Step highlight is
-separately physical: an authored Lab action names itself and says that no Node
+validated plan and journal. The last-Step highlight is separately physical: an
+authored Lab action names itself and says that no Node
 fired, while a transaction names its exact owner and trigger. Lifecycle
 transactions remain visible instead of being skipped to manufacture a more
 dramatic animation. The read model exposes both their exact trigger and a
 human summary (`Instance opened`, `Instance closing`, `Instance stopped`), so
 universal lazy `l:start` facts cannot be mistaken for duplicate deliveries or
 port-handler steps.
+
+Every authored action or scheduled VM transaction receives one disposable
+`Step N` ordinal. An external fact retained while scheduling is paused is
+labelled `External` instead of fabricating a Step. Play and repeated Step use
+the same transition and must retain the same causal sequence; history record
+count is explicitly not presented as Step count. Exact admitted, consumed and
+emitted routes animate one envelope marker, while route-less lifecycle or
+boundary work pulses its truthful owner/banner. These animations are never
+journal or scheduling facts and disappear under reduced motion.
 
 Selecting a Graph or Node opens its exact authored declaration, including
 attributes, handlers and guards. These excerpts live in the compiler's

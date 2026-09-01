@@ -623,6 +623,7 @@ fn run_with_ui<'plan>(
     let mut revision = 0_u64;
     let mut fault: Option<FaultView> = None;
     let mut activity: Option<ActivityView> = None;
+    let mut boundary_ordinal = 0_u64;
     let initial = match rastok::ui::snapshot(rastok::ui::SnapshotInput {
         revision,
         mode: "run",
@@ -658,6 +659,7 @@ fn run_with_ui<'plan>(
         let records_before = journal.records().len();
         let observations_before = vm.observations().len();
         let mut dirty = false;
+        let mut stepped_boundary = false;
         while let Some(command) = server.try_command() {
             match command {
                 UiCommand::Resume | UiCommand::RunToCompletion
@@ -734,6 +736,7 @@ fn run_with_ui<'plan>(
                     Ok(ran) => {
                         progressed |= ran;
                         dirty |= ran;
+                        stepped_boundary |= ran;
                         if !ran && state == ExecutionState::Running {
                             let target = ui_time.logical_now(time.logical_now());
                             if target > vm.now() {
@@ -831,7 +834,11 @@ fn run_with_ui<'plan>(
         dirty |= records_before != journal.records().len()
             || observations_before != vm.observations().len();
         if records_before != journal.records().len() {
-            activity = ActivityView::journal_change(journal, records_before);
+            let ordinal = stepped_boundary.then(|| {
+                boundary_ordinal = boundary_ordinal.saturating_add(1);
+                boundary_ordinal
+            });
+            activity = ActivityView::journal_change(journal, records_before, ordinal);
         }
 
         if dirty {
@@ -1123,6 +1130,7 @@ fn simulate_with_ui(
     let mut revision = 0_u64;
     let mut fault: Option<FaultView> = None;
     let mut activity: Option<ActivityView> = None;
+    let mut boundary_ordinal = 0_u64;
     let initial = match rastok::ui::snapshot(rastok::ui::SnapshotInput {
         revision,
         mode: "simulate",
@@ -1162,6 +1170,7 @@ fn simulate_with_ui(
         let observations_before = session.vm().observations().len();
         let failures_before = session.failures().len();
         let mut dirty = false;
+        let mut activity_decided = false;
         while let Some(command) = server.try_command() {
             match command {
                 UiCommand::Resume | UiCommand::RunToCompletion
@@ -1213,11 +1222,14 @@ fn simulate_with_ui(
                         Ok(Some(action)) => {
                             fault = None;
                             reported = false;
+                            boundary_ordinal = boundary_ordinal.saturating_add(1);
                             activity = Some(ActivityView::scenario_action(
                                 scenario_action_name(action),
                                 session.journal(),
                                 action_records_before,
+                                boundary_ordinal,
                             ));
+                            activity_decided = true;
                         }
                         Ok(None) => {}
                         Err(error) => {
@@ -1245,6 +1257,8 @@ fn simulate_with_ui(
                             state = ExecutionState::Paused;
                             fault = None;
                             activity = None;
+                            boundary_ordinal = 0;
+                            activity_decided = true;
                             reported = false;
                             any_failed = false;
                             golden_failures.clear();
@@ -1263,6 +1277,8 @@ fn simulate_with_ui(
                             state = ExecutionState::Paused;
                             fault = None;
                             activity = None;
+                            boundary_ordinal = 0;
+                            activity_decided = true;
                             reported = false;
                             any_failed = false;
                             golden_failures.clear();
@@ -1339,10 +1355,13 @@ fn simulate_with_ui(
             match session.step_transaction() {
                 Ok(ran) => {
                     if ran {
+                        boundary_ordinal = boundary_ordinal.saturating_add(1);
                         activity = ActivityView::journal_change(
                             session.journal(),
                             transaction_records_before,
+                            Some(boundary_ordinal),
                         );
+                        activity_decided = true;
                     }
                     state = if session.vm().awaiting_outbound_calls() == 0 {
                         ExecutionState::Paused
@@ -1400,11 +1419,14 @@ fn simulate_with_ui(
                 let action_records_before = session.journal().records().len();
                 match session.next_action() {
                     Ok(Some(action)) => {
+                        boundary_ordinal = boundary_ordinal.saturating_add(1);
                         activity = Some(ActivityView::scenario_action(
                             scenario_action_name(action),
                             session.journal(),
                             action_records_before,
+                            boundary_ordinal,
                         ));
+                        activity_decided = true;
                         dirty = true;
                     }
                     Ok(None) => {
@@ -1422,10 +1444,13 @@ fn simulate_with_ui(
                 match session.step_transaction() {
                     Ok(ran) => {
                         if ran {
+                            boundary_ordinal = boundary_ordinal.saturating_add(1);
                             activity = ActivityView::journal_change(
                                 session.journal(),
                                 transaction_records_before,
+                                Some(boundary_ordinal),
                             );
+                            activity_decided = true;
                         }
                         dirty = true;
                     }
@@ -1464,6 +1489,9 @@ fn simulate_with_ui(
         dirty |= records_before != session.journal().records().len()
             || observations_before != session.vm().observations().len()
             || failures_before != session.failures().len();
+        if records_before != session.journal().records().len() && !activity_decided {
+            activity = ActivityView::journal_change(session.journal(), records_before, None);
+        }
         if dirty {
             revision = revision.saturating_add(1);
             match rastok::ui::snapshot(rastok::ui::SnapshotInput {

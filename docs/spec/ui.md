@@ -77,6 +77,16 @@ Node fired; a transaction names its exact journal owner and trigger, including
 Graph or Node lifecycle transactions rather than skipping them for visual
 convenience.
 
+Each authored action or scheduled VM transaction receives one disposable,
+monotonically increasing `Step N` ordinal, reset with the run or scenario.
+`Play`, repeated `Step` and `Run to completion` invoke that same transition and
+must finish with the same ordinal, causal records and delivered envelopes.
+An external Call/Session fact retained while the scheduler is paused is labelled
+`External`, not counted as a phantom Step. Journal rows are causal facts, not
+Step counters: one Step may legitimately retain a transaction and an OUTBOUND
+fact atomically. The page labels that distinction rather than making history
+length look like scheduler work.
+
 `Pause` takes effect at a transaction boundary. No new inbound proposal is
 admitted and no further handler starts. An outbound Call already opened may
 continue in the external world; the boundary keeps polling it until its typed
@@ -175,7 +185,12 @@ The initial HTTP snapshot describes:
   centred group on the corresponding Graph-frame side, including the root App
   input and output ports. Edges follow horizontal/vertical lanes with rounded
   corners and compact arrowheads; deterministic ordering and lane separation
-  reduce crossings without turning geometry into execution authority. The Graph/Node owner
+  reduce crossings without turning geometry into execution authority. Count
+  badges are placed by a deterministic obstacle scorer: candidates beside the
+  longest route segments are rejected when they intersect a Node, Graph header,
+  edge or earlier label, and a short leader preserves their attachment. Port
+  names render once at their owning pin with an opaque text halo rather than
+  being repeated on every edge. The Graph/Node owner
   of the last stepped transaction is highlighted; selecting a Graph frame or
   Node exposes its exact authored declaration, including ports, attributes,
   handlers and guard expressions;
@@ -203,6 +218,14 @@ derived from the same committed transaction and validated plan. A scenario
 no Node ran. The highlighted record range is disposable controller state;
 current occupancy is rebuilt from the VM and cumulative traffic and Node
 transaction totals from the complete journal after every refresh.
+
+The latest Step also projects its exact admitted, consumed and emitted routes.
+Those routes receive a short moving-envelope animation, while the firing Node
+or lifecycle owner pulses. A Step with no spatial route (for example an
+assertion or Connector settlement fact) pulses the boundary banner and never
+invents an envelope. Animation is disposable presentation state, restarts from
+the retained Step projection after refresh, and is disabled under
+`prefers-reduced-motion` without hiding the static highlight.
 
 Source definitions are compiler debug side-table data, not plan data. The UI
 may show the exact declaration span retained by the successful compilation,

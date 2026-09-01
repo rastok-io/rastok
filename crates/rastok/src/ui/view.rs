@@ -66,6 +66,7 @@ pub struct FaultView {
 /// carries no semantic authority of its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActivityView {
+    ordinal: Option<u64>,
     kind: &'static str,
     detail: String,
     node: Option<String>,
@@ -80,9 +81,11 @@ impl ActivityView {
         action: &'static str,
         journal: &MemJournal,
         records_before: usize,
+        ordinal: u64,
     ) -> Self {
         let records = committed_range(journal, records_before);
         Self {
+            ordinal: Some(ordinal),
             kind: "scenario-action",
             detail: format!("scenario action `{action}`; no Node fired"),
             node: None,
@@ -96,7 +99,11 @@ impl ActivityView {
     /// Connector-boundary change remains visible without inventing a Node
     /// firing.
     #[must_use]
-    pub fn journal_change(journal: &MemJournal, records_before: usize) -> Option<Self> {
+    pub fn journal_change(
+        journal: &MemJournal,
+        records_before: usize,
+        ordinal: Option<u64>,
+    ) -> Option<Self> {
         let records = committed_range(journal, records_before)?;
         let changed = &journal.records()[records.0..=records.1];
         if let Some(transaction) = changed.iter().rev().find_map(|record| match record {
@@ -109,6 +116,7 @@ impl ActivityView {
                 crate::node::Trigger::Lifecycle(_) => "lifecycle",
             };
             return Some(Self {
+                ordinal,
                 kind,
                 detail: transaction_summary(transaction),
                 node: Some(owner),
@@ -130,6 +138,7 @@ impl ActivityView {
             )
         };
         Some(Self {
+            ordinal,
             kind,
             detail,
             node: None,
@@ -288,6 +297,21 @@ struct Traffic {
     last_record: Option<usize>,
 }
 
+fn record_activity_route(
+    activity: &mut BTreeMap<String, &'static str>,
+    edge: &str,
+    phase: &'static str,
+) {
+    activity
+        .entry(String::from(edge))
+        .and_modify(|existing| {
+            if *existing != phase {
+                *existing = "transferred";
+            }
+        })
+        .or_insert(phase);
+}
+
 fn topology(
     plan: &ValidatedExecutionPlan,
     definitions: &[SourceDefinition],
@@ -311,6 +335,7 @@ fn topology(
         .iter()
         .map(|owner| (owner.path.to_string(), Traffic::default()))
         .collect::<BTreeMap<_, _>>();
+    let mut activity_routes = BTreeMap::new();
     let node_slots = plan
         .nodes
         .iter()
@@ -319,18 +344,32 @@ fn topology(
         .collect::<BTreeMap<_, _>>();
 
     for (record_index, record) in journal.records().iter().enumerate() {
+        let belongs_to_activity = activity
+            .and_then(|activity| activity.records)
+            .is_some_and(|(from, through)| (from..=through).contains(&record_index));
         match record {
             Record::Inbound(inbound) => {
                 for route in &inbound.routes {
                     record_traffic(&mut traffic, &route.edge, record_index);
+                    if belongs_to_activity {
+                        record_activity_route(&mut activity_routes, &route.edge, "admitted");
+                    }
                 }
             }
             Record::Transaction(transaction) => {
                 let owner = transaction.owner_path.to_string();
                 record_traffic(&mut owner_transactions, &owner, record_index);
                 let firing_slot = node_slots.get(&owner).copied();
+                if belongs_to_activity {
+                    for consumed in &transaction.consumed {
+                        record_activity_route(&mut activity_routes, &consumed.edge, "consumed");
+                    }
+                }
                 for route in &transaction.routes {
                     record_traffic(&mut traffic, &route.edge, record_index);
+                    if belongs_to_activity {
+                        record_activity_route(&mut activity_routes, &route.edge, "emitted");
+                    }
                 }
                 if let Some(slot) = firing_slot {
                     for emission in &transaction.emissions {
@@ -340,7 +379,11 @@ fn topology(
                                 && edge.from.port == emission.port
                                 && leaves_graph
                             {
-                                record_traffic(&mut traffic, &plan.edge_text(edge), record_index);
+                                let route = plan.edge_text(edge);
+                                record_traffic(&mut traffic, &route, record_index);
+                                if belongs_to_activity {
+                                    record_activity_route(&mut activity_routes, &route, "emitted");
+                                }
                             }
                         }
                     }
@@ -483,6 +526,7 @@ fn topology(
         "owners": owners,
         "edges": edges,
         "activity": activity.map(|activity| json!({
+            "ordinal": activity.ordinal,
             "kind": activity.kind,
             "detail": activity.detail,
             "node": activity.node,
@@ -490,6 +534,10 @@ fn topology(
                 "from": from,
                 "through": through,
             })),
+            "routes": activity_routes.iter().map(|(route, phase)| json!({
+                "route": route,
+                "phase": phase,
+            })).collect::<Vec<_>>(),
         })),
     })
 }

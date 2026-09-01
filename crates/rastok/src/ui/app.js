@@ -8,6 +8,7 @@ let controls = false;
 let currentSnapshot = null;
 let historyLimit = 100;
 let selectedTopologyItem = null;
+let lastAnimatedActivity = null;
 
 async function post(path, body = null) {
   const headers = { "X-Rastok-Controller": controller };
@@ -61,7 +62,16 @@ function renderSnapshot(snapshot) {
   document.querySelector("#step").setAttribute("aria-label", stepLabel);
   renderFault(snapshot.fault);
   renderScenario(snapshot.scenario, simulation);
-  renderTopology(snapshot.topology);
+  const activity = snapshot.topology?.activity || null;
+  if (!activity) lastAnimatedActivity = null;
+  const activityKey = activity
+    ? activity.ordinal === null
+      ? `external:${activity.records?.from ?? "?"}:${activity.records?.through ?? "?"}`
+      : `step:${activity.ordinal}`
+    : null;
+  const animateStep = Boolean(activity) && activityKey !== lastAnimatedActivity;
+  renderTopology(snapshot.topology, animateStep);
+  if (animateStep) lastAnimatedActivity = activityKey;
   renderRelatedPanels(snapshot);
   updateControls();
 }
@@ -131,7 +141,7 @@ function renderScenario(scenario, enabled) {
   }, "No scenario selected.");
 }
 
-function renderTopology(topology) {
+function renderTopology(topology, animateStep = false) {
   const target = document.querySelector("#graph");
   if (!topology || !(topology.nodes || []).length) {
     empty(target, "Waiting for a validated topology.");
@@ -139,14 +149,19 @@ function renderTopology(topology) {
   }
   const activity = topology.activity || null;
   const activityPanel = document.createElement("div");
-  activityPanel.className = `graph-activity${activity ? ` activity-${activity.kind}` : ""}`;
+  activityPanel.className = `graph-activity${activity ? ` activity-${activity.kind}` : ""}${animateStep ? " activity-new" : ""}`;
   const activityLabel = document.createElement("span");
   activityLabel.className = "graph-activity-label";
-  activityLabel.textContent = activity?.kind === "transaction"
-    ? "Last Step"
+  const activityKind = activity?.kind === "transaction"
+    ? "transaction"
     : activity?.kind === "lifecycle"
-      ? "Lifecycle"
-      : "Latest boundary";
+      ? "lifecycle"
+      : "boundary";
+  activityLabel.textContent = activity
+    ? activity.ordinal === null
+      ? `External · ${activityKind}`
+      : `Step ${activity.ordinal} · ${activityKind}`
+    : "Step";
   const activityText = document.createElement("strong");
   activityText.textContent = activity?.detail || "No Step has run yet.";
   activityPanel.append(activityLabel, activityText);
@@ -197,7 +212,7 @@ function renderTopology(topology) {
     const selectable = Boolean(owner.definition);
     const selected = selectedTopologyItem === owner.id;
     const group = svgElement("g", {
-      class: `graph-scope${position.depth === 0 ? " root" : " nested"}${active ? " active" : ""}${selectable ? " selectable" : ""}${selected ? " selected" : ""}`,
+      class: `graph-scope${position.depth === 0 ? " root" : " nested"}${active ? " active" : ""}${active && animateStep ? " moving" : ""}${selectable ? " selectable" : ""}${selected ? " selected" : ""}`,
     });
     if (selectable) {
       group.setAttribute("role", "button");
@@ -254,7 +269,7 @@ function renderTopology(topology) {
       const label = svgElement("text", {
         class: "graph-scope-port-label",
         x: anchor.x + (port.direction === "input" ? 9 : -9),
-        y: anchor.y + 3.5,
+        y: anchor.y - 8,
         "text-anchor": port.direction === "input" ? "start" : "end",
       });
       label.textContent = port.name;
@@ -265,7 +280,7 @@ function renderTopology(topology) {
   svg.append(scopeLayer);
 
   const edgeLayer = svgElement("g", { class: "graph-edge-layer" });
-  const activeRecords = activity?.records || null;
+  const activeRoutes = new Map((activity?.routes || []).map((route) => [route.route, route.phase]));
   const edgeRoutes = routeGraphEdges(graph, layout);
   for (const edge of graph.edges) {
     const source = graph.byId.get(edge.source.id);
@@ -273,25 +288,49 @@ function renderTopology(topology) {
     const sourcePosition = layout.positions.get(edge.source.id);
     const destinationPosition = layout.positions.get(edge.target.id);
     if (!source || !destination || !sourcePosition || !destinationPosition) continue;
-    const active = activeRecords
-      && edge.last_envelope_record !== null
-      && edge.last_envelope_record !== undefined
-      && edge.last_envelope_record >= activeRecords.from
-      && edge.last_envelope_record <= activeRecords.through;
+    const activityPhase = activeRoutes.get(edge.route) || null;
+    const active = activityPhase !== null;
     const group = svgElement("g", {
-      class: `graph-edge${active ? " active" : ""}`,
+      class: `graph-edge${active ? " active" : ""}${active && animateStep ? " moving" : ""}`,
       "data-route": edge.route,
+      "data-activity": activityPhase || "idle",
     });
     const route = edgeRoutes.get(edge.index);
     if (!route) continue;
+    const pathData = roundedOrthogonalPath(route.points, 10);
     const path = svgElement("path", {
-      d: roundedOrthogonalPath(route.points, 10),
+      class: "graph-edge-path",
+      d: pathData,
       "marker-end": active ? "url(#graph-arrow-active)" : "url(#graph-arrow)",
     });
     const title = svgElement("title");
     title.textContent = `${edge.route} · ${edge.queued_count || "0"} queued now · ${edge.traversal_count || "0"} traversals in this run`;
     path.append(title);
     group.append(path);
+
+    if (active && animateStep) {
+      const packet = svgElement("circle", {
+        class: "graph-edge-packet",
+        r: "5",
+        "aria-hidden": "true",
+      });
+      packet.append(svgElement("animateMotion", {
+        dur: "700ms",
+        fill: "freeze",
+        path: pathData,
+      }));
+      group.append(packet);
+    }
+
+    if (route.label.leader) {
+      group.append(svgElement("line", {
+        class: "edge-label-leader",
+        x1: route.label.leader.from.x,
+        y1: route.label.leader.from.y,
+        x2: route.label.leader.to.x,
+        y2: route.label.leader.to.y,
+      }));
+    }
 
     const badge = svgElement("g", {
       class: "edge-counter",
@@ -304,21 +343,6 @@ function renderTopology(topology) {
     cumulative.textContent = `Σ${edge.traversal_count || "0"}`;
     badge.append(queued, cumulative);
     group.append(badge);
-
-    const sourcePortLabel = svgElement("text", {
-      class: "edge-port source-port",
-      x: route.start.x + 8,
-      y: route.start.y - 9,
-    });
-    sourcePortLabel.textContent = edge.source.port || "";
-    const targetPortLabel = svgElement("text", {
-      class: "edge-port target-port",
-      x: route.end.x - 8,
-      y: route.end.y - 9,
-      "text-anchor": "end",
-    });
-    targetPortLabel.textContent = edge.target.port || "";
-    group.append(sourcePortLabel, targetPortLabel);
     edgeLayer.append(group);
   }
   svg.append(edgeLayer);
@@ -332,7 +356,7 @@ function renderTopology(topology) {
     const selected = selectedTopologyItem === node.id;
     const boundary = node.kind === "boundary" || node.kind === "discard";
     const group = svgElement("g", {
-      class: `graph-node graph-node-${node.kind}${active ? " active" : ""}${selectable ? " selectable" : ""}${selected ? " selected" : ""}`,
+      class: `graph-node graph-node-${node.kind}${active ? " active" : ""}${active && animateStep ? " moving" : ""}${selectable ? " selectable" : ""}${selected ? " selected" : ""}`,
       transform: `translate(${position.x} ${position.y})`,
     });
     if (selectable) {
@@ -408,7 +432,14 @@ function renderTopology(topology) {
       const portTitle = svgElement("title");
       portTitle.textContent = `${port.direction} port ${port.name}`;
       disk.append(portTitle);
-      group.append(disk);
+      const portLabel = svgElement("text", {
+        class: "graph-node-port-label",
+        x: port.direction === "input" ? "-8" : String(position.width + 8),
+        y: anchor.y - position.y - 8,
+        "text-anchor": port.direction === "input" ? "end" : "start",
+      });
+      portLabel.textContent = port.name;
+      group.append(disk, portLabel);
     }
     nodeLayer.append(group);
   }
@@ -450,7 +481,7 @@ function renderTopology(topology) {
 
 function selectTopologyItem(id) {
   selectedTopologyItem = selectedTopologyItem === id ? null : id;
-  renderTopology(currentSnapshot?.topology);
+  renderTopology(currentSnapshot?.topology, false);
   if (currentSnapshot) renderRelatedPanels(currentSnapshot);
 }
 
@@ -1178,7 +1209,7 @@ function layoutGraph(nodes, edges, owners) {
   }
   const width = Math.max(...[...scopes.values()].map((scope) => scope.x + scope.width), nextX) + 18;
   const height = rootScope.y + rootScope.height + 18;
-  return { width, height, positions, scopes, rank };
+  return { width, height, positions, scopes, rank, owners: ownerMap };
 }
 
 function routeGraphEdges(graph, layout) {
@@ -1215,30 +1246,233 @@ function routeGraphEdges(graph, layout) {
       const { edge, start, end } = candidate;
       const centeredIndex = index - (group.length - 1) / 2;
       let points;
-      let label;
       if (end.x - start.x >= 44) {
         const midpoint = (start.x + end.x) / 2;
         const available = Math.max(0, end.x - start.x - 36);
         const spacing = Math.min(14, available / Math.max(1, group.length));
         const lane = Math.max(start.x + 18, Math.min(end.x - 18, midpoint + centeredIndex * spacing));
         points = [start, { x: lane, y: start.y }, { x: lane, y: end.y }, end];
-        label = Math.abs(end.y - start.y) >= 26
-          ? { x: lane, y: (start.y + end.y) / 2 }
-          : { x: (start.x + end.x) / 2, y: start.y };
       } else {
         const lane = Math.max(start.x, end.x) + 34 + index * 14;
         points = [start, { x: lane, y: start.y }, { x: lane, y: end.y }, end];
-        label = { x: lane, y: (start.y + end.y) / 2 };
       }
       routes.set(edge.index, {
         start,
         end,
         points,
-        label,
       });
     });
   }
+  placeEdgeLabels(routes, graph, layout);
   return routes;
+}
+
+function placeEdgeLabels(routes, graph, layout) {
+  const badge = { width: 50, height: 22 };
+  const nodeObstacles = graph.nodes
+    .filter((node) => node.kind !== "boundary" && node.kind !== "discard")
+    .map((node) => expandBox(layout.positions.get(node.id), 6))
+    .filter(Boolean);
+  const headerObstacles = [...layout.scopes.values()].map((scope) => ({
+    x: scope.x,
+    y: scope.y,
+    width: scope.width,
+    height: 34,
+  }));
+  const portLabelObstacles = [];
+  for (const [ownerId, owner] of layout.owners) {
+    const scope = layout.scopes.get(ownerId);
+    if (!scope) continue;
+    for (const port of owner.ports || []) {
+      const anchor = scopePortAnchor(owner, scope, port);
+      portLabelObstacles.push(textLabelBox(
+        anchor.x + (port.direction === "input" ? 9 : -9),
+        anchor.y - 8,
+        port.name,
+        port.direction === "input" ? "start" : "end",
+      ));
+    }
+  }
+  for (const node of graph.nodes) {
+    if (node.kind === "boundary" || node.kind === "discard") continue;
+    const position = layout.positions.get(node.id);
+    if (!position) continue;
+    for (const port of node.ports || []) {
+      const anchor = portAnchor(node, position, port.name, port.direction);
+      portLabelObstacles.push(textLabelBox(
+        anchor.x + (port.direction === "input" ? -8 : 8),
+        anchor.y - 8,
+        port.name,
+        port.direction === "input" ? "end" : "start",
+      ));
+    }
+  }
+  const pathSegments = [...routes.values()].flatMap((route) => orthogonalSegments(route.points));
+  const placed = [];
+  const ordered = [...routes.entries()].sort(([left], [right]) => left - right);
+  for (const [, route] of ordered) {
+    const ownSegments = orthogonalSegments(route.points)
+      .sort((left, right) => segmentLength(right) - segmentLength(left));
+    const candidates = [];
+    for (const segment of ownSegments) {
+      const anchor = segmentMidpoint(segment);
+      if (segment.a.y === segment.b.y) {
+        for (const offset of [-22, 22, -38, 38, -54, 54]) {
+          candidates.push({ center: { x: anchor.x, y: anchor.y + offset }, anchor });
+        }
+      } else {
+        for (const offset of [34, -34, 50, -50, 66, -66]) {
+          candidates.push({ center: { x: anchor.x + offset, y: anchor.y }, anchor });
+        }
+      }
+    }
+    const evaluated = candidates.map((candidate, order) => {
+      const box = centeredBox(candidate.center, badge.width, badge.height);
+      return {
+        ...candidate,
+        box,
+        order,
+        score: labelCollisionScore(
+          box,
+          layout,
+          nodeObstacles,
+          [...headerObstacles, ...portLabelObstacles],
+          pathSegments,
+          placed,
+        ),
+      };
+    });
+    evaluated.sort((left, right) => left.score - right.score || left.order - right.order);
+    const fallbackAnchor = ownSegments[0] ? segmentMidpoint(ownSegments[0]) : route.start;
+    const selected = evaluated[0] || {
+      center: fallbackAnchor,
+      anchor: fallbackAnchor,
+      box: centeredBox(fallbackAnchor, badge.width, badge.height),
+    };
+    placed.push(selected.box);
+    route.label = {
+      x: selected.center.x,
+      y: selected.center.y,
+      leader: {
+        from: selected.anchor,
+        to: nearestPointOnBox(selected.anchor, selected.box),
+      },
+    };
+  }
+}
+
+function textLabelBox(x, baseline, value, anchor) {
+  const width = Math.max(10, String(value || "").length * 6 + 4);
+  return {
+    x: anchor === "end" ? x - width : x,
+    y: baseline - 10,
+    width,
+    height: 13,
+  };
+}
+
+function orthogonalSegments(points) {
+  const segments = [];
+  for (let index = 1; index < points.length; index += 1) {
+    const a = points[index - 1];
+    const b = points[index];
+    if (a.x === b.x && a.y === b.y) continue;
+    segments.push({ a, b });
+  }
+  return segments;
+}
+
+function segmentLength(segment) {
+  return Math.abs(segment.b.x - segment.a.x) + Math.abs(segment.b.y - segment.a.y);
+}
+
+function segmentMidpoint(segment) {
+  return {
+    x: (segment.a.x + segment.b.x) / 2,
+    y: (segment.a.y + segment.b.y) / 2,
+  };
+}
+
+function centeredBox(center, width, height) {
+  return {
+    x: center.x - width / 2,
+    y: center.y - height / 2,
+    width,
+    height,
+  };
+}
+
+function expandBox(box, padding) {
+  if (!box) return null;
+  return {
+    x: box.x - padding,
+    y: box.y - padding,
+    width: box.width + padding * 2,
+    height: box.height + padding * 2,
+  };
+}
+
+function boxesOverlap(left, right) {
+  return left.x < right.x + right.width
+    && left.x + left.width > right.x
+    && left.y < right.y + right.height
+    && left.y + left.height > right.y;
+}
+
+function overlapArea(left, right) {
+  if (!boxesOverlap(left, right)) return 0;
+  const width = Math.min(left.x + left.width, right.x + right.width) - Math.max(left.x, right.x);
+  const height = Math.min(left.y + left.height, right.y + right.height) - Math.max(left.y, right.y);
+  return width * height;
+}
+
+function segmentCrossesBox(segment, box, padding) {
+  const expanded = expandBox(box, padding);
+  const minimumX = Math.min(segment.a.x, segment.b.x);
+  const maximumX = Math.max(segment.a.x, segment.b.x);
+  const minimumY = Math.min(segment.a.y, segment.b.y);
+  const maximumY = Math.max(segment.a.y, segment.b.y);
+  if (segment.a.y === segment.b.y) {
+    return segment.a.y >= expanded.y
+      && segment.a.y <= expanded.y + expanded.height
+      && maximumX >= expanded.x
+      && minimumX <= expanded.x + expanded.width;
+  }
+  return segment.a.x >= expanded.x
+    && segment.a.x <= expanded.x + expanded.width
+    && maximumY >= expanded.y
+    && minimumY <= expanded.y + expanded.height;
+}
+
+function labelCollisionScore(box, layout, nodes, headers, segments, placed) {
+  let score = 0;
+  if (box.x < 4 || box.y < 4 || box.x + box.width > layout.width - 4 || box.y + box.height > layout.height - 4) {
+    score += 1_000_000;
+  }
+  for (const obstacle of [...nodes, ...headers]) {
+    score += overlapArea(box, obstacle) * 10_000;
+  }
+  for (const other of placed) {
+    score += overlapArea(box, expandBox(other, 6)) * 20_000;
+  }
+  for (const segment of segments) {
+    if (segmentCrossesBox(segment, box, 5)) score += 100_000;
+  }
+  return score;
+}
+
+function nearestPointOnBox(point, box) {
+  const clampedX = Math.max(box.x, Math.min(point.x, box.x + box.width));
+  const clampedY = Math.max(box.y, Math.min(point.y, box.y + box.height));
+  if (point.x < box.x || point.x > box.x + box.width) {
+    return { x: clampedX, y: clampedY };
+  }
+  return {
+    x: clampedX,
+    y: Math.abs(point.y - box.y) < Math.abs(point.y - (box.y + box.height))
+      ? box.y
+      : box.y + box.height,
+  };
 }
 
 function roundedOrthogonalPath(points, radius) {
@@ -1329,7 +1563,7 @@ function renderHistory(history, selection) {
   const records = allRecords.filter((row) => rowMatchesSelection(row, selection, ["owner", "connector"]));
   const deliveries = allDeliveries.filter((row) => rowMatchesSelection(row, selection, ["node"]));
   const suffix = selection ? ` Filtered by ${selection.label}.` : "";
-  text("history-summary", `${records.length} causal record${records.length === 1 ? "" : "s"}; ${deliveries.length} observed deliver${deliveries.length === 1 ? "y" : "ies"}.${suffix}`);
+  text("history-summary", `${records.length} causal record${records.length === 1 ? "" : "s"} (not Steps); ${deliveries.length} observed deliver${deliveries.length === 1 ? "y" : "ies"}.${suffix}`);
   if (!records.length && !deliveries.length) {
     empty(target, selection ? "No retained activity for this selection." : "No committed records.");
     document.querySelector("#show-older").hidden = true;

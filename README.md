@@ -163,11 +163,14 @@ Lab actions and port transactions, retains the complete in-memory causal
 history after completion, and presents a compound topology, frame-owned ports,
 separate `META`/`DATA`, logical instances, Calls/Sessions, structured redacted
 state and the exact `CostReport`. Orthogonal rounded edges show live mailbox
-occupancy in bold beside muted cumulative traffic. Selecting a Node or Graph
-filters those linked views without truncating the retained authorities. Before
-a checked simulation `inject`, its typed `DATA` draft may be edited and is still
-admitted through the ordinary immutable-envelope path. Non-UI execution, plan
-identity and causal records are unchanged. See [`ui.md`](docs/spec/ui.md) and the
+occupancy in bold beside muted cumulative traffic; labels avoid the routed
+pipes, and each Step animates the exact envelope movement or lifecycle owner.
+Play repeats that same numbered Step transition continuously. Selecting a Node
+or Graph filters those linked views without truncating the retained authorities.
+Before a checked simulation `inject`, its typed `DATA` draft may be edited and
+is still admitted through the ordinary immutable-envelope path. Non-UI
+execution, plan identity and causal records are unchanged. See
+[`ui.md`](docs/spec/ui.md) and the
 [M1.9 backlog](docs/architecture/m1.9-ui-backlog.md).
 
 For hosted execution or simulation, `--deployment <profile.json>` supplies
