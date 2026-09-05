@@ -374,6 +374,20 @@ impl Checker<'_, '_> {
             );
             return None;
         }
+        if let Err(error) = crate::plan::validate_dispatch(&dispatch, &signature) {
+            self.bag.push(
+                Diagnostic::new(
+                    crate::compiler::E_INTERNAL_PLAN,
+                    Phase::Check,
+                    "checked Dispatch contradicts the independent core proof",
+                )
+                .with_span(decl.span)
+                .with_field("source", node.path.to_string())
+                .with_field("path", error.path.clone())
+                .with_field("detail", error.to_string()),
+            );
+            return None;
+        }
         Some(Handler {
             activation,
             join_within,

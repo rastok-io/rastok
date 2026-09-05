@@ -5343,7 +5343,7 @@ fn value_expressible(value: &crate::value::Value) -> Result<(), PlanValidationEr
 /// check cannot catch (it faithfully reproduces whatever order the
 /// tree carries). Recursion is safe here: the nesting budget has
 /// already bounded the tree.
-fn expr_canonical(expr: &expr::Expr) -> Result<(), PlanValidationError> {
+pub(super) fn expr_canonical(expr: &expr::Expr) -> Result<(), PlanValidationError> {
     match expr {
         expr::Expr::Literal(value) => value_expressible(value),
         // The index is bounds-checked against the asset table in

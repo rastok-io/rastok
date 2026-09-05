@@ -8,11 +8,18 @@
 
 mod annotation_resolution;
 mod case_partition;
+mod dispatch;
+mod dispatch_validation;
 mod serialization;
 mod type_resolution;
 mod validation;
 
 pub use case_partition::{CasePartitionError, closed_case_domain, validate_case_partition};
+pub use dispatch::{
+    ClosedArm, Dispatch, DispatchEmission, DispatchFieldWrite, DispatchStep, LoopCommand,
+    MAX_DISPATCH_DEPTH, MultiEmitValues, OpenArm,
+};
+pub use dispatch_validation::{DispatchErrorKind, DispatchValidationError, validate_dispatch};
 pub(crate) use serialization::type_tree;
 pub use serialization::{DecodeError, FORMAT_VERSION, MAGIC, decode, encode};
 

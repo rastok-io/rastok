@@ -11,9 +11,7 @@
 
 use crate::diagnostics::Span;
 
-/// Maximum nested match decisions on one source/HIR path. The v16 plan gate
-/// independently rechecks this bound before recursive evaluation.
-pub const MAX_DISPATCH_DEPTH: usize = 32;
+pub use crate::plan::MAX_DISPATCH_DEPTH;
 
 /// Spanned word: an identifier, keyword, or tag, as written.
 #[derive(Debug, Clone, PartialEq, Eq)]

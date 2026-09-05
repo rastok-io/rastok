@@ -1899,7 +1899,7 @@ impl<'a> ExprParser<'_, 'a> {
 /// the tree (type-check, hash, lowering, and the exact serialized
 /// walker at validation). Parser literals are scalars, so only the
 /// expression spine counts.
-fn structural_depth(root: &Expr) -> usize {
+pub(crate) fn structural_depth(root: &Expr) -> usize {
     let mut max = 0;
     let mut stack = vec![(root, 1usize)];
     while let Some((expr, depth)) = stack.pop() {
@@ -2277,14 +2277,18 @@ pub(crate) fn rederive_type(expr: &Expr, signature: &Signature) -> Option<DataTy
 
 fn check_narrowing_compatibility(source: &DataType, target: &NarrowTarget) -> Result<(), String> {
     match target {
-        NarrowTarget::Case { name, .. } => match source {
+        NarrowTarget::Case { name, payload } => match source {
             DataType::TaggedUnion(union)
-                if union.cases().iter().any(|case| case.name() == name) =>
+                if union.cases().iter().any(|case| {
+                    case.name() == name
+                        && matches!(payload.as_ref(), DataType::Struct(structure)
+                            if structure == case.payload())
+                }) =>
             {
                 Ok(())
             }
             _ => Err(format!(
-                "case `{name}` does not belong to the operand type {source}"
+                "case `{name}` and its payload do not belong to the operand type {source}"
             )),
         },
         NarrowTarget::Type(target) => {
@@ -3102,6 +3106,30 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transported_case_narrowing_rederives_the_payload_from_the_source_union() {
+        let payload = StructType::new(vec![TypeField::new("code", DataType::INT)]).unwrap();
+        let union = TaggedUnionType::new(vec![
+            crate::datatype::TaggedCase::new("Exited", payload.clone()).unwrap(),
+        ])
+        .unwrap();
+        let signature = Signature::new().with("data", DataType::TaggedUnion(union));
+        for operator in ["is", "as"] {
+            let mut tree = compile(&format!("data {operator} Exited"), &signature).unwrap();
+            assert_eq!(rederive_type(&tree.root, &signature), Some(tree.ty.clone()));
+            let (Expr::Is { target, .. } | Expr::As { target, .. }) = &mut tree.root else {
+                unreachable!();
+            };
+            let NarrowTarget::Case { payload, .. } = target.as_mut() else {
+                unreachable!();
+            };
+            **payload = DataType::Struct(
+                StructType::new(vec![TypeField::new("code", DataType::Text)]).unwrap(),
+            );
+            assert_eq!(rederive_type(&tree.root, &signature), None, "{operator}");
+        }
+    }
 
     #[test]
     fn evaluator_carriage_preserves_value_equality_for_every_family() {

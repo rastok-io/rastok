@@ -238,8 +238,9 @@ takes semantic priority; no public date overrides its R0–R9 exit gates.
   identity. New forms remain behind the categorical v16 packaging gate. See
   [`rework-r3-source-hir.md`](docs/architecture/rework-r3-source-hir.md) for
   tests and the explicitly retained v15 migration seams. R4 is open: the core
-  independently verifies closed-case partitions for Dispatch and route tables;
-  source consumers already use that proof. The single categorical v16 move
+  independently verifies closed-case partitions for Dispatch and route tables,
+  and local expressions/scopes in the Dispatch algebra shared with HIR;
+  source consumers already use those proofs. The single categorical v16 move
   remains pending, as listed in
   [`rework-r4-plan.md`](docs/architecture/rework-r4-plan.md).
 - M1.9 is paused until R9. Its retained design implements the optional hosted
