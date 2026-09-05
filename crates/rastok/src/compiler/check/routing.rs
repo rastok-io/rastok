@@ -601,7 +601,10 @@ impl Checker<'_, '_> {
         graph: &Graph,
     ) -> Option<(RouteRule, Vec<Edge>)> {
         let source_ty = endpoint_pinned_type(&source, graph);
-        let Some(domain) = source_ty.as_ref().and_then(closed_match_domain) else {
+        let Some((source_ty, domain)) = source_ty
+            .as_ref()
+            .and_then(|ty| closed_case_domain(ty).map(|domain| (ty, domain)))
+        else {
             self.bag.push(
                 Diagnostic::new(
                     E_MATCH_NOT_CLOSED,
@@ -727,6 +730,12 @@ impl Checker<'_, '_> {
             });
         }
         arms.sort_by(|left, right| left.cases.cmp(&right.cases));
+        self.verify_case_partition(
+            source_ty,
+            arms.iter().map(|arm| arm.cases.as_slice()),
+            route_match.span,
+            &endpoint_display(&source),
+        )?;
         let edges = arms
             .iter()
             .flat_map(|arm| physical_edges(&source, &arm.destinations))

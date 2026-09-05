@@ -237,7 +237,11 @@ takes semantic priority; no public date overrides its R0–R9 exit gates.
   Loop entry/terminal/state/command resolution and complete conditional HIR
   identity. New forms remain behind the categorical v16 packaging gate. See
   [`rework-r3-source-hir.md`](docs/architecture/rework-r3-source-hir.md) for
-  tests and the explicitly retained v15 migration seams. R4 is next.
+  tests and the explicitly retained v15 migration seams. R4 is open: the core
+  independently verifies closed-case partitions for Dispatch and route tables;
+  source consumers already use that proof. The single categorical v16 move
+  remains pending, as listed in
+  [`rework-r4-plan.md`](docs/architecture/rework-r4-plan.md).
 - M1.9 is paused until R9. Its retained design implements the optional hosted
   execution UI: `run --ui` and
   `simulate --ui` start paused behind a capability-protected loopback page,

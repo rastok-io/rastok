@@ -703,7 +703,7 @@ impl Checker<'_, '_> {
         declared_data_type: Option<&DataType>,
     ) -> Option<Dispatch> {
         let scrutinee = self.expr(source, signature)?;
-        let Some(domain) = closed_match_domain(&scrutinee.ty) else {
+        let Some(domain) = closed_case_domain(&scrutinee.ty) else {
             self.bag.push(
                 Diagnostic::new(
                     E_MATCH_NOT_CLOSED,
@@ -861,11 +861,45 @@ impl Checker<'_, '_> {
             });
         }
         checked.sort_by(|left, right| left.cases.cmp(&right.cases));
+        self.verify_case_partition(
+            &scrutinee.ty,
+            checked.iter().map(|arm| arm.cases.as_slice()),
+            span,
+            &node.path.to_string(),
+        )?;
         Some(Dispatch::ClosedMatch {
             prefix,
             scrutinee,
             arms: checked,
         })
+    }
+
+    /// Source diagnostics retain their authored spans above. The normalized
+    /// table must also satisfy the independent core proof; failure here is
+    /// a compiler defect, not another source-language fallback.
+    pub(super) fn verify_case_partition<'a>(
+        &mut self,
+        ty: &DataType,
+        arms: impl IntoIterator<Item = &'a [String]>,
+        span: Span,
+        source: &str,
+    ) -> Option<()> {
+        match crate::plan::validate_case_partition(ty, arms) {
+            Ok(()) => Some(()),
+            Err(error) => {
+                self.bag.push(
+                    Diagnostic::new(
+                        crate::compiler::E_INTERNAL_PLAN,
+                        Phase::Check,
+                        "checked closed match has an invalid case partition",
+                    )
+                    .with_span(span)
+                    .with_field("source", source)
+                    .with_field("detail", error.to_string()),
+                );
+                None
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1221,21 +1255,6 @@ pub(super) fn syntax_statement_span(statement: &SynStatement) -> Span {
             SynStatement::Error(error) => error.span,
             _ => Span::new(SourceId::new(0), 0..0),
         },
-    }
-}
-
-pub(super) fn closed_match_domain(ty: &DataType) -> Option<Vec<String>> {
-    match ty {
-        DataType::Bool => Some(vec![String::from("false"), String::from("true")]),
-        DataType::Enum(symbols) => Some(symbols.symbols().to_vec()),
-        DataType::TaggedUnion(union) => Some(
-            union
-                .cases()
-                .iter()
-                .map(|case| case.name().to_string())
-                .collect(),
-        ),
-        _ => None,
     }
 }
 

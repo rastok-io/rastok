@@ -7,10 +7,12 @@
 //! beside the plan as [`SemanticHash`].
 
 mod annotation_resolution;
+mod case_partition;
 mod serialization;
 mod type_resolution;
 mod validation;
 
+pub use case_partition::{CasePartitionError, closed_case_domain, validate_case_partition};
 pub(crate) use serialization::type_tree;
 pub use serialization::{DecodeError, FORMAT_VERSION, MAGIC, decode, encode};
 

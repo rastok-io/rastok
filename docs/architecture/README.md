@@ -4,9 +4,11 @@ This directory contains implementation views derived from the normative
 specification. It answers *how Rastok is built*; it does not define new
 language or runtime behavior.
 
-The active rework checkpoint is
-[`rework-r3-source-hir.md`](rework-r3-source-hir.md): checked source/HIR and
-its identity, with the categorical v16 transport and execution gates pending.
+The source/HIR checkpoint is
+[`rework-r3-source-hir.md`](rework-r3-source-hir.md). R4 is open at
+[`rework-r4-plan.md`](rework-r4-plan.md): the independent closed-case verifier
+is wired to both source consumers; categorical v16 transport and execution
+remain pending.
 
 Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 

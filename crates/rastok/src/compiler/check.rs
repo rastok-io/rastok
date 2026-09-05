@@ -39,6 +39,7 @@ use crate::datatype::{
 use crate::diagnostics::{Bag, Code, Diagnostic, Phase, SourceId, Span};
 use crate::expr;
 use crate::node;
+use crate::plan::closed_case_domain;
 use crate::schema_annotation::{
     AnnotatedSchema, AnnotationSet, AnnotationTable, CostAnnotation, CostBasis, CurrencyCode,
     DataAnnotation, MeasureCarrier, MeasureId, MeasureSource, PersonalDataClass, SchemaPath,
