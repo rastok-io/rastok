@@ -1292,30 +1292,9 @@ pub(super) fn is_loop_attribute(attribute: &SynAttribute) -> bool {
             ))
 }
 
-/// Mirrors only the already-checked handler algebra into the core proof
-/// boundary. Plan lowering performs its own full conversion later; this local
-/// copy exists so an unsupported theorem is diagnosed at its source instead
-/// of first appearing as an internal plan refusal.
+/// Checks source handlers with the independent core proof before packaging,
+/// so a rejected theorem is diagnosed at its source location.
 pub(super) fn loop_proof_handlers(graph: &Graph) -> Option<Vec<crate::plan::Handler>> {
-    let emission = |value: &EmitValue| match value {
-        EmitValue::Identity => crate::plan::Emission::Identity,
-        EmitValue::Patch(fields) | EmitValue::FreshData(fields) => {
-            let writes = fields
-                .iter()
-                .map(|field| crate::plan::FieldWrite {
-                    target: field.target.clone(),
-                    expr: field.value.clone(),
-                })
-                .collect();
-            if matches!(value, EmitValue::Patch(_)) {
-                crate::plan::Emission::Patch(writes)
-            } else {
-                crate::plan::Emission::Replace(writes)
-            }
-        }
-        EmitValue::Data(tree) => crate::plan::Emission::Data(tree.clone()),
-        EmitValue::Nothing => crate::plan::Emission::Nothing,
-    };
     graph
         .handlers
         .iter()
@@ -1335,7 +1314,7 @@ pub(super) fn loop_proof_handlers(graph: &Graph) -> Option<Vec<crate::plan::Hand
                     }),
                     Statement::Emit { port, value } => Some(crate::plan::Step::Emit {
                         port: port.clone(),
-                        value: emission(value),
+                        value: value.clone(),
                     }),
                     Statement::SetVar { name, value } => Some(crate::plan::Step::SetVar {
                         name: name.clone(),

@@ -10,6 +10,7 @@ mod annotation_resolution;
 mod case_partition;
 mod dispatch;
 mod dispatch_validation;
+mod emission;
 mod routing;
 mod routing_validation;
 mod serialization;
@@ -18,10 +19,10 @@ mod validation;
 
 pub use case_partition::{CasePartitionError, closed_case_domain, validate_case_partition};
 pub use dispatch::{
-    ClosedArm, Dispatch, DispatchEmission, DispatchFieldWrite, DispatchStep, LoopCommand,
-    MAX_DISPATCH_DEPTH, MultiEmitValues, OpenArm,
+    ClosedArm, Dispatch, DispatchStep, LoopCommand, MAX_DISPATCH_DEPTH, MultiEmitValues, OpenArm,
 };
 pub use dispatch_validation::{DispatchErrorKind, DispatchValidationError, validate_dispatch};
+pub use emission::{Emission, FieldWrite};
 pub use routing::{
     Endpoint, EndpointOwner, LoopCommandKind, LoopCommandTarget, RouteArm, RouteDestination,
     RouteRule, RouteSelection,
@@ -953,30 +954,6 @@ pub enum Step {
     /// Request closure of the current logical Node instance. The request is
     /// committed atomically with this handler transaction.
     Stop,
-}
-
-/// What an emission builds.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Emission {
-    /// Re-emit the input unchanged.
-    Identity,
-    /// Inherit the input; patch the listed fields.
-    Patch(Vec<FieldWrite>),
-    /// Full-data replacement; meta untouched.
-    Replace(Vec<FieldWrite>),
-    /// A computed value becoming the whole `data`.
-    Data(expr::Tree),
-    /// No emission on this port this transaction.
-    Nothing,
-}
-
-/// One writable field assignment inside an emission.
-#[derive(Debug, Clone, PartialEq)]
-pub struct FieldWrite {
-    /// The checked landing site.
-    pub target: crate::envelope::WriteTarget,
-    /// The expression.
-    pub expr: expr::Tree,
 }
 
 /// One planned edge.

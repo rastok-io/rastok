@@ -1739,8 +1739,8 @@ fn emitted_content(
             let value = resolve_payload_with_slots(value, slots)?;
             Ok(Some(fresh(value)))
         }
-        PlanEmission::Patch(writes) | PlanEmission::Replace(writes) => {
-            let replace = matches!(emission, PlanEmission::Replace(_));
+        PlanEmission::Patch(writes) | PlanEmission::FreshData(writes) => {
+            let replace = matches!(emission, PlanEmission::FreshData(_));
             // The whole-data CARRY: a builder whose only payload
             // write is the bare witness (`data = data`,
             // `data = a.data`) keeps the representation — the
@@ -1760,7 +1760,7 @@ fn emitted_content(
             let carry = if let Some(last) = data_writes.last() {
                 let write = &writes[*last];
                 if matches!(&write.target, envelope::WriteTarget::Data(path) if path.is_empty()) {
-                    match eval_with_slots(&write.expr, base, slots, assets)? {
+                    match eval_with_slots(&write.value, base, slots, assets)? {
                         expr::EvalValue::Payload(reference) => Some(reference),
                         _ => None,
                     }
@@ -1790,7 +1790,7 @@ fn emitted_content(
                     continue;
                 }
                 let value = resolve_payload_with_slots(
-                    eval_with_slots(&write.expr, base, slots, assets)?,
+                    eval_with_slots(&write.value, base, slots, assets)?,
                     slots,
                 )?;
                 match &write.target {

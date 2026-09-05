@@ -1,6 +1,6 @@
 # R4 — categorical plan and independent validation
 
-> **Status (2026-09-05): open, fourth validation checkpoint.** R3 is
+> **Status (2026-09-05): open, fifth representation checkpoint.** R3 is
 > committed separately from the paused M1.9 UI. The encoded package remains
 > **v15**; no v16 tag, journal key, Contract major or golden is allocated by
 > this checkpoint.
@@ -158,7 +158,27 @@ exact run context, finite timeouts, frame/exit command uniqueness, selected
 value types, intermediate routes and the effects of a repeated Graph body.
 No manager execution or ContractViolation runtime gate is claimed here.
 
-## 6. Evidence
+## 6. One envelope-construction algebra
+
+Checked Dispatch and the executable plan now carry the same `Emission` and
+ordered `FieldWrite` types. Source checking, expression/type/policy proofs,
+Loop measure verification, CBOR transport and runtime construction consume
+that one model. The duplicate Dispatch-only emission/write types and the
+proof's copy-conversion are removed, not kept as compatibility wrappers.
+Lowering only substitutes lexical constants inside the shared expressions.
+
+The five forms remain Identity, Patch, FreshData, Data and Nothing. FreshData
+names the existing fresh-data builder uniformly; it keeps the same wire tag
+and semantics, including scalar whole-data writes, payload witnesses and
+explicit metadata overrides. Field order remains authored order, never a
+canonical sort. This consolidation changes Rust representation names, not
+source spelling, plan bytes, semantic hashes or causal records.
+
+The categorical v16 gate remains at lowering. Sharing the emission leaves
+does not admit recursive Dispatch, multi-emission or manager commands into
+the v15 package.
+
+## 7. Evidence
 
 Seven core tests cover bool, enum and tagged union; unsupported/open domains;
 missing, unknown and duplicated cases; empty arms; case/arm order; absence of
@@ -226,7 +246,22 @@ unchanged. Cortex-M33 before/after retains 17,840 decode ticks, 2,713 average /
 2,966 maximum relay ticks, **129,972 B** heap peak (1,100 B margin), 5,640 B after
 open, 67 records, the echo hash and `SPIKE_OK`.
 
-## 7. Remaining R4 work
+The fifth checkpoint exercises all five emission forms in a source-authored
+scenario before and after package decode. It checks exact plan/hash/encoded
+byte equality, constant substitution, repeated writes to one field in authored
+order, metadata patching, fresh struct/scalar outputs, `nothing`, and identical
+journal records on both executions. Existing proof, annotation, type and
+runtime tests now consume the shared types directly.
+
+Fifth checkpoint gates: **1,091 workspace tests passed**, zero failures;
+fmt, workspace/all-targets/all-features clippy with warnings denied, cargo doc,
+diff checks and all three `no_std` targets pass. No dependency, package,
+Contract major, golden or witness identity changes. Cortex-M33 before/after
+retains 17,840 decode ticks, 2,713 average / 2,966 maximum relay ticks,
+**129,972 B** heap peak (1,100 B margin), 5,640 B after open, 67 records,
+the echo hash and `SPIKE_OK`.
+
+## 8. Remaining R4 work
 
 R4 remains open. The complete representation must still carry recursive
 Dispatch in the encoded plan, case route selections separate from physical

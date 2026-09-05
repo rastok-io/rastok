@@ -682,7 +682,7 @@ fn emission_type(
         Emission::Patch(fields) => {
             writes_type(fields, input.cloned(), input, expected, &mut require_input)
         }
-        Emission::Replace(fields) => {
+        Emission::FreshData(fields) => {
             let empty = StructType::new(Vec::new())
                 .map(DataType::Struct)
                 .map_err(|reason| PlanValidationError::InvalidDataType {
@@ -752,7 +752,7 @@ fn writes_type(
             continue;
         };
         let leaf_expected = expected.and_then(|ty| type_at_path(ty, path));
-        let Some(leaf) = expression_type(&field.expr, input, leaf_expected, require_input)? else {
+        let Some(leaf) = expression_type(&field.value, input, leaf_expected, require_input)? else {
             return Ok(None);
         };
         if path.is_empty() {
@@ -770,7 +770,7 @@ fn emission_preserves_payload(emission: &Emission) -> bool {
         Emission::Data(tree) => {
             matches!(&tree.root, expr::Expr::Path(path) if path.as_slice() == ["data"])
         }
-        Emission::Patch(fields) | Emission::Replace(fields) => {
+        Emission::Patch(fields) | Emission::FreshData(fields) => {
             // Match the runtime's whole-payload witness rule: metadata-only
             // patches preserve data, and a final whole-data `data = data`
             // write makes every earlier payload write dead. This is a type
@@ -782,7 +782,7 @@ fn emission_preserves_payload(emission: &Emission) -> bool {
                 return matches!(emission, Emission::Patch(_));
             };
             matches!(&last.target, WriteTarget::Data(path) if path.is_empty())
-                && matches!(&last.expr.root, expr::Expr::Path(path) if path.as_slice() == ["data"])
+                && matches!(&last.value.root, expr::Expr::Path(path) if path.as_slice() == ["data"])
         }
         Emission::Nothing => false,
     }

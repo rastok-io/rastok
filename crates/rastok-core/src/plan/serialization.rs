@@ -736,7 +736,7 @@ fn emission_tree(emission: &Emission) -> Cbor {
     match emission {
         Emission::Identity => Cbor::Array(vec![Cbor::Uint(1)]),
         Emission::Patch(writes) => Cbor::Array(vec![Cbor::Uint(2), writes_tree(writes)]),
-        Emission::Replace(writes) => Cbor::Array(vec![Cbor::Uint(3), writes_tree(writes)]),
+        Emission::FreshData(writes) => Cbor::Array(vec![Cbor::Uint(3), writes_tree(writes)]),
         Emission::Data(tree) => Cbor::Array(vec![Cbor::Uint(4), tree_tree(tree)]),
         Emission::Nothing => Cbor::Array(vec![Cbor::Uint(5)]),
     }
@@ -746,7 +746,7 @@ fn writes_tree(writes: &[FieldWrite]) -> Cbor {
     Cbor::Array(
         writes
             .iter()
-            .map(|write| Cbor::Array(vec![target_tree(&write.target), tree_tree(&write.expr)]))
+            .map(|write| Cbor::Array(vec![target_tree(&write.target), tree_tree(&write.value)]))
             .collect(),
     )
 }
@@ -1301,7 +1301,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                     // emission array at 5, its tag at 6.
                     Emission::Identity | Emission::Nothing => max = max.max(6),
                     Emission::Data(data) => tree(data, 7, &mut stack),
-                    Emission::Patch(writes) | Emission::Replace(writes) => {
+                    Emission::Patch(writes) | Emission::FreshData(writes) => {
                         max = max.max(6);
                         for write in writes {
                             // write pair at 7, target array and
@@ -1311,7 +1311,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                                 WriteTarget::Data(segments) if !segments.is_empty() => 10,
                                 _ => 9,
                             });
-                            tree(&write.expr, 9, &mut stack);
+                            tree(&write.value, 9, &mut stack);
                         }
                     }
                 },
@@ -2241,7 +2241,7 @@ fn emission_from(tree: &Cbor) -> Result<Emission, DecodeError> {
     match array_of(tree, "emission")? {
         [Cbor::Uint(1)] => Ok(Emission::Identity),
         [Cbor::Uint(2), writes] => Ok(Emission::Patch(writes_from(writes)?)),
-        [Cbor::Uint(3), writes] => Ok(Emission::Replace(writes_from(writes)?)),
+        [Cbor::Uint(3), writes] => Ok(Emission::FreshData(writes_from(writes)?)),
         [Cbor::Uint(4), tree] => Ok(Emission::Data(tree_from(tree)?)),
         [Cbor::Uint(5)] => Ok(Emission::Nothing),
         _ => Err(err("emission")),
@@ -2254,7 +2254,7 @@ fn writes_from(tree: &Cbor) -> Result<Vec<FieldWrite>, DecodeError> {
         .map(|entry| match array_of(entry, "write")? {
             [target, expr] => Ok(FieldWrite {
                 target: target_from(target)?,
-                expr: tree_from(expr)?,
+                value: tree_from(expr)?,
             }),
             _ => Err(err("write")),
         })
@@ -3651,23 +3651,23 @@ mod tests {
                         value: Emission::Patch(vec![
                             FieldWrite {
                                 target: WriteTarget::Data(vec![text("a"), text("b")]),
-                                expr: tree(expr),
+                                value: tree(expr),
                             },
                             FieldWrite {
                                 target: WriteTarget::App(text("m.dotted")),
-                                expr: tree(expr::Expr::Literal(Value::Null)),
+                                value: tree(expr::Expr::Literal(Value::Null)),
                             },
                             FieldWrite {
                                 target: WriteTarget::Ext(text("content_type")),
-                                expr: tree(expr::Expr::Literal(Value::Text(text("t")))),
+                                value: tree(expr::Expr::Literal(Value::Text(text("t")))),
                             },
                         ]),
                     },
                     Step::Emit {
                         port: port("out"),
-                        value: Emission::Replace(vec![FieldWrite {
+                        value: Emission::FreshData(vec![FieldWrite {
                             target: WriteTarget::Data(vec![]),
-                            expr: tree(expr::Expr::Literal(Value::Duration(5))),
+                            value: tree(expr::Expr::Literal(Value::Duration(5))),
                         }]),
                     },
                     Step::Stop,

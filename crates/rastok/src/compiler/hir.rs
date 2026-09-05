@@ -341,11 +341,10 @@ impl Handler {
     }
 }
 
-// HIR and core validation deliberately share one decision algebra. These
-// source-facing names preserve the existing lowering and identity vocabulary.
+// Core owns the checked decision and envelope-construction algebra.
 pub use crate::plan::{
-    ClosedArm, Dispatch, DispatchEmission as EmitValue, DispatchFieldWrite as FieldWrite,
-    DispatchStep as Statement, LoopCommand, MultiEmitValues, OpenArm,
+    ClosedArm, Dispatch, DispatchStep as Statement, Emission as EmitValue, FieldWrite, LoopCommand,
+    MultiEmitValues, OpenArm,
 };
 
 /// One desugared edge: a single source-to-target pair.

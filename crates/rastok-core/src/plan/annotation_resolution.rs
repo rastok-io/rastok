@@ -676,7 +676,7 @@ impl<'a> Solver<'a> {
             Emission::Identity => input.cloned().unwrap_or_default(),
             Emission::Data(tree) => data_policy::expression(tree, environment)
                 .map_err(|reason| ResolutionError { location, reason })?,
-            Emission::Patch(writes) | Emission::Replace(writes) => {
+            Emission::Patch(writes) | Emission::FreshData(writes) => {
                 let mut result = if matches!(emission, Emission::Patch(_)) {
                     input.cloned().unwrap_or_default()
                 } else {
@@ -684,7 +684,7 @@ impl<'a> Solver<'a> {
                 };
                 for write in writes {
                     let derived =
-                        data_policy::expression(&write.expr, environment).map_err(|reason| {
+                        data_policy::expression(&write.value, environment).map_err(|reason| {
                             ResolutionError {
                                 location: format!("handler {handler_index} field write"),
                                 reason,

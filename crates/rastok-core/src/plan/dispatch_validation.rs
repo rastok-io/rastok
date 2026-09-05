@@ -6,7 +6,7 @@ use alloc::string::{String, ToString};
 use core::fmt;
 
 use super::{
-    CasePartitionError, Dispatch, DispatchEmission, DispatchStep, LoopCommand, MAX_DISPATCH_DEPTH,
+    CasePartitionError, Dispatch, DispatchStep, Emission, LoopCommand, MAX_DISPATCH_DEPTH,
     MultiEmitValues, validate_case_partition,
 };
 use crate::datatype::{DataType, TaggedUnionType};
@@ -255,14 +255,14 @@ fn steps_at(
 }
 
 fn emission_at(
-    value: &DispatchEmission,
+    value: &Emission,
     signature: &Signature,
     path: &str,
 ) -> Result<(), DispatchValidationError> {
     match value {
-        DispatchEmission::Identity | DispatchEmission::Nothing => Ok(()),
-        DispatchEmission::Data(tree) => tree_at(tree, signature, path),
-        DispatchEmission::Patch(writes) | DispatchEmission::FreshData(writes) => {
+        Emission::Identity | Emission::Nothing => Ok(()),
+        Emission::Data(tree) => tree_at(tree, signature, path),
+        Emission::Patch(writes) | Emission::FreshData(writes) => {
             for (index, write) in writes.iter().enumerate() {
                 tree_at(&write.value, signature, &format!("{path}.writes[{index}]"))?;
             }

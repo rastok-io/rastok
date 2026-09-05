@@ -244,7 +244,9 @@ takes semantic priority; no public date overrides its R0–R9 exit gates.
   proofs, and the duplicate hosted conflict implementation is removed.
   Contract-derived Call profiles now replace the special-case Loop host test
   and check direct own-command routes for frame cardinality and repeat-safe
-  effects. Full Loop control and the single categorical v16 move remain
+  effects. One emission/write algebra also spans source checking, proofs,
+  transport and execution, without a second conversion model. Full Loop
+  control and the single categorical v16 move remain
   pending, as listed in
   [`rework-r4-plan.md`](docs/architecture/rework-r4-plan.md).
 - M1.9 is paused until R9. Its retained design implements the optional hosted

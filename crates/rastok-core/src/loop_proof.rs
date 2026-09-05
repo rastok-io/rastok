@@ -204,7 +204,7 @@ fn measured_update<'a>(emission: &'a Emission, measure: &[String]) -> Option<&'a
                 .then(|| expression_field(&tree.root, field_path))
                 .flatten()
         }
-        Emission::Patch(fields) | Emission::Replace(fields) => {
+        Emission::Patch(fields) | Emission::FreshData(fields) => {
             let (root, field_path) = measure.split_first()?;
             if root != "data" || field_path.is_empty() {
                 return None;
@@ -215,7 +215,7 @@ fn measured_update<'a>(emission: &'a Emission, measure: &[String]) -> Option<&'a
                     continue;
                 };
                 if path == field_path {
-                    selected = Some(&field.expr.root);
+                    selected = Some(&field.value.root);
                 } else if path.starts_with(field_path) || field_path.starts_with(path) {
                     // An ancestor replacement or descendant mutation changes
                     // the measured value through a form this fragment does
@@ -315,9 +315,9 @@ mod tests {
             guard: Some(tree(guard, DataType::Bool)),
             body: vec![Step::Emit {
                 port: node::Port::new("next").unwrap(),
-                value: Emission::Replace(vec![FieldWrite {
+                value: Emission::FreshData(vec![FieldWrite {
                     target: WriteTarget::Data(vec![String::from("n")]),
-                    expr: tree(after, DataType::INT),
+                    value: tree(after, DataType::INT),
                 }]),
             }],
         }
@@ -393,7 +393,7 @@ mod tests {
     fn the_last_effective_write_owns_the_measured_field() {
         let exact = |root| FieldWrite {
             target: WriteTarget::Data(vec![String::from("n")]),
-            expr: tree(root, DataType::INT),
+            value: tree(root, DataType::INT),
         };
         let handler = |writes| Handler {
             owner: HandlerOwner::Graph(OwnerSlot::new(0)),
@@ -401,7 +401,7 @@ mod tests {
             guard: Some(tree(positive_guard(), DataType::Bool)),
             body: vec![Step::Emit {
                 port: node::Port::new("next").unwrap(),
-                value: Emission::Replace(writes),
+                value: Emission::FreshData(writes),
             }],
         };
 

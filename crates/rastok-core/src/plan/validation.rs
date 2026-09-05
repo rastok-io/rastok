@@ -1019,8 +1019,8 @@ fn handler_logical_time_use(handler: &crate::plan::Handler) -> HandlerLogicalTim
             Step::Let { expr, .. } | Step::SetVar { expr, .. } => reads(expr),
             Step::Emit { value, .. } => match value {
                 Emission::Data(tree) => reads(tree),
-                Emission::Patch(writes) | Emission::Replace(writes) => {
-                    writes.iter().any(|write| reads(&write.expr))
+                Emission::Patch(writes) | Emission::FreshData(writes) => {
+                    writes.iter().any(|write| reads(&write.value))
                 }
                 Emission::Identity | Emission::Nothing => false,
             },
@@ -2097,10 +2097,10 @@ fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
                 Step::Emit { value, .. } => match value {
                     Emission::Identity | Emission::Nothing => {}
                     Emission::Data(tree) => tree_type_at(tree, location("data emission"))?,
-                    Emission::Patch(fields) | Emission::Replace(fields) => {
+                    Emission::Patch(fields) | Emission::FreshData(fields) => {
                         for (field_index, field) in fields.iter().enumerate() {
                             tree_type_at(
-                                &field.expr,
+                                &field.value,
                                 format!(
                                     "handler {handler_index} step {step_index} field {field_index}"
                                 ),
@@ -4030,10 +4030,10 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                             expr_canonical(&tree.root)?;
                             asset_indexes_bound(plan, &tree.root)?;
                         }
-                        Emission::Patch(writes) | Emission::Replace(writes) => {
+                        Emission::Patch(writes) | Emission::FreshData(writes) => {
                             for write in writes {
-                                expr_canonical(&write.expr.root)?;
-                                asset_indexes_bound(plan, &write.expr.root)?;
+                                expr_canonical(&write.value.root)?;
+                                asset_indexes_bound(plan, &write.value.root)?;
                                 meta_target_known(plan, &write.target)?;
                             }
                         }
@@ -4281,9 +4281,9 @@ fn validate_graph_handler(
                     Emission::Data(tree) => {
                         let _ = check_tree(tree, &signature)?;
                     }
-                    Emission::Patch(writes) | Emission::Replace(writes) => {
+                    Emission::Patch(writes) | Emission::FreshData(writes) => {
                         for write in writes {
-                            let _ = check_tree(&write.expr, &signature)?;
+                            let _ = check_tree(&write.value, &signature)?;
                             meta_target_known(plan, &write.target)?;
                         }
                     }
@@ -5209,7 +5209,7 @@ fn activation_presence(
 
 fn emission_meta_writes(emission: &Emission) -> MetaPresence {
     match emission {
-        Emission::Patch(writes) | Emission::Replace(writes) => writes
+        Emission::Patch(writes) | Emission::FreshData(writes) => writes
             .iter()
             .filter_map(|write| match &write.target {
                 crate::envelope::WriteTarget::App(field) => {
@@ -5228,8 +5228,8 @@ fn emission_meta_writes(emission: &Emission) -> MetaPresence {
 fn emission_expressions(emission: &Emission) -> Vec<&expr::Expr> {
     match emission {
         Emission::Data(tree) => alloc::vec![&tree.root],
-        Emission::Patch(writes) | Emission::Replace(writes) => {
-            writes.iter().map(|write| &write.expr.root).collect()
+        Emission::Patch(writes) | Emission::FreshData(writes) => {
+            writes.iter().map(|write| &write.value.root).collect()
         }
         Emission::Identity | Emission::Nothing => Vec::new(),
     }

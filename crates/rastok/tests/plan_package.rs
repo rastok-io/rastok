@@ -98,6 +98,94 @@ fn the_round_trip_preserves_the_plan_and_its_identity() {
 }
 
 #[test]
+fn every_emission_form_preserves_its_ordered_meaning_through_the_package() {
+    let source = r#"
+graph builders : App {
+  input in: struct { n: int }
+  output copied: struct { n: int }
+  output patched: struct { n: int }
+  output fresh: struct { n: int }
+  output scalar: int
+  output quiet: int
+  operator build {
+    input in: struct { n: int }
+    val bump = 2
+    on in {
+      copied = .
+      patched = { data.n = data.n + 1; data.n = data.n + bump; meta.app.mark = "patched" }
+      fresh = { n = data.n + bump }
+      scalar = data.n + bump
+      quiet = nothing
+    }
+  }
+  in -> build
+  build.copied -> copied
+  build.patched -> patched
+  build.fresh -> fresh
+  build.scalar -> scalar
+  build.quiet -> quiet
+}
+lab builders {
+  simulation construction on app {
+    scenario forms "all constructors cross the same package boundary" {
+      app.in = { n = 5 }
+      expect app.copied count == 1 where data.n == 5
+      expect app.patched count == 1 where data.n == 7 && meta.app.mark == "patched"
+      expect app.fresh count == 1 where data.n == 7
+      expect app.scalar count == 1 where data == 7
+      expect nothing app.quiet
+    }
+  }
+}
+"#;
+    let compilation = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let bytes = plan::encode(&compilation.plan, &compilation.hash);
+    let (decoded, hash) = plan::decode(&bytes).unwrap();
+    assert_eq!(decoded, compilation.plan);
+    assert_eq!(hash, compilation.hash);
+    assert_eq!(plan::encode(&decoded, &hash), bytes);
+
+    let emissions: Vec<_> = decoded.handlers[0]
+        .body
+        .iter()
+        .filter_map(|step| match step {
+            plan::Step::Emit { value, .. } => Some(value),
+            _ => None,
+        })
+        .collect();
+    assert!(matches!(
+        emissions.as_slice(),
+        [
+            plan::Emission::Identity,
+            plan::Emission::Patch(_),
+            plan::Emission::FreshData(_),
+            plan::Emission::Data(_),
+            plan::Emission::Nothing,
+        ]
+    ));
+
+    let original = rastok::lab::run(
+        &compilation.plan,
+        plan::GraphVersion(1),
+        &compilation.labs[0],
+    );
+    let restored = rastok::lab::run(&decoded, plan::GraphVersion(1), &compilation.labs[0]);
+    assert_eq!(original.len(), 1);
+    assert_eq!(restored.len(), 1);
+    assert!(
+        original[0].report.passed(),
+        "{:?}",
+        original[0].report.failures
+    );
+    assert!(
+        restored[0].report.passed(),
+        "{:?}",
+        restored[0].report.failures
+    );
+    assert_eq!(original[0].records, restored[0].records);
+}
+
+#[test]
 fn v15_retains_one_closed_loop_and_its_spatial_graph_semantics() {
     let (compiled, hash, bytes) = packaged_loop();
     let root = compiled.owners.first().expect("the root owner");

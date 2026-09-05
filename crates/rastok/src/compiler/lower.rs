@@ -781,7 +781,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                         },
                         HirStatement::Emit { port, value } => Step::Emit {
                             port: port.clone(),
-                            value: lower_emission(value, &subst),
+                            value: substitute_emission(value, &subst),
                         },
                         HirStatement::Stop => Step::Stop,
                         HirStatement::MultiEmit { .. } | HirStatement::LoopCommand(_) => {
@@ -932,7 +932,7 @@ fn lower_statement(statement: &HirStatement, subst: &impl Fn(&expr::Tree) -> exp
         },
         HirStatement::Emit { port, value } => Step::Emit {
             port: port.clone(),
-            value: lower_emission(value, subst),
+            value: substitute_emission(value, subst),
         },
         HirStatement::Stop => Step::Stop,
         HirStatement::MultiEmit { .. } | HirStatement::LoopCommand(_) => {
@@ -1002,33 +1002,32 @@ fn lower_instance(
     })
 }
 
-/// A checked instance policy whose runtime profile is not executable at the
-/// current M1.4 gate. V10 retains transport for every closed profile; lowering refuses
-/// before packaging until the corresponding scheduler rule exists.
+/// A checked source construct cannot be packaged for the selected execution
+/// model. Refusal precedes any externally visible effect.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LowerError {
-    /// Source owner whose checked policy cannot ship yet.
+    /// Source owner whose checked construct cannot ship yet.
     pub owner: String,
     /// Named missing transport/runtime gate.
     pub detail: &'static str,
 }
 
-fn lower_emission(value: &EmitValue, subst: &impl Fn(&expr::Tree) -> expr::Tree) -> Emission {
-    let writes = |fields: &[crate::compiler::hir::FieldWrite]| {
+fn substitute_emission(value: &Emission, subst: &impl Fn(&expr::Tree) -> expr::Tree) -> Emission {
+    let writes = |fields: &[FieldWrite]| {
         fields
             .iter()
             .map(|write| FieldWrite {
                 target: write.target.clone(),
-                expr: subst(&write.value),
+                value: subst(&write.value),
             })
             .collect()
     };
     match value {
-        EmitValue::Identity => Emission::Identity,
-        EmitValue::Patch(fields) => Emission::Patch(writes(fields)),
-        EmitValue::FreshData(fields) => Emission::Replace(writes(fields)),
-        EmitValue::Data(tree) => Emission::Data(subst(tree)),
-        EmitValue::Nothing => Emission::Nothing,
+        Emission::Identity => Emission::Identity,
+        Emission::Patch(fields) => Emission::Patch(writes(fields)),
+        Emission::FreshData(fields) => Emission::FreshData(writes(fields)),
+        Emission::Data(tree) => Emission::Data(subst(tree)),
+        Emission::Nothing => Emission::Nothing,
     }
 }
 

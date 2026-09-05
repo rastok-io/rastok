@@ -1,13 +1,12 @@
 //! Checked Operator decision algebra, shared by the source HIR and core proof.
 //!
-//! This is not an additional v15 execution path. The categorical v16 transport
-//! will carry this tree; v15 lowering continues to admit only its exact linear
-//! projection. Source spans and compiler inference state never enter the tree.
+//! Source spans and compiler inference state never enter the tree.
 
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use super::Emission;
 use crate::schema_annotation::AnnotationTable;
 use crate::{expr, node};
 
@@ -87,7 +86,7 @@ pub enum DispatchStep {
         /// The emission port.
         port: node::Port,
         /// What is emitted.
-        value: DispatchEmission,
+        value: Emission,
     },
     /// Ordered atomic production of several distinct envelopes.
     MultiEmit {
@@ -113,50 +112,18 @@ pub enum DispatchStep {
 #[derive(Debug, Clone, PartialEq)]
 pub enum MultiEmitValues {
     /// Evaluate once, then build one envelope for every target.
-    Broadcast(DispatchEmission),
+    Broadcast(Emission),
     /// Evaluate and pair values with targets from left to right.
-    Tuple(Vec<DispatchEmission>),
+    Tuple(Vec<Emission>),
 }
 
 /// Loop manager commands. They are neither ports nor spatial emissions.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LoopCommand {
     /// Supply the next entry envelope.
-    Next(DispatchEmission),
+    Next(Emission),
     /// Retain the current `Loop.state`.
     Again,
     /// Close without a business envelope.
     Done,
-}
-
-/// What an emission builds.
-#[derive(Debug, Clone, PartialEq)]
-pub enum DispatchEmission {
-    /// `.` — re-emit the input unchanged.
-    Identity,
-    /// The envelope form without a whole-`data` write — inherit the
-    /// input and patch the listed fields.
-    Patch(Vec<DispatchFieldWrite>),
-    /// A braced build whose data is FRESH — a pure record, or the
-    /// envelope form with a whole-`data` assignment (which may end
-    /// scalar: `{data = 1}`); heritable metadata stays the input's.
-    /// Lowered to the plan's `Replace`.
-    FreshData(Vec<DispatchFieldWrite>),
-    /// A computed value becoming the whole `data`.
-    Data(expr::Tree),
-    /// `nothing` — no emission on this port this transaction.
-    Nothing,
-}
-
-/// One writable field assignment inside an envelope builder. The
-/// RESOLVED target is what travels: the hash seals it canonically
-/// (D-2026-08-04-2 — `meta.flag` and `meta.app.flag` are one
-/// identity), and the as-written spelling lives only in the
-/// diagnostics' spans.
-#[derive(Debug, Clone, PartialEq)]
-pub struct DispatchFieldWrite {
-    /// The checked landing site — what the runtime executes.
-    pub target: crate::envelope::WriteTarget,
-    /// The compiled expression.
-    pub value: expr::Tree,
 }

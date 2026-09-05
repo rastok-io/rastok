@@ -1958,7 +1958,7 @@ graph attributed : App {
         })
         .expect("the join handler");
     let Step::Emit {
-        value: plan::Emission::Replace(writes),
+        value: plan::Emission::FreshData(writes),
         ..
     } = &mut pair.body[0]
     else {
