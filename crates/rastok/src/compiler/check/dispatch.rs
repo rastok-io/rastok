@@ -1210,6 +1210,32 @@ impl Checker<'_, '_> {
     }
 }
 
+/// Each selected leaf is a whole reply or explicit silence. Counting exits
+/// across sibling arms would invent a completion no execution can produce.
+pub(super) fn mock_completion_leaves_hold(dispatch: &Dispatch) -> bool {
+    match dispatch {
+        Dispatch::Linear(statements) => {
+            let mut last = None;
+            let mut exits = 0;
+            for (port, value) in statements.iter().flat_map(Statement::emissions) {
+                if !matches!(value, EmitValue::Nothing) {
+                    exits += usize::from(port.name() == "exit");
+                    last = Some(port);
+                }
+            }
+            last.is_none_or(|port| port.name() == "exit" && exits == 1)
+        }
+        Dispatch::ClosedMatch { arms, .. } => arms
+            .iter()
+            .all(|arm| mock_completion_leaves_hold(&arm.dispatch)),
+        Dispatch::OpenMatch { arms, fallback, .. } => {
+            arms.iter()
+                .all(|arm| mock_completion_leaves_hold(&arm.dispatch))
+                && mock_completion_leaves_hold(fallback)
+        }
+    }
+}
+
 pub(super) fn collect_hir_statements<'a>(
     dispatch: &'a Dispatch,
     statements: &mut Vec<&'a Statement>,

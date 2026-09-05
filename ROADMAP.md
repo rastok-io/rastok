@@ -250,7 +250,10 @@ takes semantic priority; no public date overrides its R0–R9 exit gates.
   conversion bridges are removed. `HandlerExecutor` prepares ordered
   emissions in scratch state, with broadcast evaluation once and tuple values
   in authored order. Raw-plan validation keeps the new statements behind the
-  v16 gate just like source lowering. Full recursive handler transport, Loop
+  v16 gate just like source lowering. The shared recursive decision selector
+  now executes Lab mocks, including pure prefixes and per-leaf atomic replies;
+  the Lab never enters the production package or its identity.
+  Full recursive handler transport, Loop
   control and the single categorical v16 move remain
   pending, as listed in
   [`rework-r4-plan.md`](docs/architecture/rework-r4-plan.md).

@@ -920,12 +920,16 @@ impl MockOutboundConnectorDriver {
         );
         let slot = runtime::DataSlot::new(request.data());
         for handler in &mock.handlers {
-            let Some((guard, body)) = handler.v15_linear_parts() else {
-                self.fault(format!(
-                    "a recursive mock Dispatch for `{}` reached the v15 Lab executor",
-                    intent.connector_path
-                ));
-                return None;
+            // Mock declarations retain their first-matching-filter protocol.
+            // Once a declaration wins, its Dispatch selects one whole reply.
+            let (guard, dispatch) = match handler.admission_guard.as_ref() {
+                Some(guard) => (Some(guard), &handler.dispatch),
+                None => handler
+                    .dispatch
+                    .filter_parts()
+                    .map_or((None, &handler.dispatch), |(predicate, branch)| {
+                        (Some(predicate), branch)
+                    }),
             };
             let passes = match guard {
                 None => true,
@@ -965,7 +969,28 @@ impl MockOutboundConnectorDriver {
             if !passes {
                 continue;
             }
-            return self.reply(body, request, env, &slot);
+            let selected = runtime::select_dispatch(
+                dispatch,
+                &runtime::LazyBindings {
+                    base: &env,
+                    data: &slot,
+                    assets: &[],
+                },
+            );
+            if let Some(fault) = slot.take_fault() {
+                self.fault(format!("the mock request is unreadable: {fault}"));
+                return None;
+            }
+            match selected {
+                Ok(selected) => {
+                    env.extend(selected.locals);
+                    return self.reply(selected.statements, request, env, &slot);
+                }
+                Err(error) => {
+                    self.fault(format!("the mock Dispatch faulted: {error}"));
+                    return None;
+                }
+            }
         }
         self.fault(format!(
             "no mock branch of `{}` matched the request; add a catch-all or script silence",
@@ -998,8 +1023,8 @@ impl MockOutboundConnectorDriver {
                     }
                 },
                 Statement::SetVar { .. } => {
-                    // The checker refuses vars on a mock's synthetic
-                    // node; nothing reaches here.
+                    self.fault(String::from("a mock cannot write instance state"));
+                    return None;
                 }
                 Statement::Emit { port, value } => {
                     match self.mock_data(value, request, &env, slot) {
@@ -1023,7 +1048,7 @@ impl MockOutboundConnectorDriver {
                 }
                 Statement::MultiEmit { .. } | Statement::LoopCommand(_) => {
                     self.fault(String::from(
-                        "an R3-only statement reached the v15 Lab executor",
+                        "a mock supports data replies, not multi-emission or manager commands",
                     ));
                     return None;
                 }
@@ -1269,6 +1294,63 @@ mod tests {
     }
 
     #[test]
+    fn nested_mock_dispatch_keeps_prefixes_and_opaque_payloads_lazy() {
+        let (outcome, faults) = opaque_answer(
+            r#"on in {
+              val current = meta.sys.graph_version == 1
+              match current {
+                false => nothing
+                true => {
+                  val copy = data
+                  match {
+                    meta.sys.graph_version == 1 => {
+                      out = copy
+                      exit = Exited { exit_code = 0, signal = null }
+                    }
+                    size(data) > 0 => {
+                      out = "must not decode"
+                      exit = Exited { exit_code = 1, signal = null }
+                    }
+                    _ => nothing
+                  }
+                }
+              }
+            }"#,
+        );
+        assert!(
+            faults.is_empty(),
+            "no losing arm forces the request: {faults:?}"
+        );
+        let completion = outcome.expect("the selected nested arm answered");
+        assert_eq!(completion.outputs().len(), 2);
+        assert!(matches!(&completion.outputs()[0].data,
+            Data::Encoded { bytes, .. } if bytes.as_slice() == b"\x01\x02"));
+    }
+
+    #[test]
+    fn a_faulting_nested_decision_does_not_fall_through_to_another_mock() {
+        let (outcome, faults) = opaque_answer(
+            r#"on in match meta.sys.graph_version == 1 {
+              false => nothing
+              true => match {
+                size(data) > 0 => {
+                  out = "unreachable"
+                  exit = Exited { exit_code = 0, signal = null }
+                }
+                _ => nothing
+              }
+            }
+            on in {
+              out = "must not fall through"
+              exit = Exited { exit_code = 0, signal = null }
+            }"#,
+        );
+        assert!(outcome.is_none());
+        assert_eq!(faults.len(), 1);
+        assert!(faults[0].contains("unreadable"), "{faults:?}");
+    }
+
+    #[test]
     fn a_mock_evaluates_the_whole_atomic_completion() {
         // An emission no longer returns from a mock branch: all drafts are
         // built before one atomic completion is handed to the dispatcher.
@@ -1351,6 +1433,39 @@ lab m0_probe {
             .into_iter()
             .map(|run| run.report)
             .collect()
+    }
+
+    #[test]
+    fn recursive_mock_dispatch_preserves_the_program_and_its_causal_run() {
+        let linear = r#"on in where data == "salut" {
+        out = "salut"
+        exit = Exited { exit_code = 0, signal = null }
+      }
+      on in {
+        out = .
+        exit = Exited { exit_code = 0, signal = null }
+      }"#;
+        let recursive = r#"on in match data == "salut" {
+        true => {
+          out = "salut"
+          exit = Exited { exit_code = 0, signal = null }
+        }
+        false => {
+          out = .
+          exit = Exited { exit_code = 0, signal = null }
+        }
+      }"#;
+        assert!(PROBE_WITH_LAB.contains(linear));
+        let replaced = PROBE_WITH_LAB.replace(linear, recursive);
+        let catalog = ContractCatalog::try_m0().unwrap();
+        let original = compile(&[PROBE_WITH_LAB], &catalog).unwrap();
+        let changed = compile(&[&replaced], &catalog).unwrap();
+        assert_eq!(original.hash, changed.hash);
+        assert_eq!(original.plan.plan(), changed.plan.plan());
+        let original_runs = run(&original.plan, GraphVersion(1), &original.labs[0]);
+        let changed_runs = run(&changed.plan, GraphVersion(1), &changed.labs[0]);
+        assert!(changed_runs.iter().all(|run| run.report.passed()));
+        assert_eq!(original_runs, changed_runs);
     }
 
     #[test]

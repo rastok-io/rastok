@@ -41,6 +41,24 @@ pub enum Dispatch {
 }
 
 impl Dispatch {
+    /// A consuming filter in its canonical decision form: one predicate,
+    /// no prefix, and an empty fallback. The accepted branch may be recursive.
+    #[must_use]
+    pub fn filter_parts(&self) -> Option<(&expr::Tree, &Self)> {
+        let Self::OpenMatch {
+            prefix,
+            arms,
+            fallback,
+        } = self
+        else {
+            return None;
+        };
+        if !prefix.is_empty() || arms.len() != 1 || !fallback.as_linear()?.is_empty() {
+            return None;
+        }
+        Some((&arms[0].predicate, &arms[0].dispatch))
+    }
+
     /// The statements of a linear leaf.
     #[must_use]
     pub fn as_linear(&self) -> Option<&[DispatchStep]> {

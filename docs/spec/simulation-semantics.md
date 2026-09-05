@@ -226,6 +226,15 @@ is `.` (`out = .`).
   its scenarios ; a scenario-level `mock` for the same Connector **replaces**
   it (per Connector, whole-mock replacement — no branch merging).
 - **First match in text order** ; a bare `on in { … }` is the catch-all.
+- A selected mock clause may use recursive closed/open `match` and pure
+  `val` prefixes. Only the selected path evaluates; a fault does not try a
+  later arm or mock clause. The canonical one-predicate/empty-fallback
+  filter keeps the same first-matching-clause semantics as `where`.
+  Each possible leaf is either explicit silence or a complete response with
+  exactly one final `exit`; exits from different arms are never added
+  together. This executable Lab syntax is not a v16 package feature: the Lab
+  never enters the production plan or its identity. Multi-emission and Loop
+  manager commands in mocks remain named deferrals.
 - **An uncovered outbound call fails the scenario, loudly** — a call reaching a
   mock with no matching branch, or a Connector with no mock at all, prints
   the request (node, key, digest, data) and fails. Wanting silence is

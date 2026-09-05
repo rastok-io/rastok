@@ -35,6 +35,9 @@ use core::fmt;
 pub use crate::datatype::{ConformanceReason, ConformanceViolation};
 pub use crate::value::ValueKind;
 
+mod dispatch;
+pub use dispatch::{DispatchSelection, select_dispatch};
+
 /// Pure, deterministic, budgeted guest execution — the contract the
 /// jq and SQL engines will implement; no engine ships in M0.
 pub trait GuestExecutor {

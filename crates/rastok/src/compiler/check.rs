@@ -1015,31 +1015,22 @@ impl Checker<'_, '_> {
                 if let Some(checked) = self.handler(handler, &signature, node, &BTreeMap::new()) {
                     let mut dispatch_statements = Vec::new();
                     collect_hir_statements(&checked.dispatch, &mut dispatch_statements);
-                    if checked.v15_linear_parts().is_none() {
+                    if dispatch_statements.iter().any(|statement| {
+                        matches!(
+                            statement,
+                            Statement::MultiEmit { .. } | Statement::LoopCommand(_)
+                        )
+                    }) {
                         self.deferred(
-                            "a recursive `match` Dispatch in a Lab mock before the v16 Lab executor",
+                            "multi-emission or a Loop manager command in a Lab mock",
                             handler.span,
                         );
                         continue;
                     }
-                    let emitted: Vec<_> = dispatch_statements
-                        .iter()
-                        .filter_map(|statement| match statement {
-                            Statement::Emit { port, value }
-                                if !matches!(value, EmitValue::Nothing) =>
-                            {
-                                Some(port)
-                            }
-                            _ => None,
-                        })
-                        .collect();
                     // A body with no actual output is the written silence and
                     // intentionally leaves the call open. Any answer is one
                     // whole completion: exactly one exit, last.
-                    if !emitted.is_empty()
-                        && (emitted.iter().filter(|port| port.name() == "exit").count() != 1
-                            || emitted.last().is_none_or(|port| port.name() != "exit"))
-                    {
+                    if !dispatch::mock_completion_leaves_hold(&checked.dispatch) {
                         self.bag.push(
                             Diagnostic::new(
                                 E_CONTRACT_REQUIRED,

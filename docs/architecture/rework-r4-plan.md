@@ -1,6 +1,6 @@
 # R4 — categorical plan and independent validation
 
-> **Status (2026-09-05): open, sixth representation checkpoint.** R3 is
+> **Status (2026-09-05): open, decision-execution checkpoint.** R3 is
 > committed separately from the paused M1.9 UI. The encoded package remains
 > **v15**; no v16 package, journal key, Contract major or golden is published
 > by this checkpoint. R4–R9 are not closed.
@@ -207,6 +207,35 @@ The handler container is still the v15 guard plus linear body. Replacing that
 container with recursive Dispatch, together with the other complete v16
 tables, remains below; shared instruction leaves alone do not close R4.
 
+### 6.2 Recursive decision execution, qualified through the Lab
+
+The core's pure `select_dispatch` now evaluates one path through the shared
+tree. Closed selection uses bool/enum/union tags without unwrapping the input;
+open predicates retain first-true source order. Pure prefixes are evaluated
+in sequence and scoped to the selected path. The result carries the chosen
+linear statements and their local bindings, not a committed effect. Depth is
+bounded without recursive evaluation; invalid prefixes, ambiguous/missing
+closed selections and non-boolean/faulting predicates refuse.
+
+The existing expression `Bindings` seam supplies payload provenance, assets
+and logical time. A carried payload remains a witness until a selected
+decision or statement demands it. No losing branch is evaluated or decoded.
+
+Lab mocks are the first executing consumer. Their clauses are Driver-script
+syntax outside the production package, so this does not publish a partial
+v16 shape. The existing first-matching mock filter protocol is preserved;
+after a clause wins, its recursive decision selects a whole atomic completion
+or written silence. The checker proves exactly one final exit **per possible
+reply leaf**, not by counting exits across mutually exclusive siblings. Faults
+never fall through to another arm or clause. Mock multi-emission and manager
+commands retain explicit source deferrals. This is execution evidence for the
+shared decision selector, not closure of application Dispatch transport or R6.
+
+The statement gate also closes a pre-existing check/run split: a linear mock
+containing `MultiEmit` passed the old linear-shape check, then faulted during
+simulation. A regression produces **no diagnostic** with that old gate and
+receives the named `E-CHECK-DEFERRED` with the statement capability check.
+
 ## 7. Evidence
 
 Seven core tests cover bool, enum and tagged union; unsupported/open domains;
@@ -307,6 +336,24 @@ intermediate binding lifetime extended through emission staging measured
 2,992 maximum ticks; releasing it after evaluation restored the margin without
 an extra cache or altered semantics. Linked `.text + .rodata` is 731,672 B,
 below 1 MiB. The final measurement prints `SPIKE_OK`.
+
+The decision-execution checkpoint adds twelve tests: seven core selector
+tests; a per-leaf mock-completion checker matrix; the unsupported mock
+multi-emission regression; and three Lab tests covering nested lazy prefixes,
+faults without fall-through, and an end-to-end recursive/linear mock twin.
+That twin preserves both the production semantic hash/plan and every causal
+record of the three scenarios, including timeout and filtered input.
+
+Decision-execution gates: **1,111 workspace tests passed**, zero failures;
+fmt, workspace/all-targets/all-features clippy with warnings denied, cargo doc,
+diff checks and all three `no_std` targets pass. No dependency, package,
+Contract major, golden or existing witness identity changes.
+
+Cortex-M33 retains 17,848 decode ticks, 2,710 average / 2,962 maximum relay
+ticks, **129,972 B** heap peak, 5,640 B after open, 67 records, the echo hash,
+and `SPIKE_OK`. Linked `.text + .rodata` is 731,656 B. The selector does not
+add a walk to an existing unannotated Operator firing; application Dispatch
+still requires the complete categorical transport below.
 
 ## 8. Remaining R4 work
 

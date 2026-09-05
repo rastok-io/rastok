@@ -69,8 +69,11 @@ The v15 lowering gate refuses case routes, manager commands, destination sets,
 new Executor Extensions, handlerless command-based Loop Graphs, non-projectable
 Dispatch and multi-emission. Exact linear/one-port-filter projections and
 ordinary mpsc source-set expansion may continue through v15 because they have
-an exact existing representation. Lab mock lowering refuses non-projectable
-Dispatch/statements rather than losing them.
+an exact existing representation. At R3, Lab mock lowering also refused
+non-projectable Dispatch/statements rather than losing them. The later R4
+execution checkpoint removes the mock decision gate with a shared core
+selector and per-leaf completion proof; application-plan transport remains
+gated. See [`rework-r4-plan.md`](rework-r4-plan.md).
 
 No package version, Contract major, causal record tag, journal key or semantic
 golden is changed here. The one parser-tree snapshot,

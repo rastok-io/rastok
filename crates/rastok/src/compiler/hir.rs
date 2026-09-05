@@ -325,19 +325,8 @@ impl Handler {
         if self.admission_guard.is_some() {
             return None;
         }
-        let Dispatch::OpenMatch {
-            prefix,
-            arms,
-            fallback,
-        } = &self.dispatch
-        else {
-            return None;
-        };
-        if !prefix.is_empty() || arms.len() != 1 || !fallback.as_linear()?.is_empty() {
-            return None;
-        }
-        let body = arms[0].dispatch.as_linear()?;
-        Some((Some(&arms[0].predicate), body))
+        let (predicate, branch) = self.dispatch.filter_parts()?;
+        Some((Some(predicate), branch.as_linear()?))
     }
 }
 

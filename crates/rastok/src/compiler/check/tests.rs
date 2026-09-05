@@ -29,6 +29,80 @@ fn check_clean(source: &str) -> Hir {
     hir.expect("an app graph")
 }
 
+#[test]
+fn mock_matches_validate_complete_replies_per_leaf() {
+    let reply = "out = \"ok\"; exit = Exited { exit_code = 0, signal = null }";
+    for (fallback, valid) in [
+        (reply, true),
+        ("nothing", true),
+        ("out = \"no exit\"", false),
+        (
+            "exit = Exited { exit_code = 0, signal = null }; out = \"too late\"",
+            false,
+        ),
+        (
+            "exit = Exited { exit_code = 0, signal = null }; exit = Exited { exit_code = 0, signal = null }",
+            false,
+        ),
+    ] {
+        let source = format!(
+            r#"
+{M0_PROBE}
+lab m0_probe {{
+  simulation s on app {{
+    mock echo {{
+      on in match data == "hello" {{
+        true => {{ {reply} }}
+        false => {{ {fallback} }}
+      }}
+    }}
+    scenario idle {{ app.in = {{ text = "hello" }} }}
+  }}
+}}
+"#
+        );
+        let (_, bag) = check_source(&source);
+        if valid {
+            assert!(!bag.has_errors(), "{:#?}", bag.diagnostics());
+        } else {
+            assert!(
+                diagnostic_codes(&bag).contains(&E_CONTRACT_REQUIRED),
+                "{:#?}",
+                bag.diagnostics()
+            );
+        }
+    }
+}
+
+#[test]
+fn a_mock_multi_emission_refuses_at_check_instead_of_faulting_during_simulation() {
+    let source = format!(
+        r#"
+{M0_PROBE}
+lab m0_probe {{
+  simulation s on app {{
+    mock echo {{
+      on in {{
+        (out, err) = "two frames"
+        exit = Exited {{ exit_code = 0, signal = null }}
+      }}
+    }}
+    scenario s {{ app.in = {{ text = "hello" }} }}
+  }}
+}}
+"#
+    );
+    let (_, bag) = check_source(&source);
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code() == E_CHECK_DEFERRED
+                && diagnostic.message().contains("multi-emission")),
+        "the unsupported mock statement must refuse before execution: {:#?}",
+        bag.diagnostics()
+    );
+}
+
 fn handler_body(handler: &Handler) -> &[Statement] {
     handler
         .v15_linear_parts()
