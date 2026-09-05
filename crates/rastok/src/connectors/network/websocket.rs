@@ -120,7 +120,7 @@ impl std::error::Error for WebSocketConfigError {}
 /// Statically linked hosted implementation of `rastok/websocket-client@1`.
 #[derive(Debug)]
 pub struct WebSocketClientFactory {
-    id: crate::connector::ConnectorId,
+    id: crate::connector::ContractId,
     config: WebSocketConfig,
 }
 
@@ -128,7 +128,7 @@ impl WebSocketClientFactory {
     /// Constructs a client factory without observing DNS or the network.
     pub fn try_new(config: WebSocketConfig) -> Result<Self, crate::connector::ConnectorIdError> {
         Ok(Self {
-            id: crate::connector::ConnectorId::parse(
+            id: crate::connector::ContractId::parse(
                 crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID,
             )?,
             config,
@@ -139,7 +139,7 @@ impl WebSocketClientFactory {
 /// Statically linked hosted implementation of `rastok/websocket-server@1`.
 #[derive(Debug)]
 pub struct WebSocketServerFactory {
-    id: crate::connector::ConnectorId,
+    id: crate::connector::ContractId,
     config: WebSocketConfig,
 }
 
@@ -147,7 +147,7 @@ impl WebSocketServerFactory {
     /// Constructs a server factory without opening a listener.
     pub fn try_new(config: WebSocketConfig) -> Result<Self, crate::connector::ConnectorIdError> {
         Ok(Self {
-            id: crate::connector::ConnectorId::parse(
+            id: crate::connector::ContractId::parse(
                 crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID,
             )?,
             config,
@@ -156,7 +156,7 @@ impl WebSocketServerFactory {
 }
 
 impl crate::connectors::ConnectorDriverFactory for WebSocketClientFactory {
-    fn connector_id(&self) -> &crate::connector::ConnectorId {
+    fn connector_id(&self) -> &crate::connector::ContractId {
         &self.id
     }
 
@@ -181,7 +181,7 @@ impl crate::connectors::ConnectorDriverFactory for WebSocketClientFactory {
 }
 
 impl crate::connectors::ConnectorDriverFactory for WebSocketServerFactory {
-    fn connector_id(&self) -> &crate::connector::ConnectorId {
+    fn connector_id(&self) -> &crate::connector::ContractId {
         &self.id
     }
 
@@ -516,7 +516,7 @@ impl<'plan> HostedWebSocket<'plan> {
         config: WebSocketConfig,
     ) -> Result<Self, String> {
         let id =
-            crate::connector::ConnectorId::parse(crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID)
+            crate::connector::ContractId::parse(crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID)
                 .map_err(|error| error.to_string())?;
         let protocol =
             WebSocketLabDriver::try_bind(plan, nodes, &id).map_err(|error| error.to_string())?;
@@ -552,7 +552,7 @@ impl<'plan> HostedWebSocket<'plan> {
         config: WebSocketConfig,
     ) -> Result<Self, String> {
         let id =
-            crate::connector::ConnectorId::parse(crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID)
+            crate::connector::ContractId::parse(crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID)
                 .map_err(|error| error.to_string())?;
         let protocol =
             WebSocketLabDriver::try_bind(plan, nodes, &id).map_err(|error| error.to_string())?;
@@ -3986,7 +3986,7 @@ graph websocket : App {
         .plan;
         let node = crate::node::Path::new(["socket"]).expect("the path is valid");
         let id =
-            crate::connector::ConnectorId::parse(crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID)
+            crate::connector::ContractId::parse(crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID)
                 .expect("the id is canonical");
         let binding = WebSocketLabDriver::try_bind(&plan, std::slice::from_ref(&node), &id)
             .expect("the protocol binds");

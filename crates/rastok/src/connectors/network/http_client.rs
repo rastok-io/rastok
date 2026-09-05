@@ -113,7 +113,7 @@ impl std::error::Error for HttpClientConfigError {}
 /// Statically linked hosted implementation of `rastok/http-client@1`.
 #[derive(Debug)]
 pub struct HttpClientFactory {
-    id: crate::connector::ConnectorId,
+    id: crate::connector::ContractId,
     config: HttpClientConfig,
 }
 
@@ -125,14 +125,14 @@ impl HttpClientFactory {
     /// The built-in Connector id ceased to be canonical.
     pub fn try_new(config: HttpClientConfig) -> Result<Self, crate::connector::ConnectorIdError> {
         Ok(Self {
-            id: crate::connector::ConnectorId::parse(crate::connector::HTTP_CLIENT_CONNECTOR_ID)?,
+            id: crate::connector::ContractId::parse(crate::connector::HTTP_CLIENT_CONNECTOR_ID)?,
             config,
         })
     }
 }
 
 impl crate::connectors::ConnectorDriverFactory for HttpClientFactory {
-    fn connector_id(&self) -> &crate::connector::ConnectorId {
+    fn connector_id(&self) -> &crate::connector::ContractId {
         &self.id
     }
 

@@ -1,6 +1,6 @@
 # Identity and canonical form
 
-> **Status: Normative — under review.** This document fixes the
+> **Status (2026-09-05): normative.** This document fixes the
 > **semantic identity** of a graph, the
 > **allocation of `graph_version`**, and the **canonical byte form** of
 > journal records.
@@ -60,6 +60,12 @@
 > and structural/tagged unions together. Decode re-derives the effective table
 > from the plan constraints and requires exact agreement with the transported
 > claim.
+>
+> D-2026-09-05-1 freezes the **conceptual v16 identity ledger** in §1.1.
+> Exact numeric package tags and append-only journal keys are allocated once
+> at R4, after source/HIR stabilization. Tables in §3 remain the exact landed
+> v15 registry until that allocation; they are historical input and no listed
+> key may be reused.
 
 ## 1. The semantic hash
 
@@ -86,13 +92,13 @@ trees) ; **the entire lab** (a lab never alters the
 production graph).
 
 **Sensitive to** : topology (the parent-linked Graph/Operator/Connector owner
-tree, scoped edges, ports, edge configs), resolved
+tree, scoped PhysicalEdges, RouteRules, ports, edge configs), resolved
 `instance.key` and `lifetime` attributes; owner `val` expressions and every
-effective Connector attribute's selected evaluation site; handlers, the order of statements inside
-a handler (`emission_index` = text order) and the order of ports in a
-join ; every Rastok expression (hashed as its canonical expression AST) ;
-resolved logical types and complete port tables, Connector contract ids and
-required roles, attributes,
+effective Connector attribute's selected evaluation site; Operator Dispatch,
+the order of linear statements (`emission_index` = source order), the order of
+ports in a join, and the order of open-match arms; every Rastok expression
+(hashed as its canonical expression AST); resolved logical types and complete
+port tables, Connector `ContractId` values and required roles, attributes,
 annotations, `variant` clauses ; `var` defaults
 (the recovery fold reads them) ; guest-language block bodies (opaque — raw bytes
 after common-indentation stripping) and the pinned guest language,
@@ -109,6 +115,9 @@ Rules :
   new `graph_version`; Wasm syntax remains out of scope here.
 - **No α-equivalence** : node names are `node_path`, hence id material —
   renaming a node is an identity change.
+- Extension order, closed-match arm order, source/destination-set order, and
+  explicit boundary spelling are erased before hashing. Ordered emissions and
+  open predicates are not.
 - Identity = canonical-form equality, nothing more ; semantic
   equivalence of different programs is out of scope.
 
@@ -414,6 +423,76 @@ three semantic witnesses above remain exact, and no causal trace moves.
 The additive A3.1 privacy registry uses the existing policy stream only for
 programs that write `@personal`; all earlier annotated witnesses remain exact.
 
+### 1.1 Plan v16 target ledger
+
+Plan v16 is one categorical move, not a sequence of partially readable
+packages. R4 allocates its exact tags only after R3 stabilizes the source/HIR
+algebra. The movement set is:
+
+- `ExtensionSpec` replaces active Aspect transport; historical tags and
+  `rastok.aspects.r1` keep their old meaning;
+- recursive `Dispatch` replaces a flat handler body;
+- `RouteRule` and canonical disposition sets are distinct from
+  `PhysicalEdge`;
+- manager-command destinations and Loop r2 Produced/Consumed facts;
+- exact `OpeningAdmissionRef`, `LoopRunRef`, and routed LoopContext;
+- productibility evidence re-derived by the validator;
+- executable ordered multi-emission;
+- removal of Graph handlers, `ChildPort`, old Loop `next` port,
+  `RootSink`, `UnwiredPolicy`, and the contract `unwired` field;
+- the Contracts of six standard Connectors move from `@1` to `@2` because their
+  production/cardinality/terminal/effect-stage contracts change.
+
+The owner table, OwnerPath, envelope/value/DataType registries, three causal
+record kinds, instance/lifetime/Closing identities, roles, exchange kinds,
+Connector `behavior`, and existing timer meanings remain. `node::Type`
+was not transported and therefore has no wire tag to remove.
+
+Canonicalization rules:
+
+- Extension lists, closed-match arms, source sets, destination sets, and each
+  RouteRule disposition set are sorted and duplicate-free;
+- open-match predicates, linear statements, join ports, and multi-emission
+  targets retain source order;
+- explicit current-boundary names and removed dot sugar must produce the same
+  HIR bytes;
+- manager commands and physical deliveries inhabit distinct identity domains;
+- `CommandProduced` and `CommandConsumed` are distinct append-only facts;
+- no retired tag, key, or domain is assigned another meaning.
+
+R3 checks these identities before a v16 package exists. Its additive HIR
+streams are `rastok.dispatch.r1` for decisions outside the exact v15 linear
+projection, `rastok.routing.r1` for case selection and manager destinations,
+and `rastok.loop.r2` for command-based Loop owners, their entry, terminals,
+fuel, delay, and authored measure/invariant. Ordinary unconditional fan-out
+keeps the existing edge stream: writing a destination set or its separate
+arrows has the same identity. Universal destinations are merged into each
+case row, and case/destination order is canonical. Changing a case's target
+or a command kind changes the hash even when physical edges are identical.
+Historical v15 Loop Graphs keep their old stream during staged migration.
+These HIR streams allocate no plan tag or journal key; R3 refuses to package
+new routing, multi-emission, recursive Dispatch, or command-based Loop in v15.
+
+The re-bless set is determined before R4. All package containers move
+categorically. Semantic hashes move only for programs affected by the new
+meaning. Causal goldens move only when they exercise changed facts. These are
+the exact pre-bump baselines used to prove the scope:
+
+| Witness | Semantic hash | v15 body size |
+|---|---|---:|
+| echo / Cortex-M33 semantic witness | `e50026eeb0b8dc77fe2f5e52de6dfaa33b50cc351211cd87c21081d28aa43709` | 988 B |
+| JSONL Process witness | `036f7ea5346fac883a3bad155fbdf41b303f6e54bef93f8c850ff5f138f769de` | 1,032 B |
+| connector-free gauge | `0d3ad43d9fb09c8626146342f6a50d1f4c387a8de52a47a3134a408cf74cb22e` | 323 B |
+
+Whether the two Process witnesses can remain semantically identical despite
+the required Contract `@2` move is an R4 test, not an assumption: the Contract
+id is semantic identity, so they are expected to move. The connector-free
+gauge must remain byte-identical semantically; only its package container
+version/checksum changes.
+
+The complete pre-allocation register and re-bless protocol are in
+[rework-r0-identity.md](../architecture/rework-r0-identity.md).
+
 ## 2. `graph_version` and the manifest
 
 `meta.sys.graph_version` is a small integer. It is a
@@ -469,6 +548,12 @@ a package reader and does not rewrite old records. Plan-package v6→v7 is
 a separate categorical transport change (D-2026-08-14-1).
 
 ## 3. The canonical record form
+
+The tables in this section are the exact **landed v15** form. V16 extends them
+only through the R4 allocation described in §1.1: old key 53 and its r1
+subtags remain historical, while Loop r2 receives new append-only
+Produced/Consumed/Admit/Close/Expired facts and exact opening/context
+references. Reading this section must never reinterpret r1 bytes as r2.
 
 Two byte formats exist and are never the same object : the **durable
 journal encoding** (free to evolve) and the **canonical form**
@@ -558,13 +643,14 @@ causal record.
 | 27 | source_connector_path | array | lexical UTF-8 path segments of the inbound Connector whose output introduced this root. Omitted exactly for an explicit App-boundary injection. Derived from the proposal's single `InboundEnvelopeProvenance` authority at acceptance; its presence and structural spelling are the replay-routing fact. |
 | 28 | inbound_call | array | present exactly when this Connector-origin root opens an inbound Call: `[inbound_call_ref (bytes16), source_instance_ref]`. The reference is the root id behind a direction-specific type; the instance is selected and reserved before this same INBOUND commit. Omitted for Event, Session and App-boundary facts. |
 
-**TRANSACTION** (kind 2 — one Node firing or one Graph-owner lifecycle fact;
+**TRANSACTION** (kind 2 — one Executor/manager firing or one controller-owned
+Node lifecycle fact;
 the commit packet of
 execution-model §1) — keys `30–39` and `48–54`:
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
-| 30 | owner_path | text | the firing Node or lifecycle owner, root-relative. Ordinary Node transactions keep their former path bytes; Graph `l:start`/`l:stop` use the Graph owner path, including empty text for the root App Graph. |
+| 30 | owner_path | text | the firing Executor/manager or lifecycle owner, root-relative. Graph `l:start`/`l:stop` use the Graph owner path, including empty text for the root App Graph; this does not make Graph an application executor. |
 | 31 | instance_ref | array | `[instance_address (bytes), generation (uint)]`, mandatory for every firing; generation is the zero-based journal-derived `l:start` ordinal for that address |
 | 32 | trigger | text | namespaced `p:<port>` / `l:<lifecycle>` (envelope.md §3 ; closed `l:` registry) |
 | 33 | consumed | array | the consumed input **positions** — each a fixed tuple `[edge (text), source_instance_ref, seq (uint)]` (the cursor key, delivery-semantics §2 — per `(graph-edge × source instance reference)`, NOT per port: several edges feed one port, so `(port, seq)` is not injective); **array sorted by canonical `(edge, source_instance_ref, seq)`** |
@@ -725,7 +811,8 @@ cannot diverge on bytes for the same journal :
   belongs to the firing Node instance at key 31 and is self-describing via the
   `type_tag` registry above. No owner qualifier is needed because mutable
   state cannot cross a Node boundary.
-- **`loop_fact` (TX key 53)** is the sole run-state authority. A
+- **Historical v15 `loop_fact` (TX key 53)** is the sole r1 run-state
+  authority for v15 packages. A
   `LoopRunRef` is `derive(0x13, instance_address ‖ generation_u64_le ‖
   external_root_id)`. An immediate re-entry envelope id is
   `derive(0x05, loop_run_ref ‖ iteration_u64_le ‖ selected_next_id)`; its
@@ -737,7 +824,8 @@ cannot diverge on bytes for the same journal :
   mutable counter or arrival order is sealed. A delayed re-entry retains its
   scheduler due instant outside the canonical key-53 array and seals
   `(5, reentry_envelope_id)` in key 37, so recovery can re-arm the same
-  obligation without changing causal identity.
+  obligation without changing causal identity. V16 does not extend or reuse
+  this shape; the r2 ledger in §1.1 receives newly allocated fields at R4.
 - **`app_meta` values (spine key 9)** : each triple's third element is
   a `tagged_value` (per the registry above).
 - **`timers` (TX key 37)** = tuples `[timer_kind (uint), ref (bytes 16)]`,

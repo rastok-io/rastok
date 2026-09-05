@@ -1,475 +1,421 @@
 # Loop — finite temporal recursion
 
-> **Status: normative and executable through M1.7 L7.** Fuel-bounded and
-> directly ranked `Loop`s cross source, checked HIR and categorical v14,
-> retained unchanged by v15, with
-> their exact boundary and ordinary Graph-owned
-> handlers. Registry-free validation re-derives the contract, finite progress
-> decision and proof certificate after decode. The VM
-> executes a root Loop whose traversal lives in Graph-owned handlers and the
-> flattened finite DAG of ordinary nested Graphs, including handlers of direct
-> child outputs, with or without `Loop.delay`, under the ordinary instance
-> lifetime profiles. Direct Graph-boundary terminal
-> producers, nested Loop owners, spatial Worker recovery and explicit `stop`
-> remain named, fail-closed composition gates. No accepted program silently
-> executes as an ordinary Graph.
+> **Status (2026-09-05): normative target for categorical plan v16.**
+> The v15 Graph-handler implementation is historical and is superseded by
+> D-2026-09-05-1. R0–R2 specify this contract; source and runtime support begin
+> at R3. Until then, unsupported v16 forms must fail closed.
 
-`Loop` applies one Graph repeatedly to an immutable iteration-state envelope.
-It is finite temporal recursion, not a spatial cycle:
+`Loop` is a temporal Extension which applies one finite host application,
+then either terminates or re-enters the same host input. Recurrence is a
+journal-derived manager transition, never an edge in the spatial DAG.
 
-```text
-external in ──▶ body ──▶ result / exit / stop    terminal
-                    └──▶ next ─┐
-                         l:next│
-                    in ◀───────┘
-```
+## 1. Contract at a glance
 
-The declared topology remains a DAG. `next` commits a dated or immediate
-`l:next` fact and re-enters the same Loop run; it is never a graph edge.
+A Loop Node has:
 
-M1.7 admits `Loop` on a **Graph only**. Pure Operator work and Connector calls
-remain ordinary children of that Graph. This is not a loss of expressivity:
-it gives every Loop one boundary, one state type and one totality proof instead
-of three carrier-specific protocols. Direct `Operator + Loop` and
-`ConnectorType + Loop` are named later gates.
+- the host's existing input and outputs;
+- qualified attributes `Loop.fuel`, `Loop.delay`, `Loop.measure`,
+  `Loop.entry`, and `Loop.terminal`;
+- the immutable binding `Loop.state`;
+- three qualified manager commands: `Loop.next`, `Loop.again`, and
+  `Loop.done`;
+- one contributed output, `Loop.expired`.
 
-## 1. Boundary contract
-
-A Loop Graph has exactly one input, `in`, two aspect-owned outputs, and any
-number of ordinary terminal outputs chosen by its domain:
-
-| Port | Direction | Contract |
-|---|---|---|
-| `in` | input | state envelope for the current iteration |
-| `next` | output owned by Loop | next state; its logical type is exactly the type of `in` |
-| any ordinary output (`out`, `exit`, `declined`, …) | output | terminal business result or observation |
-| `expired` | output owned by Loop | `LoopExpired { last_state: In }` |
-
-`next` and `expired` are contributed by the aspect and become ordinary typed
-plan ports after checking. They cannot be redeclared with another direction or
-type. User code may emit `next`; `expired` is manager-produced only. `in`
-remains an ordinary Graph boundary declaration so its type stays visible, but
-no second Graph input is admitted: another asynchronous stimulus belongs on
-an ordinary child Connector and must still lead to one proved verdict.
-`out` has no privileged Loop meaning: when declared, it is one terminal output
-among the Graph's ordinary outputs.
-
-Every completed iteration must make **exactly one progress decision**:
+Commands are not ports. They have no `PhysicalEdge`, cannot be a source, and
+do not reserve the host input while a delay is pending. The manager is neither
+a Node nor a participant in the spatial DAG.
 
 ```text
-continue:  exactly one next(state), no ordinary output, no stop
-terminate: no next, at least one ordinary output and/or stop
+opening delivery -> host application -> exactly one verdict
+                                      |
+                Done / Stopped ------+----> close run
+                Next / Again --------+----> manager command
+                                                |
+                                         optional delay
+                                                |
+                                  journalled temporal re-admission
+                                                |
+                                         same host input
 ```
 
-L3 proves this over all reachable handler paths. Silence, repeated `next`,
-more than one terminal transaction, or continuation mixed with termination
-is rejected. Registry-free validation repeats the same proof after decode as
-defense against a forged or corrupted plan; the runtime never guesses a
-decision from scheduler order. A single terminal transaction may emit several
-ordinary outputs atomically. If an application needs a single result sum, it
-may still use one tagged-union `out`; Loop does not require it.
+## 2. Hosts
 
-Bare `stop` is a stronger terminal decision: it closes the current Loop owner
-instance, so every run in that instance follows the ordinary Closing protocol.
-It is not merely a private return from one run. A run that should finish while
-leaving sibling runs alive emits an ordinary terminal output instead. If the
-owner subtree can hold an outbound call, writing `stop` also makes the existing
-`closing = { drain_for; settle_for }` policy required; no grace period is
-invented silently.
+Eligibility is derived from the resolved application profile in the Connector's Contract,
+profile, not a source-facing contract name.
 
-`next` is an aspect-owned control port. It may be connected only to the Loop
-manager selected by the checker; source wiring to or from it is rejected. The
-`expired` port is ordinary after contribution and follows the usual wiring and
-root-sink policy.
+| Host | v16 |
+|---|---|
+| Operator | admitted |
+| Graph | admitted |
+| finite outbound Connector Call | admitted |
+| Event, Session, inbound Call | `E-LOOP-HOST` |
+| Process service profile | `E-LOOP-HOST` |
 
-## 2. Surface
+The initial standard outbound Call hosts are Process job, File, and
+HttpClient. A Connector's Contract must transport a closed finite profile before
+it can host Loop.
 
-Aspect-owned attributes use their canonical qualified spelling. The prefix is
-not optional: qualification keeps aspect composition local and prevents a
-future `Saga.fuel` or Connector `delay` from changing meaning.
+A Graph remains a structural scope. Its Loop manager observes causal work in
+the contained Executors; the Graph gains no handler, application mailbox,
+mutable application state, or application transaction. Generic lifecycle
+records attributed to a Graph remain valid.
 
-| Attribute | Phase and type | Presence |
-|---|---|---|
-| `Loop.fuel` | positive plan-constant integer | optional when `Loop.measure` is independently proved; when both exist, this is the operational cap |
-| `Loop.delay` | closed plan-constant delay policy | optional; absence means immediate re-entry |
-| `Loop.invariant` | boolean theorem expression | optional with `Loop.measure`; L6 admits absence or literal `true` and refuses every richer claim |
-| `Loop.measure` | signed-integer ranking expression | optional termination witness; L6 admits a direct path rooted at iteration `data` |
-| `Loop.jitter` | deterministic delay policy | reserved and rejected by name |
+## 3. Entry and run identity
 
-The closed delay forms are:
+The recurrent entry is resolved in this order:
 
-```rastok
-Loop.delay = {
-  kind  = fixed
-  after = duration("100ms")
-}
+1. the sole input, when exactly one exists;
+2. the input named `in`, when it is unique;
+3. the input named by `Loop.entry`;
+4. otherwise `E-LOOP-ENTRY`.
 
-Loop.delay = {
-  kind    = exponential
-  first   = duration("100ms")
-  ceiling = duration("5s")
-}
-```
+`Loop.entry` must name an input and is rejected when it would contradict a
+unique derived entry.
 
-All durations are positive plan constants. For the `k`th re-entry, where
-`k >= 1`, exponential delay is:
+Every external admission to the entry starts a distinct run. Re-admission
+carrying an existing recurrence reference continues that run. The stable
+identity is:
 
 ```text
-min(ceiling, first * 2^(k - 1))
+LoopRunRef =
+  derive(rastok.loop.r2,
+         InstanceRef,
+         OpeningAdmissionRef)
 ```
 
-Arithmetic saturates safely at `ceiling`. Delay changes only the admission
-date of `next`; it does not add fuel, extend a Connector timeout or alter the
-instance lifetime.
+`OpeningAdmissionRef` is the exact admitted delivery/cursor occurrence, not
+only `origin_id`. This distinction permits two fan-out deliveries from one
+business origin to open two runs in the same keyed instance without collision.
 
-The following former spellings are removed rather than aliased:
-`Loop.variant`, `Loop.backoff`, `initial`, `source`, `value`, `until`,
-`limit`, `max_steps`, and `Loop.decreases`. Each receives one migration
-diagnostic to `Loop.fuel`, `Loop.delay`, or `Loop.measure` as appropriate.
+Every run carries an explicit `LoopContext` containing at least owner,
+run, iteration, and opening admission. Spatial routes within a Loop Graph
+preserve it; leaving the Graph pops it; a nested Loop pushes another context.
+A join may combine candidates for Loop control only when they carry the same
+context. An unrelated delivery to the same instance cannot advance a run.
 
-## 3. Iteration state
+Several runs may coexist in one instance. Their Loop state, fuel, wake-up, and
+pending command are separate; ordinary owner `var` state remains shared and
+observes normal deterministic instance serialization.
 
-At every iteration, `data` is the current input payload. The read-only binding
-`Loop.state` preserves the complete entry envelope even if a handler later
-works with another envelope:
+## 4. Loop.state
+
+`Loop.state` is the complete envelope admitted at the beginning of the
+current application. It is immutable and bound to one `LoopRunRef`.
+
+It is visible:
+
+- in a Loop Operator's application Dispatch;
+- in Executors reached inside a Loop Graph while the same context is active;
+- in the core-owned transition of a Loop Connector Call.
+
+A nested Loop masks the outer binding. Explicit access to an outer Loop state
+is deferred. Instance lifecycle handlers `on start` and `on stop` are not
+Loop applications and cannot read `Loop.state` or issue Loop commands.
+
+## 5. Commands and durable acceptance
+
+| Command | Operator form | routed form | Meaning |
+|---|---|---|---|
+| Next | `Loop.next = value` | `source -> Loop.next` | use the produced envelope as the next state |
+| Again | `Loop.again` | `source -> Loop.again` | retain `Loop.state`; routed value is only the cause |
+| Done | `Loop.done` | `source -> Loop.done` | close the run without a business envelope |
+
+Next data must be assignable to the resolved entry type. It creates an
+envelope by the ordinary propagation rule. Again accepts any causal source
+because it retains the previous state. Done is Control.
+
+A manager has a bounded, one-verdict-per-iteration command inbox. Acceptance
+uses two journal facts:
 
 ```text
-Loop.state.data
-Loop.state.meta
+CommandProduced  -- in the producer's atomic transaction
+CommandConsumed  -- in a later manager transaction
 ```
 
-That is the only Loop-specific expression binding. There is no separate
-`initial`, `value`, attempt variable or writable Loop state. User `var` cells
-remain private to their declaring Node and follow the ordinary instance rules.
+Pending commands are re-derived as Produced minus Consumed. This split is
+mandatory: a crash after the producer commits but before the manager runs must
+neither lose the command nor replay the producer transaction.
 
-One external root envelope opens one **Loop run**. Its `LoopRunRef` is derived
-from that root envelope identity. The run carries its own fuel, iteration
-ordinal and pending wakeup. Several runs may coexist in one keyed Graph
-instance and may interleave while one is delayed; mailbox serialization still
-makes each committed Graph transaction atomic.
+Direct commands and routed commands have distinct canonical command-source
+identities. Both include run, iteration, kind, and exact causal source.
+Commands are destinations for routing and capacity accounting, but never
+`PhysicalEdge` endpoints.
 
-An iteration does not create a new instance generation. Instance generation
-belongs to `l:start`/`l:stop`; Loop progress belongs to the `LoopRunRef` and
-its zero-based iteration ordinal.
+## 6. Terminal outputs
 
-## 4. Fuel and exhaustion
+`Loop.terminal` names host outputs whose emission supplies the implicit Done
+verdict:
 
-`Loop.fuel = N` bounds **body applications**, not re-entries. Its operational
-meaning is exact:
+- one ordinary output: that output is the default;
+- several ordinary outputs: an explicit closed list is required;
+- no ordinary output: terminal paths must issue `Loop.done`;
+- Connector Call: the Contract terminal exit owns application completion and
+  `Loop.terminal` is inapplicable.
+
+The resolved list is transported canonically. Every named item must be an
+output of the owner. An empty, duplicate, input, command, or
+`Loop.expired` entry is `E-LOOP-TERMINAL`.
+
+Non-terminal outputs are frames. They may coexist with Next or Again.
+Several terminal outputs emitted by one atomic transaction coalesce into one
+Done verdict; they do not count as multiple verdicts.
+
+## 7. Verdict and quiescence
+
+Every application selects exactly one:
 
 ```text
-run(0, state) = expired(LoopExpired { last_state = state })
+Next(state') | Again | Done | Stopped
+```
 
+Done comes from a terminal output, `Loop.done`, or an unredirected terminal
+Connector exit. Stopped comes from `stop` and closes the instance.
+`nothing` is only an explicit output disposition and is never a verdict.
+
+No verdict at quiescence is `LoopNoVerdict`. Competing commands, command plus
+terminal output, or command plus stop are `LoopProtocolViolation`. When the
+validated Dispatch/routes prove such a path, checking rejects it as
+`E-LOOP-CONTROL`.
+
+A produced command may wait before application quiescence. The manager
+consumes it only after all obligations with the same run context have closed:
+internal deliveries, application transactions, Calls, timers, and descendant
+commands. Work for another run does not block it. No application overlaps the
+next application of the same run.
+
+Host completion is:
+
+| Host | Completion |
+|---|---|
+| Operator | commit of the entry Dispatch transaction |
+| Graph | causal quiescence of the contained subgraph |
+| Connector Call | exactly one terminal exit after all frames and Call closure |
+
+## 8. Fuel and expiry
+
+`Loop.fuel = N` is a positive plan integer and permits at most N
+applications, the first included:
+
+```text
+run(0, state) = Expired(state)
 run(N + 1, state) =
-  body(state) then
-    terminal(outputs and/or stop) -> terminal
-    next(state')                  -> run(N, state')
+  application(state), then
+    Done | Stopped -> close
+    Next(next)     -> run(N, next)
+    Again          -> run(N, state)
 ```
 
-Consequently, if the last permitted body application emits `next`, the
-manager does **not** commit an `l:next`. It emits
-`LoopExpired { last_state = state' }`: the proposed next state is the most
-truthful terminal observation.
-
-Fuel is derived from the committed Loop fold, never from a mutable RAM counter.
-Recovery cannot regain an application. Duplicate or stale wakeups cannot spend
-fuel twice.
-
-For a proved Loop without explicit fuel, the manager evaluates the checked
-measure once against the immutable root input and derives the internal body
-budget `max(measure, 0) + 1`. This budget is an execution carrier, not a second
-termination claim and not source identity: the certificate has already proved
-that each recurrent decision decreases the measure while it is positive. When
-both witnesses are present, explicit `Loop.fuel` wins as the deliberate
-operational cap.
-
-L4 records one closed, extend-only fact in transaction key 53:
-
-```text
-Open    (run, instance, root, fuel, state₀)
-Next    (run, iteration, remaining, selected-next, stateₙ)
-Admit   (run, iteration)
-Close   (run, iteration)
-Expired (run, iteration, selected-next, LoopExpired envelope)
-```
-
-`Open` is unique for a run. `Next` must advance the ordinal by exactly one and
-reduce remaining fuel by exactly one; its re-entry envelope is derived from
-the selected `next` emission. `Admit` is the exactly-once temporal crossing
-which makes that state eligible for one body application; it carries no user
-emission or mutable state. `Close` and `Expired` are terminal and reject any
-later progress. The complete live projection is a fold over these facts, not a
-second authority. A journal implementation may maintain a replay-derived
-index of that projection, provided a fresh fold produces the same state. On a
-fresh Worker boot, open direct-body runs rebuild their disposable execution
-work from that projection; the journal remains the only source of the current
-state, ordinal and fuel.
-
-Fuel proves a finite number of iterations. It does not prove that one
-iteration returns. Every admitted body must therefore be total under its own
-contract:
-
-- pure Rastok expressions are total or fault the transaction;
-- an outbound Call has a positive finite `timeout`;
-- a guest execution has its declared finite budget;
-- an open-ended Event or Session wait is rejected from the M1.7 body.
-
-## 5. Delay and causal history
-
-Immediate and delayed recurrence use the same pair of journal facts. After a
-committed `next(state')`, `Next` records:
-
-- the current `LoopRunRef`;
-- the next iteration ordinal;
-- the remaining fuel;
-- `state'` as the re-entry envelope;
-- the `next` emission as causal parent;
-- the due date as a persisted non-causal scheduler annotation when
-  `Loop.delay` is present.
-
-Canonical key 53 keeps the same `next` array in both cases. A delayed
-transaction seals timer tuple `(5, reentry-envelope-id)` in key 37; the due
-instant remains outside semantic identity but is returned by the journal's
-Loop fold so recovery can re-arm it. Lab time advances only through `advance`;
-production maps its hosted time source to the same generic dated-event queue.
-Equal input facts and equal virtual time therefore produce the same causal
-core.
-
-When the date is due (or immediately when no delay exists), `Admit` is the
-`l:next` transaction. It selects the body's ordinary spatial routes from the
-recorded state, proves bounded mailbox capacity, commits those routes, and only
-then makes the deliveries visible. Capacity is never held while a delay is
-pending. Direct Graph handlers use the same empty-route admission, so there is
-one recurrence protocol rather than a direct-body fast path with different
-semantics.
-
-A direct child output may activate one Graph-owned handler only after the
-child's producer transaction commits. The handler's decision must remain in
-the current iteration state's causal lineage. This supports bounded outbound
-Calls: their own timeout first publishes the typed `exit` which chooses
-`next`; `Loop.delay` is armed from that later decision and cannot alter the
-Call deadline.
-
-A pending Loop wakeup is scoped to the current instance generation. It is an
-armed obligation, but it does not postpone the independent `idle`, `fixed` or
-`tumbling` deadline. If such a deadline wins, the owner enters Closing and the
-still-dated wakeup becomes stale; it cannot open work in a successor
-generation. A wakeup already admitted before Closing may drain until the
-closing drain deadline. A Loop wakeup is not a Connector call and owes no
-invocation `exit`.
-
-## 6. Termination witnesses
-
-An admitted Loop has at least one termination witness:
-
-| `Loop.fuel` | discharged `Loop.measure` | Admission |
-|---:|---:|---|
-| present | absent | yes — structural finite bound |
-| absent | present | yes — theorem proves termination |
-| present | present | yes — theorem plus operational cap |
-| absent | absent | reject |
-
-All four rows are now enforced. A proof-bearing source is accepted only after
-the hosted checker derives a certificate and the small `no_std` core can
-derive the same evidence from the canonical handler table. Categorical v15
-transports the checked measure, optional invariant and sorted multiset of exact
-decrements. Decode validation ignores that list as authority: it re-runs the
-verifier and requires exact agreement. These expressions never degrade into
-runtime assertions masquerading as proof.
-
-### 6.1 Proof obligations
-
-For state `s`, invariant `I`, measure `m` and every reachable path through the
-finite body, the verifier must establish:
-
-1. `I(s)` at entry;
-2. one body application terminates;
-3. exactly one progress verdict is produced: one `next(s')`, or explicit
-   termination by ordinary output(s) and/or `stop`;
-4. every `next(s')` preserves `I(s')`;
-5. every `next(s')` strictly decreases `m(s') < m(s)` in a well-founded order.
-
-With fuel, the structural budget proves a finite number of body applications,
-including a run that exhausts onto `expired`; they do not promise a particular
-terminal port. With a standalone `measure`, strict decrease additionally
-proves that a terminal verdict is eventually reached. No independent `until`
-predicate is needed. An external Connector result is a fresh symbolic typed
-value. A later verifier may use explicit guards on that value, but must never
-assume that a remote service progresses merely because it usually does.
-
-The L3 **control** fragment is intentionally small: boolean literals and
-connectives; a proposition paired with its syntactic negation; complementary
-`==`/`!=`, `<`/`>=` and `<=`/`>` comparisons over checked expression trees;
-and exhaustive `data is Case` partitions over a closed tagged union. The
-summary follows ordinary Operators through the finite spatial DAG. Ordinary
-nested Graph boundaries are passive composition seams and disappear during
-lowering, so their descendant Nodes participate in that same proof. This does
-not admit a nested Graph carrying its own `Loop` aspect or create a recursive
-Graph summary. A bounded
-outbound Call may decide only from its exactly-once typed `exit`; a zero-or-more
-output cannot decide progress. Mutable Graph state, open Event/Session waits,
-a nested Loop owner, or a proof exceeding the finite proposition budget refuse
-by name.
-
-The L6 **termination** fragment is deliberately narrower and closed:
-
-- the measure is a direct signed-integer path, `data` or `data.field...`;
-- every recurrent handler is a direct Graph `on in` handler;
-- its guard contains `measure > 0`, `measure >= 1`, or the equivalent reversed
-  comparison, possibly as one conjunct;
-- its one `next` writes the measured scalar or struct field as exactly
-  `measure - k`, where `k` is a positive integer literal;
-- an invariant is either absent or literal `true`.
-
-The verifier records the sorted multiset of all such positive `k` values. It
-retains duplicates, so handler multiplicity cannot disappear under sorting.
-Last-write semantics are honored: a later write that obscures the measured
-field invalidates an earlier apparent decrease. Any child-output recurrence,
-Connector-dependent progress, computed measure, mutable-state argument,
-non-trivial invariant, lexicographic ranking or opaque expression refuses with
-one `E-LOOP`; it is not approximated. Later theorem gates may extend this
-certificate algebra with affine SSA, tagged-union case reasoning and
-proof-carrying summaries for nested recurrence. A Rocq/Coq export remains an
-independent oracle, not the runtime authority.
-
-The name `measure` follows Rocq/Coq's well-founded recursion vocabulary
-(`{measure term relation}` / `{wf relation term}`). `variant` remains a data
-type term in Rastok and is not reused for termination.
-
-## 7. Examples
-
-### 7.1 Count down
+Next and Again each consume one unit. If the final permitted application asks
+to recur, no re-admission and no `l:next` are created. The manager emits the
+qualified output:
 
 ```rastok
-graph countdown : Loop {
+Loop.expired : LoopExpired { last_state: EntryType }
+```
+
+For Next, `last_state` is the proposed next envelope. For Again, it is the
+retained state. Expired is an ordinary contributed output and follows the
+common disposition rule from the parent:
+
+```rastok
+worker.Loop.expired -> failed
+worker.Loop.expired -> nothing
+```
+
+For the root `App + Loop` Graph there is no lexical parent. Its contributed
+`Loop.expired` is therefore a public App-boundary output, and that public
+termination is its explicit disposition. The root body cannot consume or hide
+it; an application that wants a local fallback wraps the Loop in a child Graph.
+
+It is not an implicit error sink. Internal fallback requires a wrapping Graph
+in v16.
+
+An explicit fuel normally makes expiry productible. A valid measure-only Loop
+proves expiry impossible. If fuel and measure coexist, expiry is impossible
+only when the proof also establishes termination within the explicit fuel;
+otherwise the checker remains conservative.
+
+## 9. Delay
+
+The accepted forms remain:
+
+```rastok
+Loop.delay = { kind = fixed; after = duration("5s") }
+Loop.delay = {
+  kind = exponential
+  first = duration("100ms")
+  ceiling = duration("2s")
+}
+```
+
+The delay begins when the manager consumes Next or Again after quiescence.
+It uses logical time and timer kind 5. Arithmetic saturates before overflow.
+There is no jitter in v16.
+
+No destination capacity is held during the wait. At the due instant, Admit
+rechecks run and generation, proves the capacities selected from the
+remembered entry port, commits `l:next` and the routes, then exposes the
+deliveries. Closing makes stale wake-ups inert.
+
+## 10. Proof of finitude
+
+At least one of `Loop.fuel` or `Loop.measure` is required. The direct proof
+fragment remains deliberately small:
+
+- integer measure;
+- direct path rooted at `Loop.state.data`;
+- a positivity guard;
+- literal strict decrease on every recurrent Dispatch leaf;
+- closed Dispatch or predicates understood by the interval checker;
+- certificate re-derived independently by the no-std validator.
+
+The derived internal bound is `max(measure(initial), 0) + 1`. Opaque helper
+calls, Connector results, external joins, or unsupported arithmetic require
+fuel. Finitude bounds the number of applications; each application must also
+terminate, for example through positive Call timeouts and bounded guests.
+
+## 11. Connector Call rules
+
+A Loop Connector must resolve to a finite outbound Call with one request input,
+closed frame cardinalities, and exactly one terminal exit. Event, Session,
+inbound Call, and resident-service profiles refuse.
+
+`out` and `err` are frames, not implicit terminals. A frame may select a
+command, but the manager still waits for the Call exit. A Contract port with
+zero-or-more frames cannot route unconditionally to a command unless the
+contract proves that at most one matching frame can occur.
+
+At terminal exit:
+
+1. an exit-case route may select a command;
+2. an earlier frame command remains the sole verdict;
+3. otherwise the exit supplies natural Done;
+4. disposing the exit with `nothing` does not suppress natural Done.
+
+Every terminal case is classified `before_effect`, `outcome_unknown`, or
+`after_effect`. Recurrence after `before_effect` is always allowed.
+Recurrence after the other classes requires `effect = none | idempotent`.
+`compensable` does not make repetition safe. Unsafe recurrence is
+`E-LOOP-EFFECT`.
+
+The standard target profiles and conservative classifications are frozen in
+[rework-r1-host-contracts.md](../architecture/rework-r1-host-contracts.md).
+
+## 12. Operator and Graph control
+
+For a Loop Operator, every reachable entry-Dispatch leaf must select one
+verdict. Other handlers on the same owner may emit contextual frames, but
+cannot become another application entry. An uncorrelated delivery cannot issue
+a command for an active run.
+
+For a Loop Graph, the opening boundary route pushes the context. Contained
+Executors retain it; a terminal boundary crossing or routed command produces
+the verdict in the child transaction. The manager waits for run-scoped
+quiescence. A route leaving the Graph pops the context, so downstream parent
+work does not delay the application.
+
+A Graph has no `on in`, `on start`, or `on stop`. Window state and
+lifecycle emissions belong in an Operator child. The generic lifecycle
+controller still writes `l:start`, `l:closing`, and `l:stop` for the
+Graph instance.
+
+## 13. Closing and recovery
+
+Closing wins over recurrence:
+
+- no new re-admission;
+- stale timers are inert;
+- pending commands close with the run;
+- nothing migrates to a successor generation;
+- descendants close inner-first.
+
+The r2 fold contains Open, CommandProduced, CommandConsumed, Next/Again, Admit,
+Close, and Expired evidence. Exact wire keys are allocated once in R4; no v15
+tag is reused.
+
+Spatial recovery reconstructs instance generations, state deltas, unconsumed
+deliveries and cursors, Calls, timers, runs, pending commands, and due
+re-admissions. A produced but unconsumed command reappears; its producer is not
+re-executed. RAM queues are caches over this fold, never authority.
+
+The old `rastok.aspects.r1` and `rastok.loop.r1` domains remain historical
+and are not reinterpreted. V16 uses `rastok.loop.r2`.
+
+## 14. Examples
+
+```rastok
+operator countdown : Loop {
   input in: struct { n: int }
   output out: text
+  Loop.fuel = 100
 
-  Loop.measure = data.n
-
-  on in where data.n <= 0 { out = "liftoff" }
-  on in where data.n > 0  { next = { n = data.n - 1 } }
-}
-```
-
-### 7.2 Fold a finite payload
-
-```rastok
-graph total : Loop {
-  input in: struct { items: array<int>; i: int; acc: int }
-  output out: int
-
-  Loop.fuel = 10000 // the indexed fold is not in the first measure fragment
-
-  on in where data.i >= size(data.items) { out = data.acc }
-  on in where data.i < size(data.items) {
-    next = {
-      items = data.items
-      i     = data.i + 1
-      acc   = data.acc + data.items[data.i]
-    }
+  on in match {
+    data.n <= 0 => out = "liftoff"
+    _           => Loop.next = { n = data.n - 1 }
   }
 }
 ```
 
-### 7.3 Retry a bounded outbound Call
-
 ```rastok
-graph retry_job : Loop {
-  input in: text
-  output exit_code: int
-
+graph refinement : Loop {
+  input in: Draft
+  output out: Answer
+  output failed: RefinementFailure
   Loop.fuel = 5
-  closing = { drain_for = duration("2s"); settle_for = duration("2s") }
-  Loop.delay = {
-    kind    = exponential
-    first   = duration("100ms")
-    ceiling = duration("5s")
-  }
+  Loop.terminal = [out, failed]
 
-  connector job : Process {
-    command  = "worker"
-    codec    = lines
-    effect   = idempotent
-    behavior = probabilistic
-    timeout  = duration("10s")
-    max_output = "1 MiB"
+  in -> model
+  model.out -> judge
+  judge.accepted -> out
+  judge.revised -> Loop.next
+  model.exit -> match {
+    Completed      -> nothing
+    TimeoutExpired -> Loop.again
+    _              -> failed
   }
-
-  . -> job
-  job.out -> nothing
-  job.err -> nothing
-  on job.exit where data is TimeoutExpired  { next = Loop.state.data }
-  on job.exit where data is Exited          { exit_code = data.exit_code }
-  on job.exit where data is SpawnFailed     { stop }
-  on job.exit where data is DecodeFailed    { stop }
-  on job.exit where data is CaptureFailed   { stop }
-  on job.exit where data is OutputOverflow  { stop }
-  on job.exit where data is OutcomeUnknown  { stop }
 }
+
+refinement.out -> publish
+refinement.failed -> alert
+refinement.Loop.expired -> alert
 ```
 
-The retry policy belongs to the Graph, not to `Process`. Stable idempotency
-keys and call close-once remain Connector obligations. The exactly-once typed
-`exit` union is a finite guard domain: timeout continues, a normal exit emits
-a domain result, and the remaining cases deliberately close this singleton
-Loop instance. A `Process(codec = jsonl)` can emit several `out` frames, so
-those frames cannot each choose Loop progress. They are discarded here; a
-later bounded collector may turn them into one ordinary terminal value.
+## 15. Named diagnostics
 
-## 8. What is not a Loop
+| Diagnostic | Meaning |
+|---|---|
+| `E-LOOP-HOST` | resolved host profile is not a finite application |
+| `E-LOOP-ENTRY` | recurrent entry is absent or ambiguous |
+| `E-LOOP-TERMINAL` | terminal set is absent, contradictory, or ill-typed |
+| `E-LOOP-CONTEXT` | work cannot be associated with one exact run |
+| `E-LOOP-CONTROL` | a reachable path has zero or competing verdicts |
+| `E-LOOP-EFFECT` | recurrence could repeat a non-repeat-safe effect |
+| `E-UNWIRED-OUTPUT` | productible `Loop.expired` has no disposition |
+| `LoopNoVerdict` | dynamic quiescence found no verdict |
+| `LoopProtocolViolation` | dynamic execution attempted competing verdicts |
 
-| Need | Primitive | Why not Loop |
-|---|---|---|
-| aggregate independent arrivals | Node-private `var` + optional `instance`/`lifetime` | state lives across unrelated root envelopes |
-| global or keyed window | finite `lifetime` + `on stop` | time closes an instance, not recursive progress |
-| calendar recurrence | `Calendar` | there is no result toward which one run converges |
-| open-ended polling daemon | `Timer` + ordinary Graph | intentionally unbounded service |
-| long-lived process/session | Connector mode + `lifetime` | lifecycle, not recursion |
+## 16. Deferred by name
 
-`lifetime` and Loop are orthogonal. A finite lifetime may close an instance
-containing active Loop runs. The termination theorem is conditional on the
-owner remaining open; Closing follows the instance protocol and invalidates
-pending Loop wakeups.
+Saga execution; Loop on Event, Session, inbound Call, and Process service;
+several recurrent entry ports; internal routing of `Loop.expired`; explicit
+outer-Loop state access; detachable obligations; affine, lexicographic, opaque
+Connector, or Rocq proofs; jitter.
 
-## 9. Composition
+A v16 join inside a Loop Graph cannot combine a candidate carrying the active
+`LoopContext` with an unrelated delivery arriving from outside that context.
+Such a pair refuses with `E-LOOP-CONTEXT` and consumes neither candidate. Data
+needed by every application must enter through the opening state, be retained
+in `Loop.state`, and travel through `Loop.next`; alternatively, perform the
+join outside the Loop Graph. Cross-context joins are deferred until they have
+an explicit run-association rule.
 
-`Saga + Loop` is not enabled merely because both names are recognized. Its
-composition rule must prove which journal fold is outermost. The target rule
-is: one complete Loop run resolves inside one Saga step, and only its terminal
-result becomes the step outcome. Saga compensation debt survives instance
-Closing; Loop wakeups do not.
+## 17. Related documents
 
-## 10. Validation checklist
-
-Before a Loop plan becomes executable, Registry-free validation re-derives:
-
-1. carrier is a Graph and the aspect occurs once;
-2. typed `in` exists and `next`/`expired` have their exact contributed types;
-3. at least one finite witness exists: positive `Loop.fuel` and/or a checked
-   proof certificate whose measure, invariant and recurrence evidence are
-   re-derived from the transported handler table;
-4. `Loop.delay` is canonical and all durations are positive;
-5. every reachable iteration path decides exactly one of continuation or
-   termination, independently of terminal-output spelling;
-6. the body is individually terminating under its Connector/guest budgets;
-7. no spatial edge reads or writes `next`;
-8. run identity, fuel and causal parents agree with the journal fold;
-9. instance Closing cannot revive a stale wakeup.
-
-Any unsupported theorem expression, carrier, aspect combination or body
-cardinality refuses before a validated plan is returned. L6 adds direct
-signed-integer ranking proofs without changing L5's immediate/delayed runtime
-protocol, causal facts or spatial-Call boundary. Direct Graph-boundary terminal
-producers, nested Loop owners, spatial recovery and explicit `stop` remain
-fail-closed until their named composition gate lands.
-
-## 11. Related documents
-
-- [aspects.md](aspects.md) — Node kind/type/aspect classification;
-- [instances.md](instances.md) — key, lifetime, generation and Closing;
-- [execution-model.md](execution-model.md) — transactions and dated events;
-- [delivery-semantics.md](delivery-semantics.md) — journal-before-effect and
-  Connector close-once;
-- [identity.md](identity.md) — extend-only causal registries;
-- [grammar.md](grammar.md) — concrete source productions.
+- [extensions.md](extensions.md)
+- [execution-model.md](execution-model.md)
+- [delivery-semantics.md](delivery-semantics.md)
+- [instances.md](instances.md)
+- [identity.md](identity.md)
+- [rework-r0-algebra.md](../architecture/rework-r0-algebra.md)
+- [rework-r0-reference-traces.md](../architecture/rework-r0-reference-traces.md)
+- [rework-r1-host-contracts.md](../architecture/rework-r1-host-contracts.md)

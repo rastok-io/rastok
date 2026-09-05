@@ -319,6 +319,12 @@ fn terminal_outputs_keep_domain_names_and_stop_is_explicit_termination() {
     );
     compile_one(&several).expect("several atomic terminal outputs are one verdict");
 
+    let stopped = loop_source("", "  on in { stop }");
+    compile_one(&stopped).expect("stop terminates while closing the Loop owner instance");
+}
+
+#[test]
+fn a_wired_loop_requires_explicit_terminals_and_the_v16_transport() {
     let relayed = r#"
 graph finite : App + Loop {
   input in: int
@@ -331,15 +337,28 @@ graph finite : App + Loop {
     output audit: int
     on in { result = data; audit = data }
   }
-  . -> split
-  split.result -> .result
-  split.audit -> .audit
+  in -> split
+  split.result -> result
+  split.audit -> audit
 }
 "#;
-    compile_one(relayed).expect("one Operator transaction may terminate on several outputs");
+    let bag = compile_one(relayed).expect_err("a wired Loop declares its terminal set");
+    assert_eq!(bag.diagnostics().len(), 1, "{bag:#?}");
+    assert_eq!(bag.diagnostics()[0].code().as_str(), "E-LOOP-TERMINAL");
 
-    let stopped = loop_source("", "  on in { stop }");
-    compile_one(&stopped).expect("stop terminates while closing the Loop owner instance");
+    let explicit = relayed.replace(
+        "Loop.fuel = 5",
+        "Loop.fuel = 5\n  Loop.terminal = [result, audit]",
+    );
+    let bag = compile_one(&explicit)
+        .expect_err("the new Loop protocol must not silently execute as a v15 Graph handler");
+    assert_eq!(bag.diagnostics().len(), 1, "{bag:#?}");
+    assert!(
+        bag.diagnostics()[0]
+            .message()
+            .contains("a command-based Loop Graph requires the categorical v16 plan"),
+        "{bag:#?}"
+    );
 }
 
 #[test]

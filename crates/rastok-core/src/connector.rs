@@ -58,9 +58,9 @@ pub fn byte_size(text: &str) -> Option<u64> {
 /// labels may contain ASCII digits and internal `-`; the positive major has
 /// no leading zero.  The constructor never normalizes aliases.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ConnectorId(Box<str>);
+pub struct ContractId(Box<str>);
 
-impl ConnectorId {
+impl ContractId {
     /// Parses one exact canonical spelling.
     ///
     /// # Errors
@@ -116,13 +116,13 @@ fn canonical_label(label: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
 }
 
-impl fmt::Display for ConnectorId {
+impl fmt::Display for ContractId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
     }
 }
 
-impl TryFrom<&str> for ConnectorId {
+impl TryFrom<&str> for ContractId {
     type Error = ConnectorIdError;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
@@ -277,7 +277,7 @@ impl fmt::Display for ConnectorRoles {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConnectorExchange, ConnectorId, ConnectorIdError, ConnectorRoles};
+    use super::{ConnectorExchange, ConnectorIdError, ConnectorRoles, ContractId};
 
     #[test]
     fn connector_ids_accept_one_canonical_spelling_only() {
@@ -286,7 +286,7 @@ mod tests {
             "org.example/http-client@12",
             "a/x1@4294967295",
         ] {
-            assert_eq!(ConnectorId::parse(valid).unwrap().as_str(), valid);
+            assert_eq!(ContractId::parse(valid).unwrap().as_str(), valid);
         }
         for (invalid, reason) in [
             ("Process", ConnectorIdError::Shape),
@@ -301,7 +301,7 @@ mod tests {
             ("rastok/process@01", ConnectorIdError::Major),
             ("rastok/process@4294967296", ConnectorIdError::Major),
         ] {
-            assert_eq!(ConnectorId::parse(invalid), Err(reason), "{invalid}");
+            assert_eq!(ContractId::parse(invalid), Err(reason), "{invalid}");
         }
     }
 

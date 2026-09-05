@@ -205,7 +205,7 @@ pub(super) fn bind_scripted_protocol(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProcessSettingsError {
     /// The spec belongs to another contract entirely.
-    NotProcess(crate::connector::ConnectorId),
+    NotProcess(crate::connector::ContractId),
     /// A Defaulted attribute did not travel in the plan.
     Unresolved(&'static str),
     /// A mode this build has no Driver for.
@@ -654,7 +654,7 @@ enum Chunk {
 /// Statically linked factory for `rastok/process@1`.
 #[derive(Debug)]
 pub struct ProcessFactory {
-    id: crate::connector::ConnectorId,
+    id: crate::connector::ContractId,
 }
 
 impl ProcessFactory {
@@ -666,13 +666,13 @@ impl ProcessFactory {
     /// The built-in constant ceased to be a canonical Connector id.
     pub fn try_new() -> Result<Self, crate::connector::ConnectorIdError> {
         Ok(Self {
-            id: crate::connector::ConnectorId::parse(crate::connector::PROCESS_CONNECTOR_ID)?,
+            id: crate::connector::ContractId::parse(crate::connector::PROCESS_CONNECTOR_ID)?,
         })
     }
 }
 
 impl super::ConnectorDriverFactory for ProcessFactory {
-    fn connector_id(&self) -> &crate::connector::ConnectorId {
+    fn connector_id(&self) -> &crate::connector::ContractId {
         &self.id
     }
 

@@ -76,6 +76,8 @@ pub enum TokenKind {
     Gt,
     /// `->`
     Arrow,
+    /// `=>`
+    FatArrow,
     /// `<->`
     BiArrow,
     /// `==`
@@ -124,6 +126,8 @@ pub struct TerminatorSet {
     pub newline: bool,
     /// Whether `->` at depth 0 terminates the span.
     pub arrow: bool,
+    /// Whether `=>` at depth 0 terminates the span.
+    pub fat_arrow: bool,
     /// Whole-word terminators (`having`, `by`, `within`, …), matched at
     /// word boundaries only.
     pub keywords: &'static [&'static str],
@@ -316,10 +320,20 @@ impl<'a> Lexer<'a> {
             // own vocabulary (the simulation expect grammar), not a
             // copied Rastok expression operator set. Error recovery may observe
             // them, but no valid Rastok expression production depends on them.
-            b'=' if self.peek_byte_at(1) == Some(b'=') => {
-                self.pos += 2;
-                self.token(TokenKind::EqEq, start)
-            }
+            b'=' => match self.peek_byte_at(1) {
+                Some(b'>') => {
+                    self.pos += 2;
+                    self.token(TokenKind::FatArrow, start)
+                }
+                Some(b'=') => {
+                    self.pos += 2;
+                    self.token(TokenKind::EqEq, start)
+                }
+                _ => {
+                    self.pos += 1;
+                    self.token(TokenKind::Eq, start)
+                }
+            },
             b'!' if self.peek_byte_at(1) == Some(b'=') => {
                 self.pos += 2;
                 self.token(TokenKind::BangEq, start)
@@ -628,6 +642,9 @@ impl<'a> Lexer<'a> {
             return true;
         }
         if terminators.arrow && token.kind == TokenKind::Arrow {
+            return true;
+        }
+        if terminators.fat_arrow && token.kind == TokenKind::FatArrow {
             return true;
         }
         token.kind == TokenKind::Ident && terminators.keywords.contains(&token.text)
@@ -1296,6 +1313,9 @@ impl<'a> Lexer<'a> {
         if terminators.arrow && self.source.as_bytes()[pos..].starts_with(b"->") {
             return true;
         }
+        if terminators.fat_arrow && self.source.as_bytes()[pos..].starts_with(b"=>") {
+            return true;
+        }
         if !terminators.keywords.is_empty() && self.word_boundary_at(pos) {
             let rest = &self.source[pos..];
             return terminators.keywords.iter().any(|keyword| {
@@ -1497,6 +1517,7 @@ mod tests {
             bytes: b"}",
             newline: true,
             arrow: false,
+            fat_arrow: false,
             keywords: &[],
         };
         // `[` opened, `}` arrives: stop BEFORE `}`, stack unpopped.
@@ -1554,9 +1575,9 @@ mod tests {
 
     #[test]
     fn arrows_take_maximal_munch() {
-        use TokenKind::{Arrow, BiArrow, Dot, Ident};
+        use TokenKind::{Arrow, BiArrow, Dot, FatArrow, Ident};
         assert_eq!(
-            kinds("a -> b.out <-> c"),
+            kinds("a -> b.out <-> c => d"),
             [
                 (Ident, "a"),
                 (Arrow, "->"),
@@ -1565,6 +1586,8 @@ mod tests {
                 (Ident, "out"),
                 (BiArrow, "<->"),
                 (Ident, "c"),
+                (FatArrow, "=>"),
+                (Ident, "d"),
             ]
         );
     }
@@ -1676,6 +1699,7 @@ mod tests {
         bytes: b";}",
         newline: true,
         arrow: false,
+        fat_arrow: false,
         keywords: &[],
     };
 
@@ -1726,6 +1750,7 @@ mod tests {
             bytes: b"{",
             newline: true,
             arrow: true,
+            fat_arrow: false,
             keywords: &["having", "within"],
         };
         let (expr, _) = lex_expression(

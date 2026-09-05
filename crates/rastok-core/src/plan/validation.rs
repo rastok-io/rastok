@@ -4140,7 +4140,7 @@ fn validate_graph_handler(
     if !owner
         .aspects
         .iter()
-        .any(|aspect| aspect.aspect() == node::Aspect::Loop)
+        .any(|aspect| aspect.aspect() == node::Extension::Loop)
     {
         return Err(PlanValidationError::InvalidGraphHandler {
             owner: owner_name,
@@ -4955,7 +4955,7 @@ fn loop_control_holds(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         if !owner
             .aspects
             .iter()
-            .any(|aspect| aspect.aspect() == node::Aspect::Loop)
+            .any(|aspect| aspect.aspect() == node::Extension::Loop)
         {
             continue;
         }

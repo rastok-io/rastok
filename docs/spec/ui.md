@@ -5,6 +5,12 @@
 > an optional build capability and an execution controller over the existing
 > VM, journal, Lab and accounting folds. Until each M1.9 gate lands, `--ui`
 > remains unavailable rather than approximating this contract.
+>
+> **Paused by D-2026-09-05-1.** This document describes the retained v15 UI
+> work and intentionally still names projections such as Graph handlers. It is
+> not authority for the v16 execution model. R9 will remove every vanished
+> port/control projection and arbitrate the simulation/experiment command
+> surface before UI work resumes.
 
 The UI is a local pedagogical and debugging surface for `rastok run` and
 `rastok simulate`. It is not a second runtime, a durable monitor, a remote

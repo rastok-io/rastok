@@ -9,14 +9,14 @@ use crate::boundary::{
     OutboundConnectorDriver, PreparedRequest, RequestPreparation, SessionConnectorDriver,
     SessionDriverEvent, SessionOpenIntent, SessionRef, SessionStart, SessionWriteIntent,
 };
-use crate::connector::{ConnectorId, ConnectorRoles};
+use crate::connector::{ConnectorRoles, ContractId};
 use crate::envelope::{Data, Envelope};
 use crate::plan::{AttrSetting, NodeExecution, ValidatedExecutionPlan};
 use crate::value::Value;
 use std::collections::BTreeMap;
 
 struct WebSocketLabFactory {
-    id: ConnectorId,
+    id: ContractId,
 }
 
 #[derive(Debug)]
@@ -426,7 +426,7 @@ impl WebSocketLabDriver {
     pub(crate) fn try_bind(
         plan: &ValidatedExecutionPlan,
         nodes: &[crate::node::Path],
-        connector_id: &ConnectorId,
+        connector_id: &ContractId,
     ) -> Result<Self, super::DriverFactoryError> {
         let mut specs = BTreeMap::new();
         for path in nodes {
@@ -690,7 +690,7 @@ impl super::BoundConnectorDriver for WebSocketLabDriver {
 }
 
 impl super::ConnectorDriverFactory for WebSocketLabFactory {
-    fn connector_id(&self) -> &ConnectorId {
+    fn connector_id(&self) -> &ContractId {
         &self.id
     }
 
@@ -711,7 +711,7 @@ impl super::ConnectorDriverFactory for WebSocketLabFactory {
 pub(crate) fn lab_factory(
     spelling: &str,
 ) -> Result<Box<dyn super::ConnectorDriverFactory>, super::DriverFactoryError> {
-    ConnectorId::parse(spelling)
+    ContractId::parse(spelling)
         .map(|id| Box::new(WebSocketLabFactory { id }) as Box<dyn super::ConnectorDriverFactory>)
         .map_err(|error| super::DriverFactoryError::new(error.to_string()))
 }

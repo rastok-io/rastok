@@ -5,25 +5,25 @@
 //! neither an artifact format nor a native ABI: only canonical Connector ids,
 //! closed role claims, and duplicate refusal belong here.
 
-use crate::connector::{ConnectorId, ConnectorRoles};
+use crate::connector::{ConnectorRoles, ContractId};
 
 /// One Connector capability advertised by a physical Driver artifact.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriverManifestEntry {
-    connector: ConnectorId,
+    connector: ContractId,
     roles: ConnectorRoles,
 }
 
 impl DriverManifestEntry {
     /// Describes one exact contract implementation and its available roles.
     #[must_use]
-    pub fn new(connector: ConnectorId, roles: ConnectorRoles) -> Self {
+    pub fn new(connector: ContractId, roles: ConnectorRoles) -> Self {
         Self { connector, roles }
     }
 
     /// Stable semantic contract identity, independent of the artifact path.
     #[must_use]
-    pub fn connector(&self) -> &ConnectorId {
+    pub fn connector(&self) -> &ContractId {
         &self.connector
     }
 
@@ -74,7 +74,7 @@ impl DriverManifest {
 
     /// Looks up one advertised role set without loading a factory.
     #[must_use]
-    pub fn roles_for(&self, connector: &ConnectorId) -> Option<ConnectorRoles> {
+    pub fn roles_for(&self, connector: &ContractId) -> Option<ConnectorRoles> {
         self.entries
             .binary_search_by(|entry| entry.connector.cmp(connector))
             .ok()
@@ -86,7 +86,7 @@ impl DriverManifest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DriverManifestError {
     /// One physical artifact claimed the same semantic contract more than once.
-    Duplicate(ConnectorId),
+    Duplicate(ContractId),
 }
 
 impl core::fmt::Display for DriverManifestError {
@@ -102,10 +102,10 @@ impl std::error::Error for DriverManifestError {}
 #[cfg(test)]
 mod tests {
     use super::{DriverManifest, DriverManifestEntry, DriverManifestError};
-    use crate::connector::{ConnectorId, ConnectorRoles};
+    use crate::connector::{ConnectorRoles, ContractId};
 
-    fn id(spelling: &str) -> ConnectorId {
-        ConnectorId::parse(spelling).expect("the test Connector id is canonical")
+    fn id(spelling: &str) -> ContractId {
+        ContractId::parse(spelling).expect("the test Connector id is canonical")
     }
 
     #[test]

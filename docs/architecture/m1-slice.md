@@ -1,5 +1,12 @@
 # The M1 slice — the public-opening milestone
 
+> **Supersession note (2026-09-05).** This file remains the historical M1
+> slice ledger. D-2026-09-05-1 puts M1.9/UI and its calendar target on hold and
+> opens the R0–R9 v16 semantic rework. M1.7's landed evidence remains valid for
+> v14/v15, but its NodeType/Aspect, Graph-handler and port-shaped Loop control
+> are not the live target. See [R0 algebra](rework-r0-algebra.md) and
+> [R1 host contracts](rework-r1-host-contracts.md).
+
 > Implementation slice — non-normative. Opened 2026-08-06, target 15
 > October 2026: the repository goes public with this milestone, and
 > its closing demonstration is **a complete flow running without the

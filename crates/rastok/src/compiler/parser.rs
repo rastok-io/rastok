@@ -15,9 +15,10 @@ use crate::compiler::lexer::{
     Token, TokenKind, ValueHead,
 };
 use crate::compiler::syntax::{
-    Annotation, AspectEvent, Attribute, BaseType, CmpOp, ConnectorDecl, EdgeDecl, EdgeEndpoint,
-    ErrorNode, ExpectStep, ExprSource, FieldDecl, FrontendPayload, FrontendValue, GraphDecl,
-    GraphItem, Guard, HandlerDecl, IntLit, LValue, LabDecl, MockDecl, Name, OperatorDecl,
+    Annotation, Attribute, BaseType, CmpOp, ConnectorDecl, Dispatch, EdgeCaseSet, EdgeDecl,
+    EdgeDestination, EdgeEndpoint, EdgeMatch, EdgeMatchArm, ErrorNode, ExpectStep, ExprSource,
+    ExtensionEvent, FieldDecl, FrontendPayload, FrontendValue, GraphDecl, GraphItem, Guard,
+    HandlerDecl, IntLit, LValue, LabDecl, MatchArm, MatchSelector, MockDecl, Name, OperatorDecl,
     OperatorItem, PortDecl, PortDirection, PortRef, RemovedLifetimeValue, RemovedPartitionDecl,
     RemovedPartitionField, RemovedPerClause, RemovedWindowMode, ScalarType, ScenarioDecl,
     ScenarioItem, SchemaAnnotation, SchemaAnnotationArgument, SchemaAnnotationConstant,
@@ -30,6 +31,8 @@ use crate::diagnostics::{Bag, Code, Diagnostic, Phase, SourceId, Span};
 pub const E_PARSE_EXPECTED: Code = Code::new("E-PARSE-EXPECTED");
 /// Diagnostic for grammatical syntax outside the implemented subset.
 pub const E_PARSE_DEFERRED: Code = Code::new("E-PARSE-DEFERRED");
+/// A recursive Dispatch exceeds its source/HIR nesting budget.
+pub const E_DISPATCH_DEPTH: Code = Code::new("E-DISPATCH-DEPTH");
 
 /// Diagnostic for a `json` literal the house reader refuses — its
 /// own code: JSON is not Rastok expression (D-2026-08-12-1, review round).
@@ -40,6 +43,7 @@ const ATTR_POSITION: TerminatorSet = TerminatorSet {
     bytes: b";}",
     newline: true,
     arrow: false,
+    fat_arrow: false,
     keywords: &[],
 };
 
@@ -48,6 +52,7 @@ const STRUCT_POSITION: TerminatorSet = TerminatorSet {
     bytes: b",;}",
     newline: true,
     arrow: false,
+    fat_arrow: false,
     keywords: &[],
 };
 
@@ -56,6 +61,7 @@ const PAREN_POSITION: TerminatorSet = TerminatorSet {
     bytes: b",)",
     newline: false,
     arrow: false,
+    fat_arrow: false,
     keywords: &[],
 };
 
@@ -64,6 +70,7 @@ const WINDOW_POSITION: TerminatorSet = TerminatorSet {
     bytes: b";}",
     newline: true,
     arrow: false,
+    fat_arrow: false,
     keywords: &["tumbling", "sliding"],
 };
 
@@ -72,7 +79,30 @@ const GUARD_POSITION: TerminatorSet = TerminatorSet {
     bytes: b"{",
     newline: true,
     arrow: true,
+    fat_arrow: false,
     keywords: &["where", "having", "by", "within", "last", "when"],
+};
+
+/// An open-match predicate ends at the host-owned `=>`, not at comparison
+/// operators contained in the expression.
+const MATCH_ARM_POSITION: TerminatorSet = TerminatorSet {
+    bytes: b"}",
+    // Arms conventionally start on a fresh line. The first predicate token
+    // therefore carries `newline_before`; `=>`, not that leading trivia, owns
+    // the boundary. Delimiter depth still keeps multiline expressions exact.
+    newline: false,
+    arrow: false,
+    fat_arrow: true,
+    keywords: &[],
+};
+
+/// The scrutinee of `match expr { ... }` ends at its opening brace.
+const MATCH_SCRUTINEE_POSITION: TerminatorSet = TerminatorSet {
+    bytes: b"{",
+    newline: true,
+    arrow: false,
+    fat_arrow: false,
+    keywords: &[],
 };
 
 /// Declaration keywords the recovery resynchronizes on.
@@ -112,6 +142,13 @@ pub(crate) fn is_dead_initializer_tag(word: &str) -> bool {
     DEAD_INITIALIZER_TAGS.contains(&word)
 }
 
+fn edge_endpoint_is_terminal(endpoint: Option<&EdgeEndpoint>) -> bool {
+    matches!(
+        endpoint,
+        Some(EdgeEndpoint::DestinationSet(_) | EdgeEndpoint::Match(_) | EdgeEndpoint::Nothing(_))
+    )
+}
+
 /// Parses one `.rkg` source into a syntax tree, accumulating
 /// diagnostics; the tree is returned even when faulty.
 pub fn parse(
@@ -125,6 +162,7 @@ pub fn parse(
         registry,
         source_id,
         last_end: 0,
+        dispatch_depth: 0,
         bag,
     }
     .file()
@@ -135,6 +173,7 @@ struct Parser<'src, 'bag> {
     registry: &'bag crate::contract::ContractCatalog,
     source_id: SourceId,
     last_end: usize,
+    dispatch_depth: usize,
     bag: &'bag mut Bag,
 }
 
@@ -325,13 +364,30 @@ impl<'src> Parser<'src, '_> {
                 let Some(expr) = self.try_complete_expr_lexeme(None, &ATTR_POSITION) else {
                     let recovery = self.skip_bare_statement(false);
                     let start = recovery.range.start;
+                    if self.bag.diagnostics().len() != diagnostics_before {
+                        return Statement::Error(ErrorNode {
+                            span: Span::new(self.source_id, start..recovery.range.end.max(start)),
+                        });
+                    }
                     return self.recovered_bare_statement(start, recovery);
                 };
                 (expr.span.range().start, Value::Expr(expr))
             }
         };
         let end = self.last_end.max(start);
-        if self.bag.diagnostics().len() != diagnostics_before || matches!(value, Value::Error(_)) {
+        let lexical_fault_already_reported = self.bag.diagnostics().iter().any(|diagnostic| {
+            matches!(
+                diagnostic.code(),
+                E_LEX_UNTERMINATED_STRING | E_LEX_UNTERMINATED_COMMENT
+            ) && diagnostic
+                .spans()
+                .first()
+                .is_some_and(|span| span.range().start == start)
+        });
+        if self.bag.diagnostics().len() != diagnostics_before
+            || lexical_fault_already_reported
+            || matches!(value, Value::Error(_))
+        {
             Statement::Error(ErrorNode {
                 span: Span::new(self.source_id, start..end),
             })
@@ -869,6 +925,10 @@ impl<'src> Parser<'src, '_> {
                         Some(val) => GraphItem::Val(val),
                         None => GraphItem::Error(self.recover(start)),
                     }),
+                    "var" => items.push(match self.var_decl() {
+                        Some(var) => GraphItem::Var(var),
+                        None => GraphItem::Error(self.recover(start)),
+                    }),
                     "defaults" => {
                         self.bump();
                         items.push(match self.struct_body() {
@@ -944,7 +1004,7 @@ impl<'src> Parser<'src, '_> {
     fn leading_endpoint(&mut self) -> Option<EdgeEndpoint> {
         match self.peek().kind {
             TokenKind::Dot => Some(EdgeEndpoint::Ref(self.boundary_ref())),
-            _ => Some(EdgeEndpoint::Branch(self.branch_refs()?)),
+            _ => Some(EdgeEndpoint::SourceSet(self.source_set()?)),
         }
     }
 
@@ -959,8 +1019,16 @@ impl<'src> Parser<'src, '_> {
         } else {
             self.expect(TokenKind::Arrow, "`->`")?;
             endpoints.push(self.edge_endpoint()?);
-            while self.eat(TokenKind::Arrow).is_some() {
+            while !edge_endpoint_is_terminal(endpoints.last())
+                && self.eat(TokenKind::Arrow).is_some()
+            {
                 endpoints.push(self.edge_endpoint()?);
+            }
+            if self.peek().kind == TokenKind::Arrow {
+                self.error_expected(
+                    "the end of this route; a set, `match`, or `nothing` is terminal",
+                );
+                return None;
             }
         }
         let guard = if self.at_word("when") {
@@ -987,10 +1055,13 @@ impl<'src> Parser<'src, '_> {
         let token = self.peek();
         match token.kind {
             TokenKind::Dot => Some(EdgeEndpoint::Ref(self.boundary_ref())),
-            TokenKind::LBrace => Some(EdgeEndpoint::Branch(self.branch_refs()?)),
+            TokenKind::LBrace => Some(EdgeEndpoint::DestinationSet(self.destination_set()?)),
             TokenKind::Ident if token.text == "nothing" => {
                 self.bump();
                 Some(EdgeEndpoint::Nothing(token.span))
+            }
+            TokenKind::Ident if token.text == "match" => {
+                Some(EdgeEndpoint::Match(self.edge_match()?))
             }
             TokenKind::Ident => {
                 let path = self.lvalue()?;
@@ -1002,6 +1073,80 @@ impl<'src> Parser<'src, '_> {
             }
             _ => {
                 self.error_expected("an edge endpoint");
+                None
+            }
+        }
+    }
+
+    /// Closed routing table. Unlike handler dispatch, route arms use `->`
+    /// because they select destinations rather than execute statements.
+    fn edge_match(&mut self) -> Option<EdgeMatch> {
+        let start = self.peek().span.range().start;
+        self.bump();
+        self.expect(TokenKind::LBrace, "`{` after route `match`")?;
+        let mut arms = Vec::new();
+        loop {
+            while self.eat(TokenKind::Semi).is_some() {}
+            if matches!(self.peek().kind, TokenKind::RBrace | TokenKind::Eof) {
+                break;
+            }
+            let arm_start = self.peek().span.range().start;
+            let cases = if self.peek().kind == TokenKind::Ident && self.peek().text == "_" {
+                EdgeCaseSet::Fallback(self.bump().span)
+            } else {
+                let mut cases = vec![self.name("a route case or `_`")?];
+                while self.eat(TokenKind::Pipe).is_some() {
+                    cases.push(self.name("a route case")?);
+                }
+                EdgeCaseSet::Cases(cases)
+            };
+            self.expect(TokenKind::Arrow, "`->`")?;
+            let destination = self.edge_arm_destination()?;
+            arms.push(EdgeMatchArm {
+                cases,
+                destination: Box::new(destination),
+                span: self.span_from(arm_start),
+            });
+            let next = self.peek();
+            if !matches!(
+                next.kind,
+                TokenKind::Semi | TokenKind::RBrace | TokenKind::Eof
+            ) && !next.newline_before
+            {
+                self.error_expected("a newline, `;`, or `}` after this route arm");
+                return None;
+            }
+        }
+        self.expect(TokenKind::RBrace, "`}`")?;
+        Some(EdgeMatch {
+            arms,
+            span: self.span_from(start),
+        })
+    }
+
+    fn edge_arm_destination(&mut self) -> Option<EdgeEndpoint> {
+        let token = self.peek();
+        match token.kind {
+            TokenKind::Dot => Some(EdgeEndpoint::Ref(self.boundary_ref())),
+            TokenKind::LBrace => Some(EdgeEndpoint::DestinationSet(self.destination_set()?)),
+            TokenKind::Ident if token.text == "nothing" => {
+                self.bump();
+                Some(EdgeEndpoint::Nothing(token.span))
+            }
+            TokenKind::Ident if token.text == "match" => {
+                self.error_expected("a route destination; nested route `match` is not allowed");
+                None
+            }
+            TokenKind::Ident => {
+                let path = self.lvalue()?;
+                Some(EdgeEndpoint::Ref(PortRef {
+                    boundary: false,
+                    segments: path.segments,
+                    span: path.span,
+                }))
+            }
+            _ => {
+                self.error_expected("a route destination");
                 None
             }
         }
@@ -1032,8 +1177,9 @@ impl<'src> Parser<'src, '_> {
         }
     }
 
-    /// `{ a ; b }` — a fan-out or fan-in branch.
-    fn branch_refs(&mut self) -> Option<Vec<PortRef>> {
+    /// `{ a ; b }` in source position — an unordered set of independent
+    /// producers.
+    fn source_set(&mut self) -> Option<Vec<PortRef>> {
         self.expect(TokenKind::LBrace, "`{`")?;
         let mut refs = Vec::new();
         loop {
@@ -1055,6 +1201,41 @@ impl<'src> Parser<'src, '_> {
         }
         self.expect(TokenKind::RBrace, "`}`")?;
         Some(refs)
+    }
+
+    /// `{ a ; b }` in destination position — an unordered atomic target set.
+    fn destination_set(&mut self) -> Option<Vec<EdgeDestination>> {
+        self.expect(TokenKind::LBrace, "`{`")?;
+        let mut destinations = Vec::new();
+        loop {
+            match self.peek().kind {
+                TokenKind::RBrace | TokenKind::Eof => break,
+                TokenKind::Semi => {
+                    self.bump();
+                }
+                TokenKind::Dot => {
+                    destinations.push(EdgeDestination::Ref(self.boundary_ref()));
+                }
+                TokenKind::Ident if self.peek().text == "nothing" => {
+                    let token = self.bump();
+                    destinations.push(EdgeDestination::Nothing(token.span));
+                }
+                TokenKind::Ident => {
+                    let path = self.lvalue()?;
+                    destinations.push(EdgeDestination::Ref(PortRef {
+                        boundary: false,
+                        segments: path.segments,
+                        span: path.span,
+                    }));
+                }
+                _ => {
+                    self.error_expected("a destination path or `nothing`");
+                    return None;
+                }
+            }
+        }
+        self.expect(TokenKind::RBrace, "`}`")?;
+        Some(destinations)
     }
 
     fn operator_decl(&mut self) -> Option<OperatorDecl> {
@@ -1172,8 +1353,8 @@ impl<'src> Parser<'src, '_> {
 
     // ----- handlers -----
 
-    /// `on trigger guard* body?` — the removed body-less spelling is retained
-    /// as a recovery form; every normative handler has a body.
+    /// `on trigger guard* dispatch?` — the removed body-less spelling is
+    /// retained as a recovery form.
     fn handler_decl(&mut self) -> Option<HandlerDecl> {
         let start = self.peek().span.range().start;
         self.bump();
@@ -1212,15 +1393,17 @@ impl<'src> Parser<'src, '_> {
                 _ => break,
             }
         }
-        let body = if self.peek().kind == TokenKind::LBrace {
-            Some(self.statements()?)
+        let dispatch = if self.peek().kind == TokenKind::LBrace {
+            Some(self.dispatch_block()?)
+        } else if self.at_word("match") {
+            Some(self.match_dispatch(Vec::new(), start)?)
         } else {
             None
         };
         Some(HandlerDecl {
             trigger,
             guards,
-            body,
+            dispatch,
             span: self.span_from(start),
         })
     }
@@ -1247,15 +1430,15 @@ impl<'src> Parser<'src, '_> {
                     let member = self.name("an output port")?;
                     if matches!(qualifier.text.as_str(), "Loop" | "Saga") {
                         let event = match member.text.as_str() {
-                            "start" => AspectEvent::Start,
-                            "stop" => AspectEvent::Stop,
+                            "start" => ExtensionEvent::Start,
+                            "stop" => ExtensionEvent::Stop,
                             _ => {
                                 self.error_expected("`start` or `stop`");
                                 return None;
                             }
                         };
-                        return Some(Trigger::Aspect {
-                            aspect: qualifier,
+                        return Some(Trigger::Extension {
+                            extension: qualifier,
                             event,
                         });
                     }
@@ -1281,14 +1464,20 @@ impl<'src> Parser<'src, '_> {
         }
     }
 
-    /// `"{" ( statement )* "}"` — one-token host dispatch. A
+    /// `"{" ( statement )* dispatch? "}"` — one-token host dispatch. A
     /// recognizable value in this position is parsed only so its own
     /// delimiters remain authoritative, then replaced by an error
     /// hole; other invalid input takes line-bounded token recovery.
-    fn statements(&mut self) -> Option<Vec<Statement>> {
+    fn dispatch_block(&mut self) -> Option<Dispatch> {
+        let start = self.peek().span.range().start;
         self.expect(TokenKind::LBrace, "`{`")?;
         let mut statements = Vec::new();
         loop {
+            if self.at_word("match") {
+                let dispatch = self.match_dispatch(statements, start)?;
+                self.expect(TokenKind::RBrace, "`}`")?;
+                return Some(dispatch);
+            }
             match self.lexer.statement_head() {
                 StatementHead::Structural => {}
                 StatementHead::BareValue => {
@@ -1321,6 +1510,10 @@ impl<'src> Parser<'src, '_> {
                     };
                     statements.push(Statement::Stop(target));
                 }
+                TokenKind::Ident if token.text == "nothing" => {
+                    self.bump();
+                    statements.push(Statement::Nothing(token.span));
+                }
                 // In statement position `(` selects multi-emit. A
                 // parenthesized expression value is valid only after `=`;
                 // malformed multi-emits recover forward from the point
@@ -1340,7 +1533,142 @@ impl<'src> Parser<'src, '_> {
             }
         }
         self.expect(TokenKind::RBrace, "`}`")?;
-        Some(statements)
+        Some(Dispatch::Linear {
+            statements,
+            span: self.span_from(start),
+        })
+    }
+
+    /// Parses a closed or open match after the `match` keyword, retaining
+    /// source order until the checker has enough type information to
+    /// canonicalize a closed domain.
+    fn match_dispatch(&mut self, prefix: Vec<Statement>, outer_start: usize) -> Option<Dispatch> {
+        let depth = self.dispatch_depth + 1;
+        if depth > crate::compiler::syntax::MAX_DISPATCH_DEPTH {
+            let span = self.peek().span;
+            self.bag.push(
+                Diagnostic::new(
+                    E_DISPATCH_DEPTH,
+                    Phase::Parse,
+                    "nested `match` decisions exceed the Dispatch depth budget",
+                )
+                .with_span(span)
+                .with_field("depth", depth.to_string())
+                .with_field(
+                    "budget",
+                    crate::compiler::syntax::MAX_DISPATCH_DEPTH.to_string(),
+                ),
+            );
+            self.skip_balanced_block();
+            let span = self.span_from(outer_start);
+            return Some(Dispatch::Linear {
+                statements: vec![Statement::Error(ErrorNode { span })],
+                span,
+            });
+        }
+        self.dispatch_depth = depth;
+        let result = self.match_dispatch_body(prefix, outer_start);
+        self.dispatch_depth -= 1;
+        result
+    }
+
+    fn match_dispatch_body(
+        &mut self,
+        prefix: Vec<Statement>,
+        outer_start: usize,
+    ) -> Option<Dispatch> {
+        let match_start = self.peek().span.range().start;
+        self.bump();
+        let scrutinee = if self.peek().kind == TokenKind::LBrace {
+            None
+        } else {
+            Some(self.expr(&MATCH_SCRUTINEE_POSITION))
+        };
+        self.expect(TokenKind::LBrace, "`{` after `match`")?;
+        let mut arms = Vec::new();
+        loop {
+            while self.eat(TokenKind::Semi).is_some() {}
+            if matches!(self.peek().kind, TokenKind::RBrace | TokenKind::Eof) {
+                break;
+            }
+            let arm_start = self.peek().span.range().start;
+            let selector = if self.peek().kind == TokenKind::Ident && self.peek().text == "_" {
+                MatchSelector::Fallback(self.bump().span)
+            } else if scrutinee.is_some() {
+                let mut cases = vec![self.name("a closed match case or `_`")?];
+                while self.eat(TokenKind::Pipe).is_some() {
+                    cases.push(self.name("a closed match case")?);
+                }
+                MatchSelector::Cases(cases)
+            } else {
+                MatchSelector::Predicate(self.expr(&MATCH_ARM_POSITION))
+            };
+            self.expect(TokenKind::FatArrow, "`=>`")?;
+            let dispatch = self.arm_dispatch()?;
+            arms.push(MatchArm {
+                selector,
+                dispatch: Box::new(dispatch),
+                span: self.span_from(arm_start),
+            });
+            let next = self.peek();
+            if !matches!(
+                next.kind,
+                TokenKind::Semi | TokenKind::RBrace | TokenKind::Eof
+            ) && !next.newline_before
+            {
+                self.error_expected("a newline, `;`, or `}` after this match arm");
+                return None;
+            }
+        }
+        self.expect(TokenKind::RBrace, "`}`")?;
+        Some(Dispatch::Match {
+            prefix,
+            scrutinee,
+            arms,
+            span: Span::new(self.source_id, outer_start.min(match_start)..self.last_end),
+        })
+    }
+
+    /// One arm's nested dispatch: a block, another match, or one statement.
+    fn arm_dispatch(&mut self) -> Option<Dispatch> {
+        if self.peek().kind == TokenKind::LBrace {
+            return self.dispatch_block();
+        }
+        if self.at_word("match") {
+            let start = self.peek().span.range().start;
+            return self.match_dispatch(Vec::new(), start);
+        }
+        let start = self.peek().span.range().start;
+        let statement = self.single_statement()?;
+        Some(Dispatch::Linear {
+            statements: vec![statement],
+            span: self.span_from(start),
+        })
+    }
+
+    fn single_statement(&mut self) -> Option<Statement> {
+        let token = self.peek();
+        let start = token.span.range().start;
+        match token.kind {
+            TokenKind::Ident if token.text == "val" => self.val_decl().map(Statement::Val),
+            TokenKind::Ident if token.text == "stop" => {
+                self.bump();
+                let target = (self.peek().kind == TokenKind::Ident)
+                    .then(|| self.name("a node name"))
+                    .flatten();
+                Some(Statement::Stop(target))
+            }
+            TokenKind::Ident if token.text == "nothing" => {
+                self.bump();
+                Some(Statement::Nothing(token.span))
+            }
+            TokenKind::LParen => self.multi_emit(),
+            TokenKind::Ident => Some(self.assign_statement(start)),
+            _ => {
+                self.error_expected("a dispatch statement, block, or nested match");
+                None
+            }
+        }
     }
 
     /// An IDENT-led assignment. Every output, including the conventional
@@ -1366,6 +1694,12 @@ impl<'src> Parser<'src, '_> {
         match self.lexer.assignment_follows() {
             Some(crate::compiler::lexer::AssignmentHead::Plain) => {
                 self.bump();
+                if segments.len() == 2 && segments[0].text == "Loop" && segments[1].text == "next" {
+                    return Statement::LoopNext {
+                        value: self.value(&ATTR_POSITION),
+                        span: self.span_from(start),
+                    };
+                }
                 Statement::Assign {
                     target: LValue {
                         span: target_span,
@@ -1393,6 +1727,18 @@ impl<'src> Parser<'src, '_> {
                 }
             }
             None => {
+                if segments.len() == 2 && segments[0].text == "Loop" {
+                    return match segments[1].text.as_str() {
+                        "again" => Statement::LoopAgain(target_span),
+                        "done" => Statement::LoopDone(target_span),
+                        _ => {
+                            self.error_expected(
+                                "`Loop.next = value`, `Loop.again`, or `Loop.done`",
+                            );
+                            Statement::Error(self.recover(start))
+                        }
+                    };
+                }
                 // A bare expression. A single FORM word is consumed
                 // by its real dispatch (the verbatim reader, the
                 // json reader, a guest framer, the dead refusals) —
@@ -2394,6 +2740,14 @@ mod tests {
         super::parse(source_id, source, &registry, bag)
     }
 
+    fn linear_handler(handler: &HandlerDecl) -> &[Statement] {
+        handler
+            .dispatch
+            .as_ref()
+            .and_then(Dispatch::as_linear)
+            .expect("a linear handler dispatch")
+    }
+
     #[test]
     fn json_recovery_keeps_the_sibling_in_the_tree() {
         // The FAULTY source itself: the first emission is the
@@ -2415,7 +2769,7 @@ mod tests {
         let OperatorItem::Handler(handler) = &operator.body[0] else {
             panic!("a handler");
         };
-        let statements = handler.body.as_ref().expect("a body");
+        let statements = linear_handler(handler);
         assert_eq!(statements.len(), 2, "both statements live");
         let Statement::Assign { value, .. } = &statements[0] else {
             panic!("first statement: {:?}", statements[0]);
@@ -2444,7 +2798,7 @@ mod tests {
         let OperatorItem::Handler(handler) = &operator.body[0] else {
             panic!("a handler");
         };
-        let statements = handler.body.as_ref().expect("a body");
+        let statements = linear_handler(handler);
         let Statement::Assign { value, .. } = &statements[0] else {
             panic!("an assignment: {:?}", statements[0]);
         };
@@ -2628,7 +2982,7 @@ mod tests {
                 let OperatorItem::Handler(handler) = &operator.body[0] else {
                     panic!("{expression} {label}: a handler");
                 };
-                let statements = handler.body.as_ref().expect("a body");
+                let statements = linear_handler(handler);
                 assert_eq!(
                     statements.len(),
                     *statements_wanted,
@@ -2663,7 +3017,7 @@ mod tests {
         let OperatorItem::Handler(handler) = &operator.body[0] else {
             panic!("a handler");
         };
-        (handler.body.clone().expect("a body"), bag)
+        (linear_handler(handler).to_vec(), bag)
     }
 
     #[test]
@@ -2819,7 +3173,7 @@ mod tests {
                 let OperatorItem::Handler(handler) = &operator.body[0] else {
                     panic!("{spelled}: a handler");
                 };
-                let statements = handler.body.as_ref().expect("a body");
+                let statements = linear_handler(handler);
                 assert_eq!(statements.len(), 1, "{spelled}: {statements:?}");
                 assert!(
                     matches!(&statements[0], Statement::Error(_)),
@@ -2863,7 +3217,6 @@ mod tests {
             ("verbatim text", "text! { don't panic }"),
             ("base64", "base64! { AAEC }"),
             ("guest", "jq! { .x }"),
-            ("nothing", "nothing"),
         ] {
             let source = format!(
                 "graph g : App {{\n  operator o {{\n    on in {{\n      {bare}\n      out = data\n    }}\n  }}\n  . -> o -> .\n}}\n"
@@ -2887,6 +3240,15 @@ mod tests {
                 "{label}"
             );
         }
+
+        let (statements, bag) = handler_statements(
+            "graph g : App { operator o { on in { nothing } } . -> o -> nothing }",
+        );
+        assert!(
+            bag.diagnostics().is_empty(),
+            "nothing is an explicit no-op: {bag:?}"
+        );
+        assert!(matches!(statements.as_slice(), [Statement::Nothing(_)]));
     }
 
     #[test]
@@ -3463,6 +3825,30 @@ graph m0_probe : App {
     }
 
     #[test]
+    fn dispatch_nesting_is_bounded_and_recovers_after_the_overdeep_arm() {
+        let source = |depth: usize| {
+            format!(
+                "graph g : App {{ operator choose {{ on in {{ {}nothing{} }} }} }}\nval after = 1\n",
+                "match { _ => ".repeat(depth),
+                " }".repeat(depth),
+            )
+        };
+        parse_clean(&source(32));
+        let mut bag = Bag::new();
+        let tree = parse(SourceId::new(0), &source(33), &mut bag);
+        let errors = bag.diagnostics();
+        assert_eq!(errors.len(), 1, "{errors:#?}");
+        assert_eq!(errors[0].code(), Code::new("E-DISPATCH-DEPTH"));
+        assert!(
+            errors[0]
+                .fields()
+                .iter()
+                .any(|(name, value)| *name == "depth" && value == "33")
+        );
+        assert!(matches!(&tree.decls[1], TopDecl::Val(val) if val.name.text == "after"));
+    }
+
+    #[test]
     fn a_lab_parses_into_its_simulation_surface() {
         let mut bag = Bag::new();
         let source = r#"
@@ -3571,7 +3957,7 @@ graph m0_probe : App {
             panic!("expected the where guard");
         };
         assert_eq!(guard.text, "data.text != \"\"");
-        let statements = handler.body.as_ref().unwrap();
+        let statements = linear_handler(handler);
         let Statement::Assign { target, value, .. } = &statements[0] else {
             panic!("expected the emission");
         };
@@ -3616,9 +4002,9 @@ graph m0_probe : App {
         };
         assert!(matches!(
             &removed_lifecycle.trigger,
-            Trigger::Aspect { aspect, event: AspectEvent::Stop } if aspect.text == "Loop"
+            Trigger::Extension { extension, event: ExtensionEvent::Stop } if extension.text == "Loop"
         ));
-        assert!(removed_lifecycle.body.is_none());
+        assert!(removed_lifecycle.dispatch.is_none());
     }
 
     #[test]
@@ -3652,7 +4038,7 @@ graph m0_probe : App {
         let OperatorItem::Handler(handler) = &operator.body[0] else {
             panic!("expected the handler");
         };
-        let statements = handler.body.as_ref().unwrap();
+        let statements = linear_handler(handler);
         assert!(matches!(&statements[0], Statement::Val(val) if val.name.text == "doubled"));
         let Statement::MultiEmit { targets, values } = &statements[1] else {
             panic!("expected the multi-emit");
@@ -3700,7 +4086,7 @@ graph m0_probe : App {
             panic!("expected the handler");
         };
         assert!(matches!(
-            &handler.body.as_ref().unwrap()[0],
+            &linear_handler(handler)[0],
             Statement::Assign { value: Value::Expr(expr), .. } if expr.text == "!done"
         ));
     }
@@ -3801,7 +4187,7 @@ graph m0_probe : App {
         };
         assert!(matches!(
             &fan_out.endpoints[1],
-            EdgeEndpoint::Branch(refs) if refs.len() == 2
+            EdgeEndpoint::DestinationSet(destinations) if destinations.len() == 2
         ));
         let GraphItem::Edge(discard) = &graph.body[1] else {
             panic!("expected the discard edge");
@@ -3818,5 +4204,51 @@ graph m0_probe : App {
             panic!("expected the duplex edge");
         };
         assert!(duplex.bidirectional);
+    }
+
+    #[test]
+    fn wiring_retains_source_sets_and_closed_case_routes() {
+        let tree = parse_clean(
+            "graph g : App {\n  { a.out ; b.out } -> sink\n  source.out -> match {\n    Ready | Cached -> { fast ; audit }\n    _ -> nothing\n  }\n}\n",
+        );
+        let TopDecl::Graph(graph) = &tree.decls[0] else {
+            panic!("expected a graph");
+        };
+        let GraphItem::Edge(fan_in) = &graph.body[0] else {
+            panic!("expected the source-set edge");
+        };
+        assert!(matches!(
+            &fan_in.endpoints[0],
+            EdgeEndpoint::SourceSet(sources) if sources.len() == 2
+        ));
+        let GraphItem::Edge(routed) = &graph.body[1] else {
+            panic!("expected the case route");
+        };
+        let EdgeEndpoint::Match(route_match) = &routed.endpoints[1] else {
+            panic!("expected a route match");
+        };
+        assert_eq!(route_match.arms.len(), 2);
+        assert!(matches!(
+            &route_match.arms[0].cases,
+            EdgeCaseSet::Cases(cases) if cases.len() == 2
+        ));
+        assert!(matches!(
+            &*route_match.arms[0].destination,
+            EdgeEndpoint::DestinationSet(destinations) if destinations.len() == 2
+        ));
+        assert!(matches!(
+            &route_match.arms[1].cases,
+            EdgeCaseSet::Fallback(_)
+        ));
+    }
+
+    #[test]
+    fn a_terminal_route_cannot_continue_as_a_chain() {
+        for terminal in ["nothing", "{ left ; right }", "match { _ -> sink }"] {
+            let mut bag = Bag::new();
+            let source = format!("graph g : App {{ source -> {terminal} -> tail }}\n");
+            let _ = parse(SourceId::new(0), &source, &mut bag);
+            assert!(bag.has_errors(), "`{source}` must refuse");
+        }
     }
 }

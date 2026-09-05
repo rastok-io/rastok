@@ -52,7 +52,8 @@ integration seam — request, external partner, late callback — be
 built, simulated, and shown end to end, before its real systems
 exist? Scope, order, and evidence:
 [`docs/architecture/m1-slice.md`](docs/architecture/m1-slice.md).
-The repository opens publicly with this milestone (15 October 2026).
+The original public-opening target was 15 October 2026. The v16 rework now
+takes semantic priority; no public date overrides its R0–R9 exit gates.
 
 - Multiport execution, then the constructs that stand on it: Node-owned
   logical instances (`instance.key`), orthogonal lifetime and bounded
@@ -122,19 +123,19 @@ The repository opens publicly with this milestone (15 October 2026).
   recovery are later work.
 - M1.5 is closed: contracts have stable versioned identities, compiler
   `ContractCatalog` and runtime `DriverRegistry` become separate authorities,
-  and one pre-journal binder serves mixed connector families through explicit
+  and one pre-journal binder serves Connectors with different Contracts through explicit
   inbound/outbound Driver roles. Static composition is first-class and keeps
   the same registry boundary available to future plugin hosts. `File` is the
   proof connector: one-file `read` and atomic `replace`, with directories and
   `watch` deliberately outside this slice. See the
   [ordered M1.5 backlog](docs/architecture/m1.5-connectors-backlog.md).
   C0's pure Driver-seam refactor, C1's categorical v10 identity/role
-  transport, C2's mixed-family pre-journal binder, and C3's Registry-free
+  transport, C2's mixed-Contract pre-journal binder, and C3's Registry-free
   `rastok/file@1` sheet plus pre-intent invocation settings are landed. C4's
   real one-file Driver now performs bounded complete reads and native atomic
   replacement only after OUTBOUND open, with portable exits, cooperative
   cancellation and no-recall replay. C5 now runs Process and File through one
-  role-aware conformance battery, binds multi-family Lab mocks through the same
+  role-aware conformance battery, binds multi-Contract Lab mocks through the same
   categorical registry, proves real/Lab plan identity and Process-only,
   File-only and combined static builds. C6 closes the slice with a data-only
   capability manifest, one documented Connector contribution path, and a
@@ -150,7 +151,7 @@ The repository opens publicly with this milestone (15 October 2026).
   H1's generic `Event | Call | Session` lifecycle, placement-neutral session
   references and two-phase inbound admission. H2 publishes the exact four
   network sheets, lossless HTTP metadata, codec-selected ports, portable exit
-  unions, Registry-free mirrors and family-owned Lab bindings. H3 now pins one
+  unions, Registry-free mirrors and Contract-owned Lab bindings. H3 now pins one
   bounded hosted pump plus Hyper/Rustls for HTTP/1.1-2, quiche/BoringSSL for
   HTTP/3, and Tungstenite, with a real-UDP
   [h3 + Quinn comparison](spikes/h3-quinn-http3/README.md), one shared trust
@@ -181,46 +182,12 @@ The repository opens publicly with this milestone (15 October 2026).
   project-wide `--resolve-open-api` generated-source workflow. Its categorical
   v12 package move is isolated from the later H5/H6 physical execution, which
   introduced no further package-format move.
-- M1.7 makes `Loop` the first NodeAspect to receive categorical transport and
-  then become executable. L0–L7 are landed and the slice is closed:
-  `node::{Kind, Type, Aspect}` are separate,
-  Reducer/Router remain patterns, source spelling is singular
-  `instance = { key = ... }`, and positive `Loop.fuel` plus closed
-  `Loop.delay` cross checked HIR and the categorical v14 form retained by v15.
-  The exact Loop boundary,
-  closed aspect contract, ordinary Graph-owned handlers, and the finite
-  progress decision are re-derived Registry-free. Immediate persistent
-  root-Graph Loops now execute through a per-root journal fold: exact fuel,
-  `l:next`, exhaustion, concurrent runs and crash reconstruction are proven
-  without a spatial back-edge. L5 now executes fixed and safely saturating
-  exponential `Loop.delay` on the shared dated queue. Timer kind 5 is sealed
-  by the `l:next` id; an exactly-once `Admit` transition selects and commits
-  bounded spatial routes only when due; direct child output handlers execute
-  after their producer commits. Equal-date wakes retain arm order, and
-  instance Closing fences every stale generation before its successor. A
-  fixed lifetime is proven not to inherit or wait for a later Loop delay, and
-  a Process timeout at 1s is proven to precede an independent 2s recurrence
-  delay. Direct-body recovery re-arms the persisted annotation; spatial
-  recovery remains named until general instance/Connector replay. The temporal
-  substrate also exposes `now()` only as one transaction-fixed logical
-  timestamp, supplied by the VM and sealed when observed; the hosted runner
-  maps wall origin plus monotonic elapsed time, while Lab/bare-metal callers
-  own the origin and `advance`.
-  The deferred event source is named `Timer`, distinct from that runtime
-  timeline and from civil `Calendar`. L6 now admits the first proof-only Loop:
-  a direct signed-integer `Loop.measure`, positive on every recurrent direct
-  input path and updated as `measure - k`, produces evidence which the
-  deterministic `no_std` core re-derives after current decode. Non-trivial
-  invariants, computed/lexicographic measures and Connector-dependent progress
-  remain named theorem gates. L7 exercises the final public composition
-  surface: singleton and keyed concurrent runs, ordinary nested Graphs,
-  bounded Process retry with multi-frame data, exhaustion, and
-  instance-Closing fences. It
-  closes the separate package/semantic/causal identity audits, three no-std
-  builds, independent interop and QEMU evidence. Operator work and Connector
-  calls remain ordinary children of the Loop Graph; no privileged `err`/`exit`
-  spelling determines policy. See the
-  [ordered M1.7 backlog](docs/architecture/m1.7-loop-backlog.md) and
+- M1.7 is closed as historical v14/v15 evidence. It proved finite temporal
+  recursion, exact fuel exhaustion, the first re-derived integer measure,
+  logical delay, concurrent runs and Closing fences without a spatial
+  back-edge. Its Graph-handler and port-shaped Loop control model is
+  superseded by D-2026-09-05-1, not erased from history. See the
+  [ordered backlog](docs/architecture/m1.7-loop-backlog.md) and
   [exit report](docs/architecture/m1.7-exit-report.md).
 - M1.8 adds the data-policy, privacy and accounting foundation: canonical
   `@sensitive`/`@secret`/`@personal`/`@measure`/`@cost` side-tables, late-resolved secrets,
@@ -252,19 +219,42 @@ The repository opens publicly with this milestone (15 October 2026).
   cross-layer audit, three-register identity ledger, independent interop,
   three-ISA `no_std` builds and Cortex-M33 evidence; see the
   [exit report](docs/architecture/m1.8-exit-report.md).
-- M1.9 implements the optional hosted execution UI: `run --ui` and
+- The v16 semantic rework is now the active work and deliberately ignores the
+  former calendar pressure. R0 freezes Node/Graph/Executor/Connector/Extension,
+  Dispatch, dispositions, multi-emission and three Loop host machines; R1
+  freezes exact entry/cardinality/terminal/effect contracts and six Connector
+  Contract `@2` sheets; R2 supersedes the normative prose and stops for review.
+  R3–R8 implement source/HIR, one categorical v16 move, explicit destinations,
+  route Dispatch, manager/recovery, and the Operator/Graph/outbound-Call host
+  matrix. R9 migrates examples and only then resumes the UI. The design
+  evidence starts at
+  [`rework-r0-algebra.md`](docs/architecture/rework-r0-algebra.md) and
+  [`rework-r1-host-contracts.md`](docs/architecture/rework-r1-host-contracts.md),
+  with the review stop recorded in
+  [`rework-r2-supersession.md`](docs/architecture/rework-r2-supersession.md).
+  R3 now has the source/HIR checkpoint: recursive typed Dispatch, canonical
+  case routing and sets, ordered multi-emission, named ownership refusals,
+  Loop entry/terminal/state/command resolution and complete conditional HIR
+  identity. New forms remain behind the categorical v16 packaging gate. See
+  [`rework-r3-source-hir.md`](docs/architecture/rework-r3-source-hir.md) for
+  tests and the explicitly retained v15 migration seams. R4 is next.
+- M1.9 is paused until R9. Its retained design implements the optional hosted
+  execution UI: `run --ui` and
   `simulate --ui` start paused behind a capability-protected loopback page,
-  freeze logical time during debugger suspension, step at the VM transaction
-  boundary, keep lifecycle facts and Lab actions distinct from port steps, and
+  freeze logical time during debugger suspension, advance at the VM transaction
+  boundary, keep lifecycle facts, Lab actions and causal records under distinct
+  `B`/`A`/`R` ordinals, and
   derive compound topology with collision-scored labels, movable side-constrained
-  Graph ports and overlap-separated orthogonal rounded routes, live mailbox plus
-  cumulative edge counts, a visible envelope motion
-  and one explicit ordinal for each action/transaction shared by Play and Step,
+  Graph ports and overlap-separated lanes rendered as smooth cubic routes,
+  inspectable current mailbox FIFOs, a visible envelope motion, pannable/zoomable
+  canvas, resizable inspector and readable one- or four-event-per-second Play,
   linked Graph/Node filters, redacted structured state
   and separate `META`/`DATA`, Calls/Sessions, full in-memory history and exact
-  `CostReport` from existing authorities. A typed pre-admission editor may
-  replace only the next checked Lab injection's DATA before the ordinary
-  immutable-envelope admission.
+  `CostReport` from existing authorities. The next checked Lab injection is a
+  typed read-only projection of source-authored DATA before ordinary immutable
+  envelope admission. Real runs expose past frames read-only while
+  continuing live; simulations can replay an exact prior boundary into a new
+  immutable branch before taking a different path.
   Reduced builds omit the
   complete capability without changing plans or execution semantics. See
   [`ui.md`](docs/spec/ui.md) and the
@@ -272,6 +262,8 @@ The repository opens publicly with this milestone (15 October 2026).
   portability and protocol gates are green; the real-browser visual/keyboard
   pass remains explicit in the release-qualification inventory before the
   complete exit statement is claimed.
+- A rich terminal debugger remains a later projection over the same controller
+  and redacted read model; its CLI spelling is deliberately not frozen in M1.9.
 - A guided example gallery seeded by the benchmark's reference
   solutions, closed by the October demo flow.
 

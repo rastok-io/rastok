@@ -480,7 +480,7 @@ pub enum NodeExecution {
 pub struct Node {
     /// Root-relative address — id-recipe material.
     pub path: node::Path,
-    /// Family-specific executable payload.
+    /// Kind-specific executable payload.
     pub execution: NodeExecution,
     /// The node's materialized port table, in canonical order. Every resolved
     /// Connector contract row is present and typed; Operator rows record
@@ -502,15 +502,6 @@ impl Node {
         match self.execution {
             NodeExecution::Operator => node::Kind::Operator,
             NodeExecution::Connector(_) => node::Kind::Connector,
-        }
-    }
-
-    /// The node's effective semantic type.
-    #[must_use]
-    pub fn ty(&self) -> node::Type {
-        match &self.execution {
-            NodeExecution::Operator => node::Type::Operator,
-            NodeExecution::Connector(spec) => node::Type::Connector(spec.contract.clone()),
         }
     }
 
@@ -665,9 +656,9 @@ pub enum AspectSpec {
 impl AspectSpec {
     /// Semantic aspect selected by this complete specification.
     #[must_use]
-    pub const fn aspect(&self) -> node::Aspect {
+    pub const fn aspect(&self) -> node::Extension {
         match self {
-            Self::Loop(_) => node::Aspect::Loop,
+            Self::Loop(_) => node::Extension::Loop,
         }
     }
 }
@@ -797,7 +788,7 @@ pub struct OwnerValue {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConnectorSpec {
     /// Stable semantic contract identity (`rastok/process@1`).
-    pub contract: crate::connector::ConnectorId,
+    pub contract: crate::connector::ContractId,
     /// Inbound/outbound runtime roles required by the contract.
     pub roles: crate::connector::ConnectorRoles,
     /// Cardinality and terminal lifecycle required by the contract.

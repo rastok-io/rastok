@@ -4,6 +4,10 @@ This directory contains implementation views derived from the normative
 specification. It answers *how Rastok is built*; it does not define new
 language or runtime behavior.
 
+The active rework checkpoint is
+[`rework-r3-source-hir.md`](rework-r3-source-hir.md): checked source/HIR and
+its identity, with the categorical v16 transport and execution gates pending.
+
 Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 
 - [`m0-slice.md`](m0-slice.md) for the first end-to-end proof;
@@ -20,7 +24,7 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
   identity-ledger, portability, and placement-neutrality evidence;
 - [`m1.5-connectors-backlog.md`](m1.5-connectors-backlog.md) for the ordered
   landing of stable Connector contracts, role-based Drivers, static/runtime
-  binding and the first second-family proof with `File`;
+  binding and the first two-Contract proof with `File`;
 - [`m1.5-exit-report.md`](m1.5-exit-report.md) for the C6 architecture,
   identity ledger, plugin non-claims and remaining Connector limits;
 - [`m1.6-http-websocket-backlog.md`](m1.6-http-websocket-backlog.md) for the
@@ -37,6 +41,18 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
   ordered data-policy, secret, observation and exact-cost foundation;
 - [`m1.8-exit-report.md`](m1.8-exit-report.md) for the policy, accounting,
   identity, portability and interoperability closure evidence;
+- [`rework-r0-algebra.md`](rework-r0-algebra.md),
+  [`rework-r0-reference-traces.md`](rework-r0-reference-traces.md),
+  [`rework-r0-repository-audit.md`](rework-r0-repository-audit.md), and
+  [`rework-r0-identity.md`](rework-r0-identity.md) for the frozen v16 algebra,
+  hand-written host traces, repository claims and identity movement ledger;
+- [`rework-r1-host-contracts.md`](rework-r1-host-contracts.md) for the exact
+  Operator, Graph and outbound-Call Loop profiles and six versioned Contract
+  `@2` sheets. These are design gates only; R3 is the first implementation
+  gate, and the M1.7 files remain historical evidence for v14/v15;
+- [`rework-r2-supersession.md`](rework-r2-supersession.md) for the live-doc
+  alignment matrix, current-v15/target-v16 boundary, repository-contact
+  corrections and the explicit review stop before R3;
 - [`release-qualification.md`](release-qualification.md) for the single
   inventory of executed third-party interoperability evidence and external
   qualifications still required before a public release;
@@ -52,7 +68,8 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 - [`plan-package.md`](plan-package.md) for current categorical v15, its retained
   v9 owner/instance and v7 type/value/expression registries, stable Connector
   identities/roles/exchange lifecycles, H4.1 `media_type` extension, canonical
-  schema-policy tables, and the validation boundary;
+  schema-policy tables, and the validation boundary; its opening note points
+  to the frozen v16 movement ledger without assigning wire tags before R4;
 - [`parallelism-notes.md`](parallelism-notes.md) for the keyed-mailbox
   concurrency model and the decisions left for physical parallelism;
 - [`spike-rp2350-emulated.md`](spike-rp2350-emulated.md) for the measured

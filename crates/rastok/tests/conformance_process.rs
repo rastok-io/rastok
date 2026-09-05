@@ -14,7 +14,7 @@ use rastok::boundary::{
 use rastok::conformance::{
     InterleaveExpectation, InterleaveProbe, Profile, Provocation, assert_conformant, verify,
 };
-use rastok::connector::{ConnectorId, ConnectorRoles, PROCESS_CONNECTOR_ID};
+use rastok::connector::{ConnectorRoles, ContractId, PROCESS_CONNECTOR_ID};
 use rastok::connectors::{
     BoundConnectorDriver, ConnectorDriverFactory, DriverFactoryError, DriverRegistry,
     ProcessFactory,
@@ -309,10 +309,10 @@ impl BoundConnectorDriver for Liar {
     }
 }
 
-struct LiarFactory(ConnectorId);
+struct LiarFactory(ContractId);
 
 impl ConnectorDriverFactory for LiarFactory {
-    fn connector_id(&self) -> &ConnectorId {
+    fn connector_id(&self) -> &ContractId {
         &self.0
     }
 
@@ -345,7 +345,7 @@ fn a_malformed_terminal_case_fails_the_battery() {
     };
     let drivers = DriverRegistry::default()
         .try_with(Box::new(LiarFactory(
-            ConnectorId::parse(PROCESS_CONNECTOR_ID).expect("the Process id is canonical"),
+            ContractId::parse(PROCESS_CONNECTOR_ID).expect("the Process id is canonical"),
         )))
         .expect("the liar registers once");
     let report = verify(
@@ -427,10 +427,10 @@ impl BoundConnectorDriver for Swapper {
     }
 }
 
-struct SwapperFactory(ConnectorId);
+struct SwapperFactory(ContractId);
 
 impl ConnectorDriverFactory for SwapperFactory {
-    fn connector_id(&self) -> &ConnectorId {
+    fn connector_id(&self) -> &ContractId {
         &self.0
     }
 
@@ -477,7 +477,7 @@ fn crossed_concurrent_replies_fail_the_battery() {
     };
     let drivers = DriverRegistry::default()
         .try_with(Box::new(SwapperFactory(
-            ConnectorId::parse(PROCESS_CONNECTOR_ID).expect("the Process id is canonical"),
+            ContractId::parse(PROCESS_CONNECTOR_ID).expect("the Process id is canonical"),
         )))
         .expect("the swapper registers once");
     let report = verify(

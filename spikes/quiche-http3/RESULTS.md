@@ -88,7 +88,7 @@ host UDP
 
 Protocol progress can therefore live inside one hosted Driver pump. Neither
 the synchronous VM nor `rastok-core` has to become async, and no `quiche` type
-needs to cross the family module boundary.
+needs to cross the Connector module boundary.
 
 The same shape also exposes the cost honestly: the application owns UDP
 readiness, timers, connection IDs, address validation/retry, certificate and

@@ -15,7 +15,7 @@ use crate::boundary::{
 use crate::compiler::hir::{
     Cmp, EmitValue, ExpectTarget, Expectation, Lab, Mock, Quantifier, Scenario, ScenarioStep,
 };
-use crate::connector::{ConnectorId, ConnectorRoles};
+use crate::connector::{ConnectorRoles, ContractId};
 #[cfg(test)]
 use crate::connectors::ProcessRequestBindings;
 use crate::connectors::{
@@ -793,7 +793,7 @@ fn draft(value: &EmitValue) -> Result<Draft, String> {
 }
 
 struct MockConnectorFactory {
-    id: ConnectorId,
+    id: ContractId,
     bind_protocol: ScriptedProtocolBinder,
     mocks: SharedMocks,
     faults: MockFaults,
@@ -809,7 +809,7 @@ impl core::fmt::Debug for MockConnectorFactory {
 }
 
 impl ConnectorDriverFactory for MockConnectorFactory {
-    fn connector_id(&self) -> &ConnectorId {
+    fn connector_id(&self) -> &ContractId {
         &self.id
     }
 
@@ -850,7 +850,7 @@ fn mock_bindings<'plan>(
     let mocks = share_mocks(mocks);
     let mut registry = DriverRegistry::default();
     for (spelling, bind_protocol) in scripted_protocol_binders() {
-        let id = ConnectorId::parse(spelling).map_err(|error| error.to_string())?;
+        let id = ContractId::parse(spelling).map_err(|error| error.to_string())?;
         registry = registry
             .try_with(Box::new(MockConnectorFactory {
                 id,
@@ -920,7 +920,14 @@ impl MockOutboundConnectorDriver {
         );
         let slot = runtime::DataSlot::new(request.data());
         for handler in &mock.handlers {
-            let passes = match &handler.guard {
+            let Some((guard, body)) = handler.v15_linear_parts() else {
+                self.fault(format!(
+                    "a recursive mock Dispatch for `{}` reached the v15 Lab executor",
+                    intent.connector_path
+                ));
+                return None;
+            };
+            let passes = match guard {
                 None => true,
                 Some(guard) => {
                     let lazy = runtime::LazyBindings {
@@ -958,7 +965,7 @@ impl MockOutboundConnectorDriver {
             if !passes {
                 continue;
             }
-            return self.reply(handler, request, env, &slot);
+            return self.reply(body, request, env, &slot);
         }
         self.fault(format!(
             "no mock branch of `{}` matched the request; add a catch-all or script silence",
@@ -972,14 +979,14 @@ impl MockOutboundConnectorDriver {
     /// machinery.
     fn reply(
         &mut self,
-        handler: &crate::compiler::hir::Handler,
+        body: &[crate::compiler::hir::Statement],
         request: &Envelope,
         mut env: BTreeMap<String, expr::EvalValue>,
         slot: &runtime::DataSlot<'_>,
     ) -> Option<Completion> {
         use crate::compiler::hir::Statement;
         let mut outputs = Vec::new();
-        for statement in &handler.body {
+        for statement in body {
             match statement {
                 Statement::Let { name, value, .. } => match self.lazy_eval(value, &env, slot) {
                     Ok(value) => {
@@ -1011,6 +1018,12 @@ impl MockOutboundConnectorDriver {
                 Statement::Stop => {
                     self.fault(String::from(
                         "a mock cannot supervise instance Closing in this build",
+                    ));
+                    return None;
+                }
+                Statement::MultiEmit { .. } | Statement::LoopCommand(_) => {
+                    self.fault(String::from(
+                        "an R3-only statement reached the v15 Lab executor",
                     ));
                     return None;
                 }

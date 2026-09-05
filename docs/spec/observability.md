@@ -513,7 +513,7 @@ data disguised as zero.
 
 ## 8. Named later work
 
-- Budget/quota aspects and pre-effect reservation;
+- Budget/quota Extensions and pre-effect reservation;
 - FX, billing authority, FOCUS conformance and OpenCost allocation;
 - arbitrary user-defined measures or metric dimensions;
 - sampled cost calibration and automatic model selection;

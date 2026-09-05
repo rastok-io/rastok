@@ -548,8 +548,7 @@ fn an_event_is_the_one_way_inbound_exchange() {
 #[test]
 fn the_catalogue_keys_source_symbols_by_stable_contract_identity() {
     let catalogue = ContractCatalog::try_m0().expect("the standard catalogue holds");
-    let id =
-        rastok::connector::ConnectorId::parse(rastok::connector::PROCESS_CONNECTOR_ID).unwrap();
+    let id = rastok::connector::ContractId::parse(rastok::connector::PROCESS_CONNECTOR_ID).unwrap();
     let process = catalogue
         .connector_by_id(&id)
         .expect("Process is keyed by its stable id");
@@ -859,7 +858,7 @@ fn process_codec_choices_resolve_the_current_execution_pins() {
             for port in ports {
                 let sheet = port.ty.expect("the promised port is typed");
                 let core = rastok::boundary::process_port_type(
-                    &rastok::connector::ConnectorId::parse(rastok::connector::PROCESS_CONNECTOR_ID)
+                    &rastok::connector::ContractId::parse(rastok::connector::PROCESS_CONNECTOR_ID)
                         .unwrap(),
                     port.port.name(),
                     Some(codec),
@@ -874,7 +873,7 @@ fn process_codec_choices_resolve_the_current_execution_pins() {
 
 #[test]
 fn file_profiles_resolve_the_same_rows_in_the_sheet_and_core_mirror() {
-    let id = rastok::connector::ConnectorId::parse(rastok::connector::FILE_CONNECTOR_ID)
+    let id = rastok::connector::ContractId::parse(rastok::connector::FILE_CONNECTOR_ID)
         .expect("the standard File id");
     for mode in ["read", "replace"] {
         let ports = rastok::stdlib::FILE
@@ -1545,7 +1544,7 @@ fn the_global_binder_requires_callable_connectors_but_skips_pure_outbound_source
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
         if let rastok::plan::NodeExecution::Connector(spec) = &mut node.execution {
-            spec.contract = rastok::connector::ConnectorId::parse("test/custom@1").unwrap();
+            spec.contract = rastok::connector::ContractId::parse("test/custom@1").unwrap();
             node.ports = vec![
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("in").expect("a conventional port"),
@@ -1663,7 +1662,7 @@ fn a_delivery_target_requires_outbound_or_an_inbound_call_response_role() {
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
         if let rastok::plan::NodeExecution::Connector(spec) = &mut node.execution {
-            spec.contract = rastok::connector::ConnectorId::parse("test/inbound-only@1")
+            spec.contract = rastok::connector::ContractId::parse("test/inbound-only@1")
                 .expect("the test id is canonical");
             spec.roles = rastok::connector::ConnectorRoles::Inbound;
             spec.exchange = rastok::connector::ConnectorExchange::Event;
@@ -1681,7 +1680,7 @@ fn a_forged_event_cannot_claim_an_outbound_effect_role() {
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
         if let rastok::plan::NodeExecution::Connector(spec) = &mut node.execution {
-            spec.contract = rastok::connector::ConnectorId::parse("test/outbound-event@1")
+            spec.contract = rastok::connector::ContractId::parse("test/outbound-event@1")
                 .expect("the test id is canonical");
             spec.exchange = rastok::connector::ConnectorExchange::Event;
             node.ports.retain(|port| port.port.name() != "exit");
@@ -1911,7 +1910,7 @@ fn the_core_phase_mirror_recognizes_every_process_sheet_row() {
     for spec in PROCESS.common {
         assert_eq!(
             rastok::boundary::process_attribute_site(
-                &rastok::connector::ConnectorId::parse(rastok::connector::PROCESS_CONNECTOR_ID,)
+                &rastok::connector::ContractId::parse(rastok::connector::PROCESS_CONNECTOR_ID,)
                     .unwrap(),
                 spec.name,
             ),
@@ -1923,8 +1922,7 @@ fn the_core_phase_mirror_recognizes_every_process_sheet_row() {
     let selector = PROCESS.selector.expect("Process has profiles");
     assert_eq!(
         rastok::boundary::process_attribute_site(
-            &rastok::connector::ConnectorId::parse(rastok::connector::PROCESS_CONNECTOR_ID)
-                .unwrap(),
+            &rastok::connector::ContractId::parse(rastok::connector::PROCESS_CONNECTOR_ID).unwrap(),
             selector.attribute,
         ),
         Some(EvaluationSite::Plan),
@@ -1934,10 +1932,8 @@ fn the_core_phase_mirror_recognizes_every_process_sheet_row() {
         for spec in profile.attributes {
             assert_eq!(
                 rastok::boundary::process_attribute_site(
-                    &rastok::connector::ConnectorId::parse(
-                        rastok::connector::PROCESS_CONNECTOR_ID,
-                    )
-                    .unwrap(),
+                    &rastok::connector::ContractId::parse(rastok::connector::PROCESS_CONNECTOR_ID,)
+                        .unwrap(),
                     spec.name,
                 ),
                 Some(spec.latest_site),
@@ -1949,15 +1945,14 @@ fn the_core_phase_mirror_recognizes_every_process_sheet_row() {
     }
     assert_eq!(
         rastok::boundary::process_attribute_site(
-            &rastok::connector::ConnectorId::parse(rastok::connector::PROCESS_CONNECTOR_ID)
-                .unwrap(),
+            &rastok::connector::ContractId::parse(rastok::connector::PROCESS_CONNECTOR_ID).unwrap(),
             "unknown",
         ),
         None
     );
     assert_eq!(
         rastok::boundary::process_attribute_site(
-            &rastok::connector::ConnectorId::parse("test/other@1").unwrap(),
+            &rastok::connector::ContractId::parse("test/other@1").unwrap(),
             "command",
         ),
         None

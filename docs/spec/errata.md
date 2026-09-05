@@ -93,12 +93,16 @@ and execution-equivalence round-trip tests pin the fix.
   a domain `DecodeError`; if retry is intended, say so explicitly.
 - **Found by:** external code review (second pass), 2026-08-03.
 
-## E-2026-08-03-2 — unwired data outputs: warning or error?
+## E-2026-08-03-2 — unwired data outputs: warning or error? — SUPERSEDED
 
 > **Resolved in the M1.3 target by D-2026-08-14-1.** There is no
 > name-based `err` exception. Every resolved output carries an explicit
 > `UnwiredPolicy`; B5 landed the two exact policies (`RequireWire` and
 > `RootSink`) in plan data. Forwarding/discard remain ordinary edges.
+> **D-2026-09-05-1 supersedes that resolution for v16:** both policies and
+> every implicit sink disappear. A productible output requires an explicit
+> disposition, while a re-derived impossible output is exempt and warned.
+> The paragraphs below remain the v15 history, not the live target rule.
 
 - **Where:** [grammar.md](grammar.md) (wiring prose) vs
   [delivery-semantics.md](delivery-semantics.md) (routing rules).

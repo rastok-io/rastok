@@ -243,7 +243,7 @@ pub enum RequestCodec {
 /// package validator prove the same table without a compiler ContractCatalog.
 #[must_use]
 pub fn process_port_type(
-    contract: &crate::connector::ConnectorId,
+    contract: &crate::connector::ContractId,
     port: &str,
     codec_word: Option<&str>,
     err_codec_word: Option<&str>,
@@ -275,7 +275,7 @@ pub fn process_port_type(
 /// [`process_port_type`].
 #[must_use]
 pub fn process_attribute_site(
-    contract: &crate::connector::ConnectorId,
+    contract: &crate::connector::ContractId,
     attribute: &str,
 ) -> Option<crate::plan::EvaluationSite> {
     use crate::plan::EvaluationSite;
@@ -302,7 +302,7 @@ pub fn process_attribute_site(
 /// is specified.
 #[must_use]
 pub fn file_port_type(
-    contract: &crate::connector::ConnectorId,
+    contract: &crate::connector::ContractId,
     port: &str,
     mode_word: Option<&str>,
 ) -> Option<DataType> {
@@ -321,7 +321,7 @@ pub fn file_port_type(
 /// Latest evaluation site admitted by the executable `File` contract.
 #[must_use]
 pub fn file_attribute_site(
-    contract: &crate::connector::ConnectorId,
+    contract: &crate::connector::ContractId,
     attribute: &str,
 ) -> Option<crate::plan::EvaluationSite> {
     use crate::plan::EvaluationSite;
@@ -349,7 +349,7 @@ fn network_body_type(codec: Option<&str>) -> Option<DataType> {
 /// Registry-free effective port type for every M1.6 network sheet.
 #[must_use]
 pub fn network_port_type(
-    contract: &crate::connector::ConnectorId,
+    contract: &crate::connector::ContractId,
     port: &str,
     codec: Option<&str>,
 ) -> Option<DataType> {
@@ -370,7 +370,7 @@ pub fn network_port_type(
 /// Registry-free evaluation-site mirror for the four M1.6 network sheets.
 #[must_use]
 pub fn network_attribute_site(
-    contract: &crate::connector::ConnectorId,
+    contract: &crate::connector::ContractId,
     attribute: &str,
 ) -> Option<crate::plan::EvaluationSite> {
     use crate::plan::EvaluationSite::{Instance, Invocation, Plan};
@@ -416,7 +416,7 @@ pub fn network_attribute_site(
 /// Registry-free evaluation-site mirror for every built-in Connector.
 #[must_use]
 pub fn connector_attribute_site(
-    contract: &crate::connector::ConnectorId,
+    contract: &crate::connector::ContractId,
     attribute: &str,
 ) -> Option<crate::plan::EvaluationSite> {
     process_attribute_site(contract, attribute)
@@ -453,7 +453,7 @@ impl BootReferencePolicy {
 /// Connector setting. Absence means that `env()` and `secret()` both refuse.
 #[must_use]
 pub fn connector_boot_reference_policy(
-    contract: &crate::connector::ConnectorId,
+    contract: &crate::connector::ContractId,
     attribute: &str,
 ) -> Option<BootReferencePolicy> {
     use BootReferencePolicy::{Environment, Secret};
@@ -1531,14 +1531,14 @@ pub enum DriverRouteError {
     /// A Session exchange view proven at bind time disappeared later.
     UnavailableSession(node::Path),
     /// An inbound role view proven at bind time disappeared later.
-    UnavailableInbound(crate::connector::ConnectorId),
+    UnavailableInbound(crate::connector::ContractId),
     /// An inbound Call view proven at bind time disappeared later.
-    UnavailableInboundCall(crate::connector::ConnectorId),
+    UnavailableInboundCall(crate::connector::ContractId),
     /// A caller attempted to decide a proposal other than the one retained
     /// by that Connector family.
     UnknownInboundProposal {
         /// Family whose retained proposal was addressed.
-        connector: crate::connector::ConnectorId,
+        connector: crate::connector::ContractId,
         /// Proposal reference supplied by the caller.
         reference: InboundProposalRef,
     },
@@ -1546,14 +1546,14 @@ pub enum DriverRouteError {
     /// contract's categorical exchange lifecycle.
     InboundExchangeMismatch {
         /// Driver family that proposed the fact.
-        connector: crate::connector::ConnectorId,
+        connector: crate::connector::ContractId,
         /// Exchange required by the validated plan.
         exchange: crate::connector::ConnectorExchange,
     },
     /// A family proposed a root from a Connector node it did not bind.
     InboundSourceMismatch {
         /// Driver family that made the proposal.
-        connector: crate::connector::ConnectorId,
+        connector: crate::connector::ContractId,
         /// Proposed Connector node.
         source: node::Path,
     },
@@ -1562,9 +1562,9 @@ pub enum DriverRouteError {
         /// Correlated call.
         call_ref: CallRef,
         /// Family that started it.
-        expected: crate::connector::ConnectorId,
+        expected: crate::connector::ContractId,
         /// Family that answered it.
-        actual: crate::connector::ConnectorId,
+        actual: crate::connector::ContractId,
     },
     /// One Driver reported a terminal fact for an inbound Call admitted by
     /// another Connector family.
@@ -1572,9 +1572,9 @@ pub enum DriverRouteError {
         /// Correlated inbound Call.
         call_ref: InboundCallRef,
         /// Family that admitted it.
-        expected: crate::connector::ConnectorId,
+        expected: crate::connector::ContractId,
         /// Family that reported the observation.
-        actual: crate::connector::ConnectorId,
+        actual: crate::connector::ContractId,
     },
     /// A Driver reported a terminal fact for no admitted inbound Call.
     UncorrelatedInboundCall(InboundCallRef),
@@ -1583,9 +1583,9 @@ pub enum DriverRouteError {
         /// Correlated logical session.
         session: SessionRef,
         /// Family that admitted or opened it.
-        expected: crate::connector::ConnectorId,
+        expected: crate::connector::ContractId,
         /// Family that reported the observation.
-        actual: crate::connector::ConnectorId,
+        actual: crate::connector::ContractId,
     },
     /// A Driver reported an observation for no admitted/opened session.
     UncorrelatedSession(SessionRef),

@@ -9,11 +9,15 @@ use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-/// Live listener proofs are independent product processes, but macOS can
-/// reset a just-opened handshake while two test-owned listeners start at
-/// once. Serialize only these real-network CLI probes; all pure and
-/// subprocess-only CLI tests remain parallel.
-#[cfg(any(feature = "hosted-http12", feature = "hosted-websocket"))]
+/// Connector probes release a chosen ephemeral port before the child binds it.
+/// A concurrently starting UI listener can claim that port, so all test-owned
+/// loopback listeners share this guard. Pure and subprocess-only CLI tests
+/// remain parallel; this does not claim a port lease against unrelated hosts.
+#[cfg(any(
+    feature = "hosted-http12",
+    feature = "hosted-websocket",
+    feature = "hosted-ui"
+))]
 static LIVE_NETWORK_CLI_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn example() -> PathBuf {
@@ -113,6 +117,9 @@ fn a_ui_port_without_the_ui_is_a_usage_error() {
 fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
     use std::io::{BufRead as _, Read as _};
 
+    let _network_guard = LIVE_NETWORK_CLI_TEST
+        .lock()
+        .expect("a prior live-network CLI test did not panic");
     let mut child = rastok()
         .arg("simulate")
         .arg(example())
@@ -431,6 +438,9 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
 fn simulation_step_keeps_a_silent_call_paused_and_reaches_the_next_lab_action() {
     use std::io::BufRead as _;
 
+    let _network_guard = LIVE_NETWORK_CLI_TEST
+        .lock()
+        .expect("a prior live-network CLI test did not panic");
     let mut child = rastok()
         .arg("simulate")
         .arg(keyed_retry_example())
@@ -537,6 +547,9 @@ fn simulation_step_keeps_a_silent_call_paused_and_reaches_the_next_lab_action() 
 fn run_ui_admits_no_stdin_before_resume_and_preserves_normal_output() {
     use std::io::{BufRead as _, Read as _};
 
+    let _network_guard = LIVE_NETWORK_CLI_TEST
+        .lock()
+        .expect("a prior live-network CLI test did not panic");
     let mut child = rastok()
         .arg("run")
         .arg(example())
@@ -922,8 +935,23 @@ fn run_composes_a_live_websocket_gateway_with_process() {
         .set_write_timeout(Some(std::time::Duration::from_secs(5)))
         .expect("the WebSocket peer write is bounded");
     let request = format!("ws://{address}/echo");
-    let (mut peer, response) = tungstenite::client::client(request, stream)
-        .expect("an independent peer completes HTTP/1.1 Upgrade");
+    let (mut peer, response) = match tungstenite::client::client(request, stream) {
+        Ok(upgrade) => upgrade,
+        Err(error) => {
+            let status = child.try_wait().expect("the gateway status is readable");
+            if status.is_none() {
+                child.kill().expect("the failed gateway can be stopped");
+            }
+            let output = child
+                .wait_with_output()
+                .expect("the gateway output is readable");
+            panic!(
+                "an independent peer failed HTTP/1.1 Upgrade: {error:?}; \
+                 gateway status before cleanup: {status:?}; stderr: {}",
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+    };
     assert_eq!(
         response.status(),
         tungstenite::http::StatusCode::SWITCHING_PROTOCOLS

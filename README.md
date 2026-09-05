@@ -9,24 +9,31 @@ constrained enough for an LLM to generate without hiding the result
 behind a visual low-code format.
 
 A Rastok graph connects existing services, models, tools, data, and
-business processes. It contains three kinds of nodes:
+business processes. In the v16 target agreed on 2026-09-05, a Node is either
+a passive Graph scope or an Executor:
 
-- **Operators** contain pure graph logic. They may update their own
-  Node-local state,
-  but they cannot read from or write to the external environment.
-- **Connectors** are explicit, typed boundaries to the external world:
-  APIs, processes, databases, files, brokers, and clocks.
-- **Graphs** compose Operators, Connectors, and other Graphs.
+- **Graphs** compose a typed boundary, children and static wiring. They own
+  instance/lifecycle scope, but no application mailbox, handler or transaction.
+- **Operators** are Executors whose transitions are authored as typed DSL
+  Dispatch. They may update private `var` state but perform no external I/O.
+- **Connectors** are Executors. Each has one exact versioned **Contract**;
+  its transition comes from that Contract and typed Driver events. Connectors are the explicit boundaries
+  to APIs, processes, databases, files, brokers and time sources.
 
-The declaration keyword fixes a Node's structural kind. Every Node also has
-one effective type — `App`, the ordinary `Graph`/`Operator` default, or an
-exact versioned Connector contract — and may carry orthogonal aspects such as
-`Loop` or `Saga`. A type says what executes; an aspect adds a separately
-validated orchestration protocol. The two are never interchangeable.
+An **Extension** is attached to one Node and may contribute attributes,
+bindings, commands, constraints and, only when necessary, ports. `App` marks
+the one public root Graph; `Loop` adds finite temporal recurrence through a
+journal-owned manager; `Saga` remains a future Extension. A manager is neither
+a Node nor an edge, so temporal recurrence never creates a spatial cycle.
+Current binaries still execute the categorical v15 model. The R3 source/HIR
+checkpoint resolves the new ontology, Dispatch, routes and Loop interface;
+forms requiring v16 refuse before packaging. Its
+[evidence and staging boundary](docs/architecture/rework-r3-source-hir.md)
+distinguish checked source from the upcoming transport/runtime gates.
 
 This separation makes effects replaceable. In production, Connectors
 interact with real systems. In a simulation sandbox called the
-**Lab**, controlled handlers replace those external systems while the
+**Lab**, controlled Driver scripts replace those external systems while the
 same Operators and the same checked graph continue to run.
 
 The Lab controls inputs, time, boundary outcomes, and faults. A
@@ -41,7 +48,7 @@ Rastok separates semantic decisions from effect execution:
 ```text
 step(plan, state, event) -> (new_state, effect_intents)
 
-App execution  : effect_intents -> real outcomes
+Driver execution: effect_intents -> real outcomes
 Lab simulation : effect_intents -> controlled outcomes
 ```
 
@@ -68,7 +75,7 @@ Rastok DSL source
   -> deterministic state machine
   -> state-machine execution in a native in-memory VM
   -> mixed real Process and File boundaries selected through one Driver registry
-  -> journaled, auditable multi-family Lab scenarios with useful golden diffs
+  -> journaled, auditable multi-Contract Lab scenarios with useful golden diffs
   -> optional paused, transaction-steppable hosted inspection
 ```
 
@@ -96,26 +103,19 @@ proof. The single
 records executed independent HTTP/WebSocket interop and the remaining
 ngtcp2/Autobahn qualifications without conflating them with workspace tests.
 
-M1.7 is closed. `Loop` is the first aspect with a closed categorical plan
-contract and Registry-free control and termination proofs. Fuel-bounded and
-directly ranked Loops cross source, typed HIR and the v14 proof form retained
-by current v15, with typed
-`in`, aspect-owned
-`next`/`expired`, domain terminal outputs and ordinary Graph handlers. Every
-completed body application proves exactly one continuation or explicit
-termination (`out`, `exit`, another ordinary output, or `stop`). Execution
-folds each immediate or delayed root-Graph run from journaled
-open/next/admit/close/expired facts; exact exhaustion, independent concurrent
-roots, direct-child Call recurrence and direct-body crash reconstruction
-execute without a spatial back-edge. The first proof certificate accepts a
-direct signed-integer measure that is positive on every recurrent path and
-decreases by a known positive literal. The `no_std` validator re-derives that
-evidence after decode; unsupported theorem fragments, spatial recovery and
-nested-owner Loop gates remain fail-closed. Public Lab scenarios additionally
-prove singleton and keyed concurrent runs, ordinary nested-Graph composition,
-bounded Process retry with multi-frame data, exact exhaustion, and stale-wake
-fencing across instance Closing. See the
-[M1.7 exit report](docs/architecture/m1.7-exit-report.md).
+M1.7 is closed as historical v14/v15 evidence: it proved fuel-bounded and
+directly ranked temporal recurrence, logical delay, typed exhaustion,
+concurrent runs and stale-wake fencing without a spatial back-edge. The
+[M1.7 exit report](docs/architecture/m1.7-exit-report.md) remains the exact
+record of that implementation. D-2026-09-05-1 now supersedes its Graph-handler
+and port-shaped control model: v16 makes Graph passive, shares transaction
+mechanics between Operator and Connector, identifies a run from its exact
+opening admission, and represents Next/Again/Done as durable manager commands.
+The frozen [R0 algebra](docs/architecture/rework-r0-algebra.md),
+[reference traces](docs/architecture/rework-r0-reference-traces.md), and
+[R1 host contracts](docs/architecture/rework-r1-host-contracts.md) lead to the
+[R2 review handoff](docs/architecture/rework-r2-supersession.md). They are
+design documents; no executable v16 claim is made before R3–R8.
 
 M1.8 is closed on categorical package v15. The source front end
 recognizes the closed `@sensitive`/`@secret`/`@personal`/`@measure`/`@cost` family,
@@ -153,8 +153,9 @@ The optional OpenTelemetry transport is explicitly deferred until exact
 temporal observations exist; no exporter timestamp is presented as commit
 time.
 
-M1.9 adds an optional local execution UI without adding a second engine or
-history store. A binary built with `hosted-ui` accepts `--ui` on `run` and
+The M1.9 UI work is paused until the v16 R9 migration. Its retained design adds
+an optional local execution UI without a second engine or causal authority. A
+binary built with `hosted-ui` accepts `--ui` on `run` and
 `simulate`, binds an OS-selected loopback port by default, prints a
 capability-bearing URL and starts paused before the first semantic
 transaction. Pausing freezes hosted logical time, so inspection cannot consume
@@ -162,14 +163,24 @@ timeout, lifetime or Loop-delay budgets. The page separates lifecycle facts,
 Lab actions and port transactions, retains the complete in-memory causal
 history after completion, and presents a compound topology, frame-owned ports,
 separate `META`/`DATA`, logical instances, Calls/Sessions, structured redacted
-state and the exact `CostReport`. Orthogonal rounded edges show live mailbox
-occupancy in bold beside muted cumulative traffic; labels avoid the routed
-pipes, and each Step animates the exact envelope movement or lifecycle owner.
-Play repeats that same numbered Step transition continuously. Selecting a Node
+state and the exact `CostReport`. Smooth cubic routes follow deterministic
+crossing-reduced lanes; `≡ n` badges show only current mailbox occupancy and
+open the exact redacted FIFO; labels avoid the routed pipes, and each retained
+`B<n>` boundary animates the exact envelope movement or lifecycle owner. The
+current v15-only dotted control layer explains historical Graph-handler
+emissions; R9 removes that layer instead of inventing an equivalent v16 port.
+`⧉ n` opens the current logical instances. The
+canvas pans and zooms, its inspector is resizable, and Play presents those same
+boundaries at one or four events per second.
+`A<n>` identifies scenario actions and `R<n>` causal records. Selecting a Node
 or Graph filters those linked views without truncating the retained authorities.
-Before a checked simulation `inject`, its typed `DATA` draft may be edited and
-is still admitted through the ordinary immutable-envelope path. Non-UI
-execution, plan identity and causal records are unchanged. See
+The timeline can inspect exact prior state while a real run continues; a
+simulation may deterministically replay a prior boundary into a new immutable
+branch and continue from there.
+Before a checked simulation `inject`, its typed redacted `DATA` is visible
+read-only; inputs remain authored in the `.rkg` scenario and are still admitted
+through the ordinary immutable-envelope path. Non-UI execution, plan identity
+and causal records are unchanged. See
 [`ui.md`](docs/spec/ui.md) and the
 [M1.9 backlog](docs/architecture/m1.9-ui-backlog.md).
 
@@ -180,7 +191,7 @@ provider is the process environment plus a matching `_VERSION` coordinate),
 never from a command-line value.
 
 The standalone runner links Process by default. Hosted features add the
-selected HTTP/WebSocket families through one registry assembly. Pass
+selected HTTP/WebSocket Connector implementations through one registry assembly. Pass
 `--file-root <dir>` to `rastok run` to add the real File Driver with an
 explicit deployment root; that root is neither inferred from the graph nor
 part of plan identity.

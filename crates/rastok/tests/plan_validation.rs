@@ -982,7 +982,7 @@ fn a_dynamic_attribute_requires_a_registry_free_contract_authority() {
         plan::NodeExecution::Connector(spec) => spec,
         plan::NodeExecution::Operator => panic!("shell is a connector"),
     };
-    spec.contract = rastok::connector::ConnectorId::parse("test/custom@1").unwrap();
+    spec.contract = rastok::connector::ContractId::parse("test/custom@1").unwrap();
     spec.attributes = vec![(
         String::from("late"),
         plan::AttrSetting::Expr {

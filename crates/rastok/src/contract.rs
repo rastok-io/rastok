@@ -926,7 +926,7 @@ fn validate_attributes(
 
 /// Holds a sheet to the rules the checker will assume forever after.
 pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
-    crate::connector::ConnectorId::parse(contract.id).map_err(|reason| {
+    crate::connector::ContractId::parse(contract.id).map_err(|reason| {
         SheetDefect::InvalidConnectorId {
             id: contract.id,
             reason,
@@ -1162,7 +1162,7 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
 /// The contract catalogue a build wires into its checker.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ContractCatalog {
-    pub(crate) connectors: BTreeMap<crate::connector::ConnectorId, ConnectorContract>,
+    pub(crate) connectors: BTreeMap<crate::connector::ContractId, ConnectorContract>,
     pub(crate) declared: Vec<&'static str>,
     pub(crate) frontends: Vec<FrontendContract>,
 }
@@ -1182,7 +1182,7 @@ impl ContractCatalog {
     /// The first [`SheetDefect`], named.
     pub fn try_with(mut self, contract: ConnectorContract) -> Result<Self, SheetDefect> {
         validate_sheet(&contract)?;
-        let id = crate::connector::ConnectorId::parse(contract.id).map_err(|reason| {
+        let id = crate::connector::ContractId::parse(contract.id).map_err(|reason| {
             SheetDefect::InvalidConnectorId {
                 id: contract.id,
                 reason,
@@ -1222,10 +1222,7 @@ impl ContractCatalog {
 
     /// Resolves the exact stable identity carried by a categorical plan.
     #[must_use]
-    pub fn connector_by_id(
-        &self,
-        id: &crate::connector::ConnectorId,
-    ) -> Option<&ConnectorContract> {
+    pub fn connector_by_id(&self, id: &crate::connector::ContractId) -> Option<&ConnectorContract> {
         self.connectors.get(id)
     }
 

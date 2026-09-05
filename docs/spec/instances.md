@@ -1,6 +1,7 @@
 # Instances, keys, lifetime, and placement
 
-> **Status:** normative M1.4 target, adopted by D-2026-08-18-1. The compiler
+> **Status (2026-09-05): normative, including the v16 target adopted by
+> D-2026-09-05-1.** The compiler
 > accepts and checks the R1 `instance` / `lifetime` surface. Plan-package v15
 > retains v9's categorical parent-linked owner table, scoped routes,
 > independent instance policy, immutable owner expressions, and phased
@@ -13,17 +14,15 @@
 > Graph closure, and bare `stop`. Source production of some dynamic
 > settings/values remains a named R1 gap. R6 makes nested Graphs and
 > instance-local joins public end to end, including Lab and package evidence;
-> M1.7 L2 subsequently transports Graph-owned handlers categorically, L3
-> proves their finite Loop progress decision, L4 executes immediate root
-> recurrence, and L5 dates recurrence on the shared queue while preserving
-> the same journaled generation and ordinary lifetime deadlines. L6 carries
-> optional proof certificates (first introduced by v14), and L7 closes the public
-> composition matrix, including ordinary nested Graph bodies, without
-> admitting nested Loop owners or widening the proof fragment. R7
+> M1.7's Graph-handler Loop implementation is historical. V16 removes Graph
+> handlers and application mailboxes while preserving Graph instance identity
+> and controller-owned lifecycle records; Loop work moves to an attached
+> manager and contained Executors. R7
 > closes the executable instance slice with negative-space and
 > placement-neutrality proofs; it adds no cluster runtime. This document is
 > the single authority for logical instance addressing, key selection,
-> Node-local state, lifetime, and the semantic boundary with future sharding.
+> Executor-owned semantic state, lifetime, and the semantic boundary with
+> future sharding.
 
 Rastok separates three concerns that the former `partition` declaration
 combined:
@@ -31,13 +30,13 @@ combined:
 1. **addressing** — an optional key selects a logical Node instance;
 2. **time** — an optional lifetime determines when that instance closes;
 3. **scope** — lexical containment determines which immutable names are in
-   scope, while mutable state remains owned by one Node.
+   scope, while mutable application state remains owned by one Executor.
 
 Placement is a later physical decision. It never changes those semantics.
 
 ## 1. One owner, three independent attributes
 
-Every Node family — Operator, Connector, or Graph — may declare an instance
+Every Node — Operator, Connector, or Graph — may declare an instance
 key on its definition:
 
 ```rastok
@@ -55,7 +54,7 @@ operator counter {
 }
 ```
 
-`instances`, `lifetime`, and `closing` are separate common
+`instance`, `lifetime`, and `closing` are separate common
 Node attributes:
 
 ```rastok
@@ -80,7 +79,7 @@ graph conversations {
 
 Their absence has one meaning each:
 
-- no `instances` means one singleton instance in the enclosing scope;
+- no `instance` means one singleton instance in the enclosing scope;
 - no `lifetime` means that instance is persistent;
 - no `closing` means no drain/cancel/settlement budget is invented. Every
   finite owner whose subtree contains a `Process` must declare it; an owner
@@ -222,7 +221,8 @@ containment from dotted path text.
 
 An address names where deliveries route. An **instance** is the currently
 live state and lifecycle at that address. After it closes, a later delivery
-may create a new instance at the same address with clean Node-local state.
+may create a new instance at the same address with clean Executor state, or
+clean descendant Executor state when the address belongs to a Graph.
 
 The runtime distinguishes successive instances by a **generation**. It is the
 zero-based ordinal of `l:start` for that address, derived from the journal and
@@ -237,10 +237,12 @@ the next tumbling box has a different address frame. Idle, fixed, single-pass,
 and explicit stop may instead close an address that a later admission reuses
 with the next generation.
 
-`instance.key` exposes the owner's local selected key as a read-only value in
-that owner's handlers. It is statically available only when that owner declares
-`instance.key`; it never falls back to an ancestor key or to null. A Graph may
-bind immutable values derived from it:
+`instance.key` exposes the owner's local selected key as a read-only value
+to that owner's allowed expressions: Operator Dispatch, instance-phase
+Connector settings, and Graph lexical `val` declarations. It is statically
+available only when that owner declares `instance.key`; it never falls back
+to an ancestor key or to null. A Graph may bind immutable values derived from
+it:
 
 ```rastok
 graph workspace {
@@ -314,21 +316,22 @@ The contract sheet, not expression shape, owns that distinction. A dynamic
 value is never accepted for a plan-shaping attribute merely because it happens
 to reduce for one instance.
 
-## 4. Mutable state has one Node owner
+## 4. Mutable state has one Executor owner
 
-A `var` belongs to exactly the Node that declares it and is visible only in
-that Node's handlers. It is indexed by that Node's complete instance
-reference.
+A DSL `var` belongs to exactly the Operator that declares it and is visible
+only in that Operator's Dispatch. It is indexed by that Node's complete
+instance reference.
 Transactions of one instance read the previous committed state, update it
 imperatively, and commit state plus emissions atomically.
 
-A Graph does not expose shared mutable state to child Nodes. A child may use
+A Graph declares no `var` and exposes no shared mutable state to child Nodes.
+A child may use
 the same field spelling; it denotes an independent cell owned by that child.
 There is no graph-wide transaction, snapshot, lock, or hidden shared memory.
 
 Shared mutable behavior is an explicit stateful Operator with typed command
 and result ports. All operations that must be atomic over its state belong in
-one of its handlers:
+one of its handlers and its Dispatch:
 
 ```rastok
 operator account {
@@ -347,17 +350,20 @@ operator account {
 }
 ```
 
-This preserves the node transaction as Rastok's only ACID unit. Keying a Graph
+This preserves the Executor transaction as Rastok's only ACID unit. Keying a Graph
 does not make an envelope's whole traversal a transaction.
 
 ## 5. Mailboxes and ordering
 
-Every logical Node instance owns one bounded mailbox. Its mailbox, derived
-immutable bindings, `var` state, open calls, lifecycle, armed events, and
-consumed cursors use the same instance reference.
+Every logical Executor instance owns one bounded activation mailbox. Its
+mailbox, derived immutable bindings, semantic state, open calls, lifecycle,
+armed events, and consumed cursors use the same instance reference. A temporal
+Extension manager has a separate bounded command inbox derived from the
+journal. A Graph instance owns lifecycle and containment but no application
+mailbox.
 
-One mailbox is claimed by at most one worker at a time. Transactions are FIFO
-within an instance. Order across independent addresses is deliberately
+One Executor mailbox is claimed by at most one worker at a time. Transactions
+are FIFO within an instance. Order across independent addresses is deliberately
 undefined and cannot be observed through shared mutable state, because none
 exists between Nodes.
 
@@ -461,20 +467,18 @@ that owner's per-instance `val`s and instance-bound Connector settings into a
 candidate bundle. A failure leaves the delivery unconsumed, commits no
 `l:start`, and performs no Driver effect. Once the bundle is valid, the
 runtime commits the `l:start` lifecycle transaction before the port
-transaction or any external resource effect. `on start` and `on stop` are
-ordinary handlers owned by the Node and require a causal input envelope;
-Graph lifecycle facts execute now. Graph-owned handler source and categorical
-transport landed with the Loop L2 gate, and L3 proves their finite progress;
-closed M1.7 executes immediate or delayed root Loops across ordinary flattened
-nested Graphs, finite lifetimes and direct-child output handlers, including
-bounded Calls. Nested Loop owners, direct Graph-boundary terminal producers, spatial
-Worker recovery and explicit Loop `stop` still refuse until their named gates
-land.
+transaction or any external resource effect. An Operator may own ordinary
+`on start` and `on stop` handlers. A Connector's start/stop behavior comes
+only from its Contract. A Graph owns neither handler: its lifecycle
+facts are committed by the generic controller, and its descendants provide
+any application work.
 
-Bare `stop` requests closure of the current Node instance after the current
+Bare `stop` in an Operator requests closure of that current Node instance
+after the current
 transaction commits. There is no `stop <partition>` form. Stopping a Graph
-also requests closure of every live descendant instance created in that Graph
-generation; children finish before the parent's `on stop`.
+is requested by its lifecycle/Extension controller and also requests closure
+of every live descendant instance created in that Graph generation; children
+finish before the parent's `l:stop`.
 
 Parent/child lifecycle is not shared memory. Each child `l:start` opens a
 runtime lifecycle obligation toward its parent generation by carrying that
@@ -549,10 +553,11 @@ Closing then follows this sequence:
    `OutcomeUnknown` case on its ordinary `exit` port with trigger
    `l:recover`. A later partner response is a discarded observation, never a
    second causal result.
-5. Descendants commit `l:stop` inner-first. Each `on stop` runs only after the
-   last required call exit and residual decision in its scope. State and the
-   instance bundle are reclaimed only after that stop commits; the waiting
-   successor may then start with clean state.
+5. Descendants commit `l:stop` inner-first. Each Operator `on stop` and each
+   Connector's Contract-defined close transition runs only after the last
+   required Call exit and residual decision in its scope; a Graph has no
+   handler. Executor state and the instance bundle are reclaimed only after
+   that stop commits; the waiting successor may then start with clean state.
 
 An observed cancellation result is not rewritten as `OutcomeUnknown`: for
 `Process`, a confirmed kill normally yields `Exited { ... }`. The unknown case
@@ -560,9 +565,38 @@ means only that no terminal outcome was confirmed before settlement expired.
 It has no `reason` payload; its causal trigger and the abandoned OUTBOUND fact
 carry the provenance.
 
-Loop wakeups are generation-bound and die with their instance.
-Saga compensation debt is journal-bound and survives instance closure; saga
-state remains a fold of ordinary journal facts, never a second ledger.
+Loop commands and wakeups are generation-bound and die with their instance.
+Future Saga debt must be journal-bound rather than a second ledger, but no
+Saga execution contract is admitted in v16.
+
+### 7.2 Window work belongs to an Operator child
+
+A Graph may key and bound a multi-Node scope, but cannot aggregate or emit at
+its own stop. Stateful window work lives in an Operator child:
+
+```rastok
+graph account_window {
+  input in: Line
+  output out: Report
+  instance = { key = data.account }
+  lifetime = { kind = tumbling; every = duration("5m") }
+
+  operator aggregate {
+    input in: Line
+    output out: Report
+    var sum: int = 0
+    on in   { sum = sum + data.amount }
+    on stop { out = { sum = sum } }
+  }
+
+  in -> aggregate
+  aggregate -> out
+}
+```
+
+During inner-first Closing, the child `on stop` commits while sibling routes
+in the parent scope remain drainable. Its emission crosses the Graph boundary
+before the parent's `l:stop`. R8 must test that ordering explicitly.
 
 ## 8. Joins
 

@@ -1,28 +1,15 @@
 # Rastok DSL — Grammar notes
 
-> **Status: normative M1.4 target under D-2026-08-18-1.** The parser accepts
-> only `IDENT!` for frontend-owned
-> regions; the superseded bare spellings are not a compatibility
-> surface. Frontends whose compiler is not in this build remain admitted
-> by their registered framer and refuse with named `E-CHECK-DEFERRED`.
-> The current parser/checker uses the Node attributes `instance` and
-> `lifetime`; the superseded `partition` / `per` draft is not a compatibility
-> surface. `persistent`, `idle`, `fixed`, `single_pass`, and processing-time
-> `tumbling` execute on Graph and Node owners. The exact bounded `closing`
-> sheet and bare `stop` execute through M1.4 R5. R6 executes nested Graph
-> composition and instance-local `on (a, b, …)` joins with `where`, `within`,
-> and `last`; `having` remains a named gate.
-> D-2026-08-25-2 makes `HttpClient`, `HttpServer`, `WebSocketClient`, and
-> `WebSocketServer` exact H2 sheets from source through validated plan and
-> Lab binding. H3 selects their private hosted-engine seam and H4 executes the
-> HttpClient sheet over H1/H2/H3. H5 executes
-> `HttpServer(mode = ack | respond)` over the same three versions with bounded
-> retained Calls and direct-path correlation. H6 executes both WebSocket
-> Session Drivers over H1 Upgrade and H2/H3 Extended CONNECT; H7 closes static
-> hosted assembly.
-> M1.8 A4 admits exact root `env()`/`secret()` references only at the
-> contract-declared HttpClient URL/bearer settings; no general expression or
-> unit/App boot-value surface is implied.
+> **Status (2026-09-05): normative v16 target under D-2026-09-05-1.**
+> R0–R2 define the source contract before its R3 implementation. Existing
+> v15 binaries therefore fail closed on the new forms rather than partially
+> executing them. V16 preserves Node-owned `instance`, `lifetime`, `closing`,
+> nested Graph composition, and instance-local joins. It replaces the old
+> Kind/Type/Aspect model with Node/Graph/Executor/Connector/Extension, removes Graph
+> and Connector handlers, adds Operator Dispatch and case routing, makes
+> output dispositions explicit, and represents Loop recurrence as manager
+> commands rather than spatial ports. M1.8 annotations and exact
+> `env()`/`secret()` boot references are unchanged.
 >
 > **Conceptual basis** : this document assumes the model defined in [WHITEPAPER.md](../../WHITEPAPER.md) and the normative instance contract in [instances.md](instances.md). This document is the grammar ; foundations is the constitution.
 >
@@ -102,10 +89,10 @@ connector codex : Process {        // type annotation with ":"
 }
 ```
 
-## Single composite concept : `graph` — and the `: App` entry point
+## Single composite concept: `graph` — and the `: App` entry point
 
 The `app` and `compose` keywords are not part of the grammar. The `App`
-NodeType marks the deployment entry point instead.
+Extension marks the deployment entry point instead.
 
 There is **one** keyword for composite units. No `pipeline`, `flow`,
 `session`, `template` — and no `app` :
@@ -151,23 +138,24 @@ The rules :
   whose name matches the App's ; each `simulation` names its closed graph
   explicitly (`on app` today — sub-graph targets are deferred, E-SIM-TARGET)
   ([simulation-semantics.md](simulation-semantics.md) §2, Boundaries).
-- **`: App` is the root Graph NodeType** : it marks the deployment entry
+- **`: App` is the root Graph Extension**: it marks the deployment entry
   point. A deployed unit has
   **exactly one** `: App` graph (0 or ≥2 = build error). App-level concerns —
   `durability` and retention overrides — are its attributes
   and body. `app` is no longer a keyword; it survives as a **pre-bound
   identifier** aliasing the `: App` graph, so a declared App boundary port
-  remains addressable as `app.<port>`. M1.3 removes the special `app.err`
-  root sink: observation and bubbling are resolved per output contract.
+  remains addressable as `app.<port>`. Plan v16 removes every implicit root
+  sink: each productible output case has an explicit disposition, and
+  `app.<port>` observes only a real App-boundary crossing.
 - **Durability is lexical.** A stateful Node's effective value is its
   explicit `durability`, otherwise the closest enclosing Graph's explicit
   value, otherwise the App's value, otherwise `none`. A child may strengthen
   or weaken the inherited value; weakening emits
   `W-DURABILITY-WEAKENED` and is included in coverage output.
-- **Declaration = instantiation, for every family.** A declared graph is a
+- **Declaration = instantiation, for every Node form.** A declared graph is a
   composite Node in its enclosing scope, wired **by name** — exactly like an
   Operator or Connector. A declared graph that is never wired = dead-code
-  warning (the unfed-input family).
+  warning (the unfed-input diagnostic class).
 - **Instance addressing is uniform** : any Operator, Connector, or Graph may
   carry `instance = { key = <expr> }`. `lifetime` is a separate common
   attribute. Physical capacity, spawn, placement, shard, and Worker policy do
@@ -177,62 +165,76 @@ The rules :
   **excluded** ([envelope.md §2](envelope.md)).
 - **Reuse note** : instantiating one graph *type* at several sites is
   deferred. If introduced, it can use
-  `graph <name> : <GraphType>` — the NodeType slot already accommodates it.
+  an explicit import/instantiation form decided with that feature; v16 does
+  not overload the Extension annotation with a Graph type.
   `compose` and `app` are
   reserved-but-not-used.
 
-## Vocabulary : Node kind, Node type, Node aspect, ports, and state
+## Vocabulary: Node, Graph, Executor, Connector, Extension, and ports
 
-Rastok recognizes exactly **three families of node** ([WHITEPAPER.md §2](../../WHITEPAPER.md)) :
+Rastok has two structural Node forms:
 
-- **Operator** — computation internal to the graph. Reacts to envelope events, optionally reads/updates its own Node-local state, emits zero or more envelopes.
-- **Connector** — same graph shape as Operator, but it is allowed to talk to an external system (HTTP, processes, files, databases, clocks, brokers, etc.). Its external configuration is expressed as flat attributes and typed ports, not as mandatory subsections.
-- **Graph** — composite Node. Its body declares Nodes and edges ; the graph declaration itself is the instance wired by name.
-
-A concrete Node is declared with `operator`, `connector`, or `graph`. The
-declaration keyword fixes its `node::Kind`; the annotation selects one
-effective `node::Type` and then zero or more `node::Aspect` values. Ordinary
-Graphs and Operators use their implicit canonical type. Connector types are
-explicit exact contract names:
-
-```rastok
-Graph, App, Operator, Jaq, Wasm,
-HttpClient, HttpServer, Process, File, Postgres, Kafka, Timer, …
+```text
+Node
+├── Graph
+└── Executor
+    ├── Operator
+    └── Connector
 ```
 
-A real alternate pure implementation such as `Jaq` or `Wasm` may be an
-Operator NodeType. `Reducer`, `Aggregator`, `Window`, `Joiner`, `Router`, and
-`Dispatch` are guide names for visible primitive combinations, never hidden
-NodeTypes. See [Operator parameterization](#operator-parameterization-state--instance--lifetime--transaction)
-below and [aspects.md](aspects.md).
+- A **Graph** is a typed boundary, lexical scope, child-Node set, and wiring
+  body. It owns no `var`, handler, application mailbox, or application
+  transaction.
+- An **Executor** owns executable ports, a bounded activation mailbox,
+  journal-derived semantic state, and atomic transactions with ordered
+  emissions.
+- An **Operator** is an Executor whose transition is a DSL `Dispatch` and may
+  declare private `var` state.
+- A **Connector** is an Executor which owns one exact versioned **Contract**;
+  its transition comes from that Contract and typed Driver events. It has no DSL handler
+  or author-declared `var` in v16.
+- An **Extension** is attached to a Node and may contribute qualified
+  attributes, bindings, admission constraints, manager commands, and ports.
+  `App`, `Loop`, and the deferred `Saga` are Extensions.
 
-The word **Processor** is not part of the canonical vocabulary. Runtime traits
-such as `Reader`, `Transformer`, and `Writer` may exist in an implementation,
-but the DSL exposes Nodes, `input` / `output` endpoints (with the default
-`in` / `out` / `err` spellings available on use), and (for Connectors)
-external configuration.
+The declaration keyword fixes the structural form. A Connector annotation
+starts with one mandatory Contract name and may continue with Extensions. A Graph or
+Operator annotation contains only Extensions:
 
-Supporting concepts :
+```rastok
+graph app : App + Loop { ... }
+operator countdown : Loop { ... }
+connector pay : HttpClient + Loop { ... }
+```
 
-- **Node** — any element of a graph : Operator, Connector, or Graph.
-- **Node kind** — the structural family selected by the declaration keyword.
-- **Node type** — exactly one implementation/contract compatible with that
-  kind (`App`, `Operator`, `Process`, …).
-- **Node aspect** — zero or more compatible orchestration protocols such as
-  `Loop` or `Saga`; an aspect never replaces the NodeType.
-- **input / output** — typed envelope endpoints declared with `input` /
-  `output` inside a Node body or inferred from handler/wiring use (including
-  the conventional `in` / `out` / `err` spellings). Connected to other Nodes
-  via DAG edges.
-- **instance addressing** — a Node's optional `instance.key` expression.
-  It selects the logical mailbox/state instance for an entering envelope and
-  is recorded before producer commit. It is not an edge or shared-state name.
-- **external configuration** — (Connector only) attributes such as URL,
-  path, command, codec, protocol, timeout, retry policy, etc. A grouped
-  configuration is a COMPOSITE attribute (`env = { … }`,
-  `jwt = { cache_ttl = … }`, `tls = { … }`) — one value, replaced
-  atomically; there is no namespace sugar and no flat-prefix
-  flattening (D-2026-08-12-1).
+Extension order is non-semantic and canonical. Duplicate, unknown, misplaced,
+or incompatible symbols refuse. Graph and Operator have no redundant
+`node::Type`; a Connector carries the exact `ContractId` of its Contract. See
+[extensions.md](extensions.md).
+
+`Reducer`, `Aggregator`, `Window`, and `Joiner` may remain guide names for
+visible primitive compositions. `Router`, `Dispatch`, and fan-out instead name
+actual routing/transaction operations, not Node categories or annotations.
+
+All Nodes may own `instance`, `lifetime`, and `closing`. A Graph may own
+immutable lexical `val` declarations. Mutable `var` belongs only to an
+Operator. Operator and Connector share transaction machinery, but the
+semantic category does not imply a public Rust trait.
+
+An input or output is a typed envelope endpoint. The current Graph boundary
+and child Nodes share one namespace: a bare name resolves to exactly one
+boundary port or child, otherwise `E-NAME-CLASH`. Direction is positional:
+inside a Graph, its input is a source and output a destination; a child input
+is a destination and child output a source. An unambiguous child name selects
+`in` as a destination or `out` as a source.
+
+Extension contributions are always qualified: `Loop.fuel`,
+`Loop.expired`, and `pay.Loop.again`. No business-port spelling is
+reserved.
+
+Connector external configuration remains flat attributes plus typed ports.
+Composite values such as `env = { ... }` and `tls = { ... }` are replaced
+atomically; dotted names qualify an owner and never patch a subobject.
 
 This keeps protocol layers separate :
 
@@ -250,7 +252,7 @@ additional typed invocation `exit` output. The compiler lowers those ports to
 runtime Reader/Writer halves that share one process handle and one
 correlator.
 
-`HttpServer` and `HttpClient` are deliberately separate node types because
+`HttpServer` and `HttpClient` deliberately name separate Contracts because
 they have different external roles even though both can have read and write
 directions :
 
@@ -311,8 +313,8 @@ mutable memory to child Nodes.
 
 ### Graph composability
 
-A graph references another graph **by name, as a node** — the third node
-family, not a special construct :
+A graph references another graph **by name, as a Node** — a structural Graph,
+not a special construct:
 
 ```rastok
 graph sessions {
@@ -370,7 +372,10 @@ physical deployment policy and are not inferred as source semantics.
 Composition rules :
 - A graph's `input <name>: <type>` declarations become inbound ports on the composed graph node.
 - A graph's `output <name>: <type>` declarations become outbound ports on the composed graph node.
-- A composed graph is still a Node — of the **Graph family** (never reclassified as an Operator or Connector). Effect-wise it is *pure* when it contains no Connector and *effectful* when it wraps a boundary ; that property propagates to analyses, not to its family.
+- A composed graph remains a **Graph** and is never reclassified as an
+  Executor. It is effect-free when it contains no effective Connector and
+  effectful when it wraps a boundary; that property belongs to analysis, not
+  to the structural taxonomy.
 - A Graph that contains a Node binding a unique resource (HTTP listener, TCP
   listen, etc.) cannot be key-instanced unless that Connector contract
   explicitly supports replication. Validation refuses the resolved contract,
@@ -403,19 +408,19 @@ Braces and names carry ALL the semantics — indentation carries none.
   `W-DEAD-GRAPH` (warning, not an error — work-in-progress graphs are
   legitimate), and its boundary-port wiring obligations are suspended.
   Any partial wiring, or any source Connector inside, re-arms the normal
-  resolved `UnwiredPolicy` of every output (`require_wire`, `journal`,
-  `bubble(port)`, or explicit discard with `-> nothing`).
+  explicit-destination obligation of every productible output. A deliberate
+  discard is written `-> nothing`.
 
 ## Operator parameterization : state + instance + lifetime + transaction
 
 Per [WHITEPAPER.md §2.3](../../WHITEPAPER.md), what informal vocabulary called
 “Reducer”, “Aggregator”, “Window”, and “Joiner” are guide names for the same
 Operator parameterized along four orthogonal axes. They are not aliases or
-NodeTypes:
+structural categories:
 
 | Axis | Values | Effect |
 |---|---|---|
-| `var` state | absent / typed `S` | Node-local state |
+| `var` state | absent / typed `S` | Operator-private state |
 | `instance` | absent / one canonical key expression | singleton / keyed addresses |
 | `lifetime` | absent / one profile | persistent / temporal instances |
 | handler trigger | `on <port>` / `on (a, b)` | ordinary transaction / join |
@@ -458,62 +463,54 @@ ordinary expressions. Structural reshaping may use tagged frontends
 
 **Emitting** : a braced value is classified ONCE by its top-level roots (D-2026-08-09-1). With only the reserved roots `data` and `meta` it is the ENVELOPE form : `out = { meta.app.count = count }` inherits the input envelope (meta + data) and patches the listed fields, and a whole-`data` assignment makes the data fresh. With no reserved root, `out = { total = n }` builds a fresh data record (a `struct`), keeping the input's heritable metadata per the uniform propagation rule (D-2026-08-10-2 ; `content_type` excluded — D-2026-08-10-4). Mixing the two refuses with `E-BRACE-MIXED` — business fields named `data` or `meta` take the explicit escape `data = { … }`. `out = .` re-emits the input envelope unchanged ; `out = nothing` emits nothing on that port this transaction. There is no `previous(x)` operator — a transaction reads the previous transaction's committed state at its start, then proceeds imperatively. The synchronous-dataflow `pre` of Lustre/SCADE applies at the **inter-transaction** boundary (each transaction is one cycle), not inside a transaction. `now()` observes the one logical timestamp fixed for the current firing; it never reads the host clock and its value is sealed when observable (see [expressions.md §1.2](expressions.md)).
 
-## Dynamic routing and keyed dispatch
+## Dispatch, route selection, and keyed placement
 
-The graph topology is statically declared (DAG, no cycles, every edge visible
-in source). Two common patterns recover bounded dynamism without introducing
-another NodeType:
+Three different decisions remain separate:
 
-| Pattern  | Selection mode                    | Topology contract                                  |
-|------------|-----------------------------------|----------------------------------------------------|
-| **Router** | Runtime choice 1-of-N or list-of-N | All N output ports are declared statically         |
-| **Dispatch** | Keyed sub-graph instantiation | The sub-graph type and `instance.key` expression are declared statically |
-
-`Dispatch` is already ordinary keyed Graph execution. `Router` is only a guide
-name for conditional emissions from an Operator to statically declared output
-ports. The generic conditional multi-output statement remains a named source
-gate; `operator x : Router` refuses rather than conjuring a privileged runtime
-family. Whatever spelling lands must keep every possible destination in the
-static port/edge table.
-
-### Boundary sugar `.` and `.foo` for graph wiring
-
-The wiring grammar accepts a dot-prefixed `port_ref` to refer to the **current graph's boundary** :
-
-| Form | Meaning | Position |
+| Decision | Surface | Semantics |
 |---|---|---|
-| `.` | the graph's default boundary port — `in` when used as edge source, `out` when used as edge target | leftmost / rightmost of a chain, or as a single edge endpoint |
-| `.foo` | the graph's explicitly declared port `foo` (must match an `input foo` or `output foo` declaration in the body) | anywhere a `port_ref` is legal |
+| transaction control | Operator `Dispatch` | select one checked handler branch |
+| static route selection | `source -> match { ... }` | select closed destination sets from a source tag |
+| keyed placement | `instance.key` | choose the logical Node instance |
 
-This mirrors the **jq convention** : in jq, `.` is "the current envelope" and `.field` accesses a property ; in wiring, `.` is "the current graph" and `.foo` accesses a named boundary port. Same mental model, different scope.
+None creates a dynamic topology. Every possible physical destination is known
+in the validated spatial DAG.
+
+A route match accepts only a tagged union, enum, or bool. It is exhaustive,
+has disjoint case sets, does not evaluate expressions, and preserves the
+complete tagged value:
 
 ```rastok
-// without sugar
-graph payment : Saga {
-  . -> reserve -> authorize -> pay -> .
-}
-
-// with `.` sugar — boundary inferred by position
-graph payment : Saga {
-  . -> reserve -> authorize -> pay -> .
-}
-
-// with `.foo` sugar — explicit named boundary ports
-graph webhook {
-  input  request  : HttpRequest
-  output response : HttpResponse
-  output error    : ErrorReport
-
-  .request -> handler -> .response
-  handler.err -> .error
+request.exit -> match {
+  Completed                  -> nothing
+  TimeoutExpired | DnsFailed -> retry
+  _                          -> failed
 }
 ```
 
-**Static rule** : `.` (bare) is **only** legal at the leftmost or rightmost position of a chain edge, or as the source / target of a one-hop edge. A `.` in an intermediate position (`a -> . -> b`) is a compile error — the boundary cannot be re-entered mid-flow. `.foo` (named) has no such restriction ; it is a regular port reference.
+A simple route and one match may coexist additively on a source; selecting the
+same destination twice for one case is `E-ROUTE-DUPLICATE`. Case routing is
+stored separately from `PhysicalEdge` identity.
 
-**Why this is safe LL(1)** : at the start of a `top_decl` or `graph_body` item, seeing `.` immediately identifies an `edge_decl` whose source is a boundary `port_ref`. The parser does not need to peek further than the next token to disambiguate from value-position `.` (which only appears after `=`).
+The old boundary spellings `.` and `.foo` are removed from wiring. Current
+Graph ports are named directly because ports and children share one scope:
 
----
+```rastok
+graph webhook {
+  input request: HttpRequest
+  output response: HttpResponse
+  output error: ErrorReport
+
+  request -> handler
+  handler.out -> response
+  handler.err -> error
+}
+```
+
+Old dot-prefixed wiring receives a migration diagnostic. It is never an
+alias. Equivalent explicit source must lower to the same plan and semantic
+hash. Value-position `.`, for example `out = .`, remains the envelope
+identity value.
 
 Broadcast to multiple outputs is not a separate primitive — it is the
 broadcast form of the atomic multi-emit statement :
@@ -521,7 +518,8 @@ broadcast form of the atomic multi-emit statement :
 ```rastok
 operator notify {
   on in {
-    (sms, email, push, slack) = in       // same envelope to every declared output
+    // RHS once; one distinct ordered envelope per declared output
+    (sms, email, push, slack) = data
   }
 }
 ```
@@ -627,12 +625,13 @@ Node; Graph-level immutable `val`s remain lexical.
 |---|---|---|
 | Declaration keyword | `graph` / `operator` / `connector` | `graph teams_inbound { ... }`, `operator classify { ... }`, `connector inbound : HttpServer { ... }` |
 | Graph names | snake_case (graphs are named like modules, not like node types) | `teams_inbound`, `codex_session`, `api_to_s3` |
-| Node types | PascalCase | `HttpServer`, `HttpClient`, `Jaq`, `Process` |
+| Contract names and Extensions | PascalCase | `HttpServer`, `Process`, `App`, `Loop` |
 | Node instances | snake_case | `inbound`, `to_codex`, `client_ws`, `sessions` |
 | Ports | snake_case, role-named, **no direction suffix** (direction from declaration/use) ; `in`/`out`/`err` are conventional spellings | `event`, `delta`, `flush`, `matched` |
 | Config keys | snake_case | `listen`, `nonce_ttl`, `jwks_url` |
 
-Node type names describe a stable external role or a pure graph primitive.
+Contract names describe a stable external role. Extension names describe a
+separate orchestration protocol.
 No `Reader`, `Writer`, or `Endpoint` suffix is needed in the DSL :
 
 | Type | Role is inferred from | Examples |
@@ -659,7 +658,7 @@ optional, needed only to **pin** a type/schema (`output x: T`), or to
 document a node with no handler (e.g. a saga) or a graph's public
 interface. Direction is carried by the keyword, not the name. The names
 **`in` / `out` / `err`** are conventional default spellings — their usual
-directions and sink policies are known without a declaration, but a plan row
+directions are known without a declaration, but a plan row
 exists only when the program declares, handles, emits or wires it. They are
 typed by the same mechanism as every other port. A `Process` maps them
 exactly to stdin, decoded stdout and raw stderr; its ordinary `exit`
@@ -678,7 +677,7 @@ output carries the tagged lifecycle/outcome value. Conventions :
 - a Connector's `exit` conventionally carries the tagged terminal outcome of
   one admitted invocation; it is still an ordinary typed output
 
-Every output is wired explicitly or sent to its resolved sink policy:
+Every productible output is wired explicitly or sent to `nothing`:
 
 ```rastok
 client.out -> codex.in
@@ -698,8 +697,11 @@ operator route {
   output invoice: variant
   output refund: variant
 
-  // The general conditional-emission statement is a named source gate.
-  // Once landed, this ordinary Operator will emit to a selected subset.
+  on in match {
+    data is Invoice => invoice = data
+    data is Refund  => refund = data
+    _               => audit = data
+  }
 }
 
 route.audit   -> audit_log.in
@@ -715,23 +717,19 @@ merge carries no guard or ordering policy. A guarded fan-in such as "wait for
 `on (a, b, c)` join handler (§2.3), bounded by `last` (and optionally
 `within`) — not the default funnel.
 
-The Aggregator pattern is the stateful counterpart for keyed folds: fragments arrive
-on a declared input such as `.delta`, flush signals arrive on `.flush`,
-and the aggregate is emitted on a declared output such as `.aggregate`.
+The Aggregator pattern is the stateful counterpart for keyed folds: fragments
+arrive on a declared input such as `delta`, flush signals arrive on `flush`,
+and the aggregate is emitted on a declared output such as `aggregate`.
 
-One possible future structural sugar is:
+Closed routing by source case is:
 
 ```rastok
-codex.out -> {
-  { meta: { method: "item/agentMessage/delta" } } -> aggregate_reply.delta, typing_feedback.in
-  { meta: { method: "turn/completed" } }          -> aggregate_reply.flush
-  _                                               -> nothing
+codex.out -> match {
+  Delta     -> { aggregate_reply.delta typing_feedback.in }
+  Completed -> aggregate_reply.flush
+  _         -> nothing
 }
 ```
-
-It can lower to an anonymous ordinary Operator plus normal edges only after
-the generic conditional-emission contract is fixed. It is not accepted by the
-current grammar.
 
 ## Edges
 
@@ -760,12 +758,11 @@ form means *"this transaction emits nothing"* (source side) ; `-> nothing` means
 *"this output stream goes to /dev/null"* (sink side). The drain **always
 consumes**, so it never applies back-pressure.
 
-**An emitted `RequireWire` output port that is left unwired is a compile
-warning** — it usually means the topology is incomplete. Resolve it explicitly:
-wire it to a consumer or to `nothing`. If the warning is accepted, the emission remains in its transaction
-record and observation stream but creates no downstream delivery; a
-`RootSink` contract row additionally publishes an unclaimed emission at the
-root sink. The runtime never infers either behavior from the port name.
+Every possibly productible output or closed output case requires a
+disposition. Leaving one unwired is `E-UNWIRED-OUTPUT`, including at a nested
+Graph boundary. Resolve it by wiring a consumer or writing `-> nothing`.
+Only an output whose impossibility is re-derived from the validated program is
+exempt and receives `W-DEAD-OUTPUT`. There is no implicit sink.
 
 ### Bidirectional wiring
 
@@ -801,7 +798,7 @@ Ambiguity-free — every edge says exactly which port on each side.
 
 ### Branchements (fan-out / fan-in)
 
-Real DSL primitives, not just sugar :
+Real DSL primitives, not just sugar:
 
 ```
 parse -> {
@@ -810,7 +807,7 @@ parse -> {
   metrics
 }
 
-# == parse -> store ; parse -> audit ; parse -> metrics
+# one envelope, three DeliveryRef values; target order is non-semantic
 ```
 
 ```
@@ -820,10 +817,12 @@ parse -> {
   worker
 } -> sink
 
-# == api -> sink ; cron -> sink ; worker -> sink
+# three independent mpsc sources; no join or source ordering
 ```
 
-Used for fan-out (one source to many destinations) and fan-in (many sources to one destination — funnel). The mpsc multi-producer semantic makes fan-in cost-free.
+Destination sets reserve every target atomically and route one envelope.
+Source sets expand to independent mpsc edges. `nothing` cannot share a
+destination set with a real or manager destination.
 
 ### Trace by branchement
 
@@ -914,10 +913,10 @@ Writing two arrows in opposite directions gives a compile error. Express the sam
 
 | Need | Pattern |
 |---|---|
-| Retry after a selected outcome | A `graph … : Loop` containing the Connector, with an explicit handler/guard over the connector's typed outcome port (for Process, `exit`) — see [loop.md](loop.md) |
+| Retry after a selected outcome | a Loop host whose closed exit cases route to `Loop.again` or whose next state is sent to `Loop.next` |
 | DLQ + replay | Failed → `Memory`; operations tooling reads a bounded snapshot, then injects selected values as roots of a new run |
 | Iterative refinement, fixed N | Static unfolding : `step -> step -> step` |
-| Iterative refinement, dynamic N | the bounded `: Loop` aspect |
+| Iterative refinement, dynamic N | the finite `: Loop` Extension |
 | Backpressure feedback | Already implicit via bounded mpsc — no edge needed |
 | Saga state machine | Internal state in a SagaCoordinator node, or unfolded chain |
 
@@ -989,7 +988,7 @@ Inside `Jaq { program = jq! { ... } }`, the input visible to the program is the
 ```
 
 (The `meta.sys` Tier 1 is fixed in [envelope.md](envelope.md). Tier-2
-`saga_*` / `loop_*` appear only inside the corresponding aspect
+`saga_*` / `loop_*` appear only inside the corresponding Extension
 scope. All ids are blake3-derived 128-bit values.)
 
 | Field | Writable by jaq |
@@ -1007,7 +1006,7 @@ nested composites belong in `data`. There is no bare
 form: `meta.customer_id` is invalid. Types unify across all writers of an
 `app` field; `ext` fields come from Connector contracts plus the standard
 `content_type`. `meta.sys` is the fixed five-field Tier 1 plus
-scope-conditional aspect fields; Connector outcome data lives on its
+scope-conditional Extension fields; Connector outcome data lives on its
 ordinary typed output port, not in `meta.sys`. Absent-field semantics are
 checked by the Rastok expression grid: an undeclared leaf is a compile
 error, a required read after an ambiguous join merge must be resolved by
@@ -1154,17 +1153,17 @@ does not claim implementation or release status.
 | `Timer` | Connector node (one-shot or periodic timestamp events) | specified in the initial stdlib catalog; not the runtime time authority |
 | `Calendar` | Source Connector | civil time (cron+tz / at) — see stdlib.md |
 | `Memory` | bounded in-process store | initial catalog; append and snapshot-read contract in stdlib.md |
-| `Jaq` | future Operator NodeType (jq guest over structured values) | frontend is registered; full Operator engine remains deferred |
-| `Sql` | future Operator NodeType (SQL guest over the table view of `array<struct>`) | planned guest; not in the initial executable slice |
+| `Jaq` | possible future Executor form or Operator engine (jq guest over structured values) | frontend is registered; execution contract remains deferred |
+| `Sql` | possible future Executor form or Operator engine (SQL guest over `array<struct>`) | planned guest |
 | Reducer pattern | ordinary Operator with `var`, optionally keyed | executable without an annotation |
 | Aggregator pattern | Reducer with `instance.key` | executable without an annotation |
 | Window pattern | stateful owner with a finite `lifetime` | processing-time profiles executable; sliding/event-time deferred |
 | Joiner pattern | Operator with an `on (a, b)` join handler | executable without an annotation |
-| Router pattern | conditional emission to declared output ports | generic conditional-emission source form remains deferred; `: Router` refuses |
-| Fanout pattern | atomic multi-emit statement `(a, b, c) = x` | executable; no NodeType |
-| Dispatch pattern | Graph carrying `instance.key` | executable; no NodeType |
-| `Saga` (aspect) | Saga aspect — opt-in scoping for long-running compensation-based workflows (model in [`effects-and-sagas.md`](effects-and-sagas.md), generic mechanism in [`aspects.md`](aspects.md)) | grammar specified; runtime manager requires effective `durability >= local` |
-| `Loop` (aspect) | Loop aspect — bounded tail-recursive iteration (retry / convergent / counted), spec in [`loop.md`](loop.md) | closed M1.7 source/check/runtime contract retained by v15; named later limits remain fail-closed |
+| Router pattern | closed/open Dispatch emitting to declared output ports | v16 target; `: Router` refuses |
+| Fanout pattern | atomic multi-emit statement `(a, b, c) = x` | v16 target; no category |
+| Dispatch | recursive `Linear | ClosedMatch | OpenMatch` within one Operator transaction | v16 target |
+| `Saga` Extension | future compensation orchestration | direction only; fail closed |
+| `Loop` Extension | finite temporal recurrence over an admissible host | v16 target in [loop.md](loop.md) |
 | `-> nothing` | Discard sink (built-in) | not a node — `nothing` as an edge target ; non-blocking drain |
 | `RequestReply` | Correlated call pattern | design intent ; may lower to Connector + Operator composition |
 | `Metrics` | Sink Connector | future |
@@ -1232,8 +1231,11 @@ Semantics :
 - `inbound.out = { ... }` injects an envelope at an inbound Connector's
   output — classified like any braced value (here the envelope form :
   every root is reserved).
-- `mock sessions.codex { on in where ... { out = ... } }` uses ordinary handler
-  grammar; an uncovered external call fails the scenario loudly.
+- `mock sessions.codex { on in where ... { out = ... } }` uses the Lab's
+  Driver-script grammar. Its handler-shaped clauses describe the simulated
+  external peer; they are not Connector-owned DSL handlers and do not become
+  application `Dispatch` in the plan. An uncovered external call fails the
+  scenario loudly.
 - `expect "label" outbound.in where (...)` observes deliveries since the last
   action step. `expect nothing ...` is the explicit empty-window quantifier.
 
@@ -1282,13 +1284,13 @@ Required Rust extensions for the parser to land :
 
 | Term | Meaning |
 |---|---|
-| `graph` | Graph declaration keyword; fixes `node::Kind::Graph`. |
-| Operator | Node kind whose computation is internal to the graph; its default NodeType is `Operator`. |
-| Connector | Node kind that talks to an external system; its exact contract id determines the mandatory NodeType. |
-| NodeType | The one effective implementation/contract compatible with a Node kind (`App`, `Operator`, `Process`, …). |
-| NodeAspect | An optional orthogonal orchestration protocol (`Loop`, `Saga`), never a replacement NodeType. |
+| `graph` | declaration keyword for a structural Graph Node |
+| Executor | Node category with bounded activations and atomic transitions |
+| Operator | Executor whose transition is described by DSL Dispatch and private `var` state |
+| Connector | Executor which owns one versioned Contract; its transition is described by that Contract and typed Driver events |
+| Extension | protocol attached to a Node, such as `App`, `Loop`, or future `Saga` |
 | Operator parameterization | Four orthogonal choices — Node-local `var`, optional `instance.key`, optional `lifetime`, and ordinary/join handler — covering the Reducer/Aggregator/Window/Joiner guide patterns. |
-| Dynamic patterns | Router = conditional ordinary emissions; Dispatch = keyed Graph; Fanout = atomic multi-emit. None is a NodeType. |
+| Dynamic patterns | Router = Dispatch with static outputs; Fanout = destination set or multi-emit; neither adds a Node category |
 | Instance | One logical execution context of a Node owner. Its address is the owner path plus the outer-to-inner stack of keyed instance frames. A singleton owner has no local key frame. See [instances.md](instances.md). |
 | Lifetime | The policy that says when an instance closes. It is independent from key selection: keyed and singleton owners may both be persistent or finite-lived. |
 | State read-modify-write | **Imperative within a transaction.** `x` (bare in DSL, or `$x` inside `jq! { … }`) starts at the value the previous transaction committed (or the default); assignments mutate it in place, so later reads see the new value (RHS = Rastok expression; no `++`-style shortcuts). The transaction commits atomically at its end. The Lustre `pre` is *inter-transaction*, not intra. |
@@ -1370,9 +1372,8 @@ COMMENT    ::= "//" .* EOL  |  "/*" any* "*/"
 DECL_KW    = { "graph", "operator", "connector",
                "type",                                                 // unit-level type alias (D-2026-08-10-8)
                "val", "var", "input", "output", "on",
-               "start", "stop", "compensate",                          // lifecycle / saga handler triggers (see effects-and-sagas.md for `compensate`)
+               "start", "stop", "match",                               // Operator lifecycle and Dispatch
                "where", "having", "within", "last",
-               "when",                                                 // edge guard : a -> b when <expr>
                "effect", "behavior",                                   // the two mandatory Connector axes (effects-and-sagas.md ; stdlib.md §2)
                "lab", "simulation", "experiment", "theorem", "over",  // the Lab surface
                "scenario", "defaults",
@@ -1468,7 +1469,7 @@ names, and future formats) are ordinary identifiers. The Registry
 selects a reader/compiler only after `IDENT!` has selected the grammar
 production. Old bare tag spellings may receive migration diagnostics,
 but do not reserve their names.
-Concrete NodeType names such as `HttpServer`,
+Concrete Contract names such as `HttpServer`,
 `Process` and `Postgres` are ordinary PascalCase identifiers resolved
 later by the stdlib registry, not lexer keywords.
 
@@ -1486,45 +1487,41 @@ top_decl          ::= graph_decl                       // incl. the one `: App` 
 // A graph instantiates by declaration and wires by name ; the entry point is
 // the `: App`-annotated graph ; `app` is a pre-bound identifier for it.
 
-graph_decl        ::= "graph" IDENT ( ":" node_annotation )? "{" graph_body "}"    // declaration = instantiation; common Node attributes carry instance/lifetime
+graph_decl        ::= "graph" IDENT ( ":" extension_list )? "{" graph_body "}"     // declaration = instantiation; common Node attributes carry instance/lifetime
 
-operator_decl     ::= "operator" IDENT ( ":" node_annotation )? operator_body
-connector_decl    ::= "connector" IDENT ":" node_annotation operator_body
+operator_decl     ::= "operator" IDENT ( ":" extension_list )? operator_body
+connector_decl    ::= "connector" IDENT ":" connector_annotation connector_body
 
-// `node_annotation` is one optional NodeType FIRST, then NodeAspects.
-// The checker owns classification and compatibility (aspects.md):
-//   - Connector: one mandatory exact contract NodeType, then aspects.
-//   - Operator: implicit/explicit `Operator` (or a registered pure engine), then aspects.
-//   - Graph: implicit/explicit `Graph`, unique root `App`, then aspects.
-// Duplicate, unknown, misordered, or incompatible symbols refuse as
-// E-NODE-ANNOTATION. Known but unimplemented aspects refuse by their named gate.
-node_annotation   ::= IDENT ( "+" IDENT )*
+// The declaration keyword fixes Graph / Operator / Connector.
+// A Connector starts with exactly one Contract; Graph and Operator contain only
+// Extensions. Extension order is canonical and non-semantic.
+connector_annotation ::= IDENT ( "+" IDENT )*
+extension_list    ::= IDENT ( "+" IDENT )*
 
 operator_body     ::= "{" ( port_decl | val_decl | var_decl
                           | handler_decl | attribute )* "}"
                                                                       // sub_block is DEAD (D-2026-08-12-1); parsed only to refuse
                                                                       //   with its migration hint
+connector_body    ::= "{" ( port_decl | val_decl | attribute )* "}"  // no DSL var or handler in v16
 
 graph_body        ::= ( port_decl | operator_decl | connector_decl
-                       | val_decl | var_decl | edge_decl
+                       | val_decl | edge_decl
                        | defaults_block
                        | graph_decl                            // graphs NEST (effects-and-sagas §7.2)
-                       | attribute                             // aspect attributes : Saga.timeout = duration("10m"), name = …
-                       | handler_decl )*                        // graph-level handlers; Loop continues through `next` and terminates through ordinary output(s) and/or `stop`
+                       | attribute )*                          // Graph has no var or handler
 
 type_decl         ::= "type" IDENT "=" type_ref                   // TOP-LEVEL only ; one namespace per unit ; duplicates refuse ;
                                                                   //   recursion refuses (v1) ; budgets: depth ≤ MAX_NESTING, expanded
                                                                   //   tree ≤ 4096 nodes, ≤ 256 fields/struct, ≤ 64 KiB (D-2026-08-10-8)
 
-// A Graph carrying `: Loop` uses ordinary qualified attributes:
+// A Node carrying `: Loop` uses ordinary qualified attributes:
 //   Loop.fuel = 5
 //   Loop.delay = { kind = exponential; first = duration("100ms");
 //                  ceiling = duration("5s") }
 // `Loop.measure` admits the L6 direct signed-integer ranking fragment;
-// `Loop.invariant` is absent or literal true in that first certificate gate.
-// Every richer theorem spelling fails closed. `Loop.jitter` is reserved.
-// Semantic validation, the contributed `next`/`expired` ports and the removal
-// of `Loop.variant`/`Loop.backoff` are specified in loop.md.
+// Every richer theorem spelling fails closed. `Loop.entry` and
+// `Loop.terminal` disambiguate host interfaces. Loop.next / again / done are
+// manager commands, not ports; Loop.expired is the sole contributed output.
 
 port_decl         ::= ( "input" | "output" ) IDENT ( ":" type_ref )?  // source annotation OPTIONAL; every validated port has an effective type
                     // in / out / err are conventional spellings and use this same model; only used/declared rows materialize in the resolved plan.
@@ -1535,36 +1532,39 @@ port_decl         ::= ( "input" | "output" ) IDENT ( ":" type_ref )?  // source 
                     //    c -> a.tick
 
 val_decl          ::= "val" IDENT ( ":" type_ref )? "=" value        // immutable, scope by position
-var_decl          ::= "var" IDENT ":" type_ref ( "=" value )?        // mutable state owned by this Node; never inherited by child Nodes
+var_decl          ::= "var" IDENT ":" type_ref ( "=" value )?        // mutable state owned by this Operator; never inherited by child Nodes
 
-handler_decl      ::= "on" trigger guard_clause* handler_body
-                    // A handler always has a body. Loop has no body-less base-case
-                    // declaration: every reachable traversal explicitly continues
-                    // once through `next`, or terminates through ordinary output(s)
-                    // and/or `stop`. The parser retains the removed body-less form
-                    // only as a recovery node so the checker can issue one migration.
+handler_decl      ::= "on" trigger where_clause? join_bound* handler_dispatch
 trigger           ::= "start"
                     | "stop"
-                    | "compensate"                                   // compensation event on a `compensable` Connector — see effects-and-sagas.md
                     | "(" IDENT ( "," IDENT )* ")"                   // join : presence of all named ports
-                    | IDENT "." IDENT                                 // direct-child output, only in a Graph-owned aspect handler
                     | IDENT                                          // single port
-                    // The parser consumes removed `Aspect.start` / `Aspect.stop`
-                    // triggers for a named migration; they are not productions.
-                    // Among child-output observations, L3 proves only a
-                    // direct child. Deeper descendant paths and Graph handlers
-                    // without an admitted aspect remain named refusals.
-guard_clause      ::= "where" expr                                   // content predicate (Tier 1 = 1 port, Tier 2 = ≥2)
-                    | "having" expr                                  // aggregate predicate (quorum, e.g. count(p) >= k) — parsed, named-deferred in R6
-                    | "within" expr                                  // join time window (optional ; positive constant duration)
-                    | "last" INT                                     // join count bound — a Tier-2 θ-join requires AT LEAST ONE bound (within or last) ; presence joins may use either or none
+where_clause      ::= "where" expr                                   // one-port: consuming filter sugar; join: pre-consumption admission guard
+join_bound        ::= "within" expr                                  // legal on a join only; positive constant duration
+                    | "last" INT                                     // legal on a join only
                     // Join ports are distinct declared inputs. Their source order fixes bindings and identity.
                     // A bounded join declares `output expired: union { JoinExpired {} }` exactly in R6.
                     // Join expressions use `<port>.data` / `<port>.meta`; bare `data` and `out = .` refuse.
                     // `by` is removed: another correlation domain is another `instance.key` owner.
-handler_body      ::= "{" ( val_decl | statement )* "}"
-statement         ::= "(" lvalue ( "," lvalue )* ")" "=" tuple_or_broadcast   // atomic multi-emit — `(` decides ; tuple = explicit per-port ; broadcast = same value everywhere (`Fanout` is not a surface alias)
+handler_dispatch  ::= dispatch | "{" val_decl* dispatch "}"
+dispatch          ::= linear_dispatch | closed_match | open_match
+                    // At most 32 nested match decisions per path, including
+                    // the match introduced by a single-port `where`.
+                    // Source and checked HIR refuse E-DISPATCH-DEPTH before
+                    // recursive evaluation; v16 validates the bound again.
+linear_dispatch   ::= statement*
+closed_match      ::= "match" expr "{" closed_arm ( sep closed_arm )* "}"
+closed_arm        ::= case_set "=>" arm_dispatch
+open_match        ::= "match" "{" open_arm* fallback_arm "}"
+open_arm          ::= expr "=>" arm_dispatch
+fallback_arm      ::= "_" "=>" arm_dispatch
+arm_dispatch      ::= statement | handler_dispatch
+case_set          ::= IDENT ( "|" IDENT )* | "_" | BOOL
+statement         ::= "(" lvalue ( "," lvalue )* ")" "=" tuple_or_broadcast   // atomic multi-emit
                     | "stop"                                          // close the current Node instance after this transaction commits
+                    | "nothing"                                       // no emission on this Dispatch leaf
+                    | "Loop.again" | "Loop.done"                       // manager Control commands
+                    | "Loop.next" "=" value                           // manager Data command
                     | IDENT path_tail assignment_tail                 // left-factored : ONE consumed word ; the ASSIGNMENT PROBE decides
 assignment_tail   ::= ( ":" type_ref )? "=" value                     // the consumed path is the LVALUE : var write / ordinary port emit / dotted meta·data write ( = nothing → no emit ; = . re-emits the input ; braced values classified by reserved roots — see braced_value ). `err` has no special branch.
                     // There is NO implicit yield (D-2026-08-13-1, review round 7) : a
@@ -1760,10 +1760,10 @@ expr_path         ::= /* a Rastok expression access path (subset of expr) : IDEN
 // so expression map literals `{"a": 1}` — the SAME punctuation as the DSL map,
 // D-2026-08-10-6 — and struct-ish braces inside the span are fine)
 // until the position's terminator set :
-//   guard positions   (where/having/when)     → { having within last when NEWLINE "{" "->" }
+//   handler guards    (where)                 → { within last NEWLINE "{" "match" }
 //   attribute / init  (= …)                   → { NEWLINE ";" "}" }
 //   emission          (out = …)               → { NEWLINE ";" "}" }
-//   paren positions   (args, tuples)          → { "," ")" } at depth 0
+//   match predicates / paren positions        → { "=>" "," ")" } at depth 0
 //   expect predicate  (where …)               → { NEWLINE "}" }
 // A terminator is never consumed by the expression lexer; the DSL parser resumes on it.
 // MULTI-LINE spans : NEWLINE terminates at depth 0 — a predicate spanning lines is
@@ -1821,28 +1821,30 @@ map_entry         ::= STRING ":" value                                // text ke
 
 defaults_block    ::= "defaults" "{" struct_body "}"
 
-edge_decl         ::= edge_source ARROW edge_target edge_guard? edge_config?
-                    | edge_source BIARROW edge_target edge_config?
-                    | branch_source ARROW edge_target edge_guard? edge_config?
-                    | edge_source ARROW branch_target edge_guard? edge_config?
-                    | branch_source ARROW branch_target edge_config?
-                    | chain_edge
+edge_decl         ::= path BIARROW path edge_config?
+                    | path ARROW ( path ( ARROW path )* ( ARROW terminal_destination )?
+                                 | terminal_destination ) edge_config?
+                    | source_set ARROW routed_destination edge_config?
+source_set        ::= "{" path ( sep? path )+ "}"
+routed_destination ::= path | terminal_destination
+terminal_destination ::= destination_set | edge_match | "nothing"
+destination_set   ::= "{" simple_destination ( sep? simple_destination )+ "}"
+simple_destination ::= path | "nothing"
+edge_match        ::= "match" "{" edge_arm ( sep edge_arm )* "}"
+edge_arm          ::= case_set ARROW ( simple_destination | destination_set )
+path              ::= IDENT ( "." ( IDENT | TYPE_KW | LITERAL_KW ) )*
+sep               ::= NEWLINE | ";"
+// Set members may also be separated by ordinary lexical whitespace, as in
+// `source -> { archive audit }`. Match arms retain their explicit separator.
 
-edge_source       ::= port_ref
-edge_target       ::= port_ref | "nothing"                           // `nothing` = explicit discard sink (non-blocking drain)
-port_ref          ::= IDENT ( "." ( IDENT | TYPE_KW | LITERAL_KW ) )* // node (default port), node.port, or a COMPOSED
-                                                                       //   path : sessions.codex.in (instance…node.port)
-                    | "." IDENT?                                       // current graph's boundary :
-                                                                       //   `.`      = default boundary port (resolves to `in` as edge_source, `out` as edge_target)
-                                                                       //   `.foo`   = explicitly named graph port (must be declared via `input foo`/`output foo`)
-                                                                       // Static rule : `.` (bare) is legal only at the leftmost or rightmost position of a chain_edge or as edge_source/edge_target ; never as an intermediate node. `.foo` is legal anywhere a port_ref is.
-                                                                       // Mirrors the jq convention : `.` = "the current thing's surface" (envelope in jq, graph in wiring).
-branch_source     ::= "{" port_ref ( ";" port_ref )* "}"
-branch_target     ::= "{" port_ref ( ";" port_ref )* "}"
-chain_edge        ::= port_ref ( ARROW port_ref )+ edge_config?       // a -> b -> c ; or `. -> a -> b -> c -> .` with the boundary sugar
-
-edge_config       ::= "{" struct_body "}"
-edge_guard        ::= "when" expr                                     // boolean edge guard : route -> audit.in when data.kind == "approval_response"
+edge_config       ::= "{" struct_body "}"                            // applied to every expanded PhysicalEdge
+// Dot-prefixed boundary wiring and `when` are dead migration forms.
+// A route match is closed case selection; it never evaluates an expression.
+// Loop.next / Loop.again / Loop.done parse as qualified paths, then resolve
+// as manager commands rather than ports. The grammar itself makes a set,
+// match, or `nothing` terminal. A resolved manager command must also terminate
+// the declaration; only an ordinary port path may continue a chain. A
+// source_set cannot start a chain.
 
 // ============ SIMULATION GRAMMAR ============
 // A simulation = a named SET of scenarios sharing a world (mocks, prelude).
@@ -1927,8 +1929,8 @@ cmp_op            ::= "==" | "!=" | "<" | ">" | "<=" | ">="
                     // consuming them. Default quantifier = ∃ (at least one match).
                     // `app.<port>` is a legal port_ref when that App boundary port exists.
 
-mock_decl         ::= "mock" IDENT ( "." IDENT )* "{" handler_decl* "}"   // dotted = a composed node (sessions.codex) ; body IS handler grammar
-                                                                      // (on in where <expr> { … }) ; two levels :
+mock_decl         ::= "mock" IDENT ( "." IDENT )* "{" handler_decl* "}"   // dotted = a composed node (sessions.codex) ; handler-shaped Lab
+                                                                      // Driver script, not Connector-owned application Dispatch ; two levels :
                                                                       // simulation-shared / scenario override
                                                                       // (whole-mock replacement, nearest wins)
 // Inside a MOCK handler body only, one extra statement is legal :
@@ -1960,11 +1962,11 @@ parser never needs to peek further than one token.
 | `expect_step` | after `port_ref` : IDENT `count` | count quantifier ; `where` → predicate ; else done |
 | mock `handler_body` | `after` — next is an expression span | dated-emission statement (mocks only ; constant duration) |
 | `graph_body` | IDENT — next is `->` / `<->` | `edge_decl` |
-| `graph_body` | `.` | `edge_decl` (boundary sugar — `port_ref` starting with `.`) |
-| `graph_body` | `{` | `edge_decl` (branch_source) |
-| `graph_body` | `graph` / `operator` / `connector` / `val` / `var` / edge starts | the matching declaration (graphs nest; a Graph `var` remains private to the Graph's own handlers) |
+| `graph_body` | `{` | `edge_decl` (`source_set`) |
+| `graph_body` | `.` | DEAD boundary-wiring form → migration refusal with the explicit port name |
+| `graph_body` | `graph` / `operator` / `connector` / `val` / edge starts | the matching declaration; Graph has no `var` or handler |
 | `graph_body` | `input` / `output` | `port_decl` |
-| `graph_body` | `on` | `handler_decl` (graph-level handler) |
+| `graph_body` | `on` / `var` | DEAD Graph execution form → named migration refusal |
 | `graph_body` | `graph` | nested `graph_decl` |
 | `graph_body` | IDENT (dotted ok) — next is `=` | `attribute` (`Saga.timeout = duration("10m")`, `name = …`) |
 | `operator_body` | `input` / `output` | `port_decl` |
@@ -1973,16 +1975,20 @@ parser never needs to peek further than one token.
 | `operator_body` | `on` | `handler_decl` |
 | `operator_body` | IDENT — next is `=` | `attribute` |
 | `operator_body` | IDENT — next is `{` | DEAD form → migration refusal (`name = { … }`) |
+| `connector_body` | `input` / `output` / `val` / attribute | corresponding declaration |
+| `connector_body` | `on` / `var` | refusal: a Connector's transition and state belong to its Contract |
 | `trigger` | `start` / `stop` | lifecycle handler |
-| `trigger` | `compensate` | saga compensation handler (only valid on a Connector with `effect = compensable`) |
 | `trigger` | `(` | join handler `(a, b)` (presence) |
 | `trigger` | IDENT | single-port handler |
-| `guard_clause` | `where` / `having` / `within` / `last` | guard clause (0+, in any order) |
-| `handler_body` (statement) | `val` | `val_decl` |
-| `handler_body` (statement) | `stop` | close the current Node instance; no target operand exists |
-| `handler_body` (statement) | `(` | tuple multi-emit `(a, b) = (e1, e2)` |
-| `handler_body` (statement) | `lvalue` (IDENT, dotted ok — e.g. `meta.app.label`) — next is `=` or `:` | assignment / port emit (`= nothing` = no emit ; `meta.sys` is read-only, never an lvalue) |
-| `handler_body` (statement) | anything else — a bare expression, IDENT-led or not | REFUSAL (`out = <value>` hint): a complete value is consumed by its real reader into one error hole; incomplete input recovers at the line; the implicit yield is REMOVED (D-2026-08-13-1) |
+| after one-port `trigger` | `where` | consuming filter sugar, lowered to OpenMatch plus `_ => nothing` |
+| after join `trigger` | `where` / `within` / `last` | pre-consumption admission guard and finite bounds |
+| `dispatch` | `match` followed by expression | closed match over a finite domain |
+| `dispatch` | `match {` | ordered open predicate match with mandatory fallback |
+| `dispatch` statement | `stop` / `nothing` / `Loop.again` / `Loop.done` | corresponding terminal/control statement |
+| `dispatch` statement | `Loop.next =` | Data manager command |
+| `dispatch` statement | `(` | tuple/broadcast multi-emit |
+| `dispatch` statement | lvalue followed by `=` or `:` | assignment / port emission |
+| `dispatch` statement | anything else | refusal; no implicit yield or mid-block match |
 | `attr_entry` | `lvalue` (IDENT, dotted ok) — next is `=` | dotted attribute |
 | `attr_entry` | IDENT — next is `{` | DEAD form → migration refusal (`name = { … }`) |
 | `value` | IDENT — next token is `!` | `value_after_ident`: tagged frontend; the Registry resolves the name only after the grammar branch is chosen |

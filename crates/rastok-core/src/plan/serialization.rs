@@ -1972,7 +1972,7 @@ fn owner_value_from(tree: &Cbor) -> Result<OwnerValue, DecodeError> {
 fn spec_from(tree: &Cbor) -> Result<ConnectorSpec, DecodeError> {
     let pairs = map_of(tree, "connector spec")?;
     let contract =
-        crate::connector::ConnectorId::parse(text_of(get(pairs, 1, "contract")?, "contract")?)
+        crate::connector::ContractId::parse(text_of(get(pairs, 1, "contract")?, "contract")?)
             .map_err(|reason| DecodeError::Malformed(format!("invalid connector id: {reason}")))?;
     let effect = match get(pairs, 2, "effect")? {
         Cbor::Uint(0) => node::Effect::None,
@@ -3571,7 +3571,7 @@ mod tests {
                 Node {
                     path: node::Path::new(["shell"]).unwrap(),
                     execution: NodeExecution::Connector(ConnectorSpec {
-                        contract: crate::connector::ConnectorId::parse(
+                        contract: crate::connector::ContractId::parse(
                             crate::connector::PROCESS_CONNECTOR_ID,
                         )
                         .unwrap(),

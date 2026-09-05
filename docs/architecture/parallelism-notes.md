@@ -1,8 +1,10 @@
 # Parallelism — logical instances and physical execution
 
 > Design notes — non-normative, forward-looking. Updated after
-> D-2026-08-18-1. The semantic authority is
-> [instances.md](../spec/instances.md).
+> D-2026-09-05-1 for the v16 target. The semantic authorities are
+> [instances.md](../spec/instances.md),
+> [extensions.md](../spec/extensions.md), and [loop.md](../spec/loop.md).
+> Current v15 Graph Loop code retains its historical execution path until R7.
 
 ## Four concepts that must stay separate
 
@@ -19,23 +21,33 @@ mailbox rule; placement never changes program meaning.
 
 ## The invariant shared by embedded and clustered runtimes
 
-One logical Node instance owns one bounded mailbox. At most one worker claims
-that mailbox for a transaction at a time. Its derived immutable bindings,
-Node-local `var` state, open
-calls, lifecycle, armed events, and consumer cursor share the same canonical
-instance reference `(logical address, generation)`.
+One logical **Executor** instance owns one bounded delivery mailbox. At most
+one worker claims that mailbox for a transaction at a time. Its immutable
+bindings, semantic state, open exchanges, lifecycle, armed events and consumer
+cursors share the same canonical instance reference `(logical address,
+generation)`. An Operator's semantic state is its DSL `var`; a Connector's is
+the core-owned Contract/exchange fold. Physical Driver handles are rebuilt and
+are never semantic state.
+
+A Graph instance retains address, lifecycle and containment but owns no
+application mailbox or transaction. Boundary admission selects and reserves
+its contained routes. A temporal Extension manager is also not a Node: it has
+a bounded durable-command inbox per run and serializes its transactions at the
+owner's address. Graph ownership and manager control therefore create no
+second spatial scheduler domain.
 
 ```text
 today:  one deterministic pump
 later:  bounded worker pools on several Hosts
-always: one instance reference -> one claimed mailbox -> one transaction at a time
+always: one Executor reference -> one claimed mailbox -> one transaction at a time
+        one manager command -> one owner/run transition at a time
 ```
 
-An unkeyed Node is a singleton inside each enclosing Graph instance. A keyed
-Node has one logical address per canonical selected key and a fresh generation
+An unkeyed owner is a singleton inside each enclosing Graph instance. A keyed
+owner has one logical address per canonical selected key and a fresh generation
 after each completed close. Order is FIFO within one instance reference and
 deliberately unspecified across independent references. This is enough to
-keep Node-local state lock-free in the reference machine and single-writer in
+keep Executor state lock-free in the reference machine and single-writer in
 the distributed machine.
 
 Several Connector calls may nevertheless be open for one Node instance.
@@ -106,6 +118,6 @@ addresses, never parallelizes two transactions in the same mailbox.
 ## The one invariant that must never drift
 
 No implicit concurrent transaction inside one mailbox. It would break FIFO,
-Node-local state, derived identity, external-effect ordering, and replay. Any
+Executor-owned state, derived identity, external-effect ordering, and replay. Any
 future simultaneous protocol activity is an explicit Connector contract over
 individually correlated calls, not a scheduler shortcut.

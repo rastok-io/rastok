@@ -1,6 +1,7 @@
 # The Execution Model — mailboxes, ordering, time, and the two planes
 
-> **Status:** normative. The Node-owned instance model in
+> **Status (2026-09-05): normative, including the plan-v16 target in
+> D-2026-09-05-1.** The Node-owned instance model in
 > [instances.md](instances.md) supersedes the unreleased P0–P3
 > named-partition implementation. Categorical plan-package v15 retains the v9
 > realigned owner tree and instance policies. R3 routes every delivery through
@@ -21,7 +22,10 @@
 > listener/stream/body pressure; H5.2 adds the generic direct-lineage response
 > return with one real consumed cursor. Final H5 executes server Calls over
 > HTTP/1.1–3; H6 executes WebSocket Sessions over all three handshakes; H7
-> closes static assembly and portability evidence.
+> closes static assembly and portability evidence. R0–R2 now separate
+> structural Graphs from transactional Executors, replace a handler body with
+> recursive Dispatch, make Driver activations explicit, and define temporal
+> Extension-manager transactions. Those v16 forms begin implementation at R3.
 > Companion to
 > [envelope.md](envelope.md) (identity, journal-relative contract) — this doc
 > pins the rules envelope.md deferred to the execution model : the
@@ -34,22 +38,28 @@ The question this doc answers : **when a graph runs, what happens exactly, in
 what order — and what can be reproduced ?**
 
 
-## 1. The unit of work — the node transaction, run-to-completion
+## 1. The unit of work — the Executor transaction, run-to-completion
 
-A **node transaction** consumes one triggering envelope at one node and runs
-the matched handler to completion : `f(state, input) → state', emissions`.
+A transaction belongs to an **Executor** or to a temporal Extension manager.
+An Operator transaction consumes an activation and evaluates one checked
+Dispatch; a Connector transaction consumes a spatial delivery or typed Driver
+activation and applies the Connector's Contract; a manager transaction consumes one
+durable Extension command. In each case the abstract shape is
+`f(state, activation) → state', ordered products`.
 "Transaction" is meant literally, not as a metaphor — **A**tomic (one commit,
 all-or-nothing : the transaction record, delivery-semantics), **C**onsistent
-(types + guards), **I**solated (one instance mailbox, one worker at a time),
+(types + Dispatch/contracts), **I**solated (one instance mailbox or manager
+command inbox, one worker at a time),
 **D**urable per the `durability` scope. *(Other traditions call
 this unit a Petri* transition firing *or an actor* turn *; Rastok says
 transaction because that is what it does.)*
 
 **Naming rule** : bare "transaction" in Rastok docs ALWAYS means the
-node-level unit. Any wider scope must be qualified — *graph transaction*,
-*cascade transaction* — terms **reserved, not specified** (nothing wider
-exists in v0.x ; beyond one node it's the journal, beyond the graph it's the
-saga). Shorthand in diagrams and tables : `tx`.
+Executor/manager unit. A Graph has no application transaction. The lifecycle
+controller may still commit `l:start`, `l:closing`, and `l:stop`
+TRANSACTION records attributed to any Node owner, including a Graph. Those are
+controller facts, not Graph code. Wider *graph transaction* and *cascade
+transaction* remain reserved and unspecified. Shorthand: `tx`.
 
 The contract is **as-if-run-to-completion (as-if-RTC)** :
 
@@ -60,9 +70,9 @@ The contract is **as-if-run-to-completion (as-if-RTC)** :
   behavior is identical to the one-at-a-time execution. (The same pact as the
   C compiler's as-if rule and database serializability.)
 
-Within a transaction, statements run in **handler-text order** (the imperative
-intra-transaction model of the DSL). This order is what makes emission identity
-derivable (§4).
+Within an Operator transaction, the Dispatch selects one branch and its linear
+statements run in source order. Connector products follow their closed
+contract order. This makes emission identity derivable (§4).
 
 An Operator is pure with respect to the external world, but its evaluation can
 still refuse (for example, a dynamic narrowing has no match or encoded data
@@ -70,17 +80,48 @@ cannot be materialized). Such a `Fault` is a supervision fact, not a graph
 value: the transaction commits neither its input cursor, state nor emissions,
 and the VM returns the fault to its caller. The conventional output name
 `err` is never selected automatically. When rejection is expected domain
-behavior, the handler expresses it explicitly and emits a value on a declared
+behavior, the Dispatch expresses it explicitly and emits a value on a declared
 output — conventionally `err`, giving the simple shape `I -> Result<R,E>`.
 Catastrophic host failure such as an allocator abort is outside this typed
 contract; the runtime does not pretend every hardware/process failure is
 recoverable in-process.
 
+### 1.1 Dispatch and preparation
+
+An Operator handler owns one recursive
+`Dispatch = Linear | ClosedMatch | OpenMatch`. A ClosedMatch has a finite
+tagged/enum/bool domain, disjoint exhaustive arms, and canonical case order.
+An OpenMatch evaluates predicates in source order, chooses the first true arm,
+and requires `_`. A match is the final control form of a block or arm; only
+pure `val` declarations may precede it.
+
+On one port, `where P` is exact sugar for an OpenMatch with
+`P => body; _ => nothing`. False consumes the delivery and commits an empty
+transaction. On a join, `where` is deliberately different: it runs while
+choosing candidates, and false consumes nothing, advances no cursor, and
+commits nothing. The accepted tuple is then consumed before its Dispatch.
+
+Before commit, preparation resolves the selected branch, state delta, ordered
+emissions, manager commands, route cases, target instances, and every required
+capacity. Driver commands remain inert during preparation. Commit makes the
+whole set visible; only then may an effect command reach a Driver.
+
+### 1.2 Connector activations
+
+A world-originated Event, inbound Call, Session open, or inbound Session
+message is admitted and journaled as INBOUND before the Connector transaction
+which consumes it. A result correlated with an already-open outbound Call or
+Session write is not another root: it settles that OUTBOUND obligation and
+enters the bounded Connector activation path with the existing causal
+reference. Both paths produce ordinary core-owned Connector transactions.
+The Driver never writes the journal or semantic state directly.
+
 
 ## 2. M:N — a mailbox per logical instance, a bounded pool of workers
 
-Not a thread per key (100 000 sessions would kill the OS). One **mailbox per
-logical Node instance**, and a bounded worker pool:
+Not a thread per key (100 000 sessions would kill the OS). One bounded
+activation mailbox per logical **Executor** instance, plus the bounded command
+inbox of each temporal manager, and a bounded worker pool:
 
 ```
    incoming envelopes
@@ -109,10 +150,11 @@ Async I/O releases the worker (the mailbox stays claimed by the suspended
 transaction) ; CPU-heavy work (large `jq`, future `sql`) runs on a separate compute
 pool with back-pressure. Both are invisible under as-if-RTC.
 
-A Node without `instances` is a singleton within its enclosing Graph
-instance. A keyed Node has one mailbox per canonical key at each enclosing
-address. A `var` is private to the declaring Node, so no graph-wide lock or
-cross-mailbox mutable state exists.
+A Node without `instance` is a singleton within its enclosing Graph
+instance. A keyed Executor has one mailbox per canonical key at each enclosing
+address. A Graph has a logical instance and lifecycle but no application
+mailbox. A `var` is private to its declaring Operator, so no graph-wide lock
+or cross-mailbox mutable state exists.
 
 ### 2.1 Instance addressing and lifecycle
 
@@ -129,7 +171,7 @@ the canonical target instance reference `(address, generation)`. Delivery and
 recovery consume that recorded fact; neither re-routes by evaluating the
 expression after commit. The hierarchical address selects placement; its
 journal-derived generation forms the instance reference that indexes mailbox,
-derived immutable instance bindings, Node-local state, open calls, lifecycle,
+derived immutable instance bindings, Executor state, open calls, lifecycle,
 armed events, and consumer cursor. Type checking follows the ordinary total
 port solver and creates no second inference mechanism.
 
@@ -180,10 +222,11 @@ publication may use a protocol, but a crash may not expose one without a
 recoverable path to the other.
 
 Every selected owner, persistent included, records one lazy `l:start` before
-its first port transaction. `on start` and `on stop` are ordinary handlers in
-an executable Node's handler table and may emit ordinary typed outputs; Graph
-lifecycle records execute at R4 while Graph handler lowering remains a named
-frontend gap. A Graph close requests inner-first closure of live descendants
+its first application transaction or contained delivery. An Operator may own
+`on start` and `on stop` lifecycle handlers. A Connector's lifecycle comes
+from its Contract; a Graph has no handlers. Graph lifecycle facts are
+committed by the generic controller. A Graph close requests inner-first
+closure of live descendants
 created in that Graph generation. A non-root child's `l:start` record carries
 its enclosing Graph's complete instance reference, so the lifecycle fold
 distinguishes two successive parents at the same logical address. The journal
@@ -215,8 +258,10 @@ descendants close inner-first. The phases are:
 5. mark every still-open OUTBOUND `abandoned`, publish one empty
    `OutcomeUnknown` on its typed exit port with trigger `l:recover`, then
    discard any late partner response as a non-causal observation;
-6. run `on stop` after the last required exit, commit `l:stop` inner-first,
-   reclaim state, and make the waiting successor runnable.
+6. run an Operator's `on stop`, or the corresponding Connector's Contract-defined
+   closure, after the last required exit; then commit `l:stop` inner-first,
+   reclaim semantic state, and make the waiting successor runnable. A Graph
+   contributes no handler at this phase.
 
 `Process` cancellation that confirms normally produces `Exited`; it is never
 rewritten as unknown. A Loop wakeup is generation-scoped and dies on close.
@@ -259,7 +304,8 @@ envelope.md §2 derives every id as
 `blake3( node_path ‖ trigger ‖ parent_id ‖ emission_port ‖ emission_index )`
 and defers the index rule here. The rule :
 
-- Emissions occur in **handler-text order** (§1), which is deterministic.
+- Operator emissions occur in the selected Dispatch leaf's **source order**;
+  Connector emissions use their closed Contract order.
 - **`emission_index` counts emissions per output port, per transaction, starting
   at 0**, in that text order.
 
@@ -267,13 +313,19 @@ and defers the index rule here. The rule :
 on in {
   out = { … }                   → ("out",   0)
   out = { … }                   → ("out",   1)     // second emit, same port
-  (audit, alert) = (m, m)       → ("audit", 0), ("alert", 0)   // broadcast: per-port counters
+  (audit, alert) = m            → ("audit", 0), ("alert", 0)   // RHS once, two envelopes
+  (left, right) = (a, b)        → ("left", 0),  ("right", 0)   // values left-to-right
 }
 ```
 
 Conditional emissions count only when they execute — the index reflects the
 *actual* emission sequence of this transaction, which is replay-identical because
 the transaction's inputs are (journal-relative) identical.
+
+An ordered multi-emission creates one EnvelopeId per target and commits all
+emissions or none. It differs from `source -> { a b }`: that routing set
+creates one envelope with several DeliveryRefs, and its target order is
+canonical rather than semantic.
 
 
 ## 5. The two planes — logical time and the dated-events queue
@@ -308,8 +360,8 @@ Concretely, the supervision plane maintains **one queue of dated events**:
 | per-call timeout | a Connector's `timeout` (§6) | `TimeoutExpired` on the contract's typed call-exit port (`exit` for Process) |
 | join eviction | a join's `within` / `last` (§7) | `JoinExpired` on the Operator's declared typed expiry output (conventionally `expired`) |
 | instance lifetime expiry | `lifetime = { … }` | the instance's `on stop` sequence (parent = **the envelope that armed the deadline** — last admission for `idle`, creator for `fixed`, creating admission for its tumbling box) |
-| Loop re-entry delay | `Loop.delay` ([loop.md](loop.md) §5) | an exactly-once `l:next` admission of the recorded iteration-state envelope (same Loop run and instance generation; spatial routes selected only when due) |
-| saga completion budget | `Saga.timeout` ([effects-and-sagas.md](effects-and-sagas.md)) | a transaction of the `: Saga` node — trigger `l:timeout`, parent = the instance-creating envelope; emits `SagaExpired` on the ordinary typed `Saga.exit` output and the instance enters `rolling_back` |
+| Loop re-entry delay | `Loop.delay` ([loop.md](loop.md) §9) | manager consumes a durable Next/Again command, then exactly-once `l:next` re-admits on the remembered entry when due |
+| saga completion budget | future Saga decision | not executable in v16; no timeout or output contract is inferred |
 
 In production the queue is advanced by the hosted time source; in simulation,
 by the fixture (§8). **The delivery contract — order, causality, identity — is
@@ -355,13 +407,14 @@ codex.exit ────► typed outcome envelope TimeoutExpired
                 case      = TimeoutExpired ∈ ProcessExit
 ```
 
-*(`l:timeout` is general : it fires for ANY declared budget's expiry, with
-parent = **the envelope that armed the budget** — the request for a call, the
-instance-creating envelope for `Saga.timeout`. One trigger, one rule.)*
+*`l:timeout` is general for every currently admitted timeout budget: its
+parent is the exact envelope which armed that budget. Saga has no executable
+timeout contract in v16; its future decision must either reuse this rule or
+allocate a distinct fact explicitly.*
 
 No new handler form: the graph reacts by ordinary wiring and union
-narrowing (`codex.exit -> triage`, guards on `data is
-TimeoutExpired`). The output name and union type come from the resolved
+narrowing (`codex.exit -> match { TimeoutExpired -> triage; _ -> ... }`).
+The output name and union type come from the resolved
 Connector contract; timeout does not create a privileged error channel.
 
 ### 6.3 The call-closed rule (anti-ghost)
@@ -408,8 +461,8 @@ the conservative default stays `bypass`.
 
 ### 6.5 Attribute-name collisions — the qualified form
 
-`Saga` already owns a `timeout` (its completion budget). When a NodeType and an
-aspect (or two aspects) declare the same attribute name in one lexical scope, the
+`Saga` may eventually own a timeout. When a Connector's Contract and an Extension, or two
+Extensions, declare the same attribute name in one lexical scope, the
 **unqualified name is a compile error (ambiguous)** and the **dotted qualified
 form disambiguates** — reusing the existing attribute-namespace grammar
 (`jwt.cache_ttl`), zero new syntax :
@@ -423,9 +476,9 @@ graph payment : Saga {
 }
 ```
 
-`Saga` is Graph-only, so this common pair is naturally disambiguated by
-lexical ownership. Same-Node aspect collisions remain fail-closed; the common
-rules are defined in [aspects.md](aspects.md) §7.
+`Saga` is Graph-only in its deferred direction, so this common pair is
+naturally disambiguated by lexical ownership. Same-Node Extension conflicts
+remain fail closed; [extensions.md](extensions.md) owns the common rule.
 
 ### 6.6 Session supervision (executable through M1.6 H6)
 
@@ -601,7 +654,7 @@ orthogonal, so a temporal singleton is a real window within its enclosing
 Graph address (App-global only at singleton ancestors), while a keyed owner is
 a window per key.
 
-| Family | Shape | One envelope belongs to | Rastok | Status |
+| Exchange contract | Shape | One envelope belongs to | Rastok | Status |
 |---|---|---|---|---|
 | **Session** | elastic, closed by admission silence | 1 instance | `lifetime = { kind = idle; after = duration("2h") }` | executable R4 |
 | **Fixed** | age from instance start | 1 instance | `lifetime = { kind = fixed; after = duration("30s") }` | executable R4 |
@@ -612,7 +665,7 @@ The table describes the executable lifetime semantics. Persistent, idle,
 fixed, single-pass, and tumbling validate on Graph and Node owners. Every
 finite owner containing a `Process` must carry the explicit Closing policy of
 §2.1. A Connector's optional per-call `timeout` remains an independent normal-
-operation budget rather than an implicit close grace period.
+The complete conflict rule lives in [extensions.md](extensions.md).
 
 The processing-time tumbling contract has four rules:
 
@@ -637,7 +690,7 @@ select several instances and therefore requires explicit one-to-many routing.
 
 ## 10. Trigger vocabulary
 
-Three lifecycle triggers owned by this execution slice belong to the `l:` registry
+Selected lifecycle triggers owned by this execution slice belong to the `l:` registry
 ([envelope.md](envelope.md) §1.1/§3.1):
 
 | Transaction | `trigger` | `parent_id` (the cause) | Emitter (`owner_path` in the record) |
@@ -645,10 +698,12 @@ Three lifecycle triggers owned by this execution slice belong to the `l:` regist
 | Call-timeout expiry | `l:timeout` | the timed-out request envelope | the Connector node |
 | Join-buffer eviction | `l:evict` | the evicted envelope | the Operator node |
 | Inbound Call terminal | `l:reply` | the committed root request | the inbound Connector node |
+| Loop re-admission | `l:next` | the consumed Next/Again manager command | the Loop owner |
 
-All follow the aspect-carrier principle generalized : the supervision plane
-never emits in its own name — emissions are attributed to the graph node they
-concern. The recipe keeps zero out-of-graph emitters.
+Manager-command production and consumption are separate append-only facts in
+the v16 Loop r2 fold. They do not invent a trigger or spatial port. All
+runtime facts follow owner attribution: supervision and managers never emit in
+an anonymous out-of-graph name.
 
 
 ## 11. Non-goals of this doc (deferred, with homes)
@@ -673,11 +728,11 @@ only on empty mailboxes, and byte-identical per-address traces across runs.
 
 - [envelope.md](envelope.md) — identity recipe, journal-relative contract,
   the `l:` trigger registry, parent rules.
-- [effects-and-sagas.md](effects-and-sagas.md) — `Saga.timeout` (the
-  completion budget this doc's §6.5 disambiguates), compensation triggers.
+- [effects-and-sagas.md](effects-and-sagas.md) — effect classes and the
+  deferred Saga Extension direction.
 - [loop.md](loop.md) — `Loop.delay` as a dated event; finite fuel and a
   checked `measure` are data-driven termination witnesses orthogonal to
   wall-clock supervision.
-- [aspects.md](aspects.md) — §6 conflict rule as applied by §6.5.
+- [extensions.md](extensions.md) — Extension composition and conflicts.
 - [grammar.md](grammar.md) — `timeout` / `on_timeout`
   attributes, qualified dotted attributes.

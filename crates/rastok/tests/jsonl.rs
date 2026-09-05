@@ -559,7 +559,7 @@ fn another_contracts_codec_vocabulary_is_untouched() {
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
         if let rastok::plan::NodeExecution::Connector(spec) = &mut node.execution {
-            spec.contract = rastok::connector::ConnectorId::parse("test/custom@1").unwrap();
+            spec.contract = rastok::connector::ContractId::parse("test/custom@1").unwrap();
             for (name, setting) in &mut spec.attributes {
                 if name == "codec" {
                     *setting = rastok::plan::AttrSetting::Word(String::from("json"));

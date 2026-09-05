@@ -3,6 +3,10 @@
 > **Status: Normative — under review.** The `lab` is the home of
 > simulations and experiments;
 > `theorem` is a reserved declaration (§10–§11).
+> Plan v16 removes the historical RootSink observation path: Lab observes
+> every emission once at its source, and `app.<port>` observes only an actual
+> App-boundary crossing. Current v15 binaries retain the old projection until
+> R5/R9.
 > Companion to [execution-model.md](execution-model.md) (virtual time —
 > `advance` is defined there, §8) and
 > [delivery-semantics.md](delivery-semantics.md) (the journal this doc
@@ -99,10 +103,10 @@ family's pure plan-bound request framing and scheduler-terminal projection.
 Only the external effect after the OUTBOUND open is replaced. Consequently a
 mock cannot change contract identity, skip binding, choose a different request
 digest, weaken a port type, mint an envelope, or write a journal record. One
-simulation may mock several Connector families; this does not create a second
+simulation may mock several Connectors with different Contracts; this does not create a second
 machine or a second plan.
 
-At M1.6 H2, all four HTTP/WebSocket families already walk this exact binding
+At M1.6 H2, all four HTTP/WebSocket Contracts already walk this exact binding
 door without a live socket. HttpClient's mock seals the resolved method, URL,
 lossless headers, body and idempotency material before the ordinary OUTBOUND
 open. The server and session factories are effectless role/exchange twins;
@@ -214,6 +218,10 @@ is `.` (`out = .`).
 
 ### 5.1 Mocks
 
+- The `on …` clauses inside a `mock` are **Lab Driver-script syntax**. They
+  describe how the simulated external peer answers a Connector request; they
+  are not handlers owned by the Connector, are not part of the application
+  graph, and are not transported as `Dispatch` in the plan package.
 - **Two levels, nearest wins** : a `mock` at `simulation` level is shared by
   its scenarios ; a scenario-level `mock` for the same Connector **replaces**
   it (per Connector, whole-mock replacement — no branch merging).
@@ -257,11 +265,13 @@ expect ledger.in count == 1 where data.charge_id == "ch_1" // exact count
 expect "charged exactly once" ledger.in count == 1 …       // optional label, for reports
 ```
 
-- **Every typed output is observable by port.** `app` remains the pre-bound
-  identifier for the `: App` entry graph, so declared App boundary ports use
-  `app.<port>`; node outputs use their qualified node path (`pay.exit`,
-  `process.err`, …). The Lab reads the resolved `UnwiredPolicy` exactly as
-  production does. There is no synthetic root-error port.
+- **Every typed source emission is observable once by port.** `app` remains
+  the pre-bound identifier for the App Graph, so `app.<port>` means that a
+  value actually crossed that declared public boundary. Executor outputs use
+  their qualified source path (`pay.exit`, `process.err`, …), whether their
+  explicit disposition is another input, an App output, or `nothing`. Lab has
+  no RootSink policy, implicit journal sink, duplicated `node: None`
+  observation, or synthetic root-error port.
 - **Expectation types are source-visible.** When an observed port has no type
   annotation available while the Lab source is checked, its predicate sees
   `data: variant`; structural access then requires explicit `is`/`as`
@@ -446,7 +456,7 @@ incident is a **mechanical projection**, not inference :
 |---|---|---|
 | INBOUND records | → | injections (same envelopes, **same `inbound_seq`** — the injection's optional `seq` clause : `ping.out = { … } seq 105` ; hand-written scenarios omit it and use the fixture counter) |
 | dated decisions (`l:*` transactions) | → | the `advance` script — **times rebased** (t₀ = first record, deltas preserved) ; the bridge sets the scenario's **`origin` = the slice's first civil instant**, so window/cron arithmetic is preserved (§5.3, execution-model §9.3) |
-| OUTBOUND `closed(response)` | → | generated mock branches: the external system's real replies, **guarded by the recorded request id** (`on in where meta.sys.id == 0x9f42… { out = … }`) — ordinary mock grammar, zero new machinery |
+| OUTBOUND `closed(response)` | → | generated mock branches: the external system's real replies, **guarded by the recorded request id** (`on in where meta.sys.id == 0x9f42… { out = … }`) — Lab Driver-script grammar, zero new application machinery |
 | OUTBOUND `closed(timeout)` | → | `{ out = nothing }` (the chrono re-does its work) |
 | crash + recovery (visible in the journal) | → | `crash after <record>` / `restart` |
 

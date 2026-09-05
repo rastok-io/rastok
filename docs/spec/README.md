@@ -25,9 +25,12 @@ semantic ownership rather than by release layer.
 3. **Simulation is executable specification.** Spec-critical behavior
    should have a falsifiable artifact: a reference simulation
    (`../examples/simulations/`), a golden trace, or a conformance test.
-4. **Specification and implementation move together.** A change that
-   affects observable behavior must update its normative home and the
-   corresponding executable evidence in the same change.
+4. **Specification and implementation stay explicitly aligned.** Normally an
+   observable change updates its normative home and executable evidence in one
+   change. A large rework may freeze the specification first only when a
+   decision names the ordered code gates, the documents label current versus
+   target behavior, and non-executable syntax continues to fail closed. The
+   v16 R0–R2/R3–R9 split is such a staged decision.
 5. **The normative text stands on its own.** Internal work logs,
    superseded alternatives, and private planning material are deliberately
    absent from this repository.
@@ -52,8 +55,9 @@ Lab: scenarios, mocks, golden traces, experiments, and the reserved
 theorem surface) → [identity.md](identity.md) (semantic hash,
 `graph_version`, canonical record form) → [stdlib.md](stdlib.md) (the
 six Connectors and guest languages) →
-[effects-and-sagas.md](effects-and-sagas.md) /
-[aspects.md](aspects.md) / [loop.md](loop.md) (the aspect layer) →
+[extensions.md](extensions.md) / [loop.md](loop.md) /
+[effects-and-sagas.md](effects-and-sagas.md) (Extensions, finite recurrence,
+and future compensation) →
 `../examples/` (canonical graphs and seven reference simulations).
 
 ## The map
@@ -67,13 +71,13 @@ six Connectors and guest languages) →
 | [grammar.md](grammar.md) | host syntax, keywords, LL(1) productions, expression/frontend positions and delimitation, simulation grammar |
 | [envelope.md](envelope.md) | envelope structure, `meta.sys`, identity framing, storage and wire form, provenance |
 | [instances.md](instances.md) | Node-owned instance keys, canonical logical addresses, Node-local mutable state, lifetime, lifecycle containment, placement/shard separation |
-| [execution-model.md](execution-model.md) | node transactions, mailboxes M:N, ordering, dated events, timeouts, windows, `advance` |
+| [execution-model.md](execution-model.md) | Executor and manager transactions, mailboxes M:N, Dispatch, ordering, dated events, timeouts, windows, `advance` |
 | [delivery-semantics.md](delivery-semantics.md) | journal records, cursors, backpressure, boundary WAL, recovery, sagas × lifecycle |
 | [simulation-semantics.md](simulation-semantics.md) | simulations, scenarios, fixtures, mocks, expectations, golden traces, coverage, production-to-fixture projection |
 | [stdlib.md](stdlib.md) | Connector contracts, the six initial Connectors, `behavior`, pure guest programs, observability, MCP |
-| [effects-and-sagas.md](effects-and-sagas.md) | effect classes, `on compensate`, the Saga aspect |
-| [aspects.md](aspects.md) | the `: T1 + T2` mechanism, admission tests, qualified names |
-| [loop.md](loop.md) | Graph-level finite temporal recursion, fuel, delay, `l:next`, and termination proofs |
+| [extensions.md](extensions.md) | Node / Graph / Executor / Connector / Extension taxonomy, the Connector-owned `Contract` plus canonical Extension mechanism, admission tests, qualified names |
+| [loop.md](loop.md) | finite temporal recursion over Operator, Graph, and outbound Call hosts; manager commands, fuel, delay, recovery, and proofs |
+| [effects-and-sagas.md](effects-and-sagas.md) | effect classes and the deferred Saga Extension direction |
 | [identity.md](identity.md) | semantic hash, `graph_version` allocation and manifest, canonical record form |
 | [diagnostics.md](diagnostics.md) | diagnostic-code registry, stability contract, lazy assignment |
 

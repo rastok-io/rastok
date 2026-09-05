@@ -11,6 +11,10 @@
 
 use crate::diagnostics::Span;
 
+/// Maximum nested match decisions on one source/HIR path. The v16 plan gate
+/// independently rechecks this bound before recursive evaluation.
+pub const MAX_DISPATCH_DEPTH: usize = 32;
+
 /// Spanned word: an identifier, keyword, or tag, as written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Name {
@@ -196,8 +200,8 @@ pub struct GraphDecl {
     pub span: Span,
 }
 
-/// `: IDENT ( "+" IDENT )*` — one optional NodeType followed by
-/// NodeAspect symbols, in written order.
+/// `: IDENT ( "+" IDENT )*` — structural Connector Contract, when present,
+/// followed by Extension symbols in written order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Annotation {
     /// The symbols, in written order.
@@ -217,15 +221,18 @@ pub enum GraphItem {
     Connector(ConnectorDecl),
     /// `val …`
     Val(ValDecl),
+    /// Recovery-only capture of Graph-private state, which belongs in an
+    /// Operator. Retained so the checker can name the owning rule.
+    Var(VarDecl),
     /// Wiring: `a -> b.in`, chains, branches, `<->`.
     Edge(EdgeDecl),
     /// Nested `graph … { … }`.
     Graph(GraphDecl),
     /// `defaults { … }`
     Defaults(StructBody),
-    /// Graph-level attribute, aspect attributes included.
+    /// Graph-level attribute, Extension attributes included.
     Attribute(Attribute),
-    /// Graph-level handler.
+    /// Historical v15 Graph handler, retained for staged migration only.
     Handler(HandlerDecl),
     /// Parse-recovery hole.
     Error(ErrorNode),
@@ -236,7 +243,7 @@ pub enum GraphItem {
 pub struct OperatorDecl {
     /// The declared instance name.
     pub name: Name,
-    /// Optional explicit NodeType followed by NodeAspects.
+    /// Optional Extensions attached to the structural Operator.
     pub annotation: Option<Annotation>,
     /// Recovery-only capture of the unpublished `per` spelling.
     pub removed_per: Option<RemovedPerClause>,
@@ -252,7 +259,7 @@ pub struct OperatorDecl {
 pub struct ConnectorDecl {
     /// The declared instance name.
     pub name: Name,
-    /// The mandatory Connector NodeType, plus optional NodeAspects.
+    /// The mandatory Connector Contract, plus optional Extensions.
     pub annotation: Annotation,
     /// Recovery-only capture of the unpublished `per` spelling.
     pub removed_per: Option<RemovedPerClause>,
@@ -389,18 +396,83 @@ pub enum RemovedPerClause {
     Inline(Vec<RemovedPartitionField>),
 }
 
-/// `on trigger guard* body?` — body-less handlers are retained for recovery;
-/// every currently executable handler has a body.
+/// `on trigger guard* dispatch?` — a missing dispatch is retained only for
+/// recovery so the checker can give one named refusal.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HandlerDecl {
     /// What fires the handler.
     pub trigger: Trigger,
     /// Guard clauses in written order.
     pub guards: Vec<Guard>,
-    /// The statements, or `None` for a body-less declaration.
-    pub body: Option<Vec<Statement>>,
+    /// The handler's recursive dispatch, or `None` for recovery.
+    pub dispatch: Option<Dispatch>,
     /// The whole handler.
     pub span: Span,
+}
+
+/// Source-faithful handler decision tree.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Dispatch {
+    /// A rectilinear statement block.
+    Linear {
+        /// Statements in authored order.
+        statements: Vec<Statement>,
+        /// Complete block or single-statement span.
+        span: Span,
+    },
+    /// A closed (`match expr`) or open (`match`) decision. The checker owns
+    /// the distinction because it has the scrutinee type.
+    Match {
+        /// Pure `val` declarations before the terminal match in a block.
+        prefix: Vec<Statement>,
+        /// Present for a closed match; absent for ordered predicates.
+        scrutinee: Option<ExprSource>,
+        /// Arms in source order. Closed arms become canonical in HIR.
+        arms: Vec<MatchArm>,
+        /// Complete match span, including a containing block when present.
+        span: Span,
+    },
+}
+
+impl Dispatch {
+    /// Complete source span.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Linear { span, .. } | Self::Match { span, .. } => *span,
+        }
+    }
+
+    /// Statements of a source-linear dispatch.
+    #[must_use]
+    pub fn as_linear(&self) -> Option<&[Statement]> {
+        match self {
+            Self::Linear { statements, .. } => Some(statements),
+            Self::Match { .. } => None,
+        }
+    }
+}
+
+/// One source match arm.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    /// Closed cases, an open predicate, or the `_` fallback.
+    pub selector: MatchSelector,
+    /// Nested arm dispatch.
+    pub dispatch: Box<Dispatch>,
+    /// Complete arm span.
+    pub span: Span,
+}
+
+/// Source selector of one match arm.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MatchSelector {
+    /// One or more closed symbolic cases joined with `|`.
+    Cases(Vec<Name>),
+    /// An ordered open predicate.
+    Predicate(ExprSource),
+    /// `_`, the exact remaining domain.
+    Fallback(Span),
 }
 
 /// Syntactic handler trigger, as written.
@@ -412,12 +484,12 @@ pub enum Trigger {
     Stop(Span),
     /// `on compensate`
     Compensate(Span),
-    /// `on <Aspect>.start` / `on <Aspect>.stop`
-    Aspect {
-        /// The qualifying aspect name.
-        aspect: Name,
+    /// `on <Extension>.start` / `on <Extension>.stop`
+    Extension {
+        /// The qualifying historical Extension name.
+        extension: Name,
         /// The qualified lifecycle event.
-        event: AspectEvent,
+        event: ExtensionEvent,
     },
     /// `on <child>.<output>` — an output emitted by a direct child of the
     /// lexical Graph. This form is meaningful only for Graph-owned handlers;
@@ -434,9 +506,9 @@ pub enum Trigger {
     Port(Name),
 }
 
-/// Recovery-only capture of a removed aspect-qualified lifecycle event.
+/// Recovery-only capture of a removed Extension-qualified lifecycle event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AspectEvent {
+pub enum ExtensionEvent {
     /// `.start`
     Start,
     /// `.stop`
@@ -479,6 +551,19 @@ pub enum Statement {
         /// One value per target, or one broadcast value.
         values: Vec<Value>,
     },
+    /// `Loop.next = value` — a temporal-manager command carrying new state.
+    LoopNext {
+        /// The next entry data.
+        value: Value,
+        /// Complete statement span.
+        span: Span,
+    },
+    /// `Loop.again` — retain the current Loop state.
+    LoopAgain(Span),
+    /// `Loop.done` — close the current Loop run without a business envelope.
+    LoopDone(Span),
+    /// Explicit no-op dispatch leaf.
+    Nothing(Span),
     /// `stop IDENT?` — lifecycle action.
     Stop(Option<Name>),
     /// Parse-recovery hole.
@@ -647,10 +732,54 @@ pub struct EdgeDecl {
 pub enum EdgeEndpoint {
     /// A port reference.
     Ref(PortRef),
-    /// `{ a ; b }` fan-out or fan-in branch.
-    Branch(Vec<PortRef>),
+    /// `{ a ; b }` in source position: independent mpsc producers.
+    SourceSet(Vec<PortRef>),
+    /// `{ a ; b }` in destination position: one atomic delivery set.
+    DestinationSet(Vec<EdgeDestination>),
+    /// Closed case routing after an arrow.
+    Match(EdgeMatch),
     /// `nothing` — explicit discard sink.
     Nothing(Span),
+}
+
+/// One non-routing destination inside a destination set or route arm.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EdgeDestination {
+    /// Ordinary endpoint or a qualified manager command, resolved later.
+    Ref(PortRef),
+    /// Explicit discard. A set mixing it with another destination is rejected
+    /// by the checker with `E-ROUTE-MIXED`.
+    Nothing(Span),
+}
+
+/// Source-faithful closed routing table.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdgeMatch {
+    /// Arms in source order; the checker canonicalizes them by case.
+    pub arms: Vec<EdgeMatchArm>,
+    /// Complete `match { ... }` span.
+    pub span: Span,
+}
+
+/// One case route.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdgeMatchArm {
+    /// Explicit cases or the `_` remainder.
+    pub cases: EdgeCaseSet,
+    /// One simple or grouped destination. Nested route matches are not part of
+    /// the grammar.
+    pub destination: Box<EdgeEndpoint>,
+    /// Complete arm span.
+    pub span: Span,
+}
+
+/// Closed route selector.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EdgeCaseSet {
+    /// One or more symbolic cases joined by `|`.
+    Cases(Vec<Name>),
+    /// Exact remainder of the source's productible cases.
+    Fallback(Span),
 }
 
 /// `node`, `node.port`, a composed path, or the graph boundary.

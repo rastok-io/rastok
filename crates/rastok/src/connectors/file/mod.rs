@@ -204,7 +204,7 @@ pub(super) fn bind_scripted_protocol(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileSettingsError {
     /// The spec belongs to another Connector contract.
-    NotFile(crate::connector::ConnectorId),
+    NotFile(crate::connector::ContractId),
     /// A required effective setting did not travel in the plan.
     Unresolved(&'static str),
     /// The selected profile has no Driver in this build.
@@ -275,7 +275,7 @@ impl std::error::Error for FileBindError {}
 /// digest, or causal identity, and construction does not inspect it.
 #[derive(Debug)]
 pub struct FileFactory {
-    id: crate::connector::ConnectorId,
+    id: crate::connector::ContractId,
     root: PathBuf,
 }
 
@@ -287,14 +287,14 @@ impl FileFactory {
     /// The built-in stable id ceased to be canonical.
     pub fn try_new(root: impl Into<PathBuf>) -> Result<Self, crate::connector::ConnectorIdError> {
         Ok(Self {
-            id: crate::connector::ConnectorId::parse(crate::connector::FILE_CONNECTOR_ID)?,
+            id: crate::connector::ContractId::parse(crate::connector::FILE_CONNECTOR_ID)?,
             root: root.into(),
         })
     }
 }
 
 impl super::ConnectorDriverFactory for FileFactory {
-    fn connector_id(&self) -> &crate::connector::ConnectorId {
+    fn connector_id(&self) -> &crate::connector::ContractId {
         &self.id
     }
 

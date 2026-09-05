@@ -5,6 +5,240 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-09-05-1 — Graph is structure; Executors transition; Loop uses durable manager commands
+
+The pre-public Node model is revised before plan v16. A `Node` is either a
+`Graph` or an `Executor`. A Graph owns a typed boundary, lexical children and
+wiring, immutable owner values, instance, lifetime, Closing and Extensions. It
+owns no application mailbox, mutable application state, handler or application
+transaction. An Executor owns executable ports, a bounded per-instance
+activation mailbox, journaled semantic state, atomic transactions, ordered
+emissions and state deltas. `Operator` and `Connector` are Executors: an
+Operator's transition is a checked DSL `Dispatch`; a Connector's transition is
+defined by its versioned Contract and typed Driver events. They share
+the commit machinery, not necessarily a public Rust trait.
+
+Graph lifecycle remains explicit. The generic lifecycle controller still
+commits `l:start`, `l:closing` and `l:stop` TRANSACTION records attributed to a
+Graph owner. “Graph has no transaction” means no **application** transaction;
+removing lifecycle records would erase M1.4's generation and containment
+authority.
+
+`Extension` replaces `Aspect`. It is attached to exactly one Node and may
+contribute attributes, bindings, admission constraints, manager commands and
+ports. `App` is the one static Extension of the root Graph. `Loop` is temporal
+and admitted on an Operator, Graph, or finite outbound Call Connector profile.
+`Saga` remains a future temporal Graph Extension. Extension order is
+non-semantic and incompatible contributions refuse. `node::Type` disappears:
+Graph and Operator are structural categories, App is an Extension, and a
+Connector carries one exact versioned Contract identified by `ContractId`. The Connector attribute
+`behavior = deterministic | probabilistic` is retained unchanged.
+The current Rust/HIR name `ConnectorId` becomes `ContractId` at R3; this is a
+source/API vocabulary change only and does not alter the validated id text or
+wire representation.
+
+### Dispatch and routing
+
+Only Operators own handlers, with at most one handler per activation. A handler
+contains recursive `Dispatch = Linear | ClosedMatch | OpenMatch`. Closed
+matches operate on a tagged union, enum or bool; arms are disjoint, exhaustive
+and canonically ordered by case. Open matches test predicates in source order,
+first true wins, and `_` is mandatory. A match is the dispatch of a block or
+arm, never a statement after a mutation or emission. Pure `val` declarations
+may precede it.
+
+On a one-port handler, `where P` is exact sugar for
+`match { P => body; _ => nothing }`: false consumes the input and commits an
+empty transaction. Both spellings lower to the same Dispatch before semantic
+identity. On a join, `where` remains a pre-consumption admission guard: false
+retains every candidate and commits nothing. `expect ... where ...` remains
+scenario syntax. `when` on edges is removed.
+
+A `RouteRule` maps a source's closed cases to canonical disposition sets. A
+`PhysicalEdge` remains only a static port-to-port path with capacity; case tags
+are not edge identity. Dispositions are a physical destination, the current
+Graph's public/boundary output, a temporal-manager command, or explicit
+`nothing`. Source sets expand to independent mpsc edges. Destination sets send
+one envelope over N `DeliveryRef` values after one atomic capacity proof. Set
+order is non-semantic. `nothing` cannot coexist with a real or manager
+destination for the same case. The `.`/`.foo` boundary wiring sugar is removed
+with a migration diagnostic; equivalent explicit wiring must retain the same
+plan and semantic hash.
+
+This exclusivity applies across separate declarations, so `nothing` always
+means that the case has no destination and never changes meaning because of a
+distant additive route. A common audit fan-out is consequently written in the
+closed routing table itself:
+
+```rastok
+pay.exit -> match {
+  Completed                  -> audit
+  TimeoutExpired | DnsFailed -> { audit ; pay.Loop.again }
+  _                          -> { audit ; failed }
+}
+```
+
+Every possibly productible output case has an explicit disposition. An output
+is exempt only when impossibility is re-derived from syntax, structure, closed
+typing, the Connector's resolved Contract, or whole-Graph unreachability. Unknown is
+possible. Missing disposition is recursive `E-UNWIRED-OUTPUT`; deliberate
+discard is `-> nothing`; an impossible declaration receives
+`W-DEAD-OUTPUT`. `RootSink`, `UnwiredPolicy`, `vm.errors()`, the name test for
+`err`, and the second `node: None` observation disappear. A Driver which emits
+a contractually impossible port or case raises `ContractViolation` before the
+value is published.
+
+Statements and emissions remain transaction-atomic and source ordered.
+`(a, b) = value` evaluates the right side once and creates two distinct
+envelopes in written target order. `(a, b) = (v1, v2)` evaluates values
+left-to-right and pairs them. This differs from `source -> { a b }`, which
+creates one envelope and two deliveries with canonical unordered destinations.
+All involved capacities are proved before commit.
+
+### Loop r2
+
+Loop recurs on the host's existing entry interface. The recurrent entry is the
+unique input, otherwise `in`, otherwise required `Loop.entry`. A distinct
+opening admission, not merely `origin_id`, identifies every run:
+
+```text
+LoopRunRef = derive(rastok.loop-run.r2, InstanceRef, OpeningAdmissionRef)
+```
+
+Routed admissions carry a journaled stack of active LoopRunRefs. This
+`LoopContext` is causal route metadata, not envelope data. It disambiguates
+fan-out, permits several runs in one instance, binds `Loop.state`, scopes
+quiescence and recovery, and makes nested Loop masking exact. A join inside a
+Loop application accepts only candidates with the same context.
+
+Loop contributes qualified attributes `Loop.fuel`, `Loop.delay`,
+`Loop.measure`, `Loop.entry`, `Loop.terminal`; binding `Loop.state`; commands
+`Loop.next`, `Loop.again`, `Loop.done`; and the sole added output
+`Loop.expired`. Commands use destination-like syntax but are neither ports nor
+PhysicalEdges. `Next` supplies the next entry envelope, `Again` retains the
+complete current state and uses its source only as cause, and `Done` closes
+without a business envelope. An Operator may issue a command as a statement;
+an output may route to the owner or a child's qualified command.
+
+A command has two durable phases. `CommandProduced` is part of the producing
+Executor transaction; `CommandConsumed` is part of the later manager
+transaction. The pending bounded inbox is the journal fold of produced minus
+consumed/invalidated commands. This distinction is mandatory: otherwise a
+crash after producer commit but before manager work could neither restore the
+command nor avoid replaying the producer. A manager is attached runtime
+machinery, not a Node or port, and shares the owner's address and generation.
+
+Each application selects exactly one verdict: `Next`, `Again`, `Done`, or
+`Stopped`. `nothing` is not a verdict. For Operator/Graph, one ordinary output
+is terminal by default and several require canonical `Loop.terminal`; no
+output requires explicit `Loop.done`. Several terminal outputs in one
+transaction coalesce to one Done. For an outbound Connector Call, frames are
+non-terminal and the sole `exit` completes the application. An exit-case or
+earlier frame command overrides natural Done; disposing or business-routing
+the exit does not. `Loop.terminal` is therefore invalid on Connector Call.
+
+`Loop.fuel = N` counts applications, first included. Next and Again consume one
+unit. A recurrence requested by the final permitted application produces no
+re-admission: the manager emits `Loop.expired` with
+`LoopExpired { last_state: EntryType }`. The manager retains the full state
+envelope; `last_state` is its data. `Loop.expired` obeys ordinary explicit
+routing and is visible only to the parent in v16. On a root `App + Loop`, it is
+itself a public App-boundary output. A measure-only proof makes it
+impossible; when an explicit smaller cap also exists, it remains conservatively
+possible unless termination within that cap is proved.
+
+The manager waits for run-scoped quiescence before consuming a verdict. An
+Operator application completes at its Dispatch commit, a Graph application at
+contained causal quiescence, and a Connector Call application at its terminal
+exit. Work outside the host or belonging to another run does not block.
+Closing invalidates commands and wakeups and always wins. Delay remains logical
+timer kind 5, with no future destination capacity held while waiting.
+
+Every outbound Call terminal occurrence is classified conservatively as
+`before_effect`, `outcome_unknown`, or `after_effect`. Next/Again after
+`before_effect` is allowed; the other classes require
+`effect = none | idempotent`. `compensable` does not make forward repetition
+safe. Process job, File read/replace and HttpClient are v16 Loop hosts;
+HttpServer, both WebSocket Session contracts, Process service, Event and inbound
+Call are not. An opaque Connector requires positive fuel.
+
+World-originated Driver facts still enter as INBOUND roots. A response
+correlated with an already-open outbound Call or Session write does **not**:
+it enters the bounded Connector activation path, settles the existing OUTBOUND
+obligation and supplies a Connector transaction. Plan v16 does not invent a
+second root for it.
+
+### Identity and staging
+
+Plan v16 is one categorical bump after source/HIR stabilization. It carries
+`ExtensionSpec`, recursive Dispatch, RouteRule, canonical sets, manager
+commands, productibility, Loop r2 and exact Loop context; retires Graph
+handlers, ChildPort, old Loop `next`, `unwired`, RootSink, and old Aspect
+transport; and never reuses a tag. The owner table, envelope/value/type
+registries, three journal record kinds, timers, instance/lifetime/Closing,
+Connector roles/exchanges and the Connector `behavior` axis remain.
+
+Removing `unwired` while adding v2 production/terminal/effect-stage contracts
+moves the six executable Contract identities to `rastok/{process,file,http-client,
+http-server,websocket-client,websocket-server}@2`. V15 and all `@1` plans refuse
+rather than being reinterpreted. Existing key 53 and the
+`rastok.aspects.r1`/`rastok.loop.r1` domains remain historical; r2 facts use new
+append-only keys/domains.
+
+R0 and R1 are specification/architecture only. R2 realigns the live corpus and
+then stops for review. Source/HIR work begins at R3, the single package bump at
+R4, explicit destinations at R5, routing/Dispatch at R6, manager/recovery at
+R7, host qualification at R8, and global migration/UI realignment at R9.
+
+**R3 source/HIR precision (2026-09-05).** The accepted whitespace-separated
+set spelling, `source -> { a b }`, survives; the EBNF's formerly mandatory
+`sep` between set members was stricter than this decision's own examples and
+is corrected to optional explicit separators. This does not relax match-arm
+separators. A Dispatch path is bounded to 32 match decisions, including a
+single-port `where` after desugaring. This is a source/HIR resource bound;
+R4 independently validates Dispatch and total package depth.
+
+The `.`/`.foo` wiring migration diagnostic is specifically an R9 gate. R3
+continues to accept that spelling silently while v15 compatibility and the
+equivalent explicit-boundary witnesses remain under test. This staging does
+not weaken the final removal rule. The parser conformance snapshot changes
+from `HandlerDecl.body` to `dispatch: Linear { statements, span }`; this AST
+movement is recorded separately from the three semantic/package/causal
+registries in the R0 identity ledger.
+
+### Supersession ledger
+
+Older entries remain historical records. The following table says exactly
+which clauses cease to be live; unlisted clauses survive.
+
+| Decision | Treatment in v16 |
+|---|---|
+| D-2026-08-27-4 | `Kind × Type × Aspect` is superseded by Node / Graph / Executor / Connector / Extension. Singular `instance` and ordinary reducer/aggregator/window/join patterns survive. Each Connector owns one versioned Contract; Contract is not another Node category. |
+| D-2026-08-28-1 | Graph-only Loop ownership and the `next` port are superseded. Fuel, delay, measure, finitude, qualified Extension attributes, `LoopRunRef`, journal authority and no-hidden-clock survive. |
+| D-2026-08-28-2 | Graph handlers, `HandlerOwner::Graph`, `ChildPort` and their v13 transport are superseded. Fail-closed staging and Registry-free validation survive. |
+| D-2026-08-28-3 | “Every ordinary output terminates” is replaced by resolved `Loop.terminal` plus exactly one `Next | Again | Done | Stopped` verdict. Verdict uniqueness and the distinction from instance `stop` survive. |
+| D-2026-08-28-4 | Port emission to `next` is replaced by a durable manager command and temporal re-entry at the remembered host input. Fuel and the journal fold survive. |
+| D-2026-08-28-6 | Direct-child `ChildPort` activation is superseded. Timer kind 5, no destination reservation during delay, and Closing invalidation survive. |
+| D-2026-08-28-7 | The proof is re-expressed over Dispatch and manager commands rather than Graph handlers. Integer ranking, re-derived certificates and the independent `no_std` verifier survive. |
+| D-2026-08-28-8 | Passive-Graph flattening and the stated limits of nested Loops survive; host qualification broadens in v16. |
+| D-2026-08-18-1 | Graph-handler clauses are superseded. Instances, lifetime, address, placement, Closing, state ownership and join `where` survive. |
+| D-2026-08-14-1 B5/B6 | `RootSink`, `UnwiredPolicy` and implicit output disposition are superseded. Typed ports and ordinary `err`/`exit` names survive. |
+| D-2026-09-02-1 | UI projections derived from Graph handlers or port-shaped Loop controls are superseded and must be rebuilt at R9. Its retained-history and simulation-only branching decisions survive. |
+| M1.8 decisions | Unchanged. Schema policy, secrets, privacy, observations and cost remain orthogonal to this rework. |
+
+D-2026-08-28-5 (`now()` and explicit logical time) is unchanged. Fuel, proof,
+instance/lifetime/Closing, typed ports, DAG delivery, and fail-closed validation
+otherwise survive as restated in the live specification.
+
+**Rejected:** making Graph a disguised Executor; a public `Executor` trait
+without a substitution need; treating commands as ports/back-edges; deriving a
+run from origin alone; one fold fact which conflates command production and
+consumption; implicit output sinks; treating declaration order of sets or
+closed matches as semantic; using `nothing` as a Loop verdict; retrying a
+compensable/irreversible effect because compensation may exist; minting an
+INBOUND root for an outbound response; and rewriting historical M1.7 reports to
+hide the supersession.
+
 ## D-2026-09-02-1 — UI history is exact; only simulation may branch from it
 
 The debugger names three different positions instead of overloading “step”:
@@ -94,7 +328,6 @@ adding a licensed third-party graph layout runtime. A rich terminal debugger is
 deferred as a separate projection over the same controller/read model; neither
 its CLI spelling nor a second execution semantics is introduced here.
 
-
 ## D-2026-08-31-2 — `--ui` is a capability-protected journal debugger
 
 The M1 live visualization is named `--ui`, not `--watch`: watch is already a
@@ -103,7 +336,7 @@ deferred File profile and commonly means source reload. The option applies to
 starts paused and advances at the VM's existing atomic transaction boundary.
 Simulation additionally exposes its authored action boundary, so `inject`,
 `advance` and `expect` never masquerade as Node transactions. Usability
-evidence refined the primary simulation `Step`: at a quiescent boundary it
+evidence refined the primary simulation boundary advance: at a quiescent boundary it
 applies exactly one authored action; otherwise it executes exactly one ready
 VM transaction. It never combines both in one click, while the specialized
 controls retain the distinction for teaching and diagnosis.
@@ -117,7 +350,7 @@ work.
 Pause is a safe-point request. New external admissions and handler firings
 stop at the transaction boundary; already-open outbound Calls remain polled
 until their typed terminal outcomes are retained, then wait unconsumed for the
-next step. Long-lived Sessions stay open and rely on their existing bounded
+next boundary. Long-lived Sessions stay open and rely on their existing bounded
 transport/mailbox backpressure. While `Paused` or `PauseRequested`, the hosted
 wall-to-logical mapping is frozen: physical time spent inspecting the run does
 not age Call timeouts, instance lifetimes or delayed Loop continuations. A
@@ -147,9 +380,9 @@ The topology view is a compound graph derived from the validated lexical owner
 table: the root `App` frame contains its direct Nodes and nested Graph frames,
 recursively. It never guesses containment from dotted paths. Operators remain
 green and Connectors blue, but compact cards carry only name, NodeType and
-NodeAspects; the former circle/square/cross seed glyphs are superseded. A white
-disk is an input port and a black disk is an output port, and exact edges attach
-to those disks. A Graph port keeps its declared side but may slide vertically
+NodeAspects; the former circle/square/cross seed glyphs are superseded. A hollow
+square is an input port and a filled square is an output port, and exact edges
+attach to those pins. A Graph port keeps its declared side but may slide vertically
 and exchange display order with peers: deterministic barycentric sweeps place
 Node cards and side pins jointly, then interval-colored orthogonal tracks avoid
 collinear overlap and minimize remaining crossings before compacting bends and
@@ -161,42 +394,40 @@ Rounded corners and smaller terminal arrows remain presentation only. A determin
 obstacle scorer places count badges beside, never deliberately over, route
 segments and keeps them clear of Nodes, Graph headers, other edges and prior
 labels; a short leader preserves association. Port names occur once at their
-owning pins with a background halo rather than once per edge. Each edge badge
-puts the current live mailbox occupancy in bold and the cumulative retained
-INBOUND/TRANSACTION traversal fold in muted text. The two values deliberately
-come from different authorities: current occupancy falls when work is consumed,
-whereas cumulative boundary/discard emissions remain derivable from the
-validated plan and journal. The last-Step highlight is separately physical: an
+owning pins with a background halo rather than once per edge. Each routed input
+badge contains only current live mailbox occupancy, which falls when work is
+consumed; selecting it opens the exact redacted FIFO. Causal route history stays
+in the journal/history view. The last-boundary highlight is separately physical: an
 authored Lab action names itself and says that no Node
 fired, while a transaction names its exact owner and trigger. Lifecycle
 transactions remain visible instead of being skipped to manufacture a more
 dramatic animation. The read model exposes both their exact trigger and a
 human summary (`Instance opened`, `Instance closing`, `Instance stopped`), so
 universal lazy `l:start` facts cannot be mistaken for duplicate deliveries or
-port-handler steps.
+port-handler transactions.
 
 Every authored action or scheduled VM transaction receives one disposable
-`Step N` ordinal. An external fact retained while scheduling is paused is
-labelled `External` instead of fabricating a Step. Play and repeated Step use
-the same transition and must retain the same causal sequence; history record
-count is explicitly not presented as Step count. Exact admitted, consumed and
-emitted routes animate one envelope marker, while route-less lifecycle or
-assertion work pulses its truthful owner/banner. Call and Session boundary
-facts name and pulse their Connector and move a small marker in the truthful
-outbound/inbound direction. These animations are never journal or scheduling
-facts and disappear under reduced motion.
+boundary ordinal. D-2026-09-02-1 names it `B<n>` and separately names authored
+actions `A<n>` and causal records `R<n>`. Play and repeated Boundary use the
+same transition and must retain the same causal sequence. Exact admitted,
+consumed and emitted routes animate one envelope marker, while route-less
+lifecycle or assertion work pulses its truthful owner/banner. Call and Session
+boundary facts name and pulse their Connector and move a small marker in the
+truthful outbound/inbound direction. These animations are never journal or
+scheduling facts and disappear under reduced motion.
 
-A Step requested from `Paused` returns to `Paused` after exactly one boundary,
+A Boundary requested from `Paused` returns to `Paused` after exactly one boundary,
 even if it opens a Call. That Call remains inspectable and later scripted
 `expect`/`advance` actions remain reachable; entering `PauseRequested` here
 would strand a deliberately silent Call while logical time is frozen. Only an
 explicit Pause requested from Running waits for already-open Calls to reach
 their safe retained outcome. The browser disables transport controls from
 command acceptance until the next snapshot revision, so rapid clicks cannot
-collapse or queue ambiguous user-visible Steps.
+collapse or queue ambiguous user-visible boundaries.
 
-Selecting a Graph or Node opens its exact authored declaration, including
-attributes, handlers and guards. These excerpts live in the compiler's
+Selecting a Graph or Node makes its exact authored declaration, including
+attributes, handlers and guards, available without forcing the Definition tab.
+These excerpts live in the compiler's
 physical debug side table: the browser neither parses source nor reconstructs
 it from the plan, and a stripped deployment may omit them without changing
 execution. The same disposable selection filters history, instances,
@@ -212,18 +443,12 @@ embedded in the page. Graph ports, including the root App ports, sit on their
 owner frame, and the selected envelope is presented as the two normative
 zones `META` and `DATA`, never as an ambiguous UI-only “payload”.
 
-One narrow simulation edit seam refines the original no-manual-injection rule.
-When the next authored action is `inject`, the UI may replace only that
-action's materialized `DATA` while it is still a draft before `App.in`. The
-editor is generated from the resolved App-port `DataType`; the execution owner
-reconstructs and validates the value before replacing the draft. `meta.ext`,
-sequence and provenance remain authored, `meta.sys` does not exist until the
-ordinary admission mints it, and an admitted envelope is immutable. `Reset`
-restores the source-authored action. Dynamic or classified trees are
-read-only, real runs expose no editor, and no ad-hoc action, internal-edge edit
-or second ingress path exists. The edit is physical scenario input selection:
-it adds no plan or journal form and makes an edited run intentionally distinct
-from its authored golden until reset.
+The next authored `inject` is a read-only typed projection before `App.in`.
+`DATA`, `meta.ext`, sequence and provenance remain authored on disk;
+`meta.sys` does not exist until ordinary admission mints it, and an admitted
+envelope is immutable. The UI has no ad-hoc action, edit command, internal-edge
+mutation or second ingress path. This deliberately keeps M1.9 a debugger rather
+than beginning an IDE.
 
 This is a package/semantic/causal non-move. Port, capability, browser state,
 view revisions and physical timing enter no identity recipe. A later UI crate,
@@ -243,7 +468,7 @@ browser; starting live before the controller explicitly resumes; letting
 debugger suspension consume logical timeout or lifetime budgets; pausing by
 cancelling Calls or Sessions; real-run reset; a second journal/accounting
 store; forcing payload materialization; post-format regex redaction;
-free-form/manual envelope injection outside a checked scenario; editing
+free-form/manual envelope injection; editing source-authored actions, `DATA`,
 `META` or committed envelopes; stepping individual edges inside one atomic
 transaction; and reusing `File.watch` vocabulary.
 

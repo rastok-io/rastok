@@ -60,42 +60,51 @@ SyntaxTree {
                                             },
                                         ),
                                         guards: [],
-                                        body: Some(
-                                            [
-                                                Assign {
-                                                    target: LValue {
-                                                        segments: [
-                                                            Name {
-                                                                text: "out",
-                                                                span: Span {
-                                                                    source: SourceId(
-                                                                        0,
-                                                                    ),
-                                                                    start: 51,
-                                                                    end: 54,
+                                        dispatch: Some(
+                                            Linear {
+                                                statements: [
+                                                    Assign {
+                                                        target: LValue {
+                                                            segments: [
+                                                                Name {
+                                                                    text: "out",
+                                                                    span: Span {
+                                                                        source: SourceId(
+                                                                            0,
+                                                                        ),
+                                                                        start: 51,
+                                                                        end: 54,
+                                                                    },
                                                                 },
+                                                            ],
+                                                            span: Span {
+                                                                source: SourceId(
+                                                                    0,
+                                                                ),
+                                                                start: 51,
+                                                                end: 54,
                                                             },
-                                                        ],
-                                                        span: Span {
-                                                            source: SourceId(
-                                                                0,
-                                                            ),
-                                                            start: 51,
-                                                            end: 54,
                                                         },
+                                                        ty: None,
+                                                        value: Identity(
+                                                            Span {
+                                                                source: SourceId(
+                                                                    0,
+                                                                ),
+                                                                start: 57,
+                                                                end: 58,
+                                                            },
+                                                        ),
                                                     },
-                                                    ty: None,
-                                                    value: Identity(
-                                                        Span {
-                                                            source: SourceId(
-                                                                0,
-                                                            ),
-                                                            start: 57,
-                                                            end: 58,
-                                                        },
+                                                ],
+                                                span: Span {
+                                                    source: SourceId(
+                                                        0,
                                                     ),
+                                                    start: 49,
+                                                    end: 60,
                                                 },
-                                            ],
+                                            },
                                         ),
                                         span: Span {
                                             source: SourceId(

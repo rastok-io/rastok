@@ -1159,7 +1159,7 @@ mod tests {
         ];
         for sheet in sheets {
             crate::contract::validate_sheet(sheet).expect("the network sheet holds its door");
-            let id = crate::connector::ConnectorId::parse(sheet.id).expect("a canonical id");
+            let id = crate::connector::ContractId::parse(sheet.id).expect("a canonical id");
             for attribute in sheet.common {
                 assert_eq!(
                     crate::boundary::network_attribute_site(&id, attribute.name),

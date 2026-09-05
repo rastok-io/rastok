@@ -2,6 +2,11 @@
 
 > Implementation blueprint — non-normative and under review.
 
+> **V16 design freeze (2026-09-05).** R0–R2 specify the target
+> Node/Graph/Executor/Connector/Extension model, explicit dispositions, recursive
+> Dispatch and Loop manager recovery. Current Rust remains categorical v15;
+> R3 is the first code gate. M1.9 and UI evolution are paused until R9.
+
 This document explains how the current Rastok specification becomes an
 executable system. It defines implementation boundaries, dependency direction,
 and the current executable foundation. It does not add
@@ -37,8 +42,8 @@ second engine:
   → parsed and checked program
   → categorical validated plan with logical instances and resolved port types
   → synchronous one-worker execution over a causal journal
-  → exact-id/role binding of Process, File and four live network Driver families
-  → deterministic multi-family Lab scenarios and useful golden diffs
+  → exact-id/role binding of Process, File and four live network Contracts
+  → deterministic mixed-Contract Lab scenarios and useful golden diffs
   → optional loopback UI over the same transaction/journal/accounting seams
 ```
 
@@ -67,8 +72,7 @@ event + state + plan ──▶ │ deterministic semantic step │
                                         │ effect intent
                             ┌───────────┴───────────┐
                             │                       │
-                    App handler              Lab handler
-                    real boundary       controlled boundary
+                 real Driver event      scripted Lab event
                             │                       │
                             └───────────┬───────────┘
                                         │ typed outcome event
@@ -89,14 +93,14 @@ promise of one crate per box:
 | Responsibility | Owns | Must not own |
 |---|---|---|
 | Source front end | parsing `.rkg`, source spans, syntax diagnostics | runtime effects |
-| Semantic checker | names, types, graph validity, aspect constraints | host I/O |
+| Semantic checker | names, types, graph validity, Extension and disposition constraints | host I/O |
 | Planner and canonicalizer | immutable executable plan, stable identity and ordering | live execution state |
-| Runtime core | state transitions, scheduling decisions, effect intents | direct host calls |
+| Runtime core | shared Executor transitions, Extension-manager transitions, scheduling decisions, effect intents | direct host calls or Graph application handlers |
 | Journal boundary | ordered typed inputs and outcomes | hidden semantic decisions |
 | Runtime Connector binding | exact-id and role association before VM/journal construction | compiler catalogue or first-registration-wins selection |
-| Process, File and network Drivers | physical external interactions behind typed Contracts; flat family modules own binding and private `network` owns sockets/TLS/protocol engines | general runtime semantics, compiler schema projection or journal authority |
+| Process, File and network Drivers | physical external interactions behind typed Contracts; flat contract-specific modules own binding and private `network` owns sockets/TLS/protocol engines | general runtime semantics, compiler schema projection or journal authority |
 | Project schema tooling | strict OpenAPI discovery/projection and deterministic generated Rastok source | a second runtime type system or authored-source mutation |
-| Lab runner | controlled handlers, virtual inputs, scripted faults | a second execution engine |
+| Lab runner | controlled Driver scripts, virtual inputs, scripted faults | a second execution engine |
 | Hosted execution UI | paused transaction controls and disposable projections of validated topology, VM inspection, journal observations and accounting | execution authority, durable history, remote administration or unredacted classified data |
 | Diagnostics and golden diff | stable human-facing evidence | mutation of execution |
 
@@ -186,23 +190,24 @@ than becoming a generic utility bucket.
 
 M1.6 H7 closes the hosted boundary without widening the core interface. One
 feature-selected `hosted_registry` composes Process, optional File and the
-linked HTTP/WebSocket families. HttpClient/HttpServer remain Calls;
+linked HTTP/WebSocket Connector implementations. HttpClient/HttpServer remain Calls;
 WebSocketClient/WebSocketServer use the generic Session fold over H1 Upgrade
 and H2/H3 Extended CONNECT. Tokio and every protocol-library type remain
 private to `rastok::connectors::network`; the same core still builds for the
 three established no-std targets.
 
-M1.7 keeps temporal recursion on that same deterministic boundary. The
-`Loop` manager consumes the categorical aspect contract introduced by v14 and
-retained by v15, then folds ordinary
-journal facts; optional dated re-entry uses the generic scheduler, not a
-thread sleep or a spatial cycle. The compiler and Registry-free core prove a
-finite control verdict plus either positive fuel or the admitted integer
-ranking certificate before the VM can execute the aspect. Public Lab and
-Cortex-M33 evidence are recorded in the
-[M1.7 exit report](docs/architecture/m1.7-exit-report.md).
+M1.7 proved temporal recursion on that deterministic boundary using the v14
+Graph-Aspect form retained by v15. Its public Lab and Cortex-M33 evidence
+remain recorded in the
+[M1.7 exit report](docs/architecture/m1.7-exit-report.md), but
+D-2026-09-05-1 supersedes its live ontology. The v16 target keeps fuel,
+proof, explicit logical time and journal authority while making Graph passive,
+sharing execution mechanics between Operator and Connector, and moving
+Next/Again/Done into durable manager commands outside the spatial DAG. See the
+[R0 algebra](docs/architecture/rework-r0-algebra.md) and
+[R1 host contracts](docs/architecture/rework-r1-host-contracts.md).
 
-M1.9 keeps interactive execution outside that boundary. The optional
+The paused M1.9 design keeps interactive execution outside that boundary. The optional
 `hosted-ui` feature embeds one loopback HTTP/SSE page and a physical controller
 whose `Step` command invokes exactly one existing VM transaction during a real
 run. In simulation the same primary gesture advances exactly one authored

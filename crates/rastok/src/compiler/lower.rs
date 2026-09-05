@@ -11,8 +11,9 @@
 //! values.
 
 use crate::compiler::hir::{
-    AttrValue, Direction, EdgeTarget, EmitValue, EndpointOwner, Graph as HirGraph, Hir,
-    InstanceLifetime, InstancePolicy, Node as HirNode, NodeSemantics, Statement as HirStatement,
+    AttrValue, Direction, Dispatch as HirDispatch, EdgeTarget, EmitValue, Endpoint, EndpointOwner,
+    Graph as HirGraph, Hir, InstanceLifetime, InstancePolicy, LoopCommandKind, LoopSpec,
+    Node as HirNode, NodeSemantics, RouteDestination, RouteSelection, Statement as HirStatement,
 };
 use crate::datatype::{
     BinaryType, DataType, DateUnit, FloatType, IntegerType, IntegerWidth, IntervalUnit,
@@ -76,6 +77,7 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
     for (text, _) in edges {
         writer.str(&text);
     }
+    writer.routing(hir);
     let nested_graphs: Vec<_> = sorted_graphs(hir)
         .into_iter()
         .filter(|graph| !graph.path.is_root())
@@ -110,19 +112,33 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
             }
         }
     }
-    let aspect_graphs: Vec<_> = sorted_graphs(hir)
+    let extension_graphs: Vec<_> = sorted_graphs(hir)
         .into_iter()
-        .filter(|graph| !graph.aspects.is_empty())
+        .filter(|graph| {
+            !graph.handlers.is_empty()
+                && graph
+                    .extensions
+                    .iter()
+                    .any(|extension| *extension != node::Extension::App)
+        })
         .collect();
-    if !aspect_graphs.is_empty() {
+    if !extension_graphs.is_empty() {
+        // Legacy v15 domain. R4 allocates the new Extension representation;
+        // the nominal R3 refactor must not move an existing identity.
         writer.str("rastok.aspects.r1");
-        writer.count(aspect_graphs.len());
-        for graph in aspect_graphs {
+        writer.count(extension_graphs.len());
+        for graph in extension_graphs {
             writer.str(&graph.path.to_string());
-            writer.count(graph.aspects.len());
-            for aspect in &graph.aspects {
-                match aspect {
-                    node::Aspect::Loop => {
+            let extensions: Vec<_> = graph
+                .extensions
+                .iter()
+                .filter(|extension| **extension != node::Extension::App)
+                .collect();
+            writer.count(extensions.len());
+            for extension in extensions {
+                match extension {
+                    node::Extension::App => {}
+                    node::Extension::Loop => {
                         writer.tag(1);
                         match &graph.loop_spec {
                             None => writer.tag(0),
@@ -150,7 +166,7 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
                             },
                         }
                     }
-                    node::Aspect::Saga => writer.tag(2),
+                    node::Extension::Saga => writer.tag(2),
                 }
             }
             let mut handlers: Vec<_> = graph.handlers.iter().collect();
@@ -172,6 +188,9 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
     let proved_graphs: Vec<_> = sorted_graphs(hir)
         .into_iter()
         .filter_map(|graph| {
+            if graph.handlers.is_empty() {
+                return None;
+            }
             graph
                 .loop_spec
                 .as_ref()
@@ -205,6 +224,32 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
                     }
                 }
             }
+        }
+    }
+    let mut loop_owners: Vec<_> = sorted_graphs(hir)
+        .into_iter()
+        .filter(|graph| graph.handlers.is_empty())
+        .filter_map(|graph| {
+            graph
+                .loop_spec
+                .as_ref()
+                .map(|spec| (EndpointOwner::Graph(graph.path.clone()), spec))
+        })
+        .chain(sorted_nodes(hir).into_iter().filter_map(|node| {
+            node.loop_spec
+                .as_ref()
+                .map(|spec| (EndpointOwner::Node(node.path.clone()), spec))
+        }))
+        .collect();
+    if !loop_owners.is_empty() {
+        // Command-based Loop identity never extends or reinterprets the
+        // historical Graph-handler stream above.
+        loop_owners.sort_by(|left, right| left.0.cmp(&right.0));
+        writer.str("rastok.loop.r2");
+        writer.count(loop_owners.len());
+        for (owner, spec) in loop_owners {
+            writer.endpoint_owner(&owner);
+            writer.loop_spec(spec);
         }
     }
     // Extend identity only when the new source declares non-default instance
@@ -438,34 +483,42 @@ fn flat_edge_text(edge: &FlatEdge) -> String {
 pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
     let nodes = sorted_nodes(hir);
     for graph in sorted_graphs(hir) {
-        let expected = if graph.path.is_root() {
-            node::Type::App
-        } else {
-            node::Type::Graph
-        };
-        if graph.ty != expected {
+        let owns_app = graph.extensions.contains(&node::Extension::App);
+        if owns_app != graph.path.is_root() {
             return Err(LowerError {
                 owner: graph.path.to_string(),
-                detail: "a checked Graph carries an incompatible Node type",
+                detail: "the App Extension does not match the checked root Graph",
             });
         }
         if graph
-            .aspects
+            .extensions
             .iter()
-            .any(|aspect| *aspect != node::Aspect::Loop)
-            || (graph.aspects.contains(&node::Aspect::Loop) && graph.loop_spec.is_none())
-            || (!graph.aspects.contains(&node::Aspect::Loop) && graph.loop_spec.is_some())
+            .any(|extension| !matches!(extension, node::Extension::App | node::Extension::Loop))
+            || (graph.extensions.contains(&node::Extension::Loop) && graph.loop_spec.is_none())
+            || (!graph.extensions.contains(&node::Extension::Loop) && graph.loop_spec.is_some())
         {
             return Err(LowerError {
                 owner: graph.path.to_string(),
-                detail: "a Graph aspect reached lowering without its complete categorical specification",
+                detail: "a Graph Extension reached lowering without its complete categorical specification",
+            });
+        }
+        if graph.routes.iter().any(|route| route.v15_edge().is_none()) {
+            return Err(LowerError {
+                owner: graph.path.to_string(),
+                detail: "route sets, case routing, and Loop manager commands require the categorical v16 plan",
+            });
+        }
+        if graph.loop_spec.is_some() && graph.handlers.is_empty() {
+            return Err(LowerError {
+                owner: graph.path.to_string(),
+                detail: "a command-based Loop Graph requires the categorical v16 plan",
             });
         }
     }
-    if let Some(node) = nodes.iter().find(|node| !node.aspects.is_empty()) {
+    if let Some(node) = nodes.iter().find(|node| !node.extensions.is_empty()) {
         return Err(LowerError {
             owner: node.path.to_string(),
-            detail: "a Node aspect reached lowering before its plan gate",
+            detail: "an Executor Extension requires the categorical v16 plan",
         });
     }
     let slot_of = |path: &node::Path| {
@@ -642,13 +695,13 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         vars.sort_by(|a, b| a.name.cmp(&b.name));
         plan.nodes.push(Node {
             path: hir_node.path.clone(),
-            execution: match (&hir_node.ty, &hir_node.semantics) {
-                (
-                    node::Type::Connector(contract),
-                    NodeSemantics::Connector {
-                        roles, exchange, ..
-                    },
-                ) => NodeExecution::Connector(ConnectorSpec {
+            execution: match &hir_node.semantics {
+                NodeSemantics::Connector {
+                    contract,
+                    roles,
+                    exchange,
+                    ..
+                } => NodeExecution::Connector(ConnectorSpec {
                     contract: contract.clone(),
                     roles: *roles,
                     exchange: *exchange,
@@ -656,13 +709,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                     behavior: typed_behavior(hir_node),
                     attributes,
                 }),
-                (node::Type::Operator, NodeSemantics::Operator) => NodeExecution::Operator,
-                _ => {
-                    return Err(LowerError {
-                        owner: hir_node.path.to_string(),
-                        detail: "a checked Node type disagrees with its family semantics",
-                    });
-                }
+                NodeSemantics::Operator => NodeExecution::Operator,
             },
             ports,
             vars,
@@ -694,12 +741,23 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         let mut handlers: Vec<_> = hir_node.handlers.iter().collect();
         handlers.sort_by_key(|handler| handler.activation.canonical_key());
         for handler in handlers {
+            let Some((guard, body)) = v15_handler_parts(handler) else {
+                return Err(LowerError {
+                    owner: hir_node.path.to_string(),
+                    detail: "recursive Dispatch requires the categorical v16 plan",
+                });
+            };
+            if body.iter().any(|statement| !is_v15_statement(statement)) {
+                return Err(LowerError {
+                    owner: hir_node.path.to_string(),
+                    detail: "multi-emission and Loop manager commands require the categorical v16 plan",
+                });
+            }
             plan.handlers.push(Handler {
                 owner: HandlerOwner::Node(slot),
                 activation: handler.activation.clone(),
-                guard: handler.guard.as_ref().map(&subst),
-                body: handler
-                    .body
+                guard: guard.map(&subst),
+                body: body
                     .iter()
                     .map(|statement| match statement {
                         HirStatement::Let {
@@ -720,6 +778,9 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                             value: lower_emission(value, &subst),
                         },
                         HirStatement::Stop => Step::Stop,
+                        HirStatement::MultiEmit { .. } | HirStatement::LoopCommand(_) => {
+                            unreachable!("unsupported statements were rejected above")
+                        }
                     })
                     .collect(),
             });
@@ -735,17 +796,28 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         let mut handlers: Vec<_> = graph
             .handlers
             .iter()
-            .map(|handler| Handler {
-                owner: HandlerOwner::Graph(owner),
-                activation: handler.activation.clone(),
-                guard: handler.guard.as_ref().map(&subst),
-                body: handler
-                    .body
-                    .iter()
-                    .map(|statement| lower_statement(statement, &subst))
-                    .collect(),
+            .map(|handler| {
+                let (guard, body) = v15_handler_parts(handler).ok_or_else(|| LowerError {
+                    owner: graph.path.to_string(),
+                    detail: "recursive Graph Dispatch requires the categorical v16 plan",
+                })?;
+                if body.iter().any(|statement| !is_v15_statement(statement)) {
+                    return Err(LowerError {
+                        owner: graph.path.to_string(),
+                        detail: "Graph multi-emission and Loop commands require the categorical v16 plan",
+                    });
+                }
+                Ok(Handler {
+                    owner: HandlerOwner::Graph(owner),
+                    activation: handler.activation.clone(),
+                    guard: guard.map(&subst),
+                    body: body
+                        .iter()
+                        .map(|statement| lower_statement(statement, &subst))
+                        .collect(),
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, LowerError>>()?;
         handlers.sort_by(|left, right| {
             left.activation
                 .canonical_key()
@@ -857,7 +929,29 @@ fn lower_statement(statement: &HirStatement, subst: &impl Fn(&expr::Tree) -> exp
             value: lower_emission(value, subst),
         },
         HirStatement::Stop => Step::Stop,
+        HirStatement::MultiEmit { .. } | HirStatement::LoopCommand(_) => {
+            unreachable!("R3-only statements are rejected before v15 lowering")
+        }
     }
+}
+
+fn is_v15_statement(statement: &HirStatement) -> bool {
+    matches!(
+        statement,
+        HirStatement::Let { .. }
+            | HirStatement::Emit { .. }
+            | HirStatement::SetVar { .. }
+            | HirStatement::Stop
+    )
+}
+
+/// Projects the one subset which has an exact v15 spelling. In particular,
+/// one-port `where` and its explicit open-match spelling normalize to the
+/// same guard/body pair and therefore preserve their pre-v16 identity.
+fn v15_handler_parts(
+    handler: &crate::compiler::hir::Handler,
+) -> Option<(Option<&expr::Tree>, &[HirStatement])> {
+    handler.v15_linear_parts()
 }
 
 fn lower_instance(
@@ -1196,6 +1290,145 @@ struct Writer<'assets> {
 }
 
 impl Writer<'_> {
+    /// The ordinary edge stream already seals unconditional spatial fan-out.
+    /// Only case selection and manager commands add material here. Universal
+    /// destinations are merged into each case so declaration boundaries and
+    /// grouping cannot affect identity.
+    fn routing(&mut self, hir: &Hir) {
+        let mut sources = std::collections::BTreeMap::<_, Vec<_>>::new();
+        for graph in sorted_graphs(hir) {
+            for route in &graph.routes {
+                sources
+                    .entry(&route.source)
+                    .or_default()
+                    .push(&route.selection);
+            }
+        }
+        sources.retain(|_, selections| {
+            selections.iter().any(|selection| match selection {
+                RouteSelection::Cases(_) => true,
+                RouteSelection::All(destinations) => destinations
+                    .iter()
+                    .any(|destination| matches!(destination, RouteDestination::LoopCommand(_))),
+            })
+        });
+        if sources.is_empty() {
+            return;
+        }
+        self.str("rastok.routing.r1");
+        self.count(sources.len());
+        for (source, selections) in sources {
+            self.endpoint(source);
+            let mut universal = std::collections::BTreeSet::new();
+            let mut cases = std::collections::BTreeMap::<_, std::collections::BTreeSet<_>>::new();
+            for selection in selections {
+                match selection {
+                    RouteSelection::All(destinations) => universal.extend(destinations),
+                    RouteSelection::Cases(arms) => {
+                        for arm in arms {
+                            for case in &arm.cases {
+                                cases.entry(case).or_default().extend(&arm.destinations);
+                            }
+                        }
+                    }
+                }
+            }
+            if cases.is_empty() {
+                self.tag(1);
+                self.route_destinations(&universal);
+            } else {
+                self.tag(2);
+                self.count(cases.len());
+                for (case, mut destinations) in cases {
+                    self.str(case);
+                    destinations.extend(&universal);
+                    self.route_destinations(&destinations);
+                }
+            }
+        }
+    }
+
+    fn route_destinations(&mut self, destinations: &std::collections::BTreeSet<&RouteDestination>) {
+        self.count(destinations.len());
+        for destination in destinations {
+            match destination {
+                RouteDestination::Port(endpoint) => {
+                    self.tag(1);
+                    self.endpoint(endpoint);
+                }
+                RouteDestination::Discard => self.tag(2),
+                RouteDestination::LoopCommand(command) => {
+                    self.tag(3);
+                    self.endpoint_owner(&command.owner);
+                    self.tag(match command.kind {
+                        LoopCommandKind::Next => 1,
+                        LoopCommandKind::Again => 2,
+                        LoopCommandKind::Done => 3,
+                    });
+                }
+            }
+        }
+    }
+
+    fn endpoint_owner(&mut self, owner: &EndpointOwner) {
+        match owner {
+            EndpointOwner::Node(path) => {
+                self.tag(1);
+                self.str(&path.to_string());
+            }
+            EndpointOwner::Graph(path) => {
+                self.tag(2);
+                self.str(&path.to_string());
+            }
+        }
+    }
+
+    fn endpoint(&mut self, endpoint: &Endpoint) {
+        self.endpoint_owner(&endpoint.owner);
+        self.str(endpoint.port.name());
+    }
+
+    fn loop_spec(&mut self, spec: &LoopSpec) {
+        self.str(spec.entry.name());
+        self.count(spec.terminals.len());
+        for terminal in &spec.terminals {
+            self.str(terminal.name());
+        }
+        match &spec.fuel {
+            None => self.tag(0),
+            Some(fuel) => {
+                self.tag(1);
+                self.tree(&fuel.tree);
+            }
+        }
+        match &spec.delay {
+            None => self.tag(0),
+            Some(crate::compiler::hir::LoopDelay::Fixed { after }) => {
+                self.tag(1);
+                self.tree(&after.tree);
+            }
+            Some(crate::compiler::hir::LoopDelay::Exponential { first, ceiling }) => {
+                self.tag(2);
+                self.tree(&first.tree);
+                self.tree(&ceiling.tree);
+            }
+        }
+        match &spec.proof {
+            None => self.tag(0),
+            Some(proof) => {
+                self.tag(1);
+                self.tree(&proof.measure);
+                match &proof.invariant {
+                    None => self.tag(0),
+                    Some(invariant) => {
+                        self.tag(1);
+                        self.tree(invariant);
+                    }
+                }
+            }
+        }
+    }
+
     fn tag(&mut self, tag: u8) {
         self.hasher.update(&[tag]);
     }
@@ -1495,24 +1728,18 @@ impl Writer<'_> {
             node::Kind::Graph => 3,
         });
         self.str(&node.path.to_string());
-        match (&node.ty, &node.semantics) {
-            (node::Type::Operator, crate::compiler::hir::NodeSemantics::Operator) => self.tag(0),
-            (
-                node::Type::Connector(contract),
-                crate::compiler::hir::NodeSemantics::Connector {
-                    roles, exchange, ..
-                },
-            ) => {
+        match &node.semantics {
+            crate::compiler::hir::NodeSemantics::Operator => self.tag(0),
+            crate::compiler::hir::NodeSemantics::Connector {
+                contract,
+                roles,
+                exchange,
+                ..
+            } => {
                 self.tag(1);
                 self.str(contract.as_str());
                 self.tag(roles.tag());
                 self.tag(exchange.tag());
-            }
-            _ => {
-                // Executable HIR cannot contain an incompatible type/family
-                // pair. Keep the hash total without granting that recovery
-                // state a semantic spelling.
-                self.tag(u8::MAX);
             }
         }
         let mut vals: Vec<_> = node.vals.iter().collect();
@@ -1614,37 +1841,136 @@ impl Writer<'_> {
                 }
             }
         }
-        match &handler.guard {
+        if let Some((guard, body)) = v15_handler_parts(handler) {
+            match guard {
+                None => self.tag(0),
+                Some(guard) => {
+                    self.tag(1);
+                    self.tree(guard);
+                }
+            }
+            self.count(body.len());
+            for statement in body {
+                self.statement(statement);
+            }
+            return;
+        }
+        // R3-only semantic form. It cannot ship in v15, but its checked HIR
+        // still has a deterministic identity for equivalence and sabotage
+        // tests before the single R4 package bump.
+        self.str("rastok.dispatch.r1");
+        match &handler.admission_guard {
             None => self.tag(0),
             Some(guard) => {
                 self.tag(1);
                 self.tree(guard);
             }
         }
-        self.count(handler.body.len());
-        for statement in &handler.body {
-            match statement {
-                HirStatement::Let {
-                    name,
-                    value,
-                    annotations,
-                } => {
-                    self.tag(1);
-                    self.str(name);
-                    self.tree(value);
-                    self.annotations(annotations);
+        self.dispatch(&handler.dispatch);
+    }
+
+    fn dispatch(&mut self, dispatch: &HirDispatch) {
+        match dispatch {
+            HirDispatch::Linear(statements) => {
+                self.tag(1);
+                self.count(statements.len());
+                for statement in statements {
+                    self.statement(statement);
                 }
-                HirStatement::Emit { port, value } => {
-                    self.tag(2);
+            }
+            HirDispatch::ClosedMatch {
+                prefix,
+                scrutinee,
+                arms,
+            } => {
+                self.tag(2);
+                self.count(prefix.len());
+                for statement in prefix {
+                    self.statement(statement);
+                }
+                self.tree(scrutinee);
+                self.count(arms.len());
+                for arm in arms {
+                    self.count(arm.cases.len());
+                    for case in &arm.cases {
+                        self.str(case);
+                    }
+                    self.dispatch(&arm.dispatch);
+                }
+            }
+            HirDispatch::OpenMatch {
+                prefix,
+                arms,
+                fallback,
+            } => {
+                self.tag(3);
+                self.count(prefix.len());
+                for statement in prefix {
+                    self.statement(statement);
+                }
+                self.count(arms.len());
+                for arm in arms {
+                    self.tree(&arm.predicate);
+                    self.dispatch(&arm.dispatch);
+                }
+                self.dispatch(fallback);
+            }
+        }
+    }
+
+    fn statement(&mut self, statement: &HirStatement) {
+        match statement {
+            HirStatement::Let {
+                name,
+                value,
+                annotations,
+            } => {
+                self.tag(1);
+                self.str(name);
+                self.tree(value);
+                self.annotations(annotations);
+            }
+            HirStatement::Emit { port, value } => {
+                self.tag(2);
+                self.str(port.name());
+                self.emission(value);
+            }
+            HirStatement::SetVar { name, value } => {
+                self.tag(3);
+                self.str(name);
+                self.tree(value);
+            }
+            HirStatement::Stop => self.tag(4),
+            HirStatement::MultiEmit { ports, values } => {
+                self.tag(5);
+                self.count(ports.len());
+                for port in ports {
                     self.str(port.name());
-                    self.emission(value);
                 }
-                HirStatement::SetVar { name, value } => {
-                    self.tag(3);
-                    self.str(name);
-                    self.tree(value);
+                match values {
+                    crate::compiler::hir::MultiEmitValues::Broadcast(value) => {
+                        self.tag(1);
+                        self.emission(value);
+                    }
+                    crate::compiler::hir::MultiEmitValues::Tuple(values) => {
+                        self.tag(2);
+                        self.count(values.len());
+                        for value in values {
+                            self.emission(value);
+                        }
+                    }
                 }
-                HirStatement::Stop => self.tag(4),
+            }
+            HirStatement::LoopCommand(command) => {
+                self.tag(6);
+                match command {
+                    crate::compiler::hir::LoopCommand::Next(value) => {
+                        self.tag(1);
+                        self.emission(value);
+                    }
+                    crate::compiler::hir::LoopCommand::Again => self.tag(2),
+                    crate::compiler::hir::LoopCommand::Done => self.tag(3),
+                }
             }
         }
     }

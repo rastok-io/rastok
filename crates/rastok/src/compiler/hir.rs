@@ -47,14 +47,11 @@ pub use crate::node::Direction;
 pub struct Graph {
     /// The graph's declared name; excluded from descendant identity.
     pub name: String,
-    /// The graph's effective node type (`App` for the deployment root,
-    /// otherwise the canonical `Graph`).
-    pub ty: node::Type,
-    /// Canonically sorted aspects. Recovery HIR records a recognized aspect
-    /// even while its diagnostic refuses compilation; lowering independently
-    /// rejects every aspect until its plan/runtime gate lands.
-    pub aspects: Vec<node::Aspect>,
-    /// Checked Loop source contract retained behind the M1.7 lowering gate.
+    /// Canonically sorted Extensions. The root owns `App`; `Loop` and future
+    /// temporal Extensions remain orthogonal to the Graph category.
+    pub extensions: Vec<node::Extension>,
+    /// Checked Loop source contract. The new command-based interface stays
+    /// behind the categorical v16 lowering gate.
     /// `None` for every Graph without `: Loop`, and for a malformed recovery
     /// declaration.
     pub loop_spec: Option<LoopSpec>,
@@ -66,8 +63,8 @@ pub struct Graph {
     pub boundary: Vec<crate::plan::PortDecl>,
     /// Graph-level constant bindings, in declaration order.
     pub vals: Vec<Val>,
-    /// Graph-owned handlers. They use the same checked statement algebra as
-    /// executable Node handlers; the distinct owner is preserved at lowering.
+    /// Historical v15 Loop Graph handlers retained until the coordinated
+    /// runtime/source migration. A v16 Graph has no application handlers.
     pub handlers: Vec<Handler>,
     /// The graph's nodes, in declaration order.
     pub nodes: Vec<Node>,
@@ -75,6 +72,10 @@ pub struct Graph {
     pub graphs: Vec<Graph>,
     /// The wiring, desugared to explicit endpoint pairs.
     pub edges: Vec<Edge>,
+    /// Source-level routing groups and case selection. Every declaration is
+    /// retained here; `edges` is only its deduplicated physical projection.
+    /// R4 moves this algebra into the categorical plan in one version bump.
+    pub routes: Vec<RouteRule>,
     /// Graph-owned instance addressing and lifetime. Absence means the
     /// persistent singleton and is canonically identical to an explicitly
     /// written persistent lifetime.
@@ -86,6 +87,13 @@ pub struct Graph {
 /// a second semantic authority.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoopSpec {
+    /// Resolved recurrent admission port. The manager always re-enters this
+    /// exact port; it is identity material in v16.
+    pub entry: node::Port,
+    /// Canonically sorted ordinary outputs whose emission supplies the natural
+    /// `Done` verdict. Connector Calls use their Contract terminal instead and
+    /// therefore keep this empty.
+    pub terminals: Vec<node::Port>,
     /// Optional positive body-application budget. A checked measure can stand
     /// alone; when both are present, fuel remains the operational cap.
     pub fuel: Option<Const>,
@@ -135,17 +143,15 @@ pub struct Val {
     pub annotations: AnnotationTable,
 }
 
-/// Family-specific facts attached to one checked node.
-///
-/// The structural family itself is [`node::Kind`], derived from the node's
-/// effective [`node::Type`]. This enum preserves the extra contract facts a
-/// Connector needs without calling that family distinction a "role".
+/// Executor-specific facts attached to one checked node.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeSemantics {
     /// Pure graph-internal computation.
     Operator,
     /// External-effect Driver under a contract sheet.
     Connector {
+        /// Exact versioned Contract owned by this Connector.
+        contract: crate::connector::ContractId,
         /// Runtime roles declared by that contract.
         roles: crate::connector::ConnectorRoles,
         /// Interaction lifecycle declared by that contract.
@@ -160,12 +166,12 @@ pub enum NodeSemantics {
 pub struct Node {
     /// Root-relative address; single-segment in the flat M0 subset.
     pub path: node::Path,
-    /// Exactly one effective node type.
-    pub ty: node::Type,
-    /// Canonically sorted aspects. Recovery HIR records a recognized aspect;
-    /// lowering independently refuses it until its plan/runtime gate lands.
-    pub aspects: Vec<node::Aspect>,
-    /// Family-specific checked facts.
+    /// Canonically sorted Extensions attached to this Executor.
+    pub extensions: Vec<node::Extension>,
+    /// Checked Loop source contract when this Executor owns `+ Loop`.
+    /// Categorical transport is deliberately deferred to the single v16 bump.
+    pub loop_spec: Option<LoopSpec>,
+    /// Operator or Connector semantics.
     pub semantics: NodeSemantics,
     /// Node-local constant bindings — identity material, substituted
     /// into shipped expressions at lowering.
@@ -187,15 +193,18 @@ impl Node {
     /// The node's structural kind.
     #[must_use]
     pub fn kind(&self) -> node::Kind {
-        self.ty.kind()
+        match self.semantics {
+            NodeSemantics::Operator => node::Kind::Operator,
+            NodeSemantics::Connector { .. } => node::Kind::Connector,
+        }
     }
 
     /// The connector's stable contract identity, when a connector.
     #[must_use]
-    pub fn connector_contract_id(&self) -> Option<&crate::connector::ConnectorId> {
-        match &self.ty {
-            node::Type::Connector(contract) => Some(contract),
-            node::Type::Graph | node::Type::App | node::Type::Operator => None,
+    pub fn connector_contract_id(&self) -> Option<&crate::connector::ContractId> {
+        match &self.semantics {
+            NodeSemantics::Connector { contract, .. } => Some(contract),
+            NodeSemantics::Operator => None,
         }
     }
 
@@ -295,11 +304,96 @@ pub struct Handler {
     /// nanoseconds travel in the activation; this tree preserves semantic
     /// identity just like every other constant position.
     pub join_within: Option<Const>,
-    /// The compiled `where` guard, when present.
-    pub guard: Option<expr::Tree>,
-    /// The body, in text order — the order that fixes emission
-    /// indices.
-    pub body: Vec<Statement>,
+    /// A join's pre-consumption `where`. A one-port `where` is normalized
+    /// into [`Dispatch::OpenMatch`] and never appears here.
+    pub admission_guard: Option<expr::Tree>,
+    /// The checked decision tree. Exactly one linear leaf executes.
+    pub dispatch: Dispatch,
+}
+
+impl Handler {
+    /// Projects the subset that the categorical v15 plan can still carry.
+    ///
+    /// A one-port `where` is represented in the HIR as an open match with an
+    /// empty fallback. Recognising that exact normal form here keeps the R3
+    /// source/HIR work identity-neutral until the single v16 bump in R4.
+    #[must_use]
+    pub(crate) fn v15_linear_parts(&self) -> Option<(Option<&expr::Tree>, &[Statement])> {
+        if let Some(body) = self.dispatch.as_linear() {
+            return Some((self.admission_guard.as_ref(), body));
+        }
+        if self.admission_guard.is_some() {
+            return None;
+        }
+        let Dispatch::OpenMatch {
+            prefix,
+            arms,
+            fallback,
+        } = &self.dispatch
+        else {
+            return None;
+        };
+        if !prefix.is_empty() || arms.len() != 1 || !fallback.as_linear()?.is_empty() {
+            return None;
+        }
+        let body = arms[0].dispatch.as_linear()?;
+        Some((Some(&arms[0].predicate), body))
+    }
+}
+
+/// Recursive, typed Operator decision tree.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Dispatch {
+    /// Rectilinear statements in semantic source order.
+    Linear(Vec<Statement>),
+    /// Closed selection over a tagged union, enum, or bool. Arms are sorted
+    /// by their canonical case sets; their source order is erased.
+    ClosedMatch {
+        /// Pure local bindings evaluated before the scrutinee.
+        prefix: Vec<Statement>,
+        /// Checked closed-domain expression.
+        scrutinee: expr::Tree,
+        /// Pairwise-disjoint, exhaustive arms.
+        arms: Vec<ClosedArm>,
+    },
+    /// Ordered predicate selection; first true wins and fallback is required.
+    OpenMatch {
+        /// Pure local bindings evaluated before the predicates.
+        prefix: Vec<Statement>,
+        /// Predicates and nested dispatches in source order.
+        arms: Vec<OpenArm>,
+        /// Exact `_` fallback.
+        fallback: Box<Dispatch>,
+    },
+}
+
+impl Dispatch {
+    /// The statements of a linear leaf.
+    #[must_use]
+    pub fn as_linear(&self) -> Option<&[Statement]> {
+        match self {
+            Self::Linear(statements) => Some(statements),
+            Self::ClosedMatch { .. } | Self::OpenMatch { .. } => None,
+        }
+    }
+}
+
+/// One canonical closed-match arm.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClosedArm {
+    /// Sorted, non-empty symbolic cases covered by this arm.
+    pub cases: Vec<String>,
+    /// Nested dispatch for those cases.
+    pub dispatch: Box<Dispatch>,
+}
+
+/// One ordered open-match arm.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpenArm {
+    /// Boolean predicate.
+    pub predicate: expr::Tree,
+    /// Nested dispatch when it is the first true predicate.
+    pub dispatch: Box<Dispatch>,
 }
 
 /// One checked statement.
@@ -321,6 +415,13 @@ pub enum Statement {
         /// What is emitted.
         value: EmitValue,
     },
+    /// Ordered atomic production of several distinct envelopes.
+    MultiEmit {
+        /// Output targets in authored order.
+        ports: Vec<node::Port>,
+        /// Broadcast or positionally paired values.
+        values: MultiEmitValues,
+    },
     /// Write to a declared state cell.
     SetVar {
         /// The cell name.
@@ -330,6 +431,28 @@ pub enum Statement {
     },
     /// Bare `stop`: close this Node's current logical instance.
     Stop,
+    /// A durable command produced for the owner's Loop manager.
+    LoopCommand(LoopCommand),
+}
+
+/// Right-hand side shape of an atomic multi-emission.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MultiEmitValues {
+    /// Evaluate once, then build one envelope for every target.
+    Broadcast(EmitValue),
+    /// Evaluate and pair values with targets from left to right.
+    Tuple(Vec<EmitValue>),
+}
+
+/// Loop manager commands. They are neither ports nor spatial emissions.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LoopCommand {
+    /// Supply the next entry envelope.
+    Next(EmitValue),
+    /// Retain the current `Loop.state`.
+    Again,
+    /// Close without a business envelope.
+    Done,
 }
 
 /// What an emission builds.
@@ -380,6 +503,87 @@ pub enum EdgeTarget {
     Port(Endpoint),
     /// `nothing` — non-blocking drain.
     Discard,
+}
+
+/// One checked routing decision owned by a single source port.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteRule {
+    /// The source whose emitted envelope selects this rule.
+    pub source: Endpoint,
+    /// Unconditional or closed-case routing.
+    pub selection: RouteSelection,
+}
+
+impl RouteRule {
+    /// Exact subset representable by one ordinary v15 edge.
+    #[must_use]
+    pub fn v15_edge(&self) -> Option<Edge> {
+        let RouteSelection::All(destinations) = &self.selection else {
+            return None;
+        };
+        let [destination] = destinations.as_slice() else {
+            return None;
+        };
+        let to = match destination {
+            RouteDestination::Port(endpoint) => EdgeTarget::Port(endpoint.clone()),
+            RouteDestination::Discard => EdgeTarget::Discard,
+            RouteDestination::LoopCommand(_) => return None,
+        };
+        Some(Edge {
+            from: self.source.clone(),
+            to,
+        })
+    }
+}
+
+/// Static route selection. Closed cases are stored canonically.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RouteSelection {
+    /// The same destination set applies to every productible source case.
+    All(Vec<RouteDestination>),
+    /// Exactly one exhaustive case arm applies.
+    Cases(Vec<RouteArm>),
+}
+
+/// One canonical route arm.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteArm {
+    /// Sorted, non-empty source cases.
+    pub cases: Vec<String>,
+    /// Canonically sorted destinations selected for those cases.
+    pub destinations: Vec<RouteDestination>,
+}
+
+/// One destination selected before a producer transaction commits.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RouteDestination {
+    /// A spatial delivery endpoint.
+    Port(Endpoint),
+    /// Explicitly consume the source without a delivery.
+    Discard,
+    /// A durable command to a temporal Extension manager. This is never a
+    /// spatial edge and therefore cannot make a cycle in the DAG.
+    LoopCommand(LoopCommandTarget),
+}
+
+/// Addressed Loop-manager command used as a wiring destination.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LoopCommandTarget {
+    /// Owner whose attached Loop manager receives the command.
+    pub owner: EndpointOwner,
+    /// Command kind; the routed envelope is the state/cause carrier.
+    pub kind: LoopCommandKind,
+}
+
+/// Command kind independent of its statement or routing carrier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LoopCommandKind {
+    /// Use the routed envelope as the next state.
+    Next,
+    /// Retain `Loop.state`; the routed envelope is only the cause.
+    Again,
+    /// Close the run without a business envelope.
+    Done,
 }
 
 /// One end of an edge, default ports made explicit.

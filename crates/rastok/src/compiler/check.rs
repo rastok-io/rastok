@@ -7,14 +7,26 @@
 //! (`E-CHECK-DEFERRED`). Rules with a normative home carry their own
 //! codes; `meta.sys` writes are the canonical example.
 
+mod dispatch;
+mod extensions;
+mod loop_control;
+mod routing;
+
+use dispatch::*;
+use loop_control::*;
+use routing::*;
+
 use crate::compiler::hir::{
-    AttrValue, Attribute, ClosingPolicy, Const, Direction, Edge, EdgeTarget, EmitValue, Endpoint,
-    EndpointOwner, FieldWrite, Graph, Handler, Hir, InstanceLifetime, InstancePolicy, LoopDelay,
-    LoopSpec, Node, NodeSemantics, Statement, Val, Var,
+    AttrValue, Attribute, ClosedArm, ClosingPolicy, Const, Direction, Dispatch, Edge, EdgeTarget,
+    EmitValue, Endpoint, EndpointOwner, FieldWrite, Graph, Handler, Hir, InstanceLifetime,
+    InstancePolicy, LoopCommand, LoopCommandKind, LoopCommandTarget, LoopDelay, LoopSpec,
+    MultiEmitValues, Node, NodeSemantics, OpenArm, RouteArm, RouteDestination, RouteRule,
+    RouteSelection, Statement, Val, Var,
 };
 use crate::compiler::syntax::{
-    Attribute as SynAttribute, BaseType, ConnectorDecl, EdgeDecl, EdgeEndpoint, ExprSource,
-    GraphDecl, GraphItem, Name, OperatorDecl, OperatorItem, PortRef, ScalarType,
+    Attribute as SynAttribute, BaseType, ConnectorDecl, Dispatch as SynDispatch, EdgeCaseSet,
+    EdgeDecl, EdgeDestination as SynEdgeDestination, EdgeEndpoint, EdgeMatch, ExprSource,
+    GraphDecl, GraphItem, MatchSelector, Name, OperatorDecl, OperatorItem, PortRef, ScalarType,
     SchemaAnnotation as SynSchemaAnnotation, SchemaAnnotationConstant, Statement as SynStatement,
     StructBody, StructEntry, SyntaxTree, TopDecl, Trigger as SynTrigger, TypeRef, ValDecl,
     Value as SynValue, VarDecl,
@@ -38,6 +50,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const E_APP_COUNT: Code = Code::new("E-APP-COUNT");
 /// Diagnostic for a duplicate node name inside one graph.
 pub const E_DUP_NODE: Code = Code::new("E-DUP-NODE");
+/// A Graph port and child claim the same lexical name.
+pub const E_NAME_CLASH: Code = Code::new("E-NAME-CLASH");
 /// Diagnostic for a name that resolves to no declaration.
 pub const E_RESOLVE_UNKNOWN: Code = Code::new("E-RESOLVE-UNKNOWN");
 /// Diagnostic for a port that the addressed node does not expose.
@@ -117,7 +131,7 @@ enum DataAnnotationTarget<'a> {
 pub const E_EXPR: Code = Code::new("E-EXPR");
 /// Diagnostic for grammar admitted but outside the executable subset.
 pub const E_CHECK_DEFERRED: Code = Code::new("E-CHECK-DEFERRED");
-/// Diagnostic for a Node type/aspect annotation that is unknown, ordered
+/// Diagnostic for a structural annotation or Extension that is unknown, ordered
 /// incorrectly, duplicated, or incompatible with the declaration kind.
 pub const E_NODE_ANNOTATION: Code = Code::new("E-NODE-ANNOTATION");
 /// Diagnostic for a connector type without a Driver in this build.
@@ -143,10 +157,48 @@ pub const E_PORT_TYPE: Code = Code::new("E-PORT-TYPE");
 /// A Node's `instance` or `lifetime` attribute is malformed, duplicated, or
 /// has no canonical instance-key type.
 pub const E_INSTANCE: Code = Code::new("E-INSTANCE");
-/// A Loop aspect attribute or finite-recursion contract is malformed.
+/// A Loop Extension attribute or finite-recursion contract is malformed.
 pub const E_LOOP: Code = Code::new("E-LOOP");
 /// A Loop body cannot prove one finite progress verdict on every traversal.
 pub const E_LOOP_CONTROL: Code = Code::new("E-LOOP-CONTROL");
+/// Loop is attached to a Node whose resolved execution profile cannot form one
+/// finite envelope-triggered application.
+pub const E_LOOP_HOST: Code = Code::new("E-LOOP-HOST");
+/// Loop has no unique recurrent admission input.
+pub const E_LOOP_ENTRY: Code = Code::new("E-LOOP-ENTRY");
+/// Loop has no unambiguous set of ordinary outputs supplying natural Done.
+pub const E_LOOP_TERMINAL: Code = Code::new("E-LOOP-TERMINAL");
+/// A second Operator handler names the same activation.
+pub const E_HANDLER_DUPLICATE: Code = Code::new("E-HANDLER-DUPLICATE");
+/// A Graph body tries to own application code; move it into an Operator.
+pub const E_GRAPH_HANDLER: Code = Code::new("E-GRAPH-HANDLER");
+/// A Connector body tries to own DSL code instead of its Contract transition.
+pub const E_CONNECTOR_HANDLER: Code = Code::new("E-CONNECTOR-HANDLER");
+/// A Graph scope tries to declare private application state.
+pub const E_GRAPH_STATE: Code = Code::new("E-GRAPH-STATE");
+/// A Connector tries to declare DSL state outside its versioned Contract.
+pub const E_CONNECTOR_STATE: Code = Code::new("E-CONNECTOR-STATE");
+/// A closed match scrutinizes an open or unsupported type.
+pub const E_MATCH_NOT_CLOSED: Code = Code::new("E-MATCH-NOT-CLOSED");
+/// Two closed arms select the same case.
+pub const E_MATCH_OVERLAP: Code = Code::new("E-MATCH-OVERLAP");
+/// A closed match leaves a case uncovered.
+pub const E_MATCH_NONEXHAUSTIVE: Code = Code::new("E-MATCH-NONEXHAUSTIVE");
+/// A second closed route match tries to become another authority for the same
+/// source cases.
+pub const E_MATCH_DUPLICATE: Code = Code::new("E-MATCH-DUPLICATE");
+/// A match appears after an effectful statement instead of at dispatch position.
+pub const E_DISPATCH_POSITION: Code = Code::new("E-DISPATCH-POSITION");
+/// An atomic multi-emission repeats one output target.
+pub const E_MULTI_EMIT_DUPLICATE: Code = Code::new("E-MULTI-EMIT-DUPLICATE");
+/// Tuple-valued multi-emission has a different arity than its targets.
+pub const E_MULTI_EMIT_ARITY: Code = Code::new("E-MULTI-EMIT-ARITY");
+/// A route selects the same destination twice for one source case.
+pub const E_ROUTE_DUPLICATE: Code = Code::new("E-ROUTE-DUPLICATE");
+/// `nothing` and a real destination are selected for the same source case.
+pub const E_ROUTE_MIXED: Code = Code::new("E-ROUTE-MIXED");
+/// Removed wiring syntax has one named migration diagnostic.
+pub const E_WIRING_MIGRATION: Code = Code::new("E-WIRING-MIGRATION");
 
 /// A braced value mixing ordinary data fields with reserved envelope
 /// roots — the classification is one or the other, never a silent
@@ -201,10 +253,7 @@ pub fn check(
         for decl in &tree.decls {
             if let TopDecl::Graph(graph) = decl {
                 let is_app = graph.annotation.as_ref().is_some_and(|annotation| {
-                    annotation
-                        .symbols
-                        .first()
-                        .is_some_and(|symbol| symbol.text == "App")
+                    annotation.symbols.iter().any(|symbol| symbol.text == "App")
                 });
                 if is_app {
                     apps.push(graph);
@@ -507,178 +556,6 @@ impl Checker<'_, '_> {
             .with_span(span)
             .with_field("construct", construct),
         );
-    }
-
-    fn node_annotation_refusal(&mut self, symbol: &Name, detail: impl Into<String>) {
-        let detail = detail.into();
-        self.bag.push(
-            Diagnostic::new(E_NODE_ANNOTATION, Phase::Check, detail.clone())
-                .with_span(symbol.span)
-                .with_field("name", symbol.text.clone())
-                .with_field("detail", detail),
-        );
-    }
-
-    fn graph_annotation(
-        &mut self,
-        decl: &GraphDecl,
-        is_root: bool,
-    ) -> (node::Type, Vec<node::Aspect>) {
-        let symbols = decl
-            .annotation
-            .as_ref()
-            .map_or(&[][..], |annotation| annotation.symbols.as_slice());
-        let mut next = 0;
-        let ty = match symbols.first() {
-            Some(symbol) if symbol.text == "App" => {
-                next = 1;
-                if !is_root {
-                    self.node_annotation_refusal(
-                        symbol,
-                        "`App` is the deployed unit's unique root type; a nested graph has type `Graph`",
-                    );
-                    node::Type::Graph
-                } else {
-                    node::Type::App
-                }
-            }
-            Some(symbol) if symbol.text == "Graph" => {
-                next = 1;
-                node::Type::Graph
-            }
-            Some(symbol) if node::Aspect::from_source_name(&symbol.text).is_none() => {
-                next = 1;
-                self.node_annotation_refusal(
-                    symbol,
-                    format!(
-                        "`{}` is not a Graph NodeType or a known NodeAspect",
-                        symbol.text
-                    ),
-                );
-                node::Type::Graph
-            }
-            Some(_) | None => node::Type::Graph,
-        };
-        let aspects = self.graph_aspects(&symbols[next..]);
-        (ty, aspects)
-    }
-
-    fn graph_aspects(&mut self, symbols: &[Name]) -> Vec<node::Aspect> {
-        let mut aspects = Vec::new();
-        for symbol in symbols {
-            let Some(aspect) = node::Aspect::from_source_name(&symbol.text) else {
-                let detail = if matches!(symbol.text.as_str(), "App" | "Graph") {
-                    "a NodeType must be the first annotation, before every NodeAspect".to_string()
-                } else {
-                    format!("`{}` is not a known Graph NodeAspect", symbol.text)
-                };
-                self.node_annotation_refusal(symbol, detail);
-                continue;
-            };
-            if aspects.contains(&aspect) {
-                self.node_annotation_refusal(
-                    symbol,
-                    format!("the `{aspect}` NodeAspect is declared twice"),
-                );
-                continue;
-            }
-            aspects.push(aspect);
-            if aspect == node::Aspect::Saga {
-                self.deferred("the Saga NodeAspect", symbol.span);
-            }
-        }
-        aspects.sort();
-        aspects
-    }
-
-    fn operator_annotation(&mut self, decl: &OperatorDecl) -> Vec<node::Aspect> {
-        let symbols = decl
-            .annotation
-            .as_ref()
-            .map_or(&[][..], |annotation| annotation.symbols.as_slice());
-        let mut next = 0;
-        if let Some(symbol) = symbols.first() {
-            if symbol.text == "Operator" {
-                next = 1;
-            } else if node::Aspect::from_source_name(&symbol.text).is_none() {
-                next = 1;
-                let detail = if matches!(
-                    symbol.text.as_str(),
-                    "Reducer" | "Aggregator" | "Window" | "Joiner" | "Router"
-                ) {
-                    format!(
-                        "`{}` is an Operator pattern, not a NodeType; write the ordinary `var`, `instance`, `lifetime`, join, and emission primitives it abbreviates",
-                        symbol.text
-                    )
-                } else {
-                    format!(
-                        "`{}` is not the `Operator` NodeType or a known NodeAspect",
-                        symbol.text
-                    )
-                };
-                self.node_annotation_refusal(symbol, detail);
-            }
-        }
-        let mut seen = Vec::new();
-        for symbol in &symbols[next..] {
-            let Some(aspect) = node::Aspect::from_source_name(&symbol.text) else {
-                let detail = if symbol.text == "Operator" {
-                    "a NodeType must be the first annotation, before every NodeAspect".to_string()
-                } else {
-                    format!("`{}` is not a known Operator NodeAspect", symbol.text)
-                };
-                self.node_annotation_refusal(symbol, detail);
-                continue;
-            };
-            if seen.contains(&aspect) {
-                self.node_annotation_refusal(
-                    symbol,
-                    format!("the `{aspect}` NodeAspect is declared twice"),
-                );
-                continue;
-            }
-            seen.push(aspect);
-            self.node_annotation_refusal(
-                symbol,
-                match aspect {
-                    node::Aspect::Loop => "the M1.7 `Loop` NodeAspect belongs to a Graph; wrap the Operator in that Graph",
-                    node::Aspect::Saga => "the `Saga` NodeAspect belongs to a Graph; an Operator cannot own a compensation workflow",
-                },
-            );
-        }
-        Vec::new()
-    }
-
-    fn connector_aspects(&mut self, symbols: &[Name]) -> Vec<node::Aspect> {
-        let mut seen = Vec::new();
-        for symbol in symbols {
-            let Some(aspect) = node::Aspect::from_source_name(&symbol.text) else {
-                self.node_annotation_refusal(
-                    symbol,
-                    format!("`{}` is not a known Connector NodeAspect", symbol.text),
-                );
-                continue;
-            };
-            if seen.contains(&aspect) {
-                self.node_annotation_refusal(
-                    symbol,
-                    format!("the `{aspect}` NodeAspect is declared twice"),
-                );
-                continue;
-            }
-            seen.push(aspect);
-            match aspect {
-                node::Aspect::Loop => self.node_annotation_refusal(
-                    symbol,
-                    "the M1.7 `Loop` NodeAspect belongs to a Graph; put the Connector inside that Graph",
-                ),
-                node::Aspect::Saga => self.node_annotation_refusal(
-                    symbol,
-                    "the `Saga` NodeAspect belongs to a Graph; put the Connector inside that Graph",
-                ),
-            }
-        }
-        Vec::new()
     }
 
     /// Compiles one Rastok expression span, adapting native diagnostics onto the
@@ -1131,8 +1008,16 @@ impl Checker<'_, '_> {
             let mut handlers = Vec::new();
             for handler in &decl.handlers {
                 if let Some(checked) = self.handler(handler, &signature, node, &BTreeMap::new()) {
-                    let emitted: Vec<_> = checked
-                        .body
+                    let mut dispatch_statements = Vec::new();
+                    collect_hir_statements(&checked.dispatch, &mut dispatch_statements);
+                    if checked.v15_linear_parts().is_none() {
+                        self.deferred(
+                            "a recursive `match` Dispatch in a Lab mock before the v16 Lab executor",
+                            handler.span,
+                        );
+                        continue;
+                    }
+                    let emitted: Vec<_> = dispatch_statements
                         .iter()
                         .filter_map(|statement| match statement {
                             Statement::Emit { port, value }
@@ -1164,7 +1049,7 @@ impl Checker<'_, '_> {
                     // A reply carries data only: its envelope is
                     // minted by the connector's own transaction —
                     // the verdict lands here, not mid-simulation.
-                    let writes_meta = checked.body.iter().any(|statement| {
+                    let writes_meta = dispatch_statements.iter().any(|statement| {
                         let Statement::Emit { value, .. } = statement else {
                             return false;
                         };
@@ -1637,7 +1522,7 @@ impl Checker<'_, '_> {
         is_root: bool,
     ) -> Graph {
         self.guard_binding_name(&decl.name, "a graph");
-        let (ty, aspects) = self.graph_annotation(decl, is_root);
+        let extensions = self.graph_extensions(decl, is_root);
         if decl.removed_per.is_some() {
             self.instance_refusal(
                 decl.span,
@@ -1646,8 +1531,7 @@ impl Checker<'_, '_> {
         }
         let mut graph = Graph {
             name: decl.name.text.clone(),
-            ty,
-            aspects,
+            extensions,
             loop_spec: None,
             path: path.clone(),
             boundary: Vec::new(),
@@ -1656,12 +1540,14 @@ impl Checker<'_, '_> {
             nodes: Vec::new(),
             graphs: Vec::new(),
             edges: Vec::new(),
+            routes: Vec::new(),
             instance: None,
         };
         let mut consts = inherited_consts.clone();
         let mut signature = inherited_signature.clone();
         let mut edges = Vec::new();
         let mut handlers = Vec::new();
+        let mut children = Vec::new();
         let mut redeclared_defaults = std::collections::BTreeSet::new();
         self.queue_instance_attributes(
             InstanceOwner::Graph(path.clone()),
@@ -1677,6 +1563,28 @@ impl Checker<'_, '_> {
             match item {
                 GraphItem::Port(port) => {
                     if !self.guard_binding_name(&port.name, "a boundary port") {
+                        continue;
+                    }
+                    if graph.nodes.iter().any(|node| {
+                        node.path.segments().last().map(String::as_str)
+                            == Some(port.name.text.as_str())
+                    }) || graph
+                        .graphs
+                        .iter()
+                        .any(|nested| nested.name == port.name.text)
+                    {
+                        self.bag.push(
+                            Diagnostic::new(
+                                E_NAME_CLASH,
+                                Phase::Resolve,
+                                format!(
+                                    "`{}` already names a child; Graph ports and children share one namespace",
+                                    port.name.text
+                                ),
+                            )
+                            .with_span(port.name.span)
+                            .with_field("name", port.name.text.clone()),
+                        );
                         continue;
                     }
                     // Boundary and state annotations resolve through the same
@@ -1808,41 +1716,27 @@ impl Checker<'_, '_> {
                         });
                     }
                 }
-                GraphItem::Operator(operator) => {
-                    if let Some(node) = self.operator(operator, &path, &signature, &consts) {
-                        self.push_node(&mut graph, node, operator.name.span);
-                    }
-                }
-                GraphItem::Connector(connector) => {
-                    if let Some(node) = self.connector(connector, &path, &signature, &consts) {
-                        self.push_node(&mut graph, node, connector.name.span);
-                    }
+                GraphItem::Var(var) => self.bag.push(
+                    Diagnostic::new(
+                        E_GRAPH_STATE,
+                        Phase::Check,
+                        "a Graph is a scope and cannot declare private `var` state; move the state and its handlers into an Operator child",
+                    )
+                    .with_span(var.span)
+                    .with_field("owner", path.to_string())
+                    .with_field("name", var.name.text.clone()),
+                ),
+                GraphItem::Operator(_) | GraphItem::Connector(_) | GraphItem::Graph(_) => {
+                    // Resolve the Graph's complete boundary and Loop entry
+                    // before checking descendant handlers. Preserve each
+                    // declaration's lexical constant environment.
+                    children.push((item, signature.clone(), consts.clone()));
                 }
                 GraphItem::Edge(edge) => edges.push(edge),
                 GraphItem::RemovedPartition(partition) => self.instance_refusal(
                     partition.span,
                     "`partition` was unpublished syntax; declare `instance` and `lifetime` on the Node that owns them",
                 ),
-                GraphItem::Graph(nested) => {
-                    let mut segments = path.segments().to_vec();
-                    segments.push(nested.name.text.clone());
-                    match crate::plan::OwnerPath::new(segments) {
-                        Ok(nested_path) => {
-                            let checked = self.graph_at(
-                                nested,
-                                nested_path,
-                                &signature,
-                                &consts,
-                                false,
-                            );
-                            self.push_graph(&mut graph, checked, nested.name.span);
-                        }
-                        Err(invalid) => self.bag.push(
-                            Diagnostic::new(E_RESOLVE_UNKNOWN, Phase::Resolve, invalid.to_string())
-                                .with_span(nested.name.span),
-                        ),
-                    }
-                }
                 GraphItem::Defaults(_) => self.deferred("a defaults block", decl.span),
                 GraphItem::Attribute(attribute) => {
                     if !is_common_node_attribute(attribute) && !is_loop_attribute(attribute) {
@@ -1853,21 +1747,70 @@ impl Checker<'_, '_> {
                 GraphItem::Error(_) => {}
             }
         }
-        let owns_loop = graph.aspects.contains(&node::Aspect::Loop);
-        graph.loop_spec = self.loop_declaration(decl, &graph, &signature, &consts);
+        let owns_loop = graph.extensions.contains(&node::Extension::Loop);
+        let legacy_graph_handlers = !handlers.is_empty();
+        graph.loop_spec =
+            self.loop_declaration(decl, &graph, &signature, &consts, legacy_graph_handlers);
+        for (item, mut child_signature, child_consts) in children {
+            if !legacy_graph_handlers && let Some(spec) = &graph.loop_spec {
+                let state_type = graph
+                    .boundary
+                    .iter()
+                    .find(|port| port.port == spec.entry)
+                    .and_then(|port| port.ty.clone())
+                    .unwrap_or(DataType::Variant);
+                child_signature = loop_state_signature(&child_signature, state_type);
+            }
+            match item {
+                GraphItem::Operator(operator) => {
+                    if let Some(node) =
+                        self.operator(operator, &path, &child_signature, &child_consts)
+                    {
+                        self.push_node(&mut graph, node, operator.name.span);
+                    }
+                }
+                GraphItem::Connector(connector) => {
+                    if let Some(node) =
+                        self.connector(connector, &path, &child_signature, &child_consts)
+                    {
+                        self.push_node(&mut graph, node, connector.name.span);
+                    }
+                }
+                GraphItem::Graph(nested) => {
+                    let mut segments = path.segments().to_vec();
+                    segments.push(nested.name.text.clone());
+                    match crate::plan::OwnerPath::new(segments) {
+                        Ok(nested_path) => {
+                            let checked = self.graph_at(
+                                nested,
+                                nested_path,
+                                &child_signature,
+                                &child_consts,
+                                false,
+                            );
+                            self.push_graph(&mut graph, checked, nested.name.span);
+                        }
+                        Err(invalid) => self.bag.push(
+                            Diagnostic::new(E_RESOLVE_UNKNOWN, Phase::Resolve, invalid.to_string())
+                                .with_span(nested.name.span),
+                        ),
+                    }
+                }
+                _ => {}
+            }
+        }
         if owns_loop {
-            if graph.loop_spec.is_some() && self.contribute_loop_boundary(&mut graph, decl.span) {
+            if legacy_graph_handlers
+                && graph.loop_spec.is_some()
+                && self.contribute_loop_boundary(&mut graph, decl.span)
+            {
                 let state_type = graph
                     .boundary
                     .iter()
                     .find(|port| port.port.name() == "in" && port.direction == Direction::Input)
                     .and_then(|port| port.ty.clone())
                     .unwrap_or(DataType::Variant);
-                let loop_signature = signature
-                    .clone()
-                    .with("Loop.state", DataType::Variant)
-                    .with("Loop.state.data", state_type)
-                    .with_metadata("Loop.state.meta");
+                let loop_signature = loop_state_signature(&signature, state_type);
                 for handler in handlers {
                     if let Some(checked) =
                         self.graph_handler(handler, &graph, &loop_signature, &consts)
@@ -1886,9 +1829,14 @@ impl Checker<'_, '_> {
             }
         } else {
             for handler in handlers {
-                self.deferred(
-                    "a graph handler outside an admitted NodeAspect",
-                    handler.span,
+                self.bag.push(
+                    Diagnostic::new(
+                        E_GRAPH_HANDLER,
+                        Phase::Check,
+                        "a Graph cannot own application handlers; move the handler into an Operator child and wire its ports",
+                    )
+                    .with_span(handler.span)
+                    .with_field("owner", path.to_string()),
                 );
             }
         }
@@ -1896,25 +1844,32 @@ impl Checker<'_, '_> {
             let Some(resolved) = self.edge(edge, &graph) else {
                 continue;
             };
-            for candidate in resolved {
-                // Duplicates are compared AFTER desugaring and
-                // resolution: `relay -> sink` and
-                // `relay.out -> sink.in` are one pair of endpoints.
-                if graph.edges.contains(&candidate) {
-                    self.bag.push(
-                        Diagnostic::new(E_DUP_EDGE, Phase::Check, "this edge is already declared")
-                            .with_span(edge.span)
-                            .with_field("edge", edge_display(&candidate)),
-                    );
-                    continue;
-                }
+            if let Some((rule, code, detail, case)) = resolved.rules.iter().find_map(|rule| {
+                graph
+                    .routes
+                    .iter()
+                    .find_map(|existing| route_conflict(existing, rule))
+                    .map(|(code, detail, case)| (rule, code, detail, case))
+            }) {
+                self.bag.push(
+                    Diagnostic::new(code, Phase::Check, detail)
+                        .with_span(edge.span)
+                        .with_field("source", endpoint_display(&rule.source))
+                        .with_field("case", case),
+                );
+                continue;
+            }
+            graph.routes.extend(resolved.rules);
+            for candidate in resolved.edges {
                 if self.reject_ack_response_edge(&graph, &candidate, edge.span) {
                     continue;
                 }
                 if self.reject_loop_next_edge(&graph, &candidate, edge.span) {
                     continue;
                 }
-                graph.edges.push(candidate);
+                if !graph.edges.contains(&candidate) {
+                    graph.edges.push(candidate);
+                }
             }
         }
         self.materialize_boundary_ports(&mut graph);
@@ -1922,466 +1877,6 @@ impl Checker<'_, '_> {
         self.reject_cycles(&graph, decl.span);
         self.warn_unwired_outputs(&graph);
         graph
-    }
-
-    /// Materializes the Loop-owned half of a Graph boundary after the source
-    /// declarations are known. `in` remains the user-owned state pin;
-    /// `next` and `expired` have exactly one aspect authority. Ordinary
-    /// outputs keep their domain names and all terminate a Loop run.
-    fn contribute_loop_boundary(&mut self, graph: &mut Graph, span: Span) -> bool {
-        let input = graph.boundary.iter().find(|port| port.port.name() == "in");
-        let Some(state_type) = input.and_then(|port| {
-            (port.direction == Direction::Input)
-                .then(|| port.ty.clone())
-                .flatten()
-        }) else {
-            self.loop_refusal(
-                span,
-                "a `: Loop` Graph declares typed `input in` as its iteration-state carrier",
-            );
-            return false;
-        };
-        if let Some(extra) = graph
-            .boundary
-            .iter()
-            .find(|port| port.direction == Direction::Input && port.port.name() != "in")
-        {
-            self.loop_refusal(
-                span,
-                &format!(
-                    "a `: Loop` Graph has one iteration input `in`; `{}` cannot be a second input",
-                    extra.port
-                ),
-            );
-            return false;
-        }
-        if let Some(collision) = graph
-            .boundary
-            .iter()
-            .find(|port| matches!(port.port.name(), "next" | "expired"))
-        {
-            self.loop_refusal(
-                span,
-                &format!(
-                    "`{}` is owned by the Loop aspect and cannot be declared explicitly",
-                    collision.port
-                ),
-            );
-            return false;
-        }
-        let Ok(next) = node::Port::new("next") else {
-            return false;
-        };
-        let Ok(expired) = node::Port::new("expired") else {
-            return false;
-        };
-        let Ok(expired_type) = node::loop_expired_type(state_type.clone()) else {
-            self.loop_refusal(span, "the LoopExpired carrier could not be represented");
-            return false;
-        };
-        graph.boundary.push(crate::plan::PortDecl {
-            port: next,
-            direction: Direction::Output,
-            unwired: crate::plan::UnwiredPolicy::RequireWire,
-            ty: Some(state_type),
-            annotations: AnnotationTable::empty(),
-        });
-        graph.boundary.push(crate::plan::PortDecl {
-            port: expired,
-            direction: Direction::Output,
-            unwired: crate::plan::UnwiredPolicy::RequireWire,
-            ty: Some(expired_type),
-            annotations: AnnotationTable::empty(),
-        });
-        true
-    }
-
-    /// Checks a Graph-owned body through the ordinary handler checker. The
-    /// temporary context only supplies the Graph's boundary table; it creates
-    /// neither a hidden Operator nor a second statement algebra.
-    fn graph_handler(
-        &mut self,
-        decl: &crate::compiler::syntax::HandlerDecl,
-        graph: &Graph,
-        signature: &expr::Signature,
-        consts: &BTreeMap<String, crate::value::Value>,
-    ) -> Option<Handler> {
-        let context = Node {
-            path: node::Path::new(["__graph_handler"]).ok()?,
-            ty: node::Type::Operator,
-            aspects: Vec::new(),
-            semantics: NodeSemantics::Operator,
-            vals: graph.vals.clone(),
-            vars: Vec::new(),
-            ports: graph.boundary.clone(),
-            handlers: Vec::new(),
-            instance: None,
-        };
-        let SynTrigger::ChildPort { child, port } = &decl.trigger else {
-            if matches!(
-                decl.trigger,
-                SynTrigger::Port(_) | SynTrigger::Start(_) | SynTrigger::Stop(_)
-            ) {
-                return self.handler(decl, signature, &context, consts);
-            }
-            self.deferred("this Graph handler trigger", decl.span);
-            return None;
-        };
-
-        let child_name = child.text.as_str();
-        let child_node = graph.nodes.iter().find(|candidate| {
-            candidate.path.segments().last().map(String::as_str) == Some(child_name)
-        });
-        let child_graph = graph.graphs.iter().find(|candidate| {
-            candidate.path.segments().last().map(String::as_str) == Some(child_name)
-        });
-        let (child_path, ports) = match (child_node, child_graph) {
-            (Some(child), None) => (child.path.clone(), &child.ports),
-            (None, Some(child)) => {
-                let Some(path) = node::Path::new(child.path.segments().iter().cloned()).ok() else {
-                    self.loop_refusal(decl.span, "the child Graph path is not representable");
-                    return None;
-                };
-                (path, &child.boundary)
-            }
-            _ => {
-                self.bag.push(
-                    Diagnostic::new(
-                        E_PORT_UNKNOWN,
-                        Phase::Check,
-                        format!("this Graph has no direct child named `{child_name}`"),
-                    )
-                    .with_span(child.span)
-                    .with_field("node", child.text.clone()),
-                );
-                return None;
-            }
-        };
-        let Some(decl_port) = ports
-            .iter()
-            .find(|candidate| candidate.port.name() == port.text)
-        else {
-            self.bag.push(
-                Diagnostic::new(
-                    E_PORT_UNKNOWN,
-                    Phase::Check,
-                    format!("child `{child_name}` exposes no port named `{}`", port.text),
-                )
-                .with_span(port.span)
-                .with_field("port", port.text.clone()),
-            );
-            return None;
-        };
-        if decl_port.direction != Direction::Output {
-            self.wrong_direction(
-                port.span,
-                &port.text,
-                decl_port.direction,
-                "a Graph handler observes a child output port",
-            );
-            return None;
-        }
-        let Some(data_type) = decl_port.ty.clone() else {
-            self.loop_refusal(
-                port.span,
-                "a child output observed by Loop must have one resolved type",
-            );
-            return None;
-        };
-        let Ok(port) = node::Port::new(port.text.clone()) else {
-            return None;
-        };
-        self.handler_with_activation(
-            decl,
-            signature,
-            &context,
-            consts,
-            Some((
-                node::HandlerActivation::ChildPort {
-                    child: child_path,
-                    port,
-                },
-                data_type,
-            )),
-        )
-    }
-
-    /// `ack` deliberately has no graph-response half. Refuse that spelling at
-    /// the source edge rather than letting Registry-free plan validation turn
-    /// it into an internal-plan diagnostic after cycle analysis has correctly
-    /// split the inbound Call boundary.
-    fn reject_ack_response_edge(&mut self, graph: &Graph, edge: &Edge, span: Span) -> bool {
-        let EdgeTarget::Port(target) = &edge.to else {
-            return false;
-        };
-        let EndpointOwner::Node(path) = &target.owner else {
-            return false;
-        };
-        let Some(target) = graph.nodes.iter().find(|node| &node.path == path) else {
-            return false;
-        };
-        let NodeSemantics::Connector { attributes, .. } = &target.semantics else {
-            return false;
-        };
-        let ack = target.connector_contract_id().is_some_and(|contract| {
-            contract.as_str() == crate::connector::HTTP_SERVER_CONNECTOR_ID
-        }) && attributes.iter().any(|attribute| {
-            attribute.name == "mode"
-                && matches!(&attribute.value, AttrValue::Word(word) if word == "ack")
-        });
-        if !ack {
-            return false;
-        }
-        self.bag.push(
-            Diagnostic::new(
-                E_CONTRACT_ATTR,
-                Phase::Check,
-                "`HttpServer(mode = ack)` has no graph-response input; select `mode = respond` for a retained API response",
-            )
-            .with_span(span)
-            .with_field("connector", path.to_string())
-            .with_field("mode", "ack"),
-        );
-        true
-    }
-
-    /// `next` is consumed only by the temporal Loop manager. Letting a source
-    /// edge mention it would turn recurrence back into an ordinary spatial
-    /// route and make the DAG claim false.
-    fn reject_loop_next_edge(&mut self, graph: &Graph, edge: &Edge, span: Span) -> bool {
-        fn graph_at<'graph>(
-            graph: &'graph Graph,
-            path: &crate::plan::OwnerPath,
-        ) -> Option<&'graph Graph> {
-            if &graph.path == path {
-                return Some(graph);
-            }
-            graph
-                .graphs
-                .iter()
-                .find_map(|nested| graph_at(nested, path))
-        }
-        let is_next = |endpoint: &Endpoint| {
-            let EndpointOwner::Graph(path) = &endpoint.owner else {
-                return false;
-            };
-            endpoint.port.name() == "next"
-                && graph_at(graph, path)
-                    .is_some_and(|owner| owner.aspects.contains(&node::Aspect::Loop))
-        };
-        let rejected =
-            is_next(&edge.from) || matches!(&edge.to, EdgeTarget::Port(target) if is_next(target));
-        if rejected {
-            self.loop_refusal(
-                span,
-                "Loop.next is a temporal control port and cannot appear in a spatial edge",
-            );
-        }
-        rejected
-    }
-
-    /// Every output requiring a wire either reaches an edge or is discarded
-    /// in writing (`-> nothing`); a port that just leaks gets flagged.
-    /// Outputs whose resolved policy is `RootSink` are exempt. The source
-    /// convention commonly gives that policy to `err`, but the warning
-    /// decision itself never inspects the spelling.
-    fn warn_unwired_outputs(&mut self, graph: &Graph) {
-        for node in &graph.nodes {
-            // Emission inference normally materializes the row already; sweep
-            // the bodies as a defensive union so diagnostics never depend on
-            // that construction order.
-            let mut outputs: Vec<node::Port> = node
-                .ports
-                .iter()
-                .filter(|decl| decl.direction == Direction::Output)
-                .map(|decl| decl.port.clone())
-                .collect();
-            for handler in &node.handlers {
-                for statement in &handler.body {
-                    if let Statement::Emit { port, .. } = statement
-                        && !outputs.contains(port)
-                    {
-                        outputs.push(port.clone());
-                    }
-                }
-            }
-            for port in &outputs {
-                if node
-                    .ports
-                    .iter()
-                    .find(|decl| decl.port == *port)
-                    .is_some_and(|decl| decl.unwired == crate::plan::UnwiredPolicy::RootSink)
-                {
-                    continue;
-                }
-                let wired = graph.edges.iter().any(|edge| {
-                    matches!(&edge.from.owner, EndpointOwner::Node(path) if path == &node.path)
-                        && edge.from.port == *port
-                }) || graph.handlers.iter().any(|handler| {
-                    matches!(
-                        &handler.activation,
-                        node::HandlerActivation::ChildPort { child, port: observed }
-                            if child == &node.path && observed == port
-                    )
-                });
-                if !wired {
-                    self.bag.push(
-                        Diagnostic::new(
-                            W_UNWIRED_OUTPUT,
-                            Phase::Check,
-                            format!(
-                                "`{}.{port}` is emitted but wired nowhere; \
-                                 route it or discard it with `-> nothing`",
-                                node.path
-                            ),
-                        )
-                        .with_field("node", node.path.to_string())
-                        .with_field("port", port.name().to_string()),
-                    );
-                }
-            }
-        }
-    }
-
-    /// Every boundary convention actually used by an edge becomes an
-    /// ordinary table row. Syntax may still abbreviate `.`, but the plan and
-    /// VM never infer a port from that spelling.
-    fn materialize_boundary_ports(&mut self, graph: &mut Graph) {
-        let mut used = Vec::new();
-        for edge in &graph.edges {
-            if matches!(&edge.from.owner, EndpointOwner::Graph(path) if path == &graph.path) {
-                used.push((edge.from.port.clone(), Direction::Input));
-            }
-            if let EdgeTarget::Port(target) = &edge.to
-                && matches!(&target.owner, EndpointOwner::Graph(path) if path == &graph.path)
-            {
-                used.push((target.port.clone(), Direction::Output));
-            }
-        }
-        for (port, direction) in used {
-            if graph.boundary.iter().any(|decl| decl.port == port) {
-                continue;
-            }
-            graph.boundary.push(crate::plan::PortDecl {
-                port,
-                direction,
-                unwired: crate::plan::UnwiredPolicy::RequireWire,
-                ty: None,
-                annotations: AnnotationTable::empty(),
-            });
-        }
-    }
-
-    /// Conventional node ports are source sugar only. If an edge uses one
-    /// that no body declaration/inference has materialized, add the ordinary
-    /// row before HIR leaves the checker. Later layers never recover a port
-    /// from its spelling.
-    fn materialize_node_edge_ports(&mut self, graph: &mut Graph) {
-        let mut used = Vec::new();
-        for edge in &graph.edges {
-            if let EndpointOwner::Node(path) = &edge.from.owner {
-                used.push((path.clone(), edge.from.port.clone(), Direction::Output));
-            }
-            if let EdgeTarget::Port(target) = &edge.to
-                && let EndpointOwner::Node(path) = &target.owner
-            {
-                used.push((path.clone(), target.port.clone(), Direction::Input));
-            }
-        }
-        for (path, port, direction) in used {
-            let Some(node) = graph.nodes.iter_mut().find(|node| node.path == path) else {
-                continue;
-            };
-            if node.ports.iter().any(|decl| decl.port == port) {
-                continue;
-            }
-            node.ports.push(crate::plan::PortDecl {
-                unwired: if port.name() == "err" {
-                    crate::plan::UnwiredPolicy::RootSink
-                } else {
-                    crate::plan::UnwiredPolicy::RequireWire
-                },
-                port,
-                direction,
-                ty: None,
-                annotations: AnnotationTable::empty(),
-            });
-        }
-    }
-
-    /// Wiring is a DAG (`grammar.md`): a cycle among nodes refuses.
-    fn reject_cycles(&mut self, graph: &Graph, span: Span) {
-        let index_of = |path: &node::Path| {
-            graph
-                .nodes
-                .iter()
-                .position(|candidate| &candidate.path == path)
-        };
-        let mut successors = vec![Vec::new(); graph.nodes.len()];
-        for edge in &graph.edges {
-            if let (EndpointOwner::Node(from), EdgeTarget::Port(to)) = (&edge.from.owner, &edge.to)
-                && let EndpointOwner::Node(to) = &to.owner
-                && let (Some(from), Some(to)) = (
-                    from.segments().first().and_then(|_| index_of(from)),
-                    index_of(to),
-                )
-            {
-                let target_is_inbound_boundary = matches!(
-                    &graph.nodes[to].semantics,
-                    NodeSemantics::Connector {
-                        roles,
-                        exchange,
-                        ..
-                    } if roles.has_inbound()
-                        && (matches!(exchange, crate::connector::ConnectorExchange::Session)
-                            || (!roles.has_outbound()
-                                && matches!(exchange, crate::connector::ConnectorExchange::Call)))
-                );
-                if target_is_inbound_boundary {
-                    // A response/message input and a world-origin output are
-                    // independent halves of one external boundary. There is
-                    // no hidden `in -> out` execution edge through this Node.
-                    continue;
-                }
-                successors[from].push(to);
-            }
-        }
-        // Iterative three-state DFS: 0 unvisited, 1 on the stack, 2 done.
-        let mut state = vec![0u8; graph.nodes.len()];
-        for start in 0..graph.nodes.len() {
-            if state[start] != 0 {
-                continue;
-            }
-            let mut stack = vec![(start, 0usize)];
-            state[start] = 1;
-            while let Some((current, next_child)) = stack.pop() {
-                if let Some(&child) = successors[current].get(next_child) {
-                    stack.push((current, next_child + 1));
-                    match state[child] {
-                        0 => {
-                            state[child] = 1;
-                            stack.push((child, 0));
-                        }
-                        1 => {
-                            let name = graph.nodes[child].path.to_string();
-                            self.bag.push(
-                                Diagnostic::new(
-                                    E_GRAPH_CYCLE,
-                                    Phase::Check,
-                                    format!("the wiring cycles through `{name}`; edges form a DAG"),
-                                )
-                                .with_span(span)
-                                .with_field("node", name),
-                            );
-                            return;
-                        }
-                        _ => {}
-                    }
-                } else {
-                    state[current] = 2;
-                }
-            }
-        }
     }
 
     fn push_node(&mut self, graph: &mut Graph, node: Node, span: Span) {
@@ -2428,6 +1923,20 @@ impl Checker<'_, '_> {
                 .with_span(span)
                 .with_field("name", name),
             );
+        } else if matches!(name.as_str(), "in" | "out")
+            || graph.boundary.iter().any(|port| port.port.name() == name)
+        {
+            self.bag.push(
+                Diagnostic::new(
+                    E_NAME_CLASH,
+                    Phase::Resolve,
+                    format!(
+                        "`{name}` already names a Graph port; ports and children share one namespace"
+                    ),
+                )
+                .with_span(span)
+                .with_field("name", name),
+            );
         } else {
             graph.nodes.push(node);
         }
@@ -2453,433 +1962,23 @@ impl Checker<'_, '_> {
                 .with_span(span)
                 .with_field("name", name),
             );
+        } else if matches!(name.as_str(), "in" | "out")
+            || graph.boundary.iter().any(|port| port.port.name() == name)
+        {
+            self.bag.push(
+                Diagnostic::new(
+                    E_NAME_CLASH,
+                    Phase::Resolve,
+                    format!(
+                        "`{name}` already names a Graph port; ports and children share one namespace"
+                    ),
+                )
+                .with_span(span)
+                .with_field("name", name),
+            );
         } else {
             graph.graphs.push(nested);
         }
-    }
-
-    /// Checks the source half of the first Loop gate while lowering remains
-    /// fail-closed. Keeping this here, beside instance attributes, gives every
-    /// qualified spelling one owner and prevents generic graph-attribute
-    /// deferrals from becoming a second interpretation.
-    fn loop_declaration(
-        &mut self,
-        decl: &GraphDecl,
-        graph: &Graph,
-        signature: &expr::Signature,
-        consts: &BTreeMap<String, crate::value::Value>,
-    ) -> Option<LoopSpec> {
-        let attributes: Vec<_> = decl
-            .body
-            .iter()
-            .filter_map(|item| match item {
-                GraphItem::Attribute(attribute) if is_loop_attribute(attribute) => Some(attribute),
-                _ => None,
-            })
-            .collect();
-        let owns_loop = graph.aspects.contains(&node::Aspect::Loop);
-        if attributes.is_empty() {
-            if owns_loop {
-                self.loop_refusal(
-                    decl.span,
-                    "a `: Loop` Graph requires positive `Loop.fuel` or a `Loop.measure` that can be proved finite",
-                );
-            }
-            return None;
-        }
-        if !owns_loop {
-            for attribute in attributes {
-                self.loop_refusal(
-                    attribute.span,
-                    "a `Loop.*` attribute requires the Graph's `: Loop` NodeAspect",
-                );
-            }
-            return None;
-        }
-
-        let mut fuel = None;
-        let mut delay = None;
-        let mut invariant = None;
-        let mut measure = None;
-        let mut unsupported = None;
-        let mut invalid = false;
-        for attribute in attributes {
-            let name = match attribute.target.segments.as_slice() {
-                [owner, name] if owner.text == "Loop" => name.text.as_str(),
-                [name]
-                    if matches!(
-                        name.text.as_str(),
-                        "fuel" | "delay" | "invariant" | "measure" | "jitter"
-                    ) =>
-                {
-                    self.loop_refusal(
-                        attribute.span,
-                        &format!(
-                            "`{}` is aspect-owned; write `Loop.{}`",
-                            name.text, name.text
-                        ),
-                    );
-                    invalid = true;
-                    continue;
-                }
-                [name] => name.text.as_str(),
-                _ => {
-                    self.loop_refusal(
-                        attribute.span,
-                        "Loop attributes have exactly one qualified name, such as `Loop.fuel`",
-                    );
-                    invalid = true;
-                    continue;
-                }
-            };
-            let target = match name {
-                "fuel" => &mut fuel,
-                "delay" => &mut delay,
-                "invariant" => &mut invariant,
-                "measure" => &mut measure,
-                "jitter" => {
-                    if unsupported
-                        .replace(("Loop.jitter", attribute.span))
-                        .is_some()
-                    {
-                        self.loop_refusal(attribute.span, "`Loop.jitter` is declared twice");
-                        invalid = true;
-                    }
-                    continue;
-                }
-                "variant" => {
-                    self.loop_refusal(
-                        attribute.span,
-                        "`Loop.variant` was removed; use finite `Loop.fuel` now, or theorem-tier `Loop.measure`",
-                    );
-                    invalid = true;
-                    continue;
-                }
-                "backoff" => {
-                    self.loop_refusal(
-                        attribute.span,
-                        "`Loop.backoff` was removed; write `Loop.delay = { ... }`",
-                    );
-                    invalid = true;
-                    continue;
-                }
-                "limit" | "max_steps" => {
-                    self.loop_refusal(
-                        attribute.span,
-                        &format!("`{name}` was removed; write `Loop.fuel`"),
-                    );
-                    invalid = true;
-                    continue;
-                }
-                "decreases" => {
-                    self.loop_refusal(
-                        attribute.span,
-                        "`Loop.decreases` was removed; Rocq-compatible termination vocabulary uses `Loop.measure`",
-                    );
-                    invalid = true;
-                    continue;
-                }
-                "until" => {
-                    self.loop_refusal(
-                        attribute.span,
-                        "`until` was removed; terminal paths emit an ordinary output or `stop`, while recursive paths emit `next`",
-                    );
-                    invalid = true;
-                    continue;
-                }
-                "initial" | "source" | "value" => {
-                    self.loop_refusal(
-                        attribute.span,
-                        &format!(
-                            "`{name}` was removed; iteration state enters through `in` and is available as `Loop.state`"
-                        ),
-                    );
-                    invalid = true;
-                    continue;
-                }
-                other => {
-                    self.loop_refusal(
-                        attribute.span,
-                        &format!(
-                            "unknown Loop attribute `{other}`; expected fuel, delay, invariant, or measure"
-                        ),
-                    );
-                    invalid = true;
-                    continue;
-                }
-            };
-            if target.replace(attribute).is_some() {
-                self.loop_refusal(attribute.span, &format!("`Loop.{name}` is declared twice"));
-                invalid = true;
-            }
-        }
-        if invalid {
-            return None;
-        }
-        if invariant.is_some() && measure.is_none() {
-            self.loop_refusal(
-                invariant.map_or(decl.span, |attribute| attribute.span),
-                "`Loop.invariant` accompanies a `Loop.measure` proof",
-            );
-            return None;
-        }
-        if let Some((construct, span)) = unsupported {
-            self.deferred(construct, span);
-            return None;
-        }
-        let fuel = match fuel {
-            Some(attribute) => Some(self.loop_fuel(attribute, signature, consts)?),
-            None => None,
-        };
-        let proof = match measure {
-            Some(attribute) => {
-                let state_type = graph
-                    .boundary
-                    .iter()
-                    .find(|port| port.port.name() == "in" && port.direction == Direction::Input)
-                    .and_then(|port| port.ty.clone());
-                let Some(state_type) = state_type else {
-                    self.loop_refusal(
-                        attribute.span,
-                        "`Loop.measure` requires one typed Graph input named `in`",
-                    );
-                    return None;
-                };
-                let theorem_signature = signature.clone().with("data", state_type);
-                let measure = self.typed_value_tree(
-                    &attribute.value,
-                    &theorem_signature,
-                    None,
-                    attribute.span,
-                    "Loop.measure",
-                )?;
-                if !matches!(
-                    measure.ty,
-                    DataType::Integer(crate::datatype::IntegerType::Signed(_))
-                ) {
-                    self.loop_refusal(
-                        attribute.span,
-                        "`Loop.measure` must be a signed integer expression",
-                    );
-                    return None;
-                }
-                let invariant = match invariant {
-                    None => None,
-                    Some(attribute) => Some(self.typed_value_tree(
-                        &attribute.value,
-                        &theorem_signature,
-                        Some(&DataType::Bool),
-                        attribute.span,
-                        "Loop.invariant",
-                    )?),
-                };
-                Some(crate::loop_proof::Certificate {
-                    measure,
-                    invariant,
-                    decreases: Vec::new(),
-                })
-            }
-            None => None,
-        };
-        if fuel.is_none() && proof.is_none() {
-            self.loop_refusal(
-                decl.span,
-                "a `: Loop` Graph requires positive `Loop.fuel` or a `Loop.measure` that can be proved finite",
-            );
-            return None;
-        }
-        let delay = match delay {
-            Some(attribute) => Some(self.loop_delay(attribute, signature, consts)?),
-            None => None,
-        };
-        Some(LoopSpec { fuel, delay, proof })
-    }
-
-    /// Produces the hosted proof evidence only after the ordinary Graph
-    /// handlers have been checked. The `no_std` validator derives the same
-    /// evidence again from the transported plan, so this step cannot grant
-    /// authority to a compiler-only claim.
-    fn complete_loop_proof(&mut self, graph: &mut Graph, span: Span) -> bool {
-        let handlers = loop_proof_handlers(graph);
-        let Some(spec) = graph.loop_spec.as_mut() else {
-            return false;
-        };
-        let Some(proof) = spec.proof.take() else {
-            return true;
-        };
-        match crate::loop_proof::derive(
-            crate::plan::OwnerSlot::new(0),
-            proof.measure,
-            proof.invariant,
-            &handlers,
-        ) {
-            Ok(proof) => {
-                spec.proof = Some(proof);
-                true
-            }
-            Err(error) => {
-                self.loop_refusal(span, &format!("this Loop cannot be proved finite: {error}"));
-                false
-            }
-        }
-    }
-
-    fn loop_fuel(
-        &mut self,
-        attribute: &SynAttribute,
-        signature: &expr::Signature,
-        consts: &BTreeMap<String, crate::value::Value>,
-    ) -> Option<Const> {
-        if matches!(attribute.value, SynValue::Error(_)) {
-            return None;
-        }
-        let tree = self.typed_value_tree(
-            &attribute.value,
-            signature,
-            None,
-            attribute.span,
-            "Loop.fuel",
-        )?;
-        let constant = self.reduce_constant(tree, attribute.span, consts)?;
-        if matches!(
-            constant.value,
-            crate::value::Value::Int(value) if value > 0
-        ) || matches!(
-            constant.value,
-            crate::value::Value::Uint(value) if value > 0
-        ) {
-            Some(constant)
-        } else {
-            self.loop_refusal(attribute.span, "`Loop.fuel` must be a positive integer");
-            None
-        }
-    }
-
-    fn loop_delay(
-        &mut self,
-        attribute: &SynAttribute,
-        signature: &expr::Signature,
-        consts: &BTreeMap<String, crate::value::Value>,
-    ) -> Option<LoopDelay> {
-        let SynValue::Braced(body) = &attribute.value else {
-            self.loop_refusal(
-                attribute.span,
-                "`Loop.delay` must be a composite with a `kind` field",
-            );
-            return None;
-        };
-        let mut fields: BTreeMap<String, (&SynValue, Span)> = BTreeMap::new();
-        for entry in &body.entries {
-            let StructEntry::Field { key, value } = entry else {
-                self.loop_refusal(
-                    attribute.span,
-                    "`Loop.delay` admits fields, not nested configuration blocks",
-                );
-                return None;
-            };
-            if key.segments.len() != 1 {
-                self.loop_refusal(key.span, "Loop.delay fields are single names");
-                return None;
-            }
-            let name = key.segments[0].text.clone();
-            if fields.insert(name.clone(), (value, key.span)).is_some() {
-                self.loop_refusal(key.span, &format!("`Loop.delay.{name}` is declared twice"));
-                return None;
-            }
-        }
-        let Some((kind, kind_span)) = fields.remove("kind") else {
-            self.loop_refusal(attribute.span, "`Loop.delay` requires exactly one `kind`");
-            return None;
-        };
-        let SynValue::Expr(kind) = kind else {
-            self.loop_refusal(kind_span, "`Loop.delay.kind` is a bare choice word");
-            return None;
-        };
-        if !is_bare_word(&kind.text) {
-            self.loop_refusal(kind.span, "`Loop.delay.kind` is a bare choice word");
-            return None;
-        }
-        let delay = {
-            let mut duration = |name: &str| {
-                let Some((value, span)) = fields.remove(name) else {
-                    self.loop_refusal(
-                        attribute.span,
-                        &format!("`Loop.delay(kind = {})` requires `{name}`", kind.text),
-                    );
-                    return None;
-                };
-                let tree = self.typed_value_tree(
-                    value,
-                    signature,
-                    Some(&DataType::DURATION),
-                    span,
-                    &format!("Loop.delay.{name}"),
-                )?;
-                let constant = self.reduce_constant(tree, span, consts)?;
-                match constant.value {
-                    crate::value::Value::Duration(nanos) if nanos > 0 => Some(constant),
-                    _ => {
-                        self.loop_refusal(
-                            span,
-                            &format!("`Loop.delay.{name}` must be a positive duration"),
-                        );
-                        None
-                    }
-                }
-            };
-            match kind.text.as_str() {
-                "fixed" => LoopDelay::Fixed {
-                    after: duration("after")?,
-                },
-                "exponential" => {
-                    let first = duration("first")?;
-                    let ceiling = duration("ceiling")?;
-                    let (
-                        crate::value::Value::Duration(first_nanos),
-                        crate::value::Value::Duration(ceiling_nanos),
-                    ) = (&first.value, &ceiling.value)
-                    else {
-                        return None;
-                    };
-                    if ceiling_nanos < first_nanos {
-                        self.loop_refusal(
-                            attribute.span,
-                            "`Loop.delay.ceiling` must be no smaller than `Loop.delay.first`",
-                        );
-                        return None;
-                    }
-                    LoopDelay::Exponential { first, ceiling }
-                }
-                other => {
-                    self.loop_refusal(
-                        kind.span,
-                        &format!(
-                            "unknown Loop.delay kind `{other}`; expected fixed or exponential"
-                        ),
-                    );
-                    return None;
-                }
-            }
-        };
-        if let Some((unexpected, (_, span))) = fields.into_iter().next() {
-            self.loop_refusal(
-                span,
-                &format!(
-                    "`Loop.delay(kind = {})` has no `{unexpected}` field",
-                    kind.text
-                ),
-            );
-            return None;
-        }
-        Some(delay)
-    }
-
-    fn loop_refusal(&mut self, span: Span, detail: &str) {
-        self.bag.push(
-            Diagnostic::new(E_LOOP, Phase::Check, detail)
-                .with_span(span)
-                .with_field("detail", detail),
-        );
     }
 
     fn queue_instance_attributes<'source>(
@@ -3680,12 +2779,12 @@ impl Checker<'_, '_> {
                 "`per` was unpublished syntax; write `instance = { key = <expr> }` inside the Operator",
             );
         }
-        let aspects = self.operator_annotation(decl);
+        let extensions = self.operator_annotation(decl);
         let path = self.node_path(owner, &decl.name.text, decl.name.span)?;
         let mut node = Node {
             path,
-            ty: node::Type::Operator,
-            aspects,
+            extensions,
+            loop_spec: None,
             semantics: NodeSemantics::Operator,
             vals: Vec::new(),
             vars: Vec::new(),
@@ -3693,7 +2792,14 @@ impl Checker<'_, '_> {
             handlers: Vec::new(),
             instance: None,
         };
-        self.node_body(&decl.body, &mut node, graph_signature, graph_consts, false);
+        self.node_body(
+            &decl.body,
+            &mut node,
+            graph_signature,
+            graph_consts,
+            false,
+            decl.span,
+        );
         self.queue_instance_attributes(
             InstanceOwner::Node(node.path.clone()),
             decl.body.iter().filter_map(|item| match item {
@@ -3722,12 +2828,12 @@ impl Checker<'_, '_> {
         }
         let mut symbols = decl.annotation.symbols.iter();
         let type_symbol = symbols.next()?;
-        if node::Aspect::from_source_name(&type_symbol.text).is_some()
+        if node::Extension::from_source_name(&type_symbol.text).is_some()
             || matches!(type_symbol.text.as_str(), "App" | "Graph" | "Operator")
         {
             self.node_annotation_refusal(
                 type_symbol,
-                "a Connector requires its exact Connector NodeType first, before every NodeAspect",
+                "a Connector requires its exact Contract first, before every Extension",
             );
             return None;
         }
@@ -3746,7 +2852,7 @@ impl Checker<'_, '_> {
         }
         let (contract_id, roles, exchange) = match self.registry.connector(&type_symbol.text) {
             contract::Availability::Available(contract) => {
-                let contract_id = match crate::connector::ConnectorId::parse(contract.id) {
+                let contract_id = match crate::connector::ContractId::parse(contract.id) {
                     Ok(contract_id) => contract_id,
                     Err(error) => {
                         self.bag.push(
@@ -3787,7 +2893,7 @@ impl Checker<'_, '_> {
                     Diagnostic::new(
                         E_CONNECTOR_UNAVAILABLE,
                         Phase::Check,
-                        format!("`{}` is not a known Connector NodeType", type_symbol.text),
+                        format!("`{}` is not a known Connector Contract", type_symbol.text),
                     )
                     .with_span(type_symbol.span)
                     .with_field("type", type_symbol.text.clone()),
@@ -3795,13 +2901,14 @@ impl Checker<'_, '_> {
                 return None;
             }
         };
-        let aspects = self.connector_aspects(symbols.as_slice());
+        let extensions = self.connector_extensions(symbols.as_slice());
         let path = self.node_path(owner, &decl.name.text, decl.name.span)?;
         let mut node = Node {
             path,
-            ty: node::Type::Connector(contract_id),
-            aspects,
+            extensions,
+            loop_spec: None,
             semantics: NodeSemantics::Connector {
+                contract: contract_id,
                 roles,
                 exchange,
                 attributes: Vec::new(),
@@ -3812,8 +2919,17 @@ impl Checker<'_, '_> {
             handlers: Vec::new(),
             instance: None,
         };
-        self.node_body(&decl.body, &mut node, graph_signature, graph_consts, true);
+        self.node_body(
+            &decl.body,
+            &mut node,
+            graph_signature,
+            graph_consts,
+            true,
+            decl.span,
+        );
         self.contract(&mut node, decl);
+        node.loop_spec =
+            self.node_loop_declaration(&decl.body, &node, graph_signature, graph_consts, decl.span);
         self.queue_instance_attributes(
             InstanceOwner::Node(node.path.clone()),
             decl.body.iter().filter_map(|item| match item {
@@ -3838,7 +2954,7 @@ impl Checker<'_, '_> {
         let Some(contract_id) = node.connector_contract_id() else {
             self.node_annotation_refusal(
                 &decl.annotation.symbols[0],
-                "a Connector declaration did not resolve to a Connector NodeType",
+                "a Connector declaration did not resolve to a Contract",
             );
             return;
         };
@@ -3917,15 +3033,19 @@ impl Checker<'_, '_> {
             .body
             .iter()
             .filter_map(|item| match item {
-                OperatorItem::Attribute(attribute) if !is_common_node_attribute(attribute) => Some(
-                    attribute
-                        .target
-                        .segments
-                        .iter()
-                        .map(|segment| segment.text.as_str())
-                        .collect::<Vec<_>>()
-                        .join("."),
-                ),
+                OperatorItem::Attribute(attribute)
+                    if !is_common_node_attribute(attribute) && !is_loop_attribute(attribute) =>
+                {
+                    Some(
+                        attribute
+                            .target
+                            .segments
+                            .iter()
+                            .map(|segment| segment.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join("."),
+                    )
+                }
                 _ => None,
             })
             .collect();
@@ -4022,7 +3142,7 @@ impl Checker<'_, '_> {
             let OperatorItem::Attribute(attribute) = item else {
                 continue;
             };
-            if is_common_node_attribute(attribute) {
+            if is_common_node_attribute(attribute) || is_loop_attribute(attribute) {
                 continue;
             }
             let name = attribute
@@ -4364,6 +3484,7 @@ impl Checker<'_, '_> {
         graph_signature: &expr::Signature,
         graph_consts: &BTreeMap<String, crate::value::Value>,
         is_connector: bool,
+        owner_span: Span,
     ) {
         let mut signature = graph_signature.clone();
         let mut consts = graph_consts.clone();
@@ -4452,6 +3573,19 @@ impl Checker<'_, '_> {
                     }
                 }
                 OperatorItem::Var(var) => {
+                    if is_connector {
+                        self.bag.push(
+                            Diagnostic::new(
+                                E_CONNECTOR_STATE,
+                                Phase::Check,
+                                "a Connector's semantic state is defined by its Contract; author private `var` state in an Operator",
+                            )
+                            .with_span(var.span)
+                            .with_field("node", node.path.to_string())
+                            .with_field("name", var.name.text.clone()),
+                        );
+                        continue;
+                    }
                     if self.bindable(&var.name, &signature)
                         && let Some(cell) = self.var(var, &signature, &consts)
                     {
@@ -4460,7 +3594,7 @@ impl Checker<'_, '_> {
                     }
                 }
                 OperatorItem::Attribute(attribute) => {
-                    if is_common_node_attribute(attribute) {
+                    if is_common_node_attribute(attribute) || is_loop_attribute(attribute) {
                         continue;
                     }
                     let name = attribute
@@ -4532,23 +3666,45 @@ impl Checker<'_, '_> {
         // pin a type or publish an interface, not as a prerequisite.
         if !is_connector {
             self.infer_ports(body, node);
+            node.loop_spec =
+                self.node_loop_declaration(body, node, graph_signature, graph_consts, owner_span);
+            if let Some(spec) = &node.loop_spec {
+                let state_type = node
+                    .ports
+                    .iter()
+                    .find(|port| port.port == spec.entry)
+                    .and_then(|port| port.ty.clone())
+                    .unwrap_or(DataType::Variant);
+                signature = loop_state_signature(&signature, state_type);
+            }
         }
         // Pass three: handlers, checked against the complete table.
         for item in body {
             if let OperatorItem::Handler(handler) = item {
                 if is_connector {
-                    self.deferred("a connector handler", handler.span);
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_CONNECTOR_HANDLER,
+                            Phase::Check,
+                            "a Connector cannot own DSL handlers; its Contract and Driver events define its transitions",
+                        )
+                        .with_span(handler.span)
+                        .with_field("node", node.path.to_string()),
+                    );
                 } else if let Some(checked) = self.handler(handler, &signature, node, &consts) {
-                    // Multi-handler arbitration (which fires? does a
-                    // false guard fall through?) has no specified rule
-                    // yet — and the emission-id recipe carries no
-                    // handler identity, so two firings could collide.
-                    if node
-                        .handlers
-                        .iter()
-                        .any(|existing| existing.activation == checked.activation)
-                    {
-                        self.deferred("a second handler for one trigger", handler.span);
+                    if node.handlers.iter().any(|existing| {
+                        same_handler_trigger(&existing.activation, &checked.activation)
+                    }) {
+                        self.bag.push(
+                            Diagnostic::new(
+                                E_HANDLER_DUPLICATE,
+                                Phase::Check,
+                                "an Operator has exactly one handler for each trigger; put the alternatives in one `match`",
+                            )
+                            .with_span(handler.span)
+                            .with_field("node", node.path.to_string())
+                            .with_field("trigger", checked.activation.canonical_key()),
+                        );
                     } else {
                         node.handlers.push(checked);
                     }
@@ -4678,21 +3834,30 @@ impl Checker<'_, '_> {
             if let crate::compiler::syntax::Trigger::Port(name) = &handler.trigger {
                 self.add_port(node, name, Direction::Input, None, "fired by a handler");
             }
-            let Some(statements) = &handler.body else {
+            let Some(dispatch) = &handler.dispatch else {
                 continue;
             };
+            let mut statements = Vec::new();
+            collect_syntax_statements(dispatch, &mut statements);
             for statement in statements {
-                let SynStatement::Assign { target, .. } = statement else {
-                    continue;
+                let targets: Vec<&Name> = match statement {
+                    SynStatement::Assign { target, .. } if target.segments.len() == 1 => {
+                        vec![&target.segments[0]]
+                    }
+                    SynStatement::MultiEmit { targets, .. } => targets
+                        .iter()
+                        .filter_map(|target| {
+                            (target.segments.len() == 1).then_some(&target.segments[0])
+                        })
+                        .collect(),
+                    _ => Vec::new(),
                 };
-                if target.segments.len() != 1 {
-                    continue;
-                }
-                let name = &target.segments[0];
-                let is_state = node.vars.iter().any(|var| var.name == name.text)
-                    || node.vals.iter().any(|val| val.name == name.text);
-                if !is_state {
-                    self.add_port(node, name, Direction::Output, None, "an emission target");
+                for name in targets {
+                    let is_state = node.vars.iter().any(|var| var.name == name.text)
+                        || node.vals.iter().any(|val| val.name == name.text);
+                    if !is_state {
+                        self.add_port(node, name, Direction::Output, None, "an emission target");
+                    }
                 }
             }
         }
@@ -5870,481 +5035,6 @@ impl Checker<'_, '_> {
                 None
             }
         }
-    }
-
-    fn handler(
-        &mut self,
-        decl: &crate::compiler::syntax::HandlerDecl,
-        node_signature: &expr::Signature,
-        node: &Node,
-        consts: &BTreeMap<String, crate::value::Value>,
-    ) -> Option<Handler> {
-        self.handler_with_activation(decl, node_signature, node, consts, None)
-    }
-
-    fn handler_with_activation(
-        &mut self,
-        decl: &crate::compiler::syntax::HandlerDecl,
-        node_signature: &expr::Signature,
-        node: &Node,
-        consts: &BTreeMap<String, crate::value::Value>,
-        activation_override: Option<(node::HandlerActivation, DataType)>,
-    ) -> Option<Handler> {
-        let (mut activation, fixed_data_type) = if let Some((activation, data_type)) =
-            activation_override
-        {
-            (activation, Some(data_type))
-        } else {
-            (
-                match &decl.trigger {
-                    SynTrigger::Port(name) => {
-                        let Some(direction) = self.node_port_direction(node, &name.text) else {
-                            self.bag.push(
-                                Diagnostic::new(
-                                    E_PORT_UNKNOWN,
-                                    Phase::Check,
-                                    format!("this node exposes no port named `{}`", name.text),
-                                )
-                                .with_span(name.span)
-                                .with_field("port", name.text.clone()),
-                            );
-                            return None;
-                        };
-                        if direction != Direction::Input {
-                            self.wrong_direction(
-                                name.span,
-                                &name.text,
-                                direction,
-                                "a handler listens on an input port",
-                            );
-                            return None;
-                        }
-                        match node::Port::new(name.text.clone()) {
-                            Ok(port) => node::HandlerActivation::Port(port),
-                            Err(_) => return None,
-                        }
-                    }
-                    SynTrigger::Start(_) => {
-                        node::HandlerActivation::Lifecycle(node::Lifecycle::Start)
-                    }
-                    SynTrigger::Stop(_) => {
-                        node::HandlerActivation::Lifecycle(node::Lifecycle::Stop)
-                    }
-                    SynTrigger::Compensate(span) => {
-                        self.deferred("a compensate handler", *span);
-                        return None;
-                    }
-                    SynTrigger::Aspect { aspect, .. } => {
-                        self.deferred("an aspect-qualified handler", aspect.span);
-                        return None;
-                    }
-                    SynTrigger::ChildPort { child, .. } => {
-                        self.deferred("a child-output handler outside a Graph", child.span);
-                        return None;
-                    }
-                    SynTrigger::Join(names) => {
-                        let mut ports = Vec::with_capacity(names.len());
-                        let mut unique = BTreeSet::new();
-                        for name in names {
-                            let Some(direction) = self.node_port_direction(node, &name.text) else {
-                                self.bag.push(
-                                    Diagnostic::new(
-                                        E_PORT_UNKNOWN,
-                                        Phase::Check,
-                                        format!("this node exposes no port named `{}`", name.text),
-                                    )
-                                    .with_span(name.span)
-                                    .with_field("port", name.text.clone()),
-                                );
-                                return None;
-                            };
-                            if direction != Direction::Input {
-                                self.wrong_direction(
-                                    name.span,
-                                    &name.text,
-                                    direction,
-                                    "a join listens on input ports",
-                                );
-                                return None;
-                            }
-                            let Ok(port) = node::Port::new(name.text.clone()) else {
-                                return None;
-                            };
-                            if !unique.insert(port.clone()) {
-                                self.instance_refusal(
-                                    name.span,
-                                    "a join lists each input port exactly once",
-                                );
-                                return None;
-                            }
-                            ports.push(port);
-                        }
-                        if ports.len() < 2 {
-                            self.instance_refusal(
-                                decl.span,
-                                "a join requires at least two input ports",
-                            );
-                            return None;
-                        }
-                        node::HandlerActivation::Join {
-                            ports,
-                            within_ns: None,
-                            last: None,
-                        }
-                    }
-                },
-                None,
-            )
-        };
-        // A source annotation or instantiated Connector contract on the
-        // activation port TYPES the handler's `data`. An unpinned operator
-        // port remains a compiler inference variable; `variant` below is only
-        // the expression checker's temporary signature, never the port's
-        // inferred effective type.
-        let declared_data_type = fixed_data_type.or_else(|| match &activation {
-            node::HandlerActivation::Port(port) => node_port_pin(node, port),
-            node::HandlerActivation::ChildPort { .. } => None,
-            node::HandlerActivation::Join { .. } => None,
-            node::HandlerActivation::Lifecycle(_) => {
-                let mut inputs = node
-                    .ports
-                    .iter()
-                    .filter(|port| port.direction == Direction::Input);
-                let Some(first) = inputs.next() else {
-                    self.instance_refusal(
-                        decl.span,
-                        "a lifecycle handler requires an input envelope to cause the instance",
-                    );
-                    return None;
-                };
-                let first = first.ty.clone();
-                inputs
-                    .all(|port| port.ty == first)
-                    .then_some(first)
-                    .flatten()
-            }
-        });
-        // The expression engine still needs a concrete signature during B2;
-        // its `variant` here is parser/checker scaffolding only. The separate
-        // `declared_data_type` is what prevents that placeholder from being
-        // mistaken for an explicit dynamic port constraint.
-        let data_type = declared_data_type.clone().unwrap_or(DataType::Variant);
-        // `now()` is the syntax of a context binding, not an evaluator clock
-        // read. Only a firing handler owns one logical instant; plan, owner,
-        // instance and invocation-setting expressions deliberately do not
-        // receive this name.
-        let mut signature = node_signature.clone().with("now", DataType::TIMESTAMP);
-        match &activation {
-            node::HandlerActivation::Join { ports, .. } => {
-                for port in ports {
-                    signature = signature
-                        .with(port.name(), DataType::Variant)
-                        .with(
-                            format!("{}.data", port.name()),
-                            node_port_pin(node, port).unwrap_or(DataType::Variant),
-                        )
-                        .with_metadata(format!("{}.meta", port.name()));
-                }
-            }
-            _ => {
-                signature = signature
-                    .with("data", data_type.clone())
-                    .with("meta", DataType::Variant);
-            }
-        }
-        let mut guard = None;
-        let mut join_within = None;
-        let mut join_last = None;
-        for clause in &decl.guards {
-            match clause {
-                crate::compiler::syntax::Guard::Where(expr) if guard.is_none() => {
-                    let tree = self.expr(expr, &signature)?;
-                    if !matches!(tree.ty, DataType::Bool | DataType::Variant) {
-                        self.bag.push(
-                            Diagnostic::new(E_EXPR, Phase::Check, "a where guard must be a bool")
-                                .with_span(expr.span)
-                                .with_field("detail", "the guard type is not bool"),
-                        );
-                        return None;
-                    }
-                    signature = signature.narrowed_by(&tree.root);
-                    guard = Some(tree);
-                }
-                crate::compiler::syntax::Guard::Where(expr) => {
-                    self.deferred("a second where guard", expr.span);
-                }
-                crate::compiler::syntax::Guard::Within(expr)
-                    if matches!(&activation, node::HandlerActivation::Join { .. })
-                        && join_within.is_none() =>
-                {
-                    let constant = self.constant(expr, node_signature, consts)?;
-                    let crate::value::Value::Duration(duration) = &constant.value else {
-                        self.instance_refusal(expr.span, "`within` requires a duration");
-                        return None;
-                    };
-                    if *duration <= 0 {
-                        self.instance_refusal(expr.span, "`within` must be positive");
-                        return None;
-                    }
-                    join_within = Some(constant);
-                }
-                crate::compiler::syntax::Guard::Last(count)
-                    if matches!(&activation, node::HandlerActivation::Join { .. })
-                        && join_last.is_none() =>
-                {
-                    let span = count.span;
-                    let Ok(count) = count.text.parse::<u32>() else {
-                        self.instance_refusal(count.span, "`last` must fit a positive u32");
-                        return None;
-                    };
-                    if count == 0 {
-                        self.instance_refusal(span, "`last` must be positive");
-                        return None;
-                    }
-                    join_last = Some(count);
-                }
-                crate::compiler::syntax::Guard::By(expr) => {
-                    self.instance_refusal(
-                        expr.span,
-                        "join `by` was removed; put the correlation expression in `instance = { key = ... }` on this Operator",
-                    );
-                }
-                crate::compiler::syntax::Guard::Having(expr) => {
-                    self.deferred("a join aggregate `having` clause", expr.span);
-                }
-                crate::compiler::syntax::Guard::Within(expr) => {
-                    self.instance_refusal(expr.span, "`within` is legal only once on a join");
-                }
-                crate::compiler::syntax::Guard::Last(count) => {
-                    self.instance_refusal(count.span, "`last` is legal only once on a join");
-                }
-            }
-        }
-        if matches!(&activation, node::HandlerActivation::Join { .. })
-            && guard.is_some()
-            && join_within.is_none()
-            && join_last.is_none()
-        {
-            self.instance_refusal(
-                decl.span,
-                "a content-predicate join requires `within` or `last` to bound retained candidates",
-            );
-            return None;
-        }
-        if let node::HandlerActivation::Join {
-            within_ns, last, ..
-        } = &mut activation
-        {
-            *within_ns = join_within.as_ref().and_then(|bound| match &bound.value {
-                crate::value::Value::Duration(duration) => Some(*duration),
-                _ => None,
-            });
-            *last = join_last;
-        }
-        if matches!(
-            &activation,
-            node::HandlerActivation::Join {
-                within_ns: Some(_),
-                ..
-            } | node::HandlerActivation::Join { last: Some(_), .. }
-        ) {
-            let Ok(expiry) = node::Port::new("expired") else {
-                return None;
-            };
-            let expected = node::join_expired_type().ok();
-            let declared = node.ports.iter().find(|port| port.port == expiry);
-            if !declared.is_some_and(|port| {
-                port.direction == Direction::Output && port.ty.as_ref() == expected.as_ref()
-            }) {
-                self.instance_refusal(
-                    decl.span,
-                    "a bounded join declares `output expired` with the one-case `JoinExpired` tagged-union type",
-                );
-                return None;
-            }
-        }
-        let Some(body) = &decl.body else {
-            self.deferred("a body-less handler outside Loop", decl.span);
-            return None;
-        };
-        let mut statements = Vec::new();
-        for statement in body {
-            match statement {
-                SynStatement::Val(val) => {
-                    if self.bindable(&val.name, &signature) {
-                        let (expected, annotations) = match &val.ty {
-                            Some(ty) => match self.resolve_executable_schema(ty) {
-                                Some(schema) => {
-                                    (Some(schema.ty().clone()), schema.annotations().clone())
-                                }
-                                None => (None, AnnotationTable::empty()),
-                            },
-                            None => (None, AnnotationTable::empty()),
-                        };
-                        if val.ty.is_some() && expected.is_none() {
-                            continue;
-                        }
-                        if let Some(tree) = self.typed_value_tree(
-                            &val.value,
-                            &signature,
-                            expected.as_ref(),
-                            val.span,
-                            &val.name.text,
-                        ) {
-                            signature = signature.with(val.name.text.clone(), tree.ty.clone());
-                            statements.push(Statement::Let {
-                                name: val.name.text.clone(),
-                                value: tree,
-                                annotations,
-                            });
-                        }
-                    }
-                }
-                SynStatement::Assign { target, ty, value } => {
-                    if ty.is_some() {
-                        self.deferred("a typed assignment", target.span);
-                    }
-                    if target.segments.len() > 1 {
-                        if target.segments[0].text == "meta" && target.segments[1].text == "sys" {
-                            self.meta_sys_write(target.span);
-                        } else {
-                            self.deferred("a dotted statement target", target.span);
-                        }
-                        continue;
-                    }
-                    let name = &target.segments[0];
-                    if let Some(var) = node.vars.iter().find(|var| var.name == name.text) {
-                        match value {
-                            // The parser already spoke for its
-                            // recovery form.
-                            SynValue::Error(_) => {}
-                            _ => {
-                                let tree = if let SynValue::Expr(source) = value {
-                                    let raw = self.expr(source, &signature);
-                                    match raw {
-                                        Some(tree)
-                                            if declared_data_type.is_none()
-                                                && tree.ty == DataType::Variant
-                                                && expression_reads_data(&tree.root) =>
-                                        {
-                                            Some(tree)
-                                        }
-                                        Some(tree) => self.contextualize_tree(
-                                            tree,
-                                            &var.ty,
-                                            target.span,
-                                            &name.text,
-                                        ),
-                                        None => None,
-                                    }
-                                } else {
-                                    self.typed_value_tree(
-                                        value,
-                                        &signature,
-                                        Some(&var.ty),
-                                        target.span,
-                                        &name.text,
-                                    )
-                                };
-                                if let Some(tree) = tree {
-                                    statements.push(Statement::SetVar {
-                                        name: name.text.clone(),
-                                        value: tree,
-                                    });
-                                }
-                            }
-                        }
-                        continue;
-                    }
-                    let Some(direction) = self.node_port_direction(node, &name.text) else {
-                        self.bag.push(
-                            Diagnostic::new(
-                                E_RESOLVE_UNKNOWN,
-                                Phase::Resolve,
-                                format!(
-                                    "`{}` names neither a port nor a state cell here",
-                                    name.text
-                                ),
-                            )
-                            .with_span(name.span)
-                            .with_field("name", name.text.clone()),
-                        );
-                        continue;
-                    };
-                    if direction != Direction::Output {
-                        self.wrong_direction(
-                            name.span,
-                            &name.text,
-                            direction,
-                            "an emission targets an output port",
-                        );
-                        continue;
-                    }
-                    let Ok(port) = node::Port::new(name.text.clone()) else {
-                        continue;
-                    };
-                    let expected = node_port_pin(node, &port);
-                    if let Some(emit) = self.emit_value(
-                        value,
-                        &signature,
-                        expected.as_ref(),
-                        name.span,
-                        port.name(),
-                    ) {
-                        if matches!(&activation, node::HandlerActivation::Join { .. })
-                            && matches!(&emit, EmitValue::Identity)
-                        {
-                            self.instance_refusal(
-                                name.span,
-                                "`out = .` is ambiguous under a join; select a named input explicitly",
-                            );
-                            continue;
-                        }
-                        // A pinned output holds its emissions to the
-                        // contract — ONE conformance notion, every
-                        // EmitValue form.
-                        if let Some(expected) = expected
-                            && !self.port_conforms(
-                                &expected,
-                                &emit,
-                                BuildOrigin::Handler(declared_data_type.as_ref()),
-                                consts,
-                                port.name(),
-                                name.span,
-                            )
-                        {
-                            continue;
-                        }
-                        statements.push(Statement::Emit { port, value: emit });
-                    }
-                }
-                SynStatement::MultiEmit { targets, .. } => {
-                    let span = targets.first().map_or(decl.span, |target| target.span);
-                    self.deferred("an atomic multi-emit", span);
-                }
-                SynStatement::Stop(Some(target)) => self.instance_refusal(
-                    target.span,
-                    "targeted `stop` was removed; bare `stop` closes the current Node instance",
-                ),
-                SynStatement::Stop(None) => {
-                    if activation == node::HandlerActivation::Lifecycle(node::Lifecycle::Stop) {
-                        self.instance_refusal(
-                            decl.span,
-                            "an `on stop` handler cannot request closure again",
-                        );
-                    } else {
-                        statements.push(Statement::Stop);
-                    }
-                }
-                SynStatement::Error(_) => {}
-            }
-        }
-        Some(Handler {
-            activation,
-            join_within,
-            guard,
-            body: statements,
-        })
     }
 
     fn meta_sys_write(&mut self, span: Span) {
@@ -7698,7 +6388,7 @@ impl Checker<'_, '_> {
             "role",
             "graph_version",
             // Tier-2 birth stamps — spec'd fields, absent outside
-            // their aspect scope (envelope.md §1.2).
+            // their Extension scope (envelope.md §1.2).
             "saga_id",
             "saga_stack",
             "loop_id",
@@ -7725,7 +6415,7 @@ impl Checker<'_, '_> {
                         self.meta_zone_refusal(
                             span,
                             &format!("meta.sys.{field}"),
-                            "the sys spine has five fields plus the aspect birth stamps — nothing else",
+                            "the sys spine has five fields plus the Extension birth stamps — nothing else",
                         );
                     }
                 }
@@ -8316,87 +7006,6 @@ impl Checker<'_, '_> {
         }
     }
 
-    fn edge(&mut self, decl: &EdgeDecl, graph: &Graph) -> Option<Vec<Edge>> {
-        if decl.bidirectional {
-            self.deferred("a bidirectional edge", decl.span);
-            return None;
-        }
-        if decl.guard.is_some() {
-            self.deferred("an edge guard (when)", decl.span);
-            return None;
-        }
-        if decl.config.is_some() {
-            self.deferred("an edge configuration block", decl.span);
-            return None;
-        }
-        let mut resolved = Vec::new();
-        for pair in decl.endpoints.windows(2) {
-            let from = self.endpoint(&pair[0], graph, true)?;
-            let to = match &pair[1] {
-                EdgeEndpoint::Nothing(_) => EdgeTarget::Discard,
-                other => EdgeTarget::Port(self.endpoint(other, graph, false)?),
-            };
-            // Two pinned ends must be directionally compatible at wiring
-            // time. An unpinned side remains open here and is closed by the
-            // validated-plan resolver.
-            if let EdgeTarget::Port(target) = &to
-                && let Some(source_ty) = endpoint_pinned_type(&from, graph)
-                && let Some(target_ty) = endpoint_pinned_type(target, graph)
-                && !source_ty.is_assignable_to(&target_ty)
-            {
-                self.bag.push(
-                    Diagnostic::new(
-                        E_PORT_TYPE,
-                        Phase::Check,
-                        format!(
-                            "this edge connects {source_ty} to {target_ty}; pinned ends must agree"
-                        ),
-                    )
-                    .with_span(decl.span)
-                    .with_field("port", target.port.name().to_string())
-                    .with_field("expected", target_ty.to_string())
-                    .with_field("found", source_ty.to_string()),
-                );
-                return None;
-            }
-            resolved.push(Edge { from, to });
-        }
-        Some(resolved)
-    }
-
-    fn endpoint(
-        &mut self,
-        endpoint: &EdgeEndpoint,
-        graph: &Graph,
-        is_source: bool,
-    ) -> Option<Endpoint> {
-        let reference = match endpoint {
-            EdgeEndpoint::Ref(reference) => reference,
-            EdgeEndpoint::Branch(refs) => {
-                let span = refs.first().map_or_else(
-                    || Span::new(SourceId::new(0), 0..0),
-                    |reference| reference.span,
-                );
-                self.deferred("a branch edge", span);
-                return None;
-            }
-            EdgeEndpoint::Nothing(span) => {
-                self.deferred("nothing as an edge source", *span);
-                return None;
-            }
-        };
-        self.port_ref(reference, graph, is_source)
-    }
-
-    /// The direction carried by a node's materialized port table.
-    fn node_port_direction(&self, target: &Node, port_name: &str) -> Option<Direction> {
-        target
-            .ports
-            .iter()
-            .find(|decl| decl.port.name() == port_name)
-            .map(|decl| decl.direction)
-    }
-
     /// The ONE notion of pinned-port conformance, shared by
     /// emissions and injections — every `EmitValue` form answers for
     /// the data it produces, statically, under the SAME construction
@@ -8558,169 +7167,6 @@ impl Checker<'_, '_> {
             ),
         );
     }
-
-    fn port_ref(
-        &mut self,
-        reference: &PortRef,
-        graph: &Graph,
-        is_source: bool,
-    ) -> Option<Endpoint> {
-        if reference.boundary {
-            // As a source the boundary feeds the graph (an input port
-            // of the graph); as a target it drains it (an output).
-            let expected = if is_source {
-                Direction::Input
-            } else {
-                Direction::Output
-            };
-            let port_name = match reference.segments.first() {
-                None => {
-                    if is_source {
-                        "in"
-                    } else {
-                        "out"
-                    }
-                }
-                Some(name) => {
-                    let Some(decl) = graph
-                        .boundary
-                        .iter()
-                        .find(|decl| decl.port.name() == name.text)
-                    else {
-                        self.bag.push(
-                            Diagnostic::new(
-                                E_PORT_UNKNOWN,
-                                Phase::Check,
-                                format!("`.{}` names no declared boundary port", name.text),
-                            )
-                            .with_span(name.span)
-                            .with_field("port", name.text.clone()),
-                        );
-                        return None;
-                    };
-                    if decl.direction != expected {
-                        let required = if is_source {
-                            "a boundary edge source must be an input of the graph"
-                        } else {
-                            "a boundary edge target must be an output of the graph"
-                        };
-                        self.wrong_direction(name.span, &name.text, decl.direction, required);
-                        return None;
-                    }
-                    name.text.as_str()
-                }
-            };
-            return node::Port::new(port_name).ok().map(|port| Endpoint {
-                owner: EndpointOwner::Graph(graph.path.clone()),
-                port,
-            });
-        }
-        let node_name = &reference.segments[0];
-        let target_node = graph.nodes.iter().find(|candidate| {
-            candidate
-                .path
-                .segments()
-                .last()
-                .is_some_and(|part| part == &node_name.text)
-        });
-        let target_graph = graph
-            .graphs
-            .iter()
-            .find(|candidate| candidate.name == node_name.text);
-        if target_node.is_none() && target_graph.is_none() {
-            self.bag.push(
-                Diagnostic::new(
-                    E_RESOLVE_UNKNOWN,
-                    Phase::Resolve,
-                    format!("`{}` names no node in this graph", node_name.text),
-                )
-                .with_span(node_name.span)
-                .with_field("name", node_name.text.clone()),
-            );
-            return None;
-        }
-        let port_name = match reference.segments.len() {
-            1 => {
-                if is_source {
-                    "out"
-                } else {
-                    "in"
-                }
-            }
-            2 => reference.segments[1].text.as_str(),
-            _ => {
-                self.deferred("a composed edge path", reference.span);
-                return None;
-            }
-        };
-        // B7 makes the conventional terminal output executable beside the
-        // ordinary in/out/err ports. Further contract-specific ports remain
-        // transported-but-deferred until their Driver slice exists.
-        if target_node.is_some_and(|target| target.connector_contract_id().is_some())
-            && !matches!(port_name, "in" | "out" | "err" | "exit")
-        {
-            self.deferred("a connector edge beyond the default trio", reference.span);
-            return None;
-        }
-        let direction = if let Some(target) = target_node {
-            self.node_port_direction(target, port_name).or_else(|| {
-                if target.connector_contract_id().is_some() {
-                    return None;
-                }
-                match port_name {
-                    "in" => Some(Direction::Input),
-                    "out" | "err" => Some(Direction::Output),
-                    _ => None,
-                }
-            })
-        } else {
-            target_graph.and_then(|target| {
-                target
-                    .boundary
-                    .iter()
-                    .find(|decl| decl.port.name() == port_name)
-                    .map(|decl| decl.direction)
-                    .or(match port_name {
-                        "in" => Some(Direction::Input),
-                        "out" | "err" => Some(Direction::Output),
-                        _ => None,
-                    })
-            })
-        };
-        let Some(direction) = direction else {
-            self.bag.push(
-                Diagnostic::new(
-                    E_PORT_UNKNOWN,
-                    Phase::Check,
-                    format!("`{}` exposes no port named `{}`", node_name.text, port_name),
-                )
-                .with_span(reference.span)
-                .with_field("port", port_name),
-            );
-            return None;
-        };
-        let expected = if is_source {
-            Direction::Output
-        } else {
-            Direction::Input
-        };
-        if direction != expected {
-            let required = if is_source {
-                "an edge source must be an output of its node"
-            } else {
-                "an edge target must be an input of its node"
-            };
-            self.wrong_direction(reference.span, port_name, direction, required);
-            return None;
-        }
-        let owner = target_node.map_or_else(
-            || target_graph.map(|target| EndpointOwner::Graph(target.path.clone())),
-            |target| Some(EndpointOwner::Node(target.path.clone())),
-        )?;
-        node::Port::new(port_name)
-            .ok()
-            .map(|port| Endpoint { owner, port })
-    }
 }
 
 fn graph_at_path<'graph>(
@@ -8790,6 +7236,11 @@ enum BuildOrigin<'a> {
     Draft,
 }
 
+struct ResolvedRouting {
+    edges: Vec<Edge>,
+    rules: Vec<RouteRule>,
+}
+
 /// The statically known shape of the data a builder produces —
 /// three DISTINCT states, never one `None` meaning all of them:
 /// unknown (an open compiler constraint), or a known type (with the
@@ -8810,38 +7261,6 @@ fn node_port_pin(node: &Node, port: &node::Port) -> Option<DataType> {
         .and_then(|decl| decl.ty.clone())
 }
 
-/// The pinned type of an edge endpoint, when its port declares one:
-/// a node's table entry (the connector's effective out pin
-/// included), or a declared boundary port. An unannotated conventional or
-/// named port answers `None` here and is closed by validated-plan inference.
-fn endpoint_pinned_type(endpoint: &Endpoint, graph: &Graph) -> Option<DataType> {
-    match &endpoint.owner {
-        EndpointOwner::Graph(path) => graph_at_path(graph, path)?
-            .boundary
-            .iter()
-            .find(|decl| decl.port == endpoint.port)
-            .and_then(|decl| decl.ty.clone()),
-        EndpointOwner::Node(path) => {
-            node_at_path(graph, path).and_then(|node| node_port_pin(node, &endpoint.port))
-        }
-    }
-}
-
-/// The canonical text of one checked edge — the human face of
-/// E-DUP-EDGE, mirroring the plan's rendering.
-fn edge_display(edge: &Edge) -> String {
-    let end = |endpoint: &Endpoint| match &endpoint.owner {
-        EndpointOwner::Node(path) => format!("{path}.{}", endpoint.port),
-        EndpointOwner::Graph(path) if path.is_root() => format!(".{}", endpoint.port),
-        EndpointOwner::Graph(path) => format!("{path}.{}", endpoint.port),
-    };
-    let to = match &edge.to {
-        EdgeTarget::Port(endpoint) => end(endpoint),
-        EdgeTarget::Discard => String::from("!discard"),
-    };
-    format!("{}>{to}", end(&edge.from))
-}
-
 fn common_node_attribute_name(attribute: &SynAttribute) -> Option<&str> {
     let name = attribute.target.segments.first()?.text.as_str();
     matches!(name, "instance" | "instances" | "lifetime" | "closing").then_some(name)
@@ -8849,90 +7268,6 @@ fn common_node_attribute_name(attribute: &SynAttribute) -> Option<&str> {
 
 fn is_common_node_attribute(attribute: &SynAttribute) -> bool {
     common_node_attribute_name(attribute).is_some()
-}
-
-fn is_loop_attribute(attribute: &SynAttribute) -> bool {
-    let Some(first) = attribute.target.segments.first() else {
-        return false;
-    };
-    first.text == "Loop"
-        || (attribute.target.segments.len() == 1
-            && matches!(
-                first.text.as_str(),
-                "fuel"
-                    | "delay"
-                    | "invariant"
-                    | "measure"
-                    | "jitter"
-                    | "variant"
-                    | "backoff"
-                    | "initial"
-                    | "source"
-                    | "value"
-                    | "until"
-                    | "limit"
-                    | "max_steps"
-                    | "decreases"
-            ))
-}
-
-/// Mirrors only the already-checked handler algebra into the core proof
-/// boundary. Plan lowering performs its own full conversion later; this local
-/// copy exists so an unsupported theorem is diagnosed at its source instead
-/// of first appearing as an internal plan refusal.
-fn loop_proof_handlers(graph: &Graph) -> Vec<crate::plan::Handler> {
-    let emission = |value: &EmitValue| match value {
-        EmitValue::Identity => crate::plan::Emission::Identity,
-        EmitValue::Patch(fields) | EmitValue::FreshData(fields) => {
-            let writes = fields
-                .iter()
-                .map(|field| crate::plan::FieldWrite {
-                    target: field.target.clone(),
-                    expr: field.value.clone(),
-                })
-                .collect();
-            if matches!(value, EmitValue::Patch(_)) {
-                crate::plan::Emission::Patch(writes)
-            } else {
-                crate::plan::Emission::Replace(writes)
-            }
-        }
-        EmitValue::Data(tree) => crate::plan::Emission::Data(tree.clone()),
-        EmitValue::Nothing => crate::plan::Emission::Nothing,
-    };
-    graph
-        .handlers
-        .iter()
-        .map(|handler| crate::plan::Handler {
-            owner: crate::plan::HandlerOwner::Graph(crate::plan::OwnerSlot::new(0)),
-            activation: handler.activation.clone(),
-            guard: handler.guard.clone(),
-            body: handler
-                .body
-                .iter()
-                .map(|statement| match statement {
-                    Statement::Let {
-                        name,
-                        value,
-                        annotations,
-                    } => crate::plan::Step::Let {
-                        name: name.clone(),
-                        expr: value.clone(),
-                        annotations: annotations.clone(),
-                    },
-                    Statement::Emit { port, value } => crate::plan::Step::Emit {
-                        port: port.clone(),
-                        value: emission(value),
-                    },
-                    Statement::SetVar { name, value } => crate::plan::Step::SetVar {
-                        name: name.clone(),
-                        expr: value.clone(),
-                    },
-                    Statement::Stop => crate::plan::Step::Stop,
-                })
-                .collect(),
-        })
-        .collect()
 }
 
 fn is_bare_word(text: &str) -> bool {
@@ -9032,18 +7367,65 @@ fn remap_graph_assets(graph: &mut Graph, remap: &[u32]) {
         if let Some(within) = &mut handler.join_within {
             expr(&mut within.tree.root, remap);
         }
-        if let Some(guard) = &mut handler.guard {
+        if let Some(guard) = &mut handler.admission_guard {
             expr(&mut guard.root, remap);
         }
-        for statement in &mut handler.body {
+        fn statement(statement: &mut Statement, remap: &[u32]) {
             match statement {
                 Statement::Let { value, .. } | Statement::SetVar { value, .. } => {
                     expr(&mut value.root, remap);
                 }
                 Statement::Emit { value, .. } => emit(value, remap),
-                Statement::Stop => {}
+                Statement::MultiEmit { values, .. } => match values {
+                    MultiEmitValues::Broadcast(value) => emit(value, remap),
+                    MultiEmitValues::Tuple(values) => {
+                        for value in values {
+                            emit(value, remap);
+                        }
+                    }
+                },
+                Statement::LoopCommand(LoopCommand::Next(value)) => emit(value, remap),
+                Statement::Stop
+                | Statement::LoopCommand(LoopCommand::Again | LoopCommand::Done) => {}
             }
         }
+        fn remap_dispatch(tree: &mut Dispatch, remap: &[u32]) {
+            match tree {
+                Dispatch::Linear(statements) => {
+                    for item in statements {
+                        statement(item, remap);
+                    }
+                }
+                Dispatch::ClosedMatch {
+                    prefix,
+                    scrutinee,
+                    arms,
+                } => {
+                    for item in prefix {
+                        statement(item, remap);
+                    }
+                    expr(&mut scrutinee.root, remap);
+                    for arm in arms {
+                        remap_dispatch(&mut arm.dispatch, remap);
+                    }
+                }
+                Dispatch::OpenMatch {
+                    prefix,
+                    arms,
+                    fallback,
+                } => {
+                    for item in prefix {
+                        statement(item, remap);
+                    }
+                    for arm in arms {
+                        expr(&mut arm.predicate.root, remap);
+                        remap_dispatch(&mut arm.dispatch, remap);
+                    }
+                    remap_dispatch(fallback, remap);
+                }
+            }
+        }
+        remap_dispatch(&mut handler.dispatch, remap);
     }
     if let Some(policy) = &mut graph.instance {
         instance(policy, remap);
@@ -9456,1971 +7838,4 @@ fn value_type(value: &crate::value::Value) -> Result<Option<DataType>, TypeError
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::compiler::parser::parse;
-
-    fn check_source(source: &str) -> (Option<Hir>, Bag) {
-        let mut bag = Bag::new();
-        let registry = contract::ContractCatalog::try_m0().expect("the standard catalogue holds");
-        let tree = parse(SourceId::new(0), source, &registry, &mut bag);
-        let unit = Unit {
-            files: vec![(SourceId::new(0), tree)],
-        };
-        let hir = check(&unit, &registry, &mut bag, None);
-        (hir, bag)
-    }
-
-    fn diagnostic_codes(bag: &Bag) -> Vec<Code> {
-        bag.diagnostics()
-            .iter()
-            .map(crate::diagnostics::Diagnostic::code)
-            .collect()
-    }
-
-    fn check_clean(source: &str) -> Hir {
-        let (hir, bag) = check_source(source);
-        assert!(
-            !bag.has_errors(),
-            "unexpected diagnostics: {:#?}",
-            bag.diagnostics()
-        );
-        hir.expect("an app graph")
-    }
-
-    const M0_PROBE: &str = r#"
-graph m0_probe : App {
-  val greeting = "hello"
-
-  connector echo : Process {
-    mode = job ; command = "cat"
-    codec = lines
-    effect = idempotent ; behavior = deterministic
-  }
-
-  operator shout {
-    input in: struct { text: text }
-    var count : int = 0
-    on in where data.text != "" {
-      count = count + 1
-      out = data.text
-    }
-  }
-
-  . -> shout -> echo -> .
-}
-"#;
-
-    #[test]
-    fn the_m0_probe_checks_into_hir() {
-        let hir = check_clean(M0_PROBE);
-        assert_eq!(hir.app.name, "m0_probe");
-        assert_eq!(hir.app.ty, node::Type::App);
-        assert!(hir.app.aspects.is_empty());
-        assert_eq!(hir.app.vals[0].name, "greeting");
-        assert_eq!(hir.app.nodes.len(), 2);
-        let echo = &hir.app.nodes[0];
-        assert_eq!(echo.kind(), node::Kind::Connector);
-        assert_eq!(
-            echo.connector_contract_id()
-                .map(|contract| contract.as_str()),
-            Some(crate::connector::PROCESS_CONNECTOR_ID)
-        );
-        // The EFFECTIVE sheet (D-2026-08-12-1): the five written
-        // attributes plus the injected defaults — `args = []`,
-        // `err_codec = lines` and,
-        // on the job profile, `max_output = "8MiB"` and
-        // `on_timeout = kill`. `mode` was written here.
-        assert_eq!(echo.attributes().len(), 9);
-        assert_eq!(
-            echo.attributes()[0].value,
-            AttrValue::Word(String::from("job"))
-        );
-        let AttrValue::Const(command) = &echo.attributes()[1].value else {
-            panic!("expected a constant attribute");
-        };
-        assert_eq!(
-            command.value,
-            crate::value::Value::Text(String::from("cat"))
-        );
-        let shout = &hir.app.nodes[1];
-        assert_eq!(shout.kind(), node::Kind::Operator);
-        assert_eq!(shout.vars[0].ty, DataType::INT);
-        let handler = &shout.handlers[0];
-        assert_eq!(
-            handler.activation,
-            node::HandlerActivation::Port(node::Port::new("in").unwrap())
-        );
-        assert!(handler.guard.is_some());
-        assert!(matches!(&handler.body[0], Statement::SetVar { name, .. } if name == "count"));
-        let Statement::Emit { port, value } = &handler.body[1] else {
-            panic!("expected the emission");
-        };
-        assert_eq!(port.name(), "out");
-        let EmitValue::Data(tree) = value else {
-            panic!("expected a whole-data expression");
-        };
-        assert!(matches!(&tree.root, expr::Expr::Path(path) if path == &["data", "text"]));
-    }
-
-    #[test]
-    fn implicit_and_explicit_default_node_types_are_one_program() {
-        let implicit = r#"
-graph app : App {
-  input in: text
-  output out: text
-  operator relay {
-    input in: text
-    output out: text
-    on in { out = . }
-  }
-  . -> relay -> .
-}
-"#;
-        let explicit = implicit.replace("operator relay {", "operator relay : Operator {");
-        let implicit = check_clean(implicit);
-        let explicit = check_clean(&explicit);
-        assert_eq!(implicit.app.nodes[0].ty, node::Type::Operator);
-        assert_eq!(explicit.app.nodes[0].ty, node::Type::Operator);
-        assert_eq!(
-            crate::compiler::lower::semantic_hash(&implicit),
-            crate::compiler::lower::semantic_hash(&explicit)
-        );
-
-        let implicit_graph = r#"
-graph app : App {
-  input in: text
-  output out: text
-  graph child {
-    input in: text
-    output out: text
-    operator relay { on in { out = . } }
-    . -> relay -> .
-  }
-  . -> child -> .
-}
-"#;
-        let explicit_graph = implicit_graph.replace("graph child {", "graph child : Graph {");
-        let implicit_graph = check_clean(implicit_graph);
-        let explicit_graph = check_clean(&explicit_graph);
-        assert_eq!(implicit_graph.app.graphs[0].ty, node::Type::Graph);
-        assert_eq!(explicit_graph.app.graphs[0].ty, node::Type::Graph);
-        assert_eq!(
-            crate::compiler::lower::semantic_hash(&implicit_graph),
-            crate::compiler::lower::semantic_hash(&explicit_graph)
-        );
-    }
-
-    #[test]
-    fn loop_aspect_contributes_its_closed_boundary_before_lowering() {
-        let source = r#"
-graph app : App {
-  graph retry : Loop {
-    input in: text
-    output out: text
-    Loop.fuel = 3
-    operator relay { on in { out = . } }
-    . -> relay -> .
-  }
-  . -> retry -> .
-}
-"#;
-        let (hir, bag) = check_source(source);
-        let hir = hir.expect("the recoverable HIR keeps the classified annotation");
-        assert_eq!(hir.app.graphs[0].ty, node::Type::Graph);
-        assert_eq!(hir.app.graphs[0].aspects, vec![node::Aspect::Loop]);
-        let spec = hir.app.graphs[0]
-            .loop_spec
-            .as_ref()
-            .expect("the source half of Loop is checked before its plan gate");
-        assert_eq!(
-            spec.fuel.as_ref().map(|fuel| &fuel.value),
-            Some(&crate::value::Value::Int(3))
-        );
-        assert!(spec.delay.is_none());
-        let retry = &hir.app.graphs[0];
-        let next = retry
-            .boundary
-            .iter()
-            .find(|port| port.port.name() == "next")
-            .expect("Loop contributes next");
-        assert_eq!(next.direction, Direction::Output);
-        assert_eq!(next.ty, Some(DataType::Text));
-        let expired = retry
-            .boundary
-            .iter()
-            .find(|port| port.port.name() == "expired")
-            .expect("Loop contributes expired");
-        assert_eq!(expired.ty, node::loop_expired_type(DataType::Text).ok());
-        assert!(diagnostic_codes(&bag).is_empty());
-    }
-
-    #[test]
-    fn loop_source_contract_reduces_every_plan_constant() {
-        let source = r#"
-graph app : App {
-  graph retry : Loop {
-    input in: text
-    output out: text
-    val attempts = 4
-    Loop.fuel = attempts
-    Loop.delay = {
-      kind = exponential
-      first = duration("100ms")
-      ceiling = duration("5s")
-    }
-    operator relay { on in { out = . } }
-    . -> relay -> .
-  }
-  . -> retry -> .
-}
-"#;
-        let (hir, bag) = check_source(source);
-        assert!(diagnostic_codes(&bag).is_empty());
-        let spec = hir
-            .expect("a fail-closed Loop keeps its checked source contract")
-            .app
-            .graphs[0]
-            .loop_spec
-            .clone()
-            .expect("LoopSpec");
-        assert_eq!(
-            spec.fuel.as_ref().map(|fuel| &fuel.value),
-            Some(&crate::value::Value::Int(4))
-        );
-        let LoopDelay::Exponential { first, ceiling } = spec.delay.expect("delay") else {
-            panic!("expected exponential delay");
-        };
-        assert_eq!(first.value, crate::value::Value::Duration(100_000_000));
-        assert_eq!(ceiling.value, crate::value::Value::Duration(5_000_000_000));
-    }
-
-    #[test]
-    fn removed_or_misplaced_loop_attributes_have_one_owner() {
-        let cases = [
-            (
-                "graph retry : Loop { Loop.variant = { kind = measure } }",
-                "Loop.variant` was removed",
-            ),
-            (
-                "graph retry : Loop { max_steps = 3 }",
-                "max_steps` was removed",
-            ),
-            (
-                "graph retry : Loop { until = data.done }",
-                "terminal paths emit an ordinary output",
-            ),
-            ("graph retry : Loop { fuel = 3 }", "write `Loop.fuel`"),
-            (
-                "graph retry { Loop.fuel = 3 }",
-                "requires the Graph's `: Loop`",
-            ),
-            (
-                "graph retry : Loop { Loop.fuel = 0 }",
-                "must be a positive integer",
-            ),
-            (
-                "graph retry : Loop { Loop.fuel = 3; Loop.delay = { kind = exponential; first = duration(\"2s\"); ceiling = duration(\"1s\") } }",
-                "ceiling` must be no smaller",
-            ),
-        ];
-        for (declaration, expected) in cases {
-            let source = format!("graph app : App {{ {declaration} }}");
-            let (_, bag) = check_source(&source);
-            assert_eq!(diagnostic_codes(&bag), vec![E_LOOP], "{source}: {bag:#?}");
-            assert!(bag.diagnostics()[0].message().contains(expected));
-        }
-    }
-
-    #[test]
-    fn node_types_and_aspects_have_one_ordered_compatibility_gate() {
-        let cases = [
-            (
-                "operator o : Loop + Operator { on in { out = . } }",
-                "NodeType must be the first annotation",
-            ),
-            (
-                "operator o : Saga { on in { out = . } }",
-                "Saga` NodeAspect belongs to a Graph",
-            ),
-            (
-                "operator o : Loop { on in { out = . } }",
-                "Loop` NodeAspect belongs to a Graph",
-            ),
-            (
-                "operator o : Reducer { on in { out = . } }",
-                "Operator pattern, not a NodeType",
-            ),
-        ];
-        for (declaration, expected) in cases {
-            let source = format!("graph app : App {{ {declaration} . -> o -> . }}");
-            let (_, bag) = check_source(&source);
-            assert!(
-                bag.diagnostics().iter().any(|diagnostic| {
-                    diagnostic.code() == E_NODE_ANNOTATION
-                        && diagnostic.message().contains(expected)
-                }),
-                "{source}: {bag:#?}"
-            );
-        }
-
-        let source = r#"
-graph app : App {
-  connector c : Loop { }
-}
-"#;
-        let (_, bag) = check_source(source);
-        assert_eq!(diagnostic_codes(&bag), vec![E_NODE_ANNOTATION]);
-        assert!(
-            bag.diagnostics()[0]
-                .message()
-                .contains("requires its exact Connector NodeType first")
-        );
-
-        let source = r#"
-graph app : App {
-  connector c : Process + Loop {
-    command = "echo"
-    args = ["ok"]
-    codec = lines
-    effect = idempotent
-    behavior = deterministic
-    max_output = 1024
-  }
-}
-"#;
-        let (_, bag) = check_source(source);
-        assert!(bag.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code() == E_NODE_ANNOTATION
-                && diagnostic
-                    .message()
-                    .contains("Loop` NodeAspect belongs to a Graph")
-        }));
-    }
-
-    #[test]
-    fn edges_desugar_to_explicit_pairs() {
-        let hir = check_clean(M0_PROBE);
-        let edges = &hir.app.edges;
-        assert_eq!(edges.len(), 3);
-        assert!(matches!(
-            &edges[0].from.owner,
-            EndpointOwner::Graph(path) if path.is_root()
-        ));
-        assert_eq!(edges[0].from.port.name(), "in");
-        let EdgeTarget::Port(to) = &edges[0].to else {
-            panic!("expected a port target");
-        };
-        assert!(matches!(&to.owner, EndpointOwner::Node(path) if path.to_string() == "shout"));
-        assert_eq!(to.port.name(), "in");
-        let EdgeTarget::Port(last) = &edges[2].to else {
-            panic!("expected a port target");
-        };
-        assert!(matches!(&last.owner, EndpointOwner::Graph(path) if path.is_root()));
-        assert_eq!(last.port.name(), "out");
-    }
-
-    #[test]
-    fn a_meta_sys_write_carries_its_normative_code() {
-        let source = "graph g : App {\n  operator o {\n    on in {\n      out = { meta.sys.id = data.x }\n    }\n  }\n  . -> o -> .\n}\n";
-        let (_, bag) = check_source(source);
-        let diagnostic = bag
-            .diagnostics()
-            .iter()
-            .find(|diagnostic| diagnostic.code() == E_META_SYS_READONLY)
-            .expect("the meta.sys refusal");
-        assert!(diagnostic.message().contains("read-only"));
-    }
-
-    #[test]
-    fn a_tagged_constructor_and_its_optional_field_are_wrapped_at_check() {
-        let source = r#"
-type ProcessExit = union {
-  Exited { exit_code: int, signal: int? },
-  SpawnFailed { message: text }
-}
-graph g : App {
-  operator o {
-    input in: int
-    output exit: ProcessExit
-    on in {
-      exit = Exited { exit_code = 0, signal = null }
-    }
-  }
-}
-"#;
-        let hir = check_clean(source);
-        let Statement::Emit { port, value } = &hir.app.nodes[0].handlers[0].body[0] else {
-            panic!("expected an emission");
-        };
-        assert_eq!(port.name(), "exit");
-        let EmitValue::Data(tree) = value else {
-            panic!("expected constructed data");
-        };
-        let expr::Expr::Tagged {
-            case,
-            fields,
-            union,
-            ..
-        } = &tree.root
-        else {
-            panic!("expected a tagged constructor");
-        };
-        assert_eq!(case, "Exited");
-        assert_eq!(union.cases()[0].name(), "Exited");
-        assert!(matches!(
-            &fields[1],
-            (name, expr::Expr::As { .. }) if name == "signal"
-        ));
-    }
-
-    #[test]
-    fn a_structural_union_is_selected_once_in_the_checked_tree() {
-        let source = r#"
-graph g : App {
-  operator o {
-    input in: int
-    output out: int | text
-    on in { out = 5 }
-  }
-}
-"#;
-        let hir = check_clean(source);
-        let Statement::Emit {
-            value: EmitValue::Data(tree),
-            ..
-        } = &hir.app.nodes[0].handlers[0].body[0]
-        else {
-            panic!("expected a data emission");
-        };
-        assert!(matches!(tree.root, expr::Expr::As { .. }));
-        assert!(matches!(tree.ty, DataType::StructuralUnion(_)));
-    }
-
-    #[test]
-    fn different_structural_unions_require_an_explicit_as() {
-        let implicit = r#"
-type Small = int | text
-type Wide = int | text | bool
-graph g : App {
-  operator o {
-    input in: Small
-    output out: Wide
-    on in { out = data }
-  }
-}
-"#;
-        let (_, bag) = check_source(implicit);
-        assert!(bag.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code() == E_PORT_TYPE
-                && diagnostic.message().contains("requires an explicit `as`")
-        }));
-
-        let explicit = implicit.replace("out = data", "out = data as Wide");
-        let hir = check_clean(&explicit);
-        let Statement::Emit {
-            value: EmitValue::Data(tree),
-            ..
-        } = &hir.app.nodes[0].handlers[0].body[0]
-        else {
-            panic!("expected a data emission");
-        };
-        assert!(matches!(tree.root, expr::Expr::As { .. }));
-    }
-
-    #[test]
-    fn err_is_an_ordinary_inferred_output_port() {
-        let source = r#"
-type Failure = union { Broken { message: text } }
-graph g : App {
-  operator o {
-    on in { err = Broken { message = "no" } }
-  }
-}
-"#;
-        let hir = check_clean(source);
-        let err = hir.app.nodes[0]
-            .ports
-            .iter()
-            .find(|port| port.port.name() == "err")
-            .expect("err is materialized like every other emitted port");
-        assert_eq!(err.direction, Direction::Output);
-        assert_eq!(err.unwired, crate::plan::UnwiredPolicy::RootSink);
-        assert!(matches!(
-            &hir.app.nodes[0].handlers[0].body[0],
-            Statement::Emit { port, value: EmitValue::Data(expr::Tree { root: expr::Expr::Tagged { .. }, .. }) }
-                if port.name() == "err"
-        ));
-    }
-
-    #[test]
-    fn a_bad_tagged_constructor_refuses_at_the_typed_destination() {
-        let source = r#"
-type Exit = union { Exited { code: int } }
-graph g : App {
-  operator o {
-    output exit: Exit
-    on in { exit = Exited { message = "wrong" } }
-  }
-}
-"#;
-        let (_, bag) = check_source(source);
-        assert_eq!(
-            diagnostic_codes(&bag)
-                .into_iter()
-                .filter(|code| *code == E_PORT_TYPE)
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn a_unit_needs_exactly_one_app() {
-        let (hir, bag) = check_source("graph a : App { }\ngraph b : App { }\n");
-        assert!(hir.is_none());
-        assert_eq!(bag.diagnostics()[0].code(), E_APP_COUNT);
-        let (hir, bag) = check_source("graph a { }\n");
-        assert!(hir.is_none());
-        assert_eq!(bag.diagnostics()[0].code(), E_APP_COUNT);
-    }
-
-    #[test]
-    fn unknown_names_and_ports_are_refused() {
-        let source = "graph g : App {\n  operator o { }\n  o -> ghost\n  o.mystery -> o\n}\n";
-        let (_, bag) = check_source(source);
-        let codes: Vec<_> = bag
-            .diagnostics()
-            .iter()
-            .map(crate::diagnostics::Diagnostic::code)
-            .collect();
-        assert!(codes.contains(&E_RESOLVE_UNKNOWN));
-        assert!(codes.contains(&E_PORT_UNKNOWN));
-    }
-
-    #[test]
-    fn duplicate_nodes_are_refused() {
-        let (_, bag) = check_source("graph g : App {\n  operator o { }\n  operator o { }\n}\n");
-        assert!(
-            bag.diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.code() == E_DUP_NODE)
-        );
-    }
-
-    #[test]
-    fn expression_faults_map_back_to_source_spans() {
-        let source = "graph g : App {\n  operator o {\n    on in where mystery > 0 { out = . }\n  }\n  . -> o -> .\n}\n";
-        let (_, bag) = check_source(source);
-        let diagnostic = bag
-            .diagnostics()
-            .iter()
-            .find(|diagnostic| diagnostic.code() == E_EXPR)
-            .expect("a Rastok expression diagnostic");
-        let span = diagnostic.spans()[0];
-        let range = span.range();
-        assert_eq!(&source[range], "mystery > 0");
-    }
-
-    #[test]
-    fn a_missing_mandatory_axis_violates_the_sheet() {
-        let source = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; codec = lines\n    behavior = deterministic\n  }\n  . -> c -> .\n}\n";
-        let (_, bag) = check_source(source);
-        let diagnostic = bag
-            .diagnostics()
-            .iter()
-            .find(|diagnostic| diagnostic.code() == E_CONTRACT_REQUIRED)
-            .expect("the missing-effect refusal");
-        assert_eq!(diagnostic.fields()[0].1, "effect");
-    }
-
-    #[test]
-    fn a_domain_violation_names_the_sheet() {
-        let source = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; codec = utf16\n    effect = idempotent ; behavior = deterministic\n  }\n  . -> c -> .\n}\n";
-        let (_, bag) = check_source(source);
-        let diagnostic = bag
-            .diagnostics()
-            .iter()
-            .find(|diagnostic| diagnostic.code() == E_CONTRACT_ATTR)
-            .expect("the codec refusal");
-        assert!(diagnostic.message().contains("Process sheet"));
-    }
-
-    #[test]
-    fn correlate_on_a_job_names_the_owning_profile() {
-        // D-2026-08-12-1: a field of another profile is ABSENT here,
-        // and the diagnostic names its owner — never "forbidden".
-        let source = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; codec = lines\n    effect = idempotent ; behavior = deterministic\n    correlate = data.id\n  }\n  . -> c -> .\n}\n";
-        let (_, bag) = check_source(source);
-        let diagnostic = bag
-            .diagnostics()
-            .iter()
-            .find(|diagnostic| diagnostic.code() == E_CONTRACT_ATTR)
-            .expect("the correlate refusal");
-        assert!(
-            diagnostic
-                .message()
-                .contains("belongs to `Process(mode = service)`"),
-            "{}",
-            diagnostic.message()
-        );
-        assert!(
-            diagnostic
-                .message()
-                .contains("not applicable to `Process(mode = job)`"),
-            "{}",
-            diagnostic.message()
-        );
-    }
-
-    #[test]
-    fn unavailable_and_unknown_connector_types_split() {
-        let declared = "graph g : App {\n  connector c : Timer { }\n  . -> c -> .\n}\n";
-        let (_, bag) = check_source(declared);
-        assert!(diagnostic_codes(&bag).contains(&E_CONNECTOR_UNAVAILABLE));
-        assert!(bag.diagnostics()[0].message().contains("catalogue"));
-
-        let removed = "graph g : App {\n  connector c : Clock { }\n}\n";
-        let (_, bag) = check_source(removed);
-        assert_eq!(bag.diagnostics().len(), 1);
-        assert!(
-            bag.diagnostics()[0]
-                .message()
-                .contains("renamed to `Timer`")
-        );
-
-        let unknown = "graph g : App {\n  connector d : Postgres { }\n  . -> d -> .\n}\n";
-        let (_, bag) = check_source(unknown);
-        assert!(bag.diagnostics().iter().any(|diagnostic| {
-            diagnostic
-                .message()
-                .contains("not a known Connector NodeType")
-        }));
-    }
-
-    #[test]
-    fn a_map_emission_compiles_to_the_map_literal_form() {
-        // `{ "n": 1 }` is an executable emission now — the entries
-        // compile into the existing MapLit expression.
-        let source = "graph g : App {\n  operator o {\n    on in { out = { \"n\": 1 } }\n  }\n  . -> o -> .\n}\n";
-        let (hir, bag) = check_source(source);
-        assert!(!bag.has_errors(), "{:#?}", bag.diagnostics());
-        let hir = hir.expect("a checked unit");
-        let Statement::Emit { value, .. } = &hir.app.nodes[0].handlers[0].body[0] else {
-            panic!("an emission");
-        };
-        let EmitValue::Data(tree) = value else {
-            panic!("a data emission");
-        };
-        assert!(
-            matches!(&tree.root, expr::Expr::MapLit(pairs) if pairs.len() == 1),
-            "the MapLit form: {tree:?}"
-        );
-    }
-
-    #[test]
-    fn a_named_type_guard_narrows_the_handler_body() {
-        let source = r#"
-type Customer = struct { id: int }
-
-graph g : App {
-  operator inspect {
-    on in where data is Customer {
-      out = data.id
-    }
-  }
-
-  . -> inspect -> .
-}
-"#;
-        let hir = check_clean(source);
-        let handler = &hir.app.nodes[0].handlers[0];
-        let guard = handler.guard.as_ref().expect("the compiled guard");
-        let customer = DataType::Struct(
-            StructType::new(vec![TypeField::new("id", DataType::INT)]).expect("one closed field"),
-        );
-        let expr::Expr::Is { target, .. } = &guard.root else {
-            panic!("the narrowing guard");
-        };
-        assert!(matches!(
-            target.as_ref(),
-            expr::NarrowTarget::Type(target) if target.ty() == &customer
-        ));
-        let Statement::Emit { value, .. } = &handler.body[0] else {
-            panic!("the guarded emission");
-        };
-        let EmitValue::Data(tree) = value else {
-            panic!("the expression emission");
-        };
-        assert_eq!(tree.ty, DataType::INT);
-        assert!(matches!(&tree.root, expr::Expr::Path(path) if path == &["data", "id"]));
-    }
-
-    #[test]
-    fn the_removed_struct_spelling_is_gone_from_the_grammar() {
-        // D-2026-08-09-1 removes `struct { … }` from value positions
-        // cleanly — a braced record IS the struct. The old spelling
-        // now falls outside the grammar and refuses; it never parses
-        // as anything else.
-        let source = "graph g : App {\n  operator o {\n    on in { out = struct { n = 1 } }\n  }\n  . -> o -> .\n}\n";
-        let (_, bag) = check_source(source);
-        assert!(
-            !bag.diagnostics().is_empty(),
-            "the removed form must refuse, not resolve"
-        );
-    }
-
-    #[test]
-    fn non_idempotent_effects_are_deferred_until_their_invariants_run() {
-        // `compensable` demands an executable `on compensate` and
-        // `irreversible` an idempotency key; neither companion exists
-        // in this subset, so the words refuse instead of lying.
-        for word in ["compensable", "irreversible"] {
-            let source = format!(
-                "graph g : App {{\n  connector c : Process {{\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = {word} ; behavior = deterministic\n  }}\n  . -> c -> .\n}}\n"
-            );
-            let (_, bag) = check_source(&source);
-            assert!(
-                bag.diagnostics().iter().any(|diagnostic| {
-                    diagnostic.code() == E_CHECK_DEFERRED
-                        && diagnostic.fields()[0].1 == "compensable and irreversible effects"
-                }),
-                "`effect = {word}` must refuse: {:#?}",
-                bag.diagnostics()
-            );
-        }
-    }
-
-    #[test]
-    fn an_unwired_output_warns_without_refusing() {
-        let source = "graph g : App {\n  operator o {\n    on in {\n      out = .\n      side = .\n    }\n  }\n  . -> o -> .\n}\n";
-        let (hir, bag) = check_source(source);
-        assert!(hir.is_some(), "a leak is a warning, not a refusal");
-        assert!(bag.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code() == W_UNWIRED_OUTPUT && diagnostic.fields()[1].1 == "side"
-        }));
-        // Discarding in writing silences it.
-        let discarded = "graph g : App {\n  operator o {\n    on in {\n      out = .\n      side = .\n    }\n  }\n  . -> o -> .\n  o.side -> nothing\n}\n";
-        let (_, bag) = check_source(discarded);
-        assert!(
-            !bag.diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.code() == W_UNWIRED_OUTPUT)
-        );
-    }
-
-    #[test]
-    fn a_second_handler_for_one_trigger_is_refused() {
-        let source = "graph g : App {\n  operator o {\n    on in { out = . }\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
-        let (_, bag) = check_source(source);
-        assert!(bag.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code() == E_CHECK_DEFERRED
-                && diagnostic.fields()[0].1 == "a second handler for one trigger"
-        }));
-    }
-
-    #[test]
-    fn lifecycle_handlers_enter_the_general_handler_table() {
-        let source = "graph g : App {\n  operator o {\n    on start { out = . }\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
-        let hir = check_clean(source);
-        assert!(hir.app.nodes[0].handlers.iter().any(|handler| {
-            handler.activation == node::HandlerActivation::Lifecycle(node::Lifecycle::Start)
-        }));
-    }
-
-    #[test]
-    fn an_admission_lifecycle_requires_a_causal_input() {
-        let source = "graph g : App {\n  operator source {\n    output out: int\n    on start { out = 1 }\n  }\n  source -> .\n}\n";
-        let (_, bag) = check_source(source);
-        assert!(bag.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code() == E_INSTANCE
-                && diagnostic.message().contains("requires an input envelope")
-        }));
-    }
-
-    #[test]
-    fn unrepresentable_emissions_refuse_at_check_not_at_runtime() {
-        let source = "graph g : App {\n  operator o {\n    on in { out = duration(\"3s\") }\n  }\n  . -> o -> .\n}\n";
-        let (_, bag) = check_source(source);
-        assert!(
-            bag.diagnostics().iter().any(|diagnostic| {
-                diagnostic.code() == E_CHECK_DEFERRED
-                    && diagnostic.fields()[0].1 == "a duration, timestamp, or null emission"
-            }),
-            "an accepted plan must not fault on a normal emission: {:#?}",
-            bag.diagnostics()
-        );
-    }
-
-    #[test]
-    fn the_jsonl_codec_compiles() {
-        // M1 item 2 (D-2026-08-11-1): the JSON chain exists — the
-        // deferral lifted with it.
-        let source = "graph g : App {\n  connector c : Process {\n    mode = job ; command = \"cat\"\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n  }\n  . -> c -> .\n}\n";
-        let (_, bag) = check_source(source);
-        assert!(
-            !bag.diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.code() == E_CHECK_DEFERRED),
-            "{:#?}",
-            bag.diagnostics()
-        );
-    }
-
-    #[test]
-    fn unknown_and_unproduced_expectation_targets_refuse() {
-        // A typo or an unproduced conventional name cannot create an
-        // observation target; predicates still owe a boolean.
-        let base = "graph g : App {\n  operator relay {\n    on in { out = . }\n  }\n  . -> relay -> .\n}\n\nlab g {\n  simulation s on app {\n    scenario sc {\n      app.in = { text = \"x\" }\n      EXPECT\n    }\n  }\n}\n";
-        let cases = [
-            ("expect nothing relay.typo", E_PORT_UNKNOWN),
-            ("expect nothing app.typo", E_PORT_UNKNOWN),
-            ("expect nothing relay.err", E_PORT_UNKNOWN),
-            ("expect nothing app.err", E_PORT_UNKNOWN),
-            ("expect nothing app.out where 42", E_EXPR),
-        ];
-        for (expect, code) in cases {
-            let source = base.replace("EXPECT", expect);
-            let (_, bag) = check_source(&source);
-            assert!(
-                bag.diagnostics()
-                    .iter()
-                    .any(|diagnostic| diagnostic.code() == code),
-                "`{expect}` must refuse with {code:?}: {:#?}",
-                bag.diagnostics()
-            );
-        }
-    }
-
-    #[test]
-    fn lab_fragments_merge_and_homonym_simulations_refuse() {
-        let source = "graph g : App {\n  operator o {\n    on in { out = . }\n  }\n  . -> o -> .\n}\n\nlab g {\n  simulation a on app { }\n}\n\nlab g {\n  simulation b on app { }\n}\n\nlab g {\n  simulation a on app { }\n}\n";
-        let (hir, bag) = check_source(source);
-        // Fragments merged into one corpus of two simulations…
-        let hir = hir.expect("the unit checks");
-        assert_eq!(hir.labs.len(), 1);
-        assert_eq!(hir.labs[0].simulations.len(), 2);
-        // …and the homonym refused by name.
-        assert!(bag.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code() == E_DUP_LAB_IDENTITY && diagnostic.fields()[0].1 == "a"
-        }));
-    }
-
-    #[test]
-    fn an_implicit_unwired_output_still_warns() {
-        // `out` never enters the declared port table; the leak must
-        // surface anyway — the errata's interim floor is visibility.
-        let source = "graph g : App {\n  operator o {\n    on in { out = . }\n  }\n  . -> o\n}\n";
-        let (_, bag) = check_source(source);
-        assert!(
-            bag.diagnostics().iter().any(|diagnostic| {
-                diagnostic.code() == W_UNWIRED_OUTPUT && diagnostic.fields()[1].1 == "out"
-            }),
-            "{:#?}",
-            bag.diagnostics()
-        );
-    }
-
-    #[test]
-    fn a_duplicated_edge_refuses_whatever_its_spelling() {
-        // Textually identical, and sugar-vs-explicit: both resolve to
-        // one endpoint pair and the second refuses with its own span.
-        for second in ["o -> p", "o.out -> p.in"] {
-            let source = format!(
-                "graph g : App {{\n  operator o {{\n    on in {{ out = . }}\n  }}\n  operator p {{\n    on in {{ out = . }}\n  }}\n  . -> o -> p -> .\n  {second}\n}}\n"
-            );
-            let (_, bag) = check_source(&source);
-            assert!(
-                bag.diagnostics()
-                    .iter()
-                    .any(|diagnostic| diagnostic.code() == E_DUP_EDGE),
-                "`{second}` must refuse: {:#?}",
-                bag.diagnostics()
-            );
-        }
-    }
-
-    #[test]
-    fn duplicate_mocks_refuse_at_both_levels() {
-        let base = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  operator o {\n    input in: struct { text: text }\n    on in { out = data.text }\n  }\n  . -> o -> shell -> .\n}\n\nlab g {\n  simulation s on app {\nBODY  }\n}\n";
-        let simulation_level = base.replace(
-            "BODY",
-            "    mock shell { on in { out = . } }\n    mock shell { on in { out = . } }\n",
-        );
-        let scenario_level = base.replace(
-            "BODY",
-            "    scenario x {\n      mock shell { on in { out = . } }\n      mock shell { on in { out = . } }\n      app.in = \"y\"\n    }\n",
-        );
-        for source in [simulation_level, scenario_level] {
-            let (_, bag) = check_source(&source);
-            assert!(
-                bag.diagnostics().iter().any(|diagnostic| {
-                    diagnostic.code() == E_DUP_LAB_IDENTITY && diagnostic.fields()[0].1 == "shell"
-                }),
-                "the duplicate mock must refuse: {:#?}",
-                bag.diagnostics()
-            );
-        }
-    }
-
-    #[test]
-    fn no_top_level_declaration_is_silently_ignored() {
-        // Until unit composition and real liveness exist, an extra
-        // top-level graph is an explicit deferral — an ERROR, so its
-        // unchecked content can never ride along silently.
-        let source = "graph main : App { }\ngraph orphan { }\nval loose = 1\n";
-        let (_, bag) = check_source(source);
-        assert!(bag.has_errors());
-        let constructs: Vec<&str> = bag
-            .diagnostics()
-            .iter()
-            .filter(|diagnostic| diagnostic.code() == E_CHECK_DEFERRED)
-            .map(|diagnostic| diagnostic.fields()[0].1.as_str())
-            .collect();
-        assert!(constructs.contains(&"a top-level graph outside the App"));
-        assert!(constructs.contains(&"a top-level val"));
-    }
-
-    #[test]
-    fn recognized_data_annotations_reach_the_annotated_port_schema() {
-        let source = "type Prompt = text @sensitive(level = confidential)\ngraph g : App {\n  operator o {\n    input in: Prompt\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
-        let (hir, bag) = check_source(source);
-        assert!(!bag.has_errors(), "v15 carries valid policy metadata");
-        let hir = hir.expect("the annotation reaches checked HIR");
-        assert_eq!(hir.named_schemas.len(), 1);
-        assert!(!hir.named_schemas[0].1.annotations().is_empty());
-        assert!(
-            !hir.app.nodes[0]
-                .ports
-                .iter()
-                .find(|decl| decl.port.name() == "in")
-                .expect("input port")
-                .annotations
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn aliases_expand_annotations_to_exact_collection_and_union_paths() {
-        let source = r#"
-type TokenCount = int @measure(id = gen_ai.usage.input_tokens)
-type Result = union {
-  Done @sensitive(level = internal) {
-    counts: array<TokenCount>
-  },
-  Empty
-}
-graph g : App {
-  operator o {
-    input in: Result
-    on in { out = . }
-  }
-  . -> o -> .
-}
-"#;
-        let (hir, bag) = check_source(source);
-        assert!(!bag.has_errors());
-        let hir = hir.expect("the annotated schema is checked into HIR");
-        let result = hir
-            .named_schemas
-            .iter()
-            .find(|(name, _)| name == "Result")
-            .map(|(_, schema)| schema)
-            .expect("Result schema");
-        let paths: Vec<String> = result
-            .annotations()
-            .entries()
-            .keys()
-            .map(ToString::to_string)
-            .collect();
-        assert_eq!(
-            paths,
-            [
-                "$.tagged_union_case(\"Done\")",
-                "$.tagged_union_case(\"Done\").field(\"counts\").array_element",
-            ]
-        );
-        let port_paths: Vec<String> = hir.app.nodes[0]
-            .ports
-            .iter()
-            .find(|decl| decl.port.name() == "in")
-            .expect("input port")
-            .annotations
-            .entries()
-            .keys()
-            .map(ToString::to_string)
-            .collect();
-        assert_eq!(port_paths, paths, "the alias is expanded at its port use");
-    }
-
-    #[test]
-    fn annotated_aliases_keep_the_canonical_structural_union_branch() {
-        let source = r#"
-type Classified = text @sensitive(level = confidential)
-type Choice = Classified | int
-graph g : App {
-  operator o {
-    input in: Choice
-    on in { out = . }
-  }
-  . -> o -> .
-}
-"#;
-        let (hir, bag) = check_source(source);
-        assert!(!bag.has_errors());
-        let hir = hir.expect("the structural-union annotation reaches checked HIR");
-        let choice = hir
-            .named_schemas
-            .iter()
-            .find(|(name, _)| name == "Choice")
-            .map(|(_, schema)| schema)
-            .expect("Choice schema");
-        let paths: Vec<String> = choice
-            .annotations()
-            .entries()
-            .keys()
-            .map(ToString::to_string)
-            .collect();
-        assert_eq!(paths, ["$.structural_union_branch(1)"]);
-        assert_eq!(
-            hir.app.nodes[0]
-                .ports
-                .iter()
-                .find(|decl| decl.port.name() == "in")
-                .expect("input port")
-                .annotations
-                .entries()
-                .keys()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>(),
-            paths,
-            "the canonical branch survives alias use at a typed port"
-        );
-    }
-
-    #[test]
-    fn cost_secret_and_personal_contracts_reach_hir_without_changing_types() {
-        let source = r#"
-type ScalarCost = decimal(38,18) @cost(currency = EUR, basis = provider_reported)
-type Money = struct { amount: decimal(38,18), currency: text }
-             @cost(basis = pricebook_calculated)
-type Credential = text @sensitive(level = restricted) @secret
-type PersonalFact = text @personal
-type SubjectId = text @personal(identifier = true)
-type HealthFact = text @personal(special = true, criminal = false)
-graph g : App {}
-"#;
-        let (hir, bag) = check_source(source);
-        assert!(!bag.has_errors());
-        let hir = hir.expect("the checked schemas survive resolution");
-        let scalar = hir
-            .named_schemas
-            .iter()
-            .find(|(name, _)| name == "ScalarCost")
-            .map(|(_, schema)| schema)
-            .expect("ScalarCost schema");
-        assert!(matches!(scalar.ty(), DataType::Decimal(_)));
-        let scalar_annotations = scalar
-            .annotations()
-            .entries()
-            .get(&SchemaPath::root())
-            .expect("root scalar annotations")
-            .annotations();
-        assert!(matches!(
-            scalar_annotations,
-            [DataAnnotation::Cost(cost)]
-                if cost.currency().map(CurrencyCode::as_str) == Some("EUR")
-                    && cost.basis() == CostBasis::ProviderReported
-        ));
-
-        let money = hir
-            .named_schemas
-            .iter()
-            .find(|(name, _)| name == "Money")
-            .map(|(_, schema)| schema)
-            .expect("Money schema");
-        assert!(matches!(money.ty(), DataType::Struct(_)));
-        assert!(matches!(
-            money.annotations()
-                .entries()
-                .get(&SchemaPath::root())
-                .expect("root Money annotations")
-                .annotations(),
-            [DataAnnotation::Cost(cost)]
-                if cost.currency().is_none()
-                    && cost.basis() == CostBasis::PricebookCalculated
-        ));
-
-        let credential = hir
-            .named_schemas
-            .iter()
-            .find(|(name, _)| name == "Credential")
-            .map(|(_, schema)| schema)
-            .expect("Credential schema");
-        assert_eq!(credential.ty(), &DataType::Text);
-        assert_eq!(
-            credential
-                .annotations()
-                .entries()
-                .get(&SchemaPath::root())
-                .expect("root credential annotations")
-                .annotations(),
-            [
-                DataAnnotation::Sensitive(SensitivityLevel::Restricted),
-                DataAnnotation::Secret,
-            ]
-        );
-
-        let subject = hir
-            .named_schemas
-            .iter()
-            .find(|(name, _)| name == "SubjectId")
-            .map(|(_, schema)| schema)
-            .expect("SubjectId schema");
-        assert_eq!(subject.ty(), &DataType::Text);
-        assert!(matches!(
-            subject
-                .annotations()
-                .entries()
-                .get(&SchemaPath::root())
-                .map(AnnotationSet::annotations),
-            Some([DataAnnotation::Personal(class)]) if class.is_identifier()
-                && !class.is_special_category()
-                && !class.is_criminal_offence()
-        ));
-
-        let personal = hir
-            .named_schemas
-            .iter()
-            .find(|(name, _)| name == "PersonalFact")
-            .map(|(_, schema)| schema)
-            .expect("PersonalFact schema");
-        assert!(matches!(
-            personal
-                .annotations()
-                .entries()
-                .get(&SchemaPath::root())
-                .map(AnnotationSet::annotations),
-            Some([DataAnnotation::Personal(class)]) if *class == PersonalDataClass::default()
-        ));
-
-        let health = hir
-            .named_schemas
-            .iter()
-            .find(|(name, _)| name == "HealthFact")
-            .map(|(_, schema)| schema)
-            .expect("HealthFact schema");
-        assert!(matches!(
-            health
-                .annotations()
-                .entries()
-                .get(&SchemaPath::root())
-                .map(AnnotationSet::annotations),
-            Some([DataAnnotation::Personal(class)]) if class.is_special_category()
-                && !class.is_criminal_offence()
-        ));
-    }
-
-    #[test]
-    fn boot_references_close_only_at_declared_connector_settings() {
-        let source = r#"
-graph app : App {
-  connector client : HttpClient {
-    url = env("SERVICE_URL")
-    auth_bearer = secret("providers/openai/token")
-    method = "POST"
-    timeout = duration("2s")
-    codec = json
-    effect = idempotent
-    behavior = deterministic
-  }
-}
-"#;
-        let (hir, bag) = check_source(source);
-        assert!(!bag.has_errors(), "{:#?}", bag.diagnostics());
-        let hir = hir.expect("boot references check into HIR");
-        let client = &hir.app.nodes[0];
-        let attributes = client.attributes();
-        for (name, expected) in [
-            (
-                "url",
-                crate::deployment::BootReference::Environment(
-                    crate::deployment::EnvironmentName::new("SERVICE_URL")
-                        .expect("portable environment name"),
-                ),
-            ),
-            (
-                "auth_bearer",
-                crate::deployment::BootReference::Secret(
-                    crate::deployment::SecretRef::new("providers/openai/token")
-                        .expect("logical secret ref"),
-                ),
-            ),
-        ] {
-            let attribute = attributes
-                .iter()
-                .find(|attribute| attribute.name == name)
-                .expect("boot-bound attribute");
-            assert!(matches!(
-                &attribute.value,
-                AttrValue::Expr { site: crate::plan::EvaluationSite::Boot, tree }
-                    if crate::expr::boot_reference(&tree.root) == Ok(Some(expected.clone()))
-            ));
-        }
-
-        for (attribute, value, detail) in [
-            (
-                "idempotency_key",
-                "secret(\"providers/openai/token\")",
-                "not authorized",
-            ),
-            ("auth_bearer", "env(\"API_TOKEN\")", "not authorized"),
-            (
-                "auth_bearer",
-                "secret(\"providers/openai/token\") + \"leak\"",
-                "exactly one string literal",
-            ),
-        ] {
-            let source = format!(
-                r#"graph app : App {{
-  connector client : HttpClient {{
-    url = "https://example.test"
-    method = "GET"
-    timeout = duration("2s")
-    codec = json
-    effect = idempotent
-    behavior = deterministic
-    {attribute} = {value}
-  }}
-}}
-"#
-            );
-            let (_, bag) = check_source(&source);
-            let diagnostic = bag
-                .diagnostics()
-                .iter()
-                .find(|diagnostic| diagnostic.code() == E_CONTRACT_ATTR)
-                .expect("boot reference refusal");
-            assert!(diagnostic.message().contains(detail), "{diagnostic:#?}");
-        }
-    }
-
-    #[test]
-    fn explicit_binding_types_retain_their_annotation_tables_in_hir() {
-        let source = r#"
-graph g : App {
-  val label: text @sensitive(level = internal) = "demo"
-  operator o {
-    var credential: text @sensitive(level = restricted) = "placeholder"
-    on in {
-      val tokens: int @measure(id = gen_ai.usage.output_tokens) = 1
-      out = .
-    }
-  }
-  . -> o -> .
-}
-"#;
-        let (hir, bag) = check_source(source);
-        assert!(!bag.has_errors());
-        let hir = hir.expect("binding annotations reach checked HIR");
-        assert!(!hir.app.vals[0].annotations.is_empty());
-        assert!(!hir.app.nodes[0].vars[0].annotations.is_empty());
-        assert!(matches!(
-            &hir.app.nodes[0].handlers[0].body[0],
-            Statement::Let { annotations, .. } if !annotations.is_empty()
-        ));
-    }
-
-    #[test]
-    fn executable_secret_schemas_refuse_until_fields_can_be_externalized() {
-        let cases = [
-            "type Secret = text @secret\ngraph g : App { input in: Secret }\n",
-            "type Secret = text @secret\ngraph g : App { operator o { input in: Secret } }\n",
-            "type Secret = text @secret\ngraph g : App { val token: Secret = \"x\" }\n",
-            "type Secret = text @secret\ngraph g : App { operator o { var token: Secret = \"x\" } }\n",
-            "type Secret = text @secret\ngraph g : App { operator o { on in { val token: Secret = \"x\"; out = . } } . -> o -> . }\n",
-        ];
-        for source in cases {
-            let (_, bag) = check_source(source);
-            let refusals = bag
-                .diagnostics()
-                .iter()
-                .filter(|diagnostic| {
-                    diagnostic.code() == E_CHECK_DEFERRED
-                        && diagnostic.message().contains("field-level externalization")
-                })
-                .count();
-            assert_eq!(refusals, 1, "{source}\n{:#?}", bag.diagnostics());
-        }
-    }
-
-    #[test]
-    fn boot_reference_functions_name_their_restricted_positions() {
-        for (function, setting) in [
-            (
-                "secret(\"providers/openai/token\")",
-                "HttpClient.auth_bearer",
-            ),
-            ("env(\"SERVICE_URL\")", "HttpClient.url"),
-        ] {
-            let source = format!(
-                "graph g : App {{ operator o {{ on in {{ out = {function} }} }} . -> o -> . }}\n"
-            );
-            let (_, bag) = check_source(&source);
-            let diagnostic = bag
-                .diagnostics()
-                .iter()
-                .find(|diagnostic| diagnostic.code() == E_EXPR)
-                .expect("the reserved boot function refuses as an expression");
-            assert!(
-                diagnostic.message().contains("admitted only")
-                    && diagnostic.message().contains(setting),
-                "{diagnostic:#?}"
-            );
-            assert!(!diagnostic.message().contains("unknown function"));
-        }
-    }
-
-    #[test]
-    fn invalid_data_annotations_refuse_by_annotation_and_exact_path() {
-        let cases = [
-            (
-                "type X = struct { field: text @unknown }\ngraph g : App {}\n",
-                "unknown",
-                "$.field(\"field\")",
-                "unknown data annotation",
-            ),
-            (
-                "type X = array<text @secret @secret>\ngraph g : App {}\n",
-                "secret",
-                "$.array_element",
-                "appears twice",
-            ),
-            (
-                "type X = int @measure(id = data)\ngraph g : App {}\n",
-                "measure",
-                "$",
-                "not in the pinned registry",
-            ),
-            (
-                "type X = int @measure(id = env(\"MEASURE\"))\ngraph g : App {}\n",
-                "measure",
-                "$",
-                "symbolic plan constant",
-            ),
-            (
-                "type X = struct { prompt: text @measure(id = gen_ai.usage.input_tokens) }\ngraph g : App {}\n",
-                "measure",
-                "$.field(\"prompt\")",
-                "cannot be carried",
-            ),
-            (
-                "type X = union { Done @cost(basis = provider_reported) }\ngraph g : App {}\n",
-                "cost",
-                "$.tagged_union_case(\"Done\")",
-                "not a union case",
-            ),
-            (
-                "type X = text @sensitive(level = internal, level = restricted)\ngraph g : App {}\n",
-                "sensitive",
-                "$",
-                "argument `level` appears twice",
-            ),
-            (
-                "type X = text @sensitive\ngraph g : App {}\n",
-                "sensitive",
-                "$",
-                "missing required argument `level`",
-            ),
-            (
-                "type X = text @secret(level = restricted)\ngraph g : App {}\n",
-                "secret",
-                "$",
-                "unexpected argument `level`",
-            ),
-            (
-                "type X = int @measure(id = http.client.request.duration)\ngraph g : App {}\n",
-                "measure",
-                "$",
-                "runtime instrument",
-            ),
-            (
-                "type X = decimal(38,18) @cost(currency = ZZZ, basis = provider_reported)\ngraph g : App {}\n",
-                "cost",
-                "$",
-                "not in the pinned ISO 4217 registry",
-            ),
-            (
-                "type X = struct { amount: decimal(38,18), currency: text } @cost(currency = EUR, basis = provider_reported)\ngraph g : App {}\n",
-                "cost",
-                "$",
-                "unexpected argument `currency`",
-            ),
-            (
-                "type X = text @personal(identifier = maybe)\ngraph g : App {}\n",
-                "personal",
-                "$",
-                "must be `true` or `false`",
-            ),
-            (
-                "type X = text @personal(purpose = support)\ngraph g : App {}\n",
-                "personal",
-                "$",
-                "unexpected argument `purpose`",
-            ),
-        ];
-        for (source, annotation, path, detail) in cases {
-            let (_, bag) = check_source(source);
-            let diagnostic = bag
-                .diagnostics()
-                .iter()
-                .find(|diagnostic| diagnostic.code() == E_DATA_ANNOTATION)
-                .unwrap_or_else(|| {
-                    panic!("missing annotation diagnostic: {:#?}", bag.diagnostics())
-                });
-            assert_eq!(diagnostic.fields()[0].1, annotation);
-            assert_eq!(diagnostic.fields()[1].1, path);
-            assert!(
-                diagnostic.fields()[2].1.contains(detail),
-                "{source}: {diagnostic:#?}"
-            );
-            assert!(
-                bag.diagnostics()
-                    .iter()
-                    .all(|diagnostic| diagnostic.code() != E_CHECK_DEFERRED),
-                "an invalid annotation must not also claim to have reached A2"
-            );
-        }
-    }
-
-    #[test]
-    fn one_faulty_alias_annotation_speaks_once_across_all_uses() {
-        let source = r#"
-type Bad = text @unknown
-graph g : App {
-  operator o {
-    input left: Bad
-    input right: Bad
-  }
-}
-"#;
-        let (_, bag) = check_source(source);
-        let annotation_diagnostics: Vec<_> = bag
-            .diagnostics()
-            .iter()
-            .filter(|diagnostic| diagnostic.code() == E_DATA_ANNOTATION)
-            .collect();
-        assert_eq!(annotation_diagnostics.len(), 1, "{:#?}", bag.diagnostics());
-        assert_eq!(annotation_diagnostics[0].fields()[0].1, "unknown");
-        assert_eq!(annotation_diagnostics[0].fields()[1].1, "$");
-    }
-
-    #[test]
-    fn a_var_initializer_must_fit_its_declared_type() {
-        let source = "graph g : App {\n  operator o {\n    var count : int = \"oops\"\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
-        let (_, bag) = check_source(source);
-        let diagnostic = bag
-            .diagnostics()
-            .iter()
-            .find(|diagnostic| diagnostic.code() == E_PORT_TYPE)
-            .expect("the type mismatch");
-        assert!(diagnostic.message().contains("requires int32"));
-    }
-
-    #[test]
-    fn shadowing_and_reserved_names_are_refused() {
-        let source = "graph g : App {\n  val limit = 1\n  operator o {\n    var limit : int = 0\n    var data : int = 0\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
-        let (_, bag) = check_source(source);
-        let shadows: Vec<&str> = bag
-            .diagnostics()
-            .iter()
-            .filter(|diagnostic| diagnostic.code() == E_DUP_BINDING)
-            .map(|diagnostic| diagnostic.fields()[0].1.as_str())
-            .collect();
-        assert_eq!(shadows, ["limit", "data"]);
-    }
-
-    #[test]
-    fn handler_and_emission_ports_are_inferred() {
-        // The reviewer's reproduction: `on event` implies an input,
-        // `result = .` implies an output — no declaration
-        // needed. This program is conforming and must check cleanly.
-        let source = "graph g : App {\n  input feed\n  output sink\n\n  operator o {\n    on event {\n      result = .\n    }\n  }\n\n  .feed -> o.event\n  o.result -> .sink\n}\n";
-        let hir = check_clean(source);
-        let ports = &hir.app.nodes[0].ports;
-        assert!(
-            ports
-                .iter()
-                .any(|decl| decl.port.name() == "event" && decl.direction == Direction::Input)
-        );
-        assert!(
-            ports
-                .iter()
-                .any(|decl| decl.port.name() == "result" && decl.direction == Direction::Output)
-        );
-    }
-
-    #[test]
-    fn conflicting_port_roles_are_refused() {
-        // The same name inferred as input and output.
-        let source = "graph g : App {\n  operator o {\n    on chan {\n      chan = .\n    }\n  }\n  . -> o.chan -> .\n}\n";
-        let (_, bag) = check_source(source);
-        assert!(diagnostic_codes(&bag).contains(&E_PORT_CONFLICT));
-        // Explicit double declaration at the boundary.
-        let source = "graph g : App {\n  input feed\n  output feed\n  operator o { on in { out = . } }\n  . -> o -> .\n}\n";
-        let (_, bag) = check_source(source);
-        assert!(diagnostic_codes(&bag).contains(&E_PORT_CONFLICT));
-    }
-
-    #[test]
-    fn a_connector_never_declares_ports() {
-        let source = "graph g : App {\n  connector c : Process {\n    input extra\n    command = \"cat\" ; codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  . -> c -> .\n}\n";
-        let (_, bag) = check_source(source);
-        let diagnostic = bag
-            .diagnostics()
-            .iter()
-            .find(|diagnostic| diagnostic.code() == E_PORT_CONFLICT)
-            .expect("the connector port refusal");
-        assert!(diagnostic.message().contains("its type defines them"));
-    }
-
-    #[test]
-    fn physical_integer_types_are_not_silently_merged() {
-        let long = "graph g : App {\n  operator o {\n    var n : long = 0\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
-        let (hir, bag) = check_source(long);
-        assert!(
-            !bag.has_errors(),
-            "long is now canonical: {:#?}",
-            bag.diagnostics()
-        );
-        assert_eq!(
-            hir.expect("one App").app.nodes[0].vars[0].ty,
-            DataType::LONG
-        );
-        let overflow = "graph g : App {\n  operator o {\n    var n : int = 2147483648\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
-        let (_, bag) = check_source(overflow);
-        assert!(
-            bag.diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.code() == E_PORT_TYPE
-                    && diagnostic.message().contains("requires int32"))
-        );
-    }
-
-    #[test]
-    fn ports_are_used_with_their_direction() {
-        // `o.in` as an edge source, a handler on `out`, and an
-        // emission into `in` all refuse.
-        let source =
-            "graph g : App {\n  operator o {\n    on out { in = . }\n  }\n  o.in -> o\n}\n";
-        let (_, bag) = check_source(source);
-        let directions = bag
-            .diagnostics()
-            .iter()
-            .filter(|diagnostic| diagnostic.code() == E_PORT_DIRECTION)
-            .count();
-        assert_eq!(
-            directions,
-            2,
-            "handler + edge source: {:#?}",
-            bag.diagnostics()
-        );
-        let emission =
-            "graph g : App {\n  operator o {\n    on in { in = . }\n  }\n  . -> o -> .\n}\n";
-        let (_, bag) = check_source(emission);
-        assert!(diagnostic_codes(&bag).contains(&E_PORT_DIRECTION));
-    }
-
-    #[test]
-    fn boundary_ports_carry_direction() {
-        let source = "graph g : App {\n  input feed\n  operator o { on in { out = . } }\n  o.out -> .feed\n}\n";
-        let (_, bag) = check_source(source);
-        let diagnostic = bag
-            .diagnostics()
-            .iter()
-            .find(|diagnostic| diagnostic.code() == E_PORT_DIRECTION)
-            .expect("an input boundary port cannot drain the graph");
-        assert!(diagnostic.message().contains("boundary edge target"));
-    }
-
-    #[test]
-    fn wiring_cycles_are_refused() {
-        let source = "graph g : App {\n  operator a { on in { out = . } }\n  operator b { on in { out = . } }\n  a -> b\n  b -> a\n}\n";
-        let (_, bag) = check_source(source);
-        let diagnostic = bag
-            .diagnostics()
-            .iter()
-            .find(|diagnostic| diagnostic.code() == E_GRAPH_CYCLE)
-            .expect("the cycle must refuse");
-        assert!(diagnostic.message().contains("DAG"));
-        let chain = "graph g : App {\n  operator a { on in { out = . } }\n  operator b { on in { out = . } }\n  . -> a -> b -> .\n}\n";
-        let (_, bag) = check_source(chain);
-        assert!(!diagnostic_codes(&bag).contains(&E_GRAPH_CYCLE));
-
-        let session = r#"
-graph session_echo : App {
-  connector socket : WebSocketServer {
-    listen = "127.0.0.1:8080"
-    codec = json
-    handshake_timeout = duration("5s")
-  }
-  operator echo { on in { out = . } }
-  socket.out -> echo.in
-  echo.out -> socket.in
-  socket.exit -> nothing
-}
-"#;
-        let (_, bag) = check_source(session);
-        assert!(
-            !diagnostic_codes(&bag).contains(&E_GRAPH_CYCLE),
-            "the inbound and outbound halves of one Session are a causal boundary: {:#?}",
-            bag.diagnostics()
-        );
-    }
-
-    #[test]
-    fn repeated_attributes_and_port_declarations_are_refused() {
-        let repeated_attr = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; command = \"false\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  . -> c -> .\n}\n";
-        let (_, bag) = check_source(repeated_attr);
-        assert!(
-            bag.diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.code() == E_CONTRACT_ATTR
-                    && diagnostic.message().contains("twice"))
-        );
-        let repeated_port = "graph g : App {\n  operator o {\n    input event\n    input event\n    on event { out = . }\n  }\n  .feed -> o.event\n  input feed\n  o -> .\n}\n";
-        let (_, bag) = check_source(repeated_port);
-        assert!(
-            bag.diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.code() == E_PORT_CONFLICT
-                    && diagnostic.message().contains("already declared"))
-        );
-    }
-
-    #[test]
-    fn key_and_lifetime_are_orthogonal_in_all_four_combinations() {
-        let policies = [
-            ("", false, "persistent"),
-            ("instance = { key = data }", true, "persistent"),
-            (
-                "lifetime = { kind = idle ; after = duration(\"30s\") }",
-                false,
-                "idle",
-            ),
-            (
-                "instance = { key = data }\n    lifetime = { kind = idle ; after = duration(\"30s\") }",
-                true,
-                "idle",
-            ),
-        ];
-        for (attributes, keyed, lifetime) in policies {
-            let source = format!(
-                "graph g : App {{\n  input in: text\n  output out: text\n  operator relay {{\n    input in: text\n    output out: text\n    {attributes}\n    on in {{ out = . }}\n  }}\n  . -> relay -> .\n}}\n"
-            );
-            let hir = check_clean(&source);
-            let policy = &hir.app.nodes[0].instance;
-            if attributes.is_empty() {
-                assert!(policy.is_none(), "omission is the persistent singleton");
-                continue;
-            }
-            let policy = policy.as_ref().expect("a non-default policy is retained");
-            assert_eq!(policy.key.is_some(), keyed);
-            match (&policy.lifetime, lifetime) {
-                (InstanceLifetime::Persistent, "persistent") => {}
-                (InstanceLifetime::Idle(value), "idle") => {
-                    assert_eq!(value.value, crate::value::Value::Duration(30_000_000_000))
-                }
-                (actual, expected) => panic!("expected {expected}, got {actual:?}"),
-            }
-        }
-    }
-
-    #[test]
-    fn omitted_and_explicit_persistent_lifetimes_share_one_identity() {
-        let source = |attribute: &str| {
-            format!(
-                "graph g : App {{\n  operator relay {{\n    {attribute}\n    on in {{ out = . }}\n  }}\n  . -> relay -> .\n}}\n"
-            )
-        };
-        let omitted = check_clean(&source(""));
-        let explicit = check_clean(&source("lifetime = { kind = persistent }"));
-        assert_eq!(
-            crate::compiler::lower::semantic_hash(&omitted),
-            crate::compiler::lower::semantic_hash(&explicit)
-        );
-        assert_eq!(omitted.app.nodes[0].instance, None);
-        assert_eq!(explicit.app.nodes[0].instance, None);
-    }
-
-    #[test]
-    fn every_node_family_uses_the_same_instance_sheet() {
-        let source = r#"
-graph g : App {
-  input in: text
-  output out: text
-  instance = { key = data }
-
-  connector shell : Process {
-    instance = { key = data }
-    lifetime = { kind = idle ; after = duration("5m") }
-    command = "cat"
-    codec = lines
-    effect = idempotent
-    behavior = deterministic
-  }
-  . -> shell -> .
-}
-"#;
-        let hir = check_clean(source);
-        let graph = hir.app.instance.as_ref().expect("the Graph owns a policy");
-        assert!(graph.key.is_some());
-        assert_eq!(graph.lifetime, InstanceLifetime::Persistent);
-        let connector = hir.app.nodes[0]
-            .instance
-            .as_ref()
-            .expect("the Connector owns the same sheet");
-        assert!(connector.key.is_some());
-        assert!(matches!(connector.lifetime, InstanceLifetime::Idle(_)));
-    }
-
-    #[test]
-    fn every_r4_lifetime_reaches_hir_with_its_duration() {
-        enum ExpectedLifetime {
-            Fixed,
-            SinglePass,
-            Tumbling,
-        }
-
-        let cases = [
-            (
-                "lifetime = { kind = fixed ; after = duration(\"30s\") }",
-                ExpectedLifetime::Fixed,
-            ),
-            (
-                "lifetime = { kind = single_pass }",
-                ExpectedLifetime::SinglePass,
-            ),
-            (
-                "lifetime = { kind = tumbling ; every = duration(\"5m\") }",
-                ExpectedLifetime::Tumbling,
-            ),
-        ];
-        for (attribute, expected) in cases {
-            let source = format!(
-                "graph g : App {{\n  input in: text\n  output out: text\n  operator relay {{\n    {attribute}\n    on in {{ out = . }}\n  }}\n  . -> relay -> .\n}}\n"
-            );
-            let hir = check_clean(&source);
-            let lifetime = &hir.app.nodes[0]
-                .instance
-                .as_ref()
-                .expect("the explicit policy reaches HIR")
-                .lifetime;
-            assert!(match expected {
-                ExpectedLifetime::Fixed => matches!(lifetime, InstanceLifetime::Fixed(_)),
-                ExpectedLifetime::SinglePass => {
-                    matches!(lifetime, InstanceLifetime::SinglePass)
-                }
-                ExpectedLifetime::Tumbling => {
-                    matches!(lifetime, InstanceLifetime::Tumbling(_))
-                }
-            });
-        }
-    }
-
-    #[test]
-    fn closing_is_one_explicit_policy_and_stop_closes_the_current_instance() {
-        let source = r#"
-graph g : App {
-  input in: int
-  output out: int
-  operator relay {
-    input in: int
-    output out: int
-    closing = { drain_for = duration("2s") ; settle_for = duration("3s") }
-    on in { out = . ; stop }
-  }
-  . -> relay -> .
-}
-"#;
-        let hir = check_clean(source);
-        let policy = hir.app.nodes[0]
-            .instance
-            .as_ref()
-            .expect("the explicit closing policy is retained");
-        let closing = policy.closing.as_ref().expect("Closing is explicit");
-        assert_eq!(
-            closing.drain_for.value,
-            crate::value::Value::Duration(2_000_000_000)
-        );
-        assert_eq!(
-            closing.settle_for.value,
-            crate::value::Value::Duration(3_000_000_000)
-        );
-        assert!(matches!(
-            hir.app.nodes[0].handlers[0].body.last(),
-            Some(Statement::Stop)
-        ));
-
-        let (_, targeted) = check_source(&source.replace("stop }", "stop other }"));
-        assert!(targeted.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code() == E_INSTANCE
-                && diagnostic.message().contains("targeted `stop` was removed")
-        }));
-        let recursive = source.replace("on in { out = . ; stop }", "on stop { stop }");
-        let (_, recursive) = check_source(&recursive);
-        assert!(
-            recursive.diagnostics().iter().any(|diagnostic| {
-                diagnostic.code() == E_INSTANCE
-                    && diagnostic
-                        .message()
-                        .contains("cannot request closure again")
-            }),
-            "got {:#?}",
-            recursive.diagnostics()
-        );
-    }
-
-    #[test]
-    fn one_key_projection_may_cross_different_input_records() {
-        let source = r#"
-graph g : App {
-  input alpha: struct { tenant: text, amount: int }
-  input beta: struct { tenant: text, note: text }
-  output out: text
-  operator relay {
-    input a: struct { tenant: text, amount: int }
-    input b: struct { tenant: text, note: text }
-    output out: text
-    instance = { key = data.tenant }
-    on a { out = data.tenant }
-    on b { out = data.tenant }
-  }
-  .alpha -> relay.a
-  .beta -> relay.b
-  relay -> .
-}
-"#;
-        let hir = check_clean(source);
-        let key = hir.app.nodes[0]
-            .instance
-            .as_ref()
-            .and_then(|policy| policy.key.as_ref())
-            .expect("the common projection is total on both ports");
-        assert_eq!(key.ty, DataType::Text);
-    }
-
-    #[test]
-    fn composite_and_sys_keys_use_the_positive_surface() {
-        let source = r#"
-graph g : App {
-  input in: text
-  output out: text
-  operator relay {
-    input in: text
-    output out: text
-    instance = { key = { request = meta.sys.id ; tenant = data } }
-    on in { out = . }
-  }
-  . -> relay -> .
-}
-"#;
-        let hir = check_clean(source);
-        let key = hir.app.nodes[0]
-            .instance
-            .as_ref()
-            .and_then(|policy| policy.key.as_ref())
-            .expect("the composite key checks");
-        assert!(key.ty.is_instance_key());
-        assert!(!key.ty.is_canonical_key());
-    }
-
-    #[test]
-    fn instance_sheets_refuse_malformed_values_before_lowering() {
-        let cases = [
-            ("instance = {}", "requires exactly one `key`"),
-            ("instance = { key = 1 ; key = 2 }", "declared twice"),
-            (
-                "lifetime = { kind = idle ; after = duration(\"0s\") }",
-                "must be positive",
-            ),
-            ("lifetime = { kind = mystery }", "unknown lifetime kind"),
-            ("closing = {}", "requires `drain_for`"),
-            (
-                "closing = { drain_for = duration(\"1s\") }",
-                "requires `settle_for`",
-            ),
-            (
-                "closing = { drain_for = duration(\"0s\") ; settle_for = duration(\"1s\") }",
-                "`closing.drain_for` must be positive",
-            ),
-            (
-                "closing = { drain_for = duration(\"1s\") ; settle_for = duration(\"1s\") ; magic = 1 }",
-                "has no `magic` field",
-            ),
-            ("instance = { key = data }", "canonical scalar/enum leaves"),
-        ];
-        for (attribute, expected) in cases {
-            let source = format!(
-                "graph g : App {{\n  input in: variant\n  output out: variant\n  operator o {{\n    input in: variant\n    output out: variant\n    {attribute}\n    on in {{ out = . }}\n  }}\n  . -> o -> .\n}}\n"
-            );
-            let (_, bag) = check_source(&source);
-            assert!(
-                bag.diagnostics().iter().any(|diagnostic| {
-                    diagnostic.code() == E_INSTANCE && diagnostic.message().contains(expected)
-                }),
-                "expected `{expected}` for {source:?}, got {:#?}",
-                bag.diagnostics()
-            );
-        }
-    }
-
-    #[test]
-    fn superseded_instance_spellings_have_exactly_one_migration_diagnostic() {
-        let sources = [
-            (
-                "named partition",
-                "graph g : App { partition p { key = 1 ; lifetime = persistent } operator o { on in { out = . } } . -> o -> . }",
-                "`partition`",
-            ),
-            (
-                "plural instance attribute",
-                "graph g : App { operator o { instances = { key = data } ; on in { out = . } } . -> o -> . }",
-                "`instances` was superseded",
-            ),
-            (
-                "Graph per",
-                "graph g : App per p { operator o { on in { out = . } } . -> o -> . }",
-                "`per`",
-            ),
-            (
-                "Operator inline per",
-                "graph g : App { operator o per (key = 1, lifetime = persistent) { on in { out = . } } . -> o -> . }",
-                "`per`",
-            ),
-            (
-                "Connector per",
-                "graph g : App { connector p : Process per p { command = \"cat\" ; codec = lines ; effect = idempotent ; behavior = deterministic } . -> p -> . }",
-                "`per`",
-            ),
-            (
-                "join by",
-                "type JoinExpiry = union { JoinExpired {} } graph g : App { operator j { input a: int ; input b: int ; output out: int ; output expired: JoinExpiry ; on (a, b) by a.data within duration(\"1s\") { out = a.data + b.data } } . -> j.a ; . -> j.b ; j -> . ; j.expired -> nothing }",
-                "join `by`",
-            ),
-            (
-                "targeted stop",
-                "graph g : App { operator o { on in { stop p } } . -> o -> . }",
-                "targeted `stop`",
-            ),
-        ];
-        for (label, source, expected) in sources {
-            let (_, bag) = check_source(source);
-            assert_eq!(bag.diagnostics().len(), 1, "{label}: {bag:#?}");
-            assert_eq!(bag.diagnostics()[0].code(), E_INSTANCE, "{label}");
-            assert!(
-                bag.diagnostics()[0].message().contains(expected),
-                "{label}: {bag:#?}"
-            );
-        }
-    }
-}
+mod tests;

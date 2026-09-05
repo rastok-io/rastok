@@ -1,7 +1,11 @@
 # Contributing a Connector Driver
 
-> Current contributor path through the M1.6 H7 closure. The
-> normative contract lives in
+> The shipped implementation remains categorical plan v15 until R3–R8 land.
+> D-2026-09-05-1 freezes the v16 target used by new design work: Connector is
+> one of the two Executor forms, its semantic transition comes from a
+> versioned Contract, all productible outcomes have explicit
+> dispositions, and the six shipped Contract ids move from `@1` to `@2` at R4.
+> The normative contract lives in
 > [`../spec/stdlib.md`](../spec/stdlib.md) and
 > [D-2026-08-22-1 through D-2026-08-27-3](../spec/decisions.md). This guide
 > explains how the pieces meet in the implementation; it does not define a
@@ -9,14 +13,14 @@
 
 ## The four objects
 
-- A **Connector** is the Node written in an RKG graph.
+- A **Connector** is the Executor Node written in an RKG graph.
 - Its **Contract** is compiler data: stable id, required roles, ports, types,
   attributes, evaluation phases and lifecycle rules.
 - A **Driver** is physical code that performs the external interaction.
 - A **Binding** proves, before the VM and journal exist, which Driver object
   serves each active Connector Node.
 
-An inbound binding may reserve every passive listener of its family so a
+An inbound binding may reserve every passive listener governed by its Contract so a
 partial bind cannot expose a half-live service. This is fail-fast host
 provisioning, not causal execution: it cannot acknowledge a request, mint a
 fact, or perform an outbound effect. Any arrival in the short pre-Worker gap
@@ -24,7 +28,8 @@ remains pending under the Driver's ordinary finite capacities.
 
 No Rust crate name, Cargo feature, library path, Host, Worker or concrete
 Driver version enters the semantic plan. The meeting key is the canonical
-contract id, for example `rastok/file@1`.
+Contract id, for example the v16 target `rastok/file@2` (the currently shipped
+v15 implementation still binds `rastok/file@1`).
 
 ```text
                          compile time
@@ -42,7 +47,7 @@ contract id, for example `rastok/file@1`.
        │                          │                                │
        └─ DriverManifest           │                      ┌─────────┴─────────┐
           (data only)              │                      │                   │
-                                                   inbound facts       outbound intents
+                                                   inbound facts       committed outbound intents
                                                            │                   │
                                                            └──── VM + journal ┘
 
@@ -55,12 +60,13 @@ contract id, for example `rastok/file@1`.
 ## Two roles, three exchange shapes
 
 `InboundConnectorDriver` retains and proposes one bounded external arrival at
-a time. It does not mint root envelopes: sequencing, routing, admission,
-identity and journal commit remain runtime authorities. The runtime answers
+a time. This world-originated fact enters the Connector instance's ordinary
+mailbox only after INBOUND admission. The Driver does not mint root envelopes:
+sequencing, routing, admission, identity and journal commit remain runtime authorities. The runtime answers
 accepted only after commit, pending without a callback under pressure, or a
 portable rejection. A proposal also names the exact Connector Node that owns
 its source output through its single `InboundEnvelopeProvenance` authority.
-Registry binding proves that path belongs to the family; the VM proves the
+Registry binding proves that path belongs to the Contract; the VM proves the
 output row. An App-boundary injection remains a separate explicit API
 category, never a provenance-string heuristic.
 
@@ -84,7 +90,10 @@ Driver never manufactures a mailbox delivery or writes a causal record.
 `CallConnectorDriver` prepares/starts calls and reports correlated typed
 completions; `SessionConnectorDriver` prepares/starts an opening and its
 individual writes, then reports correlated open/write/terminal observations.
-Neither writes records or manufactures scheduler outcomes such as timeouts.
+A correlated result for an existing outbound exchange is not a second
+world-originated INBOUND root: it settles the already committed obligation and
+then enables the Connector's ordinary core-owned transition. Neither Driver
+writes records or manufactures scheduler outcomes such as timeouts.
 
 A contract may require either role or both. A both-role factory returns one
 bound object exposing both views over shared protocol state; registering two
@@ -106,7 +115,7 @@ fold plus two-phase accepted/pending/rejected admission. H5 completes the
 generic inbound Call half with its source-instance opening and close-once
 terminal transaction, then attaches ack/respond H1/H2/H3 Drivers. H5.2's
 direct-lineage response return includes exact pre-commit selection for a keyed
-source and consume-only orphan handling. H6 attaches both WebSocket families
+source and consume-only orphan handling. H6 attaches both WebSocket Contracts
 to the existing Session view. None adds `DuplexConnectorDriver` or makes the
 VM aware of HTTP or WebSocket.
 
@@ -155,8 +164,8 @@ Hyper/Rustls, `hosted-http3` supplies quiche/BoringSSL,
 `hosted-websocket` supplies Tungstenite plus its H1/H2 transport, and
 `hosted-network` combines them. `connectors::assembly::hosted_registry` is the
 one shipped composition function: Process is always present, File requires an
-explicit physical root, and each network family follows those linked
-capabilities. A missing family refuses during global binding before VM or
+explicit physical root, and each network Contract follows those linked
+capabilities. A missing Contract refuses during global binding before VM or
 journal construction. No library type leaves `connectors/network`, enters a
 plan, or enters `rastok-core`. HTTP/1.1 Upgrade and HTTP/2–3 Extended CONNECT
 are separately proved physical adapters over the same Session protocol; the
@@ -166,13 +175,13 @@ H4 is the first live consumer of this seam. The hosted HttpClient uses H1
 origin-form requests, a pooled multiplexed H2 sender and verified quiche H3
 while preserving one semantic request descriptor and one Call completion
 shape. Request/response bodies and headers are finite, and the selected wire
-version appears only in `meta.ext.http_version`. The flat family module
+version appears only in `meta.ext.http_version`. The flat contract-specific module
 `connectors::http_client` owns semantic request binding; the private
 `connectors::network::http_client` owns sockets and protocol engines.
 
 H5.1 is the first live inbound consumer. The flat
 `connectors::http_server` module resolves the complete ack-mode listener and
-route family before a socket opens; private `network::http_server` owns Hyper,
+route contract before a socket opens; private `network::http_server` owns Hyper,
 Rustls, connection/stream permits and byte reservations. HTTP/1.1 and HTTP/2
 both retain the request until the VM answers the same proposal. Only an
 accepted-after-commit decision permits 202, and the fixed terminal observation
@@ -186,29 +195,30 @@ same `SessionConnectorDriver` fold over H1 Upgrade, RFC 8441 and RFC 9220.
 Opening, each write and terminal publication are separately correlated by
 journal-derived `SessionRef`/`SessionWriteRef`; pending work stays within the
 ordinary mailbox bound. A server object owns a multi-session table, while a
-client Node instance owns at most one active connection. The family modules
+client Node instance owns at most one active connection. The contract-specific modules
 own settings and portable outcomes; private `network::websocket` owns sockets,
 handshakes, fragmentation, control frames and transport progress.
 
-H4.1 makes the header boundary contributor-facing and typed. A family sheet
+H4.1 makes the header boundary contributor-facing and typed. A Contract sheet
 declares well-known request fields in the sparse `headers` struct and leaves
-extensions in `custom_headers: map<text,array<text>>`; the family binder must
+extensions in `custom_headers: map<text,array<text>>`; the Contract binder must
 combine and validate them before OUTBOUND open. Exact peer response bytes stay
 in `meta.ext.http_headers`, while valid standard observations such as
 `content_type: media_type` receive their typed projection. Shared modules are
 named after the responsibility they own (`websocket_protocol`, `network`), not
-after the vague fact that several families happen to use them.
+after the vague fact that several Contracts happen to use them.
 
 The model covers the intended catalogue without new role kinds:
 
-| Family | Typical role |
+| Contract | Typical role |
 |---|---|
 | `Process(job)`, `File(read/replace)`, HTTP client, LLM, database call | outbound call |
 | HTTP server | inbound call |
 | Timer, Calendar | inbound event |
 | WebSocket client/server, queue consumer/producer, future `File.watch` plus writes | both-role session, when one contract really shares one protocol state |
 
-Whether `File.watch` widens `rastok/file@1` or becomes a separate contract is
+Whether `File.watch` widens File's Contract again or becomes a separate
+contract is
 deliberately unresolved; the role model does not decide contract versioning.
 
 ## The contribution path
@@ -216,7 +226,12 @@ deliberately unresolved; the role model does not decide contract versioning.
 ### 1. Publish the Contract
 
 Add or extend one `ConnectorContract` sheet and give it one canonical
-`ConnectorId`. Declare exact roles, exchange shape and all effective ports.
+`ContractId` (named `ConnectorId` in the current v15 Rust API until R3).
+Declare exact roles, exchange shape and all effective ports.
+Under v16, also declare application profile, frame cardinality, terminal cases,
+effect-visibility stage, and productibility evidence. These fields are what
+move the six shipped Contracts to `@2`; removing implicit `unwired` policy does
+not erase the old `@1` meaning.
 Attribute defaults, domains and their latest evaluation phase belong to the
 sheet; a Driver never chooses a semantic default.
 
@@ -239,7 +254,7 @@ than to Driver code or graph identity.
 
 ### 2. Separate pure exchange protocol from the effect
 
-Put the family under `crates/rastok/src/connectors/<family>/`. Binding resolves
+Put the Connector implementation under `crates/rastok/src/connectors/<connector>/`. Binding resolves
 and validates every plan/boot/instance fact before external work. Call-time
 settings arrive as typed values (the plan names this evaluation site
 `Invocation`). Pure request preparation produces the exact
@@ -278,11 +293,11 @@ application acknowledgement.
 Implement `ConnectorDriverFactory` with the exact id and roles. `bind` may
 validate plan facts and allocate local state, but it must not observe or mutate
 the external world or launch work. `RuntimeBindings::try_new` calls each
-required family factory once before execution and rejects missing, incomplete
+required Contract factory once before execution and rejects missing, incomplete
 or lying implementations.
 
 Static builds explicitly construct the desired `DriverRegistry`. Minimal,
-embedded and full standalone binaries may therefore link different families
+embedded and full standalone binaries may therefore link different Connector implementations
 without changing the plan model or adding VM branches.
 
 The shipped standalone CLI is one such assembly: `rastok run` always registers
@@ -302,30 +317,30 @@ call or session profile and provide:
 
 A session additionally proves open/close exactly once, bidirectional message
 correlation, bounded pressure, post-exit silence, and recovery without blind
-message replay. Fragmentation and control frames are family integration tests,
+message replay. Fragmentation and control frames are Contract integration tests,
 not application outputs. An event profile proves sequence/admission and has no
 fabricated completion or per-event exit.
 
-Add family-focused integration tests for physical behavior the generic battery
-cannot force. A new family is not complete merely because its happy path runs.
+Add Contract-focused integration tests for physical behavior the generic battery
+cannot force. A new Connector and its Contract are not complete merely because their happy path runs.
 
 ### 6. Prove the Lab twin
 
-Register a mock factory under the same id and roles. Reuse the family's pure
+Register a mock factory under the same id and roles. Reuse the Contract's pure
 request preparation and scheduler-completion projection. Script only the
 external outcome after the journal has opened the call. Prove malformed mock
 outputs fail the ordinary resolved-port gate and that adding Lab source changes
 neither semantic hash nor validated plan.
 
-Put the pure scripted-protocol binder beside the real family module. The Lab
-registry composes these family-owned binders; it must not grow a parallel
+Put the pure scripted-protocol binder beside the real contract-specific module. The Lab
+registry composes these Contract-owned binders; it must not grow a parallel
 string match that re-implements the Connector catalogue.
 
 ### 7. Prove composition
 
-Bind the family alone, in a reduced build that intentionally omits it, and
-beside at least one unrelated family. The combined graph must need no concrete
-family match in the VM. Replaying an already closed call must never repeat the
+Bind the Contract alone, in a reduced build that intentionally omits it, and
+beside at least one unrelated Contract. The combined graph must need no concrete
+Contract match in the VM. Replaying an already closed call must never repeat the
 external observation or effect.
 
 ## Static builds and future plugins

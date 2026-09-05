@@ -13,7 +13,7 @@ use crate::boundary::{
     InboundCallTimeout, InboundCallTimeoutStart, InboundConnectorDriver, InboundDecision,
     InboundProposal, InboundProposalRef,
 };
-use crate::connector::{ConnectorId, ConnectorRoles};
+use crate::connector::{ConnectorRoles, ContractId};
 use crate::plan::ValidatedExecutionPlan;
 #[cfg(feature = "hosted-http12")]
 use crate::plan::{AttrSetting, NodeExecution};
@@ -279,11 +279,11 @@ impl InboundCallConnectorDriver for PassiveInbound {
 }
 
 struct HttpServerLabFactory {
-    id: ConnectorId,
+    id: ContractId,
 }
 
 impl super::ConnectorDriverFactory for HttpServerLabFactory {
-    fn connector_id(&self) -> &ConnectorId {
+    fn connector_id(&self) -> &ContractId {
         &self.id
     }
 
@@ -329,7 +329,7 @@ impl super::BoundConnectorDriver for PassiveInbound {
 
 pub(crate) fn lab_factory()
 -> Result<Box<dyn super::ConnectorDriverFactory>, super::DriverFactoryError> {
-    let id = ConnectorId::parse(crate::connector::HTTP_SERVER_CONNECTOR_ID)
+    let id = ContractId::parse(crate::connector::HTTP_SERVER_CONNECTOR_ID)
         .map_err(|error| super::DriverFactoryError::new(error.to_string()))?;
     Ok(Box::new(HttpServerLabFactory { id }))
 }

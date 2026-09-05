@@ -1,9 +1,10 @@
 # Delivery Semantics — the journal, the transaction, and the boundary
 
-> **Status:** normative — under review.
+> **Status (2026-09-05): normative, including the v16 target under
+> D-2026-09-05-1.**
 > Companion to [envelope.md](envelope.md) (identity ; its §7 journal stub is
-> filled by §6 below) and [execution-model.md](execution-model.md) (the node
-> transaction, ordering, the dated-events queue).
+> filled by §6 below) and [execution-model.md](execution-model.md)
+> (Executor/manager transactions, ordering, and the dated-events queue).
 > Reference simulations 3–4 exercise Loop retry × outbound WAL and saga
 > compensation × crash recovery.
 > D-2026-08-25-1 adds sessions in §4.5. H1 makes their generic causal
@@ -24,9 +25,10 @@ durability scope ?**
 
 ## 1. The unit of commit — the transaction record
 
-A [node transaction](execution-model.md) (one triggering envelope → the
-matched handler run to completion) commits **atomically as one journal
-record** :
+An [Executor or temporal-manager transaction](execution-model.md) commits
+**atomically as one journal record**. Operator transitions use Dispatch;
+Connector transitions use their Contracts and typed Driver activations;
+manager transitions consume durable Extension commands:
 
 ```
    transaction record = CAUSAL CORE + OBSERVATION ANNOTATIONS
@@ -38,6 +40,7 @@ record** :
                                          provenance DAG's other half),
                    state delta,
                    emissions            [(port, emission_index, id, envelope)]
+                   manager commands     (produced / consumed, when present)
                    routed targets       (instance references reserved before
                                          this commit)
                    parent instance      (on a non-root l:start only)
@@ -55,8 +58,9 @@ record** :
    makes two-mode comparison a real, checkable operation.
 ```
 
-Delivery is **post-commit and journal-driven** : emissions reach target
-mailboxes only after the record is durable (per scope, §6). The two crash
+Delivery and Driver effects are **post-commit and journal-driven**: emissions
+reach target mailboxes and effect commands reach Drivers only after the record
+is durable (per scope, §6). The two crash
 worlds close cleanly :
 
 - **Crash before commit** → the transaction never existed ; the input is
@@ -121,8 +125,9 @@ Three accumulations, three answers — nothing can grow without limit :
    Backpressure changes **pacing only, never semantics** — arrival orders
    are journaled as they happen ; the journal-relative contract is
    tempo-insensitive. Window sizes and lag bounds are **runtime
-   configuration, not DSL vocabulary** ; the deferred `RateLimiter`
-   aspect is the candidate explicit per-node policy knob.
+   configuration, not DSL vocabulary**. A future authored rate policy must
+   pass the Extension admission test or remain an ordinary deployment knob;
+   no `RateLimiter` category is reserved.
 3. **Disk — pruned below the LIVING low-water mark.** A
    delivery-cursor-only rule is unsafe because it could destroy records
    still required by live obligations:
@@ -277,14 +282,14 @@ Stripe-semantics rule) :
   expression cannot name both : against a key-deduping partner, a
   compensation reusing the forward key is deduplicated INTO the forward call
   (the release never executes ; the fold reports a clean `rolled_back`).
-  Rule : an inline `on compensate` on a Connector whose forward path declares
-  `idempotency_key` **must declare its own** (`E-COMPENSATE-KEY`,
-  [effects-and-sagas.md §3.2](effects-and-sagas.md)) — the taught norm names
-  the inverse operation (`…/release`).
+  A future compensation Contract whose forward path declares
+  `idempotency_key` must declare a distinct inverse-operation key. V16 has
+  no `on compensate` handler; [effects-and-sagas.md](effects-and-sagas.md)
+  reserves this requirement for the Saga decision.
 
   What remains mandatory: an `idempotency_key` on every
-  `irreversible`. This rule also governs [loop.md](loop.md) §7.3/§8
-  and [aspects.md](aspects.md) §7.4.
+  `irreversible`. Loop recurrence is additionally constrained by
+  [loop.md §11](loop.md).
 
 ### 4.4 Recovery — a triage, not a gamble
 
@@ -309,8 +314,9 @@ queue by the same fold that rebuilds state.** Every dated obligation is
 derivable from (journal, state): an open call's REMAINING budget (its
 arming `t` annotation + `timeout`), a buffered join half's `within` deadline
 (its buffering annotation + the window), a live instance's lifetime (last
-admission + `idle`, creator + `fixed`, or epoch-aligned tumbling arithmetic), an open saga's
-`Saga.timeout` (creator record + budget), a Loop's pending delayed re-entry.
+admission + `idle`, creator + `fixed`, or epoch-aligned tumbling
+arithmetic), and a Loop's produced/consumed command fold plus pending delayed
+re-entry.
 At restart each obligation is re-armed for its remainder ; obligations
 already past **fire immediately, in date order** — a call whose budget
 expired during the outage delivers its `TimeoutExpired` late by
@@ -424,33 +430,37 @@ than creating a second terminal. HTTP/1.1 Upgrade, RFC 8441 and RFC 9220 differ
 only below this fold.
 
 
-## 5. Unwired ports — one typed model, explicit policy
+## 5. Explicit dispositions and productibility
 
-Outputs do not acquire gravity from their name. Every resolved output
-port carries an `UnwiredPolicy` in the validated plan:
+Outputs acquire no runtime meaning from their name. Each possibly productible
+output case has at least one explicit disposition in the validated plan:
 
-- `RequireWire`: leaving it unwired emits `W-UNWIRED-OUTPUT`; if the warning
-  is accepted, the transaction emission remains a journaled/observable fact
-  but creates no downstream delivery;
-- `RootSink`: if no edge claims the emission, the VM additionally publishes
-  it at the root observation sink.
+- a physical destination;
+- the current Graph boundary output, including an App public termination;
+- a temporal-manager command;
+- `nothing`.
 
-Forwarding to a boundary and explicit discard are ordinary topology
-(`node.port -> .named` and `node.port -> nothing`), not extra policy variants.
-This keeps routing visible in the edge table instead of hiding it inside a
-port declaration.
+Missing disposition is recursive `E-UNWIRED-OUTPUT`, including a nested
+Graph boundary and a particular uncovered union case. A deliberate discard is
+written `source -> nothing`; it consumes without backpressure. The same case
+cannot select `nothing` and a real destination.
 
-The compiler desugars defaults from the node contract into this data; the
-VM never compares a port name with `"err"` or `"exit"`. Ordinary
-application outputs default to `RequireWire`. Standard Connector tables
-state their diagnostic/exit policy explicitly. Thus `err` and `exit` remain
-useful conventions without becoming second emission or typing mechanisms.
-The answer to “where did this output go?” is always in the resolved plan.
+An output is exempt only when impossibility is re-derived by the core
+validator from reachable Dispatch leaves, structure, closed narrowing, the
+resolved Contract cardinality, or whole-Graph inaccessibility. Unknown remains
+possible. A declared impossible output receives `W-DEAD-OUTPUT`; an
+inaccessible Graph receives `W-DEAD-GRAPH`. A Driver which nevertheless
+produces an impossible port or case raises `ContractViolation` before
+publication.
 
-Inputs keep their existing rule: a declared, required input that is
-   never fed = dead handlers = **compile warning** (work-in-progress graphs
-   are legitimate) ; a `?`-marked optional input may stay unwired silently
-   (its handlers simply never fire).
+`RootSink`, `UnwiredPolicy`, and name tests for `err` or `exit` have no
+v16 meaning. Each emission is observed once at its source. Crossing the App
+boundary feeds `vm.outputs()` without a duplicate emission or anonymous
+observation.
+
+A required input which can never be fed receives `W-DEAD-INPUT`. A missing
+return half required by an inbound Call `respond` profile is an error because
+it would strand an already-admitted protocol obligation.
 
 
 ## 6. The journal — three record types (fills envelope.md §7)
@@ -482,6 +492,12 @@ traces and replay — an index, not history) :
         open { key, digest, t } → closed (response XOR timeout) | discarded
 ```
 
+World-originated Driver facts use INBOUND. A typed response correlated with an
+already-open outbound Call or Session write does not create another INBOUND
+root; it settles that existing obligation and supplies a Connector
+transaction. Loop `CommandProduced` and `CommandConsumed` are append-only
+fields/subforms of TRANSACTION records, not fourth and fifth record types.
+
 - **Envelopes are stored in the canonical storage form** (envelope.md §5) :
   `meta` Avro, `data` tagged-bytes **lazy** — no re-encoding, no second
   format. Immutability pays again : parent and child sharing the same `data`
@@ -499,84 +515,32 @@ traces and replay — an index, not history) :
 | Crash-restart, same host | ❌ lost — **at-most-once across the crash : loss, never doubling** (no journal → no retry → no double-execution) | ✅ full recovery : transactions, cursors, outbound triage (§4.4) | ✅ idem |
 | Host loss | ❌ | ❌ | design intent: another host resumes under the clustered contract |
 | Retention | RAM cap | local cap + per-App override | pruning below the low-water mark + retention **policy** (audit, replay) |
-| Sagas | 💥 **not in the domain** (§7.3) | ✅ | design intent: full provenance across hosts |
+| Sagas | future gate (§7) | future gate | future gate |
 | `irreversible`/`compensable` connectors | ⚠️ compile warning : guarantees are process-lifetime | ✅ | ✅ |
 
 
-## 7. Sagas across the process lifecycle
+## 7. Saga boundary in v16
 
-### 7.1 Saga state is a fold, not a fourth record type
+Saga remains a named future Extension. V16 does not admit `: Saga`, does not
+define `Saga.timeout`, and has no `on compensate` trigger. In particular,
+this document must not manufacture an executable rollback fold while the
+command, acknowledgement, reverse order, terminal result, and recovery
+protocol are unsettled.
 
-The saga's lifecycle (`open → committed / rolling_back → rolled_back /
-rollback_failed`) is **computed from the records of its scope** :
+The retained direction is narrow:
 
-```
-   scope entered      = the instance-creating transaction record   → open
-   steps 1..k sealed  = their transaction records                  → open, k sealed
-   selected outcome reaches `Saga.rollback`                        → rolling_back
-   compensations sent = the saga node's transactions (l:compensate)→ rolling_back, j/k done
-   compensations acked= their transaction + outbound records         → rolled_back
-   a compensation exhausted its Loop fuel                          → rollback_failed
-```
+- Saga state will be a fold of the existing causal journal, not a fourth
+  record type or manager-owned mutable database;
+- `effect = compensable` will contribute a versioned Contract compensation
+  contract, not DSL code inside a Connector;
+- `Saga.compensate` will expose a closed union of compensable steps from a
+  Saga Graph;
+- every inverse effect will have a distinct stable operation identity;
+- local-or-stronger durability is expected, but its exact admission rule
+  belongs to the independent Saga decision.
 
-The saga manager stores nothing — it **folds the journal**. (This is
-Temporal's architecture, converged on independently : Event History ↔
-journal, deterministic replay ↔ the fold, stateless worker ↔ recovery.)
-
-### 7.2 Recovery = fold + outbound triage + resume
-
-```
-   ① fold the journal            → the exact state : « rolling_back, 1..j done »
-   ② open outbound records         → the §4.4 triage : recall same key / OutcomeUnknown
-   ③ resume the fold where it was : advance remaining steps, OR continue
-      compensations j+1..n        (idempotent on replay : same derived keys)
-   ④ Saga.timeout re-armed from the journal
-      (opening = the creator record's committed_at — the budget runs on journal time)
-```
-
-A crash *during* rollback is the same mechanics — resume at j+1. No new
-mechanism anywhere ; this is what §§1-6 compose to.
-
-### 7.3 `none` does not exist in a saga's durability domain
-
-Not a forbidden combination — a **domain restriction** : within a `: Saga`
-scope, `durability` ranges over **{ local, global }**. `none` is not a value
-there, the way `on compensate` is not a handler of a pure Operator. A saga is
-**by definition** the construct whose life exceeds the process (long-running,
-compensation guaranteed *whatever happens*) ; a durability that dies with the
-process is not a *weaker* saga durability — it is **not one at all** :
-executed steps would become orphans nobody can compensate.
-
-A saga whose *effective* durability resolves to `none` is a compile error at
-the saga declaration. Effective durability is resolved in this order:
-
-```text
-Node declaration > closest parent Graph > App > none
-```
-
-An explicit child declaration may strengthen or weaken its inherited value.
-A weakening emits `W-DURABILITY-WEAKENED` and appears in the coverage report.
-
-```
-   error [E-SAGA-DURABILITY] : `none` is not a durability of a saga —
-     the compensation guarantee requires a journal that outlives the process.
-     `payment : Saga` resolves to durability = none.
-       fix : set durability = local (a file — still serverless) or global ;
-             or remove `: Saga`.
-       note : simulation tests sagas with no disk at all (the fixture IS the journal).
-```
-
-Precedents agree : Temporal has no per-workflow durability opt-out — no
-history, no workflow ; its in-memory mode is a dev-server store choice, not
-a semantic mode. The consistency is also internal : `compensable` already
-*requires* `on compensate`, `irreversible` already *requires*
-`idempotency_key` — aspects and effects are gated on their preconditions at
-compile time. This closes
-[effects-and-sagas.md](effects-and-sagas.md) §8.6/§8.7.
-
-Outside sagas, `irreversible`/`compensable` under `none` stay legal with a
-**once-per-app compile warning** (guarantees are process-lifetime ; loss,
-never doubling — a near-stateless dev router is legitimate).
+[effects-and-sagas.md](effects-and-sagas.md) owns the complete list of
+unresolved gates. Until they are decided, every Saga source form fails closed.
 
 
 ## 8. The guarantees, summarized
@@ -585,8 +549,8 @@ never doubling — a near-stateless dev router is legitimate).
 |---|---|
 | Inside the graph | **effectively-once observable** (at-least-once + derived-id dedup by cursor) |
 | At the boundary | at-least-once + byte-same idempotency key → effectively-once when the partner dedups ; `OutcomeUnknown` (loud) when nothing safer exists |
-| Across a crash, `durability ≥ local` | full recovery : cursors, outbound triage, saga fold |
-| Across a crash, `durability = none` | **at-most-once : loss, never doubling** ; sagas refused at compile time |
+| Across a crash, `durability ≥ local` | full recovery of currently specified cursors, state, Calls, Sessions, timers, and Loop r2 fold |
+| Across a crash, `durability = none` | **at-most-once: loss, never doubling** |
 | Ordering | FIFO per (edge × source instance reference); cross-edge = journal-relative (envelope.md §2.0) |
 
 
@@ -609,11 +573,10 @@ These triggers belong to the `l:` registry
   already reserves it).
 - **Group-commit / fsync tuning, window & lag bound defaults** — runtime
   configuration, implementation-validation territory.
-- **DLQ connector catalog** — `Memory` suffices for the reference examples ; the
-  app-root default sink is specified here, its configurable target is the
-  stdlib note.
+- **DLQ Connector catalog** — `Memory` suffices for reference examples;
+  every routing to it is explicit.
 - **Cross-app / cross-graph transactions** — reserved words only
-  (execution-model §1 naming rule) ; nothing wider than a node transaction
+  (execution-model §1 naming rule); nothing wider than an Executor transaction
   exists in the current contract.
 
 
@@ -625,21 +588,20 @@ contract:
 - **Reference simulation 3** (Loop retry × outbound WAL : the double-pay trap
   of §4.3 exercised both ways — stable key vs per-attempt key ; a crash
   between call and closure, resolved by §4.4) ;
-- **Reference simulation 4** (saga compensation × crash : fold reconstruction
-  mid-`rolling_back`, one `OutcomeUnknown` path, `Saga.timeout` re-armed) —
-  both hand-derived and consistent with every rule above.
+- **Future Saga simulation** remains gated until the independent Saga
+  decision; no current fixture may claim compensation recovery.
 
 
 ## 12. Related docs
 
 - [envelope.md](envelope.md) — identity recipe ; §7 (journal) now points
   here ; the `l:` registry.
-- [execution-model.md](execution-model.md) — the node transaction (§1
+- [execution-model.md](execution-model.md) — the Executor transaction (§1
   naming rule incl. reserved *graph/cascade transaction*), mailboxes,
   ordering, dated events, `timeout`/`on_timeout`, `JoinExpired`.
-- [effects-and-sagas.md](effects-and-sagas.md) — effect classes, `on
-  compensate`, saga lifecycle ; §8.6/§8.7 closed by §7.3 above.
-- [loop.md](loop.md) — retry composition and the §7.3/§8 key rule.
-- [aspects.md](aspects.md) — aspect-level effect rules.
+- [effects-and-sagas.md](effects-and-sagas.md) — effect classes and future
+  Saga requirements.
+- [loop.md](loop.md) — finite recurrence and repeat-safety rules.
+- [extensions.md](extensions.md) — Extension ownership and validation.
 - [M1.6 HTTP/WebSocket backlog](../architecture/m1.6-http-websocket-backlog.md)
   — the H1 allocation that makes §4.5 executable.

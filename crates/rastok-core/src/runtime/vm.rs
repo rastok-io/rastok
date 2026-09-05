@@ -76,7 +76,7 @@ pub enum VmError {
         /// Graph carrying the aspect.
         owner: OwnerPath,
         /// Closed unsupported aspect.
-        aspect: node::Aspect,
+        aspect: node::Extension,
     },
     /// An evaluation or engine fault. It is outside every graph port
     /// contract: the transaction commits nothing and supervision decides.
@@ -1414,7 +1414,7 @@ impl<'plan> Vm<'plan> {
                 owner
                     .aspects
                     .iter()
-                    .any(|aspect| aspect.aspect() == node::Aspect::Loop)
+                    .any(|aspect| aspect.aspect() == node::Extension::Loop)
             }),
             graph_version,
             scheduler: Scheduler::new(WORKER_MAILBOX_CAPACITY),
@@ -5955,7 +5955,7 @@ impl<'plan> Vm<'plan> {
                 self.plan.owners[owner.index()]
                     .aspects
                     .iter()
-                    .any(|aspect| aspect.aspect() == node::Aspect::Loop)
+                    .any(|aspect| aspect.aspect() == node::Extension::Loop)
             });
         let Some(owner) = owner else {
             return Ok(None);

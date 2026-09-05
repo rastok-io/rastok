@@ -1,5 +1,10 @@
 # Rastok — White Paper
 
+> **Model revision (2026-09-05).** Sections 2–3 describe the plan-v16 target
+> frozen by D-2026-09-05-1. Current binaries remain v15 while R3–R9 implement
+> it; no target capability is claimed executable merely because it is
+> described here.
+
 > **Integrate AI faster. Keep production calm.**
 >
 > **Rastok is the boxes-and-arrows paradigm, rebuilt as an engineering
@@ -12,7 +17,7 @@
 
 Rastok is an **open-source runtime and typed graph DSL for stateful,
 effectful integrations**. A graph connects existing services, models,
-tools, data, and business processes through three kinds of nodes:
+tools, data, and business processes through three Node declaration forms:
 
 ```text
 External world
@@ -41,12 +46,14 @@ External world
        External world
 ```
 
-An **Envelope** is the immutable message carried by an edge. An
-**Operator** transforms envelopes and may update graph state, but has no
-external side effects. A **Connector** is the explicit boundary where
-the graph reads or changes the external world. A **Graph** composes
-these nodes. In the Lab, controlled handlers replace the Connectors
-while the same Operators and the same checked graph continue to run.
+An **Envelope** is the immutable message carried by an edge. An **Operator**
+transforms envelopes and may update private semantic state, but has no external
+side effects. A **Connector** is the explicit boundary where the graph reads or
+changes the external world. Both share the Executor mechanics of mailboxes,
+transactions, journaled state and ordered emissions; their transitions come
+respectively from DSL Dispatch and a versioned Contract plus Driver events. A
+**Graph** is a passive scope that composes these nodes. In the Lab, controlled
+Drivers replace real Connectors while the same Operators and checked graph run.
 
 AI agents are a useful stress test: they combine long-lived state,
 external effects, variable cost, and probabilistic results in one
@@ -78,9 +85,9 @@ And for the reader who wants the model up front, in one formal
 sentence:
 
 > *Rastok is a strictly acyclic graph of typed Nodes whose logical instances
-> communicate through immutable envelopes, commit Node-local state and
-> effects through a causal journal, and are specifiable by executable
-> simulations.*
+> communicate through immutable envelopes, whose Executors and temporal
+> Extension managers commit through one causal journal, and whose external
+> world is replaceable by executable simulations.*
 
 Every word of that sentence is unpacked in §2–§6.
 
@@ -338,35 +345,34 @@ graph expense_approval : App {                     // `: App` marks the deployme
     output approval
     output rejection
 
-    on (request, decision)
-      where decision.data.approved
-      within duration("48h") {
-      approval = {
-        meta.ext.request_id = request.meta.ext.request_id   // a join picks explicitly; common fields merge (CommonOrAbsent)
-        data = { request_id = instance.key,
-                        amount     = request.data.amount }
+    on (request, decision) within duration("48h") match {
+      decision.data.approved => {
+        approval = {
+          meta.ext.request_id = request.meta.ext.request_id
+          data = { request_id = instance.key,
+                          amount     = request.data.amount }
+        }
       }
-    }
-
-    on (request, decision)
-      where !decision.data.approved
-      within duration("48h") {
-      rejection = {
-        meta.ext.request_id = request.meta.ext.request_id
-        data = { request_id = instance.key,
-                        amount     = request.data.amount,
-                        reason     = decision.data.reason }
+      _ => {
+        rejection = {
+          meta.ext.request_id = request.meta.ext.request_id
+          data = { request_id = instance.key,
+                          amount     = request.data.amount,
+                          reason     = decision.data.reason }
+        }
       }
     }
   }
 
   requests  -> decide.request                      // wiring is explicit and graph-level
   decisions -> decide.decision
+  requests.exit  -> nothing
+  decisions.exit -> nothing
   decide.approval  -> accounting
   decide.rejection -> rejection
   accounting.out -> nothing                        // reply discarded ON PURPOSE (explicit, or it won't compile)
-  // `decide.expired` carries JoinExpired. Its contract journals an unwired
-  // value; wiring or `-> nothing` can override that explicit policy.
+  accounting.exit -> nothing
+  decide.expired -> nothing                        // observed by Lab at its source, explicitly discarded
 }
 
 lab expense_approval {
@@ -424,8 +430,8 @@ and bounds the wait.** Note what is already visible:
   selects the Operator instance; the join `on (request, decision)` matches
   the two legs of the *same* expense automatically, whatever the arrival
   order.
-- **Business outcomes and technical outcomes remain distinct.** The two
-  guarded handlers emit `approval` or `rejection`. Missing input is not a
+- **Business outcomes and technical outcomes remain distinct.** One exhaustive
+  Dispatch emits `approval` or `rejection`. Missing input is not a
   business refusal: after 48 hours it becomes the typed `JoinExpired`
   case on `decide.expired`.
 - **The simulation drives the world.** The *called* system
@@ -509,7 +515,9 @@ graph agent_gateway : App {
   }
 
   teams_in -> sessions -> teams_out.in  // a Graph is a Node: wired by name
+  teams_in.exit -> nothing
   teams_out.out -> nothing              // delivery receipt discarded on purpose
+  teams_out.exit -> nothing
 }
 
 lab agent_gateway {
@@ -536,8 +544,8 @@ lab agent_gateway {
 ```
 
 The rule this example makes visible: **declaring is placing, key selection is
-cardinality, wiring is naming.** A `graph` is a Node like any other —
-`sessions` is declared once and wired by name. Because it has
+cardinality, wiring is naming.** A Graph is a passive Node scope—`sessions` is
+declared once and wired by name, without gaining a mailbox or handler. Because it has
 `instance.key`, the runtime materializes one graph instance for each
 distinct session key. Every child Node belongs to that graph instance.
 A child with its own `instance.key` adds an independently shardable address
@@ -714,28 +722,25 @@ That tree is semantic: it locates Graph boundaries, instance frames, private
 state and lifecycle. A compiler may flatten passive routing, but it may not
 erase an owner and later attempt to reconstruct containment from a path.
 
-Rastok recognizes exactly **three families of node**, sharing the same
-underlying structure:
+Rastok uses one closed structural hierarchy:
 
 ```
 Node
-├── Operator   — pure, event-driven computation inside the graph
-├── Connector  — reads from or writes to the external environment
-└── Graph      — composite Node, wired by name like any other Node
+├── Graph       — passive composite scope, wired by name
+└── Executor    — bounded atomic transition owner
+    ├── Operator   — transition authored as DSL Dispatch
+    └── Connector  — owns a Contract and crosses an external boundary
 ```
 
 An Operator reacts to envelope arrivals on its inputs, optionally reads
-and updates Node-local state in its current logical instance, and emits zero or more
-envelopes on its outputs. A Connector is a Node with extra
-**boundary attributes** (URL, path, command, codec, schedule, …) that
-describe how it interacts with the external world (HTTP, processes,
-files, databases, clocks, brokers). A Graph is a composite Node: its
-body contains Nodes and edges, and its declaration is its placement.
-
-The three families share the **same Node grammar**. Connectors add
-boundary attributes — addressing the external resource and binding it
-to a wire format — on top of what every Node has. Graphs add a nested
-topology.
+and updates its private `var` state, and emits zero or more envelopes. A
+Connector owns the same mailbox, transaction, semantic-state and ordered-
+emission mechanics, but its transition is defined by its versioned Contract
+and typed Driver events. Boundary attributes such as URL, path, command,
+codec, or schedule configure that Contract. A Graph contains Nodes and edges,
+owns instance/lifecycle scope, and never acquires an application transaction.
+An Extension may attach an orthogonal protocol such as App or Loop to any
+admissible Node.
 
 ### 2.1 The Envelope, its data, and the type system
 
@@ -808,115 +813,116 @@ routing therefore does not pay parse cost. The exact authority is
 
 ### 2.2 The shared Node shape
 
-Every Node, regardless of family, shares one declarative skeleton:
+Every declaration creates one **Node**, but Node has only two structural
+branches:
 
-```
-<family> <name> [: <annotation>] { <body> }
-
-family     : operator | connector | graph        (a graph instantiates by DECLARATION
-                                                   and wires by name ; the `: App` type
-                                                   marks the deployment entry graph ;
-                                                   mock, simulation-only, mirrors the
-                                                   same skeleton as a stand-in)
-annotation : [NodeType] [ + NodeAspect ... ] — the type, when written, is first;
-             ordinary Operators/Graphs default to `Operator`/`Graph`, while a
-             Connector's exact contract type is mandatory
+```text
+Node
+├── Graph       passive scope: typed boundary, children, wiring, lexical vals
+└── Executor    mailbox + semantic state + atomic journal transaction
+    ├── Operator    transition described by DSL Dispatch
+    └── Connector   owns one Contract; transition described by it and Driver facts
 ```
 
-These are three different facts. The declaration keyword fixes the structural
-**kind** (`Graph`, `Operator`, or `Connector`). Every Node has exactly one
-effective **type** (`App`, `Graph`, `Operator`, or an exact Connector contract
-such as `HttpClient`). It may additionally carry zero or more orthogonal
-**aspects** such as `Loop` or `Saga`. An aspect changes orchestration; it never
-stands in for the Node's type. The implementation vocabulary is
-`node::{Kind, Type, Aspect}`.
+This is why Operator and Connector deliberately have mailbox, ports,
+transactions, state deltas, ordered emissions and atomic commit in common.
+They differ in the provenance of their transition. An Operator may declare
+private `var`; a Connector's replayable state is the core-owned exchange and
+Contract fold, while its socket, process handle or pool remains reconstructible
+Driver state. A Graph owns address, instance, lifetime, Closing and containment,
+but no application mailbox, handler, `var` or transaction. Its lifecycle facts
+are controller records, not Graph application code.
 
-The port-declaration keywords are **`input`** and **`output`**; the names
-**`in`**, **`out`** and **`err`** are conventional, non-reserved spellings
-typed by the same mechanism as every other port. They acquire plan rows only
-when declared, handled, emitted or wired; an Operator has no mandatory
-`err`. A
-validated plan carries an effective type for all ports, whether inferred
-or explicitly pinned. For `Process`, the mapping is exact: `in` is stdin,
-`out` is stdout decoded by the selected codec, `err` is stderr bytes, and
-the additional `exit` output carries the tagged `ProcessExit`
-(`Exited`, `SpawnFailed`, `TimeoutExpired`, `DecodeFailed`, …). A
-non-zero exit is an `Exited` fact; graph policy decides what it means.
+The annotation after `:` has a closed meaning:
 
 ```rastok
-operator <name> [: <NodeType> + <NodeAspect> ...] {
-  input  <port> [: <type>]   // source annotation optional; effective type mandatory after validation
-  output <port> [: <type>]   // a single-in/out node just uses the defaults
+graph agent : App + Loop { ... }
+operator retry : Loop { ... }
+connector model : HttpClient + Loop { ... }
+```
 
-  var <field>: <type> [= <default>]    // optional state fields
+A Connector begins with exactly one versioned **Contract**. `App`,
+`Loop` and future `Saga` are **Extensions** attached to an owner. An Extension
+may contribute attributes, bindings, manager commands, admission constraints
+and—only when the protocol needs one—ports. Extension order is not semantic;
+incompatible contributions refuse instead of acquiring precedence. The
+Connector attribute `behavior = deterministic | probabilistic` keeps its name
+and is unrelated to Extension.
 
-  instance = { key = <expr> }         // optional; absence = singleton
-  lifetime  = { kind = <profile> ... } // optional; absence = persistent
+The port keywords are `input` and `output`. `in`, `out`, `err` and `exit` are
+conventional, non-reserved names resolved like every other port. Every used
+port has one effective type. An output which may be produced must have an
+explicit disposition: another input, a Graph boundary output, an Extension
+manager command, or `nothing`. A statically and independently re-derived
+impossible output needs no destination.
 
-  on start            { ... }          // logical instance starts lazily
-  on <trigger> [where …] [having …] [within …] [last …] { ... }   // see §2.3
-  on stop             { ... }          // logical instance has finished Closing
+Only Operators contain handlers:
+
+```rastok
+operator classify : Loop {
+  input in: Request
+  output accepted: Request
+  var seen: int = 0
+
+  instance = { key = data.tenant }
+  lifetime = { kind = idle ; after = duration("2h") }
+  Loop.fuel = 3
+
+  on in match {
+    data.valid => { seen = seen + 1 ; accepted = data }
+    _          => Loop.again
+  }
 }
 ```
 
-A Connector adds boundary attributes describing its bridge to the
-outside world; built-ins do not re-declare their ports (their type
-defines them):
+A Connector contains Contract attributes but no DSL handler or author-owned
+`var`:
 
-```
-connector <name> : <NativeType> {
-  <attr> = <value>           // e.g., url = "...", codec = json ; Connectors declare NO ports
-  on <trigger> { ... }       // the contract + codec resolve every typed port
+```rastok
+connector model : HttpClient {
+  url = "https://example.test/model"
+  codec = json
+  effect = idempotent
+  behavior = probabilistic
+  timeout = duration("10s")
 }
 ```
 
-A sub-graph is a Node too: **its declaration is its instance owner**. It is
-wired by name and may select keyed instances exactly like any other Node:
+A Graph exposes a boundary and wiring. It may carry `instance`, `lifetime`,
+`closing`, lexical `val` and Extensions, but executable behavior lives in its
+children or Extension manager:
 
-```
-graph <name> [: <GraphType> + <NodeAspect> ...] {
-  instance = { key = <expr> }         // optional; one Graph instance per key
-  lifetime  = { kind = idle ; after = duration("2h") }
-  val <field> = "..." + instance.key + "..."      // immutable instance context
-  ...                                  // operators / connectors / sub-graphs / wiring
+```rastok
+graph conversation : Loop {
+  input in: Request
+  output out: Answer
+  instance = { key = data.session_id }
+  Loop.fuel = 4
+
+  in -> model -> decide
+  decide.retry -> Loop.next
+  decide.answer -> out
 }
 ```
 
-Three categories of section:
-
-- **Declarative interface** (`input`, `output`, `var`, `instance`,
-  `lifetime`). **Ports
-  are implicit**: `on <name>` declares an input, an assignment
-  `<name> = …` declares an output, and `in`/`out`/`err` have conventional
-  directions — so a Node usually declares no ports at all. A conventional
-  port not used by the program does not exist in its effective table. `input` /
-  `output` are written only to *pin* a type/schema, or to document a
-  node with no handler (a saga) or a graph's public interface. `var`
-  holds state owned only by that Node; `instance.key` selects its logical
-  address and `lifetime` independently controls temporal closure.
-- **Active behavior** — the `on <trigger>` handlers (§2.3). Outputs are
-  assigned explicitly; **atomic multi-emit** uses tuple assignment
-  `(out, exit) = (e1, e2)`. A handler may emit nothing (pure state
-  update). There is no implicit yield.
-- **Connector boundary** — only on Connectors: flat attributes such
-  as URL/path/command, **codec** (the bytes↔value boundary cast,
-  §2.1), protocol, timeout, auth and retry policy.
+No public Rust `Executor` trait is implied. Executor is first a semantic
+category; shared concrete mechanics are consolidated only where they enforce
+this contract or serve a real second implementation.
 
 ### 2.3 Event-driven semantics — handlers as transaction guards
 
-A Node is an event-driven actor — *not* an FP function. A transaction is
+An Executor is an event-driven state machine—not an FP function. A transaction
+is
 
 ```
 transaction = (trigger, state_in) → (state_out, emissions)
 ```
 
-atomic (state delta and emissions commit together), and may emit zero
-or N envelopes on any combination of outputs.
-
-A handler is `on <trigger> [where …] [having …] [within …] [last …]`,
-plus the two lifecycle hooks `on start` / `on stop`. The trigger says
-*which* ports fire it; the optional clauses refine the transaction
-condition and bound the join state.
+atomic: consumption, semantic state delta, ordered emissions and durable
+manager commands commit together or not at all. An Operator obtains that
+transition from one `Dispatch` handler. A Connector obtains it from its closed
+Contract and a typed Driver event; the Driver never edits state or the journal
+directly. Graph has neither form.
 
 **Triggers.**
 
@@ -925,13 +931,23 @@ condition and bound the join state.
 | `on a`         | an envelope arrives on port `a`                                     |
 | `on (a, b, …)` | envelopes are present on all named ports (a **join**), zipped by arrival order within the owning Operator instance |
 
-OR across ports is expressed as **separate handlers** (`on a { }` /
-`on b { }`) — there is no `||` in a trigger.
+One Operator has at most one handler per trigger. OR across different ports is
+expressed by separate handlers; alternatives within one trigger belong to its
+`Dispatch`, using a closed or ordered-open `match`.
 
-**Refinements.** `where <pred>` is a predicate over the matched
-envelopes' content; `having count(p) >= k` is the reserved quorum (k-of-n)
-form. M1.4 R6 executes `where`, `within`, and `last`; `having` remains a named
-future gate rather than an inert accepted clause.
+**`where` has two deliberately different readings.** On one input it is a
+filter sugar: a false predicate consumes the envelope in an otherwise empty
+transaction, exactly like `match { P => body; _ => nothing }`. On a join it is
+an admission condition: false consumes no candidate, advances no cursor and
+commits nothing. `within` and `last` bound joins; `having` remains a named
+future gate. This asymmetry is explicit because filtering one event and
+matching a tuple solve different problems.
+
+`match expr { Case => ... }` is closed, disjoint and exhaustive for tagged
+unions, enums and bools. `match { predicate => ...; _ => ... }` tries pure
+predicates in source order. In both forms exactly one arm executes. Match is
+the dispatch of a block or arm, never control inserted after an emission or
+state mutation.
 
 **Join key = owner instance.** Every envelope reaches one logical instance of
 the Operator before it can enter the join buffer, so `on (a, b)` correlates in
@@ -988,14 +1004,13 @@ chosen the value (D-2026-08-10-2). Single-input handlers copy each
 zone from their one parent; `meta.ext.content_type` follows the
 payload, not the merge (D-2026-08-10-4).
 
-**Lifecycle.** `on start` fires when the first envelope is admitted to a new
-logical Node instance. A lifetime deadline or bare **`stop`** requests Closing
-of that current instance after the transaction commits. `on stop` runs last,
-after already admitted work and every required Connector terminal `exit` have
-been handled under the bounded Closing contract. There is no targeted
-`stop <name>`. To reset a `var` without ending its owner, assign it (`count =
-0`). Stopping a Graph also closes its live descendants inner-first; this is a
-lifecycle relation, not shared state.
+**Lifecycle.** Lazy `l:start`, `l:closing` and `l:stop` facts exist for every
+owner, including Graph, but only an Operator may author `on start` or `on
+stop`. A lifetime deadline or bare `stop` requests Closing after the current
+transaction commits. Contained Executors close inner-first; an Operator
+child's `on stop` may still route an emission through its siblings before the
+parent Graph's final `l:stop`. A Graph therefore has lifecycle without
+pretending to execute application handlers.
 
 **No implicit `on tick`.** `now()` may observe the fixed logical instant of an
 already-running handler, but it does not create a firing. When elapsed time
@@ -1044,10 +1059,10 @@ that timeline's one fixed value for the whole firing, and a declared `Timer`
 turns selected instants into ordinary INBOUND roots. Neither Operators nor
 mocks read the host clock. A real Connector may observe time in an external
 system — for example, a Postgres query may call `NOW()` — but its controlled
-Lab handler must return a declared outcome instead of repeating that external
+Lab Driver script must return a declared outcome instead of repeating that external
 observation.
 
-### 2.4 Node-local state
+### 2.4 Executor state and Operator-local `var`
 
 State is **read-modify-write, imperatively**, within a transaction. A
 persistent field `var x: T = default` is read by its bare name (`x`)
@@ -1103,11 +1118,12 @@ proceeds imperatively. The synchronous-dataflow `pre` of Lustre/SCADE
 applies at the **inter-transaction** boundary — each transaction is one cycle —
 not *inside* a transaction (see §9.1).
 
-**One owner, no remote reads.** A `var` belongs exclusively to the Node that
-declares it and is visible only in that Node's handlers. A child Node cannot
-read an ancestor Graph's mutable cell, and sibling Nodes cannot address one
-another's cells by name. Keying a Graph serializes its own mailbox; it does not
-turn the whole traversal of an envelope into a graph transaction.
+**One owner, no remote reads.** An authored `var` belongs exclusively to the
+Operator that declares it and is visible only in that Operator's handlers. A
+child Node cannot read an ancestor's mutable state, and sibling Nodes cannot
+address one another's cells by name. Keying a Graph creates a logical
+containment frame; it gives no application mailbox or transaction to the
+Graph. Contained Executors remain the serialization points.
 
 Shared mutable behavior is modeled as an explicit stateful Operator with typed
 command/result ports. Operations that must be atomic over the same state live
@@ -1131,7 +1147,7 @@ operator account {
 ```
 
 This removes nominal action at a distance and gives one ACID unit everywhere:
-the Node transaction. Across Nodes, composition is envelopes plus the causal
+the Executor transaction. Across Nodes, composition is envelopes plus the causal
 journal, not shared memory.
 
 #### 2.4.1 Values and state: `val` / `var`
@@ -1147,7 +1163,7 @@ not by the keyword.
 | `val` | Graph-level | no | current Graph instance; lexically visible to descendants and may derive from `instance.key` |
 | `val` | Operator/Connector-level | no | current Node instance; private to that Node |
 | `val` | Inside a handler | no | One transaction (handler-local binding) |
-| `var` | Node-level | yes (read-modify-write per transaction) | current logical Node instance; visible only in that Node's handlers |
+| `var` | Operator-level | yes (read-modify-write per transaction) | current logical Operator instance; visible only in that Operator's handlers |
 
 ```rastok
 graph my_app : App {
@@ -1170,9 +1186,9 @@ operator pricing {
 
 A keyed Graph may hold **graph-level `val`s** derived from `instance.key`
 (for example a session's home directory). Descendants may read those values
-because they are immutable lexical context. A Graph `var`, if declared, is
-still private to the Graph's own handlers; lexical containment never grants a
-mutable read to a child.
+because they are immutable lexical context. A Graph cannot declare `var` or a
+handler; mutable state belongs to contained Operators, while a Connector's
+Contract/exchange state is core-owned and journal-derived.
 
 These scopes also define evaluation phase. In the target model, Unit/App boot
 `val`s are resolved once for the deployment. The M1.8 A4 executable subset is
@@ -1306,13 +1322,12 @@ Operators and Connectors look the same syntactically but differ in
 nature:
 
 - **Operators are the pure computation primitive.** The
-  `operator <name> { … }` form expresses any computation node. Reducer,
-  Aggregator, Window, Joiner, Router, Dispatch, and Fanout are guide names for
-  ordinary combinations of `var`, `instance.key`, `lifetime`, bounded joins,
-  conditional emission, Graph containment, and atomic multi-emit. They are
-  not distinct Node types. A genuinely different pure engine such as a pinned
-  jq or Wasm executor may become an Operator NodeType only after its own
-  executable contract and transport exist.
+  `operator <name> { … }` form expresses a transition using Dispatch.
+  Reducer, Aggregator and Joiner are descriptive patterns over `var`,
+  `instance.key`, lifetime and bounded joins—not Node categories. Routing,
+  dispatch and fan-out name real language operations rather than nominal
+  pseudo-types. A future pinned jq or Wasm transition must fit this ontology
+  without reviving a `NodeType` axis.
 - **Connectors are runtime primitives.** They bridge the graph to
   the outside world through Driver code (HTTP libraries, process
   spawning, database drivers, file I/O). A new Connector requires a
@@ -1329,14 +1344,14 @@ compute, route, mutate state inside the graph, but they do not write to the
 outside world. The exact effect classes, compensation rules and Saga behavior
 belong to [docs/spec/effects-and-sagas.md](docs/spec/effects-and-sagas.md).
 
-**Aspects** are orthogonal orchestration protocols composed after the optional
-NodeType in the `:` annotation. The initial specified aspects are `Saga` and
-`Loop`; the generic mechanism is in
-[docs/spec/aspects.md](docs/spec/aspects.md), with the aspect-specific
-contracts in [effects-and-sagas.md](docs/spec/effects-and-sagas.md) and
+**Extensions** attach orthogonal protocol to one Node. `App` marks the public
+root Graph; `Loop` owns finite temporal recurrence; `Saga` is the next named
+direction. Their generic admission and composition rules live in
+[docs/spec/extensions.md](docs/spec/extensions.md), with the specific contracts
+in [effects-and-sagas.md](docs/spec/effects-and-sagas.md) and
 [loop.md](docs/spec/loop.md).
 
-### 2.6 Topology: static DAG with bounded dynamic dispatch
+### 2.6 Topology: static DAG with bounded case routing
 
 Rastok's topology is a **strictly acyclic directed graph** declared in
 the DSL at compile time. There are no implicit back-edges. Every
@@ -1357,40 +1372,39 @@ This is non-negotiable. The static DAG is what enables:
 - **Workflow soundness** — properties like proper completion and
   absence of deadlocks become decidable.
 
-Dynamism is recovered through bounded ordinary forms that preserve static
-analyzability:
+Dynamism is recovered through finite forms whose possible destinations remain
+static:
 
-| Pattern | Selection mode | Topology contract |
-|---|---|---|
-| Conditional emission (“Router”) | Runtime choice among ordinary output ports | Every possible output port is statically declared; the generic source form remains a named gate |
-| Keyed Graph (“Dispatch”) | `instance.key` selects a logical Graph instance | The Graph body and key expression are statically declared |
+- Operator `Dispatch` selects exactly one checked match arm;
+- an edge `match` selects destinations by the closed tag of the unchanged
+  source value;
+- `instance.key` selects a logical instance of a statically declared Node;
+- a destination set `{ a; b }` creates one envelope and N delivery references;
+- multi-emission `(a, b) = value` creates two ordered envelopes in one atomic
+  transaction. The value is evaluated once, but the envelope identities are
+  distinct because the output ports are distinct.
 
-Broadcast to multiple outputs is expressed inline by the atomic
-multi-emit statement `(a, b, c, d) = x` — the same envelope is
-delivered on every listed output port. This subsumes a dedicated
-`Fanout` alias and composes naturally with conditional logic without
-requiring an upstream split.
+These last two forms are intentionally not aliases. A new subscriber to one
+source emission must not change that envelope's identity, while two authored
+emissions have an explicit deterministic order.
 
-The Router name grants no hidden runtime. Until the general conditional
-multi-output statement is specified, writing `: Router` refuses. Once that
-surface lands, it will choose only among ordinary declared output ports and
-lower to ordinary emissions.
-
-The Dispatch pattern is already the keyed instantiation of a declared
-sub-graph:
+A keyed Graph remains an ordinary declared scope:
 
 ```rastok
 graph conversation {
+  input in: Request
+  output out: Answer
   instance = { key = meta.app.session_id }
   lifetime = { kind = idle ; after = duration("2h") }
-  . -> classify -> answer -> .
+  in -> classify -> answer -> out
 }
 
 requests -> conversation -> responses
 ```
 
 The topology contains one `conversation` declaration. At runtime, each
-session key receives its own instance and state.
+session key receives its own address and contained Executor state; the Graph
+itself does not acquire a mailbox or transaction.
 
 In each case, *what* happens at runtime is dynamic. *Where* it can
 possibly happen is statically declared. The compiler can therefore
@@ -1405,51 +1419,55 @@ journaled:
 
 - **In state and sequence.** A stateful Operator accumulates across arrivals
   in its logical instance (§2.4, §3) — what a `while` loop does with a mutable
-  variable, Node-local state does across envelopes.
-- **In the Connector** (§2.7). External feedback loops — a user replying
-  turn after turn, a retried HTTP call — stay outside the graph; each
-  round trip re-enters as a fresh arrival.
-- **In the `Loop` aspect.** Finite temporal recursion — "apply this Graph
-  until it returns a result, with at most 10 body applications" — uses one
-  explicit state boundary:
+  variable, Operator-local state does across envelopes.
+- **In external event/session sequence** (§2.7). A user replying turn after
+  turn or a long-lived Session produces distinct typed facts rather than a
+  spatial cycle. A finite outbound Call may instead opt into the Loop
+  Extension when its Contract and `effect` make repetition safe.
+- **In the `Loop` Extension.** Finite temporal recursion—apply this Operator,
+  Graph, or outbound finite Call again until it reaches a terminal verdict—uses
+  the host's existing entry and outputs:
 
   ```rastok
-  graph refine: Loop {
+  operator refine : Loop {
     input in: struct { remaining: int }
     output out: text
     Loop.measure = data.remaining
 
-    on in where data.remaining <= 0 { out = "done" }
-    on in where data.remaining > 0 {
-      next = { remaining = data.remaining - 1 }
+    on in match {
+      data.remaining <= 0 => out = "done"
+      _ => Loop.next = { remaining = data.remaining - 1 }
     }
   }
   ```
 
-  Every traversal makes one progress decision. Exactly one `next` continues;
-  any ordinary Graph output (`out`, `exit`, a domain name, or several outputs
-  atomically) terminates the run, and bare `stop` terminates while closing the
-  whole owner instance. `next` carries the next value of `in` and the
-  runtime first records the selected state and then commits its exactly-once
-  admission as `l:next` — an event, never a back-edge. Spatial destinations
-  are selected and capacity-checked at that admission, never held while a
-  delay is pending.
-  If the final permitted application still chooses `next`, the aspect emits
-  `LoopExpired { last_state }` on `expired` instead of silently running again.
-  One external root owns one Loop run, so delayed runs may coexist safely in
-  one keyed instance.
+  Every application selects exactly one verdict. `Loop.next = value` constructs
+  the next complete state envelope; `Loop.again` retains `Loop.state`;
+  `Loop.done` closes without business data; a configured natural terminal
+  output supplies Done; and `stop` closes the owner instance. Next, Again and
+  Done are durable **manager commands**, not ports or `PhysicalEdge`s. Their
+  production commits atomically with the Executor transaction; a separate
+  manager transaction consumes the command only after run-scoped quiescence.
+  Any delay is logical time after command consumption. The later `l:next`
+  re-admits at the exact input which opened the run, so recursion is temporal
+  and the spatial topology stays acyclic.
+
+  A run derives from the exact opening admission, not merely the business
+  `origin_id`; two deliveries fanned from one root can therefore open distinct
+  runs in the same keyed instance. If the final permitted application asks for
+  Next or Again, the manager emits `LoopExpired { last_state }` on the sole
+  contributed port `Loop.expired` instead of re-admitting. That port follows
+  the universal disposition rule: its parent routes it or writes `-> nothing`.
 
   `Loop.fuel` is the structural termination witness and remains an explicit
-  operational cap. The first theorem gate also accepts the direct signed
-  integer measure above: every recurrent `on in` path proves it positive and
-  writes exactly `measure - k` for a positive literal. The hosted compiler
-  derives a certificate and the deterministic `no_std` core derives it again
-  after v15 decode (the proof form introduced by v14 is unchanged); richer
-  invariants, computed measures and external-progress
-  claims fail closed. Optional `Loop.delay` dates
-  re-entry without changing fuel, call timeout, or instance lifetime; a typed
-  Call exit selects recurrence before the independent Loop delay begins
-  ([loop.md](docs/spec/loop.md)).
+  cap: fuel N permits at most N applications, first included. The proof tier
+  also accepts the direct signed-integer measure above when every recurrent
+  Dispatch leaf proves positivity and an exact literal decrease; the
+  deterministic `no_std` validator re-derives the certificate. Opaque Driver
+  progress requires fuel, and every Call still needs a finite completion
+  contract. Repeating an ambiguous or visible effect is legal only when its
+  effect is `none` or `idempotent`. Optional `Loop.delay` changes neither fuel,
+  Call timeout nor instance lifetime ([loop.md](docs/spec/loop.md)).
 
 The maxim form: *cycles do not appear in the graph — they appear in
 state, in events, and in sequence*. Every admitted `Loop` has a finite
@@ -1504,8 +1522,8 @@ lifecycle. Discovery is physical assembly, not a second execution model.
 The reference CLI makes that assembly visible: Process is linked by default,
 an explicit `--file-root` adds File and supplies deployment data that never
 enters the graph or plan identity, and hosted feature presets add the selected
-HTTP/WebSocket families without changing their contract ids. The full hosted
-image registers all six implemented families exactly once; a reduced image
+HTTP/WebSocket Connector implementations without changing their Contract ids. The full hosted
+image registers Drivers for all six implemented Contracts exactly once; a reduced image
 refuses a missing required Driver before VM construction.
 
 Hosted network Drivers use the same separation. The synchronous Driver/VM
@@ -1549,10 +1567,10 @@ never rewritten. This makes the normal LLM-assisted workflow resolve, inspect,
 check and commit generated types while preserving a textual review boundary.
 
 The Lab follows the same rule. A mock Driver binds under the same id and roles,
-uses the same family request protocol and resolved result types, and replaces
+uses the same contract-specific request protocol and resolved result types, and replaces
 only the post-journal external interaction. It never replaces the VM or its
-bookkeeping. Each Connector family owns that shared pure request protocol;
-the Lab composes family-provided binders instead of dispatching on contract
+bookkeeping. Each Connector's Contract owns that shared pure request protocol;
+the Lab composes contract-provided binders instead of dispatching on contract
 names.
 
 **Lifecycle-bound exchanges do not invent hidden addressing dimensions.** A
@@ -1612,9 +1630,10 @@ The old word “partition” bundled three different questions:
 2. **When does that instance end?** — lifetime.
 3. **Who can read mutable state?** — ownership and lexical scope.
 
-Rastok keeps those concerns separate. A Node owns its address selection, a
-separate lifetime may close it, and every mutable cell remains private to the
-Node that declares it. The normative detail is
+Rastok keeps those concerns separate. A Node owns its address selection and a
+separate lifetime may close it. Authored mutable cells belong only to the
+Operator that declares them; Connector semantic state belongs to its Contract
+fold, and a Graph owns neither. The normative detail is
 [docs/spec/instances.md](docs/spec/instances.md).
 
 ### 3.1 One Node, optional key, optional lifetime
@@ -1728,16 +1747,19 @@ static Node path
 + this owner's dynamic frame, if any
 ```
 
-Frames are ordered outermost to innermost. An instance is the currently live
-mailbox, derived immutable bindings, Node-local state, open calls, armed events,
-and lifecycle at that address. After closure, a later delivery may create a clean instance at the
+Frames are ordered outermost to innermost. Every owner instance has derived
+immutable bindings and lifecycle at that address. An Executor instance adds a
+bounded mailbox, semantic state, open exchanges, armed events and cursors; a
+Graph instance adds containment but no application mailbox or transaction. A
+temporal Extension manager adds run-scoped durable commands without becoming a
+Node. After closure, a later delivery may create a clean instance at the
 same address. The runtime calls successive lives **generations**; generation
 is the zero-based journal-derived ordinal of `l:start`, fences stale events and
 deliveries, and never enters the logical address or call identity. Runtime and
 journal facts refer to an instance with `(address, generation)`.
 
-A `var` belongs only to its declaring Node and is visible only in that Node's
-handlers. Keying a Graph does not create a transaction around the Graph and
+A `var` belongs only to its declaring Operator and is visible only in that
+Operator's handlers. Keying a Graph does not create a transaction around the Graph and
 does not expose mutable cells to children. Graph-level `val` bindings remain
 lexical and immutable, so descendants may safely consume context derived from
 the Graph's `instance.key`.
@@ -2125,7 +2147,7 @@ explicit `Timer` wiring:
 | Cleanup of an idle Node instance | `lifetime = { kind = idle; after = duration("2h") }` |
 | Tumbling window aggregation *(sliding windows are deferred)* | `lifetime = { kind = tumbling; every = duration("5m") }` |
 | Rate limit "max N per minute" | keyed or singleton tumbling instance + a private counter |
-| Deadline / timeout for a saga | the distinct `Saga.timeout` aspect attribute |
+| Deadline / timeout for a saga | the distinct future `Saga.timeout` Extension attribute |
 
 Explicit `Timer` is reserved for patterns where an
 Operator actively emits or polls on tick — periodic metrics,
@@ -2208,7 +2230,7 @@ The ontology is a mirror:
 The key is **same program, different world**. Pure Operators run
 unchanged. Connectors mark typed effect boundaries. An App execution
 resolves effect intents against real systems; a simulation in the Lab
-resolves the same intents through controlled handlers, virtual time,
+resolves the same intents through controlled Driver scripts, virtual time,
 and scripted faults.
 
 The following is an explanatory engineering shape, not DSL syntax:
@@ -2310,9 +2332,9 @@ Key properties:
   steps, mocked Connector outcomes, and expectations.
 - **Mock/Inject/Expect** reads vertically as a Gherkin scenario
   (simulation-semantics.md is the normative spec of this surface).
-- **Mocks mirror Connector boundaries**: a mock is written in the same
-  handler grammar as a node body, but its factory binds through the same exact
-  contract id, roles and family request protocol as the real Driver. It
+- **Mocks mirror Connector boundaries**: a mock uses handler-shaped Lab
+  Driver-script syntax, not a Connector-owned application handler. Its factory
+  binds through the same exact contract id, roles and contract-specific request protocol as the real Driver. It
   replaces only the external interaction, not the Connector's journal
   bookkeeping. The graph in test is the same graph in production.
 - **Intermediate assertions** (`expect` on any internal port) test
@@ -2773,7 +2795,7 @@ incumbents.
   scheduler, DAG processor, API server, and metadata database; Rastok
   does not yet make a performance or operational-footprint comparison.
   Equivalences: cron triggers map to a `Calendar` (civil time);
-  retries and delayed re-entry use the `Loop` aspect; XCom-like passing
+  retries and delayed re-entry use the `Loop` Extension; XCom-like passing
   becomes typed envelopes on edges; backfill is a replay over the
   event log. The practical gaps to close before claiming full
   Airflow parity: the stdlib `Calendar` (cron + tz, spec'd in stdlib.md),
@@ -2837,12 +2859,12 @@ journal bytes, nor replay input. This is milestone evidence, not a
 production-readiness or cluster-runtime claim; distributed leases, fencing,
 recovery, and scheduling remain later physical implementations of the same
 logical addresses. Process and File now execute as two real outbound Driver
-families through one exact-id/role registry and one VM boundary; the Lab
+Contracts through one exact-id/role registry and one VM boundary; the Lab
 composes both through the same binding and protocol. Static Driver selection is
 implemented. A data-only capability manifest proves the future discovery seam,
 but no plugin loader or native ABI is claimed. Four exact HTTP/WebSocket
   contracts now cross source, checked v15 plan, Registry-free validation and
-family-owned Lab binding with codec-selected ports, lossless protocol metadata
+Contract-owned Lab binding with codec-selected ports, lossless protocol metadata
 and typed terminal unions. H3 pins one bounded private hosted
 pump, Hyper/Rustls for HTTP/1.1-2, quiche/BoringSSL for HTTP/3 and Tungstenite
 for WebSocket framing. It proves all three HTTP engines coexist and compares
@@ -2870,23 +2892,19 @@ The official Autobahn report remains a named external qualification because
 the reference host has no container engine; M1.6 does not substitute an
 unmaintained runner or convert that missing report into a production claim.
 
-Closed M1.7 has made `Loop` the first aspect with categorical transport,
-Registry-free finite-control proof and a checked termination certificate.
-Fuel-bounded and directly ranked Loops carry their fixed state/progress
-boundary, domain-named terminal outputs, closed delay policy and ordinary
-Graph-owned handlers from source through the v14 proof form retained by v15.
-Every reachable completed
-traversal proves one `next` or explicit termination by ordinary output(s) or
-`stop`; immediate and delayed recurrence execute through one journal-derived
-run fold. A proof-only direct integer countdown derives its safe body budget
-from the root measure, while the `no_std` validator re-derives every decrement
-from the transported handlers. Public source-to-Lab scenarios cover keyed and
-singleton concurrency, ordinary nested Graph composition, bounded Connector
-retry, multi-frame Process data, exact exhaustion and instance-Closing fences.
-Unsupported mathematics, nested Loop owners, direct spatial boundary verdicts,
-explicit Loop `stop` and spatial recovery still refuse before execution,
-preserving the rule that a recognized policy never silently runs as a plain
-Graph.
+Closed M1.7 remains the evidence that finite journal-owned recurrence, exact
+fuel exhaustion, logical delay and a re-derived integer measure work on v14/v15.
+D-2026-09-05-1 supersedes its Graph-handler and port-shaped control ontology.
+R0–R2 now freeze v16 before code: passive Graph scopes; Operator and Connector
+as the two shared-mechanics Executors; canonical Extensions; explicit output
+dispositions; recursive Dispatch and case routing; ordered atomic
+multi-emission; and Loop over Operator, Graph and outbound finite Call through
+durable Next/Again/Done manager commands. A run derives from its exact opening
+admission, and recovery reconstructs every pending command and spatial delivery
+from the journal. The six boundary Contracts move to `@2` because they
+gain cardinality, terminal and effect-visibility evidence while losing implicit
+unwired policy. R3 is the first implementation gate; this paragraph makes no
+claim that current v15 binaries execute the target.
 
 Closed M1.8 executes the `@sensitive`, `@secret`, `@personal`,
 `@measure` and `@cost` family through source, checked HIR and categorical v15 as canonical
@@ -2930,11 +2948,11 @@ norms — each compresses a rule whose exact contract lives in
 wins.
 
 1. **Pure logic belongs in Operators. Effects belong in Connectors.**
-2. **A Node fires on an input event and emits zero or more envelopes
-   atomically. It is not a tuple-to-tuple function.**
-3. **Topology is static. Dispatch is dynamic. The dynamism is bounded
-   by the topology.**
-4. **Every mutable cell has one Node owner. Key selection addresses a
+2. **An Executor consumes a typed fact and commits state, ordered emissions
+   and commands atomically. A Graph scopes and wires; it does not fire.**
+3. **Topology is static. Dispatch and closed case routing are dynamic only
+   inside the statically enumerated possibilities.**
+4. **Every mutable cell has one Executor owner. Key selection addresses a
    logical instance; lifetime closes it; lexical scope exposes immutable
    context. Do not fuse the three.**
 5. **Cycles do not appear in the graph. They appear in state, in
@@ -2966,12 +2984,14 @@ wins.
     emit new ones. Single input inherits `meta` additively; a join
     merges by value — common fields survive, conflicts drop, and
     explicit writes win (D-2026-08-10-2).**
-14. **A logical Node instance starts lazily, runs mailbox transactions,
-    enters bounded Closing by `stop` or lifetime expiry, runs `on stop` last,
-    and may later be recreated at the same address as a fresh generation.**
+14. **Every logical Node owner starts lazily and may enter bounded Closing;
+    only Executor instances run delivery-mailbox transactions, only Operators
+    author `on stop`, and Graph lifecycle remains a controller fact. A closed
+    address may later acquire a fresh generation.**
 15. **Two keywords, scope by position: `val` for immutable context and
-    `var` for mutable Node-local state with read-modify-write per transaction.
-    Graph `val`s are lexical; no child inherits an ancestor `var`.**
+    `var` for mutable Operator-local state with read-modify-write per
+    transaction. Graph `val`s are lexical; Connectors own Contract state but
+    no authored `var`; no child inherits an ancestor `var`.**
 16. **Ports may be inferred from handlers, while `input` / `output`
     pin or document constraints. Every validated port has one effective
     logical type. `in` / `out` / `err` are conventions, not categories;
@@ -2983,8 +3003,9 @@ wins.
     terminal outcome. For Process, `err` is stderr and `exit` carries
     `ProcessExit`, including the original typed error cases. One completion
     carries `out* + err* + exactly one exit`; `stop` independently closes the
-    owning Node instance. Engine faults and panics are supervision,
-    never envelopes.**
+    owning Node instance. Every productible output has an explicit disposition;
+    `nothing` is intentional discard, not a default sink. Engine faults and
+    panics are supervision, never envelopes.**
 17. **The `data` payload is statically typed by default; `variant` is
     the only dynamic type, narrowed before use. The type tree is
     scalar(parameters+logical) / struct / map / array / enum / union,
@@ -2992,10 +3013,10 @@ wins.
     including unions — project into this one algebra without lossy
     fallback. `table` is the relational view of
     `array<struct>`, not a type. Numbers are lossless until narrowed.**
-18. **A handler is a transaction guard. `on (a, b)` is a join correlated by
-    its owning Operator instance; content correlation is a θ-join and demands
-    a bound (`last` for memory, optionally `within` for staleness).
-    OR across ports is separate handlers, not `||`.**
+18. **Only Operators have handlers, one per trigger. A single-port `where`
+    consumes on false as filter sugar; a join `where` admits without consuming
+    on false and demands a bound for content correlation. Match owns branching;
+    exactly one Dispatch arm executes in a transaction.**
 
 19. **The Lab is the App's twin, never woven into the deployed graph:
     simulations close graphs, experiments exercise real boundaries,
@@ -3004,7 +3025,7 @@ wins.
 20. **A Connector contract names semantics; a Driver supplies one physical
     implementation. Exact ids and roles meet once at binding. Static builds and
     future plugin hosts must feed the same registry, while the VM remains
-    ignorant of concrete Connector families.**
+    ignorant of concrete Connector contracts and implementations.**
 21. **Data policy is orthogonal to logical type. Canonical annotations beside
     the resolved schema govern sensitivity, secrets, measures and exact cost
     without changing ordinary assignability. The causal journal remains the

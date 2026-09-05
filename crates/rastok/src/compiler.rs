@@ -64,7 +64,7 @@ pub struct Compilation {
 pub struct SourceDefinition {
     /// Root-relative owner path. The App Graph uses the empty root path.
     pub owner: crate::plan::OwnerPath,
-    /// Structural declaration family.
+    /// Structural declaration kind.
     pub kind: node::Kind,
     /// Source table index handed to [`compile`].
     pub source: SourceId,
@@ -102,8 +102,8 @@ pub fn app_source_index(sources: &[&str], registry: &contract::ContractCatalog) 
                 .as_ref()
                 .is_some_and(|annotation| annotation
                     .symbols
-                    .first()
-                    .is_some_and(|symbol| symbol.text == "App")))
+                    .iter()
+                    .any(|symbol| symbol.text == "App")))
         });
         if declares_app {
             return Some(index);
@@ -146,11 +146,11 @@ pub fn compile_with_assets(
                     check::E_CHECK_DEFERRED,
                     Phase::Plan,
                     format!(
-                        "the instance policy on `{}` is checked but cannot ship yet: {}",
+                        "`{}` is checked but cannot ship in the current plan format: {}",
                         error.owner, error.detail
                     ),
                 )
-                .with_field("construct", "M1.4 R2 instance transport")
+                .with_field("construct", "categorical plan transport")
                 .with_field("owner", error.owner),
             );
             return Err(bag);
@@ -267,6 +267,7 @@ fn collect_graph_definitions(
             syntax::GraphItem::Port(_)
             | syntax::GraphItem::RemovedPartition(_)
             | syntax::GraphItem::Val(_)
+            | syntax::GraphItem::Var(_)
             | syntax::GraphItem::Edge(_)
             | syntax::GraphItem::Defaults(_)
             | syntax::GraphItem::Attribute(_)

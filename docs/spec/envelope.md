@@ -5,6 +5,9 @@
 > of truth** for the envelope's structure, identity, `meta.sys` reserved
 > fields, the version stamp, and the storage / wire form. Other docs cite it
 > rather than restating the field list.
+> Plan v16 replaces Aspect vocabulary and Loop's root-derived run reference as
+> specified below; v15 packages retain their historical encoding and are never
+> reinterpreted.
 
 An **envelope** is the unit that flows along edges and through transactions. It is
 **immutable** : a transaction never mutates an envelope, it *emits* new ones (Mealy
@@ -82,9 +85,9 @@ payload is a structured in-memory value.
 `uuid128` is a fixed 128-bit value. (The values are blake3-derived, not RFC
 UUIDs — see §2 — but the physical type is a 128-bit identifier.)
 
-### 1.2 Tier 2 — birth stamps (aspect scopes)
+### 1.2 Tier 2 — birth stamps (Extension scopes)
 
-Minted on envelopes **born** inside the corresponding aspect scope ; envelopes
+Minted on envelopes **born** inside the corresponding Extension scope ; envelopes
 born outside carry nothing (zero overhead) :
 
 | Fields | Present when | Spec |
@@ -99,7 +102,7 @@ on envelopes born outside, and they simply travel wherever the wires go
 immutable ; and it is honest provenance : that envelope *is* the scope's
 product). **In the language**, Saga context is *instance* context: inside its
 lexical scope, expressions expose `meta.sys.saga_id` / `saga_stack` resolved
-from the aspect instance (exactly like contextual `instance.key`). They are
+from the Extension owner instance (exactly like contextual `instance.key`). They are
 present even while processing the scope-creating envelope and absent from the
 type environment outside. Loop deliberately does not add birth stamps: its
 per-root reference and iteration ordinal are journal facts, while its sole
@@ -347,12 +350,14 @@ Composed cases :
   `origin_id` across a join — `HttpServer { mode = respond }` correlates by
   lineage only on join-free return paths, and requires an explicit
   `correlate` field otherwise ([stdlib.md §3.1](stdlib.md)).
-- **Loop** (`: Loop` re-injection) → each iteration-state envelope is emitted
-  by the Loop manager under domain `0x05`, trigger `l:next`, `parent_id` = the
-  selected `next` emission. Its run reference uses domain `0x13` and includes
-  the exact owner generation plus external root. The parent chain *is* the
-  iteration history; the last permitted proposed `next` instead parents the
-  terminal `LoopExpired` output and creates no re-entry.
+- **Loop re-admission** → `Loop.next` constructs, or routing into it selects,
+  one next-state envelope. The producer transaction retains a durable
+  `CommandProduced` fact naming that exact cause. After a separate
+  `CommandConsumed` fact and any logical delay, `l:next` re-admits the state at
+  the remembered entry. The v16 run reference derives from the exact opening
+  admission reference, not merely `origin_id`; a last permitted Next instead
+  parents `Loop.expired` and creates no re-admission. Again retains
+  `Loop.state` but uses its routed envelope as the command cause.
 
 ### 3.1 Transactions without a port arrival — trigger and parent
 
@@ -367,16 +372,18 @@ transactions that no port arrival triggers :
 | `on stop` via lifetime expiry | `l:stop` | **the envelope that armed the deadline** — the last admitted envelope (`idle`), creator (`fixed`), or creating admission of the processing-time box (`tumbling`). Always exists; there is no phantom tick | the node itself |
 | Inbound Call terminal | `l:reply` | the committed root request that opened the Call | the inbound Connector instance that admitted it |
 | Session terminal | `l:exit` | the envelope that opened the logical Session | the Connector instance that owns the Session |
-| Loop re-injection | `l:next` | the selected `next` emission — the chain *is* the iteration history | **the `: Loop` Graph**, in the same instance generation |
+| Loop re-admission | `l:next` | the durable Next/Again command cause selected for this run and iteration | the Loop manager, recorded at its owner path and generation |
 | Saga compensation envelope | `l:compensate` | **the envelope explicitly routed to `Saga.rollback`** (or the saga's `SagaExpired` timeout event); for compensations 2..n: the previous compensation's ack (the chain IS the reverse rollback order) | **the `: Saga`-carrying node**, port `compensate` (reserved), index 0 |
 | Budget expiry (call `timeout`, `Saga.timeout`) | `l:timeout` | **the envelope that ARMED the budget** — the request (call) ; the instance-creating envelope (saga) | the Connector node / the `: Saga` node |
 | Join-buffer eviction | `l:evict` | the evicted envelope ([execution-model.md §7](execution-model.md)) | the Operator node |
 | Recovery resolution of an unknown outbound | `l:recover` | the request envelope whose outcome is unknown ([delivery-semantics.md §4.4](delivery-semantics.md)) | the Connector node |
 
-The last two rows state the principle for **synthesized envelopes** : a
-runtime layer (loop manager, saga manager, supervision plane) never emits in its own name —
-the emission is attributed to the **aspect-carrying node**, with a lifecycle
-trigger from the aspect's vocabulary. The recipe has no out-of-graph emitters.
+The manager rows state the principle for **synthesized envelopes**: a runtime
+manager is not a Node or spatial endpoint. Its transaction is represented at
+the Extension owner's path and generation, with the manager command or
+lifecycle trigger as its cause. The recipe has no out-of-graph spatial
+emitter, but it does distinguish an Executor transaction from an Extension
+manager transaction.
 The saga row's scheme is fixed: compensations are
 **sequential transactions** of the `: Saga` node — port `compensate`
 (reserved), index 0, parent = the rollback's cause for the first, then the

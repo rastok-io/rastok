@@ -12,7 +12,7 @@ use crate::boundary::{
     SessionConnectorBindings, SessionConnectorDriver, SessionDriverEvent, SessionOpenIntent,
     SessionRef, SessionWriteIntent,
 };
-use crate::connector::{ConnectorExchange, ConnectorId, ConnectorRoles};
+use crate::connector::{ConnectorExchange, ConnectorRoles, ContractId};
 use crate::envelope::{Data, Envelope};
 use crate::node;
 use crate::plan::ValidatedExecutionPlan;
@@ -38,7 +38,7 @@ pub trait BoundConnectorDriver {
 /// Creates one plan-bound Driver object for a stable Connector contract.
 pub trait ConnectorDriverFactory {
     /// Stable contract identity implemented by this factory.
-    fn connector_id(&self) -> &ConnectorId;
+    fn connector_id(&self) -> &ContractId;
 
     /// Roles the implementation exposes.
     fn roles(&self) -> ConnectorRoles;
@@ -131,7 +131,7 @@ impl std::error::Error for DriverFactoryError {}
 /// Runtime factories explicitly linked or loaded into one build.
 #[derive(Default)]
 pub struct DriverRegistry {
-    factories: BTreeMap<ConnectorId, Box<dyn ConnectorDriverFactory>>,
+    factories: BTreeMap<ContractId, Box<dyn ConnectorDriverFactory>>,
 }
 
 impl core::fmt::Debug for DriverRegistry {
@@ -186,7 +186,7 @@ impl DriverRegistry {
     /// binding failures.
     pub fn require(
         &self,
-        id: &ConnectorId,
+        id: &ContractId,
         required: ConnectorRoles,
     ) -> Result<&dyn ConnectorDriverFactory, DriverBindingError> {
         let Some(factory) = self.factories.get(id) else {
@@ -223,7 +223,7 @@ struct BoundFamily<'plan> {
 /// One retained proposal paired with the exact Driver family that owns it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoutedInboundProposal {
-    connector: ConnectorId,
+    connector: ContractId,
     proposal: InboundProposal,
 }
 
@@ -271,7 +271,7 @@ impl std::error::Error for InboundPumpError {}
 impl RoutedInboundProposal {
     /// Stable family that must receive the eventual decision callback.
     #[must_use]
-    pub fn connector(&self) -> &ConnectorId {
+    pub fn connector(&self) -> &ContractId {
         &self.connector
     }
 
@@ -289,15 +289,15 @@ impl RoutedInboundProposal {
 /// exact Node path and role; no concrete contract name or registration order
 /// participates in execution.
 pub struct RuntimeBindings<'plan> {
-    families: BTreeMap<ConnectorId, BoundFamily<'plan>>,
+    families: BTreeMap<ContractId, BoundFamily<'plan>>,
     /// Last inbound family polled. Cycling from this key prevents one
     /// backpressured transport from blocking an unrelated family.
-    inbound_cursor: Option<ConnectorId>,
-    outbound: BTreeMap<node::Path, ConnectorId>,
-    calls: BTreeMap<CallRef, ConnectorId>,
-    inbound_calls: BTreeMap<crate::boundary::InboundCallRef, ConnectorId>,
-    session_outbound: BTreeMap<node::Path, ConnectorId>,
-    sessions: BTreeMap<SessionRef, ConnectorId>,
+    inbound_cursor: Option<ContractId>,
+    outbound: BTreeMap<node::Path, ContractId>,
+    calls: BTreeMap<CallRef, ContractId>,
+    inbound_calls: BTreeMap<crate::boundary::InboundCallRef, ContractId>,
+    session_outbound: BTreeMap<node::Path, ContractId>,
+    sessions: BTreeMap<SessionRef, ContractId>,
 }
 
 impl core::fmt::Debug for RuntimeBindings<'_> {
@@ -348,7 +348,7 @@ impl<'plan> RuntimeBindings<'plan> {
         registry: &DriverRegistry,
         boot: &crate::deployment::BootBindings,
     ) -> Result<Self, DriverBindingError> {
-        let mut requirements: BTreeMap<ConnectorId, FamilyRequirement> = BTreeMap::new();
+        let mut requirements: BTreeMap<ContractId, FamilyRequirement> = BTreeMap::new();
         for (index, planned) in plan.plan().nodes.iter().enumerate() {
             let Some(spec) = planned.connector() else {
                 continue;
@@ -816,7 +816,7 @@ impl<'plan> RuntimeBindings<'plan> {
     fn session_driver(
         &mut self,
         connector: &node::Path,
-    ) -> Result<(ConnectorId, &mut dyn SessionConnectorDriver), DriverRouteError> {
+    ) -> Result<(ContractId, &mut dyn SessionConnectorDriver), DriverRouteError> {
         let id = self.session_family(connector)?;
         let Some(family) = self.families.get_mut(&id) else {
             return Err(DriverRouteError::UnboundSession(connector.clone()));
@@ -831,7 +831,7 @@ impl<'plan> RuntimeBindings<'plan> {
         Ok((id, driver))
     }
 
-    fn session_family(&self, connector: &node::Path) -> Result<ConnectorId, DriverRouteError> {
+    fn session_family(&self, connector: &node::Path) -> Result<ContractId, DriverRouteError> {
         self.session_outbound
             .get(connector)
             .cloned()
@@ -1150,7 +1150,7 @@ fn outbound_exchange_of(driver: &mut dyn BoundConnectorDriver) -> Option<Connect
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DriverRegistrationError {
     /// The id already has a factory; first-registration-wins is forbidden.
-    Duplicate(ConnectorId),
+    Duplicate(ContractId),
 }
 
 impl core::fmt::Display for DriverRegistrationError {
@@ -1172,12 +1172,12 @@ pub enum DriverBindingError {
     /// No implementation of the exact stable contract id is registered.
     Missing {
         /// Required contract.
-        id: ConnectorId,
+        id: ContractId,
     },
     /// An implementation exists but omits at least one required role.
     MissingRoles {
         /// Required contract.
-        id: ConnectorId,
+        id: ContractId,
         /// Roles transported by the plan.
         required: ConnectorRoles,
         /// Roles advertised by the factory.
@@ -1186,14 +1186,14 @@ pub enum DriverBindingError {
     /// The factory refused its selected plan Nodes before execution began.
     Factory {
         /// Stable contract id.
-        id: ConnectorId,
+        id: ContractId,
         /// Factory-specific typed-boundary explanation.
         detail: String,
     },
     /// The object returned by a factory contradicts its advertised roles.
     BoundRolesMismatch {
         /// Stable contract id.
-        id: ConnectorId,
+        id: ContractId,
         /// Factory claim used for deterministic selection.
         advertised: ConnectorRoles,
         /// Role views actually exposed; `None` means neither.
@@ -1203,13 +1203,13 @@ pub enum DriverBindingError {
     /// forged plan.
     ConflictingExchange {
         /// Ambiguous semantic contract id.
-        id: ConnectorId,
+        id: ContractId,
     },
     /// The bound outbound role exposes the wrong or an ambiguous exchange
     /// protocol view.
     BoundExchangeMismatch {
         /// Contract being bound.
-        id: ConnectorId,
+        id: ContractId,
         /// Exchange carried by the validated plan.
         required: ConnectorExchange,
         /// Sole exchange view actually exposed, if any.
@@ -1286,7 +1286,7 @@ mod tests {
         SessionRef, SessionWriteIntent, SubmissionSequence,
     };
     use crate::compiler::compile;
-    use crate::connector::{ConnectorExchange, ConnectorId, ConnectorRoles};
+    use crate::connector::{ConnectorExchange, ConnectorRoles, ContractId};
     use crate::contract::ContractCatalog;
     use crate::envelope::{Data, Envelope, Namespace, Value};
     use crate::journal::{Journal, MemJournal, ids};
@@ -1297,12 +1297,12 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     struct FakeFactory {
-        id: ConnectorId,
+        id: ContractId,
         roles: ConnectorRoles,
     }
 
     impl ConnectorDriverFactory for FakeFactory {
-        fn connector_id(&self) -> &ConnectorId {
+        fn connector_id(&self) -> &ContractId {
             &self.id
         }
 
@@ -1321,14 +1321,14 @@ mod tests {
 
     fn fake(id: &str, roles: ConnectorRoles) -> Box<dyn ConnectorDriverFactory> {
         Box::new(FakeFactory {
-            id: ConnectorId::parse(id).unwrap(),
+            id: ContractId::parse(id).unwrap(),
             roles,
         })
     }
 
     #[test]
     fn registration_is_exact_role_aware_and_never_first_wins() {
-        let id = ConnectorId::parse("test/duplex@1").unwrap();
+        let id = ContractId::parse("test/duplex@1").unwrap();
         let registry = DriverRegistry::default()
             .try_with(fake(id.as_str(), ConnectorRoles::Inbound))
             .unwrap();
@@ -1351,12 +1351,12 @@ mod tests {
         assert_eq!(
             registry
                 .require(
-                    &ConnectorId::parse("test/missing@1").unwrap(),
+                    &ContractId::parse("test/missing@1").unwrap(),
                     ConnectorRoles::Outbound,
                 )
                 .err(),
             Some(DriverBindingError::Missing {
-                id: ConnectorId::parse("test/missing@1").unwrap(),
+                id: ContractId::parse("test/missing@1").unwrap(),
             })
         );
         assert_eq!(
@@ -1446,14 +1446,14 @@ mod tests {
     }
 
     struct RoutingFactory {
-        id: ConnectorId,
+        id: ContractId,
         advertised: ConnectorRoles,
         actual: Option<ConnectorRoles>,
         starts: Arc<Mutex<Vec<String>>>,
     }
 
     impl ConnectorDriverFactory for RoutingFactory {
-        fn connector_id(&self) -> &ConnectorId {
+        fn connector_id(&self) -> &ContractId {
             &self.id
         }
 
@@ -1489,7 +1489,7 @@ mod tests {
         starts: &Arc<Mutex<Vec<String>>>,
     ) -> Box<dyn ConnectorDriverFactory> {
         Box::new(RoutingFactory {
-            id: ConnectorId::parse(id).unwrap(),
+            id: ContractId::parse(id).unwrap(),
             advertised,
             actual,
             starts: Arc::clone(starts),
@@ -1527,7 +1527,7 @@ graph mixed : App {
             }) else {
                 continue;
             };
-            spec.contract = ConnectorId::parse(match planned.path.to_string().as_str() {
+            spec.contract = ContractId::parse(match planned.path.to_string().as_str() {
                 "first" => "test/alpha@1",
                 "second" => "test/beta@1",
                 other => panic!("unexpected probe node `{other}`"),
@@ -1587,7 +1587,7 @@ graph inbound : App {
         let crate::plan::NodeExecution::Connector(spec) = &mut source.execution else {
             panic!("the source node is a connector")
         };
-        spec.contract = ConnectorId::parse("test/event-source@1").unwrap();
+        spec.contract = ContractId::parse("test/event-source@1").unwrap();
         spec.roles = ConnectorRoles::Inbound;
         spec.exchange = ConnectorExchange::Event;
         source.ports.retain(|port| port.port.name() != "exit");
@@ -1667,12 +1667,12 @@ graph inbound : App {
     }
 
     struct DuplexFactory {
-        id: ConnectorId,
+        id: ContractId,
         observations: Arc<Mutex<Vec<&'static str>>>,
     }
 
     impl ConnectorDriverFactory for DuplexFactory {
-        fn connector_id(&self) -> &ConnectorId {
+        fn connector_id(&self) -> &ContractId {
             &self.id
         }
 
@@ -1698,7 +1698,7 @@ graph inbound : App {
         let starts = Arc::new(Mutex::new(Vec::new()));
         let registry = DriverRegistry::default()
             .try_with(Box::new(DuplexFactory {
-                id: ConnectorId::parse("test/alpha@1").unwrap(),
+                id: ContractId::parse("test/alpha@1").unwrap(),
                 observations: Arc::clone(&observations),
             }))
             .unwrap()
@@ -1848,12 +1848,12 @@ graph inbound : App {
     }
 
     struct SessionDuplexFactory {
-        id: ConnectorId,
+        id: ContractId,
         observations: Arc<Mutex<Vec<&'static str>>>,
     }
 
     impl ConnectorDriverFactory for SessionDuplexFactory {
-        fn connector_id(&self) -> &ConnectorId {
+        fn connector_id(&self) -> &ContractId {
             &self.id
         }
 
@@ -1881,7 +1881,7 @@ graph inbound : App {
         let starts = Arc::new(Mutex::new(Vec::new()));
         let registry = DriverRegistry::default()
             .try_with(Box::new(SessionDuplexFactory {
-                id: ConnectorId::parse("test/alpha@1").unwrap(),
+                id: ContractId::parse("test/alpha@1").unwrap(),
                 observations: Arc::clone(&observations),
             }))
             .unwrap()
@@ -1979,7 +1979,7 @@ graph inbound : App {
         let starts = Arc::new(Mutex::new(Vec::new()));
         let registry = DriverRegistry::default()
             .try_with(Box::new(SessionDuplexFactory {
-                id: ConnectorId::parse("test/alpha@1").unwrap(),
+                id: ContractId::parse("test/alpha@1").unwrap(),
                 observations,
             }))
             .unwrap()
@@ -2070,7 +2070,7 @@ graph inbound : App {
     }
 
     struct RetainedInboundFactory {
-        id: ConnectorId,
+        id: ContractId,
         state: Arc<Mutex<InboundQueueState>>,
     }
 
@@ -2159,12 +2159,12 @@ graph inbound : App {
     }
 
     struct RetainedCallFactory {
-        id: ConnectorId,
+        id: ContractId,
         state: Arc<Mutex<RetainedCallState>>,
     }
 
     impl ConnectorDriverFactory for RetainedCallFactory {
-        fn connector_id(&self) -> &ConnectorId {
+        fn connector_id(&self) -> &ContractId {
             &self.id
         }
 
@@ -2184,7 +2184,7 @@ graph inbound : App {
     }
 
     impl ConnectorDriverFactory for RetainedInboundFactory {
-        fn connector_id(&self) -> &ConnectorId {
+        fn connector_id(&self) -> &ContractId {
             &self.id
         }
 
@@ -2258,7 +2258,7 @@ graph api : App {
         let crate::plan::NodeExecution::Connector(spec) = &mut server.execution else {
             panic!("the server node is a connector")
         };
-        spec.contract = ConnectorId::parse("test/inbound-call@1").unwrap();
+        spec.contract = ContractId::parse("test/inbound-call@1").unwrap();
 
         let response = raw
             .edges
@@ -2299,7 +2299,7 @@ graph api : App {
         .plan;
         let event_only_registry = DriverRegistry::default()
             .try_with(Box::new(RetainedInboundFactory {
-                id: ConnectorId::parse(crate::connector::HTTP_SERVER_CONNECTOR_ID).unwrap(),
+                id: ContractId::parse(crate::connector::HTTP_SERVER_CONNECTOR_ID).unwrap(),
                 state: Arc::new(Mutex::new(InboundQueueState::default())),
             }))
             .unwrap();
@@ -2332,7 +2332,7 @@ graph api : App {
         }));
         let registry = DriverRegistry::default()
             .try_with(Box::new(RetainedCallFactory {
-                id: ConnectorId::parse(crate::connector::HTTP_SERVER_CONNECTOR_ID).unwrap(),
+                id: ContractId::parse(crate::connector::HTTP_SERVER_CONNECTOR_ID).unwrap(),
                 state: Arc::clone(&state),
             }))
             .unwrap();
@@ -2467,7 +2467,7 @@ graph api : App {
         }));
         let registry = DriverRegistry::default()
             .try_with(Box::new(RetainedCallFactory {
-                id: ConnectorId::parse("test/inbound-call@1").unwrap(),
+                id: ContractId::parse("test/inbound-call@1").unwrap(),
                 state: Arc::clone(&state),
             }))
             .unwrap();
@@ -2604,7 +2604,7 @@ graph api : App {
         }));
         let registry = DriverRegistry::default()
             .try_with(Box::new(RetainedCallFactory {
-                id: ConnectorId::parse("test/inbound-call@1").unwrap(),
+                id: ContractId::parse("test/inbound-call@1").unwrap(),
                 state: Arc::clone(&state),
             }))
             .unwrap();
@@ -2672,7 +2672,7 @@ graph api : App {
         }));
         let registry = DriverRegistry::default()
             .try_with(Box::new(RetainedInboundFactory {
-                id: ConnectorId::parse("test/event-source@1").unwrap(),
+                id: ContractId::parse("test/event-source@1").unwrap(),
                 state: Arc::clone(&state),
             }))
             .unwrap();
@@ -2738,7 +2738,7 @@ graph api : App {
         }));
         let registry = DriverRegistry::default()
             .try_with(Box::new(RetainedInboundFactory {
-                id: ConnectorId::parse("test/event-source@1").unwrap(),
+                id: ContractId::parse("test/event-source@1").unwrap(),
                 state: Arc::clone(&state),
             }))
             .unwrap();
@@ -2772,7 +2772,7 @@ graph api : App {
         }));
         let registry = DriverRegistry::default()
             .try_with(Box::new(RetainedInboundFactory {
-                id: ConnectorId::parse("test/event-source@1").unwrap(),
+                id: ContractId::parse("test/event-source@1").unwrap(),
                 state,
             }))
             .unwrap();
@@ -2799,7 +2799,7 @@ graph api : App {
         }));
         let registry = DriverRegistry::default()
             .try_with(Box::new(RetainedInboundFactory {
-                id: ConnectorId::parse("test/event-source@1").unwrap(),
+                id: ContractId::parse("test/event-source@1").unwrap(),
                 state,
             }))
             .unwrap();
@@ -2823,7 +2823,7 @@ graph api : App {
         }));
         let registry = DriverRegistry::default()
             .try_with(Box::new(RetainedInboundFactory {
-                id: ConnectorId::parse("test/event-source@1").unwrap(),
+                id: ContractId::parse("test/event-source@1").unwrap(),
                 state,
             }))
             .unwrap();
