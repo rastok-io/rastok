@@ -18,68 +18,104 @@
     <symbol id="icon-reset" viewBox="0 0 24 24"><path d="M12 5a7 7 0 1 1-6.7 9H2a10 10 0 1 0 2.9-7.1L2 4v7h7L7 9a7 7 0 0 1 5-2z"/></symbol>
     <symbol id="icon-control" viewBox="0 0 24 24"><path d="M8 11a5 5 0 1 1 4 2H9v3H6v3H3v-5l6-6a5 5 0 0 1-1 3zm8-5a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></symbol>
     <symbol id="icon-close" viewBox="0 0 24 24"><path d="M5 5l14 14m0-14L5 19" fill="none" stroke="currentColor" stroke-width="3"/></symbol>
+    <symbol id="icon-back" viewBox="0 0 24 24"><path d="M5 4h2v16H5zm14 0L8 12l11 8z"/></symbol>
+    <symbol id="icon-live" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9h-3a6 6 0 1 1-1.8-4.3L13 11h8V3l-2.7 2.7A8.9 8.9 0 0 0 12 3z"/></symbol>
+    <symbol id="icon-branch" viewBox="0 0 24 24"><path d="M7 3a3 3 0 1 0 2 5.2V10c0 2.2 1.8 4 4 4h2.8a3 3 0 1 0 0-2H13a2 2 0 0 1-2-2V8.2A3 3 0 0 0 7 3zm0 2a1 1 0 1 1 0 2 1 1 0 0 1 0-2zm12 8a1 1 0 1 1-2 0 1 1 0 0 1 2 0zM7 16a3 3 0 1 0 3 3 3 3 0 0 0-3-3zm0 2a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/></symbol>
+    <symbol id="icon-zoom-in" viewBox="0 0 24 24"><path d="M10 4a6 6 0 1 0 3.7 10.7L19 20l1-1-5.3-5.3A6 6 0 0 0 10 4zm-1 3h2v2h2v2h-2v2H9v-2H7V9h2z"/></symbol>
+    <symbol id="icon-zoom-out" viewBox="0 0 24 24"><path d="M10 4a6 6 0 1 0 3.7 10.7L19 20l1-1-5.3-5.3A6 6 0 0 0 10 4zM7 9h6v2H7z"/></symbol>
+    <symbol id="icon-fit" viewBox="0 0 24 24"><path d="M4 9V4h5v2H6v3zm11-5h5v5h-2V6h-3zM6 15v3h3v2H4v-5zm12 0h2v5h-5v-2h3z"/></symbol>
   </svg>
 
   <header class="app-bar">
-    <div class="brand-block">
-      <strong class="brand">Rastok UI</strong>
-      <span id="mode" class="mode-badge">—</span>
-      <span id="execution-state" class="pill state-paused">paused</span>
+    <div class="toolbar-row">
+      <div class="brand-block">
+        <strong class="brand">Rastok UI</strong>
+        <span id="mode" class="mode-badge">—</span>
+        <span id="execution-state" class="execution-state state-paused">paused</span>
+      </div>
+      <nav class="transport" aria-label="Execution controls">
+        <button id="back-boundary" class="transport-button" title="View the previous retained boundary"><svg><use href="#icon-back"/></svg><span>Back</span></button>
+        <button data-command="resume" class="transport-button" title="Play: replay retained boundaries at the selected speed"><svg><use href="#icon-play"/></svg><span>Play</span></button>
+        <button data-command="pause" class="transport-button" title="Pause: stop at the next safe execution boundary"><svg><use href="#icon-pause"/></svg><span>Pause</span></button>
+        <button id="step" data-command="step" class="transport-button primary" title="Step in: advance one retained atomic boundary"><svg><use href="#icon-step"/></svg><span>Step in</span></button>
+        <button data-command="retry-step" class="transport-button" title="Retry: retry the reserved transaction"><svg><use href="#icon-retry"/></svg><span>Retry</span></button>
+        <button data-command="run-to-completion" class="transport-button" title="Continue: run immediately to completion"><svg><use href="#icon-complete"/></svg><span>Continue</span></button>
+        <label class="speed-control" title="Buffered Play speed"><span>Speed</span>
+          <select id="playback-speed" aria-label="Buffered Play speed">
+            <option value="1">1 event/s</option>
+            <option value="4">4 events/s</option>
+          </select>
+        </label>
+        <span class="transport-divider simulation-only" hidden></span>
+        <button data-command="next-scenario-action" class="transport-button simulation-only" hidden title="Step over: execute one complete authored scenario action"><svg><use href="#icon-action"/></svg><span>Step over</span></button>
+        <button data-command="run-until-assertion" class="transport-button simulation-only" hidden title="Run to expect: continue to the next expect action"><svg><use href="#icon-assert"/></svg><span>Run to expect</span></button>
+        <button data-command="reset-scenario" class="transport-button simulation-only" hidden title="Start a clean scenario branch"><svg><use href="#icon-reset"/></svg><span>Reset</span></button>
+      </nav>
+      <div class="bar-status">
+        <span><b id="logical-time">—</b> logical</span>
+        <span><b id="awaiting-calls">0</b> calls</span>
+        <span id="scenario-progress" class="simulation-only" hidden>—</span>
+        <span id="role" class="role-badge">connecting</span>
+        <button id="take-control" class="icon-button quiet take-control-button" title="Take control" aria-label="Take control"><svg><use href="#icon-control"/></svg><span>Take control</span></button>
+        <button data-command="close" class="icon-button danger" title="Close UI" aria-label="Close UI"><svg><use href="#icon-close"/></svg></button>
+      </div>
     </div>
-    <nav class="transport" aria-label="Execution controls">
-      <button data-command="resume" class="icon-button" title="Play the same Steps continuously" aria-label="Play the same Steps continuously"><svg><use href="#icon-play"/></svg></button>
-      <button data-command="pause" class="icon-button" title="Pause safely" aria-label="Pause safely"><svg><use href="#icon-pause"/></svg></button>
-      <button id="step" data-command="step" class="icon-button primary" title="Step to next boundary" aria-label="Step to next boundary"><svg><use href="#icon-step"/></svg></button>
-      <button data-command="retry-step" class="icon-button" title="Retry transaction" aria-label="Retry transaction"><svg><use href="#icon-retry"/></svg></button>
-      <button data-command="run-to-completion" class="icon-button" title="Run the same Steps to completion" aria-label="Run the same Steps to completion"><svg><use href="#icon-complete"/></svg></button>
-      <span class="transport-divider simulation-only" hidden></span>
-      <button data-command="next-scenario-action" class="icon-button simulation-only" hidden title="Next scenario action" aria-label="Next scenario action"><svg><use href="#icon-action"/></svg></button>
-      <button data-command="run-until-assertion" class="icon-button simulation-only" hidden title="Run until assertion" aria-label="Run until assertion"><svg><use href="#icon-assert"/></svg></button>
-      <button data-command="reset-scenario" class="icon-button simulation-only" hidden title="Reset scenario" aria-label="Reset scenario"><svg><use href="#icon-reset"/></svg></button>
-    </nav>
-    <div class="bar-status">
-      <span><b id="logical-time">—</b> logical</span>
-      <span><b id="awaiting-calls">0</b> calls</span>
-      <span id="scenario-progress" class="simulation-only" hidden>—</span>
-      <span id="role" class="role-badge">connecting</span>
-      <button id="take-control" class="icon-button quiet" title="Take control" aria-label="Take control"><svg><use href="#icon-control"/></svg></button>
-      <button data-command="close" class="icon-button danger" title="Close UI" aria-label="Close UI"><svg><use href="#icon-close"/></svg></button>
+    <div class="timeline-bar" aria-label="Retained execution timeline">
+      <span id="timeline-position" class="timeline-position">LIVE · B0</span>
+      <abbr class="timeline-vocabulary" title="A: authored scenario action · B: retained atomic boundary · R: causal record" aria-label="A means scenario action; B means retained atomic boundary; R means causal record">A/B/R</abbr>
+      <label class="timeline-branch simulation-only" hidden>Branch
+        <select id="timeline-branch" aria-label="Simulation history branch"></select>
+      </label>
+      <input id="timeline" type="range" min="0" max="0" value="0" step="1" aria-label="Retained atomic boundary">
+      <span id="timeline-head" class="timeline-head">B0</span>
+      <button id="return-live" class="timeline-action" title="Return to the live execution head" aria-label="Return to the live execution head" hidden><svg><use href="#icon-live"/></svg><span>Return live</span></button>
+      <button id="branch-here" class="timeline-action simulation-only" title="Create a new simulation branch from this boundary" aria-label="Create a new simulation branch from this boundary" hidden><svg><use href="#icon-branch"/></svg><span>Branch from here</span></button>
     </div>
     <div id="command-status" class="command-status" aria-live="polite" hidden></div>
   </header>
 
   <main>
-    <section id="fault-panel" class="wide fault-panel" hidden aria-live="assertive">
+    <section id="fault-panel" class="fault-panel" hidden aria-live="assertive">
       <h2 id="fault-title">Execution fault</h2>
       <p id="fault-message" class="fault-message"></p>
       <p id="fault-help"></p>
       <p id="fault-commit" class="commit-note"></p>
     </section>
-    <section id="scenario-panel" class="wide simulation-only compact-section" hidden>
-      <div class="section-heading">
-        <div><h2>Scenario</h2><p id="scenario-status" class="section-summary"></p></div>
-        <div class="scenario-picker">
-          <label for="scenario-select">Checked scenario</label>
-          <select id="scenario-select"></select>
+    <div class="workspace">
+      <section class="graph-section" aria-labelledby="graph-title">
+        <h2 id="graph-title">Graph</h2>
+        <div id="scenario-panel" class="graph-scenario simulation-only" hidden>
+          <button id="scenario-definition" class="scenario-definition" type="button" title="Inspect the selected scenario">Scenario</button>
+          <select id="scenario-select" aria-label="Checked scenario"></select>
           <button id="select-scenario" class="secondary">Select</button>
+          <span id="scenario-status" class="section-summary"></span>
         </div>
-      </div>
-      <div id="scenario" class="empty">No scenario selected.</div>
-    </section>
-    <section class="wide graph-section">
-      <div class="section-heading"><h2>Graph</h2></div>
-      <div id="graph" class="empty">Waiting for a validated topology.</div>
-    </section>
-    <section class="wide">
-      <div class="section-heading">
-        <div><h2>Causal history</h2><p id="history-summary" class="section-summary">No committed records.</p></div>
-        <button id="show-older" class="secondary" hidden>Show older records</button>
-      </div>
-      <div id="history" class="empty">No committed records.</div>
-    </section>
-    <section><h2>Instances and private state</h2><div id="state" class="empty">No active instance.</div></section>
-    <section><h2>Calls and Sessions</h2><div id="exchanges" class="empty">No open exchange.</div></section>
-    <section class="wide"><h2>Cost report</h2><div id="cost" class="empty">No measured cost.</div></section>
+        <div id="graph" class="empty">Waiting for a validated topology.</div>
+      </section>
+      <div id="workspace-splitter" class="workspace-splitter" role="separator" aria-label="Resize graph and inspector" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="720" aria-valuenow="360" tabindex="0"></div>
+      <aside class="inspector" aria-label="Execution inspector">
+        <div class="inspector-tabs" role="tablist" aria-label="Inspector views">
+          <button id="tab-envelope" role="tab" aria-controls="panel-envelope" aria-selected="true" data-inspector-tab="envelope">Envelope</button>
+          <button id="tab-mailbox" role="tab" aria-controls="panel-mailbox" aria-selected="false" data-inspector-tab="mailbox" tabindex="-1">Mailbox</button>
+          <button id="tab-definition" role="tab" aria-controls="panel-definition" aria-selected="false" data-inspector-tab="definition" tabindex="-1">Definition</button>
+          <button id="tab-instances" role="tab" aria-controls="panel-instances" aria-selected="false" data-inspector-tab="instances" tabindex="-1">Instances</button>
+          <button id="tab-history" role="tab" aria-controls="panel-history" aria-selected="false" data-inspector-tab="history" tabindex="-1">History</button>
+        </div>
+        <div id="panel-envelope" class="inspector-panel" role="tabpanel" aria-labelledby="tab-envelope"><div id="envelope" class="empty">No envelope selected.</div></div>
+        <div id="panel-mailbox" class="inspector-panel mailbox-panel" role="tabpanel" aria-labelledby="tab-mailbox" hidden><div id="mailbox" class="empty">Select a mailbox in the graph.</div></div>
+        <div id="panel-definition" class="inspector-panel" role="tabpanel" aria-labelledby="tab-definition" hidden><div id="definition" class="empty">Select a Graph or Node.</div></div>
+        <div id="panel-instances" class="inspector-panel runtime-panel" role="tabpanel" aria-labelledby="tab-instances" hidden>
+          <section><h2>Injections</h2><div id="injections" class="empty">No admitted injection.</div></section>
+          <section><h2>Instances and private state</h2><div id="state" class="empty">No active instance.</div></section>
+          <section><h2>Calls and Sessions</h2><div id="exchanges" class="empty">No open exchange.</div></section>
+          <section><h2>Cost report</h2><div id="cost" class="empty">No measured cost.</div></section>
+        </div>
+        <div id="panel-history" class="inspector-panel history-panel" role="tabpanel" aria-labelledby="tab-history" hidden>
+          <div class="history-heading"><p id="history-summary" class="section-summary">No committed records.</p><button id="show-older" class="secondary" hidden>Older</button></div>
+          <div id="history" class="empty">No committed records.</div>
+        </div>
+      </aside>
+    </div>
   </main>
   <script src="/graph-layout.js" defer></script>
   <script src="/app.js" defer></script>

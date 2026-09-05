@@ -149,9 +149,9 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
     assert!(
         snapshot["topology"]["edges"]
             .as_array()
-            .is_some_and(|edges| edges
-                .iter()
-                .all(|edge| { edge["queued_count"] == "0" && edge["traversal_count"] == "0" })),
+            .is_some_and(|edges| edges.iter().all(|edge| {
+                edge["queued_count"] == "0" && edge["mailbox"].as_array().is_some_and(Vec::is_empty)
+            })),
         "a fresh graph starts with no invented edge traffic: {snapshot}"
     );
 
@@ -200,11 +200,14 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
         "1",
         "the admitted envelope is currently waiting on its exact edge"
     );
-    assert_eq!(
-        topology_edge(&after_action, ".in>relay.in")["traversal_count"],
-        "1",
-        "the same admission contributes one cumulative traversal"
-    );
+    let mailbox = topology_edge(&after_action, ".in>relay.in")["mailbox"]
+        .as_array()
+        .expect("the exact mailbox FIFO is inspectable");
+    assert_eq!(mailbox.len(), 1);
+    assert_eq!(mailbox[0]["position"], 0);
+    assert_eq!(mailbox[0]["node"], "relay");
+    assert_eq!(mailbox[0]["port"], "in");
+    assert_eq!(mailbox[0]["envelope_id"], mailbox[0]["origin_id"]);
     let transactions_before = transaction_observation_count(&after_action);
     let step = ui_http(
         address,
@@ -239,13 +242,13 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
     assert_eq!(latest_record["trigger"], "l:start");
     assert_eq!(latest_record["summary"], "Instance opened · App · gen 0");
     assert_eq!(
-        topology_edge(&after_step, "relay.out>shell.in")["traversal_count"],
+        topology_edge(&after_step, "relay.out>shell.in")["queued_count"],
         "0",
         "a lifecycle transaction does not invent an emitted envelope"
     );
 
     for _ in 0..4 {
-        if topology_edge(&after_step, "relay.out>shell.in")["traversal_count"] == "1" {
+        if topology_edge(&after_step, "relay.out>shell.in")["queued_count"] == "1" {
             break;
         }
         let prior_revision = after_step["revision"].as_u64();
@@ -277,9 +280,11 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
         "the emitted envelope is visibly waiting in the downstream mailbox"
     );
     assert_eq!(
-        topology_edge(&after_step, "relay.out>shell.in")["traversal_count"],
-        "1",
-        "current occupancy and cumulative traversal remain distinct"
+        topology_edge(&after_step, "relay.out>shell.in")["mailbox"]
+            .as_array()
+            .map(Vec::len),
+        Some(1),
+        "the mailbox inspector and its count describe the same current FIFO"
     );
 
     for _ in 0..16 {
@@ -337,10 +342,11 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
             .is_some_and(|edges| edges.iter().all(|edge| edge["queued_count"] == "0")),
         "a completed run has no envelopes left in live mailboxes: {completed}"
     );
-    assert_eq!(
-        topology_edge(&completed, "relay.out>shell.in")["traversal_count"],
-        "1",
-        "the causal traversal remains visible after the mailbox drains"
+    assert!(
+        topology_edge(&completed, "relay.out>shell.in")["mailbox"]
+            .as_array()
+            .is_some_and(Vec::is_empty),
+        "the inspector does not confuse causal history with live mailbox contents"
     );
     let continuously_driven_records = completed["history"]["records"].clone();
     let continuously_driven_deliveries = completed["history"]["deliveries"].clone();

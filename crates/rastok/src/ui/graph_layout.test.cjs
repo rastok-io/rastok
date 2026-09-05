@@ -27,7 +27,7 @@ function edge(index, sourceId, sourcePort, targetId, targetPort) {
     source: { id: sourceId, port: sourcePort, kind: sourceId.startsWith("boundary:") ? "input" : "node", owner: "owner:0" },
     target: { id: targetId, port: targetPort, kind: "node" },
     queued_count: "0",
-    traversal_count: "0",
+    mailbox: [],
   };
 }
 
@@ -44,7 +44,12 @@ function stableProjection(result) {
     scopes: [...result.layout.scopes.entries()],
     nodePorts: [...result.layout.portAnchors.entries()],
     scopePorts: [...result.layout.scopePortAnchors.entries()],
-    routes: [...result.routes.entries()].map(([index, route]) => [index, route.points, route.portals]),
+    routes: [...result.routes.entries()].map(([index, route]) => [
+      index,
+      route.points,
+      route.presentationPoints,
+      route.portals,
+    ]),
   });
 }
 
@@ -149,7 +154,7 @@ test("independent pipes receive orthogonal non-overlapping tracks", () => {
   assert.equal(layoutEngine.countRouteOverlaps(routes), 0);
 });
 
-test("fan-out pipes separate at the pin instead of sharing an unreadable trunk", () => {
+test("fan-out presentation curves separate immediately after their common pin", () => {
   const topology = {
     owners: [owner("owner:0", null, [{ name: "in", direction: "input" }])],
     nodes: [
@@ -163,12 +168,12 @@ test("fan-out pipes separate at the pin instead of sharing an unreadable trunk",
   };
   const { routes } = render(topology);
   assert.equal(layoutEngine.countRouteCrossings(routes), 0);
-  assert.equal(layoutEngine.countRouteOverlaps(routes), 0);
-  assert.notEqual(
-    routes.get(0).points[1].y,
-    routes.get(1).points[1].y,
-    "the two pipes become visually distinct immediately after their shared pin",
-  );
+  assert.equal(layoutEngine.countRouteOverlaps(routes), 1, "the invisible lane plan may share its source stub");
+  const upper = layoutEngine.curvedCorridorSegments(routes.get(0).presentationPoints);
+  const lower = layoutEngine.curvedCorridorSegments(routes.get(1).presentationPoints);
+  assert.deepEqual(upper[0].from, lower[0].from, "both pipes start at the exact output pin");
+  assert.notDeepEqual(upper[0], lower[0], "the visible curves share no segment after that pin");
+  assert.notEqual(routes.get(0).presentationPoints[1].y, routes.get(1).presentationPoints[1].y);
 });
 
 test("ambiguous flattened composition seams never invent a Graph port", () => {
@@ -188,4 +193,317 @@ test("ambiguous flattened composition seams never invent a Graph port", () => {
   };
   const { routes } = render(topology);
   assert.deepEqual(routes.get(0).portals, []);
+});
+
+test("the smooth cubic presentation remains inside its routed bounds", () => {
+  const points = [
+    { x: 10, y: 20 },
+    { x: 80, y: 20 },
+    { x: 80, y: 90 },
+    { x: 140, y: 90 },
+  ];
+  const path = layoutEngine.curvedCorridorPath(points);
+  assert.match(path, /^M 10 20 /);
+  assert.match(path, / 140 90$/);
+  assert.doesNotMatch(path, /\s[QL]\s/, "the presentation uses cubic Beziers throughout");
+  assert.equal((path.match(/ C /g) || []).length, 3, "one smooth cubic joins each routed waypoint");
+  const segments = layoutEngine.curvedCorridorSegments(points);
+  assert.equal(segments[0].from.y, segments[0].c1.y, "the output tangent is horizontal");
+  assert.equal(segments.at(-1).c2.y, segments.at(-1).to.y, "the input tangent is horizontal");
+  for (const point of layoutEngine.sampleCurvedCorridor(points, undefined, 16)) {
+    assert.ok(point.x >= 10 && point.x <= 140);
+    assert.ok(point.y >= 20 && point.y <= 90);
+  }
+  assert.equal(layoutEngine.orthogonalSegments(points).length, 3);
+});
+
+test("explicit nothing drains remain local output ports", () => {
+  const topology = {
+    owners: [owner("owner:0", null)],
+    nodes: [{ ...operator("model", "owner:0", [
+      { name: "err", direction: "output" },
+      { name: "exit", direction: "output" },
+      { name: "out", direction: "output" },
+    ]), kind: "connector" }],
+    edges: [
+      {
+        index: 0,
+        route: "model.err>!discard",
+        source: { id: "model", port: "err", kind: "node", owner: "owner:0" },
+        target: { id: "discard:0", port: null, kind: "discard", owner: "owner:0", label: "Discard · model.err" },
+      },
+      {
+        index: 1,
+        route: "model.out>!discard",
+        source: { id: "model", port: "out", kind: "node", owner: "owner:0" },
+        target: { id: "discard:1", port: null, kind: "discard", owner: "owner:0", label: "Discard · model.out" },
+      },
+    ],
+  };
+  const { graph, routes } = render(topology);
+  assert.deepEqual(graph.edges, [], "a drain with no inspectable destination is not drawn as a pipe");
+  assert.equal(graph.nodes.some((node) => node.kind === "discard"), false, "no synthetic sink box is created");
+  assert.deepEqual(
+    graph.byId.get("model").ports.map((port) => port.name),
+    ["err", "exit", "out"],
+    "all declared contract ports remain visible",
+  );
+  assert.equal(routes.size, 0);
+});
+
+test("Graph handler choices reach boundary outputs without becoming mailboxes", () => {
+  const topology = {
+    owners: [owner("owner:0", null, [
+      { name: "in", direction: "input" },
+      { name: "done", direction: "output" },
+      { name: "next", direction: "output" },
+      { name: "expired", direction: "output" },
+    ])],
+    nodes: [{ ...operator("model", "owner:0", [
+      { name: "in", direction: "input" },
+      { name: "exit", direction: "output" },
+    ]), kind: "connector" }],
+    control_nodes: [{
+      id: "control:owner:0:loop",
+      owner: "owner:0",
+      kind: "control",
+      label: "Loop manager",
+      type: "control",
+      ports: [{ name: "fuel", direction: "output" }],
+      inspect_owner: "owner:0",
+    }],
+    edges: [edge(0, "boundary:input:in", "in", "model", "in")],
+    handler_relations: [
+      {
+        index: 1,
+        route: "@control:0:model.exit>done",
+        relation: "handler",
+        owner: "owner:0",
+        activation: "model.exit",
+        show_label: true,
+        source: { id: "model", port: "exit", kind: "node" },
+        target: { id: "boundary:output:done", port: "done", kind: "output", owner: "owner:0" },
+      },
+      {
+        index: 2,
+        route: "@control:0:model.exit>next",
+        relation: "temporal",
+        owner: "owner:0",
+        activation: "model.exit",
+        show_label: false,
+        source: { id: "model", port: "exit", kind: "node" },
+        target: { id: "boundary:output:next", port: "next", kind: "output", owner: "owner:0" },
+      },
+      {
+        index: 3,
+        route: "@control:0:loop>expired",
+        relation: "manager",
+        owner: "owner:0",
+        activation: "Loop fuel exhausted",
+        show_label: false,
+        source: { id: "control:owner:0:loop", port: "fuel", kind: "control" },
+        target: { id: "boundary:output:expired", port: "expired", kind: "output", owner: "owner:0" },
+      },
+    ],
+  };
+  const { graph, routes } = render(topology);
+  assert.equal(graph.edges.length, 4);
+  assert.equal(graph.byId.get("control:owner:0:loop").kind, "control");
+  assert.equal(graph.byId.get("boundary:output:done").kind, "boundary");
+  assert.equal(routes.size, 4);
+  assert.deepEqual(
+    graph.edges.filter((candidate) => candidate.relation).map((candidate) => candidate.relation),
+    ["handler", "temporal", "manager"],
+  );
+  assert.ok(graph.edges.filter((candidate) => candidate.relation).every((candidate) =>
+    candidate.mailbox === undefined && candidate.queued_count === undefined));
+});
+
+test("Graph outputs keep a non-overlapping side band without synthetic sinks", () => {
+  const topology = {
+    owners: [owner("owner:0", null, [
+      { name: "done", direction: "output" },
+      { name: "failed", direction: "output" },
+    ])],
+    nodes: [operator("model", "owner:0", [{ name: "out", direction: "output" }])],
+    edges: [{
+      index: 0,
+      route: "model.out>!discard",
+      source: { id: "model", port: "out", kind: "node", owner: "owner:0" },
+      target: { id: "discard:0", port: null, kind: "discard", owner: "owner:0", label: "Discard · model.out" },
+      queued_count: "0",
+      mailbox: [],
+    }],
+  };
+  const { graph, layout, routes } = render(topology);
+  const root = topology.owners[0];
+  const ys = root.ports
+    .map((port) => layoutEngine.scopePortAnchor(root, layout.scopes.get(root.id), port, layout).y)
+    .sort((left, right) => left - right);
+  for (let index = 1; index < ys.length; index += 1) {
+    assert.ok(ys[index] - ys[index - 1] >= 20, "every right-side target keeps the declared spacing");
+  }
+  assert.equal(graph.nodes.some((node) => node.kind === "discard"), false);
+  assert.equal(routes.size, 0);
+});
+
+test("the root reserves a complete output gutter without stretching a nested scope", () => {
+  const topology = {
+    owners: [
+      owner("owner:0", null, [
+        { name: "done", direction: "output" },
+        { name: "expired", direction: "output" },
+        { name: "failed", direction: "output" },
+        { name: "next", direction: "output" },
+        { name: "in", direction: "input" },
+      ]),
+      owner("owner:1", "owner:0", [{ name: "in", direction: "input" }]),
+    ],
+    nodes: [
+      operator("observe", "owner:1", [
+        { name: "in", direction: "input" },
+        { name: "out", direction: "output" },
+      ]),
+      { ...operator("model", "owner:0", [
+        { name: "in", direction: "input" },
+        { name: "err", direction: "output" },
+        { name: "exit", direction: "output" },
+        { name: "out", direction: "output" },
+      ]), kind: "connector" },
+    ],
+    edges: [
+      edge(0, "boundary:input:in", "in", "observe", "in"),
+      edge(1, "boundary:input:in", "in", "model", "in"),
+      {
+        index: 2,
+        route: "observe.out>!discard",
+        source: { id: "observe", port: "out", kind: "node", owner: "owner:1" },
+        target: { id: "discard:2", port: null, kind: "discard", owner: "owner:1", label: "Discard · audit.observe.out" },
+      },
+      ...["err", "out"].map((port, offset) => ({
+        index: 3 + offset,
+        route: `model.${port}>!discard`,
+        source: { id: "model", port, kind: "node", owner: "owner:0" },
+        target: { id: `discard:${3 + offset}`, port: null, kind: "discard", owner: "owner:0", label: `Discard · model.${port}` },
+      })),
+    ],
+  };
+  const { graph, layout, routes } = render(topology);
+  const root = layout.scopes.get("owner:0");
+  const nested = layout.scopes.get("owner:1");
+  const rightmostWork = Math.max(
+    layout.positions.get("model").x + layout.positions.get("model").width,
+    layout.positions.get("observe").x + layout.positions.get("observe").width,
+  );
+  assert.ok(root.x + root.width - rightmostWork >= 140, "the root keeps its 140 px result column");
+  assert.ok(nested.x + nested.width < root.x + root.width - 100, "the nested Graph does not consume the result gutter");
+  assert.equal(graph.nodes.some((node) => node.kind === "discard"), false);
+  assert.ok([...routes.values()].every((route) => route.label.leader === null), "mailboxes sit directly beside their route");
+  const rootInput = layoutEngine.scopePortAnchor(
+    topology.owners[0],
+    root,
+    topology.owners[0].ports.find((port) => port.direction === "input"),
+    layout,
+  );
+  const nestedInput = layoutEngine.scopePortAnchor(
+    topology.owners[1],
+    nested,
+    topology.owners[1].ports[0],
+    layout,
+  );
+  const fanLabel = routes.get(0).label.box;
+  const rootLabelEnd = rootInput.x + 9 + 16;
+  const nestedLabelStart = nestedInput.x + 9;
+  assert.ok(fanLabel.x - rootLabelEnd >= 16, "the fan-out counter clears the App input label");
+  assert.ok(nestedLabelStart - (fanLabel.x + fanLabel.width) >= 16, "the fan-out counter clears the nested input label");
+});
+
+test("mailbox labels avoid every unrelated presentation curve", () => {
+  const topology = {
+    owners: [owner("owner:0", null, [{ name: "in", direction: "input" }])],
+    nodes: [
+      operator("top", "owner:0", [{ name: "in", direction: "input" }, { name: "out", direction: "output" }]),
+      operator("bottom", "owner:0", [{ name: "in", direction: "input" }, { name: "out", direction: "output" }]),
+    ],
+    edges: [
+      edge(0, "boundary:input:in", "in", "top", "in"),
+      edge(1, "boundary:input:in", "in", "bottom", "in"),
+    ],
+  };
+  const { routes } = render(topology);
+  for (const [index, route] of routes) {
+    const box = route.label.box;
+    for (const [otherIndex, other] of routes) {
+      if (index === otherIndex) continue;
+      const crosses = layoutEngine.sampleCurvedCorridor(other.presentationPoints, undefined, 24).some((point) =>
+        point.x >= box.x - 4 && point.x <= box.x + box.width + 4
+          && point.y >= box.y - 4 && point.y <= box.y + box.height + 4);
+      assert.equal(crosses, false, `curve ${otherIndex} avoids label ${index}`);
+    }
+  }
+});
+
+test("presentation curves avoid unrelated port labels and square pins", () => {
+  const topology = {
+    owners: [owner("owner:0", null, [{ name: "in", direction: "input" }])],
+    nodes: [
+      operator("source", "owner:0", [
+        { name: "in", direction: "input" },
+        { name: "alpha", direction: "output" },
+        { name: "beta", direction: "output" },
+      ]),
+      operator("upper", "owner:0", [{ name: "in", direction: "input" }]),
+      operator("lower", "owner:0", [{ name: "in", direction: "input" }]),
+    ],
+    edges: [
+      edge(0, "boundary:input:in", "in", "source", "in"),
+      edge(1, "source", "alpha", "upper", "in"),
+      edge(2, "source", "beta", "lower", "in"),
+    ],
+  };
+  const { graph, layout, routes } = render(topology);
+  const portGeometry = [];
+  for (const node of graph.nodes) {
+    if (["boundary", "discard"].includes(node.kind)) continue;
+    const position = layout.positions.get(node.id);
+    for (const port of node.ports) {
+      const anchor = layoutEngine.portAnchor(node, position, port.name, port.direction, layout);
+      const labelX = anchor.x + (port.direction === "input" ? -8 : 8);
+      const width = Math.max(10, port.name.length * 6 + 4);
+      portGeometry.push({
+        node: node.id,
+        port: port.name,
+        anchor,
+        label: {
+          x: port.direction === "input" ? labelX - width : labelX,
+          y: anchor.y - 15,
+          width,
+          height: 13,
+        },
+      });
+    }
+  }
+  for (const edgeValue of graph.edges) {
+    const route = routes.get(edgeValue.index);
+    if (!route) continue;
+    const related = new Set([
+      `${edgeValue.source.id}\u0000${edgeValue.source.port || ""}`,
+      `${edgeValue.target.id}\u0000${edgeValue.target.port || ""}`,
+    ]);
+    const samples = layoutEngine.sampleCurvedCorridor(route.presentationPoints, undefined, 32);
+    for (const geometry of portGeometry) {
+      if (related.has(`${geometry.node}\u0000${geometry.port}`)) continue;
+      const hitsDisk = samples.some((point) => Math.hypot(
+        point.x - geometry.anchor.x,
+        point.y - geometry.anchor.y,
+      ) < 6);
+      assert.equal(hitsDisk, false, `${edgeValue.route} avoids ${geometry.node}.${geometry.port} pin`);
+      const hitsLabel = samples.some((point) =>
+        point.x >= geometry.label.x - 2
+          && point.x <= geometry.label.x + geometry.label.width + 2
+          && point.y >= geometry.label.y - 2
+          && point.y <= geometry.label.y + geometry.label.height + 2);
+      assert.equal(hitsLabel, false, `${edgeValue.route} avoids ${geometry.node}.${geometry.port} label`);
+    }
+  }
 });

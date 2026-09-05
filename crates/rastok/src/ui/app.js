@@ -9,18 +9,42 @@ history.replaceState(null, "", location.pathname);
 
 let controls = false;
 let currentSnapshot = null;
+let liveSnapshot = null;
+let timelineIndex = null;
+let manualHistoricalView = false;
+let bufferedPlayback = false;
+let replayPaused = false;
+let playbackTimer = null;
 let historyLimit = 100;
 let selectedTopologyItem = null;
+let selectedMailboxRoute = null;
+let selectedHandlerRelation = null;
+let mailboxVisibleLimit = 100;
 let lastAnimatedActivity = null;
 let pendingCommandRevision = null;
+let activeInspectorTab = "envelope";
+let scenarioDefinitionActive = false;
+let graphResizeObserver = null;
+let graphTextSync = null;
+const graphViewport = { scale: 1, x: 0, y: 0 };
 
-async function post(path, body = null) {
+const COMMAND_HINTS = Object.freeze({
+  resume: "Play: replay retained boundaries at the selected speed",
+  pause: "Pause: stop playback or execution at the next safe boundary",
+  step: "Step in: advance one retained atomic boundary",
+  "retry-step": "Retry: retry the reserved transaction",
+  "run-to-completion": "Continue: run immediately to completion",
+  "next-scenario-action": "Step over: execute one complete authored scenario action",
+  "run-until-assertion": "Run to expect: continue to the next expect action",
+  "reset-scenario": "Reset: start a clean scenario branch",
+  close: "Close UI",
+});
+
+async function post(path) {
   const headers = { "X-Rastok-Controller": controller };
-  if (body !== null) headers["Content-Type"] = "application/json";
   const response = await fetch(path, {
     method: "POST",
     headers,
-    body: body === null ? undefined : body,
   });
   if (!response.ok) throw new Error(await response.text());
   return response;
@@ -38,35 +62,65 @@ async function claim(take = false) {
   updateControls();
 }
 
+function releaseControl() {
+  if (!controls) return;
+  controls = false;
+  fetch("/api/control/release", {
+    method: "POST",
+    headers: { "X-Rastok-Controller": controller },
+    keepalive: true,
+  }).catch(() => {});
+}
+
 async function refresh() {
-  const response = await fetch("/api/snapshot", { cache: "no-store" });
-  if (!response.ok) throw new Error(await response.text());
-  currentSnapshot = await response.json();
+  const [snapshotResponse, timelineResponse] = await Promise.all([
+    fetch("/api/snapshot", { cache: "no-store" }),
+    fetch("/api/timeline", { cache: "no-store" }),
+  ]);
+  if (!snapshotResponse.ok) throw new Error(await snapshotResponse.text());
+  if (!timelineResponse.ok) throw new Error(await timelineResponse.text());
+  liveSnapshot = await snapshotResponse.json();
+  timelineIndex = await timelineResponse.json();
+  if (pendingCommandRevision !== null && liveSnapshot.revision > pendingCommandRevision) {
+    pendingCommandRevision = null;
+    setCommandStatus("");
+  }
+  if (!currentSnapshot) {
+    currentSnapshot = liveSnapshot;
+    renderSnapshot(currentSnapshot);
+    return;
+  }
+  if (manualHistoricalView) {
+    renderLiveExecutionState();
+    renderTimeline();
+    updateControls();
+    return;
+  }
+  if (bufferedPlayback && !sameTimelinePoint(currentSnapshot, liveSnapshot)) {
+    scheduleBufferedBoundary();
+    renderTimeline();
+    updateControls();
+    return;
+  }
+  currentSnapshot = liveSnapshot;
   renderSnapshot(currentSnapshot);
 }
 
 function renderSnapshot(snapshot) {
-  if (pendingCommandRevision !== null && snapshot.revision > pendingCommandRevision) {
-    pendingCommandRevision = null;
-  }
+  currentSnapshot = snapshot;
   const execution = snapshot.execution || {};
-  const state = execution.state || "paused";
-  text("execution-state", state);
-  document.querySelector("#execution-state").className = `pill state-${state}`;
+  renderExecutionState(snapshot);
   text("mode", snapshot.mode === "simulate" ? "SIMULATION" : (snapshot.mode || "—").toUpperCase());
-  text("logical-time", formatNanoseconds(execution.logical_time_ns));
+  text("logical-time", formatLogicalTime(execution.logical_time_ns));
+  document.querySelector("#logical-time").title = execution.logical_time_ns === undefined
+    ? ""
+    : `${execution.logical_time_ns} ns`;
   text("awaiting-calls", String(execution.awaiting_outbound_calls || 0));
 
   const simulation = snapshot.mode === "simulate";
   for (const element of document.querySelectorAll(".simulation-only")) {
     element.hidden = !simulation;
   }
-  const scenario = snapshot.scenario?.current;
-  const stepLabel = simulation && scenario && !scenario.complete && scenario.quiescent
-    ? "Step to next scenario action"
-    : "Step one atomic transaction";
-  document.querySelector("#step").title = stepLabel;
-  document.querySelector("#step").setAttribute("aria-label", stepLabel);
   renderFault(snapshot.fault);
   renderScenario(snapshot.scenario, simulation);
   const activity = snapshot.topology?.activity || null;
@@ -74,30 +128,342 @@ function renderSnapshot(snapshot) {
   const activityKey = activity
     ? activity.ordinal === null
       ? `external:${activity.records?.from ?? "?"}:${activity.records?.through ?? "?"}`
-      : `step:${activity.ordinal}`
+      : `branch:${snapshot.timeline?.branch ?? 0}:boundary:${activity.ordinal}`
     : null;
-  const animateStep = Boolean(activity) && activityKey !== lastAnimatedActivity;
-  renderTopology(snapshot.topology, animateStep);
-  if (animateStep) lastAnimatedActivity = activityKey;
+  const animateBoundary = Boolean(activity) && activityKey !== lastAnimatedActivity;
+  renderTopology(snapshot.topology, animateBoundary);
+  if (animateBoundary) lastAnimatedActivity = activityKey;
   renderRelatedPanels(snapshot);
+  renderTimeline();
   updateControls();
+}
+
+function renderLiveExecutionState() {
+  renderExecutionState(currentSnapshot);
+}
+
+function renderExecutionState(snapshot) {
+  const state = snapshot?.execution?.state || "paused";
+  const liveState = liveSnapshot?.execution?.state || state;
+  const atLive = sameTimelinePoint(snapshot, liveSnapshot);
+  const pill = document.querySelector("#execution-state");
+  if (!atLive && (bufferedPlayback || replayPaused)) {
+    text("execution-state", `${replayPaused ? "replay paused" : "replaying"} · engine ${liveState}`);
+    pill.className = `execution-state state-${replayPaused ? "paused" : "running"}`;
+    return;
+  }
+  text("execution-state", atLive ? state : `${liveState} · live`);
+  pill.className = `execution-state state-${liveState}`;
+}
+
+function sameTimelinePoint(left, right) {
+  return Number(left?.timeline?.branch || 0) === Number(right?.timeline?.branch || 0)
+    && Number(left?.timeline?.boundary || 0) === Number(right?.timeline?.boundary || 0);
+}
+
+function timelineBranch(branch) {
+  return (timelineIndex?.branches || []).find((candidate) => Number(candidate.branch) === Number(branch));
+}
+
+function branchName(branch) {
+  return Number(branch) === 0 ? "Main" : `Branch ${branch}`;
+}
+
+function timelineFrames(branch) {
+  return timelineBranch(branch)?.frames || [];
+}
+
+async function showBoundary(branch, boundary, manual = true) {
+  const response = await fetch(`/api/snapshot?branch=${encodeURIComponent(branch)}&boundary=${encodeURIComponent(boundary)}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(await response.text());
+  manualHistoricalView = manual;
+  currentSnapshot = await response.json();
+  renderSnapshot(currentSnapshot);
+}
+
+function scheduleBufferedBoundary() {
+  if (playbackTimer !== null) return;
+  const speed = Number(document.querySelector("#playback-speed").value);
+  const branch = Number(currentSnapshot?.timeline?.branch || 0);
+  const currentBoundary = Number(currentSnapshot?.timeline?.boundary || 0);
+  const next = timelineFrames(branch).find((frame) => Number(frame.boundary) > currentBoundary);
+  if (!next) {
+    const liveBranch = Number(liveSnapshot?.timeline?.branch || 0);
+    const liveRunning = liveSnapshot?.execution?.state === "running";
+    if (branch !== liveBranch || !liveRunning) {
+      bufferedPlayback = false;
+      manualHistoricalView = branch !== liveBranch;
+    }
+    renderExecutionState(currentSnapshot);
+    renderTimeline();
+    updateControls();
+    return;
+  }
+  playbackTimer = setTimeout(async () => {
+    playbackTimer = null;
+    try {
+      await showBoundary(branch, next.boundary, false);
+      scheduleBufferedBoundary();
+    } catch (error) {
+      bufferedPlayback = false;
+      setCommandStatus(`Buffered playback stopped: ${error.message}`);
+    }
+  }, Math.round(1000 / speed));
+}
+
+function clearPlaybackTimer() {
+  if (playbackTimer === null) return;
+  clearTimeout(playbackTimer);
+  playbackTimer = null;
+}
+
+function startBufferedPlayback() {
+  clearPlaybackTimer();
+  manualHistoricalView = false;
+  replayPaused = false;
+  bufferedPlayback = true;
+  renderExecutionState(currentSnapshot);
+  renderTimeline();
+  updateControls();
+  scheduleBufferedBoundary();
+}
+
+function pauseBufferedPlayback() {
+  clearPlaybackTimer();
+  bufferedPlayback = false;
+  replayPaused = true;
+  manualHistoricalView = true;
+  renderExecutionState(currentSnapshot);
+  renderTimeline();
+  updateControls();
+  const branch = Number(currentSnapshot?.timeline?.branch || 0);
+  const boundary = Number(currentSnapshot?.timeline?.boundary || 0);
+  setCommandStatus(`Replay paused on ${branchName(branch)} · B${boundary}; the engine head was not changed.`);
+}
+
+function renderTimeline() {
+  const branch = Number(currentSnapshot?.timeline?.branch || 0);
+  const boundary = Number(currentSnapshot?.timeline?.boundary || 0);
+  const liveBranch = Number(liveSnapshot?.timeline?.branch || branch);
+  const liveBoundary = Number(liveSnapshot?.timeline?.boundary || boundary);
+  const frames = timelineFrames(branch);
+  const branchSelector = document.querySelector("#timeline-branch");
+  const branches = timelineIndex?.branches || [];
+  branchSelector.replaceChildren(...branches.map((candidate) => {
+    const option = document.createElement("option");
+    const candidateFrames = candidate.frames || [];
+    const lastBoundary = Number(candidateFrames.at(-1)?.boundary || 0);
+    option.value = String(candidate.branch);
+    option.textContent = `${branchName(candidate.branch)} · B0–B${lastBoundary}`;
+    option.selected = Number(candidate.branch) === branch;
+    return option;
+  }));
+  branchSelector.disabled = branches.length < 2;
+  const slider = document.querySelector("#timeline");
+  slider.min = String(frames[0]?.boundary ?? 0);
+  slider.max = String(frames.at(-1)?.boundary ?? boundary);
+  slider.value = String(boundary);
+  slider.disabled = frames.length < 2;
+  const atLive = branch === liveBranch && boundary === liveBoundary;
+  document.body.classList.toggle("historical-view", !atLive);
+  const view = atLive
+    ? "LIVE"
+    : bufferedPlayback
+      ? "REPLAY"
+      : replayPaused
+        ? "REPLAY PAUSED"
+        : "HISTORY";
+  text("timeline-position", `${view} · ${branchName(branch)} · B${boundary}`);
+  text("timeline-head", `live ${branchName(liveBranch)} · B${liveBoundary}`);
+  const returnLive = document.querySelector("#return-live");
+  returnLive.hidden = atLive;
+  const returnLabel = `Return to live ${branchName(liveBranch)} · B${liveBoundary}`;
+  returnLive.querySelector("span").textContent = returnLabel;
+  returnLive.title = returnLabel;
+  returnLive.setAttribute("aria-label", returnLabel);
+  const branchButton = document.querySelector("#branch-here");
+  branchButton.hidden = currentSnapshot?.mode !== "simulate" || atLive;
+  const branchLabel = `Create a new simulation branch from ${branchName(branch)} · B${boundary}`;
+  branchButton.title = branchLabel;
+  branchButton.setAttribute("aria-label", branchLabel);
+  branchButton.disabled = !controls
+    || liveSnapshot?.execution?.state === "running"
+    || !(liveSnapshot?.execution?.legal_commands || []).includes("branch-from");
 }
 
 function renderRelatedPanels(snapshot) {
   const selection = selectedTopologyContext(snapshot.topology);
+  const envelope = document.querySelector("#envelope");
+  envelope.className = "";
+  envelope.replaceChildren(envelopePanel(snapshot));
+  renderMailbox(snapshot.topology);
+  const definition = document.querySelector("#definition");
+  definition.className = "";
+  definition.replaceChildren(scenarioDefinitionActive
+    ? scenarioDefinitionPanel(snapshot.scenario?.current)
+    : definitionPanel(selectedTopologyItemView(snapshot.topology)));
   renderHistory(snapshot.history, selection);
+  renderInjections(snapshot, selection);
   renderInstances(snapshot.instances, selection);
   renderExchanges(snapshot.exchanges, selection);
   renderCost(snapshot.cost_report, selection);
 }
 
-function updateControls() {
-  const legal = new Set(currentSnapshot?.execution?.legal_commands || []);
-  for (const button of document.querySelectorAll("button[data-command]")) {
-    button.disabled = pendingCommandRevision !== null || !controls || !legal.has(button.dataset.command);
+function renderMailbox(topology) {
+  const target = document.querySelector("#mailbox");
+  const edge = (topology?.edges || []).find((candidate) => candidate.route === selectedMailboxRoute);
+  if (!edge) {
+    empty(target, "Select a mailbox in the graph.");
+    return;
   }
-  document.querySelector("#select-scenario").disabled =
-    !controls || !legal.has("select-scenario") || !document.querySelector("#scenario-select").value;
+  const destination = (topology.nodes || []).find((node) => node.id === edge.target?.id);
+  const name = destination
+    ? `${destination.path || destination.label}.${edge.target.port}`
+    : edge.route;
+  const deliveries = edge.mailbox || [];
+  const heading = document.createElement("header");
+  heading.className = "mailbox-heading";
+  const title = document.createElement("h3");
+  title.textContent = `Mailbox · ${name}`;
+  const summary = document.createElement("p");
+  summary.textContent = `${deliveries.length} message${deliveries.length === 1 ? "" : "s"} waiting · ${edge.route}`;
+  heading.append(title, summary);
+
+  const list = document.createElement("div");
+  list.className = "mailbox-deliveries";
+  for (const [index, delivery] of deliveries.slice(0, mailboxVisibleLimit).entries()) {
+    const details = document.createElement("details");
+    details.className = "mailbox-delivery";
+    details.open = index < 3;
+    const row = document.createElement("summary");
+    const id = String(delivery.envelope_id || "unknown");
+    row.textContent = `#${index + 1} · ${id.slice(0, 8)}${delivery.claimed ? " · claimed" : ""}`;
+    row.title = id;
+    const meta = document.createElement("p");
+    meta.className = "mailbox-delivery-meta";
+    meta.textContent = `port ${delivery.port || "?"} · sequence ${delivery.sequence || "?"} · generation ${delivery.instance?.generation ?? "?"}`;
+    details.append(row, meta, envelopeZones(delivery.meta, delivery.data));
+    list.append(details);
+  }
+  if (mailboxVisibleLimit < deliveries.length) {
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "mailbox-more secondary";
+    more.textContent = `Show ${Math.min(100, deliveries.length - mailboxVisibleLimit)} more`;
+    more.addEventListener("click", () => {
+      mailboxVisibleLimit += 100;
+      renderMailbox(topology);
+    });
+    list.append(more);
+  }
+  target.className = "";
+  target.replaceChildren(heading, list);
+}
+
+function inspectScenarioDefinition() {
+  scenarioDefinitionActive = true;
+  selectedTopologyItem = null;
+  selectedMailboxRoute = null;
+  selectedHandlerRelation = null;
+  renderTopology(currentSnapshot?.topology, false);
+  if (currentSnapshot) renderRelatedPanels(currentSnapshot);
+  activateInspectorTab("definition");
+}
+
+function scenarioDefinitionPanel(scenario) {
+  const panel = document.createElement("aside");
+  panel.className = `node-definition${scenario ? " populated" : " empty"}`;
+  panel.setAttribute("aria-label", "Selected scenario definition");
+  if (!scenario) {
+    const title = document.createElement("h3");
+    title.textContent = "Scenario definition";
+    panel.append(title);
+    return panel;
+  }
+  const heading = document.createElement("div");
+  heading.className = "node-definition-heading";
+  const identity = document.createElement("div");
+  const eyebrow = document.createElement("p");
+  eyebrow.className = "node-definition-kind";
+  eyebrow.textContent = "scenario";
+  const title = document.createElement("h3");
+  title.textContent = `${scenario.simulation || "?"}.${scenario.scenario || "?"}`;
+  identity.append(eyebrow, title);
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "node-definition-close secondary";
+  close.textContent = "Close";
+  close.setAttribute("aria-label", "Close scenario definition");
+  close.addEventListener("click", () => {
+    scenarioDefinitionActive = false;
+    renderRelatedPanels(currentSnapshot);
+    activateInspectorTab("envelope");
+  });
+  heading.append(identity, close);
+  const progress = document.createElement("p");
+  progress.className = "scenario-definition-progress";
+  progress.textContent = `A${scenario.next_action_index || 0}/${scenario.action_count || 0}`;
+  const actions = document.createElement("ol");
+  actions.className = "scenario-action-list";
+  if (scenario.last_action) {
+    const previous = document.createElement("li");
+    previous.className = "complete";
+    previous.value = Math.max(1, Number(scenario.next_action_index || 0));
+    previous.textContent = scenario.last_action;
+    actions.append(previous);
+  }
+  const current = document.createElement("li");
+  current.className = "current";
+  current.value = Number(scenario.next_action_index || 0) + 1;
+  current.textContent = scenario.next_action || "scenario complete";
+  actions.append(current);
+  const note = document.createElement("p");
+  note.className = "scenario-source-limit";
+  note.textContent = "This front-only snapshot exposes the current action outline, not the authored scenario source.";
+  panel.append(heading, progress, actions, note);
+  return panel;
+}
+
+function updateControls() {
+  const legal = new Set(liveSnapshot?.execution?.legal_commands || currentSnapshot?.execution?.legal_commands || []);
+  const atLive = sameTimelinePoint(currentSnapshot, liveSnapshot);
+  const branch = Number(currentSnapshot?.timeline?.branch || 0);
+  const boundary = Number(currentSnapshot?.timeline?.boundary || 0);
+  const frames = timelineFrames(branch);
+  const canReplayForward = frames.some((frame) => Number(frame.boundary) > boundary);
+  for (const button of document.querySelectorAll("button[data-command]")) {
+    const command = button.dataset.command;
+    const replayPlay = button.dataset.command === "resume" && !atLive && canReplayForward;
+    const replayPause = button.dataset.command === "pause" && bufferedPlayback;
+    const localReplayControl = replayPlay || replayPause;
+    const physicalControl = button.dataset.command === "pause" || button.dataset.command === "close";
+    button.disabled = pendingCommandRevision !== null
+      || (!localReplayControl && !controls)
+      || (!localReplayControl && ((!atLive && !physicalControl) || !legal.has(button.dataset.command)));
+    const base = COMMAND_HINTS[command] || command;
+    let reason = "";
+    if (button.disabled) {
+      if (pendingCommandRevision !== null) reason = "the previous command is still being retained";
+      else if (!controls) reason = "this browser is an observer; take control first";
+      else if (!atLive && !physicalControl) {
+        reason = command === "reset-scenario"
+          ? "available in LIVE only; select Return live"
+          : "available in LIVE only; select Return live or branch from here";
+      } else if (!legal.has(command)) reason = "not legal at the current execution state";
+    }
+    button.title = reason ? `${base} — unavailable: ${reason}.` : base;
+    button.setAttribute("aria-label", reason ? `${base}. Unavailable: ${reason}.` : base);
+  }
+  const selectScenario = document.querySelector("#select-scenario");
+  selectScenario.disabled = !controls || !atLive || !legal.has("select-scenario") || !document.querySelector("#scenario-select").value;
+  selectScenario.title = selectScenario.disabled
+    ? "Select scenario — unavailable until this controller returns to LIVE and selection is legal."
+    : "Select the checked scenario";
+  const back = document.querySelector("#back-boundary");
+  back.disabled = frames.findIndex((frame) => Number(frame.boundary) === boundary) <= 0;
+  back.title = back.disabled
+    ? "Back — no earlier retained boundary exists on this branch."
+    : "Back: view the previous retained boundary";
   document.querySelector("#take-control").hidden = controls;
 }
 
@@ -105,7 +471,7 @@ function renderFault(fault) {
   const panel = document.querySelector("#fault-panel");
   panel.hidden = !fault;
   if (!fault) return;
-  text("fault-title", fault.commit?.includes("draft") ? "Input edit refused" : "Execution fault");
+  text("fault-title", "Execution fault");
   text("fault-message", fault.message || "The transaction faulted.");
   text("fault-help", fault.help || "Inspect the retained state before choosing a legal action.");
   text("fault-commit", fault.commit || "Nothing from the faulting transaction was committed.");
@@ -117,9 +483,13 @@ function renderScenario(scenario, enabled) {
   const next = current.next_action ? `next: ${current.next_action}` : "no remaining action";
   text(
     "scenario-progress",
-    `${current.simulation || "?"}.${current.scenario || "?"} · ${current.next_action_index || 0}/${current.action_count || 0}`,
+    `${current.simulation || "?"}.${current.scenario || "?"} · A${current.next_action_index || 0}/${current.action_count || 0}`,
   );
-  text("scenario-status", `${current.quiescent ? "at action boundary" : "VM work ready"}; ${next}`);
+  const failures = (current.failures || []).length + (current.golden_failures || []).length;
+  text(
+    "scenario-status",
+    `A${current.next_action_index || 0}/${current.action_count || 0} · ${next} · ${failures} failure${failures === 1 ? "" : "s"}`,
+  );
   const select = document.querySelector("#scenario-select");
   const selected = `${current.simulation || ""}\u0000${current.scenario || ""}`;
   const options = [];
@@ -140,23 +510,144 @@ function renderScenario(scenario, enabled) {
     element.selected = option.value === selected;
     return element;
   }));
-  renderGeneric("scenario", {
-    current_action: current.last_action || null,
-    next_action: current.next_action || null,
-    failures: current.failures || [],
-    golden_failures: current.golden_failures || [],
-  }, "No scenario selected.");
+  document.querySelector("#scenario-definition").textContent = current.scenario || "Scenario";
 }
 
-function renderTopology(topology, animateStep = false) {
+function keepGraphTextAtInterfaceSize(svg, intrinsicWidth) {
+  const sync = () => {
+    const renderedWidth = svg.getBoundingClientRect().width;
+    if (!(renderedWidth > 0) || !(intrinsicWidth > 0)) return;
+    const scale = Math.max(renderedWidth / intrinsicWidth / graphViewport.scale, 0.1);
+    svg.style.setProperty("--graph-title-font-size", `${12 / scale}px`);
+    svg.style.setProperty("--graph-mono-font-size", `${10 / scale}px`);
+    svg.style.setProperty("--graph-small-font-size", `${9 / scale}px`);
+    svg.style.setProperty("--graph-text-halo-width", `${3 / scale}px`);
+  };
+  graphTextSync = sync;
+  graphResizeObserver?.disconnect();
+  if (typeof ResizeObserver === "function") {
+    graphResizeObserver = new ResizeObserver(sync);
+    graphResizeObserver.observe(svg);
+  }
+  sync();
+  requestAnimationFrame(sync);
+}
+
+function clampGraphZoom(value) {
+  return Math.min(2.5, Math.max(0.5, value));
+}
+
+function applyGraphViewport(layer, label) {
+  layer.style.transform = `matrix(${graphViewport.scale}, 0, 0, ${graphViewport.scale}, ${graphViewport.x}, ${graphViewport.y})`;
+  if (label) label.textContent = `${Math.round(graphViewport.scale * 100)}%`;
+  requestAnimationFrame(() => graphTextSync?.());
+}
+
+function zoomGraphAt(layer, label, canvas, nextScale, clientX, clientY) {
+  const scale = clampGraphZoom(nextScale);
+  const bounds = canvas.getBoundingClientRect();
+  const anchorX = clientX - bounds.left;
+  const anchorY = clientY - bounds.top;
+  const worldX = (anchorX - graphViewport.x) / graphViewport.scale;
+  const worldY = (anchorY - graphViewport.y) / graphViewport.scale;
+  graphViewport.x = anchorX - worldX * scale;
+  graphViewport.y = anchorY - worldY * scale;
+  graphViewport.scale = scale;
+  applyGraphViewport(layer, label);
+}
+
+function installGraphViewport(canvas, layer) {
+  const controls = document.createElement("div");
+  controls.className = "graph-viewport-controls";
+  controls.setAttribute("aria-label", "Graph viewport controls");
+  const label = document.createElement("span");
+  label.className = "graph-zoom-value";
+  const button = (icon, accessible, action) => {
+    const control = document.createElement("button");
+    control.type = "button";
+    control.title = accessible;
+    control.setAttribute("aria-label", accessible);
+    const image = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    use.setAttribute("href", `#icon-${icon}`);
+    image.append(use);
+    control.append(image);
+    control.addEventListener("click", (event) => {
+      event.stopPropagation();
+      action();
+    });
+    return control;
+  };
+  const center = () => {
+    const bounds = canvas.getBoundingClientRect();
+    return { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 };
+  };
+  controls.append(
+    button("zoom-out", "Zoom out", () => {
+      const point = center();
+      zoomGraphAt(layer, label, canvas, graphViewport.scale / 1.2, point.x, point.y);
+    }),
+    button("zoom-in", "Zoom in", () => {
+      const point = center();
+      zoomGraphAt(layer, label, canvas, graphViewport.scale * 1.2, point.x, point.y);
+    }),
+    button("fit", "Fit graph", () => {
+      graphViewport.scale = 1;
+      graphViewport.x = 0;
+      graphViewport.y = 0;
+      applyGraphViewport(layer, label);
+    }),
+    label,
+  );
+
+  let drag = null;
+  canvas.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || event.target.closest("button, .graph-node, .graph-instance-badge, .edge-counter, .control-relation, .graph-scope-title-hit, text")) return;
+    drag = { x: event.clientX, y: event.clientY, panX: graphViewport.x, panY: graphViewport.y };
+    canvas.classList.add("panning");
+    canvas.setPointerCapture(event.pointerId);
+  });
+  canvas.addEventListener("pointermove", (event) => {
+    if (!drag) return;
+    graphViewport.x = drag.panX + event.clientX - drag.x;
+    graphViewport.y = drag.panY + event.clientY - drag.y;
+    applyGraphViewport(layer, label);
+  });
+  const finishPan = (event) => {
+    if (!drag) return;
+    drag = null;
+    canvas.classList.remove("panning");
+    if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+  };
+  canvas.addEventListener("pointerup", finishPan);
+  canvas.addEventListener("pointercancel", finishPan);
+  canvas.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    zoomGraphAt(
+      layer,
+      label,
+      canvas,
+      graphViewport.scale * (event.deltaY < 0 ? 1.12 : 1 / 1.12),
+      event.clientX,
+      event.clientY,
+    );
+  }, { passive: false });
+  applyGraphViewport(layer, label);
+  return controls;
+}
+
+function renderTopology(topology, animateBoundary = false) {
   const target = document.querySelector("#graph");
   if (!topology || !(topology.nodes || []).length) {
     empty(target, "Waiting for a validated topology.");
     return;
   }
   const activity = topology.activity || null;
+  const drainedOutputs = new Set((topology.edges || [])
+    .filter((edge) => edge.target?.kind === "discard")
+    .map((edge) => `${edge.source.id}\u0000${edge.source.port || ""}`));
   const activityPanel = document.createElement("div");
-  activityPanel.className = `graph-activity${activity ? ` activity-${activity.kind}` : ""}${animateStep ? " activity-new" : ""}`;
+  activityPanel.className = `graph-activity${activity ? ` activity-${activity.kind}` : ""}${animateBoundary ? " activity-new" : ""}`;
   const activityLabel = document.createElement("span");
   activityLabel.className = "graph-activity-label";
   const activityKind = activity?.kind === "transaction"
@@ -171,11 +662,17 @@ function renderTopology(topology, animateStep = false) {
   activityLabel.textContent = activity
     ? activity.ordinal === null
       ? `External · ${activityKind}`
-      : `Step ${activity.ordinal} · ${activityKind}`
-    : "Step";
+      : `B${activity.ordinal} · ${activityKind}`
+    : "B0 · initial";
   const activityText = document.createElement("strong");
-  activityText.textContent = activity?.detail || "No Step has run yet.";
+  activityText.textContent = activity?.detail || "Before admission · no execution boundary has advanced.";
   activityPanel.append(activityLabel, activityText);
+  if (activity?.kind === "lifecycle") {
+    const note = document.createElement("span");
+    note.className = "graph-activity-note";
+    note.textContent = "Instance lifecycle only · no envelope moved";
+    activityPanel.append(note);
+  }
 
   const graph = graphLayout.materializeGraph(topology);
   const layout = graphLayout.layoutGraph(graph.nodes, graph.edges, topology.owners || []);
@@ -186,32 +683,61 @@ function renderTopology(topology, animateStep = false) {
     viewBox: `0 0 ${layout.width} ${layout.height}`,
     width: layout.width,
     height: layout.height,
+    style: `--graph-fit-width:${Math.ceil(layout.width * 1.5)}px`,
+    preserveAspectRatio: "xMinYMin meet",
     role: "img",
-    "aria-label": "Validated Rastok graph with current mailbox occupancy and cumulative traffic",
+    "aria-label": "Validated Rastok graph with current mailbox occupancy",
   });
   svg.classList.add("graph-svg");
+  svg.addEventListener("click", (event) => {
+    if (event.target === svg) selectTopologyItem(null);
+  });
   const definitions = svgElement("defs");
   const marker = svgElement("marker", {
     id: "graph-arrow",
-    viewBox: "0 0 10 10",
-    refX: "8.5",
-    refY: "5",
-    markerWidth: "5.5",
-    markerHeight: "5.5",
-    orient: "auto-start-reverse",
+    viewBox: "0 0 11 7",
+    refX: "11",
+    refY: "3.5",
+    markerWidth: "11",
+    markerHeight: "7",
+    markerUnits: "userSpaceOnUse",
+    orient: "auto",
   });
-  marker.append(svgElement("path", { d: "M 0 0 L 10 5 L 0 10 z" }));
+  marker.append(svgElement("path", { d: "M 0 0 L 7 3.5 L 0 7 z" }));
   const activeMarker = svgElement("marker", {
     id: "graph-arrow-active",
-    viewBox: "0 0 10 10",
-    refX: "8.5",
-    refY: "5",
-    markerWidth: "5.5",
-    markerHeight: "5.5",
-    orient: "auto-start-reverse",
+    viewBox: "0 0 11 7",
+    refX: "11",
+    refY: "3.5",
+    markerWidth: "11",
+    markerHeight: "7",
+    markerUnits: "userSpaceOnUse",
+    orient: "auto",
   });
-  activeMarker.append(svgElement("path", { d: "M 0 0 L 10 5 L 0 10 z" }));
-  definitions.append(marker, activeMarker);
+  activeMarker.append(svgElement("path", { d: "M 0 0 L 7 3.5 L 0 7 z" }));
+  const controlMarker = svgElement("marker", {
+    id: "graph-arrow-control",
+    viewBox: "0 0 11 7",
+    refX: "11",
+    refY: "3.5",
+    markerWidth: "11",
+    markerHeight: "7",
+    markerUnits: "userSpaceOnUse",
+    orient: "auto",
+  });
+  controlMarker.append(svgElement("path", { d: "M 0 0 L 7 3.5 L 0 7 z" }));
+  const temporalMarker = svgElement("marker", {
+    id: "graph-arrow-temporal",
+    viewBox: "0 0 11 7",
+    refX: "11",
+    refY: "3.5",
+    markerWidth: "11",
+    markerHeight: "7",
+    markerUnits: "userSpaceOnUse",
+    orient: "auto",
+  });
+  temporalMarker.append(svgElement("path", { d: "M 0 0 L 7 3.5 L 0 7 z" }));
+  definitions.append(marker, activeMarker, controlMarker, temporalMarker);
   svg.append(definitions);
 
   const scopeLayer = svgElement("g", { class: "graph-scope-layer" });
@@ -224,14 +750,23 @@ function renderTopology(topology, animateStep = false) {
     const selectable = Boolean(owner.definition);
     const selected = selectedTopologyItem === owner.id;
     const group = svgElement("g", {
-      class: `graph-scope${position.depth === 0 ? " root" : " nested"}${active ? " active" : ""}${active && animateStep ? " moving" : ""}${selectable ? " selectable" : ""}${selected ? " selected" : ""}`,
+      class: `graph-scope${position.depth === 0 ? " root" : " nested"}${active ? " active" : ""}${active && animateBoundary ? " moving" : ""}${selectable ? " selectable" : ""}${selected ? " selected" : ""}`,
     });
     if (selectable) {
       group.setAttribute("role", "button");
       group.setAttribute("tabindex", "0");
       group.setAttribute("aria-pressed", String(selected));
       group.setAttribute("aria-label", `Inspect ${owner.path || "App"} Graph definition`);
-      group.addEventListener("click", () => selectTopologyItem(owner.id));
+      group.addEventListener("click", (event) => {
+        const classList = event.target.classList;
+        if (classList.contains("graph-scope-title-hit")
+          || classList.contains("graph-scope-name")
+          || classList.contains("graph-scope-type")) {
+          selectTopologyItem(owner.id);
+        } else if (classList.contains("graph-scope-body")) {
+          selectTopologyItem(null);
+        }
+      });
       group.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
@@ -247,45 +782,60 @@ function renderTopology(topology, animateStep = false) {
       y: position.y,
       width: position.width,
       height: position.height,
-      rx: position.depth === 0 ? "16" : "12",
+      rx: "0",
     });
     const header = svgElement("line", {
       class: "graph-scope-header-line",
       x1: position.x,
-      y1: position.y + 34,
+      y1: position.y + 26,
       x2: position.x + position.width,
-      y2: position.y + 34,
+      y2: position.y + 26,
+    });
+    const titleHit = svgElement("rect", {
+      class: "graph-scope-title-hit",
+      x: position.x,
+      y: position.y,
+      width: position.width,
+      height: "26",
     });
     const name = svgElement("text", {
       class: "graph-scope-name",
       x: position.x + 14,
-      y: position.y + 22,
+      y: position.y + 18,
     });
     name.textContent = truncate(owner.label || "App", 28);
     const type = svgElement("text", {
       class: "graph-scope-type",
-      x: position.x + position.width - 14,
-      y: position.y + 22,
+      x: position.x + position.width - (owner.instances?.length ? 56 : 8),
+      y: position.y + 18,
       "text-anchor": "end",
     });
-    type.textContent = truncate(itemDescriptor(owner), 34);
-    group.append(title, body, header, name, type);
+    type.textContent = truncate(scopeDescriptor(owner), 34);
+    group.append(title, body, header, titleHit, name, type);
+    appendInstanceBadge(
+      group,
+      owner.instances || [],
+      position.x + position.width - 8,
+      position.y + 7,
+      owner.id,
+    );
     for (const port of owner.ports || []) {
       const anchor = graphLayout.scopePortAnchor(owner, position, port, layout);
-      const disk = svgElement("circle", {
+      const pin = svgElement("rect", {
         class: `graph-port graph-port-${port.direction}`,
-        cx: anchor.x,
-        cy: anchor.y,
-        r: "5.5",
+        x: anchor.x - 4,
+        y: anchor.y - 4,
+        width: "8",
+        height: "8",
       });
       const label = svgElement("text", {
         class: "graph-scope-port-label",
         x: anchor.x + (port.direction === "input" ? 9 : -9),
-        y: anchor.y - 8,
+        y: anchor.y - 5,
         "text-anchor": port.direction === "input" ? "start" : "end",
       });
       label.textContent = port.name;
-      group.append(disk, label);
+      group.append(pin, label);
     }
     scopeLayer.append(group);
   }
@@ -301,28 +851,78 @@ function renderTopology(topology, animateStep = false) {
     if (!source || !destination || !sourcePosition || !destinationPosition) continue;
     const activityPhase = activeRoutes.get(edge.route) || null;
     const active = activityPhase !== null;
+    const relation = edge.relation || null;
+    const queuedNow = !relation && Number(edge.queued_count || 0) > 0;
+    const mailbox = !relation && edge.target?.kind === "node";
+    const selected = relation
+      ? selectedHandlerRelation?.route === edge.route
+      : selectedMailboxRoute === edge.route;
     const group = svgElement("g", {
-      class: `graph-edge${active ? " active" : ""}${active && animateStep ? " moving" : ""}`,
+      class: `graph-edge${relation ? ` control-relation relation-${relation}` : ""}${active ? " active" : ""}${queuedNow ? " queued" : ""}${selected ? " selected" : ""}${active && animateBoundary ? " moving" : ""}`,
       "data-route": edge.route,
       "data-activity": activityPhase || "idle",
     });
     const route = edgeRoutes.get(edge.index);
     if (!route) continue;
-    const pathData = graphLayout.roundedOrthogonalPath(route.points, 10);
+    const pathData = graphLayout.curvedCorridorPath(route.presentationPoints || route.points);
     const path = svgElement("path", {
       class: "graph-edge-path",
       d: pathData,
-      "marker-end": active ? "url(#graph-arrow-active)" : "url(#graph-arrow)",
+      "marker-end": active
+        ? "url(#graph-arrow-active)"
+        : relation === "temporal" || relation === "manager"
+          ? "url(#graph-arrow-temporal)"
+          : relation
+            ? "url(#graph-arrow-control)"
+            : "url(#graph-arrow)",
     });
     const title = svgElement("title");
-    title.textContent = `${edge.route} · ${edge.queued_count || "0"} queued now · ${edge.traversal_count || "0"} traversals in this run`;
+    title.textContent = relation
+      ? `${edge.description} · control relation, no envelope mailbox`
+      : mailbox
+      ? `${edge.route} · ${edge.queued_count || "0"} messages waiting`
+      : edge.route;
     path.append(title);
     group.append(path);
 
-    if (active && animateStep) {
+    if (relation) {
+      const inspectRelation = (event) => {
+        event.stopPropagation();
+        inspectHandlerRelation(edge);
+      };
+      group.setAttribute("role", "button");
+      group.setAttribute("tabindex", "0");
+      group.setAttribute("aria-label", `Inspect ${edge.description}`);
+      group.append(svgElement("path", {
+        class: "graph-control-relation-hit",
+        d: pathData,
+      }));
+      group.addEventListener("click", inspectRelation);
+      group.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          inspectRelation(event);
+        }
+      });
+      if (edge.show_label) {
+        const badge = svgElement("g", {
+          class: "graph-handler-label",
+          transform: `translate(${route.label.x - 13} ${route.label.y - 9})`,
+        });
+        const badgeTitle = svgElement("title");
+        badgeTitle.textContent = edge.description;
+        badge.append(svgElement("rect", { width: "26", height: "18", rx: "2" }));
+        const label = svgElement("text", { x: "13", y: "13", "text-anchor": "middle" });
+        label.textContent = edge.relation === "manager" ? "mgr" : "on";
+        badge.append(badgeTitle, label);
+        group.append(badge);
+      }
+    }
+
+    if (active && animateBoundary) {
       const packet = svgElement("circle", {
         class: "graph-edge-packet",
-        r: "5",
+        r: "4",
         "aria-hidden": "true",
       });
       packet.append(svgElement("animateMotion", {
@@ -343,17 +943,33 @@ function renderTopology(topology, animateStep = false) {
       }));
     }
 
-    const badge = svgElement("g", {
-      class: "edge-counter",
-      transform: `translate(${route.label.x - 25} ${route.label.y - 11})`,
-    });
-    badge.append(svgElement("rect", { width: "50", height: "22", rx: "11" }));
-    const queued = svgElement("text", { class: "edge-queued", x: "17", y: "15", "text-anchor": "middle" });
-    queued.textContent = edge.queued_count || "0";
-    const cumulative = svgElement("text", { class: "edge-cumulative", x: "34", y: "15", "text-anchor": "middle" });
-    cumulative.textContent = `Σ${edge.traversal_count || "0"}`;
-    badge.append(queued, cumulative);
-    group.append(badge);
+    if (mailbox) {
+      const badge = svgElement("g", {
+        class: "edge-counter",
+        transform: `translate(${route.label.x - 18} ${route.label.y - 9})`,
+        role: "button",
+        tabindex: "0",
+        "aria-label": `Open mailbox ${destination.path || destination.label}.${edge.target.port}, ${edge.queued_count || "0"} messages waiting`,
+      });
+      const counterTitle = svgElement("title");
+      counterTitle.textContent = `Mailbox ${destination.path || destination.label}.${edge.target.port}: ${edge.queued_count || "0"} messages waiting`;
+      badge.append(svgElement("rect", { width: "36", height: "18", rx: "2" }));
+      const queued = svgElement("text", { x: "18", y: "13", "text-anchor": "middle" });
+      queued.textContent = `≡ ${edge.queued_count || "0"}`;
+      badge.append(counterTitle, queued);
+      const inspect = (event) => {
+        event.stopPropagation();
+        inspectMailbox(edge.route);
+      };
+      badge.addEventListener("click", inspect);
+      badge.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          inspect(event);
+        }
+      });
+      group.append(badge);
+    }
     edgeLayer.append(group);
   }
   svg.append(edgeLayer);
@@ -363,23 +979,44 @@ function renderTopology(topology, animateStep = false) {
     const position = layout.positions.get(node.id);
     if (!position) continue;
     const active = activity?.node === node.path;
-    const selectable = Boolean(node.definition);
+    const selectable = Boolean(node.definition || node.inspect_owner);
     const selected = selectedTopologyItem === node.id;
     const boundary = node.kind === "boundary" || node.kind === "discard";
     const group = svgElement("g", {
-      class: `graph-node graph-node-${node.kind}${active ? " active" : ""}${active && animateStep ? " moving" : ""}${selectable ? " selectable" : ""}${selected ? " selected" : ""}`,
+      class: `graph-node graph-node-${node.kind}${active ? " active" : ""}${active && animateBoundary ? " moving" : ""}${selectable ? " selectable" : ""}${selected ? " selected" : ""}`,
       transform: `translate(${position.x} ${position.y})`,
     });
     if (selectable) {
+      const inspectId = node.inspect_owner || node.id;
       group.setAttribute("role", "button");
       group.setAttribute("tabindex", "0");
       group.setAttribute("aria-pressed", String(selected));
-      group.setAttribute("aria-label", `Inspect ${node.path} definition`);
-      group.addEventListener("click", () => selectTopologyItem(node.id));
+      group.setAttribute("aria-label", node.kind === "control"
+        ? `Inspect ${node.label} control source`
+        : `Inspect ${node.path} definition`);
+      group.addEventListener("click", () => {
+        if (node.kind === "control") {
+          selectedHandlerRelation = null;
+          selectedTopologyItem = inspectId;
+          renderTopology(currentSnapshot?.topology, false);
+          if (currentSnapshot) renderRelatedPanels(currentSnapshot);
+          activateInspectorTab("definition");
+        } else {
+          selectTopologyItem(inspectId);
+        }
+      });
       group.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          selectTopologyItem(node.id);
+          if (node.kind === "control") {
+            selectedHandlerRelation = null;
+            selectedTopologyItem = inspectId;
+            renderTopology(currentSnapshot?.topology, false);
+            if (currentSnapshot) renderRelatedPanels(currentSnapshot);
+            activateInspectorTab("definition");
+          } else {
+            selectTopologyItem(inspectId);
+          }
         }
       });
     }
@@ -393,21 +1030,25 @@ function renderTopology(topology, animateStep = false) {
     }
     if (boundary) {
       const direction = node.direction || (node.kind === "discard" ? "discard" : "input");
-      const diskX = direction === "input" ? position.width - 10 : 10;
-      const disk = svgElement("circle", {
+      const pinX = direction === "input" ? position.width - 10 : 10;
+      const pin = svgElement("rect", {
         class: `graph-port graph-port-${direction}`,
-        cx: diskX,
-        cy: position.height / 2,
-        r: "6",
+        x: pinX - 4,
+        y: position.height / 2 - 4,
+        width: "8",
+        height: "8",
       });
       const label = svgElement("text", {
         class: "graph-boundary-label",
-        x: direction === "input" ? diskX + 12 : diskX - 12,
-        y: position.height / 2 + 4,
-        "text-anchor": direction === "input" ? "start" : "end",
+        x: pinX - 12,
+        y: position.height / 2 - 5,
+        "text-anchor": "end",
       });
-      label.textContent = truncate(node.label || node.ports?.[0]?.name || "boundary", 16);
-      group.append(disk, label);
+      const boundaryLabel = node.kind === "discard"
+        ? String(node.label || "Discard").replace(/^Discard · /, "")
+        : node.label || node.ports?.[0]?.name || "boundary";
+      label.textContent = boundaryLabel;
+      group.append(pin, label);
       nodeLayer.append(group);
       continue;
     }
@@ -415,24 +1056,29 @@ function renderTopology(topology, animateStep = false) {
       class: "graph-node-body",
       width: position.width,
       height: position.height,
-      rx: "10",
+      rx: "3",
     });
     const name = svgElement("text", {
       class: "graph-node-name",
-      x: position.width / 2,
-      y: "22",
-      "text-anchor": "middle",
+      x: "10",
+      y: nodeSubtitle(node) ? "17" : "25",
+      "text-anchor": "start",
     });
     name.textContent = truncate(node.label || node.path || node.id, 22);
-    const type = svgElement("text", {
-      class: "graph-node-type",
-      x: position.width / 2,
-      y: "41",
-      "text-anchor": "middle",
-    });
-    type.textContent = truncate(itemDescriptor(node), 27);
-    group.append(body, name, type);
-    if (active && animateStep && ["inbound", "outbound"].includes(activity?.motion)) {
+    group.append(body, name);
+    const subtitle = nodeSubtitle(node);
+    if (subtitle) {
+      const type = svgElement("text", {
+        class: "graph-node-type",
+        x: "10",
+        y: "33",
+        "text-anchor": "start",
+      });
+      type.textContent = truncate(subtitle, 17);
+      group.append(type);
+    }
+    appendInstanceBadge(group, node.instances || [], position.width - 8, 6, node.id);
+    if (active && animateBoundary && ["inbound", "outbound"].includes(activity?.motion)) {
       const outward = activity.motion === "outbound";
       const from = outward ? position.width / 2 : position.width + 20;
       const to = outward ? position.width + 20 : position.width / 2;
@@ -440,7 +1086,7 @@ function renderTopology(topology, animateStep = false) {
         class: "connector-boundary-packet",
         cx: String(from),
         cy: String(position.height / 2),
-        r: "5",
+        r: "4",
         "aria-hidden": "true",
       });
       packet.append(svgElement("animate", {
@@ -460,48 +1106,54 @@ function renderTopology(topology, animateStep = false) {
         port.direction,
         layout,
       );
-      const disk = svgElement("circle", {
+      const pin = svgElement("rect", {
         class: `graph-port graph-port-${port.direction}`,
-        cx: anchor.x - position.x,
-        cy: anchor.y - position.y,
-        r: "5.5",
+        x: anchor.x - position.x - 4,
+        y: anchor.y - position.y - 4,
+        width: "8",
+        height: "8",
       });
       const portTitle = svgElement("title");
-      portTitle.textContent = `${port.direction} port ${port.name}`;
-      disk.append(portTitle);
+      const drained = port.direction === "output"
+        && drainedOutputs.has(`${node.id}\u0000${port.name}`);
+      portTitle.textContent = drained
+        ? `output port ${port.name} · drained to nothing; no downstream mailbox`
+        : `${port.direction} port ${port.name}`;
+      pin.append(portTitle);
       const portLabel = svgElement("text", {
         class: "graph-node-port-label",
         x: port.direction === "input" ? "-8" : String(position.width + 8),
-        y: anchor.y - position.y - 8,
+        y: anchor.y - position.y - 5,
         "text-anchor": port.direction === "input" ? "end" : "start",
       });
       portLabel.textContent = port.name;
-      group.append(disk, portLabel);
+      group.append(pin, portLabel);
     }
     nodeLayer.append(group);
   }
   svg.append(nodeLayer);
-  canvas.append(svg);
+  const historyWatermark = document.createElement("span");
+  historyWatermark.className = "history-watermark";
+  historyWatermark.textContent = "HISTORY";
+  const panLayer = document.createElement("div");
+  panLayer.className = "graph-pan-layer";
+  panLayer.append(svg);
+  const viewportControls = installGraphViewport(canvas, panLayer);
+  canvas.append(panLayer, historyWatermark, viewportControls);
+  canvas.addEventListener("click", (event) => {
+    if (event.target === canvas) selectTopologyItem(null);
+  });
 
-  const selectableItems = [
-    ...(topology.owners || []).map((owner) => ({ ...owner, kind: "graph" })),
-    ...graph.nodes.filter((node) => node.definition),
-  ];
-  let selected = selectableItems.find((item) => item.id === selectedTopologyItem) || null;
-  if (selectedTopologyItem && !selected) {
+  if (selectedTopologyItem && !selectedTopologyItemView(topology)) {
     selectedTopologyItem = null;
-    selected = null;
   }
-  const workbench = document.createElement("div");
-  workbench.className = "graph-workbench";
-  const inspectors = document.createElement("div");
-  inspectors.className = "inspection-stack";
-  inspectors.append(envelopePanel(currentSnapshot), definitionPanel(selected));
-  workbench.append(canvas, inspectors);
+  if (selectedMailboxRoute && !(topology.edges || []).some((edge) => edge.route === selectedMailboxRoute)) {
+    selectedMailboxRoute = null;
+  }
 
   const legend = document.createElement("div");
   legend.className = "graph-legend";
-  for (const [kind, label] of [["operator", "Operator"], ["connector", "Connector"], ["scope", "Graph scope"], ["input", "Input"], ["output", "Output"]]) {
+  for (const [kind, label] of [["operator", "Operator"], ["connector", "Connector"], ["scope", "Graph scope"], ["input", "Input"], ["output", "Output"], ["handler", "Handler choice"], ["temporal", "Temporal control"]]) {
     const item = document.createElement("span");
     item.className = `legend-${kind}`;
     item.textContent = label;
@@ -509,17 +1161,76 @@ function renderTopology(topology, animateStep = false) {
   }
   const evidence = document.createElement("span");
   evidence.className = "legend-evidence";
-  evidence.textContent = "bold: queued now · gray Σ: traversed in this run";
+  evidence.textContent = "solid = envelope route · dotted = control, no mailbox";
   legend.append(evidence);
 
   target.className = "topology";
-  target.replaceChildren(activityPanel, workbench, legend);
+  target.replaceChildren(activityPanel, canvas, legend);
+  keepGraphTextAtInterfaceSize(svg, layout.width);
+}
+
+function visibleKeyValue(value) {
+  if (value === null || typeof value !== "object") return null;
+  if (!Array.isArray(value) && typeof value.tenant === "string") return value.tenant;
+  for (const child of Object.values(value)) {
+    const found = visibleKeyValue(child);
+    if (found) return found;
+  }
+  return null;
 }
 
 function selectTopologyItem(id) {
+  scenarioDefinitionActive = false;
+  selectedMailboxRoute = null;
+  selectedHandlerRelation = null;
   selectedTopologyItem = selectedTopologyItem === id ? null : id;
   renderTopology(currentSnapshot?.topology, false);
   if (currentSnapshot) renderRelatedPanels(currentSnapshot);
+}
+
+function inspectMailbox(route) {
+  scenarioDefinitionActive = false;
+  selectedTopologyItem = null;
+  selectedHandlerRelation = null;
+  selectedMailboxRoute = route;
+  mailboxVisibleLimit = 100;
+  renderTopology(currentSnapshot?.topology, false);
+  if (currentSnapshot) renderRelatedPanels(currentSnapshot);
+  activateInspectorTab("mailbox");
+}
+
+function inspectHandlerRelation(edge) {
+  scenarioDefinitionActive = false;
+  selectedMailboxRoute = null;
+  selectedHandlerRelation = {
+    route: edge.route,
+    owner: edge.owner,
+    activation: edge.activation,
+    target: edge.target?.port,
+    description: edge.description,
+  };
+  selectedTopologyItem = edge.owner;
+  renderTopology(currentSnapshot?.topology, false);
+  if (currentSnapshot) renderRelatedPanels(currentSnapshot);
+  activateInspectorTab("definition", true);
+}
+
+function activateInspectorTab(name, focus = false) {
+  activeInspectorTab = name;
+  for (const button of document.querySelectorAll("[data-inspector-tab]")) {
+    const selected = button.dataset.inspectorTab === name;
+    button.setAttribute("aria-selected", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+    document.querySelector(`#panel-${button.dataset.inspectorTab}`).hidden = !selected;
+    if (selected && focus) button.focus();
+  }
+}
+
+function selectedTopologyItemView(topology) {
+  if (!selectedTopologyItem || !topology) return null;
+  const owner = (topology.owners || []).find((item) => item.id === selectedTopologyItem);
+  if (owner) return { ...owner, kind: "graph" };
+  return (topology.nodes || []).find((item) => item.id === selectedTopologyItem) || null;
 }
 
 function selectedTopologyContext(topology) {
@@ -579,7 +1290,7 @@ function envelopePanel(snapshot) {
   const panel = document.createElement("aside");
   panel.className = "envelope-inspector";
   panel.setAttribute("aria-label", "Current envelope boundary");
-  const draft = snapshot?.scenario?.current?.draft;
+  const nextInjection = snapshot?.scenario?.current?.next_injection;
   const deliveries = snapshot?.history?.deliveries || [];
   const delivery = deliveries.at(-1) || null;
   const heading = document.createElement("div");
@@ -592,46 +1303,16 @@ function envelopePanel(snapshot) {
   heading.append(identity);
   panel.append(heading);
 
-  if (draft?.position === "before-app-input") {
-    position.textContent = "Before admission";
-    title.textContent = `App.${draft.port}`;
+  if (nextInjection?.position === "before-app-input") {
+    position.textContent = "Next authored input";
+    title.textContent = `App.${nextInjection.port}`;
     const badges = document.createElement("div");
     badges.className = "envelope-badges";
-    badges.append(typeBadge(draft.type?.label || "unknown"));
-    if (draft.edited) {
-      const edited = document.createElement("span");
-      edited.className = "edited-badge";
-      edited.textContent = "edited draft";
-      badges.append(edited);
-    }
+    const type = document.createElement("span");
+    type.textContent = nextInjection.type || "unknown";
+    badges.append(type);
     panel.append(badges);
-    const zones = envelopeZones(draft.meta, null);
-    const dataZone = zones.querySelector("[data-zone='data']");
-    if (draft.editable) {
-      let editorValue = cloneJson(draft.data);
-      const tree = typedNode(draft.type, editorValue, "DATA", (next) => { editorValue = next; });
-      tree.classList.add("typed-tree");
-      dataZone.append(tree);
-      const actions = document.createElement("div");
-      actions.className = "envelope-actions";
-      const save = document.createElement("button");
-      save.type = "button";
-      save.textContent = "Apply DATA draft";
-      save.disabled = !controls || !(snapshot.execution?.legal_commands || []).includes("edit-next-injection");
-      save.addEventListener("click", async () => {
-        try {
-          await post("/api/command/edit-next-injection", JSON.stringify(editorValue));
-          setCommandStatus("DATA draft accepted for validation.");
-        } catch (error) {
-          setCommandStatus(`DATA edit refused: ${error.message}`);
-        }
-      });
-      actions.append(save);
-      dataZone.append(actions);
-    } else {
-      appendDataTree(dataZone, draft.data);
-    }
-    panel.append(zones);
+    panel.append(envelopeZones(nextInjection.meta, nextInjection.data));
     return panel;
   }
 
@@ -671,241 +1352,6 @@ function envelopeZones(meta, data) {
   return zones;
 }
 
-function typedNode(schema, value, name, setValue) {
-  const kind = schema?.kind || "variant";
-  if (kind === "struct") {
-    const fieldset = typedFieldset(name, schema.label);
-    const children = document.createElement("div");
-    children.className = "typed-items";
-    for (const field of schema.fields || []) {
-      children.append(typedNode(field.type, value?.[field.name], field.name, (next) => {
-        value[field.name] = next;
-        setValue(value);
-      }));
-    }
-    fieldset.append(children);
-    return fieldset;
-  }
-  if (kind === "array") {
-    const fieldset = typedFieldset(name, schema.label);
-    const items = document.createElement("div");
-    items.className = "typed-items";
-    const renderItems = () => {
-      items.replaceChildren(...value.map((item, index) => {
-        const row = document.createElement("div");
-        row.className = "typed-item";
-        row.append(typedNode(schema.element, item, `[${index}]`, (next) => {
-          value[index] = next;
-          setValue(value);
-        }));
-        if (schema.length === null || schema.length === undefined) {
-          const remove = tinyButton("−", `Remove item ${index}`);
-          remove.addEventListener("click", () => {
-            value.splice(index, 1);
-            setValue(value);
-            renderItems();
-          });
-          row.append(remove);
-        }
-        return row;
-      }));
-    };
-    renderItems();
-    fieldset.append(items);
-    if (schema.length === null || schema.length === undefined) {
-      const add = tinyButton("+", "Add item");
-      add.addEventListener("click", () => {
-        value.push(defaultValue(schema.element));
-        setValue(value);
-        renderItems();
-      });
-      fieldset.append(add);
-    }
-    return fieldset;
-  }
-  if (kind === "map") {
-    const fieldset = typedFieldset(name, schema.label);
-    const items = document.createElement("div");
-    items.className = "typed-items";
-    const renderItems = () => {
-      items.replaceChildren(...value.map((entry, index) => {
-        const row = document.createElement("div");
-        row.className = "typed-item";
-        const pair = typedFieldset(`entry ${index}`, "key → value");
-        pair.append(
-          typedNode(schema.key, entry.key, "key", (next) => { entry.key = next; setValue(value); }),
-          typedNode(schema.value, entry.value, "value", (next) => { entry.value = next; setValue(value); }),
-        );
-        const remove = tinyButton("−", `Remove entry ${index}`);
-        remove.addEventListener("click", () => {
-          value.splice(index, 1);
-          setValue(value);
-          renderItems();
-        });
-        row.append(pair, remove);
-        return row;
-      }));
-    };
-    renderItems();
-    const add = tinyButton("+", "Add map entry");
-    add.addEventListener("click", () => {
-      value.push({ key: defaultValue(schema.key), value: defaultValue(schema.value) });
-      setValue(value);
-      renderItems();
-    });
-    fieldset.append(items, add);
-    return fieldset;
-  }
-  if (kind === "structural-union") {
-    const fieldset = typedFieldset(name, schema.label);
-    const select = document.createElement("select");
-    for (const [index, branch] of (schema.branches || []).entries()) {
-      const option = document.createElement("option");
-      option.value = String(index);
-      option.textContent = branch.label;
-      option.selected = Number(value?.branch || 0) === index;
-      select.append(option);
-    }
-    const body = document.createElement("div");
-    const renderBranch = () => {
-      const index = Number(select.value);
-      body.replaceChildren(typedNode(schema.branches[index], value.value, "value", (next) => {
-        value.value = next;
-        setValue(value);
-      }));
-    };
-    select.addEventListener("change", () => {
-      value = { branch: Number(select.value), value: defaultValue(schema.branches[Number(select.value)]) };
-      setValue(value);
-      renderBranch();
-    });
-    renderBranch();
-    fieldset.append(select, body);
-    return fieldset;
-  }
-  if (kind === "tagged-union") {
-    const fieldset = typedFieldset(name, schema.label);
-    const select = document.createElement("select");
-    for (const item of schema.cases || []) {
-      const option = document.createElement("option");
-      option.value = item.name;
-      option.textContent = item.name;
-      option.selected = value?.case === item.name;
-      select.append(option);
-    }
-    const body = document.createElement("div");
-    const renderCase = () => {
-      const item = (schema.cases || []).find((candidate) => candidate.name === select.value);
-      body.replaceChildren(typedNode(item.type, value.value, item.name, (next) => {
-        value.value = next;
-        setValue(value);
-      }));
-    };
-    select.addEventListener("change", () => {
-      const item = (schema.cases || []).find((candidate) => candidate.name === select.value);
-      value = { case: item.name, value: defaultValue(item.type) };
-      setValue(value);
-      renderCase();
-    });
-    renderCase();
-    fieldset.append(select, body);
-    return fieldset;
-  }
-  if (kind === "temporal" && value !== null && typeof value === "object") {
-    const fieldset = typedFieldset(name, schema.label);
-    for (const field of ["months", "days", "nanoseconds"]) {
-      fieldset.append(typedLeaf({ kind: "integer", label: "int64" }, value[field], field, (next) => {
-        value[field] = next;
-        setValue(value);
-      }));
-    }
-    return fieldset;
-  }
-  return typedLeaf(schema, value, name, setValue);
-}
-
-function typedLeaf(schema, value, name, setValue) {
-  const row = document.createElement("label");
-  row.className = "typed-leaf";
-  const label = document.createElement("span");
-  label.className = "typed-leaf-label";
-  label.append(document.createTextNode(name), typeBadge(schema?.label || schema?.kind || "unknown"));
-  let input;
-  if (schema?.kind === "bool") {
-    input = document.createElement("input");
-    input.type = "checkbox";
-    input.checked = Boolean(value);
-    input.addEventListener("change", () => setValue(input.checked));
-  } else if (schema?.kind === "enum") {
-    input = document.createElement("select");
-    for (const symbol of schema.symbols || []) {
-      const option = document.createElement("option");
-      option.value = symbol;
-      option.textContent = symbol;
-      option.selected = symbol === value;
-      input.append(option);
-    }
-    input.addEventListener("change", () => setValue(input.value));
-  } else {
-    input = document.createElement("input");
-    input.type = "text";
-    input.value = schema?.kind === "null" ? "null" : String(value ?? "");
-    input.disabled = schema?.kind === "null" || schema?.kind === "variant";
-    input.addEventListener("input", () => setValue(input.value));
-  }
-  row.append(label, input);
-  return row;
-}
-
-function typedFieldset(name, type) {
-  const fieldset = document.createElement("fieldset");
-  fieldset.className = "typed-fieldset";
-  const legend = document.createElement("legend");
-  legend.append(document.createTextNode(name), typeBadge(type));
-  fieldset.append(legend);
-  return fieldset;
-}
-
-function typeBadge(label) {
-  const badge = document.createElement("span");
-  badge.className = "type-badge";
-  badge.textContent = label || "unknown";
-  return badge;
-}
-
-function tinyButton(label, accessible) {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "tiny-button";
-  button.textContent = label;
-  button.setAttribute("aria-label", accessible);
-  button.title = accessible;
-  return button;
-}
-
-function defaultValue(schema) {
-  switch (schema?.kind) {
-    case "null": return null;
-    case "bool": return false;
-    case "integer": case "float": case "decimal": case "number": return "0";
-    case "temporal": return String(schema.family || "").startsWith("Interval")
-      ? { months: "0", days: "0", nanoseconds: "0" }
-      : "0";
-    case "text": case "media-type": case "bytes": case "uuid": return "";
-    case "enum": return schema.symbols?.[0] || "";
-    case "struct": return Object.fromEntries((schema.fields || []).map((field) => [field.name, defaultValue(field.type)]));
-    case "array": return Array.from({ length: schema.length || 0 }, () => defaultValue(schema.element));
-    case "map": return [];
-    case "structural-union": return { branch: 0, value: defaultValue(schema.branches?.[0]) };
-    case "tagged-union": return { case: schema.cases?.[0]?.name || "", value: defaultValue(schema.cases?.[0]?.type) };
-    default: return null;
-  }
-}
-
-function cloneJson(value) {
-  return JSON.parse(JSON.stringify(value));
-}
-
 function definitionPanel(item) {
   const panel = document.createElement("aside");
   panel.className = `node-definition${item ? " populated" : " empty"}`;
@@ -942,6 +1388,13 @@ function definitionPanel(item) {
     badge.textContent = label;
     badges.append(badge);
   }
+  const relation = selectedHandlerRelation?.owner === item.id
+    ? document.createElement("p")
+    : null;
+  if (relation) {
+    relation.className = "handler-relation-context";
+    relation.textContent = selectedHandlerRelation.description;
+  }
   const location = document.createElement("p");
   location.className = "node-definition-location";
   const lineLabel = item.definition.first_line === item.definition.last_line
@@ -953,7 +1406,9 @@ function definitionPanel(item) {
   const code = document.createElement("code");
   code.textContent = item.definition.code;
   pre.append(code);
-  panel.append(heading, badges, location, pre);
+  panel.append(heading, badges);
+  if (relation) panel.append(relation);
+  panel.append(location, pre);
   return panel;
 }
 
@@ -973,6 +1428,54 @@ function itemDescriptor(item) {
     .join(" · ");
 }
 
+function scopeDescriptor(owner) {
+  const base = owner.parent === null ? "App" : (owner.type || "Graph");
+  return [base, ...(owner.aspects || [])].join(" + ");
+}
+
+function nodeSubtitle(node) {
+  if (node.kind !== "connector") return "";
+  const contract = String(node.type || "Connector").split("/").at(-1).split("@")[0];
+  return contract
+    .split(/[-_]/)
+    .map((part) => part ? `${part[0].toUpperCase()}${part.slice(1)}` : "")
+    .join("");
+}
+
+function appendInstanceBadge(group, instances, right, top, itemId) {
+  if (!instances.length) return;
+  const width = 40;
+  const badge = svgElement("g", {
+    class: "graph-instance-badge",
+    transform: `translate(${right - width} ${top})`,
+    role: "button",
+    tabindex: "0",
+  });
+  const title = svgElement("title");
+  const description = `${instances.length} open logical instance${instances.length === 1 ? "" : "s"}`;
+  title.textContent = description;
+  badge.setAttribute("aria-label", `${description}. Inspect these instances.`);
+  const inspectInstances = (event) => {
+    event.stopPropagation();
+    selectedTopologyItem = itemId;
+    renderTopology(currentSnapshot?.topology, false);
+    if (currentSnapshot) renderRelatedPanels(currentSnapshot);
+    activateInspectorTab("instances");
+  };
+  badge.addEventListener("click", inspectInstances);
+  badge.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      inspectInstances(event);
+    }
+  });
+  badge.append(title, svgElement("rect", { width, height: "17", rx: "2" }));
+  const label = svgElement("text", { x: String(width / 2), y: "12", "text-anchor": "middle" });
+  label.textContent = `⧉ ${instances.length}`;
+  badge.append(label);
+  group.append(badge);
+}
+
 function truncate(value, maximum) {
   const text = String(value || "");
   return text.length <= maximum ? text : `${text.slice(0, maximum - 1)}…`;
@@ -985,7 +1488,7 @@ function renderHistory(history, selection) {
   const records = allRecords.filter((row) => rowMatchesSelection(row, selection, ["owner", "connector"]));
   const deliveries = allDeliveries.filter((row) => rowMatchesSelection(row, selection, ["node"]));
   const suffix = selection ? ` Filtered by ${selection.label}.` : "";
-  text("history-summary", `${records.length} causal record${records.length === 1 ? "" : "s"} (not Steps); ${deliveries.length} observed deliver${deliveries.length === 1 ? "y" : "ies"}.${suffix}`);
+  text("history-summary", `${records.length} causal record${records.length === 1 ? "" : "s"}; ${deliveries.length} observed deliver${deliveries.length === 1 ? "y" : "ies"}.${suffix}`);
   if (!records.length && !deliveries.length) {
     empty(target, selection ? "No retained activity for this selection." : "No committed records.");
     document.querySelector("#show-older").hidden = true;
@@ -993,8 +1496,8 @@ function renderHistory(history, selection) {
   }
   const start = Math.max(0, records.length - historyLimit);
   const fragment = document.createDocumentFragment();
-  fragment.append(historyTable("Causal records", records.slice(start), ["record_index", "summary", "trigger", "origin_id"]));
-  fragment.append(historyTable("Observed envelopes", deliveries.slice(Math.max(0, deliveries.length - historyLimit)), ["index", "node", "port", "envelope_id", "meta", "data"]));
+  fragment.append(historyTable("Causal records", records.slice(start), ["record_index", "summary", "trigger", "origin_id"], true));
+  fragment.append(historyTable("Observed envelopes", deliveries.slice(Math.max(0, deliveries.length - historyLimit)), ["index", "node", "port", "envelope_id", "meta", "data"], false));
   target.className = "history-stack";
   target.replaceChildren(fragment);
   const older = document.querySelector("#show-older");
@@ -1002,12 +1505,13 @@ function renderHistory(history, selection) {
   older.textContent = `Show ${Math.min(100, start)} older records`;
 }
 
-function historyTable(label, rows, columns) {
+function historyTable(label, rows, columns, open) {
   const details = document.createElement("details");
-  details.open = true;
+  details.open = open;
   const summary = document.createElement("summary");
   summary.textContent = `${label} (${rows.length} shown)`;
   const table = document.createElement("table");
+  table.className = label === "Causal records" ? "causal-history-table" : "delivery-history-table";
   const head = document.createElement("thead");
   const header = document.createElement("tr");
   for (const column of columns) {
@@ -1022,10 +1526,34 @@ function historyTable(label, rows, columns) {
   const body = document.createElement("tbody");
   for (const row of rows) {
     const line = document.createElement("tr");
+    if (Object.hasOwn(row, "record_index")) {
+      line.className = "timeline-record";
+      line.tabIndex = 0;
+      line.setAttribute("role", "button");
+      line.title = `View the system at causal record R${row.record_index}`;
+      const openRecord = () => showRecordBoundary(row.record_index)
+        .catch((error) => setCommandStatus(`Historical view unavailable: ${error.message}`));
+      line.addEventListener("click", openRecord);
+      line.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openRecord();
+        }
+      });
+    }
     for (const column of columns) {
       const cell = document.createElement("td");
       if (["meta", "data"].includes(column)) {
         appendDataTree(cell, row[column]);
+      } else if (column === "record_index") {
+        const boundary = boundaryForRecord(row[column]);
+        appendValue(cell, boundary === null ? `R${row[column]}` : `R${row[column]} · B${boundary}`);
+      } else if (column === "origin_id" && typeof row[column] === "string") {
+        const abbreviated = document.createElement("code");
+        abbreviated.textContent = row[column].slice(0, 8);
+        abbreviated.title = row[column];
+        abbreviated.setAttribute("aria-label", row[column]);
+        cell.append(abbreviated);
       } else {
         appendValue(cell, row[column]);
       }
@@ -1036,6 +1564,94 @@ function historyTable(label, rows, columns) {
   table.append(head, body);
   details.append(summary, table);
   return details;
+}
+
+async function showRecordBoundary(recordIndex) {
+  const branch = Number(currentSnapshot?.timeline?.branch || 0);
+  const boundary = boundaryForRecord(recordIndex);
+  const frame = timelineFrames(branch).find((candidate) => Number(candidate.boundary) === boundary);
+  if (!frame) throw new Error(`no retained boundary contains R${recordIndex}`);
+  clearPlaybackTimer();
+  bufferedPlayback = false;
+  replayPaused = false;
+  await showBoundary(branch, frame.boundary, true);
+}
+
+function boundaryForRecord(recordIndex) {
+  const branch = Number(currentSnapshot?.timeline?.branch || 0);
+  const frame = timelineFrames(branch).find((candidate) =>
+    candidate.record_through !== null
+      && candidate.record_through !== undefined
+      && Number(candidate.record_through) >= Number(recordIndex));
+  return frame ? Number(frame.boundary) : null;
+}
+
+function renderInjections(snapshot, selection) {
+  const target = document.querySelector("#injections");
+  const roots = new Map();
+  for (const delivery of snapshot?.history?.deliveries || []) {
+    const origin = delivery?.origin_id || delivery?.meta?.sys?.origin_id;
+    if (!origin || delivery?.meta?.sys?.parent_id !== null || roots.has(origin)) continue;
+    roots.set(origin, delivery);
+  }
+  const rows = [...roots.entries()].filter(([, delivery]) =>
+    rowMatchesSelection(delivery, selection, ["node"]));
+  if (!rows.length) {
+    empty(target, selection ? "No admitted injection for this selection." : "No admitted injection.");
+    return;
+  }
+  const branch = Number(snapshot?.timeline?.branch || 0);
+  const table = document.createElement("table");
+  const header = document.createElement("tr");
+  for (const label of ["Key", "Logical time", "Boundary", "Branch"]) {
+    const cell = document.createElement("th");
+    cell.textContent = label;
+    header.append(cell);
+  }
+  const head = document.createElement("thead");
+  head.append(header);
+  const body = document.createElement("tbody");
+  for (const [origin, delivery] of rows) {
+    const admitted = (snapshot?.history?.records || []).find((record) =>
+      record.origin_id === origin && String(record.summary || "").startsWith("Input admitted"));
+    const boundary = admitted ? boundaryForRecord(admitted.record_index) : null;
+    const line = document.createElement("tr");
+    line.className = boundary === null ? "" : "timeline-record";
+    if (boundary !== null) {
+      line.tabIndex = 0;
+      line.setAttribute("role", "button");
+      const open = () => showBoundary(branch, boundary, true)
+        .catch((error) => setCommandStatus(`Injection history unavailable: ${error.message}`));
+      line.addEventListener("click", open);
+      line.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          open();
+        }
+      });
+    }
+    const logical = delivery?.meta?.sys?.logical_time_ns
+      ?? delivery?.meta?.sys?.timestamp_ns
+      ?? null;
+    const values = [visibleKeyValue(delivery.data) || truncate(origin, 10), logical === null ? "…" : formatLogicalTime(logical), boundary === null ? "—" : `B${boundary}`, branchName(branch)];
+    const cells = [];
+    for (const value of values) {
+      const cell = document.createElement("td");
+      cell.textContent = String(value);
+      line.append(cell);
+      cells.push(cell);
+    }
+    if (logical === null && boundary !== null) {
+      fetch(`/api/snapshot?branch=${encodeURIComponent(branch)}&boundary=${encodeURIComponent(boundary)}`, { cache: "no-store" })
+        .then((response) => response.ok ? response.json() : null)
+        .then((frame) => { cells[1].textContent = frame ? formatLogicalTime(frame.execution?.logical_time_ns) : "—"; })
+        .catch(() => { cells[1].textContent = "—"; });
+    }
+    body.append(line);
+  }
+  table.append(head, body);
+  target.className = "injection-history";
+  target.replaceChildren(table);
 }
 
 function renderInstances(instances, selection) {
@@ -1055,7 +1671,10 @@ function renderInstances(instances, selection) {
     const meta = document.createElement("p");
     meta.className = "card-meta";
     meta.textContent = `${instance.phase} · generation ${instance.reference?.generation ?? "?"}`;
-    card.append(heading, meta);
+    const address = document.createElement("code");
+    address.className = "instance-address";
+    address.textContent = `address ${instance.reference?.address || "?"}`;
+    card.append(heading, meta, address);
     appendValue(card, instance.state);
     return card;
   }));
@@ -1214,18 +1833,125 @@ function setCommandStatus(message) {
   status.hidden = !message;
 }
 
-function formatNanoseconds(value) {
-  return value === undefined || value === null ? "—" : `${value} ns`;
+function formatLogicalTime(value) {
+  if (value === undefined || value === null) return "—";
+  let nanoseconds;
+  try {
+    nanoseconds = BigInt(String(value));
+  } catch (_) {
+    return String(value);
+  }
+  const negative = nanoseconds < 0n;
+  const absolute = negative ? -nanoseconds : nanoseconds;
+  const totalSeconds = absolute / 1_000_000_000n;
+  const fractionalNanoseconds = absolute % 1_000_000_000n;
+  const seconds = totalSeconds % 60n;
+  const minutes = (totalSeconds / 60n) % 60n;
+  const hours = totalSeconds / 3_600n;
+  let fraction = fractionalNanoseconds.toString().padStart(9, "0").replace(/0+$/, "");
+  if (!fraction) fraction = "0";
+  const secondsText = `${seconds.toString().padStart(totalSeconds >= 60n ? 2 : 1, "0")}.${fraction} s`;
+  const prefix = negative ? "−" : "";
+  if (hours > 0n) return `${prefix}${hours} h ${minutes.toString().padStart(2, "0")} min ${secondsText}`;
+  if (totalSeconds >= 60n) return `${prefix}${totalSeconds / 60n} min ${secondsText}`;
+  return `${prefix}${secondsText}`;
 }
+
+function installWorkspaceSplitter() {
+  const workspace = document.querySelector(".workspace");
+  const splitter = document.querySelector("#workspace-splitter");
+  const stored = Number(sessionStorage.getItem("rastok-inspector-width"));
+  let width = Number.isFinite(stored) && stored > 0 ? stored : 360;
+  const limits = () => ({
+    minimum: 280,
+    maximum: Math.max(280, Math.min(720, workspace.getBoundingClientRect().width - 305)),
+  });
+  const apply = (candidate) => {
+    const { minimum, maximum } = limits();
+    width = Math.min(maximum, Math.max(minimum, candidate));
+    workspace.style.setProperty("--inspector-width", `${Math.round(width)}px`);
+    splitter.setAttribute("aria-valuemin", String(minimum));
+    splitter.setAttribute("aria-valuemax", String(maximum));
+    splitter.setAttribute("aria-valuenow", String(Math.round(width)));
+    sessionStorage.setItem("rastok-inspector-width", String(Math.round(width)));
+  };
+  let dragging = false;
+  splitter.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    dragging = true;
+    workspace.classList.add("resizing");
+    splitter.setPointerCapture(event.pointerId);
+  });
+  splitter.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    const bounds = workspace.getBoundingClientRect();
+    apply(bounds.right - event.clientX);
+  });
+  const stop = (event) => {
+    if (!dragging) return;
+    dragging = false;
+    workspace.classList.remove("resizing");
+    if (splitter.hasPointerCapture(event.pointerId)) splitter.releasePointerCapture(event.pointerId);
+  };
+  splitter.addEventListener("pointerup", stop);
+  splitter.addEventListener("pointercancel", stop);
+  splitter.addEventListener("keydown", (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const { minimum, maximum } = limits();
+    const next = event.key === "Home"
+      ? minimum
+      : event.key === "End"
+        ? maximum
+        : width + (event.key === "ArrowLeft" ? 24 : -24);
+    apply(next);
+  });
+  window.addEventListener("resize", () => apply(width));
+  apply(width);
+}
+
+installWorkspaceSplitter();
 
 for (const button of document.querySelectorAll("button[data-command]")) {
   button.addEventListener("click", async () => {
     if (pendingCommandRevision !== null) return;
-    pendingCommandRevision = currentSnapshot?.revision ?? 0;
+    const command = button.dataset.command;
+    const branch = Number(currentSnapshot?.timeline?.branch || 0);
+    const boundary = Number(currentSnapshot?.timeline?.boundary || 0);
+    const hasReplayAhead = timelineFrames(branch)
+      .some((frame) => Number(frame.boundary) > boundary);
+    if (command === "resume" && !sameTimelinePoint(currentSnapshot, liveSnapshot) && hasReplayAhead) {
+      startBufferedPlayback();
+      return;
+    }
+    if (command === "pause" && bufferedPlayback) {
+      pauseBufferedPlayback();
+      if (!(liveSnapshot?.execution?.legal_commands || []).includes("pause")) return;
+    }
+    if (command === "resume") {
+      clearPlaybackTimer();
+      manualHistoricalView = false;
+      replayPaused = false;
+      bufferedPlayback = true;
+    } else if (command === "run-to-completion") {
+      clearPlaybackTimer();
+      manualHistoricalView = false;
+      replayPaused = false;
+      bufferedPlayback = false;
+    } else if (command === "reset-scenario") {
+      clearPlaybackTimer();
+      manualHistoricalView = false;
+      replayPaused = false;
+      bufferedPlayback = false;
+      selectedTopologyItem = null;
+      selectedMailboxRoute = null;
+    }
+    pendingCommandRevision = liveSnapshot?.revision ?? currentSnapshot?.revision ?? 0;
     updateControls();
     try {
-      await post(`/api/command/${button.dataset.command}`);
+      await post(`/api/command/${command}`);
     } catch (error) {
+      if (command === "resume") bufferedPlayback = false;
       pendingCommandRevision = null;
       updateControls();
       setCommandStatus(`UI command refused: ${error.message}`);
@@ -1234,26 +1960,120 @@ for (const button of document.querySelectorAll("button[data-command]")) {
 }
 
 document.querySelector("#take-control").addEventListener("click", () => claim(true));
+for (const button of document.querySelectorAll("[data-inspector-tab]")) {
+  button.addEventListener("click", () => activateInspectorTab(button.dataset.inspectorTab));
+  button.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const tabs = [...document.querySelectorAll("[data-inspector-tab]")];
+    const current = tabs.indexOf(button);
+    const target = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? tabs.length - 1
+        : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    activateInspectorTab(tabs[target].dataset.inspectorTab, true);
+  });
+}
+document.querySelector("#back-boundary").addEventListener("click", () => {
+  const branch = Number(currentSnapshot?.timeline?.branch || 0);
+  const boundary = Number(currentSnapshot?.timeline?.boundary || 0);
+  const frames = timelineFrames(branch);
+  const index = frames.findIndex((frame) => Number(frame.boundary) === boundary);
+  if (index <= 0) return;
+  clearPlaybackTimer();
+  bufferedPlayback = false;
+  replayPaused = false;
+  showBoundary(branch, frames[index - 1].boundary, true)
+    .catch((error) => setCommandStatus(`Historical view unavailable: ${error.message}`));
+});
+document.querySelector("#return-live").addEventListener("click", () => {
+  clearPlaybackTimer();
+  manualHistoricalView = false;
+  bufferedPlayback = false;
+  replayPaused = false;
+  if (liveSnapshot) renderSnapshot(liveSnapshot);
+});
+document.querySelector("#branch-here").addEventListener("click", async () => {
+  const branch = Number(currentSnapshot?.timeline?.branch || 0);
+  const boundary = Number(currentSnapshot?.timeline?.boundary || 0);
+  const previousHistoricalView = manualHistoricalView;
+  try {
+    clearPlaybackTimer();
+    manualHistoricalView = false;
+    bufferedPlayback = false;
+    replayPaused = false;
+    setCommandStatus(`Replaying ${branchName(branch)} through B${boundary} into a new branch…`);
+    pendingCommandRevision = liveSnapshot?.revision ?? 0;
+    updateControls();
+    await post(`/api/command/branch-from?branch=${encodeURIComponent(branch)}&boundary=${encodeURIComponent(boundary)}`);
+  } catch (error) {
+    manualHistoricalView = previousHistoricalView;
+    pendingCommandRevision = null;
+    updateControls();
+    setCommandStatus(`Branch refused: ${error.message}`);
+  }
+});
+document.querySelector("#timeline").addEventListener("change", (event) => {
+  const branch = Number(currentSnapshot?.timeline?.branch || 0);
+  clearPlaybackTimer();
+  bufferedPlayback = false;
+  replayPaused = false;
+  showBoundary(branch, Number(event.target.value), true)
+    .catch((error) => setCommandStatus(`Historical view unavailable: ${error.message}`));
+});
+document.querySelector("#timeline-branch").addEventListener("change", (event) => {
+  const branch = Number(event.target.value);
+  const frames = timelineFrames(branch);
+  const target = frames.at(-1);
+  if (!target) return;
+  clearPlaybackTimer();
+  bufferedPlayback = false;
+  replayPaused = false;
+  showBoundary(branch, target.boundary, true)
+    .catch((error) => setCommandStatus(`Historical branch unavailable: ${error.message}`));
+});
+document.querySelector("#playback-speed").addEventListener("change", () => {
+  clearPlaybackTimer();
+  if (bufferedPlayback) scheduleBufferedBoundary();
+});
 document.querySelector("#show-older").addEventListener("click", () => {
   historyLimit += 100;
-  renderHistory(currentSnapshot?.history);
+  if (currentSnapshot) renderRelatedPanels(currentSnapshot);
 });
-document.querySelector("#scenario-select").addEventListener("change", updateControls);
+document.querySelector("#scenario-definition").addEventListener("click", inspectScenarioDefinition);
+document.querySelector("#scenario-select").addEventListener("change", () => {
+  updateControls();
+});
 document.querySelector("#select-scenario").addEventListener("click", async () => {
   const [simulation, scenario] = document.querySelector("#scenario-select").value.split("\u0000");
   try {
+    clearPlaybackTimer();
+    manualHistoricalView = false;
+    bufferedPlayback = false;
+    replayPaused = false;
+    selectedTopologyItem = null;
+    selectedMailboxRoute = null;
+    pendingCommandRevision = liveSnapshot?.revision ?? currentSnapshot?.revision ?? 0;
+    updateControls();
     await post(`/api/command/select-scenario?simulation=${encodeURIComponent(simulation)}&scenario=${encodeURIComponent(scenario)}`);
   } catch (error) {
+    pendingCommandRevision = null;
+    updateControls();
     setCommandStatus(`Scenario selection refused: ${error.message}`);
   }
 });
 
 const events = new EventSource("/api/events");
 events.addEventListener("revision", () => refresh().catch((error) => setCommandStatus(error.message)));
+events.addEventListener("open", () => {
+  if (!controls) claim().then(refresh).catch((error) => setCommandStatus(error.message));
+});
 events.onerror = () => {
   text("role", "reconnecting");
   controls = false;
   updateControls();
 };
+window.addEventListener("pagehide", releaseControl);
 
 claim().then(refresh).catch((error) => setCommandStatus(error.message));

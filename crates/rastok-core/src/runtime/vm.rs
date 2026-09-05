@@ -824,6 +824,19 @@ pub struct InstanceInspection {
     pub state: BTreeMap<String, crate::value::Value>,
 }
 
+/// One live per-instance mailbox exposed to hosted debuggers.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MailboxInspection {
+    /// Executable Node that owns this FIFO.
+    pub node: node::Path,
+    /// Exact logical instance generation owning the FIFO.
+    pub instance: InstanceRef,
+    /// Whether execution has reserved the mailbox head for an open protocol.
+    pub claimed: bool,
+    /// Current FIFO contents in delivery order.
+    pub deliveries: Vec<Delivery>,
+}
+
 /// Direction of one retained Call obligation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallDirectionInspection {
@@ -893,9 +906,8 @@ pub struct SessionInspection {
 pub struct VmInspection {
     /// Live logical instances in canonical reference order.
     pub instances: Vec<InstanceInspection>,
-    /// Current mailbox occupancy grouped by canonical incoming edge. Unlike
-    /// journal traffic, these counts decrease when deliveries are consumed.
-    pub queued_by_edge: BTreeMap<String, usize>,
+    /// Current bounded mailbox contents in canonical owner/instance order.
+    pub mailboxes: Vec<MailboxInspection>,
     /// Retained Call obligations in canonical identity order.
     pub calls: Vec<CallInspection>,
     /// Retained Sessions in canonical identity order.
@@ -3490,9 +3502,21 @@ impl<'plan> Vm<'plan> {
                     .any(|settled| settled.session == *reference),
             })
             .collect();
+        let mailboxes = self
+            .scheduler
+            .mailboxes
+            .inspection()
+            .into_iter()
+            .map(|(slot, instance, claimed, deliveries)| MailboxInspection {
+                node: self.plan.nodes[slot.index()].path.clone(),
+                instance,
+                claimed,
+                deliveries,
+            })
+            .collect();
         VmInspection {
             instances,
-            queued_by_edge: self.scheduler.mailboxes.queued_by_edge(),
+            mailboxes,
             calls,
             sessions,
         }

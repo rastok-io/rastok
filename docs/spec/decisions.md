@@ -5,6 +5,96 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-09-02-1 — UI history is exact; only simulation may branch from it
+
+The debugger names three different positions instead of overloading “step”:
+`A<n>` is an authored scenario action, `B<n>` an atomic retained UI boundary,
+and `R<n>` a causal journal-record index. Universal lazy lifecycle transitions
+remain visible `B` boundaries. `Play`, manual `Step in` and `Continue` use the
+same execution transitions; Play merely presents every retained boundary at a
+readable client-side cadence, while Continue selects the fast path.
+
+Before publishing its replaceable newest-live notification, the execution
+owner retains the complete redacted read-model frame for every `(branch,
+boundary)` in memory. That ordering prevents a fast engine or slow browser from
+creating holes in the timeline. The frame includes its journal prefix, VM
+inspection, observations, logical time, Lab position and CostReport. It is a
+disposable projection over existing authorities, never another journal, and is
+discarded with the process.
+
+For `run`, selecting an older boundary changes only the browser view. The real
+machine continues at its live head and external effects are neither replayed
+nor undone. Historical graph, envelopes, instances, private state, mailboxes,
+Calls/Sessions and accounting are read-only; only global safe Pause and Close
+remain available. `Return live` restores the live projection. This is temporal
+inspection, not execution rewind.
+
+For `simulate`, `Branch from here` is an explicit deterministic reconstruction.
+The owner creates a fresh checked scenario and replays the selected branch's
+authored actions, VM transactions and Driver polls. It then
+requires exact equality of causal records, VM inspection, observed envelopes,
+logical time, action cursor, quiescence and failures at the requested boundary.
+A mismatch refuses without changing the current scenario. A match creates a
+new branch at that boundary; its source branch and journal prefix remain
+immutable and remain selectable for inspection. Further steps occur only on
+the new branch. Reset and scenario selection similarly start a fresh
+branch rather than truncating old history; each replay recipe carries its own
+checked simulation/scenario identity.
+
+The compound graph keeps a deterministic crossing-reduced lane plan as hidden
+placement authority, but renders each complete route as a smooth cubic spline
+with horizontal port tangents and compact arrows. Shared sources and targets
+receive distinct approaches before the visible curves can coincide. The root
+Graph grows to hold a complete result gutter; that gutter never steals width
+from its Nodes. The complete drawing then fits the available canvas with a
+24-pixel viewport margin and a maximum 1.5× presentation scale. Qualified
+result labels, edge badges and port labels retain their minimum clearances in
+drawing units, independent of that viewport scale, while SVG text remains at
+the surrounding interface's screen-space size. Only retained topology edges
+with an inspectable destination become visible pipes. Unwired outputs and
+explicit `-> nothing` drains remain local square ports, with no terminal cap
+or synthetic sink. A separate thin dotted control layer is derived from the
+validated Graph-owned handler table: it connects an activation port to each
+boundary output that one of those handlers may select, carries a compact `on`
+marker, and has no mailbox or envelope animation. `next` is distinguished as
+temporal control, while manager-produced `expired` begins at an explicit Loop
+manager source. Selecting a relation opens the owning Graph's source-faithful
+definition. This explains Graph results without falsifying them into spatial
+DAG edges. Active
+owners show an `⧉ n` instance count; selecting it opens
+the structured instance inspector. Selecting a box lightens its body and
+border without changing any port color. An input edge badge sits toward its
+receiving square port, reads `≡ n`, and contains only current
+mailbox occupancy and opens the exact redacted FIFO. Causal traversal counts
+remain in history and never masquerade as live queue contents. The canvas may
+be panned and zoomed, and a physical splitter resizes its inspector without
+changing graph geometry or execution state.
+
+This is a package, semantic and causal non-move. Branch numbers, boundary
+ordinals, retained frames, playback speed and viewport geometry are physical UI
+state and enter no plan, semantic hash or journal recipe. No graph-layout,
+timeline or replay dependency is added.
+
+**Supersedes in D-2026-08-31-2:** the user-facing `Step N` vocabulary,
+instantaneous Play presentation, fixed intrinsic graph sizing, short curved
+turns, leader-linked edge badges, synthetic unwired-output routes, cumulative
+mailbox labels and browser-side injection editing. A pending checked injection
+is read-only evidence from the `.rkg` scenario; `App.in` is topology, not an IDE
+affordance. The atomicity, safe-pause and no-hidden-clock rules of that decision
+remain unchanged.
+
+**Rejected:** mutating a live `run` from historical state; truncating a
+simulation journal in place; reconstructing history from topology alone;
+dropping intermediate frames when SSE coalesces; hiding lifecycle boundaries;
+throttling the semantic engine to animate; exposing raw keyed values as graph
+badges; shrinking Nodes to donate a fixed output gutter; rendering coincident
+visible routes; drawing a destination for `nothing`; leaving handler-produced
+Graph outputs visually indistinguishable from unused ports; and
+adding a licensed third-party graph layout runtime. A rich terminal debugger is
+deferred as a separate projection over the same controller/read model; neither
+its CLI spelling nor a second execution semantics is introduced here.
+
+
 ## D-2026-08-31-2 — `--ui` is a capability-protected journal debugger
 
 The M1 live visualization is named `--ui`, not `--watch`: watch is already a

@@ -14,7 +14,8 @@ use hyper::header::{
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use serde_json::Value as JsonValue;
+use serde_json::{Value as JsonValue, json};
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
@@ -29,8 +30,7 @@ use tokio::sync::{RwLock, mpsc, watch};
 mod view;
 
 pub use view::{
-    ActivityView, ExecutionState, FaultView, SnapshotInput, parse_edited_data,
-    scenario_injection_json, snapshot,
+    ActivityView, ExecutionState, FaultView, SnapshotInput, scenario_injection_json, snapshot,
 };
 
 const INDEX_HTML: &str = include_str!("index.html");
@@ -40,7 +40,6 @@ const APP_JS: &str = include_str!("app.js");
 const COMMAND_CAPACITY: usize = 32;
 const SNAPSHOT_CAPACITY: usize = 1;
 const SSE_CAPACITY: usize = 8;
-pub(super) const MAX_EDIT_BODY_BYTES: usize = 256 * 1024;
 
 type HttpBody = http_body_util::combinators::UnsyncBoxBody<Bytes, Infallible>;
 
@@ -70,10 +69,13 @@ pub enum UiCommand {
         /// Checked scenario name.
         scenario: String,
     },
-    /// Replace the typed DATA tree of the next pre-admission Lab injection.
-    EditNextInjection {
-        /// Schema-guided editor JSON, interpreted by the execution owner.
-        data: String,
+    /// Rebuild a simulation at one retained boundary and continue on a new
+    /// append-only presentation branch. Real runs never admit this command.
+    BranchFrom {
+        /// Source presentation branch.
+        branch: u64,
+        /// Atomic boundary retained on that branch.
+        boundary: u64,
     },
     /// End the hosted UI session.
     Close,
@@ -83,7 +85,12 @@ pub enum UiCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UiSnapshot {
     revision: u64,
-    json: String,
+    json: Bytes,
+    branch: u64,
+    boundary: u64,
+    kind: String,
+    summary: String,
+    record_through: Option<u64>,
 }
 
 impl UiSnapshot {
@@ -94,13 +101,118 @@ impl UiSnapshot {
     /// JSON serialization failure is returned before the current projection
     /// is changed.
     pub fn new(revision: u64, value: &JsonValue) -> Result<Self, serde_json::Error> {
-        serde_json::to_string(value).map(|json| Self { revision, json })
+        let branch = value
+            .pointer("/timeline/branch")
+            .and_then(JsonValue::as_u64)
+            .unwrap_or(0);
+        let boundary = value
+            .pointer("/timeline/boundary")
+            .and_then(JsonValue::as_u64)
+            .unwrap_or(0);
+        let kind = value
+            .pointer("/topology/activity/kind")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("initial")
+            .to_owned();
+        let summary = value
+            .pointer("/topology/activity/detail")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("Before admission")
+            .to_owned();
+        let record_through = value
+            .pointer("/timeline/record_through")
+            .and_then(JsonValue::as_u64);
+        serde_json::to_vec(value).map(|json| Self {
+            revision,
+            json: Bytes::from(json),
+            branch,
+            boundary,
+            kind,
+            summary,
+            record_through,
+        })
     }
 
     /// Revision monotonically assigned by the execution owner.
     #[must_use]
     pub const fn revision(&self) -> u64 {
         self.revision
+    }
+
+    fn on_branch(&self, branch: u64) -> Option<Self> {
+        let mut value = serde_json::from_slice::<JsonValue>(&self.json).ok()?;
+        value.pointer_mut("/timeline/branch").map(|field| {
+            *field = JsonValue::from(branch);
+        })?;
+        Self::new(self.revision, &value).ok()
+    }
+}
+
+/// Complete in-memory debugger history. These are exact disposable
+/// projections captured at committed boundaries, never causal authority.
+#[derive(Debug)]
+struct TimelineStore {
+    live: UiSnapshot,
+    branches: BTreeMap<u64, BTreeMap<u64, UiSnapshot>>,
+}
+
+impl TimelineStore {
+    fn new(initial: UiSnapshot) -> Self {
+        let mut store = Self {
+            live: initial.clone(),
+            branches: BTreeMap::new(),
+        };
+        store.retain(initial);
+        store
+    }
+
+    fn retain(&mut self, snapshot: UiSnapshot) {
+        self.branches
+            .entry(snapshot.branch)
+            .or_default()
+            .insert(snapshot.boundary, snapshot.clone());
+        if snapshot.revision >= self.live.revision {
+            self.live = snapshot;
+        }
+    }
+
+    fn frame(&self, branch: u64, boundary: u64) -> Option<&UiSnapshot> {
+        self.branches.get(&branch)?.get(&boundary)
+    }
+
+    fn fork(&mut self, source: u64, through: u64, target: u64) -> bool {
+        let Some(source_frames) = self.branches.get(&source) else {
+            return false;
+        };
+        let copied = source_frames
+            .range(..=through)
+            .filter_map(|(boundary, snapshot)| {
+                snapshot
+                    .on_branch(target)
+                    .map(|snapshot| (*boundary, snapshot))
+            })
+            .collect::<BTreeMap<_, _>>();
+        if copied.is_empty() {
+            return false;
+        }
+        self.branches.insert(target, copied);
+        true
+    }
+
+    fn index_json(&self) -> JsonValue {
+        json!({
+            "active_branch": self.live.branch,
+            "live_boundary": self.live.boundary,
+            "branches": self.branches.iter().map(|(branch, frames)| json!({
+                "branch": branch,
+                "frames": frames.values().map(|snapshot| json!({
+                    "boundary": snapshot.boundary,
+                    "kind": snapshot.kind,
+                    "summary": snapshot.summary,
+                    "record_through": snapshot.record_through,
+                })).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+        })
     }
 }
 
@@ -143,6 +255,7 @@ pub struct UiServer {
     commands: Receiver<UiCommand>,
     snapshots: SyncSender<UiSnapshot>,
     pending_snapshot: Option<UiSnapshot>,
+    timeline: Arc<Mutex<TimelineStore>>,
     shutdown: watch::Sender<bool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -169,6 +282,7 @@ impl UiServer {
         let (snapshot_tx, snapshot_rx) = std::sync::mpsc::sync_channel(SNAPSHOT_CAPACITY);
         let (shutdown, shutdown_rx) = watch::channel(false);
         let initial_revision = initial.revision();
+        let timeline = Arc::new(Mutex::new(TimelineStore::new(initial.clone())));
         let context = Arc::new(ServerContext {
             capability: capability.clone(),
             origin: format!("http://{address}"),
@@ -176,6 +290,7 @@ impl UiServer {
             controller: Mutex::new(None),
             snapshot: RwLock::new(initial),
             revision: watch::channel(initial_revision).0,
+            timeline: Arc::clone(&timeline),
         });
         let thread_context = Arc::clone(&context);
         let thread = std::thread::Builder::new()
@@ -190,6 +305,7 @@ impl UiServer {
             commands,
             snapshots: snapshot_tx,
             pending_snapshot: None,
+            timeline,
             shutdown,
             thread: Some(thread),
         })
@@ -212,6 +328,9 @@ impl UiServer {
     /// A saturated one-slot lane keeps only the newest pending revision. The
     /// execution owner should call [`Self::flush`] in later loop turns.
     pub fn publish(&mut self, snapshot: UiSnapshot) {
+        if let Ok(mut timeline) = self.timeline.lock() {
+            timeline.retain(snapshot.clone());
+        }
         self.flush();
         match self.snapshots.try_send(snapshot) {
             Ok(()) => {}
@@ -230,6 +349,15 @@ impl UiServer {
             Err(TrySendError::Full(snapshot)) => self.pending_snapshot = Some(snapshot),
             Err(TrySendError::Disconnected(_)) => {}
         }
+    }
+
+    /// Copies an immutable prefix into a new simulation branch. The
+    /// execution owner calls this only after it has independently replayed
+    /// and verified the corresponding semantic state.
+    pub fn fork_timeline(&mut self, source: u64, through: u64, target: u64) -> bool {
+        self.timeline
+            .lock()
+            .is_ok_and(|mut timeline| timeline.fork(source, through, target))
     }
 }
 
@@ -250,6 +378,7 @@ struct ServerContext {
     controller: Mutex<Option<String>>,
     snapshot: RwLock<UiSnapshot>,
     revision: watch::Sender<u64>,
+    timeline: Arc<Mutex<TimelineStore>>,
 }
 
 async fn serve(
@@ -327,10 +456,8 @@ async fn handle(
             (&Method::GET, "/app.js") => {
                 response(StatusCode::OK, "text/javascript; charset=utf-8", APP_JS)
             }
-            (&Method::GET, "/api/snapshot") => {
-                let snapshot = context.snapshot.read().await;
-                response(StatusCode::OK, "application/json", snapshot.json.clone())
-            }
+            (&Method::GET, "/api/snapshot") => historical_snapshot(&request, &context),
+            (&Method::GET, "/api/timeline") => timeline_response(&context),
             (&Method::GET, "/api/events") => sse_response(context.revision.subscribe()),
             (&Method::POST, "/api/control/claim") => control_claim(&request, &context, false),
             (&Method::POST, "/api/control/take") => control_claim(&request, &context, true),
@@ -347,6 +474,63 @@ async fn handle(
         }
     };
     Ok(response)
+}
+
+fn historical_snapshot(request: &Request<Incoming>, context: &ServerContext) -> Response<HttpBody> {
+    let requested = request.uri().query().and_then(|query| {
+        let branch = query_value(query, "branch")?.parse::<u64>().ok()?;
+        let boundary = query_value(query, "boundary")?.parse::<u64>().ok()?;
+        Some((branch, boundary))
+    });
+    if let Some((branch, boundary)) = requested {
+        let Ok(timeline) = context.timeline.lock() else {
+            return response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "text/plain; charset=utf-8",
+                "timeline unavailable",
+            );
+        };
+        return timeline.frame(branch, boundary).map_or_else(
+            || {
+                response(
+                    StatusCode::NOT_FOUND,
+                    "text/plain; charset=utf-8",
+                    "unknown retained boundary",
+                )
+            },
+            |snapshot| response(StatusCode::OK, "application/json", snapshot.json.clone()),
+        );
+    }
+    let Ok(timeline) = context.timeline.lock() else {
+        return response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "text/plain; charset=utf-8",
+            "timeline unavailable",
+        );
+    };
+    response(
+        StatusCode::OK,
+        "application/json",
+        timeline.live.json.clone(),
+    )
+}
+
+fn timeline_response(context: &ServerContext) -> Response<HttpBody> {
+    let Ok(timeline) = context.timeline.lock() else {
+        return response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "text/plain; charset=utf-8",
+            "timeline unavailable",
+        );
+    };
+    match serde_json::to_string(&timeline.index_json()) {
+        Ok(body) => response(StatusCode::OK, "application/json", body),
+        Err(_) => response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "text/plain; charset=utf-8",
+            "timeline serialization failed",
+        ),
+    }
 }
 
 fn authorized(request: &Request<Incoming>, capability: &str) -> bool {
@@ -511,21 +695,12 @@ async fn command(
             "stale controller",
         );
     }
-    let command = if spelling == "edit-next-injection" {
-        let body = match read_edit_body(request.into_body()).await {
-            Ok(body) => body,
-            Err(response) => return response,
-        };
-        UiCommand::EditNextInjection { data: body }
-    } else {
-        let Some(command) = command_from_request(spelling, &request) else {
-            return response(
-                StatusCode::BAD_REQUEST,
-                "text/plain; charset=utf-8",
-                "unknown command",
-            );
-        };
-        command
+    let Some(command) = command_from_request(spelling, &request) else {
+        return response(
+            StatusCode::BAD_REQUEST,
+            "text/plain; charset=utf-8",
+            "unknown command",
+        );
     };
     match context.command_tx.try_send(command) {
         Ok(()) => response(
@@ -546,37 +721,6 @@ async fn command(
     }
 }
 
-async fn read_edit_body(mut body: Incoming) -> Result<String, Response<HttpBody>> {
-    let mut bytes = Vec::new();
-    while let Some(frame) = body.frame().await {
-        let frame = frame.map_err(|_| {
-            response(
-                StatusCode::BAD_REQUEST,
-                "text/plain; charset=utf-8",
-                "the edited DATA body could not be read",
-            )
-        })?;
-        let Ok(data) = frame.into_data() else {
-            continue;
-        };
-        if bytes.len().saturating_add(data.len()) > MAX_EDIT_BODY_BYTES {
-            return Err(response(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "text/plain; charset=utf-8",
-                "the edited DATA tree exceeds 256 KiB",
-            ));
-        }
-        bytes.extend_from_slice(&data);
-    }
-    String::from_utf8(bytes).map_err(|_| {
-        response(
-            StatusCode::BAD_REQUEST,
-            "text/plain; charset=utf-8",
-            "the edited DATA tree must be UTF-8 JSON",
-        )
-    })
-}
-
 fn command_from_request(spelling: &str, request: &Request<Incoming>) -> Option<UiCommand> {
     match spelling {
         "resume" => Some(UiCommand::Resume),
@@ -587,6 +731,13 @@ fn command_from_request(spelling: &str, request: &Request<Incoming>) -> Option<U
         "next-scenario-action" => Some(UiCommand::NextScenarioAction),
         "run-until-assertion" => Some(UiCommand::RunUntilAssertion),
         "reset-scenario" => Some(UiCommand::ResetScenario),
+        "branch-from" => {
+            let query = request.uri().query()?;
+            Some(UiCommand::BranchFrom {
+                branch: query_value(query, "branch")?.parse().ok()?,
+                boundary: query_value(query, "boundary")?.parse().ok()?,
+            })
+        }
         "close" => Some(UiCommand::Close),
         "select-scenario" => {
             let query = request.uri().query()?;
@@ -725,6 +876,27 @@ mod tests {
             .expect("static JSON")
     }
 
+    fn timeline_frame(revision: u64, branch: u64, boundary: u64) -> UiSnapshot {
+        UiSnapshot::new(
+            revision,
+            &serde_json::json!({
+                "revision": revision,
+                "timeline": {
+                    "branch": branch,
+                    "boundary": boundary,
+                    "record_through": boundary.checked_sub(1),
+                },
+                "topology": {
+                    "activity": (boundary > 0).then(|| serde_json::json!({
+                        "kind": "transaction",
+                        "detail": format!("boundary {boundary}"),
+                    })),
+                },
+            }),
+        )
+        .expect("static timeline JSON")
+    }
+
     fn request(address: SocketAddr, request: &str) -> String {
         let mut stream = std::net::TcpStream::connect(address).expect("loopback server accepts");
         stream
@@ -819,39 +991,16 @@ mod tests {
     }
 
     #[test]
-    fn a_controller_can_queue_one_bounded_typed_input_edit() {
-        let server = UiServer::start(None, initial()).expect("server starts");
-        let headers = |path: &str, body: &str| {
-            request(
-                server.address,
-                &format!(
-                    "POST {path}?token={} HTTP/1.1\r\nHost: {}\r\nOrigin: http://{}\r\nX-Rastok-Controller: editor\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    server.capability,
-                    server.address,
-                    server.address,
-                    body.len(),
-                ),
-            )
-        };
-        assert!(
-            headers("/api/control/claim", "").starts_with("HTTP/1.1 200"),
-            "the editor owns control"
-        );
-        let body = r#"{"name":"alice","count":"7"}"#;
-        assert!(headers("/api/command/edit-next-injection", body).starts_with("HTTP/1.1 202"));
-        assert_eq!(
-            server.try_command(),
-            Some(UiCommand::EditNextInjection {
-                data: String::from(body),
-            })
-        );
-    }
-
-    #[test]
     fn embedded_ui_uses_system_theme_and_compact_transport_controls() {
-        assert!(APP_CSS.contains("prefers-color-scheme: dark"));
+        assert!(APP_CSS.contains("prefers-color-scheme: light"));
+        assert!(APP_CSS.contains("--bg: #0f1412"));
         assert!(INDEX_HTML.contains("class=\"transport\""));
         assert!(INDEX_HTML.contains("#icon-step"));
+        assert!(INDEX_HTML.contains("<span>Step in</span>"));
+        assert!(INDEX_HTML.contains("<span>Step over</span>"));
+        assert!(INDEX_HTML.contains("<span>Run to expect</span>"));
+        assert!(INDEX_HTML.contains("<span>Continue</span>"));
+        assert!(INDEX_HTML.contains("<span>Take control</span>"));
         assert!(INDEX_HTML.contains("src=\"/graph-layout.js\""));
         assert!(!INDEX_HTML.contains("id=\"guidance\""));
         assert!(APP_JS.contains("Before admission"));
@@ -861,23 +1010,104 @@ mod tests {
         assert!(APP_JS.contains("selectedTopologyContext(snapshot.topology)"));
         assert!(APP_JS.contains("ownerIds.has(item.owner)"));
         assert!(!APP_JS.contains("path.startsWith(`${selection.path}.`)"));
-        assert!(APP_JS.contains("graphLayout.roundedOrthogonalPath(route.points, 10)"));
+        assert!(
+            APP_JS.contains(
+                "graphLayout.curvedCorridorPath(route.presentationPoints || route.points)"
+            )
+        );
+        assert!(APP_JS.contains("showBoundary(branch, frames[index - 1].boundary, true)"));
+        assert!(INDEX_HTML.contains("Branch from here"));
+        assert!(INDEX_HTML.contains("id=\"timeline-branch\""));
+        assert!(APP_JS.contains("Historical branch unavailable"));
         assert!(GRAPH_LAYOUT_JS.contains("minimizeAdjacentCrossings("));
         assert!(GRAPH_LAYOUT_JS.contains("allocateSideItems("));
         assert!(GRAPH_LAYOUT_JS.contains("occupiedVertical"));
         assert!(GRAPH_LAYOUT_JS.contains("routingPortals("));
         assert!(GRAPH_LAYOUT_JS.contains("placeEdgeLabels(routes, graph, layout)"));
-        assert!(GRAPH_LAYOUT_JS.contains("labelCollisionScore("));
+        assert!(GRAPH_LAYOUT_JS.contains("curveLabelCollisionScore("));
+        assert!(GRAPH_LAYOUT_JS.contains("curvedCorridorSegments("));
+        assert!(GRAPH_LAYOUT_JS.contains("candidate.portals.map"));
+        assert!(GRAPH_LAYOUT_JS.contains("ROOT_OUTPUT_GUTTER = 140"));
+        assert!(GRAPH_LAYOUT_JS.contains("ROOT_CONTENT_GUTTER = 108"));
+        assert!(APP_CSS.contains("max-width: var(--graph-fit-width)"));
+        assert!(APP_JS.contains("Math.ceil(layout.width * 1.5)"));
+        assert!(APP_JS.contains("keepGraphTextAtInterfaceSize(svg, layout.width)"));
+        assert!(APP_CSS.contains("--graph-title-font-size"));
+        assert!(APP_JS.contains("history-watermark"));
         assert!(APP_JS.contains("animateMotion"));
         assert!(APP_JS.contains("activity?.routes"));
         assert!(APP_JS.contains("connector-boundary-packet"));
         assert!(APP_JS.contains("pendingCommandRevision"));
         assert!(GRAPH_LAYOUT_JS.contains("scopePortAnchors"));
         assert!(APP_JS.contains("edge.queued_count"));
-        assert!(APP_JS.contains("`Σ${edge.traversal_count"));
+        assert!(APP_JS.contains("inspectMailbox(edge.route)"));
+        assert!(APP_JS.contains("renderMailbox(snapshot.topology)"));
+        assert!(!APP_JS.contains("edge.traversal_count"));
         assert!(!APP_JS.contains("edge.envelope_count"));
         assert!(!APP_JS.contains("class: \"edge-port source-port\""));
         assert!(!APP_JS.contains('✉'));
+        assert!(INDEX_HTML.contains("data-inspector-tab=\"envelope\""));
+        assert!(INDEX_HTML.contains("data-inspector-tab=\"mailbox\""));
+        assert!(INDEX_HTML.contains("id=\"workspace-splitter\""));
+        assert!(INDEX_HTML.contains("1 event/s"));
+        assert!(INDEX_HTML.contains("4 events/s"));
+        assert!(APP_JS.contains("installGraphViewport"));
+        assert!(APP_JS.contains("installWorkspaceSplitter"));
+        assert!(!APP_JS.contains("edit-next-injection"));
+        assert!(!INDEX_HTML.contains("Inject now"));
+        assert!(!APP_JS.contains("typeBadge("));
+        assert!(GRAPH_LAYOUT_JS.contains("edge.target?.kind !== \"discard\""));
+        assert!(GRAPH_LAYOUT_JS.contains("topology.handler_relations"));
+        assert!(!APP_JS.contains("graph-port-terminal"));
+        assert!(APP_JS.contains("drained to nothing; no downstream mailbox"));
+        assert!(APP_JS.contains("control relation, no envelope mailbox"));
+        assert!(APP_JS.contains("inspectHandlerRelation(edge)"));
+        assert!(APP_JS.contains("`≡ ${edge.queued_count || \"0\"}`"));
+        assert!(APP_JS.contains("`⧉ ${instances.length}`"));
+        assert!(APP_JS.contains("Unavailable: ${reason}"));
+        assert!(APP_JS.contains("window.addEventListener(\"pagehide\", releaseControl)"));
+        assert!(APP_JS.contains("events.addEventListener(\"open\""));
+        assert!(APP_JS.contains("slice(0, 8)"));
+        assert!(!APP_JS.contains("truncate(boundaryLabel"));
+        assert!(!GRAPH_LAYOUT_JS.contains("terminal:${node.id}:${port.name}"));
+    }
+
+    #[test]
+    fn every_boundary_remains_addressable_and_a_fork_preserves_its_prefix() {
+        let mut server = UiServer::start(None, timeline_frame(0, 0, 0)).expect("server starts");
+        server.publish(timeline_frame(1, 0, 1));
+        server.publish(timeline_frame(2, 0, 2));
+
+        let index = request(
+            server.address,
+            &format!(
+                "GET /api/timeline?token={} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                server.capability, server.address
+            ),
+        );
+        assert!(index.contains("\"live_boundary\":2"), "{index}");
+        assert!(index.contains("boundary 1"), "{index}");
+
+        let historical = request(
+            server.address,
+            &format!(
+                "GET /api/snapshot?branch=0&boundary=1&token={} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                server.capability, server.address
+            ),
+        );
+        assert!(historical.contains("\"boundary\":1"), "{historical}");
+        assert!(!historical.contains("\"boundary\":2"), "{historical}");
+
+        assert!(server.fork_timeline(0, 1, 7));
+        let forked = request(
+            server.address,
+            &format!(
+                "GET /api/snapshot?branch=7&boundary=1&token={} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                server.capability, server.address
+            ),
+        );
+        assert!(forked.contains("\"branch\":7"), "{forked}");
+        assert!(forked.contains("\"boundary\":1"), "{forked}");
     }
 
     #[test]

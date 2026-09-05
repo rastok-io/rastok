@@ -2,12 +2,13 @@ use super::UiSnapshot;
 use crate::accounting::{CostEvidence, CostReport};
 use crate::compiler::SourceDefinition;
 use crate::data_policy::is_redacted_path;
-use crate::datatype::{DataType, IntegerType, TemporalType};
 use crate::envelope::{Data, MetaValue, Namespace, Scalar, Value};
 use crate::identity::InstanceRef;
 use crate::journal::{Journal, MemJournal, OutboundRecord, OutboundStatus, Record, SessionStatus};
 use crate::observation::ExchangeCorrelation;
-use crate::plan::{NodeExecution, Slot, ValidatedExecutionPlan};
+use crate::plan::{
+    ExecutionPlan, HandlerOwner, NodeExecution, OwnerSlot, Slot, Step, ValidatedExecutionPlan,
+};
 use crate::runtime::vm::{
     CallDirectionInspection, CallReferenceInspection, InstancePhaseInspection,
     SessionDirectionInspection, Vm, VmInspection,
@@ -72,9 +73,25 @@ pub struct ActivityView {
     node: Option<String>,
     motion: Option<&'static str>,
     records: Option<(usize, usize)>,
+    instance: Option<InstanceRef>,
 }
 
 impl ActivityView {
+    /// Describes one physical boundary observation which retained no Node
+    /// transaction of its own.
+    #[must_use]
+    pub fn external(ordinal: u64, kind: &'static str, detail: impl Into<String>) -> Self {
+        Self {
+            ordinal: Some(ordinal),
+            kind,
+            detail: detail.into(),
+            node: None,
+            motion: None,
+            records: None,
+            instance: None,
+        }
+    }
+
     /// Describes one authored Lab action, which is explicitly not a Node
     /// transaction even when it admits an envelope onto a graph edge.
     #[must_use]
@@ -88,10 +105,11 @@ impl ActivityView {
         Self {
             ordinal: Some(ordinal),
             kind: "scenario-action",
-            detail: format!("scenario action `{action}`; no Node fired"),
+            detail: format!("Scenario {action} · the authored action reached its boundary"),
             node: None,
             motion: None,
             records,
+            instance: None,
         }
     }
 
@@ -124,6 +142,7 @@ impl ActivityView {
                 node: Some(owner),
                 motion: None,
                 records: Some(records),
+                instance: Some(transaction.instance.clone()),
             });
         }
         if let Some((kind, node, motion, detail)) =
@@ -166,6 +185,7 @@ impl ActivityView {
                 node: Some(node),
                 motion: Some(motion),
                 records: Some(records),
+                instance: None,
             });
         }
         let (kind, detail) = if changed
@@ -189,6 +209,7 @@ impl ActivityView {
             node: None,
             motion: None,
             records: Some(records),
+            instance: None,
         })
     }
 }
@@ -224,6 +245,10 @@ pub struct SnapshotInput<'a> {
     pub activity: Option<&'a ActivityView>,
     /// Interactive Lab projection, absent in real-run mode.
     pub scenario: Option<JsonValue>,
+    /// Append-only presentation branch. Always zero for a real run.
+    pub branch: u64,
+    /// Atomic execution boundary within that branch.
+    pub boundary: u64,
 }
 
 /// Builds one complete disposable execution projection.
@@ -245,21 +270,36 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
         fault,
         activity,
         scenario,
+        branch,
+        boundary,
     } = input;
     let legal_commands = legal_commands(mode, state, fault, scenario.as_ref());
     let inspection = vm.inspection();
+    let active_instances = active_instance_lifecycles(journal);
     let value = json!({
         "revision": revision,
         "mode": mode,
+        "timeline": {
+            "branch": branch,
+            "boundary": boundary,
+            "record_through": journal.records().len().checked_sub(1),
+        },
         "execution": {
             "state": state.spelling(),
             "logical_time_ns": vm.now().to_string(),
             "awaiting_outbound_calls": vm.awaiting_outbound_calls(),
             "legal_commands": legal_commands,
         },
-        "topology": topology(plan, definitions, &inspection, journal, activity),
+        "topology": topology(
+            plan,
+            definitions,
+            &inspection,
+            journal,
+            &active_instances,
+            activity,
+        ),
         "history": history(plan, vm, journal),
-        "instances": instances(plan, &inspection),
+        "instances": instances(plan, &inspection, &active_instances),
         "exchanges": exchanges(&inspection),
         "cost_report": cost_report(plan, journal, cost_profile),
         "scenario": scenario,
@@ -287,15 +327,6 @@ fn legal_commands(
             if fault.is_some_and(|fault| fault.retryable) {
                 commands.push("retry-step");
             }
-            let editable_draft = scenario
-                .and_then(|scenario| scenario.get("current"))
-                .and_then(|current| current.get("draft"))
-                .and_then(|draft| draft.get("editable"))
-                .and_then(JsonValue::as_bool)
-                .unwrap_or(false);
-            if editable_draft {
-                commands.push("edit-next-injection");
-            }
             commands
         }
         ExecutionState::Completed => Vec::new(),
@@ -317,20 +348,18 @@ fn legal_commands(
                 commands.extend(["resume", "step", "run-until-assertion", "run-to-completion"]);
                 if quiescent {
                     commands.push("next-scenario-action");
-                    let editable_draft = current
-                        .and_then(|current| current.get("draft"))
-                        .and_then(|draft| draft.get("editable"))
-                        .and_then(JsonValue::as_bool)
-                        .unwrap_or(false);
-                    if editable_draft {
-                        commands.push("edit-next-injection");
-                    }
                 }
             }
             commands
         }
     };
     if mode == "simulate" {
+        if matches!(
+            state,
+            ExecutionState::Paused | ExecutionState::Faulted | ExecutionState::Completed
+        ) {
+            commands.push("branch-from");
+        }
         commands.extend(["reset-scenario", "select-scenario"]);
     }
     commands.push("close");
@@ -341,6 +370,25 @@ fn legal_commands(
 struct Traffic {
     count: u64,
     last_record: Option<usize>,
+}
+
+fn active_instance_lifecycles(journal: &MemJournal) -> BTreeSet<InstanceRef> {
+    let mut active = BTreeSet::new();
+    for record in journal.records() {
+        let Record::Transaction(transaction) = record else {
+            continue;
+        };
+        match &transaction.trigger {
+            crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Start) => {
+                active.insert(transaction.instance.clone());
+            }
+            crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Stop) => {
+                active.remove(&transaction.instance);
+            }
+            crate::node::Trigger::Port(_) | crate::node::Trigger::Lifecycle(_) => {}
+        }
+    }
+    active
 }
 
 fn record_activity_route(
@@ -363,18 +411,15 @@ fn topology(
     definitions: &[SourceDefinition],
     inspection: &VmInspection,
     journal: &MemJournal,
+    active_instances: &BTreeSet<InstanceRef>,
     activity: Option<&ActivityView>,
 ) -> JsonValue {
+    let mailbox_contents = mailbox_contents(plan, inspection);
     let resolved_ports = plan.resolved_ports();
     let plan = plan.plan();
     let definitions_by_owner = definitions
         .iter()
         .map(|definition| (definition.owner.to_string(), definition))
-        .collect::<BTreeMap<_, _>>();
-    let mut traffic = plan
-        .edges
-        .iter()
-        .map(|edge| (plan.edge_text(edge), Traffic::default()))
         .collect::<BTreeMap<_, _>>();
     let mut owner_transactions = plan
         .owners
@@ -382,6 +427,14 @@ fn topology(
         .map(|owner| (owner.path.to_string(), Traffic::default()))
         .collect::<BTreeMap<_, _>>();
     let mut activity_routes = BTreeMap::new();
+    let instance_badges = inspection
+        .instances
+        .iter()
+        .filter_map(|instance| {
+            instance_badge_json(instance, active_instances)
+                .map(|badge| (instance.reference.clone(), badge))
+        })
+        .collect::<BTreeMap<_, _>>();
     let node_slots = plan
         .nodes
         .iter()
@@ -396,7 +449,6 @@ fn topology(
         match record {
             Record::Inbound(inbound) => {
                 for route in &inbound.routes {
-                    record_traffic(&mut traffic, &route.edge, record_index);
                     if belongs_to_activity {
                         record_activity_route(&mut activity_routes, &route.edge, "admitted");
                     }
@@ -412,7 +464,6 @@ fn topology(
                     }
                 }
                 for route in &transaction.routes {
-                    record_traffic(&mut traffic, &route.edge, record_index);
                     if belongs_to_activity {
                         record_activity_route(&mut activity_routes, &route.edge, "emitted");
                     }
@@ -426,7 +477,6 @@ fn topology(
                                 && leaves_graph
                             {
                                 let route = plan.edge_text(edge);
-                                record_traffic(&mut traffic, &route, record_index);
                                 if belongs_to_activity {
                                     record_activity_route(&mut activity_routes, &route, "emitted");
                                 }
@@ -485,6 +535,11 @@ fn topology(
                 "definition": definition.map(source_definition_json),
                 "firing_count": firing.count.to_string(),
                 "last_firing_record": firing.last_record,
+                "instances": inspection.instances.iter().filter(|instance| {
+                    instance.node.as_ref() == Some(&node.path)
+                }).filter_map(|instance| {
+                    instance_badges.get(&instance.reference).cloned()
+                }).collect::<Vec<_>>(),
             })
         })
         .collect::<Vec<_>>();
@@ -535,6 +590,11 @@ fn topology(
                 "definition": definition.map(source_definition_json),
                 "transaction_count": activity.count.to_string(),
                 "last_transaction_record": activity.last_record,
+                "instances": inspection.instances.iter().filter(|instance| {
+                    instance.owner == owner.path
+                }).filter_map(|instance| {
+                    instance_badges.get(&instance.reference).cloned()
+                }).collect::<Vec<_>>(),
             })
         })
         .collect::<Vec<_>>();
@@ -544,8 +604,7 @@ fn topology(
         .enumerate()
         .map(|(index, edge)| {
             let route = plan.edge_text(edge);
-            let traffic = traffic.get(&route).copied().unwrap_or_default();
-            let queued = inspection.queued_by_edge.get(&route).copied().unwrap_or(0);
+            let mailbox = mailbox_contents.get(&route).cloned().unwrap_or_default();
             json!({
                 "index": index,
                 "route": route,
@@ -555,22 +614,31 @@ fn topology(
                     || json!({
                         "id": format!("discard:{index}"),
                         "kind": "discard",
-                        "label": "Discard",
+                        "label": format!(
+                            "Discard · {}.{}",
+                            edge.from.node.map_or_else(
+                                || String::from("App"),
+                                |slot| plan.nodes[slot.index()].path.to_string(),
+                            ),
+                            edge.from.port,
+                        ),
                         "owner": format!("owner:{}", edge.scope.index()),
                         "port": JsonValue::Null,
                     }),
                     |target| endpoint_json(target, false),
                 ),
-                "queued_count": queued.to_string(),
-                "traversal_count": traffic.count.to_string(),
-                "last_envelope_record": traffic.last_record,
+                "queued_count": mailbox.len().to_string(),
+                "mailbox": mailbox,
             })
         })
         .collect::<Vec<_>>();
+    let (control_nodes, handler_relations) = graph_handler_relations(plan);
     json!({
         "nodes": nodes,
         "owners": owners,
         "edges": edges,
+        "control_nodes": control_nodes,
+        "handler_relations": handler_relations,
         "activity": activity.map(|activity| json!({
             "ordinal": activity.ordinal,
             "kind": activity.kind,
@@ -581,12 +649,340 @@ fn topology(
                 "from": from,
                 "through": through,
             })),
+            "instance": activity.instance.as_ref().map(instance_ref_json),
             "routes": activity_routes.iter().map(|(route, phase)| json!({
                 "route": route,
                 "phase": phase,
             })).collect::<Vec<_>>(),
         })),
     })
+}
+
+/// Projects Graph-owned handler choices separately from spatial topology.
+///
+/// A Graph handler consumes no spatial edge between its child trigger and the
+/// Graph boundary output. Drawing one as an ordinary edge would invent a
+/// mailbox and an envelope route. These relations are therefore explicit
+/// presentation facts: they are derived from the validated handler table,
+/// carry no queue state, and never enter plan or journal identity.
+fn graph_handler_relations(plan: &ExecutionPlan) -> (Vec<JsonValue>, Vec<JsonValue>) {
+    type RelationKey = (usize, String, String, String, String);
+
+    let node_slots = plan
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(slot, node)| (node.path.to_string(), slot))
+        .collect::<BTreeMap<_, _>>();
+    let graph_slots = plan
+        .owners
+        .iter()
+        .enumerate()
+        .filter(|(_, owner)| owner.kind == crate::plan::OwnerKind::Graph)
+        .map(|(slot, owner)| (owner.path.to_string(), slot))
+        .collect::<BTreeMap<_, _>>();
+    let mut control_nodes = BTreeMap::<String, JsonValue>::new();
+    let mut relations = BTreeMap::<RelationKey, (JsonValue, JsonValue)>::new();
+
+    for handler in &plan.handlers {
+        let HandlerOwner::Graph(owner_slot) = handler.owner else {
+            continue;
+        };
+        let owner = &plan.owners[owner_slot.index()];
+        let owner_id = format!("owner:{}", owner_slot.index());
+        let (source_identity, source, activation) = match &handler.activation {
+            crate::node::HandlerActivation::Port(port) => (
+                format!("{owner_id}:input:{port}"),
+                graph_boundary_endpoint_json(plan, owner_slot, port, crate::node::Direction::Input),
+                port.to_string(),
+            ),
+            crate::node::HandlerActivation::ChildPort { child, port } => {
+                let child_path = child.to_string();
+                let endpoint = if let Some(slot) = node_slots.get(&child_path) {
+                    json!({
+                        "id": format!("node:{slot}"),
+                        "kind": "node",
+                        "label": JsonValue::Null,
+                        "port": port.name(),
+                    })
+                } else if let Some(slot) = graph_slots.get(&child_path) {
+                    graph_boundary_endpoint_json(
+                        plan,
+                        OwnerSlot::new(u32::try_from(*slot).unwrap_or(u32::MAX)),
+                        port,
+                        crate::node::Direction::Output,
+                    )
+                } else {
+                    debug_assert!(false, "validated Graph handler child must exist");
+                    continue;
+                };
+                let relative_child = child
+                    .segments()
+                    .get(owner.path.segments().len()..)
+                    .filter(|segments| !segments.is_empty())
+                    .map_or_else(|| child_path.clone(), |segments| segments.join("."));
+                (
+                    format!("child:{child_path}:{port}"),
+                    endpoint,
+                    format!("{relative_child}.{port}"),
+                )
+            }
+            crate::node::HandlerActivation::Lifecycle(lifecycle) => {
+                let control_id = format!("control:{owner_id}:lifecycle:{lifecycle}");
+                control_nodes.entry(control_id.clone()).or_insert_with(|| {
+                    control_node_json(
+                        &control_id,
+                        &owner_id,
+                        &format!("on {lifecycle}"),
+                        &format!("l:{lifecycle}"),
+                    )
+                });
+                (
+                    format!("lifecycle:{lifecycle}"),
+                    json!({
+                        "id": control_id,
+                        "kind": "control",
+                        "label": JsonValue::Null,
+                        "port": format!("l:{lifecycle}"),
+                    }),
+                    format!("l:{lifecycle}"),
+                )
+            }
+            crate::node::HandlerActivation::Join { ports, .. } => {
+                let activation = format!(
+                    "({})",
+                    ports
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                let source_port = handler.activation.canonical_key();
+                let control_id = format!("control:{owner_id}:{source_port}");
+                control_nodes.entry(control_id.clone()).or_insert_with(|| {
+                    control_node_json(&control_id, &owner_id, "join", &source_port)
+                });
+                (
+                    source_port.clone(),
+                    json!({
+                        "id": control_id,
+                        "kind": "control",
+                        "label": JsonValue::Null,
+                        "port": source_port,
+                    }),
+                    activation,
+                )
+            }
+        };
+
+        for port in handler.body.iter().filter_map(|step| match step {
+            Step::Emit { port, .. } => Some(port),
+            Step::Let { .. } | Step::SetVar { .. } | Step::Stop => None,
+        }) {
+            let relation_kind = if port.name() == "next" {
+                "temporal"
+            } else {
+                "handler"
+            };
+            let target = graph_boundary_endpoint_json(
+                plan,
+                owner_slot,
+                port,
+                crate::node::Direction::Output,
+            );
+            relations
+                .entry((
+                    owner_slot.index(),
+                    source_identity.clone(),
+                    activation.clone(),
+                    port.to_string(),
+                    String::from(relation_kind),
+                ))
+                .or_insert_with(|| (source.clone(), target));
+        }
+    }
+
+    // `expired` is emitted by the Loop manager rather than by an authored
+    // handler. Showing that producer closes the visual explanation without
+    // pretending that a spatial edge or mailbox exists.
+    for (owner_index, owner) in plan.owners.iter().enumerate() {
+        if owner.kind != crate::plan::OwnerKind::Graph
+            || !owner
+                .aspects
+                .iter()
+                .any(|aspect| matches!(aspect, crate::plan::AspectSpec::Loop(_)))
+        {
+            continue;
+        }
+        let owner_slot = OwnerSlot::new(u32::try_from(owner_index).unwrap_or(u32::MAX));
+        let Some(expired) = plan.graph_ports(owner_slot).and_then(|ports| {
+            ports.iter().find(|port| {
+                port.direction == crate::node::Direction::Output && port.port.name() == "expired"
+            })
+        }) else {
+            continue;
+        };
+        let owner_id = format!("owner:{owner_index}");
+        let control_id = format!("control:{owner_id}:loop");
+        control_nodes
+            .entry(control_id.clone())
+            .or_insert_with(|| control_node_json(&control_id, &owner_id, "Loop manager", "fuel"));
+        relations
+            .entry((
+                owner_index,
+                String::from("loop-manager"),
+                String::from("Loop fuel exhausted"),
+                String::from("expired"),
+                String::from("manager"),
+            ))
+            .or_insert_with(|| {
+                (
+                    json!({
+                    "id": control_id,
+                    "kind": "control",
+                    "label": JsonValue::Null,
+                    "port": "fuel",
+                    }),
+                    graph_boundary_endpoint_json(
+                        plan,
+                        owner_slot,
+                        &expired.port,
+                        crate::node::Direction::Output,
+                    ),
+                )
+            });
+    }
+
+    let first_index = plan.edges.len();
+    let mut labelled_sources = BTreeSet::new();
+    let relations = relations
+        .into_iter()
+        .enumerate()
+        .map(
+            |(
+                offset,
+                (
+                    (owner_index, source_identity, activation, target_port, relation_kind),
+                    (source, target),
+                ),
+            )| {
+                let owner = &plan.owners[owner_index];
+                let owner_label = if owner.path.is_root() {
+                    String::from("App")
+                } else {
+                    owner.path.to_string()
+                };
+                let show_label = relation_kind != "manager"
+                    && labelled_sources.insert((
+                        owner_index,
+                        source_identity.clone(),
+                        activation.clone(),
+                    ));
+                let description = format!(
+                    "{} may emit {owner_label}.{target_port}",
+                    if relation_kind == "manager" {
+                        String::from("Loop manager")
+                    } else {
+                        format!("on {activation}")
+                    },
+                );
+                json!({
+                    "index": first_index + offset,
+                    "route": format!(
+                        "@control:{owner_index}:{source_identity}>{target_port}"
+                    ),
+                    "relation": relation_kind,
+                    "owner": format!("owner:{owner_index}"),
+                    "activation": activation,
+                    "label": if show_label { "on" } else { "" },
+                    "show_label": show_label,
+                    "description": description,
+                    "source": source,
+                    "target": target,
+                })
+            },
+        )
+        .collect();
+
+    (control_nodes.into_values().collect(), relations)
+}
+
+fn graph_boundary_endpoint_json(
+    plan: &ExecutionPlan,
+    owner_slot: OwnerSlot,
+    port: &crate::node::Port,
+    direction: crate::node::Direction,
+) -> JsonValue {
+    let owner = &plan.owners[owner_slot.index()];
+    let direction_name = match direction {
+        crate::node::Direction::Input => "input",
+        crate::node::Direction::Output => "output",
+    };
+    let id = if owner.path.is_root() {
+        format!("boundary:{direction_name}:{port}")
+    } else {
+        format!(
+            "boundary:owner:{}:{direction_name}:{port}",
+            owner_slot.index()
+        )
+    };
+    json!({
+        "id": id,
+        "kind": direction_name,
+        "label": format!(
+            "{} {direction_name}",
+            if owner.path.is_root() {
+                String::from("App")
+            } else {
+                owner.path.to_string()
+            },
+        ),
+        "owner": format!("owner:{}", owner_slot.index()),
+        "port": port.name(),
+    })
+}
+
+fn control_node_json(id: &str, owner: &str, label: &str, port: &str) -> JsonValue {
+    json!({
+        "id": id,
+        "owner": owner,
+        "kind": "control",
+        "label": label,
+        "path": JsonValue::Null,
+        "type": "control",
+        "aspects": [],
+        "ports": [{ "name": port, "direction": "output" }],
+        "inspect_owner": owner,
+    })
+}
+
+fn mailbox_contents(
+    plan: &ValidatedExecutionPlan,
+    inspection: &VmInspection,
+) -> BTreeMap<String, Vec<JsonValue>> {
+    let mut contents = BTreeMap::<String, Vec<JsonValue>>::new();
+    for mailbox in &inspection.mailboxes {
+        for (position, delivery) in mailbox.deliveries.iter().enumerate() {
+            let annotations = node_port_annotations(plan, &mailbox.node, &delivery.port);
+            contents
+                .entry(delivery.edge.clone())
+                .or_default()
+                .push(json!({
+                    "position": position,
+                    "node": mailbox.node.to_string(),
+                    "port": delivery.port.name(),
+                    "claimed": mailbox.claimed && position == 0,
+                    "instance": instance_ref_json(&mailbox.instance),
+                    "source_instance": instance_ref_json(&delivery.source_instance),
+                    "sequence": delivery.seq.to_string(),
+                    "envelope_id": delivery.envelope.meta().sys().id().to_string(),
+                    "origin_id": delivery.envelope.meta().sys().origin_id().to_string(),
+                    "meta": meta_json(delivery.envelope.meta()),
+                    "data": data_json(delivery.envelope.data(), annotations),
+                }));
+        }
+    }
+    contents
 }
 
 fn source_definition_json(definition: &SourceDefinition) -> JsonValue {
@@ -693,7 +1089,7 @@ fn history_record_description(record: &Record) -> (&'static str, Option<String>,
         }
         Record::Transaction(transaction) => {
             let kind = match &transaction.trigger {
-                crate::node::Trigger::Port(_) => "step",
+                crate::node::Trigger::Port(_) => "port-transaction",
                 crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Start) => "instance-opened",
                 crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Stop) => "instance-stopped",
                 crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Closing) => {
@@ -752,7 +1148,7 @@ fn transaction_summary(transaction: &crate::journal::TransactionRecord) -> Strin
     };
     let generation = transaction.instance.generation();
     match &transaction.trigger {
-        crate::node::Trigger::Port(port) => format!("Step · {owner} · {port}"),
+        crate::node::Trigger::Port(port) => format!("Port transaction · {owner} · {port}"),
         crate::node::Trigger::Lifecycle(lifecycle) => {
             let verb = match lifecycle {
                 crate::node::Lifecycle::Start => "Instance opened",
@@ -776,18 +1172,7 @@ fn observation_annotations<'a>(
     observed: &crate::runtime::vm::Observed,
 ) -> &'a AnnotationTable {
     match &observed.node {
-        Some(path) => plan
-            .plan()
-            .nodes
-            .iter()
-            .position(|node| &node.path == path)
-            .and_then(|index| {
-                plan.resolved_ports()
-                    .node(Slot::new(u32::try_from(index).unwrap_or(u32::MAX)))
-            })
-            .and_then(|ports| ports.iter().find(|port| port.port() == &observed.port))
-            .map(crate::plan::ResolvedPort::annotations)
-            .unwrap_or(&EMPTY_ANNOTATIONS),
+        Some(path) => node_port_annotations(plan, path, &observed.port),
         None => plan
             .resolved_ports()
             .boundary()
@@ -798,11 +1183,34 @@ fn observation_annotations<'a>(
     }
 }
 
-fn instances(plan: &ValidatedExecutionPlan, inspection: &VmInspection) -> JsonValue {
+fn node_port_annotations<'a>(
+    plan: &'a ValidatedExecutionPlan,
+    path: &crate::node::Path,
+    port: &crate::node::Port,
+) -> &'a AnnotationTable {
+    plan.plan()
+        .nodes
+        .iter()
+        .position(|node| &node.path == path)
+        .and_then(|index| {
+            plan.resolved_ports()
+                .node(Slot::new(u32::try_from(index).unwrap_or(u32::MAX)))
+        })
+        .and_then(|ports| ports.iter().find(|resolved| resolved.port() == port))
+        .map(crate::plan::ResolvedPort::annotations)
+        .unwrap_or(&EMPTY_ANNOTATIONS)
+}
+
+fn instances(
+    plan: &ValidatedExecutionPlan,
+    inspection: &VmInspection,
+    active_instances: &BTreeSet<InstanceRef>,
+) -> JsonValue {
     JsonValue::Array(
         inspection
             .instances
             .iter()
+            .filter(|instance| active_instances.contains(&instance.reference))
             .map(|instance| {
                 let state = instance.node.as_ref().map_or_else(Map::new, |path| {
                     let annotations = plan
@@ -984,6 +1392,19 @@ fn instance_ref_json(reference: &InstanceRef) -> JsonValue {
     })
 }
 
+fn instance_badge_json(
+    instance: &crate::runtime::vm::InstanceInspection,
+    active_instances: &BTreeSet<InstanceRef>,
+) -> Option<JsonValue> {
+    active_instances
+        .contains(&instance.reference)
+        .then_some(())?;
+    Some(json!({
+        "generation": instance.reference.generation(),
+        "phase": phase(instance.phase),
+    }))
+}
+
 fn meta_json(meta: &crate::envelope::Meta) -> JsonValue {
     json!({
         "sys": {
@@ -1066,535 +1487,19 @@ fn data_json(data: &Data, annotations: &AnnotationTable) -> JsonValue {
     materialized_value_json(value, annotations)
 }
 
-/// Projects one pending Lab injection into the typed, pre-admission editor
-/// model. Classified or dynamic trees remain visible under the ordinary
-/// redaction rules but are not editable in M1.
+/// Projects the next authored Lab injection for read-only inspection.
+///
+/// The value still comes from the checked scenario on disk. The UI has no
+/// command that can replace it.
 #[must_use]
-pub fn scenario_injection_json(draft: &crate::lab::ScenarioInjectionDraft) -> JsonValue {
-    let value = draft.data.materialized_value();
-    let editable = value.is_some()
-        && schema_is_editable(&draft.ty)
-        && !draft
-            .annotations
-            .entries()
-            .keys()
-            .any(|path| is_redacted_path(&draft.annotations, path));
+pub fn scenario_injection_json(injection: &crate::lab::ScenarioInjectionDraft) -> JsonValue {
     json!({
         "position": "before-app-input",
-        "port": draft.port.name(),
-        "edited": draft.edited,
-        "editable": editable,
-        "type": type_json(&draft.ty),
-        "meta": draft_meta_json(&draft.ext),
-        "data": if editable {
-            value.and_then(|value| editable_value_json(&draft.ty, value).ok())
-                .unwrap_or(JsonValue::Null)
-        } else {
-            data_json(&draft.data, &draft.annotations)
-        },
+        "port": injection.port.name(),
+        "type": injection.ty.to_string(),
+        "meta": draft_meta_json(&injection.ext),
+        "data": data_json(&injection.data, &injection.annotations),
     })
-}
-
-/// Decodes the typed editor wire shape against one resolved App input type.
-/// The caller still admits the resulting value through the ordinary Lab/VM
-/// boundary; this function cannot mint or mutate an envelope.
-///
-/// # Errors
-///
-/// Malformed JSON, an unsupported dynamic tree, or any exact conformance
-/// violation refuses before the scenario draft changes.
-pub fn parse_edited_data(text: &str, ty: &DataType) -> Result<Value, String> {
-    if text.len() > super::MAX_EDIT_BODY_BYTES {
-        return Err(String::from("the edited DATA tree exceeds 256 KiB"));
-    }
-    let json = serde_json::from_str::<JsonValue>(text)
-        .map_err(|error| format!("the edited DATA tree is not valid JSON: {error}"))?;
-    let value = editable_json_value(ty, &json, "DATA")?;
-    if let Some(violation) = ty.violation("edited input data", &value) {
-        return Err(format!(
-            "the edited DATA tree does not conform: {violation}"
-        ));
-    }
-    Ok(value)
-}
-
-fn schema_is_editable(ty: &DataType) -> bool {
-    match ty {
-        DataType::Variant => false,
-        DataType::Struct(structure) => structure
-            .fields()
-            .iter()
-            .all(|field| schema_is_editable(field.ty())),
-        DataType::Map(map) => schema_is_editable(map.key()) && schema_is_editable(map.value()),
-        DataType::Array(array) => schema_is_editable(array.element()),
-        DataType::StructuralUnion(union) => union.branches().iter().all(schema_is_editable),
-        DataType::TaggedUnion(union) => union.cases().iter().all(|case| {
-            case.payload()
-                .fields()
-                .iter()
-                .all(|field| schema_is_editable(field.ty()))
-        }),
-        _ => true,
-    }
-}
-
-fn type_json(ty: &DataType) -> JsonValue {
-    let label = ty.to_string();
-    match ty {
-        DataType::Null => json!({ "kind": "null", "label": label }),
-        DataType::Bool => json!({ "kind": "bool", "label": label }),
-        DataType::Integer(integer) => json!({
-            "kind": "integer",
-            "label": label,
-            "signed": matches!(integer, IntegerType::Signed(_)),
-        }),
-        DataType::Float(_) => json!({ "kind": "float", "label": label }),
-        DataType::Decimal(decimal) => json!({
-            "kind": "decimal",
-            "label": label,
-            "precision": decimal.precision(),
-            "scale": decimal.scale(),
-        }),
-        DataType::Number => json!({ "kind": "number", "label": label }),
-        DataType::Text => json!({ "kind": "text", "label": label }),
-        DataType::MediaType => json!({ "kind": "media-type", "label": label }),
-        DataType::Bytes(binary) => json!({
-            "kind": "bytes",
-            "label": label,
-            "length": match binary {
-                crate::datatype::BinaryType::Variable => None,
-                crate::datatype::BinaryType::Fixed(length) => Some(length.get()),
-            },
-        }),
-        DataType::Temporal(temporal) => json!({
-            "kind": "temporal",
-            "label": label,
-            "family": format!("{temporal:?}"),
-        }),
-        DataType::Uuid => json!({ "kind": "uuid", "label": label }),
-        DataType::Struct(structure) => json!({
-            "kind": "struct",
-            "label": label,
-            "fields": structure.fields().iter().map(|field| json!({
-                "name": field.name(),
-                "type": type_json(field.ty()),
-            })).collect::<Vec<_>>(),
-        }),
-        DataType::Map(map) => json!({
-            "kind": "map",
-            "label": label,
-            "key": type_json(map.key()),
-            "value": type_json(map.value()),
-        }),
-        DataType::Array(array) => json!({
-            "kind": "array",
-            "label": label,
-            "element": type_json(array.element()),
-            "length": array.length().map(crate::datatype::ArrayLength::get),
-        }),
-        DataType::Enum(enumeration) => json!({
-            "kind": "enum",
-            "label": label,
-            "symbols": enumeration.symbols(),
-        }),
-        DataType::StructuralUnion(union) => json!({
-            "kind": "structural-union",
-            "label": label,
-            "branches": union.branches().iter().map(type_json).collect::<Vec<_>>(),
-        }),
-        DataType::TaggedUnion(union) => json!({
-            "kind": "tagged-union",
-            "label": label,
-            "cases": union.cases().iter().map(|case| json!({
-                "name": case.name(),
-                "type": type_json(&DataType::Struct(case.payload().clone())),
-            })).collect::<Vec<_>>(),
-        }),
-        DataType::Variant => json!({
-            "kind": "variant",
-            "label": label,
-            "editable": false,
-        }),
-    }
-}
-
-fn editable_value_json(ty: &DataType, value: &Value) -> Result<JsonValue, String> {
-    match (ty, value) {
-        (DataType::Null, Value::Null) => Ok(JsonValue::Null),
-        (DataType::Bool, Value::Bool(value)) => Ok(JsonValue::Bool(*value)),
-        (DataType::Integer(IntegerType::Signed(_)), Value::Int(value)) => {
-            Ok(JsonValue::String(value.to_string()))
-        }
-        (DataType::Integer(IntegerType::Unsigned(_)), Value::Uint(value)) => {
-            Ok(JsonValue::String(value.to_string()))
-        }
-        (DataType::Float(_), Value::Double(value)) => Ok(JsonValue::String(value.to_string())),
-        (DataType::Decimal(_), Value::Decimal { unscaled, scale })
-        | (DataType::Number, Value::Decimal { unscaled, scale }) => Ok(JsonValue::String(format!(
-            "{unscaled}e{}",
-            scale.saturating_neg()
-        ))),
-        (DataType::Number, Value::Int(value)) => Ok(JsonValue::String(value.to_string())),
-        (DataType::Number, Value::Uint(value)) => Ok(JsonValue::String(value.to_string())),
-        (DataType::Text | DataType::MediaType, Value::Text(value))
-        | (DataType::Enum(_), Value::Enum(value)) => Ok(JsonValue::String(value.clone())),
-        (DataType::Bytes(_), Value::Bytes(value)) => Ok(JsonValue::String(hex(value))),
-        (DataType::Temporal(TemporalType::Date(_)), Value::Date(value))
-        | (DataType::Temporal(TemporalType::Time(_)), Value::Time(value))
-        | (DataType::Temporal(TemporalType::Timestamp { .. }), Value::Timestamp(value))
-        | (DataType::Temporal(TemporalType::TimestampNtz(_)), Value::TimestampNtz(value))
-        | (DataType::Temporal(TemporalType::Duration(_)), Value::Duration(value)) => {
-            Ok(JsonValue::String(value.to_string()))
-        }
-        (
-            DataType::Temporal(TemporalType::Interval(_)),
-            Value::Interval {
-                months,
-                days,
-                nanoseconds,
-            },
-        ) => Ok(json!({
-            "months": months.to_string(),
-            "days": days.to_string(),
-            "nanoseconds": nanoseconds.to_string(),
-        })),
-        (DataType::Uuid, Value::Uuid(value)) => Ok(JsonValue::String(hex(value))),
-        (DataType::Struct(structure), Value::Struct(fields)) => {
-            let fields = fields
-                .iter()
-                .map(|(name, value)| (name.as_str(), value))
-                .collect::<BTreeMap<_, _>>();
-            let mut json = Map::new();
-            for field in structure.fields() {
-                let value = fields
-                    .get(field.name())
-                    .ok_or_else(|| format!("the value has no field `{}`", field.name()))?;
-                json.insert(
-                    field.name().to_string(),
-                    editable_value_json(field.ty(), value)?,
-                );
-            }
-            Ok(JsonValue::Object(json))
-        }
-        (DataType::Map(map), Value::Map(entries)) if map.key() == &DataType::Text => {
-            Ok(JsonValue::Array(
-                entries
-                    .iter()
-                    .map(|(key, value)| {
-                        Ok(json!({
-                            "key": key,
-                            "value": editable_value_json(map.value(), value)?,
-                        }))
-                    })
-                    .collect::<Result<Vec<_>, String>>()?,
-            ))
-        }
-        (DataType::Map(map), Value::KeyedMap(entries)) => Ok(JsonValue::Array(
-            entries
-                .iter()
-                .map(|(key, value)| {
-                    Ok(json!({
-                        "key": editable_value_json(map.key(), key)?,
-                        "value": editable_value_json(map.value(), value)?,
-                    }))
-                })
-                .collect::<Result<Vec<_>, String>>()?,
-        )),
-        (DataType::Array(array), Value::Array(items)) => Ok(JsonValue::Array(
-            items
-                .iter()
-                .map(|item| editable_value_json(array.element(), item))
-                .collect::<Result<Vec<_>, _>>()?,
-        )),
-        (DataType::StructuralUnion(union), Value::StructuralUnion { branch, value }) => {
-            let branch_type = union
-                .branches()
-                .get(usize::from(*branch))
-                .ok_or_else(|| String::from("the structural-union branch is out of range"))?;
-            Ok(json!({
-                "branch": branch,
-                "value": editable_value_json(branch_type, value)?,
-            }))
-        }
-        (DataType::TaggedUnion(union), Value::TaggedUnion(tagged)) => {
-            let case = union
-                .cases()
-                .iter()
-                .find(|case| case.name() == tagged.case)
-                .ok_or_else(|| format!("unknown tagged case `{}`", tagged.case))?;
-            Ok(json!({
-                "case": tagged.case,
-                "value": editable_value_json(
-                    &DataType::Struct(case.payload().clone()),
-                    &Value::Struct(tagged.payload.clone()),
-                )?,
-            }))
-        }
-        _ => Err(format!("the value does not inhabit `{ty}`")),
-    }
-}
-
-fn editable_json_value(ty: &DataType, json: &JsonValue, path: &str) -> Result<Value, String> {
-    let scalar = |expected: &str| {
-        json.as_str()
-            .map(String::from)
-            .or_else(|| json.as_i64().map(|value| value.to_string()))
-            .or_else(|| json.as_u64().map(|value| value.to_string()))
-            .or_else(|| json.as_f64().map(|value| value.to_string()))
-            .ok_or_else(|| format!("{path} must be edited as {expected}"))
-    };
-    match ty {
-        DataType::Null if json.is_null() => Ok(Value::Null),
-        DataType::Null => Err(format!("{path} must be null")),
-        DataType::Bool => json
-            .as_bool()
-            .map(Value::Bool)
-            .ok_or_else(|| format!("{path} must be a boolean")),
-        DataType::Integer(IntegerType::Signed(_)) => scalar("a signed integer")?
-            .parse::<i64>()
-            .map(Value::Int)
-            .map_err(|_| format!("{path} is not a signed 64-bit integer")),
-        DataType::Integer(IntegerType::Unsigned(_)) => scalar("an unsigned integer")?
-            .parse::<u64>()
-            .map(Value::Uint)
-            .map_err(|_| format!("{path} is not an unsigned 64-bit integer")),
-        DataType::Float(_) => scalar("a floating-point number")?
-            .parse::<f64>()
-            .map(Value::Double)
-            .map_err(|_| format!("{path} is not a floating-point number")),
-        DataType::Decimal(_) | DataType::Number => {
-            let text = scalar("an exact number")?;
-            let value = match rastok_core::json::parse_declared_number(&text)
-                .map_err(|error| format!("{path} is not an exact number: {error}"))?
-            {
-                rastok_core::json::DeclaredNumber::Int(value) => Value::Int(value),
-                rastok_core::json::DeclaredNumber::Decimal { unscaled, scale } => {
-                    Value::Decimal { unscaled, scale }
-                }
-            };
-            ty.narrow(value, None)
-                .map_err(|error| format!("{path} does not fit `{ty}`: {error}"))
-        }
-        DataType::Text | DataType::MediaType => json
-            .as_str()
-            .map(|value| Value::Text(value.to_string()))
-            .ok_or_else(|| format!("{path} must be text")),
-        DataType::Bytes(_) => parse_hex(&scalar("hexadecimal bytes")?)
-            .map(Value::Bytes)
-            .map_err(|error| format!("{path}: {error}")),
-        DataType::Temporal(temporal) => match temporal {
-            TemporalType::Date(_) => parse_i64(json, path).map(Value::Date),
-            TemporalType::Time(_) => parse_i64(json, path).map(Value::Time),
-            TemporalType::Timestamp { .. } => parse_i64(json, path).map(Value::Timestamp),
-            TemporalType::TimestampNtz(_) => parse_i64(json, path).map(Value::TimestampNtz),
-            TemporalType::Duration(_) => parse_i64(json, path).map(Value::Duration),
-            TemporalType::Interval(_) => {
-                let object = json
-                    .as_object()
-                    .ok_or_else(|| format!("{path} must be an interval object"))?;
-                Ok(Value::Interval {
-                    months: parse_i64(
-                        required(object, "months", path)?,
-                        &format!("{path}.months"),
-                    )?,
-                    days: parse_i64(required(object, "days", path)?, &format!("{path}.days"))?,
-                    nanoseconds: parse_i64(
-                        required(object, "nanoseconds", path)?,
-                        &format!("{path}.nanoseconds"),
-                    )?,
-                })
-            }
-        },
-        DataType::Uuid => {
-            let bytes = parse_hex(&scalar("a 16-byte UUID in hexadecimal")?)
-                .map_err(|error| format!("{path}: {error}"))?;
-            let bytes: [u8; 16] = bytes
-                .try_into()
-                .map_err(|_| format!("{path} must contain exactly 16 bytes"))?;
-            Ok(Value::Uuid(bytes))
-        }
-        DataType::Struct(structure) => {
-            let object = json
-                .as_object()
-                .ok_or_else(|| format!("{path} must be a struct"))?;
-            let expected = structure
-                .fields()
-                .iter()
-                .map(|field| field.name())
-                .collect::<BTreeSet<_>>();
-            if let Some(extra) = object.keys().find(|name| !expected.contains(name.as_str())) {
-                return Err(format!("{path} has undeclared field `{extra}`"));
-            }
-            structure
-                .fields()
-                .iter()
-                .map(|field| {
-                    let child = format!("{path}.{}", field.name());
-                    Ok((
-                        field.name().to_string(),
-                        editable_json_value(
-                            field.ty(),
-                            required(object, field.name(), path)?,
-                            &child,
-                        )?,
-                    ))
-                })
-                .collect::<Result<Vec<_>, String>>()
-                .map(Value::Struct)
-        }
-        DataType::Map(map) => {
-            let entries = json
-                .as_array()
-                .ok_or_else(|| format!("{path} must be a list of map entries"))?;
-            if map.key() == &DataType::Text {
-                let mut values = BTreeMap::new();
-                for (index, entry) in entries.iter().enumerate() {
-                    let entry = entry
-                        .as_object()
-                        .ok_or_else(|| format!("{path}[{index}] must be a map entry"))?;
-                    let key = required(entry, "key", path)?
-                        .as_str()
-                        .ok_or_else(|| format!("{path}[{index}].key must be text"))?
-                        .to_string();
-                    let value = editable_json_value(
-                        map.value(),
-                        required(entry, "value", path)?,
-                        &format!("{path}[{index}].value"),
-                    )?;
-                    if values.insert(key.clone(), value).is_some() {
-                        return Err(format!("{path} contains duplicate key `{key}`"));
-                    }
-                }
-                Ok(Value::Map(values))
-            } else {
-                entries
-                    .iter()
-                    .enumerate()
-                    .map(|(index, entry)| {
-                        let entry = entry
-                            .as_object()
-                            .ok_or_else(|| format!("{path}[{index}] must be a map entry"))?;
-                        Ok((
-                            editable_json_value(
-                                map.key(),
-                                required(entry, "key", path)?,
-                                &format!("{path}[{index}].key"),
-                            )?,
-                            editable_json_value(
-                                map.value(),
-                                required(entry, "value", path)?,
-                                &format!("{path}[{index}].value"),
-                            )?,
-                        ))
-                    })
-                    .collect::<Result<Vec<_>, String>>()
-                    .map(Value::KeyedMap)
-            }
-        }
-        DataType::Array(array) => json
-            .as_array()
-            .ok_or_else(|| format!("{path} must be an array"))?
-            .iter()
-            .enumerate()
-            .map(|(index, value)| {
-                editable_json_value(array.element(), value, &format!("{path}[{index}]"))
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map(Value::Array),
-        DataType::Enum(enumeration) => {
-            let value = json
-                .as_str()
-                .ok_or_else(|| format!("{path} must be an enum symbol"))?;
-            if !enumeration.symbols().iter().any(|symbol| symbol == value) {
-                return Err(format!("{path} is not a declared enum symbol"));
-            }
-            Ok(Value::Enum(value.to_string()))
-        }
-        DataType::StructuralUnion(union) => {
-            let object = json
-                .as_object()
-                .ok_or_else(|| format!("{path} must select one union branch"))?;
-            let branch = required(object, "branch", path)?
-                .as_u64()
-                .and_then(|branch| u16::try_from(branch).ok())
-                .ok_or_else(|| format!("{path}.branch must be an unsigned branch index"))?;
-            let branch_type = union
-                .branches()
-                .get(usize::from(branch))
-                .ok_or_else(|| format!("{path}.branch is out of range"))?;
-            Ok(Value::StructuralUnion {
-                branch,
-                value: Box::new(editable_json_value(
-                    branch_type,
-                    required(object, "value", path)?,
-                    &format!("{path}.value"),
-                )?),
-            })
-        }
-        DataType::TaggedUnion(union) => {
-            let object = json
-                .as_object()
-                .ok_or_else(|| format!("{path} must select one tagged case"))?;
-            let case_name = required(object, "case", path)?
-                .as_str()
-                .ok_or_else(|| format!("{path}.case must be text"))?;
-            let case = union
-                .cases()
-                .iter()
-                .find(|case| case.name() == case_name)
-                .ok_or_else(|| format!("{path} selects undeclared case `{case_name}`"))?;
-            let payload = editable_json_value(
-                &DataType::Struct(case.payload().clone()),
-                required(object, "value", path)?,
-                &format!("{path}.{case_name}"),
-            )?;
-            let Value::Struct(payload) = payload else {
-                return Err(format!("{path}.{case_name} must be a struct"));
-            };
-            Ok(Value::TaggedUnion(Box::new(
-                crate::value::TaggedUnionValue {
-                    case: case_name.to_string(),
-                    payload,
-                },
-            )))
-        }
-        DataType::Variant => Err(format!(
-            "{path} has type `variant`; M1 edits only statically typed DATA trees"
-        )),
-    }
-}
-
-fn required<'a>(
-    object: &'a Map<String, JsonValue>,
-    field: &str,
-    path: &str,
-) -> Result<&'a JsonValue, String> {
-    object
-        .get(field)
-        .ok_or_else(|| format!("{path} has no field `{field}`"))
-}
-
-fn parse_i64(json: &JsonValue, path: &str) -> Result<i64, String> {
-    json.as_str()
-        .and_then(|value| value.parse().ok())
-        .or_else(|| json.as_i64())
-        .ok_or_else(|| format!("{path} must be a signed 64-bit integer"))
-}
-
-fn parse_hex(text: &str) -> Result<Vec<u8>, String> {
-    if !text.len().is_multiple_of(2) || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(String::from(
-            "hexadecimal bytes need an even number of hex digits",
-        ));
-    }
-    text.as_bytes()
-        .chunks_exact(2)
-        .map(|pair| {
-            let digits = core::str::from_utf8(pair)
-                .map_err(|_| String::from("hexadecimal bytes must be ASCII"))?;
-            u8::from_str_radix(digits, 16).map_err(|_| String::from("invalid hexadecimal byte"))
-        })
-        .collect()
 }
 
 fn materialized_value_json(value: &Value, annotations: &AnnotationTable) -> JsonValue {
@@ -1766,7 +1671,6 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datatype::{StructType, TypeField};
     use crate::schema_annotation::{
         AnnotationSet, DataAnnotation, PersonalDataClass, SensitivityLevel,
     };
@@ -1798,12 +1702,14 @@ graph inspected : App {
         let journal = MemJournal::new(crate::plan::GraphVersion(1));
         let vm = Vm::boot(&compilation.plan, crate::plan::GraphVersion(1));
         let inspection = vm.inspection();
+        let active_instances = active_instance_lifecycles(&journal);
 
         let value = topology(
             &compilation.plan,
             &compilation.source_definitions,
             &inspection,
             &journal,
+            &active_instances,
             None,
         );
         assert_eq!(value["owners"][0]["definition"]["first_line"], 2);
@@ -1847,6 +1753,60 @@ graph inspected : App {
             value["nodes"][0]["definition"]["code"]
                 .as_str()
                 .is_some_and(|code| code.contains("where size(data) > 0"))
+        );
+    }
+
+    #[test]
+    fn topology_separates_graph_handler_choices_from_spatial_edges() {
+        let source = include_str!("../../../../examples/keyed-retry.rkg");
+        let compilation = crate::compiler::compile(
+            &[source],
+            &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("the UI tour compiles");
+        let journal = MemJournal::new(crate::plan::GraphVersion(1));
+        let vm = Vm::boot(&compilation.plan, crate::plan::GraphVersion(1));
+        let inspection = vm.inspection();
+        let active_instances = active_instance_lifecycles(&journal);
+
+        let value = topology(
+            &compilation.plan,
+            &compilation.source_definitions,
+            &inspection,
+            &journal,
+            &active_instances,
+            None,
+        );
+        let relations = value["handler_relations"]
+            .as_array()
+            .expect("control relations have their own table");
+        let model_targets = relations
+            .iter()
+            .filter(|relation| relation["activation"] == "model.exit")
+            .map(|relation| {
+                relation["target"]["port"]
+                    .as_str()
+                    .expect("a Graph result port")
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(model_targets, BTreeSet::from(["done", "failed", "next"]));
+        assert!(relations.iter().any(|relation| {
+            relation["target"]["port"] == "next" && relation["relation"] == "temporal"
+        }));
+        assert!(relations.iter().any(|relation| {
+            relation["target"]["port"] == "expired"
+                && relation["relation"] == "manager"
+                && relation.get("queued_count").is_none()
+        }));
+        assert!(
+            value["control_nodes"]
+                .as_array()
+                .is_some_and(|nodes| nodes.iter().any(|node| node["label"] == "Loop manager"))
+        );
+        assert!(
+            value["edges"]
+                .as_array()
+                .is_some_and(|edges| edges.iter().all(|edge| edge["target"]["kind"] != "output"))
         );
     }
 
@@ -1910,17 +1870,17 @@ graph inspected : App {
     }
 
     #[test]
-    fn a_pending_injection_exposes_one_typed_edit_tree_before_meta_sys_exists() {
-        let ty = DataType::Struct(
-            StructType::new(vec![
-                TypeField::new("count", DataType::INT),
-                TypeField::new("name", DataType::Text),
+    fn a_pending_injection_is_a_read_only_projection_of_the_authored_scenario() {
+        let ty = crate::datatype::DataType::Struct(
+            crate::datatype::StructType::new(vec![
+                crate::datatype::TypeField::new("count", crate::datatype::DataType::INT),
+                crate::datatype::TypeField::new("name", crate::datatype::DataType::Text),
             ])
             .expect("two fields"),
         );
         let draft = crate::lab::ScenarioInjectionDraft {
             port: crate::node::Port::new("in").expect("conventional port"),
-            ty: ty.clone(),
+            ty,
             annotations: AnnotationTable::empty(),
             data: Data::materialized(Value::Struct(vec![
                 (String::from("count"), Value::Int(3)),
@@ -1932,36 +1892,15 @@ graph inspected : App {
         let rendered = scenario_injection_json(&draft);
         assert_eq!(rendered["position"], "before-app-input");
         assert_eq!(rendered["meta"]["sys"]["pending"], "minted on admission");
-        assert_eq!(rendered["type"]["kind"], "struct");
-        assert_eq!(rendered["data"]["count"], "3");
-        assert_eq!(rendered["data"]["name"], "alice");
-
-        let edited = parse_edited_data(r#"{"count":"9","name":"bob"}"#, &ty)
-            .expect("the schema-guided tree decodes exactly");
-        assert_eq!(
-            edited,
-            Value::Struct(vec![
-                (String::from("count"), Value::Int(9)),
-                (String::from("name"), Value::Text(String::from("bob"))),
-            ])
-        );
-        assert!(parse_edited_data(r#"{"count":"wide","name":"bob"}"#, &ty).is_err());
-
-        let unsigned_number = crate::lab::ScenarioInjectionDraft {
-            port: crate::node::Port::new("in").expect("conventional port"),
-            ty: DataType::Number,
-            annotations: AnnotationTable::empty(),
-            data: Data::materialized(Value::Uint(u64::MAX)),
-            ext: Namespace::new(),
-            edited: false,
-        };
-        let rendered = scenario_injection_json(&unsigned_number);
-        assert_eq!(rendered["data"], u64::MAX.to_string());
-        assert!(parse_edited_data(&rendered["data"].to_string(), &DataType::Number).is_ok());
+        assert_eq!(rendered["type"], "struct");
+        assert_eq!(rendered["data"]["kind"], "struct");
+        assert_eq!(rendered["data"]["content"]["count"], 3);
+        assert_eq!(rendered["data"]["content"]["name"], "alice");
+        assert!(rendered.get("editable").is_none());
     }
 
     #[test]
-    fn a_classified_pending_tree_is_redacted_and_not_editable() {
+    fn a_classified_pending_scenario_value_is_redacted() {
         let annotations = AnnotationTable::new(vec![(
             SchemaPath::root(),
             AnnotationSet::new(vec![DataAnnotation::Sensitive(
@@ -1972,8 +1911,12 @@ graph inspected : App {
         .expect("one canonical path");
         let draft = crate::lab::ScenarioInjectionDraft {
             port: crate::node::Port::new("in").expect("conventional port"),
-            ty: DataType::Struct(
-                StructType::new(vec![TypeField::new("name", DataType::Text)]).expect("one field"),
+            ty: crate::datatype::DataType::Struct(
+                crate::datatype::StructType::new(vec![crate::datatype::TypeField::new(
+                    "name",
+                    crate::datatype::DataType::Text,
+                )])
+                .expect("one field"),
             ),
             annotations,
             data: Data::materialized(Value::Struct(vec![(
@@ -1984,7 +1927,8 @@ graph inspected : App {
             edited: false,
         };
         let rendered = scenario_injection_json(&draft);
-        assert_eq!(rendered["editable"], false);
         assert!(!rendered.to_string().contains("alice"));
+        assert!(rendered.to_string().contains("redacted"));
+        assert!(rendered.get("editable").is_none());
     }
 }
