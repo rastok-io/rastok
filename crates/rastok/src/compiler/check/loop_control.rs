@@ -1300,35 +1300,19 @@ pub(super) fn loop_proof_handlers(graph: &Graph) -> Option<Vec<crate::plan::Hand
         .iter()
         .map(|handler| {
             let (guard, body) = handler.v15_linear_parts()?;
-            let body: Option<Vec<_>> = body
-                .iter()
-                .map(|statement| match statement {
-                    Statement::Let {
-                        name,
-                        value,
-                        annotations,
-                    } => Some(crate::plan::Step::Let {
-                        name: name.clone(),
-                        expr: value.clone(),
-                        annotations: annotations.clone(),
-                    }),
-                    Statement::Emit { port, value } => Some(crate::plan::Step::Emit {
-                        port: port.clone(),
-                        value: value.clone(),
-                    }),
-                    Statement::SetVar { name, value } => Some(crate::plan::Step::SetVar {
-                        name: name.clone(),
-                        expr: value.clone(),
-                    }),
-                    Statement::Stop => Some(crate::plan::Step::Stop),
-                    Statement::MultiEmit { .. } | Statement::LoopCommand(_) => None,
-                })
-                .collect();
+            if body.iter().any(|step| {
+                matches!(
+                    step,
+                    Statement::MultiEmit { .. } | Statement::LoopCommand(_)
+                )
+            }) {
+                return None;
+            }
             Some(crate::plan::Handler {
                 owner: crate::plan::HandlerOwner::Graph(crate::plan::OwnerSlot::new(0)),
                 activation: handler.activation.clone(),
                 guard: guard.cloned(),
-                body: body?,
+                body: body.to_vec(),
             })
         })
         .collect()

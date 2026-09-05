@@ -311,7 +311,7 @@ single-stepping and future journal-relative inspection structural.
 |---|---|---|---|---|
 | **Scheduler** | run-to-completion firing; the single dated-event queue — the **call budgets, armed at DELIVERY** so queue time counts, referenced by `(edge, envelope id)`, resolved reserve→resolve→ack so a refused expiry replays (a timeout is the scheduler's dated event, never a Driver answer); virtual-time `advance`; drain-to-stable | plan + ordered events → transaction firings | [execution-model.md §1, §5–6, §8](../spec/execution-model.md) | M0 (single worker) |
 | **Mailboxes** | per-instance-reference FIFO order, arrival-order capture (the race outcome is journaled), bounded capacity | envelopes → ordered delivery within one address generation | [execution-model.md §2–3](../spec/execution-model.md) | M0 base; M1.4 R3 hierarchical rebase landed |
-| **TransactionExecutor** | the atomic node transaction: consumed input, state delta, emissions, and records commit together; scratch isolation while a handler runs | firing → transaction commit + emissions | [execution-model.md §1](../spec/execution-model.md) | M0 |
+| **HandlerExecutor** | the atomic node transaction: consumed input, state delta, emissions, and records commit together; scratch isolation while a handler runs | firing → transaction commit + emissions | [execution-model.md §1](../spec/execution-model.md) | M0 |
 | **EmissionBuffer** | per-port emission identity in text order (`emission_index`) | handler body → ordered emissions | [execution-model.md §4](../spec/execution-model.md) | M0 |
 | **Boundary completion** | one correlated completion closes a Call and carries ordered ordinary output drafts plus one final typed `exit`; the VM mints and commits all output envelopes atomically. Outbound Calls consume a delivery and close an OUTBOUND record; inbound Calls close their committed root through `l:reply`: fixed ack consumes no cursor, while a graph response consumes its one already-journaled delivery. The orthogonal Session path journals opening and individual write obligations, then publishes one terminal exit. | completion drafts or session facts → causal records and routed envelopes | [types.md](../spec/types.md); [m1.3 backlog](m1.3-type-system-backlog.md); [M1.6 backlog](m1.6-http-websocket-backlog.md) | M1.3 B7 outbound Call; M1.6 H1 Session fold; H5/H5.2 generic inbound Call |
 | **Instance Closing** | durable close-scope arbitration; successor-generation admission; bounded drain, canonical cancellation and settlement; residual cursor retirement; inner-first stop and state reclamation | `closing` policy + lifecycle cause + journal fold → terminal exits and `l:stop` | [instances.md §7](../spec/instances.md); [execution-model.md §2.1](../spec/execution-model.md) | M1.4 R5 |
@@ -556,7 +556,7 @@ The slice stages of [`m0-slice.md`](m0-slice.md), in module terms:
 | Parse | `compiler` (parse), `diagnostics` |
 | Check | `compiler` (assemble, desugar, check vs `stdlib` contracts), `expr` (compile) |
 | Plan | `compiler` (canonicalize, lower), `plan::Manifest` |
-| Step | `runtime` (Scheduler, Mailboxes, TransactionExecutor, EmissionBuffer, error routing) |
+| Step | `runtime` (Scheduler, Mailboxes, HandlerExecutor, EmissionBuffer, error routing) |
 | Handle | `boundary::Dispatcher` + `boundary::OutboundConnectorDriver` behind `CompletionGate`; `connectors::Process` (App) or the Lab mock (Lab) |
 | Record | `journal` (semantic operations, id derivation) |
 | Compare | `golden` projection, seal, and diff; `lab`-returned records; `main --golden/--bless` |

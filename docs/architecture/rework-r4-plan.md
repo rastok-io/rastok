@@ -1,9 +1,9 @@
 # R4 — categorical plan and independent validation
 
-> **Status (2026-09-05): open, fifth representation checkpoint.** R3 is
+> **Status (2026-09-05): open, sixth representation checkpoint.** R3 is
 > committed separately from the paused M1.9 UI. The encoded package remains
-> **v15**; no v16 tag, journal key, Contract major or golden is allocated by
-> this checkpoint.
+> **v15**; no v16 package, journal key, Contract major or golden is published
+> by this checkpoint. R4–R9 are not closed.
 
 ## 1. Invariant protected
 
@@ -178,6 +178,35 @@ The categorical v16 gate remains at lowering. Sharing the emission leaves
 does not admit recursive Dispatch, multi-emission or manager commands into
 the v15 package.
 
+### 6.1 One instruction model, down to execution
+
+The executable handler now carries the same `DispatchStep` leaves as HIR.
+The duplicate `Step` enum and statement-copy bridges are removed, without a
+compatibility alias. Lowering substitutes constants inside that shared model;
+it no longer relies on `unreachable!` to convert its additional variants.
+`HandlerExecutor` now names the existing handler transaction preparer, leaving
+Executor as the semantic category shared by Operators and Connectors.
+
+Business-output traversal preserves authored target order and does not mistake
+manager commands for ports. Expression traversal visits a broadcast builder
+once and tuple builders in order; time-demand and metadata-read proofs use the
+same allocation-free traversal. Type and annotation propagation inspect each
+emission destination separately.
+
+The runtime's scratch emission preparer handles both singular emissions and
+the ordered multi-emission algebra. A broadcast evaluates one builder, then
+creates each target's envelope; a tuple evaluates its builders left-to-right.
+An evaluation or target-pin failure aborts preparation before any transaction
+record is returned to the VM. This is not yet a source-to-v16 multi-emission
+qualification: source lowering and independent raw-plan validation both
+refuse multi-emission and manager commands in the v15 package. The extended
+raw-handler ordering tree cannot bypass that gate or acquire an executable
+v15 spelling. The reader still rejects its new instruction forms.
+
+The handler container is still the v15 guard plus linear body. Replacing that
+container with recursive Dispatch, together with the other complete v16
+tables, remains below; shared instruction leaves alone do not close R4.
+
 ## 7. Evidence
 
 Seven core tests cover bool, enum and tagged union; unsupported/open domains;
@@ -260,6 +289,24 @@ Contract major, golden or witness identity changes. Cortex-M33 before/after
 retains 17,840 decode ticks, 2,713 average / 2,966 maximum relay ticks,
 **129,972 B** heap peak (1,100 B margin), 5,640 B after open, 67 records,
 the echo hash and `SPIKE_OK`.
+
+The sixth checkpoint adds eight tests: three shared-instruction traversal
+tests, four scratch evaluation tests and a forged raw-plan refusal covering
+broadcast and all three manager commands. The depth oracle additionally
+compares every new instruction/builder combination against the actual raw
+canonical tree, then checks that none can pass the v15 executable gate.
+
+Sixth checkpoint gates: **1,099 workspace tests passed**, zero failures;
+fmt, workspace/all-targets/all-features clippy with warnings denied, cargo doc,
+diff checks and all three `no_std` targets pass. No dependency, accepted
+package shape, Contract major, golden or witness identity changes. Cortex-M33
+retains **129,972 B** heap peak (1,100 B margin), 5,640 B after open, 67 records
+and the echo hash. Decode changes from 17,840 to 17,848 ticks; relay changes
+from 2,713 average / 2,966 maximum to **2,710 average / 2,962 maximum**. An
+intermediate binding lifetime extended through emission staging measured
+2,992 maximum ticks; releasing it after evaluation restored the margin without
+an extra cache or altered semantics. Linked `.text + .rodata` is 731,672 B,
+below 1 MiB. The final measurement prints `SPIKE_OK`.
 
 ## 8. Remaining R4 work
 

@@ -876,7 +876,7 @@ pub struct Handler {
     /// The compiled guard, when present.
     pub guard: Option<expr::Tree>,
     /// The steps, in text order — the order fixing emission indices.
-    pub body: Vec<Step>,
+    pub body: Vec<DispatchStep>,
 }
 
 impl Handler {
@@ -923,37 +923,6 @@ impl HandlerOwner {
             Self::Node(_) => None,
         }
     }
-}
-
-/// One executable step.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Step {
-    /// Transaction-local binding.
-    Let {
-        /// The binding name.
-        name: String,
-        /// The expression.
-        expr: expr::Tree,
-        /// Sparse policy beside the binding's resolved result type.
-        annotations: AnnotationTable,
-    },
-    /// Emission on a port.
-    Emit {
-        /// The port.
-        port: node::Port,
-        /// What is emitted.
-        value: Emission,
-    },
-    /// State-cell write.
-    SetVar {
-        /// The cell name.
-        name: String,
-        /// The expression.
-        expr: expr::Tree,
-    },
-    /// Request closure of the current logical Node instance. The request is
-    /// committed atomically with this handler transaction.
-    Stop,
 }
 
 /// One planned edge.

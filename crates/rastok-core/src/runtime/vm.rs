@@ -8,7 +8,7 @@
 //!
 //! # The delivery protocol
 //!
-//! A transaction is atomic in [`TransactionExecutor`]; this module
+//! A transaction is atomic in [`HandlerExecutor`]; this module
 //! keeps it atomic across the machine. Every step follows the same
 //! discipline: *reserve* the head of a mailbox without removing it,
 //! *evaluate* on isolated state, *reserve capacity* in every target
@@ -37,8 +37,8 @@ use crate::plan::{
     OwnerKind, OwnerPath, OwnerSlot, Slot, ValidatedExecutionPlan,
 };
 use crate::runtime::{
-    DataSlot, Delivery, Fault, InstanceState, JoinCandidate, LifecycleFiring, Mailboxes,
-    TransactionExecutor, eval_lazy, meta_value, resolve_payload,
+    DataSlot, Delivery, Fault, HandlerExecutor, InstanceState, JoinCandidate, LifecycleFiring,
+    Mailboxes, eval_lazy, meta_value, resolve_payload,
 };
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -1094,7 +1094,7 @@ fn first_annotation_location(
     }
     for (handler_index, handler) in plan.handlers.iter().enumerate() {
         for step in &handler.body {
-            if let crate::plan::Step::Let {
+            if let crate::plan::DispatchStep::Let {
                 name, annotations, ..
             } = step
                 && contains(annotations)
@@ -1167,7 +1167,7 @@ fn personal_data_requirements(
     }
     for handler in &plan.handlers {
         for step in &handler.body {
-            if let crate::plan::Step::Let { annotations, .. } = step {
+            if let crate::plan::DispatchStep::Let { annotations, .. } = step {
                 inspect(annotations);
             }
         }
@@ -1318,7 +1318,7 @@ impl<'plan> Vm<'plan> {
                         && handler
                             .body
                             .iter()
-                            .any(|step| matches!(step, crate::plan::Step::Stop))
+                            .any(|step| matches!(step, crate::plan::DispatchStep::Stop))
                 });
                 let owner_slot = OwnerSlot::new(u32::try_from(index).unwrap_or(u32::MAX));
                 let spatial_boundary = self.plan.edges.iter().any(|edge| {
@@ -3095,7 +3095,7 @@ impl<'plan> Vm<'plan> {
                     else {
                         return Ok(());
                     };
-                    let executor = TransactionExecutor::at(self.plan, self.graph_version, self.now);
+                    let executor = HandlerExecutor::at(self.plan, self.graph_version, self.now);
                     let trigger = node::Trigger::Port(queued.port.clone());
                     executor
                         .connector_completion(slot, &instance, queued, &trigger, &completion)
@@ -4341,7 +4341,7 @@ impl<'plan> Vm<'plan> {
                         owner: self.plan.owners[owner.index()].path.clone(),
                         reason: "the Loop owner generation is not live",
                     })?;
-                let executor = TransactionExecutor::at(self.plan, self.graph_version, self.now);
+                let executor = HandlerExecutor::at(self.plan, self.graph_version, self.now);
                 let mut outcome = executor
                     .fire_graph(
                         owner,
@@ -4568,7 +4568,7 @@ impl<'plan> Vm<'plan> {
                 let state = self
                     .state
                     .cell_unchecked(self.plan.plan(), slot, &work.instance);
-                let executor = TransactionExecutor::at(self.plan, self.graph_version, self.now);
+                let executor = HandlerExecutor::at(self.plan, self.graph_version, self.now);
                 let outcome = executor
                     .fire_lifecycle(
                         slot,
@@ -4774,7 +4774,7 @@ impl<'plan> Vm<'plan> {
         let Some(request) = self.pending.get(&event.call_ref).cloned() else {
             return Err(VmError::MissingPending(event.call_ref));
         };
-        let executor = TransactionExecutor::at(self.plan, self.graph_version, self.now);
+        let executor = HandlerExecutor::at(self.plan, self.graph_version, self.now);
         // The dispatcher gate checked every materialized draft before the
         // closure became causal. This is the typed belt for machine-minted
         // completions (timeouts) and for any future in-memory caller.
@@ -4830,7 +4830,7 @@ impl<'plan> Vm<'plan> {
         event: InboundCallEvent,
         pending: PendingInboundCall,
     ) -> Result<(), VmError> {
-        let executor = TransactionExecutor::at(self.plan, self.graph_version, self.now);
+        let executor = HandlerExecutor::at(self.plan, self.graph_version, self.now);
         let mut outcome = match pending.response.as_ref() {
             Some(response) => executor.inbound_call_response_completion(
                 pending.slot,
@@ -4891,7 +4891,7 @@ impl<'plan> Vm<'plan> {
                 reason: "a terminal Session observation lost its logical session",
             });
         };
-        let executor = TransactionExecutor::at(self.plan, self.graph_version, self.now);
+        let executor = HandlerExecutor::at(self.plan, self.graph_version, self.now);
         let consumed = session
             .opening_delivery
             .iter()
@@ -4967,7 +4967,7 @@ impl<'plan> Vm<'plan> {
             }
         }
 
-        let executor = TransactionExecutor::at(self.plan, self.graph_version, self.now);
+        let executor = HandlerExecutor::at(self.plan, self.graph_version, self.now);
         let state = self.state.cell_unchecked(self.plan.plan(), slot, instance);
         let values = self
             .instances
@@ -5094,7 +5094,7 @@ impl<'plan> Vm<'plan> {
         instance: &InstanceRef,
         delivery: &Delivery,
     ) -> Result<(), VmError> {
-        let executor = TransactionExecutor::at(self.plan, self.graph_version, self.now);
+        let executor = HandlerExecutor::at(self.plan, self.graph_version, self.now);
         let state = self.state.cell_unchecked(self.plan.plan(), slot, instance);
         let values = self
             .instances
@@ -5179,7 +5179,7 @@ impl<'plan> Vm<'plan> {
         trigger: &Delivery,
         inputs: &[Delivery],
     ) -> Result<(), VmError> {
-        let executor = TransactionExecutor::at(self.plan, self.graph_version, self.now);
+        let executor = HandlerExecutor::at(self.plan, self.graph_version, self.now);
         let state = self.state.cell_unchecked(self.plan.plan(), slot, instance);
         let values = self
             .instances
@@ -5252,7 +5252,7 @@ impl<'plan> Vm<'plan> {
         instance: &InstanceRef,
         delivery: &Delivery,
     ) -> Result<(), VmError> {
-        let executor = TransactionExecutor::at(self.plan, self.graph_version, self.now);
+        let executor = HandlerExecutor::at(self.plan, self.graph_version, self.now);
         let mut outcome = executor
             .join_expired(slot, instance, delivery)
             .map_err(VmError::Fault)?;
@@ -5725,7 +5725,7 @@ impl<'plan> Vm<'plan> {
         delivery: &Delivery,
         completion: &Completion,
     ) -> Result<(), VmError> {
-        let executor = TransactionExecutor::at(self.plan, self.graph_version, self.now);
+        let executor = HandlerExecutor::at(self.plan, self.graph_version, self.now);
         let trigger = node::Trigger::Port(delivery.port.clone());
         let mut outcome = executor
             .connector_completion(slot, instance, delivery, &trigger, completion)
@@ -5790,7 +5790,7 @@ impl<'plan> Vm<'plan> {
         {
             RequestPreparation::Prepared(prepared) => prepared,
             RequestPreparation::Rejected(completion) => {
-                let executor = TransactionExecutor::at(self.plan, self.graph_version, self.now);
+                let executor = HandlerExecutor::at(self.plan, self.graph_version, self.now);
                 let trigger = node::Trigger::Port(delivery.port.clone());
                 let mut outcome = executor
                     .connector_completion(slot, instance, delivery, &trigger, &completion)

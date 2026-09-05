@@ -108,6 +108,83 @@ pub enum DispatchStep {
     LoopCommand(LoopCommand),
 }
 
+impl DispatchStep {
+    /// Business emissions in authored order. A broadcast retains one builder
+    /// with several targets; it is not expanded into repeated evaluations.
+    pub fn emissions(&self) -> impl Iterator<Item = (&node::Port, &Emission)> {
+        let mut index = 0;
+        core::iter::from_fn(move || {
+            let current = index;
+            let result = match self {
+                Self::Emit { port, value } if current == 0 => Some((port, value)),
+                Self::MultiEmit { ports, values } => {
+                    let port = ports.get(current)?;
+                    let value = match values {
+                        MultiEmitValues::Broadcast(value) => value,
+                        MultiEmitValues::Tuple(values) => values.get(current)?,
+                    };
+                    Some((port, value))
+                }
+                Self::Let { .. }
+                | Self::Emit { .. }
+                | Self::SetVar { .. }
+                | Self::Stop
+                | Self::LoopCommand(_) => None,
+            };
+            if result.is_some() {
+                index += 1;
+            }
+            result
+        })
+    }
+
+    /// Every expression which can influence this statement. A broadcast's
+    /// builder is visited once, while tuple builders retain their order.
+    pub(crate) fn expressions(&self) -> impl Iterator<Item = &expr::Tree> {
+        let scalar = match self {
+            Self::Let { value, .. } | Self::SetVar { value, .. } => Some(value),
+            Self::Emit { .. } | Self::MultiEmit { .. } | Self::Stop | Self::LoopCommand(_) => None,
+        };
+        let single = match self {
+            Self::Emit { value, .. }
+            | Self::MultiEmit {
+                values: MultiEmitValues::Broadcast(value),
+                ..
+            }
+            | Self::LoopCommand(LoopCommand::Next(value)) => Some(value),
+            Self::Let { .. }
+            | Self::SetVar { .. }
+            | Self::Stop
+            | Self::MultiEmit {
+                values: MultiEmitValues::Tuple(_),
+                ..
+            }
+            | Self::LoopCommand(LoopCommand::Again | LoopCommand::Done) => None,
+        };
+        let tuple = match self {
+            Self::MultiEmit {
+                values: MultiEmitValues::Tuple(values),
+                ..
+            } => values.as_slice(),
+            Self::Let { .. }
+            | Self::Emit { .. }
+            | Self::SetVar { .. }
+            | Self::Stop
+            | Self::MultiEmit {
+                values: MultiEmitValues::Broadcast(_),
+                ..
+            }
+            | Self::LoopCommand(_) => &[],
+        };
+        scalar.into_iter().chain(
+            single
+                .into_iter()
+                .chain(tuple)
+                .flat_map(Emission::expressions),
+        )
+    }
+}
+
 /// Right-hand side shape of an atomic multi-emission.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MultiEmitValues {
@@ -126,4 +203,72 @@ pub enum LoopCommand {
     Again,
     /// Close without a business envelope.
     Done,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        datatype::DataType,
+        expr::{Expr, Tree},
+        value::Value,
+    };
+    use alloc::vec;
+
+    fn value(number: i64) -> Emission {
+        Emission::Data(Tree {
+            root: Expr::Literal(Value::Int(number)),
+            ty: DataType::INT,
+        })
+    }
+
+    #[test]
+    fn broadcast_visits_one_builder_but_preserves_every_authored_target() {
+        let step = DispatchStep::MultiEmit {
+            ports: vec![node::Port::new("z").unwrap(), node::Port::new("a").unwrap()],
+            values: MultiEmitValues::Broadcast(value(7)),
+        };
+        let outputs: Vec<_> = step.emissions().collect();
+        assert_eq!(
+            outputs
+                .iter()
+                .map(|(port, _)| port.name())
+                .collect::<Vec<_>>(),
+            vec!["z", "a"]
+        );
+        assert!(core::ptr::eq(outputs[0].1, outputs[1].1));
+        assert_eq!(step.expressions().count(), 1);
+    }
+
+    #[test]
+    fn tuple_visits_values_in_emission_order_without_sorting_targets() {
+        let step = DispatchStep::MultiEmit {
+            ports: vec![node::Port::new("z").unwrap(), node::Port::new("a").unwrap()],
+            values: MultiEmitValues::Tuple(vec![value(2), value(1)]),
+        };
+        assert_eq!(
+            step.emissions()
+                .map(|(port, value)| (port.name(), value.clone()))
+                .collect::<Vec<_>>(),
+            vec![("z", value(2)), ("a", value(1))]
+        );
+        assert_eq!(
+            step.expressions()
+                .map(|tree| tree.root.clone())
+                .collect::<Vec<_>>(),
+            vec![Expr::Literal(Value::Int(2)), Expr::Literal(Value::Int(1))]
+        );
+    }
+
+    #[test]
+    fn commands_are_not_business_emissions_and_next_keeps_its_expression_dependency() {
+        let next = DispatchStep::LoopCommand(LoopCommand::Next(value(9)));
+        assert_eq!(next.emissions().count(), 0);
+        assert_eq!(next.expressions().count(), 1);
+        for command in [LoopCommand::Again, LoopCommand::Done] {
+            let step = DispatchStep::LoopCommand(command);
+            assert_eq!(step.emissions().count(), 0);
+            assert_eq!(step.expressions().count(), 0);
+        }
+    }
 }

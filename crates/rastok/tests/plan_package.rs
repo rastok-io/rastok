@@ -149,7 +149,7 @@ lab builders {
         .body
         .iter()
         .filter_map(|step| match step {
-            plan::Step::Emit { value, .. } => Some(value),
+            plan::DispatchStep::Emit { value, .. } => Some(value),
             _ => None,
         })
         .collect();

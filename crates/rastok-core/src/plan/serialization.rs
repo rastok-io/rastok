@@ -29,11 +29,11 @@ use crate::expr;
 use crate::identity::encoding::value_tagged;
 use crate::node;
 use crate::plan::{
-    AspectSpec, AttrSetting, ClosingPolicy, ConnectorSpec, Edge, Emission, EndpointRef,
-    EvaluationSite, ExecutionPlan, FieldWrite, Handler, HandlerOwner, InstanceLifetime,
-    InstanceSpec, LoopDelay, LoopSpec, Node, NodeExecution, Owner, OwnerKind, OwnerPath, OwnerSlot,
-    OwnerValue, PlanConstant, PlanValidationError, PortDecl, SemanticHash, Slot, Step,
-    ValidatedExecutionPlan, VarCell,
+    AspectSpec, AttrSetting, ClosingPolicy, ConnectorSpec, DispatchStep, Edge, Emission,
+    EndpointRef, EvaluationSite, ExecutionPlan, FieldWrite, Handler, HandlerOwner,
+    InstanceLifetime, InstanceSpec, LoopDelay, LoopSpec, Node, NodeExecution, Owner, OwnerKind,
+    OwnerPath, OwnerSlot, OwnerValue, PlanConstant, PlanValidationError, PortDecl, SemanticHash,
+    Slot, ValidatedExecutionPlan, VarCell,
 };
 use crate::schema_annotation::{
     AnnotationSet, AnnotationTable, CostAnnotation, CostBasis, CurrencyCode, DataAnnotation,
@@ -705,11 +705,11 @@ const fn lifecycle_tag(lifecycle: node::Lifecycle) -> u64 {
     }
 }
 
-fn step_tree(step: &Step) -> Cbor {
+fn step_tree(step: &DispatchStep) -> Cbor {
     match step {
-        Step::Let {
+        DispatchStep::Let {
             name,
-            expr,
+            value: expr,
             annotations,
         } => {
             let mut fields = vec![Cbor::Uint(1), Cbor::Text(name.clone()), tree_tree(expr)];
@@ -718,17 +718,45 @@ fn step_tree(step: &Step) -> Cbor {
             }
             Cbor::Array(fields)
         }
-        Step::Emit { port, value } => Cbor::Array(vec![
+        DispatchStep::Emit { port, value } => Cbor::Array(vec![
             Cbor::Uint(2),
             Cbor::Text(port.name().to_string()),
             emission_tree(value),
         ]),
-        Step::SetVar { name, expr } => Cbor::Array(vec![
+        DispatchStep::SetVar { name, value: expr } => Cbor::Array(vec![
             Cbor::Uint(3),
             Cbor::Text(name.clone()),
             tree_tree(expr),
         ]),
-        Step::Stop => Cbor::Array(vec![Cbor::Uint(4)]),
+        DispatchStep::Stop => Cbor::Array(vec![Cbor::Uint(4)]),
+        DispatchStep::MultiEmit { ports, values } => Cbor::Array(vec![
+            Cbor::Uint(5),
+            Cbor::Array(
+                ports
+                    .iter()
+                    .map(|port| Cbor::Text(port.name().to_string()))
+                    .collect(),
+            ),
+            match values {
+                super::MultiEmitValues::Broadcast(value) => {
+                    Cbor::Array(vec![Cbor::Uint(1), emission_tree(value)])
+                }
+                super::MultiEmitValues::Tuple(values) => Cbor::Array(vec![
+                    Cbor::Uint(2),
+                    Cbor::Array(values.iter().map(emission_tree).collect()),
+                ]),
+            },
+        ]),
+        DispatchStep::LoopCommand(command) => Cbor::Array(vec![
+            Cbor::Uint(6),
+            match command {
+                super::LoopCommand::Next(value) => {
+                    Cbor::Array(vec![Cbor::Uint(1), emission_tree(value)])
+                }
+                super::LoopCommand::Again => Cbor::Array(vec![Cbor::Uint(2)]),
+                super::LoopCommand::Done => Cbor::Array(vec![Cbor::Uint(3)]),
+            },
+        ]),
     }
 }
 
@@ -1150,6 +1178,19 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
         stack.push(Item::Ty(&tree.ty, level));
         stack.push(Item::Expr(&tree.root, level));
     }
+    fn emission<'a>(value: &'a Emission, level: usize, max: &mut usize, stack: &mut Vec<Item<'a>>) {
+        *max = (*max).max(level + 1);
+        match value {
+            Emission::Identity | Emission::Nothing => {}
+            Emission::Data(value) => tree(value, level + 2, stack),
+            Emission::Patch(writes) | Emission::FreshData(writes) => {
+                for write in writes {
+                    *max = (*max).max(level + if matches!(&write.target, WriteTarget::Data(path) if !path.is_empty()) { 5 } else { 4 });
+                    tree(&write.value, level + 4, stack);
+                }
+            }
+        }
+    }
     /// A `plan_constant_tree` at `level`: its tree and tagged value are one
     /// level down, and the tree's type/expression roots one level below that.
     fn plan_constant<'a>(
@@ -1287,34 +1328,36 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
             // step array at 4, tag and name at 5.
             max = max.max(5);
             match step {
-                Step::Let {
-                    expr,
+                DispatchStep::Let {
+                    value: expr,
                     annotations: table,
                     ..
                 } => {
                     tree(expr, 6, &mut stack);
                     annotations(table, 5, &mut max);
                 }
-                Step::SetVar { expr, .. } => tree(expr, 6, &mut stack),
-                Step::Stop => {}
-                Step::Emit { value, .. } => match value {
-                    // emission array at 5, its tag at 6.
-                    Emission::Identity | Emission::Nothing => max = max.max(6),
-                    Emission::Data(data) => tree(data, 7, &mut stack),
-                    Emission::Patch(writes) | Emission::FreshData(writes) => {
-                        max = max.max(6);
-                        for write in writes {
-                            // write pair at 7, target array and
-                            // tree_tree at 8, their fields at 9 — a
-                            // data path's segments text at 10.
-                            max = max.max(match &write.target {
-                                WriteTarget::Data(segments) if !segments.is_empty() => 10,
-                                _ => 9,
-                            });
-                            tree(&write.value, 9, &mut stack);
+                DispatchStep::SetVar { value: expr, .. } => tree(expr, 6, &mut stack),
+                DispatchStep::Stop => {}
+                DispatchStep::Emit { value, .. } => emission(value, 5, &mut max, &mut stack),
+                DispatchStep::MultiEmit { values, .. } => {
+                    max = max.max(6);
+                    match values {
+                        super::MultiEmitValues::Broadcast(value) => {
+                            emission(value, 6, &mut max, &mut stack)
+                        }
+                        super::MultiEmitValues::Tuple(values) => {
+                            for value in values {
+                                emission(value, 7, &mut max, &mut stack);
+                            }
                         }
                     }
-                },
+                }
+                DispatchStep::LoopCommand(command) => {
+                    max = max.max(6);
+                    if let super::LoopCommand::Next(value) = command {
+                        emission(value, 6, &mut max, &mut stack);
+                    }
+                }
             }
         }
     }
@@ -2212,27 +2255,27 @@ fn handler_from(tree: &Cbor) -> Result<Handler, DecodeError> {
     })
 }
 
-fn step_from(tree: &Cbor) -> Result<Step, DecodeError> {
+fn step_from(tree: &Cbor) -> Result<DispatchStep, DecodeError> {
     match array_of(tree, "step")? {
-        [Cbor::Uint(1), Cbor::Text(name), expr] => Ok(Step::Let {
+        [Cbor::Uint(1), Cbor::Text(name), expr] => Ok(DispatchStep::Let {
             name: name.clone(),
-            expr: tree_from(expr)?,
+            value: tree_from(expr)?,
             annotations: AnnotationTable::empty(),
         }),
-        [Cbor::Uint(1), Cbor::Text(name), expr, annotations] => Ok(Step::Let {
+        [Cbor::Uint(1), Cbor::Text(name), expr, annotations] => Ok(DispatchStep::Let {
             name: name.clone(),
-            expr: tree_from(expr)?,
+            value: tree_from(expr)?,
             annotations: annotation_table_from(annotations)?,
         }),
-        [Cbor::Uint(2), Cbor::Text(port), emission] => Ok(Step::Emit {
+        [Cbor::Uint(2), Cbor::Text(port), emission] => Ok(DispatchStep::Emit {
             port: node::Port::new(port.clone()).map_err(|_| err("emit port"))?,
             value: emission_from(emission)?,
         }),
-        [Cbor::Uint(3), Cbor::Text(name), expr] => Ok(Step::SetVar {
+        [Cbor::Uint(3), Cbor::Text(name), expr] => Ok(DispatchStep::SetVar {
             name: name.clone(),
-            expr: tree_from(expr)?,
+            value: tree_from(expr)?,
         }),
-        [Cbor::Uint(4)] => Ok(Step::Stop),
+        [Cbor::Uint(4)] => Ok(DispatchStep::Stop),
         _ => Err(err("step")),
     }
 }
@@ -3625,28 +3668,28 @@ mod tests {
                 activation: node::HandlerActivation::Port(port("in")),
                 guard: Some(tree(expr.clone())),
                 body: vec![
-                    Step::Let {
+                    DispatchStep::Let {
                         name: text("x"),
-                        expr: tree(expr.clone()),
+                        value: tree(expr.clone()),
                         annotations: AnnotationTable::empty(),
                     },
-                    Step::SetVar {
+                    DispatchStep::SetVar {
                         name: text("seen"),
-                        expr: tree(expr.clone()),
+                        value: tree(expr.clone()),
                     },
-                    Step::Emit {
+                    DispatchStep::Emit {
                         port: port("out"),
                         value: Emission::Identity,
                     },
-                    Step::Emit {
+                    DispatchStep::Emit {
                         port: port("out"),
                         value: Emission::Nothing,
                     },
-                    Step::Emit {
+                    DispatchStep::Emit {
                         port: port("out"),
                         value: Emission::Data(tree(expr.clone())),
                     },
-                    Step::Emit {
+                    DispatchStep::Emit {
                         port: port("out"),
                         value: Emission::Patch(vec![
                             FieldWrite {
@@ -3663,14 +3706,14 @@ mod tests {
                             },
                         ]),
                     },
-                    Step::Emit {
+                    DispatchStep::Emit {
                         port: port("out"),
                         value: Emission::FreshData(vec![FieldWrite {
                             target: WriteTarget::Data(vec![]),
                             value: tree(expr::Expr::Literal(Value::Duration(5))),
                         }]),
                     },
-                    Step::Stop,
+                    DispatchStep::Stop,
                 ],
             }],
             app_schema: vec![(text("m.dotted"), DataType::Variant)],
@@ -3697,9 +3740,9 @@ mod tests {
                 owner: HandlerOwner::Node(Slot::new(0)),
                 activation: node::HandlerActivation::Port(port("in")),
                 guard: None,
-                body: vec![Step::Let {
+                body: vec![DispatchStep::Let {
                     name: text("x"),
-                    expr: tree(root),
+                    value: tree(root),
                     annotations: AnnotationTable::empty(),
                 }],
             }],
@@ -4195,9 +4238,9 @@ mod tests {
             nested_type = DataType::text_map(nested_type);
         }
         let mut deep_type_plan = one_step_plan(expr::Expr::Literal(Value::Null));
-        deep_type_plan.handlers[0].body = vec![Step::Let {
+        deep_type_plan.handlers[0].body = vec![DispatchStep::Let {
             name: text("x"),
-            expr: expr::Tree {
+            value: expr::Tree {
                 ty: nested_type.clone(),
                 root: expr::Expr::Literal(Value::Null),
             },
@@ -4312,6 +4355,48 @@ mod tests {
                 levels(&plan_tree(plan)),
                 "the walker's arithmetic drifted from the builders"
             );
+        }
+
+        for value in [
+            Emission::Identity,
+            Emission::Nothing,
+            Emission::Data(tree(expr::Expr::Literal(Value::Int(1)))),
+            Emission::Patch(vec![FieldWrite {
+                target: WriteTarget::Data(vec![text("n")]),
+                value: tree(expr::Expr::Literal(Value::Int(1))),
+            }]),
+            Emission::FreshData(vec![FieldWrite {
+                target: WriteTarget::App(text("tenant")),
+                value: tree(expr::Expr::Literal(Value::Text(text("alice")))),
+            }]),
+        ] {
+            for statement in [
+                DispatchStep::MultiEmit {
+                    ports: vec![port("z"), port("a")],
+                    values: super::super::MultiEmitValues::Broadcast(value.clone()),
+                },
+                DispatchStep::MultiEmit {
+                    ports: vec![port("z"), port("a")],
+                    values: super::super::MultiEmitValues::Tuple(vec![
+                        value.clone(),
+                        value.clone(),
+                    ]),
+                },
+                DispatchStep::LoopCommand(super::super::LoopCommand::Next(value.clone())),
+                DispatchStep::LoopCommand(super::super::LoopCommand::Again),
+                DispatchStep::LoopCommand(super::super::LoopCommand::Done),
+            ] {
+                let mut raw = one_step_plan(expr::Expr::Literal(Value::Null));
+                raw.handlers[0].body = vec![statement];
+                assert_eq!(deepest_level(&raw), levels(&plan_tree(&raw)));
+                assert!(
+                    matches!(
+                        ValidatedExecutionPlan::try_new(raw),
+                        Err(PlanValidationError::UnsupportedStatement { .. })
+                    ),
+                    "a raw ordering key must not open the v15 package gate"
+                );
+            }
         }
 
         let resolved_plan = ExecutionPlan {

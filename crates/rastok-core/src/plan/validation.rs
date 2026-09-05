@@ -13,8 +13,8 @@ use crate::datatype::{DataType, TypeError};
 use crate::expr;
 use crate::node;
 use crate::plan::{
-    Emission, EndpointRef, EvaluationSite, ExecutionPlan, HandlerOwner, InstanceLifetime, Node,
-    NodeExecution, OwnerKind, OwnerSlot, Slot, Step,
+    DispatchStep, Emission, EndpointRef, EvaluationSite, ExecutionPlan, HandlerOwner,
+    InstanceLifetime, Node, NodeExecution, OwnerKind, OwnerSlot, Slot,
 };
 use crate::schema_annotation::{AnnotatedSchema, AnnotationTable, SchemaAnnotationError};
 
@@ -23,6 +23,13 @@ use crate::schema_annotation::{AnnotatedSchema, AnnotationTable, SchemaAnnotatio
 /// of defect; `Display` renders the human diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanValidationError {
+    /// A statement has no executable representation in the current package.
+    UnsupportedStatement {
+        /// Handler-table index.
+        handler: usize,
+        /// Named construct, never silently omitted from execution.
+        statement: &'static str,
+    },
     /// The categorical owner table is absent or has no root App Graph.
     MissingRootOwner,
     /// An owner reference indexes past the owner table.
@@ -600,6 +607,10 @@ pub enum PlanValidationError {
 impl core::fmt::Display for PlanValidationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::UnsupportedStatement { handler, statement } => write!(
+                f,
+                "invalid plan: handler {handler} uses {statement}, which requires the categorical v16 plan"
+            ),
             Self::MissingRootOwner => {
                 f.write_str("invalid plan: the owner table has no root App Graph")
             }
@@ -1015,17 +1026,11 @@ fn handler_logical_time_use(handler: &crate::plan::Handler) -> HandlerLogicalTim
         |tree: &expr::Tree| super::type_resolution::expression_reads_root(&tree.root, "now");
     HandlerLogicalTimeUse {
         guard: handler.guard.as_ref().is_some_and(reads),
-        body: handler.body.iter().any(|step| match step {
-            Step::Let { expr, .. } | Step::SetVar { expr, .. } => reads(expr),
-            Step::Emit { value, .. } => match value {
-                Emission::Data(tree) => reads(tree),
-                Emission::Patch(writes) | Emission::FreshData(writes) => {
-                    writes.iter().any(|write| reads(&write.value))
-                }
-                Emission::Identity | Emission::Nothing => false,
-            },
-            Step::Stop => false,
-        }),
+        body: handler
+            .body
+            .iter()
+            .flat_map(DispatchStep::expressions)
+            .any(reads),
     }
 }
 
@@ -1616,9 +1621,9 @@ fn annotations_well_formed(
     }
     for (handler_index, handler) in plan.handlers.iter().enumerate() {
         for step in &handler.body {
-            if let Step::Let {
+            if let DispatchStep::Let {
                 name,
-                expr,
+                value: expr,
                 annotations,
             } = step
             {
@@ -2091,10 +2096,19 @@ fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
         for (step_index, step) in handler.body.iter().enumerate() {
             let location = |role: &str| format!("handler {handler_index} step {step_index} {role}");
             match step {
-                Step::Let { expr, .. } => tree_type_at(expr, location("let expression"))?,
-                Step::SetVar { expr, .. } => tree_type_at(expr, location("state expression"))?,
-                Step::Stop => {}
-                Step::Emit { value, .. } => match value {
+                DispatchStep::MultiEmit { .. } | DispatchStep::LoopCommand(_) => {
+                    for (index, expression) in step.expressions().enumerate() {
+                        tree_type_at(expression, location(&format!("expression {index}")))?;
+                    }
+                }
+                DispatchStep::Let { value: expr, .. } => {
+                    tree_type_at(expr, location("let expression"))?
+                }
+                DispatchStep::SetVar { value: expr, .. } => {
+                    tree_type_at(expr, location("state expression"))?
+                }
+                DispatchStep::Stop => {}
+                DispatchStep::Emit { value, .. } => match value {
                     Emission::Identity | Emission::Nothing => {}
                     Emission::Data(tree) => tree_type_at(tree, location("data emission"))?,
                     Emission::Patch(fields) | Emission::FreshData(fields) => {
@@ -2846,7 +2860,11 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     .get(node_slot.index())
                     .is_some_and(|node| node.owner == slot),
             };
-            belongs_to_owner && handler.body.iter().any(|step| matches!(step, Step::Stop))
+            belongs_to_owner
+                && handler
+                    .body
+                    .iter()
+                    .any(|step| matches!(step, DispatchStep::Stop))
         });
         if owner.instance.lifetime != InstanceLifetime::Persistent || explicitly_stoppable {
             for node in &plan.nodes {
@@ -3001,6 +3019,19 @@ fn owner_contains(plan: &ExecutionPlan, ancestor: OwnerSlot, child: OwnerSlot) -
 }
 
 fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
+    for (handler, definition) in plan.handlers.iter().enumerate() {
+        for step in &definition.body {
+            let statement = match step {
+                DispatchStep::MultiEmit { .. } => "multi-emission",
+                DispatchStep::LoopCommand(_) => "a Loop manager command",
+                DispatchStep::Let { .. }
+                | DispatchStep::SetVar { .. }
+                | DispatchStep::Emit { .. }
+                | DispatchStep::Stop => continue,
+            };
+            return Err(PlanValidationError::UnsupportedStatement { handler, statement });
+        }
+    }
     data_types_well_formed(plan)?;
     schema_well_formed("app", &plan.app_schema)?;
     schema_well_formed("ext", &plan.ext_schema)?;
@@ -4017,37 +4048,39 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         }
         for step in &handler.body {
             match step {
-                Step::Emit { port, value } => {
-                    if !has_port(node, port, node::Direction::Output) {
-                        return Err(PlanValidationError::WrongPortDirection {
-                            node: Some(node.path.clone()),
-                            port: port.clone(),
-                            expected: node::Direction::Output,
-                        });
-                    }
-                    match value {
-                        Emission::Data(tree) => {
-                            expr_canonical(&tree.root)?;
-                            asset_indexes_bound(plan, &tree.root)?;
+                DispatchStep::Emit { .. } | DispatchStep::MultiEmit { .. } => {
+                    for (port, value) in step.emissions() {
+                        if !has_port(node, port, node::Direction::Output) {
+                            return Err(PlanValidationError::WrongPortDirection {
+                                node: Some(node.path.clone()),
+                                port: port.clone(),
+                                expected: node::Direction::Output,
+                            });
                         }
-                        Emission::Patch(writes) | Emission::FreshData(writes) => {
-                            for write in writes {
-                                expr_canonical(&write.value.root)?;
-                                asset_indexes_bound(plan, &write.value.root)?;
-                                meta_target_known(plan, &write.target)?;
+                        match value {
+                            Emission::Data(tree) => {
+                                expr_canonical(&tree.root)?;
+                                asset_indexes_bound(plan, &tree.root)?;
                             }
+                            Emission::Patch(writes) | Emission::FreshData(writes) => {
+                                for write in writes {
+                                    expr_canonical(&write.value.root)?;
+                                    asset_indexes_bound(plan, &write.value.root)?;
+                                    meta_target_known(plan, &write.target)?;
+                                }
+                            }
+                            Emission::Identity | Emission::Nothing => {}
                         }
-                        Emission::Identity | Emission::Nothing => {}
-                    }
-                    if matches!(value, Emission::Identity)
-                        && matches!(handler.activation, node::HandlerActivation::Join { .. })
-                    {
-                        return Err(PlanValidationError::AmbiguousJoinIdentity {
-                            node: node.path.clone(),
-                        });
+                        if matches!(value, Emission::Identity)
+                            && matches!(handler.activation, node::HandlerActivation::Join { .. })
+                        {
+                            return Err(PlanValidationError::AmbiguousJoinIdentity {
+                                node: node.path.clone(),
+                            });
+                        }
                     }
                 }
-                Step::SetVar { name, expr } => {
+                DispatchStep::SetVar { name, value: expr } => {
                     if !node.vars.iter().any(|var| var.name == *name) {
                         return Err(PlanValidationError::UnknownVariable {
                             node: node.path.clone(),
@@ -4056,8 +4089,14 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     }
                     expr_canonical(&expr.root)?;
                 }
-                Step::Let { expr, .. } => expr_canonical(&expr.root)?,
-                Step::Stop => {
+                DispatchStep::Let { value: expr, .. } => expr_canonical(&expr.root)?,
+                DispatchStep::LoopCommand(_) => {
+                    for expression in step.expressions() {
+                        expr_canonical(&expression.root)?;
+                        asset_indexes_bound(plan, &expression.root)?;
+                    }
+                }
+                DispatchStep::Stop => {
                     if handler.activation
                         == node::HandlerActivation::Lifecycle(node::Lifecycle::Stop)
                     {
@@ -4250,17 +4289,19 @@ fn validate_graph_handler(
     }
     for step in &handler.body {
         match step {
-            Step::Let { name, expr, .. } => {
+            DispatchStep::Let {
+                name, value: expr, ..
+            } => {
                 let ty = check_tree(expr, &signature)?;
                 signature = signature.with(name, ty);
             }
-            Step::SetVar { .. } => {
+            DispatchStep::SetVar { .. } => {
                 return Err(PlanValidationError::InvalidGraphHandler {
                     owner: owner_name.clone(),
                     detail: "Graph mutable state has not landed",
                 });
             }
-            Step::Stop => {
+            DispatchStep::Stop => {
                 if handler.activation == node::HandlerActivation::Lifecycle(node::Lifecycle::Stop) {
                     return Err(PlanValidationError::InvalidGraphHandler {
                         owner: owner_name.clone(),
@@ -4268,37 +4309,50 @@ fn validate_graph_handler(
                     });
                 }
             }
-            Step::Emit { port, value } => {
-                let expected = ports
-                    .iter()
-                    .find(|decl| decl.port == *port && decl.direction == node::Direction::Output)
-                    .and_then(|decl| decl.ty.as_ref())
-                    .ok_or_else(|| PlanValidationError::InvalidGraphHandler {
-                        owner: owner_name.clone(),
-                        detail: "an emission targets no typed Graph output",
-                    })?;
-                match value {
-                    Emission::Data(tree) => {
-                        let _ = check_tree(tree, &signature)?;
-                    }
-                    Emission::Patch(writes) | Emission::FreshData(writes) => {
-                        for write in writes {
-                            let _ = check_tree(&write.value, &signature)?;
-                            meta_target_known(plan, &write.target)?;
+            DispatchStep::Emit { .. } | DispatchStep::MultiEmit { .. } => {
+                for (port, value) in step.emissions() {
+                    let expected = ports
+                        .iter()
+                        .find(|decl| {
+                            decl.port == *port && decl.direction == node::Direction::Output
+                        })
+                        .and_then(|decl| decl.ty.as_ref())
+                        .ok_or_else(|| PlanValidationError::InvalidGraphHandler {
+                            owner: owner_name.clone(),
+                            detail: "an emission targets no typed Graph output",
+                        })?;
+                    match value {
+                        Emission::Data(tree) => {
+                            let _ = check_tree(tree, &signature)?;
                         }
+                        Emission::Patch(writes) | Emission::FreshData(writes) => {
+                            for write in writes {
+                                let _ = check_tree(&write.value, &signature)?;
+                                meta_target_known(plan, &write.target)?;
+                            }
+                        }
+                        Emission::Identity | Emission::Nothing => {}
                     }
-                    Emission::Identity | Emission::Nothing => {}
+                    let actual = super::type_resolution::resolved_emission_type(
+                        value,
+                        &input_type,
+                        expected,
+                    )?;
+                    if let Some(actual) = actual
+                        && !actual.is_assignable_to(expected)
+                    {
+                        return Err(PlanValidationError::InvalidGraphHandler {
+                            owner: owner_name.clone(),
+                            detail: "an emission contradicts its Graph output type",
+                        });
+                    }
                 }
-                let actual =
-                    super::type_resolution::resolved_emission_type(value, &input_type, expected)?;
-                if let Some(actual) = actual
-                    && !actual.is_assignable_to(expected)
-                {
-                    return Err(PlanValidationError::InvalidGraphHandler {
-                        owner: owner_name.clone(),
-                        detail: "an emission contradicts its Graph output type",
-                    });
-                }
+            }
+            DispatchStep::LoopCommand(_) => {
+                return Err(PlanValidationError::InvalidGraphHandler {
+                    owner: owner_name.clone(),
+                    detail: "Loop manager commands require the categorical v16 plan",
+                });
             }
         }
     }
@@ -4625,7 +4679,7 @@ impl<'plan> LoopControl<'plan> {
         let mut direct = LoopEffect::default();
         let mut downstream = LoopEffects::neutral();
         for step in &handler.body {
-            if let Step::Emit { port, value } = step
+            if let DispatchStep::Emit { port, value } = step
                 && !matches!(value, Emission::Nothing)
             {
                 let output = self.node_output_effects(slot, port)?;
@@ -4828,17 +4882,23 @@ impl<'plan> LoopControl<'plan> {
         let mut effect = LoopEffect::default();
         for step in &handler.body {
             match step {
-                Step::Emit {
+                DispatchStep::MultiEmit { .. } | DispatchStep::LoopCommand(_) => {
+                    return Err(self.error(
+                        "dispatch",
+                        "multi-emission and manager commands require the categorical v16 plan",
+                    ));
+                }
+                DispatchStep::Emit {
                     value: Emission::Nothing,
                     ..
                 } => {}
-                Step::Emit { port, .. } => match port.name() {
+                DispatchStep::Emit { port, .. } => match port.name() {
                     "next" => effect.next = effect.next.saturating_add(1).min(2),
                     "expired" => effect.user_expired = true,
                     _ => effect.terminal = 1,
                 },
-                Step::Stop => effect.terminal = 1,
-                Step::Let { .. } | Step::SetVar { .. } => {}
+                DispatchStep::Stop => effect.terminal = 1,
+                DispatchStep::Let { .. } | DispatchStep::SetVar { .. } => {}
             }
         }
         Ok(LoopEffects::one(effect))
@@ -5048,7 +5108,7 @@ fn join_metadata_presence_holds(plan: &ExecutionPlan) -> Result<(), PlanValidati
             };
             let base = activation_presence(handler, &inputs, &all_fields);
             for step in &handler.body {
-                let Step::Emit { port, value } = step else {
+                let DispatchStep::Emit { port, value } = step else {
                     continue;
                 };
                 if matches!(value, Emission::Nothing) {
@@ -5122,16 +5182,8 @@ fn join_metadata_presence_holds(plan: &ExecutionPlan) -> Result<(), PlanValidati
             required_meta_reads_hold(&guard.root, &base, owner)?;
         }
         for step in &handler.body {
-            match step {
-                Step::Let { expr, .. } | Step::SetVar { expr, .. } => {
-                    required_meta_reads_hold(&expr.root, &base, owner)?;
-                }
-                Step::Emit { value, .. } => {
-                    for expression in emission_expressions(value) {
-                        required_meta_reads_hold(expression, &base, owner)?;
-                    }
-                }
-                Step::Stop => {}
+            for expression in step.expressions() {
+                required_meta_reads_hold(&expression.root, &base, owner)?;
             }
         }
     }
@@ -5222,16 +5274,6 @@ fn emission_meta_writes(emission: &Emission) -> MetaPresence {
             })
             .collect(),
         Emission::Identity | Emission::Data(_) | Emission::Nothing => MetaPresence::new(),
-    }
-}
-
-fn emission_expressions(emission: &Emission) -> Vec<&expr::Expr> {
-    match emission {
-        Emission::Data(tree) => alloc::vec![&tree.root],
-        Emission::Patch(writes) | Emission::FreshData(writes) => {
-            writes.iter().map(|write| &write.value.root).collect()
-        }
-        Emission::Identity | Emission::Nothing => Vec::new(),
     }
 }
 

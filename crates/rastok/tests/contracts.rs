@@ -2354,7 +2354,7 @@ fn a_json_recovery_follows_the_position_terminators() {
     let emissions = handler
         .body
         .iter()
-        .filter(|step| matches!(step, rastok::plan::Step::Emit { .. }))
+        .filter(|step| matches!(step, rastok::plan::DispatchStep::Emit { .. }))
         .count();
     assert_eq!(emissions, 2, "both emissions live in the tree");
 

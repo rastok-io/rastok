@@ -21,6 +21,22 @@ pub enum Emission {
     Nothing,
 }
 
+impl Emission {
+    /// Expressions in the order the envelope builder evaluates them.
+    pub(crate) fn expressions(&self) -> impl Iterator<Item = &expr::Tree> {
+        let data = match self {
+            Self::Data(value) => Some(value),
+            Self::Identity | Self::Nothing | Self::Patch(_) | Self::FreshData(_) => None,
+        };
+        let writes = match self {
+            Self::Patch(writes) | Self::FreshData(writes) => writes.as_slice(),
+            Self::Identity | Self::Nothing | Self::Data(_) => &[],
+        };
+        data.into_iter()
+            .chain(writes.iter().map(|write| &write.value))
+    }
+}
+
 /// One resolved write in an envelope builder. Source spelling and diagnostic
 /// spans are absent: all consumers use the same canonical landing site.
 #[derive(Debug, Clone, PartialEq)]

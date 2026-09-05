@@ -14,7 +14,7 @@ use crate::datatype::{DataType, StructType, TypeField};
 use crate::envelope::WriteTarget;
 use crate::expr;
 use crate::node;
-use crate::plan::{Emission, EndpointRef, ExecutionPlan, PlanValidationError, Slot, Step};
+use crate::plan::{DispatchStep, Emission, EndpointRef, ExecutionPlan, PlanValidationError, Slot};
 use crate::schema_annotation::AnnotationTable;
 
 /// Why one effective port type holds.
@@ -289,23 +289,25 @@ impl<'plan> Solver<'plan> {
                 }
                 for step in &handler.body {
                     match step {
-                        Step::Emit { port, value } => {
-                            let output =
-                                self.ensure(Some(node_index), port, node::Direction::Output);
-                            if emission_preserves_payload(value) {
-                                self.flows.push(Flow {
-                                    source: input,
-                                    target: output,
-                                });
-                            } else if !matches!(value, Emission::Nothing) {
-                                self.emissions.push(EmissionRule {
-                                    input,
-                                    output,
-                                    emission: value,
-                                });
+                        DispatchStep::Emit { .. } | DispatchStep::MultiEmit { .. } => {
+                            for (port, value) in step.emissions() {
+                                let output =
+                                    self.ensure(Some(node_index), port, node::Direction::Output);
+                                if emission_preserves_payload(value) {
+                                    self.flows.push(Flow {
+                                        source: input,
+                                        target: output,
+                                    });
+                                } else if !matches!(value, Emission::Nothing) {
+                                    self.emissions.push(EmissionRule {
+                                        input,
+                                        output,
+                                        emission: value,
+                                    });
+                                }
                             }
                         }
-                        Step::SetVar { name, expr } => {
+                        DispatchStep::SetVar { name, value: expr } => {
                             if let Some(expected) = self.plan.nodes[node_index]
                                 .vars
                                 .iter()
@@ -319,7 +321,9 @@ impl<'plan> Solver<'plan> {
                                 });
                             }
                         }
-                        Step::Let { .. } | Step::Stop => {}
+                        DispatchStep::Let { .. }
+                        | DispatchStep::Stop
+                        | DispatchStep::LoopCommand(_) => {}
                     }
                 }
             }

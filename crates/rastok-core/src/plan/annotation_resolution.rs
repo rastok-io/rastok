@@ -16,8 +16,8 @@ use crate::schema_annotation::{AnnotationTable, SchemaPathSegment};
 
 use super::type_resolution::ResolvedPortTable;
 use super::{
-    AspectSpec, Emission, EndpointRef, ExecutionPlan, Handler, HandlerOwner, OwnerKind, OwnerSlot,
-    Slot, Step,
+    AspectSpec, DispatchStep, Emission, EndpointRef, ExecutionPlan, Handler, HandlerOwner,
+    OwnerKind, OwnerSlot, Slot,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -330,9 +330,9 @@ impl<'a> Solver<'a> {
             };
             for step in &handler.body {
                 match step {
-                    Step::Let {
+                    DispatchStep::Let {
                         name,
-                        expr,
+                        value: expr,
                         annotations,
                     } => {
                         let derived =
@@ -354,7 +354,7 @@ impl<'a> Solver<'a> {
                             })?;
                         environment.insert(name.clone(), expr.ty.clone(), expected.clone());
                     }
-                    Step::SetVar { name, expr } => {
+                    DispatchStep::SetVar { name, value: expr } => {
                         let key = VarKey {
                             node: handler.owner.node().ok_or_else(|| ResolutionError {
                                 location: format!("handler {handler_index} var `{name}`"),
@@ -376,25 +376,27 @@ impl<'a> Solver<'a> {
                             })?;
                         vars.entry(key).or_default().push(derived);
                     }
-                    Step::Emit { port, value } => {
-                        let key = self.handler_output(handler.owner, port)?;
-                        if let Some(mut derived) = self.emission(
-                            value,
-                            input.as_ref(),
-                            &environment,
-                            self.port(&key)?.ty.clone(),
-                            handler_index,
-                        )? {
-                            derived = overlay(&derived, &guard_taint).map_err(|reason| {
-                                ResolutionError {
-                                    location: port_location(self.plan, &key),
-                                    reason,
-                                }
-                            })?;
-                            ports.entry(key).or_default().push(derived);
+                    DispatchStep::Emit { .. } | DispatchStep::MultiEmit { .. } => {
+                        for (port, value) in step.emissions() {
+                            let key = self.handler_output(handler.owner, port)?;
+                            if let Some(mut derived) = self.emission(
+                                value,
+                                input.as_ref(),
+                                &environment,
+                                self.port(&key)?.ty.clone(),
+                                handler_index,
+                            )? {
+                                derived = overlay(&derived, &guard_taint).map_err(|reason| {
+                                    ResolutionError {
+                                        location: port_location(self.plan, &key),
+                                        reason,
+                                    }
+                                })?;
+                                ports.entry(key).or_default().push(derived);
+                            }
                         }
                     }
-                    Step::Stop => {}
+                    DispatchStep::Stop | DispatchStep::LoopCommand(_) => {}
                 }
             }
         }
@@ -855,8 +857,8 @@ fn has_policy_declaration(plan: &ExecutionPlan, resolved: &ResolvedPortTable) ->
         })
         || plan.handlers.iter().any(|handler| {
             handler.body.iter().any(
-                |step| matches!(step, Step::Let { annotations, .. } if !annotations.is_empty()),
-            )
+            |step| matches!(step, DispatchStep::Let { annotations, .. } if !annotations.is_empty()),
+        )
         })
 }
 

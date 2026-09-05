@@ -245,7 +245,12 @@ takes semantic priority; no public date overrides its R0–R9 exit gates.
   Contract-derived Call profiles now replace the special-case Loop host test
   and check direct own-command routes for frame cardinality and repeat-safe
   effects. One emission/write algebra also spans source checking, proofs,
-  transport and execution, without a second conversion model. Full Loop
+  transport and execution, without a second conversion model. Executable
+  handler leaves now use `DispatchStep` directly; the duplicate `Step` and its
+  conversion bridges are removed. `HandlerExecutor` prepares ordered
+  emissions in scratch state, with broadcast evaluation once and tuple values
+  in authored order. Raw-plan validation keeps the new statements behind the
+  v16 gate just like source lowering. Full recursive handler transport, Loop
   control and the single categorical v16 move remain
   pending, as listed in
   [`rework-r4-plan.md`](docs/architecture/rework-r4-plan.md).

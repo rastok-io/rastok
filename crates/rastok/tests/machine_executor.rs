@@ -12,7 +12,7 @@ use rastok::envelope::{Data, Envelope, Meta, MetaSys, MetaValue, Namespace, Scal
 use rastok::identity::{InstanceAddress, InstanceFrame, InstanceRef};
 use rastok::journal::ids;
 use rastok::plan::{GraphVersion, OwnerPath, Slot, ValidatedExecutionPlan};
-use rastok::runtime::{Delivery, Fault, InstanceState, Mailboxes, TransactionExecutor, meta_value};
+use rastok::runtime::{Delivery, Fault, HandlerExecutor, InstanceState, Mailboxes, meta_value};
 use rastok::{envelope, node};
 use std::collections::BTreeMap;
 
@@ -111,7 +111,7 @@ fn an_identity_emission_inherits_everything_but_its_spine() {
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
-    let executor = TransactionExecutor::new(&compilation.plan, GraphVersion(1));
+    let executor = HandlerExecutor::new(&compilation.plan, GraphVersion(1));
     let slot = Slot::new(0);
     let state = InstanceState::new()
         .cell(&compilation.plan, slot, &singleton())
@@ -212,7 +212,7 @@ fn the_meta_projection_carries_the_whole_spine() {
 #[test]
 fn the_activation_pattern_is_not_the_causal_trigger() {
     let (plan, slot) = probe();
-    let executor = TransactionExecutor::new(&plan, GraphVersion(1));
+    let executor = HandlerExecutor::new(&plan, GraphVersion(1));
     let state = InstanceState::new()
         .cell(&plan, slot, &singleton())
         .unwrap();
@@ -281,7 +281,7 @@ fn metadata_writes_land_where_the_spec_says() {
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
-    let executor = TransactionExecutor::new(&compilation.plan, GraphVersion(1));
+    let executor = HandlerExecutor::new(&compilation.plan, GraphVersion(1));
     let slot = Slot::new(0);
     let state = InstanceState::new()
         .cell(&compilation.plan, slot, &singleton())
@@ -333,7 +333,7 @@ fn metadata_writes_land_where_the_spec_says() {
 #[test]
 fn a_transaction_commits_everything_together() {
     let (plan, slot) = probe();
-    let executor = TransactionExecutor::new(&plan, GraphVersion(1));
+    let executor = HandlerExecutor::new(&plan, GraphVersion(1));
     let state = InstanceState::new()
         .cell(&plan, slot, &singleton())
         .unwrap();
@@ -372,7 +372,7 @@ fn a_transaction_commits_everything_together() {
 #[test]
 fn execution_is_deterministic() {
     let (plan, slot) = probe();
-    let executor = TransactionExecutor::new(&plan, GraphVersion(1));
+    let executor = HandlerExecutor::new(&plan, GraphVersion(1));
     let state = InstanceState::new()
         .cell(&plan, slot, &singleton())
         .unwrap();
@@ -389,7 +389,7 @@ fn execution_is_deterministic() {
 #[test]
 fn a_false_guard_consumes_without_effect() {
     let (plan, slot) = probe();
-    let executor = TransactionExecutor::new(&plan, GraphVersion(1));
+    let executor = HandlerExecutor::new(&plan, GraphVersion(1));
     let state = InstanceState::new()
         .cell(&plan, slot, &singleton())
         .unwrap();
@@ -408,7 +408,7 @@ fn a_false_guard_consumes_without_effect() {
 #[test]
 fn a_faulted_transaction_changes_nothing() {
     let (plan, slot) = probe();
-    let executor = TransactionExecutor::new(&plan, GraphVersion(1));
+    let executor = HandlerExecutor::new(&plan, GraphVersion(1));
     let state = InstanceState::new()
         .cell(&plan, slot, &singleton())
         .unwrap();
@@ -630,7 +630,7 @@ fn a_claimed_mailbox_is_skipped_until_released() {
 #[test]
 fn the_connector_completion_matches_the_reference_trace() {
     let (plan, _) = probe();
-    let executor = TransactionExecutor::new(&plan, GraphVersion(1));
+    let executor = HandlerExecutor::new(&plan, GraphVersion(1));
     let request = input("salut");
     let connector_path = node::Path::new(["echo"]).unwrap();
     let connector_slot = Slot::new(
@@ -700,7 +700,7 @@ fn the_connector_completion_matches_the_reference_trace() {
 #[test]
 fn a_connector_output_overlays_only_its_external_observations() {
     let (plan, _) = probe();
-    let executor = TransactionExecutor::new(&plan, GraphVersion(1));
+    let executor = HandlerExecutor::new(&plan, GraphVersion(1));
     let mut request = input("salut");
     let mut app = Namespace::new();
     app.insert(
@@ -789,7 +789,7 @@ fn a_caller_supplied_slot_is_verified_not_trusted() {
             .unwrap_err(),
         Fault::UnknownSlot(ghost)
     );
-    let executor = TransactionExecutor::new(&plan, GraphVersion(1));
+    let executor = HandlerExecutor::new(&plan, GraphVersion(1));
     assert_eq!(
         executor
             .fire(ghost, &singleton(), &input("salut"), &BTreeMap::new())

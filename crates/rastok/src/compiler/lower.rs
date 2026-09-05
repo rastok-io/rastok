@@ -22,11 +22,11 @@ use crate::datatype::{
 use crate::expr;
 use crate::node;
 use crate::plan::{
-    AspectSpec, AttrSetting, ClosingPolicy as PlanClosingPolicy, ConnectorSpec, Edge, Emission,
-    EndpointRef, EvaluationSite, ExecutionPlan, FieldWrite, Handler, HandlerOwner,
+    AspectSpec, AttrSetting, ClosingPolicy as PlanClosingPolicy, ConnectorSpec, DispatchStep, Edge,
+    Emission, EndpointRef, EvaluationSite, ExecutionPlan, FieldWrite, Handler, HandlerOwner,
     InstanceLifetime as PlanInstanceLifetime, InstanceSpec, LoopDelay as PlanLoopDelay,
     LoopSpec as PlanLoopSpec, Node, NodeExecution, Owner, OwnerKind, OwnerPath, OwnerSlot,
-    OwnerValue, PlanConstant, SemanticHash, Slot, Step, SymbolTable, VarCell,
+    OwnerValue, PlanConstant, SemanticHash, Slot, SymbolTable, VarCell,
 };
 use crate::schema_annotation::{
     AnnotationTable, CostBasis, DataAnnotation, SchemaPathSegment, SensitivityLevel,
@@ -765,29 +765,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                 guard: guard.map(&subst),
                 body: body
                     .iter()
-                    .map(|statement| match statement {
-                        HirStatement::Let {
-                            name,
-                            value,
-                            annotations,
-                        } => Step::Let {
-                            name: name.clone(),
-                            expr: subst(value),
-                            annotations: annotations.clone(),
-                        },
-                        HirStatement::SetVar { name, value } => Step::SetVar {
-                            name: name.clone(),
-                            expr: subst(value),
-                        },
-                        HirStatement::Emit { port, value } => Step::Emit {
-                            port: port.clone(),
-                            value: substitute_emission(value, &subst),
-                        },
-                        HirStatement::Stop => Step::Stop,
-                        HirStatement::MultiEmit { .. } | HirStatement::LoopCommand(_) => {
-                            unreachable!("unsupported statements were rejected above")
-                        }
-                    })
+                    .map(|statement| lower_statement(statement, &subst))
                     .collect(),
             });
         }
@@ -915,29 +893,50 @@ fn lower_loop_spec(
     }
 }
 
-fn lower_statement(statement: &HirStatement, subst: &impl Fn(&expr::Tree) -> expr::Tree) -> Step {
+fn lower_statement(
+    statement: &HirStatement,
+    subst: &impl Fn(&expr::Tree) -> expr::Tree,
+) -> DispatchStep {
     match statement {
         HirStatement::Let {
             name,
             value,
             annotations,
-        } => Step::Let {
+        } => DispatchStep::Let {
             name: name.clone(),
-            expr: subst(value),
+            value: subst(value),
             annotations: annotations.clone(),
         },
-        HirStatement::SetVar { name, value } => Step::SetVar {
+        HirStatement::SetVar { name, value } => DispatchStep::SetVar {
             name: name.clone(),
-            expr: subst(value),
+            value: subst(value),
         },
-        HirStatement::Emit { port, value } => Step::Emit {
+        HirStatement::Emit { port, value } => DispatchStep::Emit {
             port: port.clone(),
             value: substitute_emission(value, subst),
         },
-        HirStatement::Stop => Step::Stop,
-        HirStatement::MultiEmit { .. } | HirStatement::LoopCommand(_) => {
-            unreachable!("R3-only statements are rejected before v15 lowering")
-        }
+        HirStatement::Stop => DispatchStep::Stop,
+        HirStatement::MultiEmit { ports, values } => DispatchStep::MultiEmit {
+            ports: ports.clone(),
+            values: match values {
+                crate::plan::MultiEmitValues::Broadcast(value) => {
+                    crate::plan::MultiEmitValues::Broadcast(substitute_emission(value, subst))
+                }
+                crate::plan::MultiEmitValues::Tuple(values) => crate::plan::MultiEmitValues::Tuple(
+                    values
+                        .iter()
+                        .map(|value| substitute_emission(value, subst))
+                        .collect(),
+                ),
+            },
+        },
+        HirStatement::LoopCommand(command) => DispatchStep::LoopCommand(match command {
+            crate::plan::LoopCommand::Next(value) => {
+                crate::plan::LoopCommand::Next(substitute_emission(value, subst))
+            }
+            crate::plan::LoopCommand::Again => crate::plan::LoopCommand::Again,
+            crate::plan::LoopCommand::Done => crate::plan::LoopCommand::Done,
+        }),
     }
 }
 
@@ -2348,7 +2347,7 @@ mod tests {
     use crate::contract::ContractCatalog;
     use crate::diagnostics::{Bag, SourceId};
     use crate::node;
-    use crate::plan::{AttrSetting, Emission, GraphVersion, Manifest, Step};
+    use crate::plan::{AttrSetting, DispatchStep, Emission, GraphVersion, Manifest};
     use crate::schema_annotation::{
         AnnotationKind, AnnotationSet, AnnotationTable, DataAnnotation, SchemaPath,
         SensitivityLevel,
@@ -2407,7 +2406,7 @@ graph m0_probe : App {
         );
         assert!(matches!(
             &handler.body[0],
-            Step::Emit {
+            DispatchStep::Emit {
                 value: Emission::Data(_),
                 ..
             }
@@ -2533,7 +2532,7 @@ graph app : App {
         );
         assert!(matches!(
             &compilation.plan.plan().handlers[0].body[0],
-            Step::Let { annotations, .. } if !annotations.is_empty()
+            DispatchStep::Let { annotations, .. } if !annotations.is_empty()
         ));
 
         let bytes = crate::plan::encode(&compilation.plan, &compilation.hash);

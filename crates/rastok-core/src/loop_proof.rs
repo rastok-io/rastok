@@ -8,7 +8,7 @@
 use crate::envelope::WriteTarget;
 use crate::expr::{self, BinaryOp, Expr};
 use crate::node;
-use crate::plan::{Emission, Handler, HandlerOwner, OwnerSlot, Step};
+use crate::plan::{DispatchStep, Emission, Handler, HandlerOwner, OwnerSlot};
 use crate::value::Value;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -183,10 +183,11 @@ fn is_true(tree: &expr::Tree) -> bool {
 }
 
 fn next_emission(handler: &Handler) -> Result<Option<&Emission>, Error> {
-    let mut next = handler.body.iter().filter_map(|step| match step {
-        Step::Emit { port, value } if port.name() == "next" => Some(value),
-        Step::Let { .. } | Step::Emit { .. } | Step::SetVar { .. } | Step::Stop => None,
-    });
+    let mut next = handler
+        .body
+        .iter()
+        .flat_map(DispatchStep::emissions)
+        .filter_map(|(port, value)| (port.name() == "next").then_some(value));
     let Some(selected) = next.next() else {
         return Ok(None);
     };
@@ -313,7 +314,7 @@ mod tests {
             owner: HandlerOwner::Graph(OwnerSlot::new(0)),
             activation: node::HandlerActivation::Port(node::Port::new("in").unwrap()),
             guard: Some(tree(guard, DataType::Bool)),
-            body: vec![Step::Emit {
+            body: vec![DispatchStep::Emit {
                 port: node::Port::new("next").unwrap(),
                 value: Emission::FreshData(vec![FieldWrite {
                     target: WriteTarget::Data(vec![String::from("n")]),
@@ -399,7 +400,7 @@ mod tests {
             owner: HandlerOwner::Graph(OwnerSlot::new(0)),
             activation: node::HandlerActivation::Port(node::Port::new("in").unwrap()),
             guard: Some(tree(positive_guard(), DataType::Bool)),
-            body: vec![Step::Emit {
+            body: vec![DispatchStep::Emit {
                 port: node::Port::new("next").unwrap(),
                 value: Emission::FreshData(writes),
             }],

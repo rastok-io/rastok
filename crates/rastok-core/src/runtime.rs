@@ -21,8 +21,8 @@ use crate::identity::InstanceRef;
 use crate::journal::{ConsumedPosition, Emission, TransactionRecord, ids};
 use crate::node;
 use crate::plan::{
-    Emission as PlanEmission, ExecutionPlan, GraphVersion, Handler, HandlerOwner, OwnerSlot, Slot,
-    Step, ValidatedExecutionPlan,
+    DispatchStep, Emission as PlanEmission, ExecutionPlan, GraphVersion, Handler, HandlerOwner,
+    OwnerSlot, Slot, ValidatedExecutionPlan,
 };
 use crate::value::{Value, ValueError};
 use alloc::boxed::Box;
@@ -557,16 +557,16 @@ pub(crate) struct JoinCandidate<'a> {
     pub(crate) inputs: &'a [Delivery],
 }
 
-/// Atomic node-transaction executor: scratch isolation while a
-/// handler runs, everything or nothing after.
+/// Prepares a handler transaction in scratch isolation. State and emissions
+/// become visible together only when its caller commits the returned record.
 #[derive(Debug)]
-pub struct TransactionExecutor<'plan> {
+pub struct HandlerExecutor<'plan> {
     plan: &'plan ValidatedExecutionPlan,
     graph_version: GraphVersion,
     logical_time: i64,
 }
 
-impl<'plan> TransactionExecutor<'plan> {
+impl<'plan> HandlerExecutor<'plan> {
     /// An executor over a validated plan. The executor dereferences
     /// the plan without checking, so the proof enters here — the
     /// internal reference stays raw, but no public path constructs
@@ -980,16 +980,18 @@ impl<'plan> TransactionExecutor<'plan> {
         let mut close_requested = false;
         for step in &handler.body {
             match step {
-                Step::Let { name, expr, .. } => {
+                DispatchStep::Let {
+                    name, value: expr, ..
+                } => {
                     let value = eval_with_slots(expr, &base(&lets), &payloads, &self.plan.assets)?;
                     lets.insert(name.clone(), value);
                 }
-                Step::SetVar { .. } => {
+                DispatchStep::SetVar { .. } => {
                     return Err(Fault::Unrepresentable(String::from(
                         "Graph handlers cannot own mutable state",
                     )));
                 }
-                Step::Emit { port, value } => {
+                DispatchStep::Emit { port, value } => {
                     let built = emitted_content(value, input, &base(&lets), &payloads, self.plan)?;
                     if let Some(built) = built {
                         let index = buffer.next_index(port);
@@ -1032,7 +1034,12 @@ impl<'plan> TransactionExecutor<'plan> {
                         });
                     }
                 }
-                Step::Stop => close_requested = true,
+                DispatchStep::Stop => close_requested = true,
+                DispatchStep::MultiEmit { .. } | DispatchStep::LoopCommand(_) => {
+                    return Err(Fault::Unrepresentable(String::from(
+                        "multi-emission and Loop manager commands require the categorical v16 plan",
+                    )));
+                }
             }
         }
         Ok(TransactionOutcome {
@@ -1194,7 +1201,9 @@ impl<'plan> TransactionExecutor<'plan> {
         let mut close_requested = false;
         for step in &handler.body {
             match step {
-                Step::Let { name, expr, .. } => {
+                DispatchStep::Let {
+                    name, value: expr, ..
+                } => {
                     let value = eval_with_slots(
                         expr,
                         &base(&scratch, &lets),
@@ -1203,7 +1212,7 @@ impl<'plan> TransactionExecutor<'plan> {
                     )?;
                     lets.insert(name.clone(), value);
                 }
-                Step::SetVar { name, expr } => {
+                DispatchStep::SetVar { name, value: expr } => {
                     // A state write consumes the value — the store
                     // outlives the transaction, so the witness
                     // resolves here.
@@ -1232,64 +1241,76 @@ impl<'plan> TransactionExecutor<'plan> {
                     }
                     scratch.insert(name.clone(), value);
                 }
-                Step::Emit { port, value } => {
-                    let built = emitted_content(
-                        value,
-                        input,
-                        &base(&scratch, &lets),
-                        &payloads,
-                        self.plan,
-                    )?;
-                    if let Some(built) = built {
-                        let index = buffer.next_index(port);
-                        let id = ids::emission_id(
-                            &node.path,
-                            trigger,
-                            input.meta().sys().id(),
-                            port,
-                            index,
-                        );
-                        let sys = MetaSys::emission(id, input.meta().sys(), self.graph_version.0);
-                        // The content-type hint: an explicit write wins; a
-                        // carried payload keeps that source's hint; rebuilt
-                        // content carries none.
-                        // Every pin the content must cross — the
-                        // emitting port's own and each fan-out
-                        // target's — is judged HERE, before the
-                        // commit: the same judge as a state cell, so
-                        // runtime arithmetic cannot carry an
-                        // out-of-range int (or any wrong shape) into
-                        // a pin, pass-through included. Encoded
-                        // bytes are the codecs' door.
-                        let from = crate::plan::EndpointRef {
-                            node: Some(slot),
-                            port: port.clone(),
-                        };
-                        let data = match built.data {
-                            BuiltData::Carried(data) => {
-                                if let Data::Materialized(current) = &data {
-                                    crossing_pins_hold(self.plan, &from, current)
-                                        .map_err(PinViolation::into_fault)?;
+                DispatchStep::Emit { .. } | DispatchStep::MultiEmit { .. } => {
+                    evaluate_emissions(
+                        step,
+                        |value| {
+                            emitted_content(
+                                value,
+                                input,
+                                &base(&scratch, &lets),
+                                &payloads,
+                                self.plan,
+                            )
+                        },
+                        |port, built| {
+                            let index = buffer.next_index(port);
+                            let id = ids::emission_id(
+                                &node.path,
+                                trigger,
+                                input.meta().sys().id(),
+                                port,
+                                index,
+                            );
+                            let sys =
+                                MetaSys::emission(id, input.meta().sys(), self.graph_version.0);
+                            // The content-type hint: an explicit write wins; a
+                            // carried payload keeps that source's hint; rebuilt
+                            // content carries none.
+                            // Every pin the content must cross — the
+                            // emitting port's own and each fan-out
+                            // target's — is judged HERE, before the
+                            // commit: the same judge as a state cell, so
+                            // runtime arithmetic cannot carry an
+                            // out-of-range int (or any wrong shape) into
+                            // a pin, pass-through included. Encoded
+                            // bytes are the codecs' door.
+                            let from = crate::plan::EndpointRef {
+                                node: Some(slot),
+                                port: port.clone(),
+                            };
+                            let data = match built.data {
+                                BuiltData::Carried(data) => {
+                                    if let Data::Materialized(current) = &data {
+                                        crossing_pins_hold(self.plan, &from, current)
+                                            .map_err(PinViolation::into_fault)?;
+                                    }
+                                    data
                                 }
-                                data
-                            }
-                            BuiltData::Value(value) => {
-                                crossing_pins_hold(self.plan, &from, &value)
-                                    .map_err(PinViolation::into_fault)?;
-                                Data::materialized(value)
-                            }
-                        };
-                        // The writable zones travel whole — the
-                        // builder's overlays are already folded in.
-                        let meta = Meta::new(sys).with_app(built.app).with_ext(built.ext);
-                        buffer.push(Emission {
-                            port: port.clone(),
-                            index,
-                            envelope: Envelope::new(meta, data),
-                        });
-                    }
+                                BuiltData::Value(value) => {
+                                    crossing_pins_hold(self.plan, &from, &value)
+                                        .map_err(PinViolation::into_fault)?;
+                                    Data::materialized(value)
+                                }
+                            };
+                            // The writable zones travel whole — the
+                            // builder's overlays are already folded in.
+                            let meta = Meta::new(sys).with_app(built.app).with_ext(built.ext);
+                            buffer.push(Emission {
+                                port: port.clone(),
+                                index,
+                                envelope: Envelope::new(meta, data),
+                            });
+                            Ok(())
+                        },
+                    )?;
                 }
-                Step::Stop => close_requested = true,
+                DispatchStep::Stop => close_requested = true,
+                DispatchStep::LoopCommand(_) => {
+                    return Err(Fault::Unrepresentable(String::from(
+                        "Loop manager commands require the categorical v16 plan",
+                    )));
+                }
             }
         }
         // The delta is what actually changed.
@@ -1626,6 +1647,7 @@ impl<'plan> TransactionExecutor<'plan> {
 /// What one emission carries out of its builder. A carried payload keeps its
 /// original representation (encoded bytes included) and content-type hint,
 /// per the "no structural read, no transcode" rule.
+#[derive(Clone)]
 pub(crate) struct Built {
     /// The built payload.
     pub(crate) data: BuiltData,
@@ -1637,11 +1659,71 @@ pub(crate) struct Built {
 }
 
 /// A builder's payload verdict.
+#[derive(Clone)]
 pub(crate) enum BuiltData {
     /// One input's physical representation ships as-is.
     Carried(Data),
     /// The payload was (re)built as one materialized core value.
     Value(Value),
+}
+
+/// Evaluates builders before handing their results to the transaction's
+/// scratch emission buffer. Broadcast evaluation is singular; tuple values
+/// and target envelope creation both retain authored order.
+fn evaluate_emissions(
+    step: &DispatchStep,
+    mut evaluate: impl FnMut(&PlanEmission) -> Result<Option<Built>, Fault>,
+    mut stage: impl FnMut(&node::Port, Built) -> Result<(), Fault>,
+) -> Result<(), Fault> {
+    match step {
+        DispatchStep::Emit { port, value } => {
+            if let Some(built) = evaluate(value)? {
+                stage(port, built)?;
+            }
+        }
+        DispatchStep::MultiEmit { ports, values } => {
+            if ports.len() < 2 {
+                return Err(Fault::Unrepresentable(String::from(
+                    "multi-emission requires at least two targets",
+                )));
+            }
+            match values {
+                crate::plan::MultiEmitValues::Broadcast(value) => {
+                    if let Some(built) = evaluate(value)? {
+                        let mut targets = ports.iter().peekable();
+                        while let Some(port) = targets.next() {
+                            if targets.peek().is_none() {
+                                stage(port, built)?;
+                                break;
+                            }
+                            stage(port, built.clone())?;
+                        }
+                    }
+                }
+                crate::plan::MultiEmitValues::Tuple(values) => {
+                    if values.len() != ports.len() {
+                        return Err(Fault::Unrepresentable(String::from(
+                            "multi-emission tuple arity differs from its targets",
+                        )));
+                    }
+                    for (port, value) in ports.iter().zip(values) {
+                        if let Some(built) = evaluate(value)? {
+                            stage(port, built)?;
+                        }
+                    }
+                }
+            }
+        }
+        DispatchStep::Let { .. }
+        | DispatchStep::SetVar { .. }
+        | DispatchStep::Stop
+        | DispatchStep::LoopCommand(_) => {
+            return Err(Fault::Unrepresentable(String::from(
+                "this statement does not produce business emissions",
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Folds the input envelope's zones onto a fresh emission meta —
@@ -2593,6 +2675,9 @@ pub fn to_meta_value(value: &Value) -> Result<MetaValue, Fault> {
         }
     })
 }
+
+#[cfg(test)]
+mod emission_tests;
 
 #[cfg(test)]
 mod metadata_conformance_tests {

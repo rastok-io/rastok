@@ -7,7 +7,8 @@ use crate::identity::InstanceRef;
 use crate::journal::{Journal, MemJournal, OutboundRecord, OutboundStatus, Record, SessionStatus};
 use crate::observation::ExchangeCorrelation;
 use crate::plan::{
-    ExecutionPlan, HandlerOwner, NodeExecution, OwnerSlot, Slot, Step, ValidatedExecutionPlan,
+    DispatchStep, ExecutionPlan, HandlerOwner, NodeExecution, OwnerSlot, Slot,
+    ValidatedExecutionPlan,
 };
 use crate::runtime::vm::{
     CallDirectionInspection, CallReferenceInspection, InstancePhaseInspection,
@@ -775,10 +776,7 @@ fn graph_handler_relations(plan: &ExecutionPlan) -> (Vec<JsonValue>, Vec<JsonVal
             }
         };
 
-        for port in handler.body.iter().filter_map(|step| match step {
-            Step::Emit { port, .. } => Some(port),
-            Step::Let { .. } | Step::SetVar { .. } | Step::Stop => None,
-        }) {
+        for (port, _) in handler.body.iter().flat_map(DispatchStep::emissions) {
             let relation_kind = if port.name() == "next" {
                 "temporal"
             } else {

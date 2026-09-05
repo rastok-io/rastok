@@ -14,7 +14,8 @@ use rastok::datatype::{DataType, StructType, TaggedCase, TaggedUnionType};
 use rastok::expr;
 use rastok::node::{self, Direction, Port};
 use rastok::plan::{
-    self, Edge, EndpointRef, ExecutionPlan, PlanValidationError, Slot, Step, ValidatedExecutionPlan,
+    self, DispatchStep, Edge, EndpointRef, ExecutionPlan, PlanValidationError, Slot,
+    ValidatedExecutionPlan,
 };
 
 const PROBE: &str = r#"
@@ -45,6 +46,42 @@ fn raw_probe() -> ExecutionPlan {
     .expect("a valid plan")
     .plan
     .into_inner()
+}
+
+#[test]
+fn raw_plans_cannot_smuggle_new_statements_past_the_package_gate() {
+    let variants = [
+        (
+            DispatchStep::MultiEmit {
+                ports: vec![Port::new("out").unwrap(), Port::new("audit").unwrap()],
+                values: plan::MultiEmitValues::Broadcast(plan::Emission::Identity),
+            },
+            "multi-emission",
+        ),
+        (
+            DispatchStep::LoopCommand(plan::LoopCommand::Next(plan::Emission::Identity)),
+            "a Loop manager command",
+        ),
+        (
+            DispatchStep::LoopCommand(plan::LoopCommand::Again),
+            "a Loop manager command",
+        ),
+        (
+            DispatchStep::LoopCommand(plan::LoopCommand::Done),
+            "a Loop manager command",
+        ),
+    ];
+    for (step, statement) in variants {
+        let mut raw = raw_probe();
+        raw.handlers[0].body.push(step);
+        assert_eq!(
+            ValidatedExecutionPlan::try_new(raw).unwrap_err(),
+            PlanValidationError::UnsupportedStatement {
+                handler: 0,
+                statement
+            }
+        );
+    }
 }
 
 fn raw_join(bounded: bool) -> ExecutionPlan {
@@ -221,7 +258,7 @@ fn loop_claims_are_rederived_from_the_graph_contract() {
         .iter_mut()
         .find(|handler| handler.owner.graph().is_some())
         .expect("the fixture has one Graph handler");
-    let Step::Emit {
+    let DispatchStep::Emit {
         value: plan::Emission::Data(tree),
         ..
     } = &mut graph_handler.body[0]
@@ -243,7 +280,7 @@ fn loop_progress_is_reproved_registry_free_from_the_transported_body() {
         .iter_mut()
         .find(|handler| handler.owner.graph().is_some())
         .expect("the fixture has one Graph handler");
-    let Step::Emit { value, .. } = &mut handler.body[0] else {
+    let DispatchStep::Emit { value, .. } = &mut handler.body[0] else {
         panic!("the Graph handler emits its result")
     };
     *value = plan::Emission::Nothing;
@@ -259,7 +296,7 @@ fn loop_progress_is_reproved_registry_free_from_the_transported_body() {
         .iter_mut()
         .find(|handler| handler.owner.graph().is_some())
         .expect("the fixture has one Graph handler");
-    handler.body.push(Step::Emit {
+    handler.body.push(DispatchStep::Emit {
         port: Port::new("next").unwrap(),
         value: plan::Emission::Identity,
     });
@@ -723,7 +760,7 @@ fn closing_budgets_and_stop_recursion_are_registry_free_invariants() {
         owner: plan::HandlerOwner::Node(Slot::new(0)),
         activation: rastok::node::HandlerActivation::Lifecycle(rastok::node::Lifecycle::Stop),
         guard: None,
-        body: vec![Step::Stop],
+        body: vec![DispatchStep::Stop],
     });
     assert_eq!(
         ValidatedExecutionPlan::try_new(recursive).unwrap_err(),
@@ -1574,7 +1611,7 @@ fn a_duplicated_var_refuses() {
 fn a_write_to_an_undeclared_var_refuses() {
     let mut plan = raw_probe();
     for step in &mut plan.handlers[0].body {
-        if let Step::SetVar { name, .. } = step {
+        if let DispatchStep::SetVar { name, .. } = step {
             "ghost".clone_into(name);
         }
     }
@@ -1875,7 +1912,7 @@ fn a_bounded_join_never_invents_an_untyped_or_missing_expiry_channel() {
     ));
 
     let mut identity = raw_join(false);
-    let Step::Emit { value, .. } = &mut identity.handlers[0].body[0] else {
+    let DispatchStep::Emit { value, .. } = &mut identity.handlers[0].body[0] else {
         panic!("the fixture emits")
     };
     *value = plan::Emission::Identity;
@@ -1957,7 +1994,7 @@ graph attributed : App {
                 .is_some_and(|slot| forged.nodes[slot.index()].path.to_string() == "pair")
         })
         .expect("the join handler");
-    let Step::Emit {
+    let DispatchStep::Emit {
         value: plan::Emission::FreshData(writes),
         ..
     } = &mut pair.body[0]
@@ -2055,7 +2092,7 @@ fn an_extra_process_port_refuses_without_a_registry() {
 fn with_setvar_root(root: expr::Expr) -> ExecutionPlan {
     let mut plan = raw_probe();
     for step in &mut plan.handlers[0].body {
-        if let Step::SetVar { expr, .. } = step {
+        if let DispatchStep::SetVar { value: expr, .. } = step {
             expr.root = root.clone();
         }
     }
@@ -2139,7 +2176,7 @@ fn what_the_type_accepts_the_format_reads_back() {
     for _ in 0..(MAX_NESTING + 16) {
         let relay_steps = &mut plan.handlers[0].body;
         for step in relay_steps {
-            if let Step::SetVar { expr, .. } = step {
+            if let DispatchStep::SetVar { value: expr, .. } = step {
                 let previous = core::mem::replace(
                     &mut expr.root,
                     expr::Expr::Literal(rastok::value::Value::Int(0)),
@@ -2193,9 +2230,9 @@ fn complete_m13_types_round_trip_through_v7() {
 #[test]
 fn complete_expression_result_types_round_trip_through_v7() {
     let mut plan = raw_probe();
-    plan.handlers[0].body[0] = Step::Let {
+    plan.handlers[0].body[0] = DispatchStep::Let {
         name: String::from("wide"),
-        expr: expr::Tree {
+        value: expr::Tree {
             root: expr::Expr::Literal(rastok::value::Value::Int(i64::MAX)),
             ty: DataType::LONG,
         },
@@ -2223,9 +2260,9 @@ fn narrowing_expressions_round_trip_through_v7() {
                 target: Box::new(target),
             }
         };
-        plan.handlers[0].body[0] = Step::Let {
+        plan.handlers[0].body[0] = DispatchStep::Let {
             name: String::from("narrowed"),
-            expr: expr::Tree {
+            value: expr::Tree {
                 root,
                 ty: if predicate {
                     DataType::Bool
@@ -2262,9 +2299,9 @@ fn constructed_values_round_trip_through_v7() {
         ),
     ] {
         let mut plan = raw_probe();
-        plan.handlers[0].body[0] = Step::Let {
+        plan.handlers[0].body[0] = DispatchStep::Let {
             name: String::from("constructed"),
-            expr: expr::Tree { root, ty },
+            value: expr::Tree { root, ty },
             annotations: Default::default(),
         };
         let validated = ValidatedExecutionPlan::try_new(plan).expect("constructors are v7 forms");

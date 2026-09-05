@@ -980,7 +980,7 @@ fn asset_order_is_digest_canonical() {
 #[test]
 fn graph_handlers_follow_the_canonical_asset_remap() {
     use rastok::compiler::compile_with_assets;
-    use rastok::plan::{Emission, HandlerOwner, Step};
+    use rastok::plan::{DispatchStep, Emission, HandlerOwner};
     use std::io::Write;
 
     let root =
@@ -1034,7 +1034,7 @@ graph app : App {{
         .iter()
         .filter(|handler| matches!(handler.owner, HandlerOwner::Graph(_)))
         .map(|handler| {
-            let Step::Emit {
+            let DispatchStep::Emit {
                 value: Emission::Data(tree),
                 ..
             } = &handler.body[0]
