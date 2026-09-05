@@ -64,6 +64,29 @@ pub enum LoopCommandKind {
     Done,
 }
 
+impl LoopCommandKind {
+    /// Canonical command discriminant, shared by identity and transport.
+    #[must_use]
+    pub const fn tag(self) -> u8 {
+        match self {
+            Self::Next => 1,
+            Self::Again => 2,
+            Self::Done => 3,
+        }
+    }
+
+    /// Read a canonical command discriminant without a default interpretation.
+    #[must_use]
+    pub const fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            1 => Some(Self::Next),
+            2 => Some(Self::Again),
+            3 => Some(Self::Done),
+            _ => None,
+        }
+    }
+}
+
 /// One end of an edge, default ports made explicit.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Endpoint {

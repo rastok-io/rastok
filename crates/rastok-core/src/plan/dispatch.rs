@@ -223,6 +223,18 @@ pub enum LoopCommand {
     Done,
 }
 
+impl LoopCommand {
+    /// Discriminant independent of the next-state envelope builder.
+    #[must_use]
+    pub const fn kind(&self) -> super::LoopCommandKind {
+        match self {
+            Self::Next(_) => super::LoopCommandKind::Next,
+            Self::Again => super::LoopCommandKind::Again,
+            Self::Done => super::LoopCommandKind::Done,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

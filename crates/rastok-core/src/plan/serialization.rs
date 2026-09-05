@@ -41,6 +41,8 @@ use crate::schema_annotation::{
 };
 use crate::value::Value;
 
+pub mod fields;
+
 /// The package's leading magic.
 pub const MAGIC: [u8; 4] = *b"RKPB";
 
@@ -747,16 +749,13 @@ fn step_tree(step: &DispatchStep) -> Cbor {
                 ]),
             },
         ]),
-        DispatchStep::LoopCommand(command) => Cbor::Array(vec![
-            Cbor::Uint(6),
-            match command {
-                super::LoopCommand::Next(value) => {
-                    Cbor::Array(vec![Cbor::Uint(1), emission_tree(value)])
-                }
-                super::LoopCommand::Again => Cbor::Array(vec![Cbor::Uint(2)]),
-                super::LoopCommand::Done => Cbor::Array(vec![Cbor::Uint(3)]),
-            },
-        ]),
+        DispatchStep::LoopCommand(command) => {
+            let mut fields = vec![Cbor::Uint(u64::from(command.kind().tag()))];
+            if let super::LoopCommand::Next(value) = command {
+                fields.push(emission_tree(value));
+            }
+            Cbor::Array(vec![Cbor::Uint(6), Cbor::Array(fields)])
+        }
     }
 }
 

@@ -253,8 +253,11 @@ takes semantic priority; no public date overrides its R0–R9 exit gates.
   v16 gate just like source lowering. The shared recursive decision selector
   now executes Lab mocks, including pure prefixes and per-leaf atomic replies;
   the Lab never enters the production package or its identity.
-  Full recursive handler transport, Loop
-  control and the single categorical v16 move remain
+  Decision and routing fields now round-trip through canonical CBOR with
+  independent local proofs, strict ordering and combined nesting bounds;
+  source-to-field tests preserve desugaring and shared-edge identities.
+  These fields do not grant package execution. Full handler/route integration,
+  Extension/Loop transport, control and the single categorical v16 move remain
   pending, as listed in
   [`rework-r4-plan.md`](docs/architecture/rework-r4-plan.md).
 - M1.9 is paused until R9. Its retained design implements the optional hosted

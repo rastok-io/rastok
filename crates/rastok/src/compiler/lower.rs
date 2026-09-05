@@ -12,8 +12,8 @@
 
 use crate::compiler::hir::{
     AttrValue, Direction, Dispatch as HirDispatch, EdgeTarget, EmitValue, Endpoint, EndpointOwner,
-    Graph as HirGraph, Hir, InstanceLifetime, InstancePolicy, LoopCommandKind, LoopSpec,
-    Node as HirNode, NodeSemantics, RouteDestination, RouteSelection, Statement as HirStatement,
+    Graph as HirGraph, Hir, InstanceLifetime, InstancePolicy, LoopSpec, Node as HirNode,
+    NodeSemantics, RouteDestination, RouteSelection, Statement as HirStatement,
 };
 use crate::datatype::{
     BinaryType, DataType, DateUnit, FloatType, IntegerType, IntegerWidth, IntervalUnit,
@@ -1364,11 +1364,7 @@ impl Writer<'_> {
                 RouteDestination::LoopCommand(command) => {
                     self.tag(3);
                     self.endpoint_owner(&command.owner);
-                    self.tag(match command.kind {
-                        LoopCommandKind::Next => 1,
-                        LoopCommandKind::Again => 2,
-                        LoopCommandKind::Done => 3,
-                    });
+                    self.tag(command.kind.tag());
                 }
             }
         }
@@ -1967,13 +1963,9 @@ impl Writer<'_> {
             }
             HirStatement::LoopCommand(command) => {
                 self.tag(6);
-                match command {
-                    crate::compiler::hir::LoopCommand::Next(value) => {
-                        self.tag(1);
-                        self.emission(value);
-                    }
-                    crate::compiler::hir::LoopCommand::Again => self.tag(2),
-                    crate::compiler::hir::LoopCommand::Done => self.tag(3),
+                self.tag(command.kind().tag());
+                if let crate::compiler::hir::LoopCommand::Next(value) = command {
+                    self.emission(value);
                 }
             }
         }

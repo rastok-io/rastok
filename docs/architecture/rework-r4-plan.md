@@ -1,6 +1,6 @@
 # R4 — categorical plan and independent validation
 
-> **Status (2026-09-05): open, decision-execution checkpoint.** R3 is
+> **Status (2026-09-05): open, decision/routing field transport.** R3 is
 > committed separately from the paused M1.9 UI. The encoded package remains
 > **v15**; no v16 package, journal key, Contract major or golden is published
 > by this checkpoint. R4–R9 are not closed.
@@ -356,6 +356,75 @@ add a walk to an existing unannotated Operator firing; application Dispatch
 still requires the complete categorical transport below.
 
 ## 8. Remaining R4 work
+
+### 8.1 Decision and routing fields
+
+`plan::fields` now encodes and reads the complete shared `Dispatch` and
+`RouteRule` fields, including pure prefixes, recursive closed/open arms,
+annotations, ordered broadcast/tuple emissions and all three manager commands.
+It shares the existing expression, type, value, annotation and envelope-builder
+codec; none has a second registry. Command-kind tags have one authority shared
+by statement/wiring transport and both HIR identity consumers. These are field
+bytes, **not an executable package**, and do not bypass source lowering or
+`ValidatedExecutionPlan`.
+
+Field shapes (CBOR arrays; symbolic names below are not serialized):
+
+```text
+dispatch  = [1, statements]
+          | [2, prefix, scrutinee, [[case_names, dispatch], ...]]
+          | [3, prefix, [[predicate, dispatch], ...], fallback]
+statement = existing Let=1 / Emit=2 / SetVar=3 / Stop=4
+          | [5, ports_in_authored_order, [1, broadcast_builder]]
+          | [5, ports_in_authored_order, [2, tuple_builders]]
+          | [6, [1, next_builder] | [2] | [3]]
+route     = [endpoint, [1, destinations] | [2, [[case_names, destinations], ...]]]
+endpoint  = [owner, port_name]
+owner     = [1, node_path] | [2, graph_path]
+destination = [1, endpoint] | [2] | [3, owner, command_kind]
+command_kind = 1 (Next) | 2 (Again) | 3 (Done)
+```
+
+Routing rows sort by their canonical encoded bytes, strictly; destination sets
+and closed case sets retain their checked canonical algebra order. Readers
+reject wrong order rather than sorting a forged claim. Open arms, statements,
+builders and multi-emission targets retain authored order. Node paths cannot
+be empty; the empty Graph path denotes the root. A manager command cannot be
+decoded as a spatial endpoint.
+
+The reader verifies exact tags/arities, consumes the complete byte input,
+re-derives the existing local expression/partition/routing proofs against the
+supplied independent context, and requires exact canonical re-encoding. It
+checks decision depth before constructing children. Encoding additionally
+checks the **combined** CBOR depth of decisions, expressions, types, values
+and annotations, not merely each component's individual limit.
+
+These field APIs deliberately do not claim owner resolution, whole-plan type
+inference, data-policy propagation, output/state-target validity, Loop control,
+effect safety or execution capability. Those proofs still belong to the
+enclosing v16 plan. In particular, reading command statements does not make
+them executable in a v15 handler, and the v15 instruction reader is unchanged.
+The package depth proof must include its own enclosing-table framing in
+addition to the field's nesting.
+
+Source-to-field tests use the real parser/checker: nested matches and broadcasts
+select the same branch after decoding; `where`/explicit-match and closed-arm
+permutation twins preserve field bytes and HIR hash; case-routing preserves a
+single physical edge shared by several cases. Each new application form still
+receives the named categorical-v16 packaging refusal. No witness is re-blessed.
+
+Evidence: sixteen core tests and three source-to-field integration tests.
+The full all-feature workspace passes **1,130 tests**, zero failures; fmt,
+workspace/all-targets/all-features clippy with warnings denied, cargo doc,
+diff checks and all three `no_std` targets pass. The package decoder also
+rejects field bytes as `BadMagic`: the two boundaries cannot be confused.
+
+Cortex-M33 before/after retains **129,972 B** peak heap (1,100 B margin),
+5,640 B after open, 2,710 average / 2,962 maximum relay ticks, 67 records and
+the unchanged echo hash. Decode moves from 17,848 to 17,850 ticks;
+linked `.text + .rodata` is 731,712 B. Both measurements print `SPIKE_OK`.
+
+### 8.2 Package integration still open
 
 R4 remains open. The complete representation must still carry recursive
 Dispatch in the encoded plan, case route selections separate from physical

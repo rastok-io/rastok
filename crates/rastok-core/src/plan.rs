@@ -31,6 +31,7 @@ pub use routing_validation::{
     RouteConflict, RouteConflictKind, RouteErrorKind, RouteValidationError, route_conflict,
     validate_routing,
 };
+pub use serialization::fields;
 pub(crate) use serialization::type_tree;
 pub use serialization::{DecodeError, FORMAT_VERSION, MAGIC, decode, encode};
 
