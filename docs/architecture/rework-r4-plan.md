@@ -1,6 +1,6 @@
 # R4 — categorical plan and independent validation
 
-> **Status (2026-09-05): open, second validation checkpoint.** R3 is
+> **Status (2026-09-05): open, third validation checkpoint.** R3 is
 > committed separately from the paused M1.9 UI. The encoded package remains
 > **v15**; no v16 tag, journal key, Contract major or golden is allocated by
 > this checkpoint.
@@ -87,7 +87,44 @@ state/output targets, metadata writes, policy propagation and Loop control and
 effects. Closed-match narrowing currently covers the source subset's
 `match data`; this checkpoint does not introduce arbitrary-path narrowing.
 
-## 4. Evidence
+## 4. Shared routing and additive-disposition proof
+
+Core now owns `RouteRule`, selections, arms, endpoints and manager-command
+destinations. HIR re-exports that same algebra. The separate hosted conflict
+implementation and its arm/intersection helpers are removed; source diagnostics
+translate the core's typed conflict into the existing code, span and case.
+The v15 single-edge compatibility helper is also removed from the model: its
+admission condition belongs at lowering, where it is now checked directly.
+
+`rastok_core::plan::validate_routing` checks the complete normalized routing
+inventory of each Graph, not just isolated match arms:
+
+- destination sets are nonempty, strictly canonical and duplicate-free;
+- closed partitions come from the looked-up source type, never route claims;
+- a source has at most one closed match;
+- universal and case selections are additive without selecting a destination
+  twice for the same value;
+- `nothing` remains exclusive across declarations, including against manager
+  commands, irrespective of declaration order;
+- different cases may select the same destination without inventing another
+  physical edge; commands remain a distinct destination variant, never a port
+  recognized by its spelling.
+
+The verifier neither repairs a malformed set nor merges away evidence of a
+conflict. Failures locate the selection or arm, such as
+`routes[0].selection.arms[1].destinations`. The checker calls this proof after
+endpoint materialization in every Graph. Ordinary source mistakes keep their
+named source diagnostics; a contradictory normalized inventory is
+`E-INTERNAL-PLAN`.
+
+**Boundary of this proof:** source types are supplied explicitly; unconditional
+routes need no closed domain and may still carry inference placeholders. Full
+v16 validation must establish endpoint existence and direction, destination
+types/narrowing, lexical scope, capacities, productibility and manager
+ownership/context. This checkpoint does not turn source routing into an
+executable v15 approximation or introduce a second spatial-edge authority.
+
+## 5. Evidence
 
 Seven core tests cover bool, enum and tagged union; unsupported/open domains;
 missing, unknown and duplicated cases; empty arms; case/arm order; absence of
@@ -120,7 +157,23 @@ heap peak (1,100 B margin), 5,640 B after open, 2,713 average / 2,966 maximum
 relay ticks, 67 records and the echo hash; decode moves from 17,844 to 17,840
 ticks. Both runs finish with `SPIKE_OK`.
 
-## 5. Remaining R4 work
+The third checkpoint adds eleven core routing tests and two compiler tests.
+Besides malformed partitions/sets and cross-declaration conflicts, the core
+battery enumerates **4,352** tables over a bool source, two port destinations,
+discard and a manager command. Every table is checked in both declaration
+orders against an independent selected-value flatten/sort/uniqueness oracle.
+Compiler tests keep exact-case source diagnostics, one physical edge per
+destination and identical hashes across additive/grouped route spellings.
+
+Third checkpoint gates: **1,079 workspace tests passed**, zero failures;
+fmt, workspace/all-targets/all-features clippy with warnings denied, cargo doc,
+diff checks and all three `no_std` targets pass. No dependency, package version,
+Contract version or golden changes. Cortex-M33 before/after is identical:
+17,840 decode ticks, 2,713 average / 2,966 maximum relay ticks, **129,972 B**
+heap peak (1,100 B margin), 5,640 B after open, 67 records, unchanged echo hash
+and `SPIKE_OK`.
+
+## 6. Remaining R4 work
 
 R4 remains open. The complete representation must still carry recursive
 Dispatch in the encoded plan, case route selections separate from physical

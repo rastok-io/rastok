@@ -3,6 +3,24 @@
 use super::*;
 
 impl Checker<'_, '_> {
+    pub(super) fn verify_routing(&mut self, graph: &Graph, span: Span) {
+        if let Err(error) = crate::plan::validate_routing(&graph.routes, |endpoint| {
+            endpoint_pinned_type(endpoint, graph)
+        }) {
+            self.bag.push(
+                Diagnostic::new(
+                    crate::compiler::E_INTERNAL_PLAN,
+                    Phase::Check,
+                    "normalized routing contradicts independent core validation",
+                )
+                .with_span(span)
+                .with_field("owner", graph.path.to_string())
+                .with_field("path", error.path.clone())
+                .with_field("detail", error.to_string()),
+            );
+        }
+    }
+
     /// `ack` deliberately has no graph-response half. Refuse that spelling at
     /// the source edge rather than letting Registry-free plan validation turn
     /// it into an internal-plan diagnostic after cycle analysis has correctly
@@ -601,10 +619,7 @@ impl Checker<'_, '_> {
         graph: &Graph,
     ) -> Option<(RouteRule, Vec<Edge>)> {
         let source_ty = endpoint_pinned_type(&source, graph);
-        let Some((source_ty, domain)) = source_ty
-            .as_ref()
-            .and_then(|ty| closed_case_domain(ty).map(|domain| (ty, domain)))
-        else {
+        let Some(domain) = source_ty.as_ref().and_then(closed_case_domain) else {
             self.bag.push(
                 Diagnostic::new(
                     E_MATCH_NOT_CLOSED,
@@ -730,12 +745,6 @@ impl Checker<'_, '_> {
             });
         }
         arms.sort_by(|left, right| left.cases.cmp(&right.cases));
-        self.verify_case_partition(
-            source_ty,
-            arms.iter().map(|arm| arm.cases.as_slice()),
-            route_match.span,
-            &endpoint_display(&source),
-        )?;
         let edges = arms
             .iter()
             .flat_map(|arm| physical_edges(&source, &arm.destinations))
@@ -1145,9 +1154,8 @@ pub(super) fn route_destination_display(destination: &RouteDestination) -> Strin
     }
 }
 
-/// The spatial projection used by the v15 cycle/type machinery while R3
-/// retains richer routing in HIR. Manager commands deliberately project to no
-/// edge: temporal recursion must never enter the spatial DAG.
+/// Endpoint pairs used by cycle and type analysis. Manager commands project
+/// to no edge: temporal recursion must never enter the spatial DAG.
 pub(super) fn physical_edges(source: &Endpoint, destinations: &[RouteDestination]) -> Vec<Edge> {
     destinations
         .iter()
@@ -1190,89 +1198,36 @@ pub(super) fn narrowed_route_type(ty: &DataType, cases: &[String]) -> Result<Dat
     }
 }
 
-pub(super) fn route_selection_arms(
-    selection: &RouteSelection,
-) -> Vec<(Option<&[String]>, &[RouteDestination])> {
-    match selection {
-        RouteSelection::All(destinations) => vec![(None, destinations)],
-        RouteSelection::Cases(arms) => arms
-            .iter()
-            .map(|arm| (Some(arm.cases.as_slice()), arm.destinations.as_slice()))
-            .collect(),
-    }
-}
-
-pub(super) fn route_case_overlap(left: Option<&[String]>, right: Option<&[String]>) -> Vec<String> {
-    match (left, right) {
-        (None, None) => vec![String::from("all")],
-        (None, Some(cases)) | (Some(cases), None) => cases.to_vec(),
-        (Some(left), Some(right)) => left
-            .iter()
-            .filter(|case| right.contains(case))
-            .cloned()
-            .collect(),
-    }
-}
-
-/// Detects conflicts in additive declarations for one source. `nothing` is an
-/// exclusive disposition even across declarations; real destinations remain
-/// additive, provided the exact same destination is not selected twice.
 pub(super) fn route_conflict(
     existing: &RouteRule,
     candidate: &RouteRule,
 ) -> Option<(Code, String, String)> {
-    if existing.source != candidate.source {
-        return None;
-    }
-    if matches!(existing.selection, RouteSelection::Cases(_))
-        && matches!(candidate.selection, RouteSelection::Cases(_))
-    {
-        return Some((
+    use crate::plan::RouteConflictKind;
+
+    let conflict = crate::plan::route_conflict(existing, candidate)?;
+    let case = conflict
+        .cases
+        .map_or_else(|| String::from("all"), |cases| cases.join("|"));
+    let (code, detail) = match conflict.kind {
+        RouteConflictKind::MultipleMatches => (
             E_MATCH_DUPLICATE,
             String::from("a source may have at most one closed route `match`"),
-            String::from("all"),
-        ));
-    }
-    for (left_cases, left_destinations) in route_selection_arms(&existing.selection) {
-        for (right_cases, right_destinations) in route_selection_arms(&candidate.selection) {
-            let overlap = route_case_overlap(left_cases, right_cases);
-            if overlap.is_empty() {
-                continue;
-            }
-            let case = overlap.join("|");
-            let left_discards = left_destinations.contains(&RouteDestination::Discard);
-            let right_discards = right_destinations.contains(&RouteDestination::Discard);
-            let left_real = left_destinations
-                .iter()
-                .any(|destination| *destination != RouteDestination::Discard);
-            let right_real = right_destinations
-                .iter()
-                .any(|destination| *destination != RouteDestination::Discard);
-            if (left_discards && right_real) || (right_discards && left_real) {
-                return Some((
-                    E_ROUTE_MIXED,
-                    String::from(
-                        "`nothing` cannot coexist with a real destination for the same source case",
-                    ),
-                    case,
-                ));
-            }
-            if let Some(duplicate) = left_destinations
-                .iter()
-                .find(|destination| right_destinations.contains(destination))
-            {
-                return Some((
-                    E_ROUTE_DUPLICATE,
-                    format!(
-                        "destination `{}` is selected twice for the same source case",
-                        route_destination_display(duplicate)
-                    ),
-                    case,
-                ));
-            }
-        }
-    }
-    None
+        ),
+        RouteConflictKind::MixedDiscard => (
+            E_ROUTE_MIXED,
+            String::from(
+                "`nothing` cannot coexist with a real destination for the same source case",
+            ),
+        ),
+        RouteConflictKind::DuplicateDestination(destination) => (
+            E_ROUTE_DUPLICATE,
+            format!(
+                "destination `{}` is selected twice for the same source case",
+                route_destination_display(&destination)
+            ),
+        ),
+    };
+    Some((code, detail, case))
 }
 
 /// The canonical text of one checked edge — the human face of

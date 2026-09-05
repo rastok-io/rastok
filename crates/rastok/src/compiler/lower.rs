@@ -502,7 +502,13 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                 detail: "a Graph Extension reached lowering without its complete categorical specification",
             });
         }
-        if graph.routes.iter().any(|route| route.v15_edge().is_none()) {
+        if graph.routes.iter().any(|route| {
+            !matches!(
+                &route.selection,
+                RouteSelection::All(destinations)
+                    if matches!(destinations.as_slice(), [RouteDestination::Port(_) | RouteDestination::Discard])
+            )
+        }) {
             return Err(LowerError {
                 owner: graph.path.to_string(),
                 detail: "route sets, case routing, and Loop manager commands require the categorical v16 plan",

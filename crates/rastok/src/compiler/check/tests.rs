@@ -469,6 +469,88 @@ on in { out = . }
 }
 
 #[test]
+fn additive_case_routes_have_one_identity_and_one_edge_per_destination() {
+    let source = |routes: &str| {
+        format!(
+            r#"
+graph g : App {{
+  input in: bool
+  operator audit {{ input in: bool ; on in {{ nothing }} }}
+  operator sink {{ input in: bool ; on in {{ nothing }} }}
+  {routes}
+}}
+"#
+        )
+    };
+    let split = check_clean(&source(
+        "in -> audit; in -> match { false -> sink; true -> sink }",
+    ));
+    let reversed = check_clean(&source(
+        "in -> match { true -> sink; false -> sink }; in -> audit",
+    ));
+    let grouped = check_clean(&source("in -> match { false | true -> { sink; audit } }"));
+    let expected = crate::compiler::lower::semantic_hash(&split);
+    for hir in [&split, &reversed, &grouped] {
+        assert_eq!(crate::compiler::lower::semantic_hash(hir), expected);
+        assert_eq!(
+            hir.app.edges.len(),
+            2,
+            "case membership is not edge identity"
+        );
+    }
+}
+
+#[test]
+fn additive_route_conflicts_keep_source_diagnostics_and_exact_cases() {
+    let universal = "in -> sink";
+    for (conditional, code, case) in [
+        (
+            "in -> match { false -> nothing; true -> audit }",
+            E_ROUTE_MIXED,
+            "false",
+        ),
+        (
+            "in -> match { false -> audit; true -> sink }",
+            E_ROUTE_DUPLICATE,
+            "true",
+        ),
+    ] {
+        for routes in [
+            format!("{universal}; {conditional}"),
+            format!("{conditional}; {universal}"),
+        ] {
+            let source = format!(
+                r#"
+graph g : App {{
+  input in: bool
+  operator audit {{ input in: bool ; on in {{ nothing }} }}
+  operator sink {{ input in: bool ; on in {{ nothing }} }}
+  {routes}
+}}
+"#
+            );
+            let (_, bag) = check_source(&source);
+            let error = bag
+                .diagnostics()
+                .iter()
+                .find(|error| error.code() == code)
+                .expect("the source conflict must remain a named diagnostic");
+            assert!(!error.spans().is_empty());
+            assert!(
+                error
+                    .fields()
+                    .iter()
+                    .any(|(key, value)| *key == "case" && value == case)
+            );
+            assert!(
+                !diagnostic_codes(&bag).contains(&crate::compiler::E_INTERNAL_PLAN),
+                "source mistakes must not become internal routing failures"
+            );
+        }
+    }
+}
+
+#[test]
 fn destination_sets_are_atomic_hir_not_duplicate_emissions() {
     let source = r#"
 graph g : App {
@@ -495,7 +577,10 @@ graph g : App {
         route_destination_display(&destinations[0]) < route_destination_display(&destinations[1]),
         "destination order is canonical, not source order"
     );
-    assert!(route.v15_edge().is_none());
+    assert!(
+        crate::compiler::lower::lower(&hir).is_err(),
+        "a destination set must not be approximated by a single edge"
+    );
 }
 
 #[test]

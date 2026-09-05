@@ -10,6 +10,8 @@ mod annotation_resolution;
 mod case_partition;
 mod dispatch;
 mod dispatch_validation;
+mod routing;
+mod routing_validation;
 mod serialization;
 mod type_resolution;
 mod validation;
@@ -20,6 +22,14 @@ pub use dispatch::{
     MAX_DISPATCH_DEPTH, MultiEmitValues, OpenArm,
 };
 pub use dispatch_validation::{DispatchErrorKind, DispatchValidationError, validate_dispatch};
+pub use routing::{
+    Endpoint, EndpointOwner, LoopCommandKind, LoopCommandTarget, RouteArm, RouteDestination,
+    RouteRule, RouteSelection,
+};
+pub use routing_validation::{
+    RouteConflict, RouteConflictKind, RouteErrorKind, RouteValidationError, route_conflict,
+    validate_routing,
+};
 pub(crate) use serialization::type_tree;
 pub use serialization::{DecodeError, FORMAT_VERSION, MAGIC, decode, encode};
 

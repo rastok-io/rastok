@@ -1,0 +1,264 @@
+//! Registry-free proof of static route selections and additive dispositions.
+
+use alloc::collections::BTreeMap;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use core::fmt;
+
+use super::{
+    CasePartitionError, Endpoint, RouteDestination, RouteRule, RouteSelection,
+    validate_case_partition,
+};
+use crate::datatype::DataType;
+
+#[cfg(test)]
+mod tests;
+
+/// Incompatibility between declarations for the same source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RouteConflictKind {
+    /// A source has more than one case match.
+    MultipleMatches,
+    /// Explicit discard and a real destination select the same value.
+    MixedDiscard,
+    /// One destination is selected twice for the same value.
+    DuplicateDestination(RouteDestination),
+}
+
+/// An additive conflict, with the affected cases rather than a source span.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteConflict {
+    /// `None` means all source values; otherwise the exact overlapping cases.
+    pub cases: Option<Vec<String>>,
+    /// The violated disposition rule.
+    pub kind: RouteConflictKind,
+}
+
+/// A malformed selection or conflict in the complete routing inventory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RouteErrorKind {
+    /// There is no independently resolved type for a case-routed source.
+    UnresolvedCaseSource,
+    /// A case table contradicts the resolved source type or canonical order.
+    CasePartition(CasePartitionError),
+    /// A selected value has no disposition; discard must be explicit.
+    EmptyDestinations,
+    /// The destination set is not in strictly canonical order.
+    DestinationOrder,
+    /// A destination occurs twice within one selected set.
+    DuplicateDestination(RouteDestination),
+    /// A selected set contains both discard and a real destination.
+    MixedDiscard,
+    /// Two declarations for one source conflict.
+    Conflict(RouteConflict),
+}
+
+/// Exact location of a failed routing proof, independent of source spans.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteValidationError {
+    /// Structural position in the supplied routing inventory.
+    pub path: String,
+    /// The contradicted invariant.
+    pub kind: RouteErrorKind,
+}
+
+impl RouteValidationError {
+    fn at(path: &str, kind: RouteErrorKind) -> Self {
+        Self {
+            path: path.to_string(),
+            kind,
+        }
+    }
+}
+
+impl fmt::Display for RouteValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: ", self.path)?;
+        match &self.kind {
+            RouteErrorKind::UnresolvedCaseSource => {
+                f.write_str("case-routed source has no resolved type")
+            }
+            RouteErrorKind::CasePartition(error) => fmt::Display::fmt(error, f),
+            RouteErrorKind::EmptyDestinations => {
+                f.write_str("a selected value needs a destination or explicit `nothing`")
+            }
+            RouteErrorKind::DestinationOrder => {
+                f.write_str("route destinations are not in canonical order")
+            }
+            RouteErrorKind::DuplicateDestination(_) => {
+                f.write_str("a destination occurs twice in one selected set")
+            }
+            RouteErrorKind::MixedDiscard => {
+                f.write_str("`nothing` cannot coexist with a real destination")
+            }
+            RouteErrorKind::Conflict(conflict) => {
+                match &conflict.kind {
+                    RouteConflictKind::MultipleMatches => {
+                        f.write_str("a source has more than one case match")?;
+                    }
+                    RouteConflictKind::MixedDiscard => {
+                        f.write_str("additive routes mix `nothing` with a real destination")?;
+                    }
+                    RouteConflictKind::DuplicateDestination(_) => {
+                        f.write_str("additive routes select the same destination twice")?;
+                    }
+                }
+                if let Some(cases) = &conflict.cases {
+                    write!(f, " for case(s) {}", cases.join("|"))?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl core::error::Error for RouteValidationError {}
+
+/// Checks canonical sets, closed case partitions and cross-declaration rules.
+///
+/// The supplied lookup must derive case-source types independently of route
+/// claims. It is not consulted for unconditional selections, which also work
+/// while source port types are being inferred. A case match always needs a
+/// resolved closed type. No selection is sorted, deduplicated or repaired.
+///
+/// This proves the selection algebra, not a whole execution plan. Callers must
+/// also establish endpoint existence/direction, destination type compatibility,
+/// lexical scope, capacities, productibility, and manager ownership/context.
+/// A manager destination is a command, not a physical delivery edge.
+///
+/// # Errors
+///
+/// Returns the first invalid selection or additive conflict, with its exact
+/// inventory position. The input inventory remains unchanged.
+pub fn validate_routing(
+    rules: &[RouteRule],
+    mut source_type: impl FnMut(&Endpoint) -> Option<DataType>,
+) -> Result<(), RouteValidationError> {
+    let mut by_source = BTreeMap::<&Endpoint, Vec<&RouteRule>>::new();
+    for (index, rule) in rules.iter().enumerate() {
+        let path = format!("routes[{index}].selection");
+        match &rule.selection {
+            RouteSelection::All(destinations) => {
+                validate_destinations(destinations, &format!("{path}.destinations"))?;
+            }
+            RouteSelection::Cases(arms) => {
+                let ty = source_type(&rule.source).ok_or_else(|| {
+                    RouteValidationError::at(
+                        &format!("routes[{index}].source"),
+                        RouteErrorKind::UnresolvedCaseSource,
+                    )
+                })?;
+                validate_case_partition(&ty, arms.iter().map(|arm| arm.cases.as_slice())).map_err(
+                    |error| {
+                        RouteValidationError::at(
+                            &format!("{path}.arms"),
+                            RouteErrorKind::CasePartition(error),
+                        )
+                    },
+                )?;
+                for (arm, selection) in arms.iter().enumerate() {
+                    validate_destinations(
+                        &selection.destinations,
+                        &format!("{path}.arms[{arm}].destinations"),
+                    )?;
+                }
+            }
+        }
+        let preceding = by_source.entry(&rule.source).or_default();
+        for existing in preceding.iter() {
+            if let Some(conflict) = route_conflict(existing, rule) {
+                return Err(RouteValidationError::at(
+                    &path,
+                    RouteErrorKind::Conflict(conflict),
+                ));
+            }
+        }
+        preceding.push(rule);
+    }
+    Ok(())
+}
+
+fn validate_destinations(
+    destinations: &[RouteDestination],
+    path: &str,
+) -> Result<(), RouteValidationError> {
+    if destinations.is_empty() {
+        return Err(RouteValidationError::at(
+            path,
+            RouteErrorKind::EmptyDestinations,
+        ));
+    }
+    if destinations.contains(&RouteDestination::Discard)
+        && destinations
+            .iter()
+            .any(|destination| *destination != RouteDestination::Discard)
+    {
+        return Err(RouteValidationError::at(path, RouteErrorKind::MixedDiscard));
+    }
+    for pair in destinations.windows(2) {
+        if pair[0] == pair[1] {
+            return Err(RouteValidationError::at(
+                path,
+                RouteErrorKind::DuplicateDestination(pair[1].clone()),
+            ));
+        }
+        if pair[0] > pair[1] {
+            return Err(RouteValidationError::at(
+                path,
+                RouteErrorKind::DestinationOrder,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Detects a conflict between two declarations without merging away evidence.
+///
+/// This also serves source diagnostics before the complete inventory is
+/// verified. It does not replace the canonical-set and partition proof.
+#[must_use]
+pub fn route_conflict(existing: &RouteRule, candidate: &RouteRule) -> Option<RouteConflict> {
+    if existing.source != candidate.source {
+        return None;
+    }
+    match (&existing.selection, &candidate.selection) {
+        (RouteSelection::Cases(_), RouteSelection::Cases(_)) => Some(RouteConflict {
+            cases: None,
+            kind: RouteConflictKind::MultipleMatches,
+        }),
+        (RouteSelection::All(left), RouteSelection::All(right)) => {
+            destination_conflict(left, right, None)
+        }
+        (RouteSelection::All(left), RouteSelection::Cases(arms)) => arms
+            .iter()
+            .find_map(|arm| destination_conflict(left, &arm.destinations, Some(&arm.cases))),
+        (RouteSelection::Cases(arms), RouteSelection::All(right)) => arms
+            .iter()
+            .find_map(|arm| destination_conflict(&arm.destinations, right, Some(&arm.cases))),
+    }
+}
+
+fn destination_conflict(
+    left: &[RouteDestination],
+    right: &[RouteDestination],
+    cases: Option<&[String]>,
+) -> Option<RouteConflict> {
+    let discards = |set: &[RouteDestination]| set.contains(&RouteDestination::Discard);
+    let delivers = |set: &[RouteDestination]| {
+        set.iter()
+            .any(|destination| *destination != RouteDestination::Discard)
+    };
+    let kind = if (discards(left) && delivers(right)) || (discards(right) && delivers(left)) {
+        RouteConflictKind::MixedDiscard
+    } else {
+        let duplicate = left
+            .iter()
+            .find(|destination| right.contains(destination))?;
+        RouteConflictKind::DuplicateDestination(duplicate.clone())
+    };
+    Some(RouteConflict {
+        cases: cases.map(<[String]>::to_vec),
+        kind,
+    })
+}

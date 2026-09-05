@@ -7,9 +7,9 @@ language or runtime behavior.
 The source/HIR checkpoint is
 [`rework-r3-source-hir.md`](rework-r3-source-hir.md). R4 is open at
 [`rework-r4-plan.md`](rework-r4-plan.md): the independent closed-case verifier
-is wired to both source consumers, and the shared core/HIR Dispatch now has an
-independent local expression and scope proof. Categorical v16 transport and
-execution remain pending.
+is wired to both source consumers. Core/HIR share Dispatch and routing, with
+independent local expression/scope checks and whole-inventory route conflict
+validation. Categorical v16 transport and execution remain pending.
 
 Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 

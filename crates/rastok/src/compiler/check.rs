@@ -1875,6 +1875,7 @@ impl Checker<'_, '_> {
         }
         self.materialize_boundary_ports(&mut graph);
         self.materialize_node_edge_ports(&mut graph);
+        self.verify_routing(&graph, decl.span);
         self.reject_cycles(&graph, decl.span);
         self.warn_unwired_outputs(&graph);
         graph
