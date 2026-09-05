@@ -169,6 +169,10 @@ pub const E_LOOP_HOST: Code = Code::new("E-LOOP-HOST");
 pub const E_LOOP_ENTRY: Code = Code::new("E-LOOP-ENTRY");
 /// Loop has no unambiguous set of ordinary outputs supplying natural Done.
 pub const E_LOOP_TERMINAL: Code = Code::new("E-LOOP-TERMINAL");
+/// A Call route could issue several verdicts in one Loop application.
+pub const E_LOOP_CARDINALITY: Code = Code::new("E-LOOP-CARDINALITY");
+/// Recurrence could repeat an effect without a repeat-safety guarantee.
+pub const E_LOOP_EFFECT: Code = Code::new("E-LOOP-EFFECT");
 /// A second Operator handler names the same activation.
 pub const E_HANDLER_DUPLICATE: Code = Code::new("E-HANDLER-DUPLICATE");
 /// A Graph body tries to own application code; move it into an Operator.
@@ -3217,10 +3221,9 @@ impl Checker<'_, '_> {
             let fault: Option<String> = match (&spec.domain, &attribute.value) {
                 (contract::ValueDomain::Choice(words), AttrValue::Word(word)) => {
                     if words.contains(&word.as_str()) {
-                        // The runtime companions — idempotency keys
-                        // and `on compensate` — are not executable in
-                        // this subset; admitting the words without
-                        // their invariants would be a silent lie.
+                        // Accepting an effect word must not imply support for
+                        // its execution protocol. Only the repeat-safe classes
+                        // have an executable contract in this build.
                         if attribute.name == "effect"
                             && !matches!(word.as_str(), "none" | "idempotent")
                         {

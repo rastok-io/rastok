@@ -766,6 +766,7 @@ impl Checker<'_, '_> {
         span: Span,
         cases: Option<&[String]>,
     ) -> Option<()> {
+        self.validate_call_command_route(source, destinations, cases, graph, span)?;
         let source_ty = endpoint_pinned_type(source, graph);
         let selected_ty = match source_ty.as_ref() {
             Some(ty) => match narrowed_route_type(ty, cases.unwrap_or(&[])) {

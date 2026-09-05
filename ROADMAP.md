@@ -241,8 +241,11 @@ takes semantic priority; no public date overrides its R0–R9 exit gates.
   independently verifies closed-case partitions, local Dispatch expressions
   and scopes, and canonical route sets with cross-declaration conflicts.
   Dispatch and routing share one algebra with HIR; source consumers use those
-  proofs, and the duplicate hosted conflict implementation is removed. The
-  single categorical v16 move remains pending, as listed in
+  proofs, and the duplicate hosted conflict implementation is removed.
+  Contract-derived Call profiles now replace the special-case Loop host test
+  and check direct own-command routes for frame cardinality and repeat-safe
+  effects. Full Loop control and the single categorical v16 move remain
+  pending, as listed in
   [`rework-r4-plan.md`](docs/architecture/rework-r4-plan.md).
 - M1.9 is paused until R9. Its retained design implements the optional hosted
   execution UI: `run --ui` and

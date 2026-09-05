@@ -8,6 +8,12 @@
 use alloc::boxed::Box;
 use core::fmt;
 
+mod call;
+
+pub use call::{
+    CallCommandError, CallSemantics, FrameProduction, TerminalVisibility, outbound_call_semantics,
+};
+
 /// The standard Process contract's stable major-version identity.
 pub const PROCESS_CONNECTOR_ID: &str = "rastok/process@1";
 

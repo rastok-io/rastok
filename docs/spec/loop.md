@@ -389,6 +389,7 @@ refinement.Loop.expired -> alert
 | `E-LOOP-TERMINAL` | terminal set is absent, contradictory, or ill-typed |
 | `E-LOOP-CONTEXT` | work cannot be associated with one exact run |
 | `E-LOOP-CONTROL` | a reachable path has zero or competing verdicts |
+| `E-LOOP-CARDINALITY` | a Call output can issue more than one command per application |
 | `E-LOOP-EFFECT` | recurrence could repeat a non-repeat-safe effect |
 | `E-UNWIRED-OUTPUT` | productible `Loop.expired` has no disposition |
 | `LoopNoVerdict` | dynamic quiescence found no verdict |

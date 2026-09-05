@@ -558,39 +558,26 @@ impl Checker<'_, '_> {
             return None;
         }
 
-        let connector_call = match &node.semantics {
-            NodeSemantics::Operator => false,
-            NodeSemantics::Connector {
-                contract,
-                roles,
-                exchange,
-                attributes,
-            } => {
-                let service_process = contract.as_str() == crate::connector::PROCESS_CONNECTOR_ID
-                    && attributes.iter().any(|attribute| {
-                        attribute.name == "mode"
-                            && matches!(&attribute.value, AttrValue::Word(word) if word == "service")
-                    });
-                if *exchange != crate::connector::ConnectorExchange::Call
-                    || !roles.has_outbound()
-                    || roles.has_inbound()
-                    || service_process
-                {
+        let call_semantics = match &node.semantics {
+            NodeSemantics::Operator => None,
+            NodeSemantics::Connector { contract, .. } => {
+                let Some(profile) = connector_call_semantics(node) else {
                     self.bag.push(
                         Diagnostic::new(
                             E_LOOP_HOST,
                             Phase::Check,
-                            "Loop requires an envelope-triggered finite Executor: an Operator or an outbound Call Connector",
+                            "Loop requires an Operator or a resolved outbound Call Contract with closed frame and terminal guarantees",
                         )
                         .with_span(owner_span)
                         .with_field("node", node.path.to_string())
                         .with_field("contract", contract.to_string()),
                     );
                     return None;
-                }
-                true
+                };
+                Some(profile)
             }
         };
+        let connector_call = call_semantics.is_some();
 
         let mut selected: BTreeMap<String, &SynAttribute> = BTreeMap::new();
         let mut invalid = false;
@@ -709,6 +696,22 @@ impl Checker<'_, '_> {
             .iter()
             .filter(|port| port.direction == Direction::Output)
             .collect();
+        if let Some(profile) = call_semantics
+            && (input_ports.len() != 1 || entry.name() != profile.request())
+        {
+            self.bag.push(
+                Diagnostic::new(
+                    E_LOOP_ENTRY,
+                    Phase::Check,
+                    "a Loop Call admits only its Contract's sole request input",
+                )
+                .with_span(owner_span)
+                .with_field("node", node.path.to_string())
+                .with_field("expected", profile.request())
+                .with_field("found", entry.to_string()),
+            );
+            return None;
+        }
         let mut terminals = if connector_call {
             if let Some(attribute) = selected.get("terminal") {
                 self.bag.push(
@@ -1157,6 +1160,92 @@ impl Checker<'_, '_> {
                 .with_field("detail", detail),
         );
     }
+
+    pub(super) fn validate_call_command_route(
+        &mut self,
+        source: &Endpoint,
+        destinations: &[RouteDestination],
+        cases: Option<&[String]>,
+        graph: &Graph,
+        span: Span,
+    ) -> Option<()> {
+        use crate::connector::CallCommandError;
+
+        let EndpointOwner::Node(path) = &source.owner else {
+            return Some(());
+        };
+        let Some(node) = node_at_path(graph, path).filter(|node| node.loop_spec.is_some()) else {
+            return Some(());
+        };
+        let Some(contract) = connector_call_semantics(node) else {
+            return Some(());
+        };
+        for destination in destinations {
+            let RouteDestination::LoopCommand(target) = destination else {
+                continue;
+            };
+            if target.owner != source.owner {
+                continue;
+            }
+            let effect = node.attributes().iter().find_map(|attribute| {
+                if attribute.name != "effect" {
+                    return None;
+                }
+                let AttrValue::Word(word) = &attribute.value else {
+                    return None;
+                };
+                match word.as_str() {
+                    "none" => Some(node::Effect::None),
+                    "idempotent" => Some(node::Effect::Class(node::EffectClass::Idempotent)),
+                    "compensable" => Some(node::Effect::Class(node::EffectClass::Compensable)),
+                    "irreversible" => Some(node::Effect::Class(node::EffectClass::Irreversible)),
+                    _ => None,
+                }
+            })?;
+            if let Err(error) =
+                contract.validate_command(source.port.name(), cases, target.kind, effect)
+            {
+                let code = match &error {
+                    CallCommandError::RepeatedFrames => E_LOOP_CARDINALITY,
+                    CallCommandError::UnsafeRecurrence { .. } => E_LOOP_EFFECT,
+                    CallCommandError::UnknownPort | CallCommandError::UnknownCase(_) => {
+                        crate::compiler::E_INTERNAL_PLAN
+                    }
+                };
+                self.bag.push(
+                    Diagnostic::new(code, Phase::Check, error.to_string())
+                        .with_span(span)
+                        .with_field("source", endpoint_display(source))
+                        .with_field("destination", route_destination_display(destination))
+                        .with_field("effect", effect.to_string()),
+                );
+                return None;
+            }
+        }
+        Some(())
+    }
+}
+
+fn connector_call_semantics(node: &Node) -> Option<crate::connector::CallSemantics> {
+    let NodeSemantics::Connector {
+        contract,
+        roles,
+        exchange,
+        attributes,
+    } = &node.semantics
+    else {
+        return None;
+    };
+    let mode = attributes.iter().find_map(|attribute| {
+        if attribute.name != "mode" {
+            return None;
+        }
+        match &attribute.value {
+            AttrValue::Word(word) => Some(word.as_str()),
+            _ => None,
+        }
+    });
+    crate::connector::outbound_call_semantics(contract, *roles, *exchange, mode)
 }
 
 pub(super) fn graph_loop_entry_type(graph: &Graph) -> Option<DataType> {

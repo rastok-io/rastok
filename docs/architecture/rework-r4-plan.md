@@ -1,6 +1,6 @@
 # R4 — categorical plan and independent validation
 
-> **Status (2026-09-05): open, third validation checkpoint.** R3 is
+> **Status (2026-09-05): open, fourth validation checkpoint.** R3 is
 > committed separately from the paused M1.9 UI. The encoded package remains
 > **v15**; no v16 tag, journal key, Contract major or golden is allocated by
 > this checkpoint.
@@ -124,7 +124,41 @@ types/narrowing, lexical scope, capacities, productibility and manager
 ownership/context. This checkpoint does not turn source routing into an
 executable v15 approximation or introduce a second spatial-edge authority.
 
-## 5. Evidence
+## 5. Contract-derived Call guarantees
+
+Core now derives `CallSemantics` from the exact Contract identity, direction,
+exchange lifecycle and resolved profile. The closed inventories cover Process
+job, File read/replace and HttpClient. They specify the sole request input,
+exactly-once terminal output, frame production and conservative terminal
+visibility from R1. Unknown Contracts, other majors and inadmissible profiles
+receive no inferred guarantees. Construction is private; a serialized claim
+cannot manufacture a more permissive profile.
+
+The source checker uses these facts for Loop host admission instead of a
+Process-specific service exception. For direct routes from a Call output to
+its own Loop command, the shared proof checks:
+
+- streamed Process frames cannot establish an at-most-one verdict guarantee,
+  even with an idempotent effect: `E-LOOP-CARDINALITY`;
+- `Next` and `Again` after possible visibility require `none` or `idempotent`:
+  `E-LOOP-EFFECT`; compensation alone is not repeat safety;
+- a `before_effect` terminal case permits repetition, while `Done` does not
+  repeat the effect;
+- File read and HttpClient produce a single response only on `Completed`;
+  File replace produces no response frame.
+
+These inventories describe the existing `@1` outcomes without changing those
+contracts or their transport. The six `@2` moves still belong to the single
+v16 transition. The new source forms still refuse at packaging; the global
+execution gate for compensable/irreversible effects is not relaxed.
+
+**Boundary of this proof:** this is direct Call-to-own-manager validation,
+not whole-application Loop control. Full v16 validation must also establish
+exact run context, finite timeouts, frame/exit command uniqueness, selected
+value types, intermediate routes and the effects of a repeated Graph body.
+No manager execution or ContractViolation runtime gate is claimed here.
+
+## 6. Evidence
 
 Seven core tests cover bool, enum and tagged union; unsupported/open domains;
 missing, unknown and duplicated cases; empty arms; case/arm order; absence of
@@ -173,7 +207,26 @@ Contract version or golden changes. Cortex-M33 before/after is identical:
 heap peak (1,100 B margin), 5,640 B after open, 67 records, unchanged echo hash
 and `SPIKE_OK`.
 
-## 6. Remaining R4 work
+The fourth checkpoint adds eight core Call tests and three compiler tests.
+Terminal inventories are compared with independently constructed exit types;
+unknown identity/profile combinations refuse. The battery checks all **432**
+terminal-case/effect/command combinations across the four admissible profiles,
+the conservative visibility rows, repeated/single/absent frames, and exact
+case selection. Source probes verify the specific cardinality/effect
+diagnostics and that valid local proofs do not bypass packaging or the
+existing effect-execution gate. The new diagnostic regression failed before
+the implementation with only the generic effect deferral, not an admitted
+unsafe execution.
+
+Fourth checkpoint gates: **1,090 workspace tests passed**, zero failures;
+fmt, workspace/all-targets/all-features clippy with warnings denied, cargo doc,
+diff checks and all three `no_std` targets pass. No dependency, package,
+Contract major or golden changes; the echo, JSONL and gauge witnesses remain
+unchanged. Cortex-M33 before/after retains 17,840 decode ticks, 2,713 average /
+2,966 maximum relay ticks, **129,972 B** heap peak (1,100 B margin), 5,640 B after
+open, 67 records, the echo hash and `SPIKE_OK`.
+
+## 7. Remaining R4 work
 
 R4 remains open. The complete representation must still carry recursive
 Dispatch in the encoded plan, case route selections separate from physical

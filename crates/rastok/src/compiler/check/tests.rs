@@ -1723,6 +1723,95 @@ Loop.fuel = 3
 }
 
 #[test]
+fn connector_loop_routes_refuse_unsafe_repetition_and_unbounded_verdicts() {
+    for (routes, expected) in [
+        (
+            "call.out -> nothing; call.exit -> match { TimeoutExpired -> call.Loop.again; _ -> nothing }",
+            Code::new("E-LOOP-EFFECT"),
+        ),
+        (
+            "call.out -> call.Loop.done; call.exit -> nothing",
+            Code::new("E-LOOP-CARDINALITY"),
+        ),
+    ] {
+        let source = format!(
+            r#"
+graph g : App {{
+  input in: text
+  connector call : Process + Loop {{
+    mode = job
+    command = "cat"
+    codec = lines
+    effect = irreversible
+    behavior = deterministic
+    Loop.fuel = 3
+  }}
+  in -> call
+  call.err -> nothing
+  {routes}
+}}
+"#
+        );
+        let (_, bag) = check_source(&source);
+        assert!(
+            diagnostic_codes(&bag).contains(&expected),
+            "{expected} must be diagnosed before packaging: {:#?}",
+            bag.diagnostics()
+        );
+    }
+}
+
+#[test]
+fn a_before_effect_retry_does_not_weaken_the_existing_effect_execution_gate() {
+    let source = r#"
+graph g : App {
+  connector call : Process + Loop {
+    command = "cat"
+    codec = lines
+    effect = irreversible
+    behavior = deterministic
+    Loop.fuel = 3
+  }
+  call.out -> nothing
+  call.err -> nothing
+  call.exit -> match { SpawnFailed -> call.Loop.again; _ -> nothing }
+}
+"#;
+    let (_, bag) = check_source(source);
+    assert!(!diagnostic_codes(&bag).contains(&E_LOOP_EFFECT));
+    assert!(!diagnostic_codes(&bag).contains(&E_LOOP_HOST));
+    assert!(
+        diagnostic_codes(&bag).contains(&E_CHECK_DEFERRED),
+        "repeat safety does not admit a globally deferred effect class"
+    );
+    let (_, repeated) = check_source(&source.replace("SpawnFailed ->", "Exited ->"));
+    assert!(diagnostic_codes(&repeated).contains(&E_LOOP_EFFECT));
+}
+
+#[test]
+fn a_single_http_response_can_supply_one_idempotent_recurrence_command() {
+    let source = r#"
+graph g : App {
+  input in: bytes
+  connector call : HttpClient + Loop {
+    url = "https://example.test"
+    codec = bytes
+    timeout = duration("1s")
+    effect = idempotent
+    behavior = probabilistic
+    Loop.fuel = 3
+  }
+  in -> call
+  call.out -> call.Loop.again
+  call.exit -> nothing
+}
+"#;
+    let hir = check_clean(source);
+    let error = crate::compiler::lower::lower(&hir).expect_err("v16 transport is still required");
+    assert!(error.detail.contains("categorical v16"));
+}
+
+#[test]
 fn multi_emission_is_one_ordered_atomic_hir_statement() {
     let source = r#"
 graph g : App {
