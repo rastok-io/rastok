@@ -58,6 +58,41 @@ fn raw_probe() -> ExecutionPlan {
 }
 
 #[test]
+fn a_connector_cannot_acquire_a_dsl_handler_from_a_raw_plan() {
+    let mut raw = raw_probe();
+    let target = raw
+        .nodes
+        .iter()
+        .position(|node| node.connector().is_some())
+        .unwrap();
+    let node = raw.nodes[target].path.clone();
+    raw.handlers.push(plan::Handler {
+        owner: Slot::new(u32::try_from(target).unwrap()),
+        activation: node::HandlerActivation::Port(Port::new("in").unwrap()),
+        guard: None,
+        dispatch: plan::Dispatch::Linear(vec![]),
+    });
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(raw).unwrap_err(),
+        PlanValidationError::NonOperatorHandler { node }
+    );
+}
+
+#[test]
+fn a_handler_owner_is_bounds_checked_before_any_signature_is_derived() {
+    let mut raw = raw_probe();
+    let node_count = raw.nodes.len();
+    raw.handlers[0].owner = Slot::new(u32::MAX);
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(raw).unwrap_err(),
+        PlanValidationError::SlotOutOfBounds {
+            slot: Slot::new(u32::MAX),
+            node_count,
+        }
+    );
+}
+
+#[test]
 fn raw_commands_require_an_owning_loop_application() {
     let variants = [
         (
@@ -738,7 +773,7 @@ fn closing_budgets_and_stop_recursion_are_registry_free_invariants() {
         annotations: Default::default(),
     });
     recursive.handlers.push(plan::Handler {
-        owner: plan::HandlerOwner::Node(Slot::new(0)),
+        owner: Slot::new(0),
         activation: rastok::node::HandlerActivation::Lifecycle(rastok::node::Lifecycle::Stop),
         guard: None,
         dispatch: rastok_core::plan::Dispatch::Linear(vec![DispatchStep::Stop]),
@@ -1931,12 +1966,7 @@ graph attributed : App {
     let pair = forged
         .handlers
         .iter_mut()
-        .find(|handler| {
-            handler
-                .owner
-                .node()
-                .is_some_and(|slot| forged.nodes[slot.index()].path.to_string() == "pair")
-        })
+        .find(|handler| forged.nodes[handler.owner.index()].path.to_string() == "pair")
         .expect("the join handler");
     let DispatchStep::Emit {
         value: plan::Emission::FreshData(writes),

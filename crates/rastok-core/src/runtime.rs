@@ -739,9 +739,11 @@ impl<'plan> HandlerExecutor<'plan> {
         state: &BTreeMap<String, Value>,
         instance_values: &BTreeMap<String, Value>,
     ) -> Result<bool, Fault> {
-        let Some(handler) = self.plan.handlers.iter().find(|handler| {
-            handler.owner.node() == Some(slot) && &handler.activation == candidate.activation
-        }) else {
+        let Some(handler) =
+            self.plan.handlers.iter().find(|handler| {
+                handler.owner == slot && &handler.activation == candidate.activation
+            })
+        else {
             return Err(Fault::MissingHandler);
         };
         let Some(guard) = &handler.guard else {
@@ -948,9 +950,7 @@ impl<'plan> HandlerExecutor<'plan> {
             .handlers
             .iter()
             .zip(self.plan.handler_context())
-            .find(|(handler, _)| {
-                handler.owner.node() == Some(slot) && &handler.activation == activation
-            });
+            .find(|(handler, _)| handler.owner == slot && &handler.activation == activation);
         let Some((handler, time_use)) = handler else {
             if matches!(
                 activation,
@@ -1358,7 +1358,7 @@ impl<'plan> HandlerExecutor<'plan> {
                     ));
                 }
                 let join_within = self.plan.handlers.iter().find_map(|handler| {
-                    (handler.owner.node() == Some(target))
+                    (handler.owner == target)
                         .then_some(&handler.activation)
                         .and_then(|activation| match activation {
                             node::HandlerActivation::Join {
@@ -1622,7 +1622,7 @@ impl<'plan> HandlerExecutor<'plan> {
         self.plan
             .handlers
             .iter()
-            .find(|handler| handler.owner.node() == Some(slot) && handler.activation == *activation)
+            .find(|handler| handler.owner == slot && handler.activation == *activation)
     }
 }
 

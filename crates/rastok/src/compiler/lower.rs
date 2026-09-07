@@ -25,7 +25,7 @@ use crate::expr;
 use crate::node;
 use crate::plan::{
     AttrSetting, ClosingPolicy as PlanClosingPolicy, ConnectorSpec, DispatchStep, Edge, Emission,
-    EndpointRef, EvaluationSite, ExecutionPlan, ExtensionSpec, FieldWrite, Handler, HandlerOwner,
+    EndpointRef, EvaluationSite, ExecutionPlan, ExtensionSpec, FieldWrite, Handler,
     InstanceLifetime as PlanInstanceLifetime, InstanceSpec, LoopDelay as PlanLoopDelay,
     LoopSpec as PlanLoopSpec, Node, NodeExecution, Owner, OwnerKind, OwnerPath, OwnerSlot,
     OwnerValue, PlanConstant, SemanticHash, Slot, SymbolTable, VarCell,
@@ -652,7 +652,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         handlers.sort_by_key(|handler| handler.activation.canonical_key());
         for handler in handlers {
             plan.handlers.push(Handler {
-                owner: HandlerOwner::Node(slot),
+                owner: slot,
                 activation: handler.activation.clone(),
                 guard: handler.admission_guard.as_ref().map(&subst),
                 dispatch: lower_dispatch(&handler.dispatch, &subst),
@@ -660,14 +660,11 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         }
     }
     plan.handlers.sort_by(|left, right| {
-        left.owner
-            .cmp(&right.owner)
-            .then_with(|| {
-                left.activation
-                    .canonical_key()
-                    .cmp(&right.activation.canonical_key())
-            })
-            .then_with(|| left.canonical_order_key().cmp(&right.canonical_order_key()))
+        left.owner.cmp(&right.owner).then_with(|| {
+            left.activation
+                .canonical_key()
+                .cmp(&right.activation.canonical_key())
+        })
     });
     plan.routes = routing::flatten(&hir.app).map_err(|error| LowerError {
         owner: endpoint_text(&error.source),
@@ -2292,7 +2289,7 @@ graph m0_probe : App {
         );
         assert_eq!(plan.handlers.len(), 1);
         let handler = &plan.handlers[0];
-        assert_eq!(handler.owner.node().map(|slot| slot.index()), Some(0));
+        assert_eq!(handler.owner.index(), 0);
         assert_eq!(
             handler.activation,
             node::HandlerActivation::Port(node::Port::new("in").unwrap())

@@ -219,13 +219,8 @@ fn v16_retains_one_operator_loop_without_a_graph_handler_or_command_port() {
         port.port.name(),
         "next" | "Loop.next" | "Loop.again" | "Loop.done"
     )));
-    assert!(matches!(
-        compiled.handlers.as_slice(),
-        [rastok::plan::Handler {
-            owner: rastok::plan::HandlerOwner::Node(_),
-            ..
-        }]
-    ));
+    assert_eq!(compiled.handlers.len(), 1);
+    assert_eq!(compiled.handlers[0].owner, rastok::plan::Slot::new(0));
 
     let (decoded, declared) = plan::decode(&bytes).expect("v16 revalidates Loop Registry-free");
     assert_eq!(decoded, compiled);

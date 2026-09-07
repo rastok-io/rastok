@@ -462,6 +462,20 @@ The negative check temporarily lowered the bound to 100 KiB: the same workload
 exited with status 1 and `SPIKE_HEAP_LIMIT`, without `SPIKE_OK`. The bound was
 restored to 128 KiB, rebuilt and rerun successfully before committing.
 
+### Raw Graph-handler cleanup (2026-09-07)
+
+The next core change was preceded by the same 106,244 B peak measurement.
+After removing the retired handler-owner/activation states, their unused
+proof branches and the full-handler ordering tie-break, the same candidate
+and 67-record workload retain **106,244 B** peak and 6,440 B after opening.
+The heap margin remains **24,828 B (18.94%)**, without changing the gate.
+Decode takes 21,270 ticks; relay takes **1,462 / 1,415 / 1,656** ticks, with
+the unchanged calibration of 39,999 ticks per 2,000,000 instructions.
+`.text` is 732,308 B and `.rodata` 64,600 B: **796,908 B** total, a reduction
+of **25,792 B** from the preceding checkpoint. `SPIKE_OK`, the candidate
+semantic hash and the separate three-witness package/causal ledger checks
+are unchanged. Graph Loop and complete recovery remain unqualified paths.
+
 From the repository root (the crate must be built from its own
 directory — its `.cargo/config.toml` sets the target and linker
 script, and Cargo only reads that file from the working directory):

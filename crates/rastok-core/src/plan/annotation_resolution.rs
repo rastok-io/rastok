@@ -16,8 +16,8 @@ use crate::schema_annotation::{AnnotationTable, SchemaPathSegment};
 
 use super::type_resolution::ResolvedPortTable;
 use super::{
-    DispatchStep, Emission, EndpointRef, ExecutionPlan, ExtensionSpec, Handler, HandlerOwner,
-    OwnerKind, OwnerSlot, Slot,
+    DispatchStep, Emission, EndpointRef, ExecutionPlan, ExtensionSpec, Handler, OwnerKind,
+    OwnerSlot, Slot,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -373,10 +373,7 @@ impl<'a> Solver<'a> {
                         }
                         DispatchStep::SetVar { name, value: expr } => {
                             let key = VarKey {
-                                node: handler.owner.node().ok_or_else(|| ResolutionError {
-                                    location: format!("handler {handler_index} var `{name}`"),
-                                    reason: PropagationError::UnknownBinding(name.clone()),
-                                })?,
+                                node: handler.owner,
                                 name: name.clone(),
                             };
                             let derived =
@@ -606,12 +603,12 @@ impl<'a> Solver<'a> {
             .with("now", DataType::TIMESTAMP, AnnotationTable::empty());
         let mut ordinary_input = None;
         match (handler.owner, &handler.activation) {
-            (HandlerOwner::Node(slot), node::HandlerActivation::Port(port)) => {
+            (slot, node::HandlerActivation::Port(port)) => {
                 let state = self.port(&PortKey::Node(slot, port.clone()))?;
                 environment.insert("data", state.ty.clone(), state.current.clone());
                 ordinary_input = Some(state.current.clone());
             }
-            (HandlerOwner::Node(slot), node::HandlerActivation::Join { ports, .. }) => {
+            (slot, node::HandlerActivation::Join { ports, .. }) => {
                 for port in ports {
                     let state = self.port(&PortKey::Node(slot, port.clone()))?;
                     environment.insert(
@@ -626,7 +623,7 @@ impl<'a> Solver<'a> {
                     );
                 }
             }
-            (HandlerOwner::Node(slot), node::HandlerActivation::Lifecycle(_)) => {
+            (slot, node::HandlerActivation::Lifecycle(_)) => {
                 let inputs: Vec<_> = self
                     .ports
                     .values()
@@ -649,45 +646,9 @@ impl<'a> Solver<'a> {
                     ordinary_input = Some(table);
                 }
             }
-            (HandlerOwner::Graph(owner), node::HandlerActivation::Port(port)) => {
-                let key = self.graph_port_key(owner, port.name())?;
-                let state = self.port(&key)?;
-                environment.insert("data", state.ty.clone(), state.current.clone());
-                ordinary_input = Some(state.current.clone());
-            }
-            (HandlerOwner::Graph(_), node::HandlerActivation::ChildPort { child, port }) => {
-                let key = self.child_port_key(child, port)?;
-                let state = self.port(&key)?;
-                environment.insert("data", state.ty.clone(), state.current.clone());
-                ordinary_input = Some(state.current.clone());
-            }
-            (HandlerOwner::Graph(owner), node::HandlerActivation::Lifecycle(_)) => {
-                let inputs: Vec<_> = self
-                    .graph_port_states(owner)
-                    .into_iter()
-                    .filter(|state| state.direction == node::Direction::Input)
-                    .collect();
-                if let Some(first) = inputs.first() {
-                    let table = alternatives(inputs.iter().map(|state| state.current.clone()))
-                        .map_err(|reason| ResolutionError {
-                            location: format!(
-                                "Graph lifecycle handler `{}`",
-                                self.plan.owners[owner.index()].path
-                            ),
-                            reason,
-                        })?;
-                    environment.insert("data", first.ty.clone(), table.clone());
-                    ordinary_input = Some(table);
-                }
-            }
-            (HandlerOwner::Graph(_), node::HandlerActivation::Join { .. })
-            | (HandlerOwner::Node(_), node::HandlerActivation::ChildPort { .. }) => {}
         }
 
-        let owner = match handler.owner {
-            HandlerOwner::Node(slot) => self.plan.nodes[slot.index()].owner,
-            HandlerOwner::Graph(owner) => owner,
-        };
+        let owner = self.plan.nodes[handler.owner.index()].owner;
         let lexical = self.owner_environment(owner, None)?;
         for (name, binding) in lexical.bindings() {
             environment.insert(
@@ -700,28 +661,15 @@ impl<'a> Solver<'a> {
             environment.insert("instance.key", ty, annotations);
         }
 
-        if let HandlerOwner::Node(slot) = handler.owner {
-            for state in self.vars.values().filter(|state| state.key.node == slot) {
-                environment.insert(
-                    state.key.name.clone(),
-                    state.ty.clone(),
-                    state.current.clone(),
-                );
-            }
-        }
-        if let HandlerOwner::Graph(owner) = handler.owner
-            && self.plan.owners[owner.index()]
-                .extensions
-                .iter()
-                .any(|aspect| matches!(aspect, ExtensionSpec::Loop(_)))
+        for state in self
+            .vars
+            .values()
+            .filter(|state| state.key.node == handler.owner)
         {
-            let key = self.graph_port_key(owner, "in")?;
-            let state = self.port(&key)?;
-            environment.insert("Loop.state.data", state.ty.clone(), state.current.clone());
             environment.insert(
-                "Loop.state.meta",
-                DataType::Variant,
-                AnnotationTable::empty(),
+                state.key.name.clone(),
+                state.ty.clone(),
+                state.current.clone(),
             );
         }
         Ok((environment, ordinary_input))
@@ -780,15 +728,8 @@ impl<'a> Solver<'a> {
         Ok(Some(result))
     }
 
-    fn handler_output(
-        &self,
-        owner: HandlerOwner,
-        port: &node::Port,
-    ) -> Result<PortKey, ResolutionError> {
-        let key = match owner {
-            HandlerOwner::Node(slot) => PortKey::Node(slot, port.clone()),
-            HandlerOwner::Graph(slot) => self.graph_port_key(slot, port.name())?,
-        };
+    fn handler_output(&self, owner: Slot, port: &node::Port) -> Result<PortKey, ResolutionError> {
+        let key = PortKey::Node(owner, port.clone());
         self.port(&key)?;
         Ok(key)
     }
@@ -821,41 +762,6 @@ impl<'a> Solver<'a> {
                 )
                 .collect()
         }
-    }
-
-    fn child_port_key(
-        &self,
-        child: &node::Path,
-        port: &node::Port,
-    ) -> Result<PortKey, ResolutionError> {
-        if let Some((index, _)) = self
-            .plan
-            .nodes
-            .iter()
-            .enumerate()
-            .find(|(_, node)| node.path == *child)
-        {
-            let key = PortKey::Node(
-                Slot::new(u32::try_from(index).unwrap_or(u32::MAX)),
-                port.clone(),
-            );
-            self.port(&key)?;
-            return Ok(key);
-        }
-        if let Some((index, _)) = self.plan.owners.iter().enumerate().find(|(_, owner)| {
-            owner.kind == OwnerKind::Graph && owner.path.segments() == child.segments()
-        }) {
-            let key = PortKey::Graph(
-                OwnerSlot::new(u32::try_from(index).unwrap_or(u32::MAX)),
-                port.clone(),
-            );
-            self.port(&key)?;
-            return Ok(key);
-        }
-        Err(ResolutionError {
-            location: format!("child port `{child}.{port}`"),
-            reason: PropagationError::UnknownBinding(format!("{child}.{port}")),
-        })
     }
 
     fn port(&self, key: &PortKey) -> Result<&PortState, ResolutionError> {

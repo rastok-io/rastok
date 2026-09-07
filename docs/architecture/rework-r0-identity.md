@@ -62,6 +62,9 @@ wave.
 - `behavior = deterministic | probabilistic` remains the Connector attribute.
 - the Rust/HIR name `ConnectorId` becomes `ContractId`, but its validated text,
   wire representation and semantic role are unchanged.
+- removing the retired raw handler-owner enum leaves each valid handler's
+  owner encoded as `[1, operator_slot]`. Owner tag 2 and activation tag 4
+  still refuse by name; removing their Rust variants is not another wire move.
 - App/public-boundary semantics remain, despite App moving from `node::Type` to
   `Extension` in source/HIR.
 

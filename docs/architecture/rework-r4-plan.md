@@ -561,11 +561,13 @@ type pins survive flattening and receive hostile-package tests. Finer
 case-productibility deductions remain conservative rather than trusting a
 serialized impossibility claim.
 
-The Graph application path has been removed from HIR and the VM:
-`__graph_handler`, `fire_graph`, `LoopWork`, and the child-observation activation
-queue are gone. Retired raw handler-owner/activation variants and their unused
-validator/projection branches still need removal; no supported package can
-admit them. Graph lifecycle facts remain controller-owned, as required by R0.
+The Graph application path has been removed from HIR, the raw plan and the VM:
+`__graph_handler`, `fire_graph`, `LoopWork`, `HandlerOwner::Graph`, and the
+child-observation activation queue are gone. Handler ownership is an Operator
+slot; independent validation rejects Connector targets and out-of-bounds slots.
+The obsolete Graph-handler proof and UI projection are removed too. Retired
+wire tags still refuse by name; valid v16 handler bytes are unchanged. Graph
+lifecycle facts remain controller-owned, as required by R0.
 
 Still open, without a claim of closure:
 
@@ -573,14 +575,13 @@ Still open, without a claim of closure:
   from descendant Executors;
 - complete spatial RecoveryFold, including retained temporal obligations;
 - finer closed-case productibility proofs and full boundary-context recovery;
-- removal of retired raw Graph-handler variants and their dead branches;
 - migration of the old Loop/UI fixtures, then the single golden blessing;
 - the complete post-cutover qualification matrix.
 
-Latest Cortex-M33 candidate measurement after the R4 review: **106,244 B**
-heap against 131,072 B, **24,828 B (18.94%)** margin; worst relay 1,657 ticks
+Latest Cortex-M33 candidate measurement after the raw-plan cleanup: **106,244 B**
+heap against 131,072 B, **24,828 B (18.94%)** margin; worst relay 1,656 ticks
 at 39,999 calibration ticks per 2,000,000 instructions, approximately 82.9 k
-instructions against 150 k. Text + rodata: **822,700 B**, below 1 MiB.
+instructions against 150 k. Text + rodata: **796,908 B**, below 1 MiB.
 Indirect record packets recovered the reserve/reallocation cost without
 dropping history; retained timing adds 256 B to that measurement. The spike
 now refuses `SPIKE_OK` and exits unsuccessfully above the 128 KiB heap gate,
@@ -664,3 +665,54 @@ The failing test-name multiset is unchanged: 26 old Loop/Graph/UI-form tests
 and seven categorical expectations. None was ignored, deleted or weakened;
 R9 must migrate each former form or name its removal. No package or trace
 golden was re-blessed. **R4–R9 and the whole workspace are still not qualified.**
+
+## 13. Retire raw Graph-handler states — 2026-09-07
+
+`Handler` now owns an Operator `Slot` directly. The Graph-owner variant and
+core child-output activation no longer exist, nor do their validator,
+annotation-environment and synthetic UI-topology branches. The source parser
+still recognizes the removed child-output spelling only to report its named
+migration refusal. Graph lifecycle facts are unaffected. Graph Loop remains
+explicitly gated on routed run contexts and causal quiescence; deleting the
+old Graph-handler proof does not pretend to implement that manager.
+
+The hostile raw-plan regression exposed a real admission hole: a valid plan
+could acquire a DSL handler on its Process Connector and still validate.
+The test first failed with an accepted plan. Independent validation now returns
+`NonOperatorHandler`, and a second test proves that an out-of-bounds owner
+returns `SlotOutOfBounds` before any signature derivation. The existing
+canonical-node-order refusal retains its diagnostic priority.
+
+The five former Graph-handler measure tests now exercise command Dispatch
+through `verify_dispatch`: exact decreases, nondecrease/unbounded refusal,
+forged certificates, last-write semantics and unproved invariants. They were
+migrated, not deleted. The obsolete UI test
+`topology_separates_graph_handler_choices_from_spatial_edges` is replaced by
+`topology_projects_scope_wiring_without_synthetic_handler_edges`, which checks
+a nested Graph's real spatial wiring and absence of fabricated handler edges.
+This is removal of the retired projection, not resumed UI development.
+
+There is **no new format or identity move**. A byte-exact codec test pins
+`[1, operator_slot]` and a complete minimal handler, then independently forges
+owner tag 2 and activation tag 4 and requires their named refusals. One
+owner/activation has one Dispatch, so the obsolete full-body ordering
+tie-break is removed. Echo, JSONL and gauge candidate bodies, hashes,
+checksums and every scenario seal match the preceding checkpoint exactly.
+
+| Check actually executed on this cleanup | Result |
+|---|---|
+| fmt, `git diff --check` | pass |
+| workspace/all-targets/all-features clippy, warnings denied | pass |
+| `cargo doc --workspace --no-deps` | pass |
+| `cargo test --workspace --all-features --no-fail-fast` | **1,155 passed, 32 failed**, 31 suite reports, zero ignored |
+| core / independent plan validation / v16 Loop | **306 / 75 / 22 passed** |
+| all three no-std targets listed in §11 | pass |
+| Cortex-M33 | `SPIKE_OK`; 106,244 B peak; 1,656 worst relay ticks; 796,908 B text + rodata |
+| echo, JSONL, gauge candidate package and causal ledgers | unchanged; no re-bless |
+
+The failing test-name multiset loses exactly the migrated topology test and
+gains none: **25** remaining old Loop/Graph/UI-form tests and **seven**
+categorical expectations. The embedded heap margin is unchanged at 24,828 B;
+linked text and read-only data shrink by **25,792 B**. This cleanup closes the
+retired raw-state item, not the remaining Graph Loop, full recovery or R9
+qualification gates.

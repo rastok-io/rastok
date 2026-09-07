@@ -268,17 +268,10 @@ impl<'plan> Solver<'plan> {
             }
         }
         for handler in &self.plan.handlers {
-            let Some(node) = handler.owner.node() else {
-                // Graph boundaries carried by v15 are fully pinned and their
-                // handlers are verified against that contract by plan
-                // validation. They do not participate in the flattened Node
-                // port fixed point.
-                continue;
-            };
+            let node = handler.owner;
             let node_index = node.index();
             let input_ports: Vec<node::Port> = match &handler.activation {
                 node::HandlerActivation::Port(port) => alloc::vec![port.clone()],
-                node::HandlerActivation::ChildPort { .. } => Vec::new(),
                 node::HandlerActivation::Join { ports, .. } => ports.clone(),
                 node::HandlerActivation::Lifecycle(_) => self.plan.nodes[node_index]
                     .ports

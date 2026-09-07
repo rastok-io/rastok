@@ -2147,7 +2147,7 @@ impl<'plan> Vm<'plan> {
                     // scan, so the common single-port path stays allocation
                     // free.
                     let join_owned = self.plan.handlers.iter().any(|handler| {
-                        handler.owner.node() == Some(slot)
+                        handler.owner == slot
                             && matches!(
                                 &handler.activation,
                                 node::HandlerActivation::Join { ports, .. }
@@ -3325,7 +3325,7 @@ impl<'plan> Vm<'plan> {
                 return false;
             }
             let join_owned = self.plan.handlers.iter().any(|handler| {
-                handler.owner.node() == Some(slot)
+                handler.owner == slot
                     && matches!(
                         &handler.activation,
                         node::HandlerActivation::Join { ports, .. }
@@ -3421,7 +3421,7 @@ impl<'plan> Vm<'plan> {
                 return true;
             }
             let join_owned = self.plan.handlers.iter().any(|handler| {
-                handler.owner.node() == Some(slot)
+                handler.owner == slot
                     && matches!(
                         &handler.activation,
                         node::HandlerActivation::Join { ports, .. }
@@ -4340,7 +4340,7 @@ impl<'plan> Vm<'plan> {
             .plan
             .handlers
             .iter()
-            .filter(|handler| handler.owner.node() == Some(slot))
+            .filter(|handler| handler.owner == slot)
             .collect();
         let join_owns = |port: &node::Port| {
             handlers.iter().any(|handler| {
@@ -6326,7 +6326,7 @@ impl<'plan> Vm<'plan> {
                                 unreachable!("capacity was reserved before the commit")
                             });
                         let join_within = self.plan.handlers.iter().find_map(|handler| {
-                            (handler.owner.node() == Some(target))
+                            (handler.owner == target)
                                 .then_some(&handler.activation)
                                 .and_then(|activation| match activation {
                                     node::HandlerActivation::Join {

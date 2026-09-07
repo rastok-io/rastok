@@ -216,6 +216,11 @@ authority for containment, instances, lifetime, Closing, and managers.
 Connector's exact versioned `ContractId` remains transported in its
 specification.
 
+An application handler targets an Operator slot, never a Graph owner. The
+independent plan validator rejects a Connector target and an out-of-bounds
+slot before a handler can execute. This does not remove controller-owned
+Graph lifecycle facts from the journal.
+
 The historical `AspectSpec` tag and `rastok.aspects.r1` domain are never
 reinterpreted. V15 refuses categorically once v16 lands.
 

@@ -6,10 +6,7 @@ use crate::envelope::{Data, MetaValue, Namespace, Scalar, Value};
 use crate::identity::InstanceRef;
 use crate::journal::{Journal, MemJournal, OutboundRecord, OutboundStatus, Record, SessionStatus};
 use crate::observation::ExchangeCorrelation;
-use crate::plan::{
-    DispatchStep, ExecutionPlan, HandlerOwner, NodeExecution, OwnerSlot, Slot,
-    ValidatedExecutionPlan,
-};
+use crate::plan::{NodeExecution, Slot, ValidatedExecutionPlan};
 use crate::runtime::vm::{
     CallDirectionInspection, CallReferenceInspection, InstancePhaseInspection,
     SessionDirectionInspection, Vm, VmInspection,
@@ -633,13 +630,10 @@ fn topology(
             })
         })
         .collect::<Vec<_>>();
-    let (control_nodes, handler_relations) = graph_handler_relations(plan);
     json!({
         "nodes": nodes,
         "owners": owners,
         "edges": edges,
-        "control_nodes": control_nodes,
-        "handler_relations": handler_relations,
         "activity": activity.map(|activity| json!({
             "ordinal": activity.ordinal,
             "kind": activity.kind,
@@ -656,301 +650,6 @@ fn topology(
                 "phase": phase,
             })).collect::<Vec<_>>(),
         })),
-    })
-}
-
-/// Projects Graph-owned handler choices separately from spatial topology.
-///
-/// A Graph handler consumes no spatial edge between its child trigger and the
-/// Graph boundary output. Drawing one as an ordinary edge would invent a
-/// mailbox and an envelope route. These relations are therefore explicit
-/// presentation facts: they are derived from the validated handler table,
-/// carry no queue state, and never enter plan or journal identity.
-fn graph_handler_relations(plan: &ExecutionPlan) -> (Vec<JsonValue>, Vec<JsonValue>) {
-    type RelationKey = (usize, String, String, String, String);
-
-    let node_slots = plan
-        .nodes
-        .iter()
-        .enumerate()
-        .map(|(slot, node)| (node.path.to_string(), slot))
-        .collect::<BTreeMap<_, _>>();
-    let graph_slots = plan
-        .owners
-        .iter()
-        .enumerate()
-        .filter(|(_, owner)| owner.kind == crate::plan::OwnerKind::Graph)
-        .map(|(slot, owner)| (owner.path.to_string(), slot))
-        .collect::<BTreeMap<_, _>>();
-    let mut control_nodes = BTreeMap::<String, JsonValue>::new();
-    let mut relations = BTreeMap::<RelationKey, (JsonValue, JsonValue)>::new();
-
-    for handler in &plan.handlers {
-        let HandlerOwner::Graph(owner_slot) = handler.owner else {
-            continue;
-        };
-        let owner = &plan.owners[owner_slot.index()];
-        let owner_id = format!("owner:{}", owner_slot.index());
-        let (source_identity, source, activation) = match &handler.activation {
-            crate::node::HandlerActivation::Port(port) => (
-                format!("{owner_id}:input:{port}"),
-                graph_boundary_endpoint_json(plan, owner_slot, port, crate::node::Direction::Input),
-                port.to_string(),
-            ),
-            crate::node::HandlerActivation::ChildPort { child, port } => {
-                let child_path = child.to_string();
-                let endpoint = if let Some(slot) = node_slots.get(&child_path) {
-                    json!({
-                        "id": format!("node:{slot}"),
-                        "kind": "node",
-                        "label": JsonValue::Null,
-                        "port": port.name(),
-                    })
-                } else if let Some(slot) = graph_slots.get(&child_path) {
-                    graph_boundary_endpoint_json(
-                        plan,
-                        OwnerSlot::new(u32::try_from(*slot).unwrap_or(u32::MAX)),
-                        port,
-                        crate::node::Direction::Output,
-                    )
-                } else {
-                    debug_assert!(false, "validated Graph handler child must exist");
-                    continue;
-                };
-                let relative_child = child
-                    .segments()
-                    .get(owner.path.segments().len()..)
-                    .filter(|segments| !segments.is_empty())
-                    .map_or_else(|| child_path.clone(), |segments| segments.join("."));
-                (
-                    format!("child:{child_path}:{port}"),
-                    endpoint,
-                    format!("{relative_child}.{port}"),
-                )
-            }
-            crate::node::HandlerActivation::Lifecycle(lifecycle) => {
-                let control_id = format!("control:{owner_id}:lifecycle:{lifecycle}");
-                control_nodes.entry(control_id.clone()).or_insert_with(|| {
-                    control_node_json(
-                        &control_id,
-                        &owner_id,
-                        &format!("on {lifecycle}"),
-                        &format!("l:{lifecycle}"),
-                    )
-                });
-                (
-                    format!("lifecycle:{lifecycle}"),
-                    json!({
-                        "id": control_id,
-                        "kind": "control",
-                        "label": JsonValue::Null,
-                        "port": format!("l:{lifecycle}"),
-                    }),
-                    format!("l:{lifecycle}"),
-                )
-            }
-            crate::node::HandlerActivation::Join { ports, .. } => {
-                let activation = format!(
-                    "({})",
-                    ports
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-                let source_port = handler.activation.canonical_key();
-                let control_id = format!("control:{owner_id}:{source_port}");
-                control_nodes.entry(control_id.clone()).or_insert_with(|| {
-                    control_node_json(&control_id, &owner_id, "join", &source_port)
-                });
-                (
-                    source_port.clone(),
-                    json!({
-                        "id": control_id,
-                        "kind": "control",
-                        "label": JsonValue::Null,
-                        "port": source_port,
-                    }),
-                    activation,
-                )
-            }
-        };
-
-        for (port, _) in handler.dispatch.steps().flat_map(DispatchStep::emissions) {
-            let relation_kind = if port.name() == "next" {
-                "temporal"
-            } else {
-                "handler"
-            };
-            let target = graph_boundary_endpoint_json(
-                plan,
-                owner_slot,
-                port,
-                crate::node::Direction::Output,
-            );
-            relations
-                .entry((
-                    owner_slot.index(),
-                    source_identity.clone(),
-                    activation.clone(),
-                    port.to_string(),
-                    String::from(relation_kind),
-                ))
-                .or_insert_with(|| (source.clone(), target));
-        }
-    }
-
-    // `expired` is emitted by the Loop manager rather than by an authored
-    // handler. Showing that producer closes the visual explanation without
-    // pretending that a spatial edge or mailbox exists.
-    for (owner_index, owner) in plan.owners.iter().enumerate() {
-        if owner.kind != crate::plan::OwnerKind::Graph
-            || !owner
-                .extensions
-                .iter()
-                .any(|aspect| matches!(aspect, crate::plan::ExtensionSpec::Loop(_)))
-        {
-            continue;
-        }
-        let owner_slot = OwnerSlot::new(u32::try_from(owner_index).unwrap_or(u32::MAX));
-        let Some(expired) = plan.graph_ports(owner_slot).and_then(|ports| {
-            ports.iter().find(|port| {
-                port.direction == crate::node::Direction::Output && port.port.name() == "expired"
-            })
-        }) else {
-            continue;
-        };
-        let owner_id = format!("owner:{owner_index}");
-        let control_id = format!("control:{owner_id}:loop");
-        control_nodes
-            .entry(control_id.clone())
-            .or_insert_with(|| control_node_json(&control_id, &owner_id, "Loop manager", "fuel"));
-        relations
-            .entry((
-                owner_index,
-                String::from("loop-manager"),
-                String::from("Loop fuel exhausted"),
-                String::from("expired"),
-                String::from("manager"),
-            ))
-            .or_insert_with(|| {
-                (
-                    json!({
-                    "id": control_id,
-                    "kind": "control",
-                    "label": JsonValue::Null,
-                    "port": "fuel",
-                    }),
-                    graph_boundary_endpoint_json(
-                        plan,
-                        owner_slot,
-                        &expired.port,
-                        crate::node::Direction::Output,
-                    ),
-                )
-            });
-    }
-
-    let first_index = plan.edges.len();
-    let mut labelled_sources = BTreeSet::new();
-    let relations = relations
-        .into_iter()
-        .enumerate()
-        .map(
-            |(
-                offset,
-                (
-                    (owner_index, source_identity, activation, target_port, relation_kind),
-                    (source, target),
-                ),
-            )| {
-                let owner = &plan.owners[owner_index];
-                let owner_label = if owner.path.is_root() {
-                    String::from("App")
-                } else {
-                    owner.path.to_string()
-                };
-                let show_label = relation_kind != "manager"
-                    && labelled_sources.insert((
-                        owner_index,
-                        source_identity.clone(),
-                        activation.clone(),
-                    ));
-                let description = format!(
-                    "{} may emit {owner_label}.{target_port}",
-                    if relation_kind == "manager" {
-                        String::from("Loop manager")
-                    } else {
-                        format!("on {activation}")
-                    },
-                );
-                json!({
-                    "index": first_index + offset,
-                    "route": format!(
-                        "@control:{owner_index}:{source_identity}>{target_port}"
-                    ),
-                    "relation": relation_kind,
-                    "owner": format!("owner:{owner_index}"),
-                    "activation": activation,
-                    "label": if show_label { "on" } else { "" },
-                    "show_label": show_label,
-                    "description": description,
-                    "source": source,
-                    "target": target,
-                })
-            },
-        )
-        .collect();
-
-    (control_nodes.into_values().collect(), relations)
-}
-
-fn graph_boundary_endpoint_json(
-    plan: &ExecutionPlan,
-    owner_slot: OwnerSlot,
-    port: &crate::node::Port,
-    direction: crate::node::Direction,
-) -> JsonValue {
-    let owner = &plan.owners[owner_slot.index()];
-    let direction_name = match direction {
-        crate::node::Direction::Input => "input",
-        crate::node::Direction::Output => "output",
-    };
-    let id = if owner.path.is_root() {
-        format!("boundary:{direction_name}:{port}")
-    } else {
-        format!(
-            "boundary:owner:{}:{direction_name}:{port}",
-            owner_slot.index()
-        )
-    };
-    json!({
-        "id": id,
-        "kind": direction_name,
-        "label": format!(
-            "{} {direction_name}",
-            if owner.path.is_root() {
-                String::from("App")
-            } else {
-                owner.path.to_string()
-            },
-        ),
-        "owner": format!("owner:{}", owner_slot.index()),
-        "port": port.name(),
-    })
-}
-
-fn control_node_json(id: &str, owner: &str, label: &str, port: &str) -> JsonValue {
-    json!({
-        "id": id,
-        "owner": owner,
-        "kind": "control",
-        "label": label,
-        "path": JsonValue::Null,
-        "type": "control",
-        "extensions": [],
-        "ports": [{ "name": port, "direction": "output" }],
-        "inspect_owner": owner,
     })
 }
 
@@ -1755,57 +1454,45 @@ graph inspected : App {
     }
 
     #[test]
-    fn topology_separates_graph_handler_choices_from_spatial_edges() {
-        let source = include_str!("../../../../examples/keyed-retry.rkg");
+    fn topology_projects_scope_wiring_without_synthetic_handler_edges() {
+        let source = r#"
+          graph app : App {
+            input in: text
+            output out: text
+            graph inner {
+              input in: text
+              output out: text
+              operator relay {
+                input in: text
+                output out: text
+                on in { out = data }
+              }
+              in -> relay -> out
+            }
+            in -> inner -> out
+          }"#;
         let compilation = crate::compiler::compile(
             &[source],
-            &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
+            &crate::contract::ContractCatalog::try_m0().unwrap(),
         )
-        .expect("the UI tour compiles");
+        .unwrap();
         let journal = MemJournal::new(crate::plan::GraphVersion(1));
         let vm = Vm::boot(&compilation.plan, crate::plan::GraphVersion(1));
-        let inspection = vm.inspection();
-        let active_instances = active_instance_lifecycles(&journal);
-
         let value = topology(
             &compilation.plan,
             &compilation.source_definitions,
-            &inspection,
+            &vm.inspection(),
             &journal,
-            &active_instances,
+            &active_instance_lifecycles(&journal),
             None,
         );
-        let relations = value["handler_relations"]
-            .as_array()
-            .expect("control relations have their own table");
-        let model_targets = relations
-            .iter()
-            .filter(|relation| relation["activation"] == "model.exit")
-            .map(|relation| {
-                relation["target"]["port"]
-                    .as_str()
-                    .expect("a Graph result port")
-            })
-            .collect::<BTreeSet<_>>();
-        assert_eq!(model_targets, BTreeSet::from(["done", "failed", "next"]));
-        assert!(relations.iter().any(|relation| {
-            relation["target"]["port"] == "next" && relation["relation"] == "temporal"
-        }));
-        assert!(relations.iter().any(|relation| {
-            relation["target"]["port"] == "expired"
-                && relation["relation"] == "manager"
-                && relation.get("queued_count").is_none()
-        }));
-        assert!(
-            value["control_nodes"]
-                .as_array()
-                .is_some_and(|nodes| nodes.iter().any(|node| node["label"] == "Loop manager"))
-        );
-        assert!(
-            value["edges"]
-                .as_array()
-                .is_some_and(|edges| edges.iter().all(|edge| edge["target"]["kind"] != "output"))
-        );
+        assert!(value.get("handler_relations").is_none());
+        assert!(value.get("control_nodes").is_none());
+        let edges = value["edges"].as_array().unwrap();
+        assert_eq!(edges.len(), compilation.plan.edges.len());
+        assert_eq!(edges.len(), 2);
+        assert!(edges.iter().any(|edge| edge["target"]["kind"] == "output"));
+        assert_eq!(value["nodes"][0]["path"], "inner.relay");
     }
 
     #[test]

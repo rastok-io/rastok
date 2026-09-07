@@ -49,9 +49,10 @@ pub(super) fn may_produce(plan: &ExecutionPlan, slot: Slot, port: &node::Port) -
             .is_none_or(|spec| spec.proof.is_none() || spec.fuel.is_some());
     }
     match &node.execution {
-        NodeExecution::Operator => plan.handlers.iter().any(|handler| {
-            handler.owner == HandlerOwner::Node(slot) && handler.dispatch.may_emit(port)
-        }),
+        NodeExecution::Operator => plan
+            .handlers
+            .iter()
+            .any(|handler| handler.owner == slot && handler.dispatch.may_emit(port)),
         NodeExecution::Connector(connector) => !connector
             .call_semantics()
             .is_some_and(|call| call.frame_production(port.name()) == Some(FrameProduction::Never)),

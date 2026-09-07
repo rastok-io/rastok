@@ -31,10 +31,10 @@ use crate::identity::encoding::value_tagged;
 use crate::node;
 use crate::plan::{
     AttrSetting, ClosingPolicy, ConnectorSpec, DispatchStep, Edge, Emission, EndpointRef,
-    EvaluationSite, ExecutionPlan, ExtensionSpec, FieldWrite, Handler, HandlerOwner,
-    InstanceLifetime, InstanceSpec, LoopDelay, LoopSpec, Node, NodeExecution, Owner, OwnerKind,
-    OwnerPath, OwnerSlot, OwnerValue, PlanConstant, PlanValidationError, PortDecl, SemanticHash,
-    Slot, ValidatedExecutionPlan, VarCell,
+    EvaluationSite, ExecutionPlan, ExtensionSpec, FieldWrite, Handler, InstanceLifetime,
+    InstanceSpec, LoopDelay, LoopSpec, Node, NodeExecution, Owner, OwnerKind, OwnerPath, OwnerSlot,
+    OwnerValue, PlanConstant, PlanValidationError, PortDecl, SemanticHash, Slot,
+    ValidatedExecutionPlan, VarCell,
 };
 use crate::schema_annotation::{
     AnnotationSet, AnnotationTable, CostAnnotation, CostBasis, CurrencyCode, DataAnnotation,
@@ -665,11 +665,6 @@ fn handler_tree(handler: &Handler) -> Cbor {
         node::HandlerActivation::Port(port) => {
             Cbor::Array(vec![Cbor::Uint(1), Cbor::Text(port.name().to_string())])
         }
-        node::HandlerActivation::ChildPort { child, port } => Cbor::Array(vec![
-            Cbor::Uint(4),
-            Cbor::Text(child.to_string()),
-            Cbor::Text(port.name().to_string()),
-        ]),
         node::HandlerActivation::Join {
             ports,
             within_ns,
@@ -689,24 +684,16 @@ fn handler_tree(handler: &Handler) -> Cbor {
             Cbor::Array(vec![Cbor::Uint(2), Cbor::Uint(lifecycle_tag(*lifecycle))])
         }
     };
-    let owner = match handler.owner {
-        HandlerOwner::Node(slot) => {
-            Cbor::Array(vec![Cbor::Uint(1), Cbor::Uint(slot.index() as u64)])
-        }
-        HandlerOwner::Graph(slot) => {
-            Cbor::Array(vec![Cbor::Uint(2), Cbor::Uint(slot.index() as u64)])
-        }
-    };
+    let owner = Cbor::Array(vec![
+        Cbor::Uint(1),
+        Cbor::Uint(handler.owner.index() as u64),
+    ]);
     let mut pairs = BTreeMap::from([(1, owner), (2, activation)]);
     if let Some(guard) = &handler.guard {
         pairs.insert(3, tree_tree(guard));
     }
     pairs.insert(4, fields::dispatch_tree(&handler.dispatch));
     Cbor::Map(pairs)
-}
-
-pub(super) fn handler_order_key(handler: &Handler) -> Vec<u8> {
-    canonical_cbor::encode(&handler_tree(handler))
 }
 
 const fn lifecycle_tag(lifecycle: node::Lifecycle) -> u64 {
@@ -2288,7 +2275,7 @@ fn endpoint_from(tree: &Cbor) -> Result<EndpointRef, DecodeError> {
 fn handler_from(tree: &Cbor) -> Result<Handler, DecodeError> {
     let pairs = map_of(tree, "handler")?;
     let owner = match array_of(get(pairs, 1, "handler owner")?, "handler owner")? {
-        [Cbor::Uint(1), index] => HandlerOwner::Node(Slot::new(u32_from(index, "handler node")?)),
+        [Cbor::Uint(1), index] => Slot::new(u32_from(index, "handler node")?),
         [Cbor::Uint(2), ..] => return Err(err("retired Graph handler owner")),
         _ => return Err(err("handler owner")),
     };
@@ -2968,6 +2955,46 @@ mod tests {
 
     fn text(name: &str) -> String {
         String::from(name)
+    }
+
+    #[test]
+    fn handler_owner_bytes_stay_fixed_and_retired_tags_stay_unreadable() {
+        let handler = Handler {
+            owner: Slot::new(0),
+            activation: node::HandlerActivation::Port(node::Port::new("in").unwrap()),
+            guard: None,
+            dispatch: crate::plan::Dispatch::Linear(vec![]),
+        };
+        let tree = handler_tree(&handler);
+        assert_eq!(
+            canonical_cbor::encode(&tree),
+            [
+                0xa3, 1, 0x82, 1, 0, 2, 0x82, 1, 0x62, b'i', b'n', 4, 0x82, 1, 0x80
+            ]
+        );
+        assert_eq!(handler_from(&tree).unwrap(), handler);
+        for (key, value, refusal) in [
+            (
+                1,
+                Cbor::Array(vec![Cbor::Uint(2), Cbor::Uint(0)]),
+                "retired Graph handler owner",
+            ),
+            (
+                2,
+                Cbor::Array(vec![
+                    Cbor::Uint(4),
+                    Cbor::Text(text("child")),
+                    Cbor::Text(text("out")),
+                ]),
+                "retired child-output activation",
+            ),
+        ] {
+            let Cbor::Map(mut fields) = tree.clone() else {
+                unreachable!()
+            };
+            fields.insert(key, value);
+            assert_eq!(handler_from(&Cbor::Map(fields)), Err(err(refusal)));
+        }
     }
 
     fn port(name: &str) -> node::Port {
@@ -3835,7 +3862,7 @@ mod tests {
                 },
             ],
             handlers: vec![Handler {
-                owner: HandlerOwner::Node(Slot::new(0)),
+                owner: Slot::new(0),
                 activation: node::HandlerActivation::Port(port("in")),
                 guard: Some(tree(expr.clone())),
                 dispatch: crate::plan::Dispatch::Linear(vec![
@@ -3910,7 +3937,7 @@ mod tests {
             boundary: vec![],
             edges: vec![],
             handlers: vec![Handler {
-                owner: HandlerOwner::Node(Slot::new(0)),
+                owner: Slot::new(0),
                 activation: node::HandlerActivation::Port(port("in")),
                 guard: None,
                 dispatch: crate::plan::Dispatch::Linear(vec![DispatchStep::Let {

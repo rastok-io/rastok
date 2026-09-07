@@ -134,7 +134,6 @@ impl Checker<'_, '_> {
         // inferred effective type.
         let declared_data_type = fixed_data_type.or_else(|| match &activation {
             node::HandlerActivation::Port(port) => node_port_pin(node, port),
-            node::HandlerActivation::ChildPort { .. } => None,
             node::HandlerActivation::Join { .. } => None,
             node::HandlerActivation::Lifecycle(_) => {
                 let mut inputs = node
@@ -307,10 +306,7 @@ impl Checker<'_, '_> {
         }
         if !is_join
             && where_guard.is_some()
-            && !matches!(
-                &activation,
-                node::HandlerActivation::Port(_) | node::HandlerActivation::ChildPort { .. }
-            )
+            && !matches!(&activation, node::HandlerActivation::Port(_))
         {
             self.bag.push(
                 Diagnostic::new(
@@ -1321,16 +1317,6 @@ pub(super) fn same_handler_trigger(
         (node::HandlerActivation::Lifecycle(left), node::HandlerActivation::Lifecycle(right)) => {
             left == right
         }
-        (
-            node::HandlerActivation::ChildPort {
-                child: left_child,
-                port: left_port,
-            },
-            node::HandlerActivation::ChildPort {
-                child: right_child,
-                port: right_port,
-            },
-        ) => left_child == right_child && left_port == right_port,
         (
             node::HandlerActivation::Join {
                 ports: left_ports, ..

@@ -1,16 +1,13 @@
 //! Small, deterministic certificates for finite `Loop` recursion.
 //!
 //! This module is deliberately narrower than the expression evaluator. A
-//! proof is accepted only when every recurrent handler exposes one direct
-//! affine decrease that this `no_std` verifier can re-derive from the shipped
+//! proof is accepted only when every recurrent Dispatch leaf exposes one direct
+//! literal decrease that this `no_std` verifier can re-derive from the shipped
 //! handler table. Unsupported mathematics is a refusal, never an assumption.
 
 use crate::envelope::WriteTarget;
 use crate::expr::{self, BinaryOp, Expr};
-use crate::node;
-use crate::plan::{
-    Dispatch, DispatchStep, Emission, Handler, HandlerOwner, LoopCommand, OwnerSlot,
-};
+use crate::plan::{Dispatch, DispatchStep, Emission, LoopCommand};
 use crate::value::Value;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -18,12 +15,10 @@ use core::fmt;
 
 /// One canonical termination certificate.
 ///
-/// `decreases` is the sorted multiset of exact positive decrements from every
-/// handler owned by the Loop Graph which emits `next`. Sorting makes the
-/// witness independent of source and table order while retaining duplicate
-/// paths. The verifier derives the same multiset from the handler expressions
-/// and requires byte-for-byte agreement; the list is evidence, never
-/// authority.
+/// `decreases` is the sorted multiset of literal strict decrements on every
+/// recurrent Dispatch leaf. Sorting removes decision-table order but retains
+/// repeated decrements. Validation re-derives the exact multiset; the shipped
+/// list is evidence, never authority.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Certificate {
     /// Integer-valued ranking expression over the iteration input.
@@ -64,7 +59,7 @@ impl fmt::Display for Error {
             Self::UnsupportedInvariant => {
                 "the Loop invariant cannot be established at entry by this proof gate"
             }
-            Self::UnsupportedActivation => "a recurrent path is not a direct Graph input handler",
+            Self::UnsupportedActivation => "the Loop measure requires a supported entry Dispatch",
             Self::AmbiguousRecurrence => {
                 "a recurrent handler does not select exactly one next state"
             }
@@ -83,84 +78,21 @@ impl fmt::Display for Error {
 
 impl core::error::Error for Error {}
 
-/// Verifies a certificate against the canonical handler table.
-///
-/// The initial fragment proves a direct signed-integer ranking path such as
-/// `data.n`, guarded by `data.n > 0` (or an equivalent stronger bound), and
-/// updated as `data.n - k` for a positive integer literal `k`. This is enough
-/// to establish that no infinite sequence of `next` decisions exists. The
-/// ordinary Loop control proof remains responsible for exhaustive terminal
-/// versus recurrent decisions.
+/// Independently re-derive the complete certificate from the entry Dispatch.
 ///
 /// # Errors
-///
-/// Any expression, activation, invariant, guard, update, or witness outside
-/// that closed fragment is refused with an [`Error`].
-pub fn verify(
-    owner: OwnerSlot,
-    certificate: &Certificate,
-    handlers: &[Handler],
-) -> Result<(), Error> {
-    let derived = derive(
-        owner,
+/// Unsupported decisions or recurrence, or a witness multiset which differs
+/// from the one derived from every recurrent leaf.
+pub fn verify_dispatch(certificate: &Certificate, dispatch: &Dispatch) -> Result<(), Error> {
+    let derived = derive_dispatch(
         certificate.measure.clone(),
         certificate.invariant.clone(),
-        handlers,
+        dispatch,
     )?;
     if derived.decreases != certificate.decreases {
         return Err(Error::CertificateMismatch);
     }
     Ok(())
-}
-
-/// Derives the canonical certificate for the first supported proof fragment.
-///
-/// The hosted compiler uses this constructor to ship evidence. Validation
-/// calls [`verify`] after decode and derives the same evidence again; a
-/// transported list is therefore never trusted.
-///
-/// # Errors
-///
-/// The same closed-fragment refusals as [`verify`].
-pub fn derive(
-    owner: OwnerSlot,
-    measure: expr::Tree,
-    invariant: Option<expr::Tree>,
-    handlers: &[Handler],
-) -> Result<Certificate, Error> {
-    let measure_path = measure_path(&measure)?;
-    if invariant.as_ref().is_some_and(|tree| !is_true(tree)) {
-        return Err(Error::UnsupportedInvariant);
-    }
-
-    let mut derived = Vec::new();
-    for handler in handlers
-        .iter()
-        .filter(|handler| handler.owner == HandlerOwner::Graph(owner))
-    {
-        let Some(next) = next_emission(handler)? else {
-            continue;
-        };
-        if !matches!(
-            &handler.activation,
-            node::HandlerActivation::Port(port) if port.name() == "in"
-        ) {
-            return Err(Error::UnsupportedActivation);
-        }
-        let guard = handler.guard.as_ref().ok_or(Error::MeasureNotPositive)?;
-        if !guard_proves_positive(&guard.root, measure_path) {
-            return Err(Error::MeasureNotPositive);
-        }
-        let after = measured_update(next, measure_path).ok_or(Error::MeasureDoesNotDecrease)?;
-        let decrease = strict_decrease(after, measure_path).ok_or(Error::MeasureDoesNotDecrease)?;
-        derived.push(decrease);
-    }
-    derived.sort_unstable();
-    Ok(Certificate {
-        measure,
-        invariant,
-        decreases: derived,
-    })
 }
 
 /// Derives the direct integer-path certificate from a command Dispatch.
@@ -286,21 +218,6 @@ fn is_true(tree: &expr::Tree) -> bool {
         && tree.ty == crate::datatype::DataType::Bool
 }
 
-fn next_emission(handler: &Handler) -> Result<Option<&Emission>, Error> {
-    let mut next = handler
-        .dispatch
-        .steps()
-        .flat_map(DispatchStep::emissions)
-        .filter_map(|(port, value)| (port.name() == "next").then_some(value));
-    let Some(selected) = next.next() else {
-        return Ok(None);
-    };
-    if next.next().is_some() {
-        return Err(Error::AmbiguousRecurrence);
-    }
-    Ok(Some(selected))
-}
-
 fn measured_update<'a>(emission: &'a Emission, measure: &[String]) -> Option<&'a Expr> {
     match emission {
         Emission::Data(tree) => {
@@ -361,10 +278,6 @@ fn strict_decrease(after: &Expr, measure: &[String]) -> Option<u64> {
         Expr::Literal(Value::Int(value)) if *value > 0 => u64::try_from(*value).ok(),
         _ => None,
     }
-}
-
-fn guard_proves_positive(guard: &Expr, measure: &[String]) -> bool {
-    guard_fact_proves_positive(guard, true, measure)
 }
 
 fn guard_fact_proves_positive(guard: &Expr, truth: bool, measure: &[String]) -> bool {
@@ -438,7 +351,7 @@ fn signed_literal(expr: &Expr) -> Option<i64> {
 mod tests {
     use super::*;
     use crate::datatype::DataType;
-    use crate::plan::FieldWrite;
+    use crate::plan::{FieldWrite, OpenArm};
     use alloc::boxed::Box;
     use alloc::vec;
 
@@ -450,19 +363,29 @@ mod tests {
         expr::Tree { root, ty }
     }
 
-    fn recurrent(guard: Expr, after: Expr) -> Handler {
-        Handler {
-            owner: HandlerOwner::Graph(OwnerSlot::new(0)),
-            activation: node::HandlerActivation::Port(node::Port::new("in").unwrap()),
-            guard: Some(tree(guard, DataType::Bool)),
-            dispatch: crate::plan::Dispatch::Linear(vec![DispatchStep::Emit {
-                port: node::Port::new("next").unwrap(),
-                value: Emission::FreshData(vec![FieldWrite {
-                    target: WriteTarget::Data(vec![String::from("n")]),
-                    value: tree(after, DataType::INT),
-                }]),
-            }]),
+    fn guarded(guard: Expr, update: Emission) -> Dispatch {
+        Dispatch::OpenMatch {
+            prefix: vec![],
+            arms: vec![OpenArm {
+                predicate: tree(guard, DataType::Bool),
+                dispatch: Box::new(Dispatch::Linear(vec![DispatchStep::LoopCommand(
+                    LoopCommand::Next(update),
+                )])),
+            }],
+            fallback: Box::new(Dispatch::Linear(vec![DispatchStep::LoopCommand(
+                LoopCommand::Done,
+            )])),
         }
+    }
+
+    fn recurrent(guard: Expr, after: Expr) -> Dispatch {
+        guarded(
+            guard,
+            Emission::FreshData(vec![FieldWrite {
+                target: WriteTarget::Data(vec![String::from("n")]),
+                value: tree(after, DataType::INT),
+            }]),
+        )
     }
 
     fn positive_guard() -> Expr {
@@ -490,11 +413,10 @@ mod tests {
     }
 
     #[test]
-    fn a_direct_affine_countdown_is_a_small_checkable_certificate() {
-        verify(
-            OwnerSlot::new(0),
+    fn a_direct_countdown_is_a_small_checkable_certificate() {
+        verify_dispatch(
             &certificate(vec![1]),
-            &[recurrent(positive_guard(), decrease(1))],
+            &recurrent(positive_guard(), decrease(1)),
         )
         .unwrap();
     }
@@ -502,18 +424,16 @@ mod tests {
     #[test]
     fn a_non_decrease_or_unbounded_recurrence_never_becomes_a_proof() {
         assert_eq!(
-            verify(
-                OwnerSlot::new(0),
+            verify_dispatch(
                 &certificate(vec![1]),
-                &[recurrent(positive_guard(), Expr::Path(path()))],
+                &recurrent(positive_guard(), Expr::Path(path()))
             ),
             Err(Error::MeasureDoesNotDecrease)
         );
         assert_eq!(
-            verify(
-                OwnerSlot::new(0),
+            verify_dispatch(
                 &certificate(vec![1]),
-                &[recurrent(Expr::Literal(Value::Bool(true)), decrease(1))],
+                &recurrent(Expr::Literal(Value::Bool(true)), decrease(1))
             ),
             Err(Error::MeasureNotPositive)
         );
@@ -522,10 +442,9 @@ mod tests {
     #[test]
     fn a_certificate_cannot_lie_about_the_verified_decrease() {
         assert_eq!(
-            verify(
-                OwnerSlot::new(0),
+            verify_dispatch(
                 &certificate(vec![2]),
-                &[recurrent(positive_guard(), decrease(1))],
+                &recurrent(positive_guard(), decrease(1))
             ),
             Err(Error::CertificateMismatch)
         );
@@ -537,36 +456,21 @@ mod tests {
             target: WriteTarget::Data(vec![String::from("n")]),
             value: tree(root, DataType::INT),
         };
-        let handler = |writes| Handler {
-            owner: HandlerOwner::Graph(OwnerSlot::new(0)),
-            activation: node::HandlerActivation::Port(node::Port::new("in").unwrap()),
-            guard: Some(tree(positive_guard(), DataType::Bool)),
-            dispatch: crate::plan::Dispatch::Linear(vec![DispatchStep::Emit {
-                port: node::Port::new("next").unwrap(),
-                value: Emission::FreshData(writes),
-            }]),
-        };
-
+        let dispatch = |writes| guarded(positive_guard(), Emission::FreshData(writes));
         assert_eq!(
-            derive(
-                OwnerSlot::new(0),
+            derive_dispatch(
                 certificate(vec![]).measure,
                 None,
-                &[handler(
-                    vec![exact(decrease(1)), exact(Expr::Path(path())),]
-                )],
+                &dispatch(vec![exact(decrease(1)), exact(Expr::Path(path()))]),
             ),
             Err(Error::MeasureDoesNotDecrease),
             "an earlier decrease cannot hide a later overwrite"
         );
         assert_eq!(
-            derive(
-                OwnerSlot::new(0),
+            derive_dispatch(
                 certificate(vec![]).measure,
                 None,
-                &[handler(
-                    vec![exact(Expr::Path(path())), exact(decrease(1)),]
-                )],
+                &dispatch(vec![exact(Expr::Path(path())), exact(decrease(1))]),
             )
             .unwrap()
             .decreases,
@@ -579,11 +483,10 @@ mod tests {
     fn an_unproved_invariant_never_rides_as_a_runtime_assertion() {
         let invariant = tree(Expr::Literal(Value::Bool(false)), DataType::Bool);
         assert_eq!(
-            derive(
-                OwnerSlot::new(0),
+            derive_dispatch(
                 certificate(vec![]).measure,
                 Some(invariant),
-                &[recurrent(positive_guard(), decrease(1))],
+                &recurrent(positive_guard(), decrease(1)),
             ),
             Err(Error::UnsupportedInvariant)
         );

@@ -399,15 +399,6 @@ impl fmt::Display for Trigger {
 pub enum HandlerActivation {
     /// Arrival on a single port.
     Port(Port),
-    /// Output of one direct child declaration, observed by its lexical Graph.
-    /// The path is global and structural in the plan even though the source
-    /// spelling uses only the direct child's local name.
-    ChildPort {
-        /// Canonical child Node or Graph path.
-        child: Path,
-        /// Typed child output.
-        port: Port,
-    },
     /// Presence of one delivery on every port, inside one owning Operator
     /// instance. Port order is semantic: it fixes bindings, contribution
     /// order, and the activation identity. Bounds retain candidates; they
@@ -436,7 +427,6 @@ impl HandlerActivation {
     pub fn canonical_key(&self) -> alloc::string::String {
         match self {
             Self::Port(port) => alloc::format!("p:{port}"),
-            Self::ChildPort { child, port } => alloc::format!("c:{child}:{port}"),
             Self::Join { ports, .. } => {
                 let mut key = String::from("j:(");
                 for (index, port) in ports.iter().enumerate() {
@@ -459,7 +449,6 @@ impl fmt::Display for HandlerActivation {
         // pinned.
         match self {
             Self::Port(port) => write!(f, "p:{port}"),
-            Self::ChildPort { child, port } => write!(f, "c:{child}:{port}"),
             Self::Join { ports, .. } => {
                 f.write_str("j:(")?;
                 for (index, port) in ports.iter().enumerate() {

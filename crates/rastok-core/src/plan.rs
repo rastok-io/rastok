@@ -971,8 +971,9 @@ pub struct VarCell {
 /// One Operator transition, with join admission separate from consumption.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Handler {
-    /// Lexical declaration that owns the handler.
-    pub owner: HandlerOwner,
+    /// Operator slot that owns this application transition. Graph scopes
+    /// have no application handlers; Connector transitions follow a Contract.
+    pub owner: Slot,
     /// The declared activation pattern — not the causal trigger a
     /// transaction records; see [`node::HandlerActivation`].
     pub activation: node::HandlerActivation,
@@ -981,52 +982,6 @@ pub struct Handler {
     pub guard: Option<expr::Tree>,
     /// Typed decision and ordered atomic emissions.
     pub dispatch: Dispatch,
-}
-
-impl Handler {
-    /// Complete canonical ordering key for the shipped handler table.
-    ///
-    /// Graph extensions may own several mutually exclusive guarded handlers for
-    /// one activation. The activation alone is therefore no longer a total
-    /// order; the exact transported handler supplies the deterministic
-    /// tie-break without making declaration order semantic.
-    #[must_use]
-    pub fn canonical_order_key(&self) -> Vec<u8> {
-        serialization::handler_order_key(self)
-    }
-}
-
-/// Owner of one ordinary handler body.
-///
-/// Graph handlers reuse the exact guard/statement representation of Node
-/// handlers. This is a transport distinction, not a Loop-only execution
-/// family.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum HandlerOwner {
-    /// Executable Operator or Connector slot.
-    Node(Slot),
-    /// Lexical Graph owner slot.
-    Graph(OwnerSlot),
-}
-
-impl HandlerOwner {
-    /// Node slot when this is an executable-Node handler.
-    #[must_use]
-    pub const fn node(self) -> Option<Slot> {
-        match self {
-            Self::Node(slot) => Some(slot),
-            Self::Graph(_) => None,
-        }
-    }
-
-    /// Graph owner slot when this is a Graph handler.
-    #[must_use]
-    pub const fn graph(self) -> Option<OwnerSlot> {
-        match self {
-            Self::Graph(slot) => Some(slot),
-            Self::Node(_) => None,
-        }
-    }
 }
 
 /// One planned edge.
