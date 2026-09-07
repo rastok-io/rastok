@@ -1,5 +1,10 @@
 graph totals : App {
+  input in: struct { amount: int }
+  output out: struct { total: int }
+
   operator accumulate {
+    input in: struct { amount: int }
+    output out: struct { total: int }
     var sum : int = 0
     on in {
       sum = sum + data.amount
@@ -7,5 +12,5 @@ graph totals : App {
     }
   }
 
-  . -> accumulate -> .
+  in -> accumulate -> out
 }

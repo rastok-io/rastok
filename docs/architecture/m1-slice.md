@@ -7,13 +7,20 @@
 > are not the live target. See [R0 algebra](rework-r0-algebra.md) and
 > [R1 host contracts](rework-r1-host-contracts.md).
 
+> **R9 update (2026-09-07).** The v16 rework is implemented and qualified in
+> [the R9 ledger](rework-r9-qualification.md). This file preserves the dated
+> M1 checkpoints below; it is not the current syntax card. The visual debugger
+> now admits only `simulate --ui`, with read-only history and reset sessions,
+> not real-I/O `run`, branches or input authoring. Its external browser pass
+> remains in [release qualification](release-qualification.md).
+
 > Implementation slice — non-normative. Opened 2026-08-06, target 15
 > October 2026: the repository goes public with this milestone, and
 > its closing demonstration is **a complete flow running without the
 > real systems** — compiled, simulated against mocks, golden-traced,
 > inspected live at deterministic transaction boundaries.
 
-**Current checkpoint (2026-08-31): items 1–9 are closed.** M1.4 owns keyed
+**Historical checkpoint (2026-08-31): items 1–9 are closed.** M1.4 owns keyed
 instances, lifetimes, Closing and joins; M1.5 owns the generic Driver boundary
 and File; M1.6 owns Event/Call/Session plus HTTP/1.1–3 and WebSocket; M1.7 owns
 finite temporal recursion; M1.8 owns the five data policies, deployment

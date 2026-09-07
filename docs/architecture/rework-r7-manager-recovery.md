@@ -1,9 +1,8 @@
 # R7 — manager contexts and spatial recovery
 
-> Work in progress, 2026-09-07. The latest checkpoint (§10) qualifies nested and
-> adjacent runs, annotations, Graph measures, boundary-only applications,
-> same-context joins and inbound Call/Session recovery. R9 migration and the
-> complete qualification matrix remain in progress.
+> **Historical implementation checkpoints.** The dated evidence below records
+> the cutover as it landed. [R9 qualification](rework-r9-qualification.md)
+> owns the final migration, package blessing, checks and remaining named limits.
 
 The second checkpoint (§5) qualifies outbound Call, join, lifetime and Closing
 recovery. Earlier checkpoint counts and gates below are retained as history,

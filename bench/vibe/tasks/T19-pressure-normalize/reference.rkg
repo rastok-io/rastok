@@ -1,9 +1,14 @@
 graph pressures : App {
+  input in: struct { value: int, unit: text }
+  output out: struct { kpa: int }
+
   operator normalize {
+    input in: struct { value: int, unit: text }
+    output out: struct { kpa: int }
     on in {
       out = {kpa = data.unit == "bar" ? data.value * 100 : data.value}
     }
   }
 
-  . -> normalize -> .
+  in -> normalize -> out
 }

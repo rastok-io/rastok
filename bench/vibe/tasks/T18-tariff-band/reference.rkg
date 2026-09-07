@@ -1,9 +1,14 @@
 graph tariffs : App {
+  input in: struct { price: int }
+  output out: struct { band: text }
+
   operator band {
+    input in: struct { price: int }
+    output out: struct { band: text }
     on in {
       out = {band = data.price < 50 ? "low" : (data.price > 150 ? "high" : "mid")}
     }
   }
 
-  . -> band -> .
+  in -> band -> out
 }

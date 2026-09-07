@@ -222,7 +222,7 @@ fn committed_range(journal: &MemJournal, records_before: usize) -> Option<(usize
 pub struct SnapshotInput<'a> {
     /// Monotonic physical view revision.
     pub revision: u64,
-    /// `run` or `simulate`.
+    /// Currently only `simulate` is admitted by the CLI.
     pub mode: &'static str,
     /// Current physical controller state.
     pub state: ExecutionState,
@@ -241,11 +241,11 @@ pub struct SnapshotInput<'a> {
     pub fault: Option<&'a FaultView>,
     /// Most recently advanced physical UI boundary.
     pub activity: Option<&'a ActivityView>,
-    /// Interactive Lab projection, absent in real-run mode.
+    /// Interactive Lab projection.
     pub scenario: Option<JsonValue>,
-    /// Append-only presentation branch. Always zero for a real run.
-    pub branch: u64,
-    /// Atomic execution boundary within that branch.
+    /// Fresh simulation session ordinal, incremented on reset or selection.
+    pub session: u64,
+    /// Atomic execution boundary within that session.
     pub boundary: u64,
 }
 
@@ -268,7 +268,7 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
         fault,
         activity,
         scenario,
-        branch,
+        session,
         boundary,
     } = input;
     let legal_commands = legal_commands(mode, state, fault, scenario.as_ref());
@@ -278,7 +278,7 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
         "revision": revision,
         "mode": mode,
         "timeline": {
-            "branch": branch,
+            "session": session,
             "boundary": boundary,
             "record_through": journal.records().len().checked_sub(1),
         },
@@ -298,6 +298,7 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
         ),
         "history": history(plan, vm, journal),
         "instances": instances(plan, &inspection, &active_instances),
+        "loop_runs": loop_runs(journal),
         "exchanges": exchanges(&inspection),
         "cost_report": cost_report(plan, journal, cost_profile),
         "scenario": scenario,
@@ -328,9 +329,6 @@ fn legal_commands(
             commands
         }
         ExecutionState::Completed => Vec::new(),
-        ExecutionState::Paused if mode == "run" => {
-            vec!["resume", "step", "run-to-completion"]
-        }
         ExecutionState::Paused => {
             let current = scenario.and_then(|scenario| scenario.get("current"));
             let complete = current
@@ -352,12 +350,6 @@ fn legal_commands(
         }
     };
     if mode == "simulate" {
-        if matches!(
-            state,
-            ExecutionState::Paused | ExecutionState::Faulted | ExecutionState::Completed
-        ) {
-            commands.push("branch-from");
-        }
         commands.extend(["reset-scenario", "select-scenario"]);
     }
     commands.push("close");
@@ -634,6 +626,7 @@ fn topology(
         "nodes": nodes,
         "owners": owners,
         "edges": edges,
+        "commands": manager_commands(plan),
         "activity": activity.map(|activity| json!({
             "ordinal": activity.ordinal,
             "kind": activity.kind,
@@ -651,6 +644,93 @@ fn topology(
             })).collect::<Vec<_>>(),
         })),
     })
+}
+
+fn manager_commands(plan: &crate::plan::ExecutionPlan) -> Vec<JsonValue> {
+    use crate::plan::{EndpointOwner, LoopCommandKind, RouteDestination, RouteSelection};
+    let owner_path = |owner: &EndpointOwner| match owner {
+        EndpointOwner::Node(path) => path.to_string(),
+        EndpointOwner::Graph(path) => path.to_string(),
+    };
+    let mut commands = Vec::new();
+    for rule in &plan.routes {
+        let mut project = |cases: &[String], destinations: &[RouteDestination]| {
+            for destination in destinations {
+                let RouteDestination::LoopCommand(target) = destination else {
+                    continue;
+                };
+                let command = match target.kind {
+                    LoopCommandKind::Next => "Loop.next",
+                    LoopCommandKind::Again => "Loop.again",
+                    LoopCommandKind::Done => "Loop.done",
+                };
+                commands.push(json!({
+                    "source_owner": owner_path(&rule.source.owner),
+                    "source_port": rule.source.port.name(),
+                    "owner": owner_path(&target.owner),
+                    "command": command,
+                    "cases": cases,
+                }));
+            }
+        };
+        match &rule.selection {
+            RouteSelection::All(destinations) => project(&[], destinations),
+            RouteSelection::Cases(arms) => {
+                for arm in arms {
+                    project(&arm.cases, &arm.destinations);
+                }
+            }
+        }
+    }
+    commands
+}
+
+fn loop_runs(journal: &MemJournal) -> JsonValue {
+    use crate::journal::loop_protocol::{CommandValue, Fact, Fold};
+    let fold = match Fold::from_records(journal.records()) {
+        Ok(fold) => fold,
+        Err(error) => return json!({ "error": error.to_string() }),
+    };
+    let owners = journal
+        .records()
+        .iter()
+        .flat_map(|record| {
+            let Record::Transaction(transaction) = record else {
+                return Vec::new();
+            };
+            let Some(packet) = transaction.loop_protocol() else {
+                return Vec::new();
+            };
+            packet
+                .facts
+                .iter()
+                .filter_map(|fact| match fact {
+                    Fact::Open { run, .. } => Some((*run, transaction.owner_path.to_string())),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<BTreeMap<_, _>>();
+    json!(
+        fold.runs()
+            .map(|(reference, run)| json!({
+                "reference": reference.to_string(),
+                "owner": owners.get(reference),
+                "instance": instance_ref_json(&run.instance),
+                "entry": run.entry.name(),
+                "application": run.iteration.saturating_add(1).to_string(),
+                "remaining": run.remaining.to_string(),
+                "phase": format!("{:?}", run.phase),
+                "state_envelope_id": run.state.meta().sys().id().to_string(),
+                "due_at_ns": run.due_at.map(|instant| instant.to_string()),
+                "pending_command": run.pending.as_ref().map(|command| match &command.value {
+                    CommandValue::Next(_) => "Loop.next",
+                    CommandValue::Again(_) => "Loop.again",
+                    CommandValue::Done { .. } => "Loop.done",
+                }),
+            }))
+            .collect::<Vec<_>>()
+    )
 }
 
 fn mailbox_contents(
@@ -844,6 +924,20 @@ fn transaction_summary(transaction: &crate::journal::TransactionRecord) -> Strin
         transaction.owner_path.to_string()
     };
     let generation = transaction.instance.generation();
+    if let Some(fact) = transaction
+        .loop_protocol()
+        .and_then(|packet| packet.facts.last())
+    {
+        use crate::journal::loop_protocol::Fact;
+        let verb = match fact {
+            Fact::Open { .. } => "Loop run opened",
+            Fact::Advance { .. } => "Loop recurrence scheduled",
+            Fact::Admit { .. } => "Loop application admitted",
+            Fact::Close { .. } => "Loop run closed",
+            Fact::Expired { .. } => "Loop fuel exhausted",
+        };
+        return format!("{verb} · {owner} · gen {generation}");
+    }
     match &transaction.trigger {
         crate::node::Trigger::Port(port) => format!("Port transaction · {owner} · {port}"),
         crate::node::Trigger::Lifecycle(lifecycle) => {
@@ -1386,9 +1480,9 @@ graph inspected : App {
     operator relay {
       on in where size(data) > 0 { out = . }
     }
-    . -> relay -> .
+    in -> relay -> out
   }
-  . -> inner -> .
+  in -> inner -> out
 }
 "#;
         let compilation = crate::compiler::compile(
@@ -1493,6 +1587,74 @@ graph inspected : App {
         assert_eq!(edges.len(), 2);
         assert!(edges.iter().any(|edge| edge["target"]["kind"] == "output"));
         assert_eq!(value["nodes"][0]["path"], "inner.relay");
+    }
+
+    #[test]
+    fn loop_commands_and_run_dependencies_do_not_invent_ports_or_expose_state_data() {
+        let source = include_str!("../../../../examples/keyed-retry.rkg");
+        let compilation = crate::compiler::compile(
+            &[source],
+            &crate::contract::ContractCatalog::try_m0().unwrap(),
+        )
+        .unwrap();
+        let simulation = &compilation.labs[0].simulations[0];
+        let mut session = crate::lab::ScenarioSession::try_new(
+            &compilation.plan,
+            crate::plan::GraphVersion(1),
+            &simulation.name,
+            &simulation.mocks,
+            &simulation.scenarios[0],
+            None,
+        )
+        .unwrap();
+        session.run_to_completion();
+        assert!(session.report().passed());
+        let value = topology(
+            &compilation.plan,
+            &compilation.source_definitions,
+            &session.vm().inspection(),
+            session.journal(),
+            &active_instance_lifecycles(session.journal()),
+            None,
+        );
+        let commands = value["commands"].as_array().unwrap();
+        assert!(
+            commands
+                .iter()
+                .any(|command| command["source_owner"] == "decide"
+                    && command["source_port"] == "retry"
+                    && command["owner"] == ""
+                    && command["command"] == "Loop.next")
+        );
+        assert!(value["nodes"].as_array().unwrap().iter().all(|node| {
+            node["ports"].as_array().unwrap().iter().all(|port| {
+                !["Loop.next", "Loop.again", "Loop.done"].contains(&port["name"].as_str().unwrap())
+            })
+        }));
+        let runs = loop_runs(session.journal());
+        let runs = runs.as_array().unwrap();
+        assert_eq!(runs.len(), 2, "one run for each admitted conversation");
+        assert!(
+            runs.iter()
+                .all(|run| run["phase"] == "Closed" && run["application"] == "2")
+        );
+        assert!(
+            runs.iter().all(|run| run["state_envelope_id"].is_string()
+                && run.get("data").is_none()
+                && run.get("state").is_none()),
+            "Loop.state is an exact dependency, not a second unclassified payload view"
+        );
+        assert!(
+            session
+                .journal()
+                .records()
+                .iter()
+                .any(|record| match record {
+                    Record::Transaction(transaction) =>
+                        transaction_summary(transaction).starts_with("Loop application admitted"),
+                    _ => false,
+                })
+        );
     }
 
     #[test]

@@ -1,11 +1,13 @@
 // =============================================================================
 // teams-codex-gateway.rkg
 //
-// Teams <-> Codex bridge — larger M1 target-surface example.
-// It is intentionally ahead of the executable subset: keyed owners,
-// lifetime/closing and File(read/replace) execute, but Http/Memory,
-// append-style File logging, Loop, Process(service), and jq remain guarded as
-// of 2026-08-23. This is a design reference, not a current fixture.
+// Teams <-> Codex bridge — historical pre-v16 design sketch (2026-08-23).
+// Preserved for the proposed integration, NOT as a current syntax card or
+// executable fixture. Its inferred interfaces, implicit output dispositions
+// and prospective connector settings do not satisfy v16. The current
+// checked gateway is docs/examples/codex-websocket-gateway.rkg; the current
+// Loop example is examples/keyed-retry.rkg. R9 does not claim this future
+// Teams/service/guest integration has been implemented.
 //
 // Demonstrates :
 //   - graph composability : `sessions` = a per-key sub-graph, declared in place

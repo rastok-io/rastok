@@ -23,7 +23,7 @@ graph process_only : App {
     behavior = deterministic
   }
 
-  . -> shell
+  in -> shell
   shell.out -> nothing
   shell.err -> nothing
   shell.exit -> nothing
@@ -39,7 +39,7 @@ graph file_only : App {
     path = "artifact.bin"
   }
 
-  . -> file
+  in -> file
   file.out -> nothing
   file.exit -> nothing
 }
@@ -69,10 +69,10 @@ graph mixed : App {
     on in { out = data.text }
   }
 
-  . -> process_request -> shell
-  . -> file
-  shell.out -> .process_out
-  file.out -> .file_out
+  in -> process_request -> shell
+  in -> file
+  shell.out -> process_out
+  file.out -> file_out
   shell.err -> nothing
   shell.exit -> nothing
   file.exit -> nothing
@@ -243,7 +243,7 @@ graph websocket_only : App {
     effect = idempotent ; behavior = deterministic
     versions = ["http/1.1"]
   }
-  . -> socket
+  in -> socket
   socket.out -> nothing
   socket.exit -> nothing
 }

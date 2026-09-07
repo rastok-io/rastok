@@ -1,11 +1,12 @@
 # Loop — finite temporal recursion
 
-> **Status (2026-09-07): normative target for categorical plan v16.**
+> **Status (2026-09-07): normative categorical plan v16.**
 > Operator, outbound Call and Graph hosts execute and recover, including nested
 > runs, annotated recurrence, entry-preserving Graph measures, boundary-only
 > bodies and unconditional same-context joins. The control-proof limits below
 > remain explicit. [R7 §10](../architecture/rework-r7-manager-recovery.md#10-context-composition-and-exchange-recovery--2026-09-07)
-> records the checkpoint; R9 migration and final qualification are in progress.
+> records the host checkpoint; [R9](../architecture/rework-r9-qualification.md)
+> records the final migration and qualification.
 
 `Loop` is a temporal Extension which applies one finite host application,
 then either terminates or re-enters the same host input. Recurrence is a

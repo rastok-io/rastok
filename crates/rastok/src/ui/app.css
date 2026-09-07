@@ -96,8 +96,8 @@ select, input, textarea { min-width: 0; padding: 3px 5px; background: var(--surf
 .timeline-position, .timeline-head { font: 11px var(--mono); white-space: nowrap; }
 .timeline-position { color: var(--text); }
 .timeline-vocabulary { color: var(--muted); font: 10px var(--mono); text-decoration: underline dotted; cursor: help; }
-.timeline-branch { display: inline-flex; align-items: center; gap: 4px; }
-.timeline-branch select { width: 92px; height: 21px; padding: 1px 3px; font: 10px var(--mono); }
+.timeline-session { display: inline-flex; align-items: center; gap: 4px; }
+.timeline-session select { width: 92px; height: 21px; padding: 1px 3px; font: 10px var(--mono); }
 .timeline-bar input[type="range"] { width: 100%; height: 14px; padding: 0; border: 0; accent-color: var(--boundary); background: transparent; }
 .timeline-action { height: 27px; min-height: 27px; border-width: 0 0 0 1px; padding: 0 6px; font-size: 10px; }
 .command-status { position: fixed; z-index: 80; top: 64px; left: 50%; max-width: min(720px, calc(100vw - 24px)); transform: translateX(-50%); padding: 4px 8px; border: 1px solid var(--history); background: var(--surface); color: var(--history); font: 11px var(--mono); }
@@ -185,26 +185,14 @@ body.historical-view .history-watermark { display: block; }
 .graph-edge.queued .graph-edge-path { stroke-dasharray: 3 3; }
 .graph-edge.active .graph-edge-path { stroke: var(--active-flow, var(--boundary)); stroke-width: 2; }
 .graph-edge.selected .graph-edge-path { stroke: var(--selection); stroke-width: 2; }
-.graph-edge.control-relation .graph-edge-path { stroke: color-mix(in srgb, var(--scope) 72%, var(--muted)); stroke-width: 1.25; stroke-dasharray: 5 4; opacity: .82; }
-.graph-edge.control-relation.relation-temporal .graph-edge-path { stroke: var(--selection); stroke-dasharray: 2 4; }
-.graph-edge.control-relation.relation-manager .graph-edge-path { stroke: color-mix(in srgb, var(--selection) 72%, var(--muted)); stroke-dasharray: 7 3 2 3; }
-.graph-edge.control-relation.selected .graph-edge-path, .graph-edge.control-relation:focus-visible .graph-edge-path { stroke: var(--selection); stroke-width: 2; opacity: 1; }
-.graph-edge.control-relation:focus { outline: none; }
-.graph-control-relation-hit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: pointer; }
 #graph-arrow path { fill: var(--muted); }
 #graph-arrow-active path { fill: var(--active-flow, var(--boundary)); }
-#graph-arrow-control path { fill: var(--scope); }
-#graph-arrow-temporal path { fill: var(--selection); }
 .graph-edge-packet, .connector-boundary-packet { fill: var(--active-flow, var(--boundary)); stroke: var(--surface); stroke-width: 1; pointer-events: none; }
 .edge-counter { cursor: pointer; }
 .edge-counter rect { fill: rgba(0, 0, 0, .72); stroke: var(--hairline-strong); stroke-width: 1; }
 .edge-counter text { fill: #f2f5f3; font: 700 var(--graph-mono-font-size) var(--mono); }
 .edge-counter:hover rect, .edge-counter:focus-visible rect { stroke: var(--boundary); }
 .graph-edge.active .edge-counter rect { stroke: var(--active-flow, var(--boundary)); }
-.graph-handler-label { cursor: pointer; }
-.graph-handler-label rect { fill: color-mix(in srgb, var(--surface) 88%, transparent); stroke: color-mix(in srgb, var(--scope) 70%, var(--hairline-strong)); stroke-width: 1; }
-.graph-handler-label text { fill: var(--text); font: 700 var(--graph-small-font-size) var(--mono); }
-.relation-temporal .graph-handler-label rect, .relation-manager .graph-handler-label rect { stroke: var(--selection); }
 .graph-instance-badge { cursor: pointer; }
 .graph-instance-badge rect { fill: rgba(0, 0, 0, .55); stroke: var(--hairline-strong); stroke-width: 1; }
 .graph-instance-badge text { fill: #d8ddd9; font: 700 var(--graph-small-font-size) var(--mono); }
@@ -249,7 +237,6 @@ body.historical-view .history-watermark { display: block; }
 .node-definition-badges, .envelope-badges { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
 .node-definition-badges span, .envelope-badges span, .type-badge { border: 1px solid var(--hairline-strong); border-radius: 2px; padding: 1px 3px; color: var(--muted); font: 10px var(--mono); }
 .node-definition-location { margin-bottom: 4px; color: var(--muted); font-size: 10px; }
-.handler-relation-context { margin: 0 0 6px; padding: 4px 6px; border-left: 2px solid var(--selection); background: color-mix(in srgb, var(--selection) 8%, transparent); color: var(--text); font: 10px/1.4 var(--mono); }
 .node-definition-code { max-height: calc(100vh - 180px); margin: 0; padding: 8px; overflow: auto; border: 1px solid var(--hairline); background: var(--surface-soft); color: var(--text); font: 11px/1.45 var(--mono); tab-size: 2; }
 .scenario-definition-progress { margin: 8px 0 4px; color: var(--boundary); font: 700 11px var(--mono); }
 .scenario-action-list { margin: 0; padding: 0; list-style-position: inside; border: 1px solid var(--hairline); font: 11px/1.6 var(--mono); }
@@ -314,7 +301,7 @@ tr.timeline-record:focus { outline: 1px solid var(--boundary); outline-offset: -
   .brand-block { height: 32px; }
   .transport { order: 3; width: 100%; flex-basis: 100%; border-top: 1px solid var(--hairline); }
   .timeline-bar { grid-template-columns: auto minmax(80px, 1fr) auto; height: auto; min-height: 30px; }
-  .timeline-vocabulary, .timeline-branch, .timeline-action { display: none !important; }
+  .timeline-vocabulary, .timeline-session, .timeline-action { display: none !important; }
   main { height: auto; min-height: calc(100vh - 94px); }
   .workspace { min-height: 760px; grid-template-columns: 1fr; }
   .workspace-splitter { display: none; }

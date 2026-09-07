@@ -582,7 +582,7 @@ impl Vm<'_> {
             .chain(core::iter::once(run))
             .collect();
         let contexts = self.graph_route_contexts(&context, &routes, envelope.meta().sys().id());
-        if let Some(crate::journal::LoopRecord::R2(packet)) = record.loop_record.as_deref_mut() {
+        if let Some(packet) = record.loop_record.as_deref_mut() {
             packet.routes = contexts.clone();
             packet.routes.sort_by_key(|route| route.delivery);
         }
@@ -694,8 +694,7 @@ impl Vm<'_> {
             }),
         )?;
         if !produced.is_empty() {
-            let Some(crate::journal::LoopRecord::R2(packet)) = record.loop_record.as_deref_mut()
-            else {
+            let Some(packet) = record.loop_record.as_deref_mut() else {
                 return Err(graph_error(
                     &record.owner_path,
                     "a Graph verdict lost its application context",
@@ -967,7 +966,7 @@ impl Vm<'_> {
             ));
         }
         let mut derived = record.clone();
-        if let Some(crate::journal::LoopRecord::R2(packet)) = derived.loop_record.as_deref_mut() {
+        if let Some(packet) = derived.loop_record.as_deref_mut() {
             packet.produced.clear();
         }
         self.retain_graph_verdicts(&mut derived)?;

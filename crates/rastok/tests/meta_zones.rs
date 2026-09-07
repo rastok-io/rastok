@@ -30,7 +30,7 @@ fn refuses_with(source: &str, code: &str) -> Vec<String> {
 fn a_bare_meta_field_refuses() {
     // The alias is dead: `meta.customer_id` resolves to nothing.
     refuses_with(
-        "graph g : App {\n  operator o {\n    on in { out = { meta.customer_id = \"x\" } }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  operator o {\n    on in { out = { meta.customer_id = \"x\" } }\n  }\n  in -> o -> out\n}\n",
         "E-META-ZONE",
     );
 }
@@ -39,7 +39,7 @@ fn a_bare_meta_field_refuses() {
 fn a_custom_root_refuses() {
     // Root customs died with the zones.
     refuses_with(
-        "graph g : App {\n  operator o {\n    on in { out = { meta.audit.origin = \"x\" } }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  operator o {\n    on in { out = { meta.audit.origin = \"x\" } }\n  }\n  in -> o -> out\n}\n",
         "E-META-ZONE",
     );
 }
@@ -49,7 +49,7 @@ fn an_unknown_ext_write_refuses() {
     // `ext` belongs to the connector sheets plus `content_type`;
     // the application's own vocabulary goes to `app`.
     refuses_with(
-        "graph g : App {\n  operator o {\n    on in { out = { meta.ext.invented = \"x\" } }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  operator o {\n    on in { out = { meta.ext.invented = \"x\" } }\n  }\n  in -> o -> out\n}\n",
         "E-META-ZONE",
     );
 }
@@ -59,7 +59,7 @@ fn a_read_never_written_refuses() {
     // The Rastok expression grid, statically: the graph writes `meta.app.known`
     // nowhere, so reading it is a compile error — not a runtime err.
     refuses_with(
-        "graph g : App {\n  operator o {\n    on in where meta.app.ghost == \"x\" { out = data }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  operator o {\n    on in where meta.app.ghost == \"x\" { out = data }\n  }\n  in -> o -> out\n}\n",
         "E-META-ZONE",
     );
 }
@@ -68,8 +68,8 @@ fn a_read_never_written_refuses() {
 fn inference_is_order_independent() {
     // The same writes in either textual order seal the same schema
     // and the same semantic hash.
-    let ab = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.first = \"a\"\n        meta.app.second = 2\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
-    let ba = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.second = 2\n        meta.app.first = \"a\"\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let ab = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.first = \"a\"\n        meta.app.second = 2\n        data = data\n      }\n    }\n  }\n  in -> o -> out\n}\n";
+    let ba = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.second = 2\n        meta.app.first = \"a\"\n        data = data\n      }\n    }\n  }\n  in -> o -> out\n}\n";
     let first = compile(
         &[ab],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -83,7 +83,7 @@ fn inference_is_order_independent() {
     // The write ORDER is identity (the fold executes in order), so
     // the hashes differ — but both compile, and reading either
     // field is legal in both:
-    let reads = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.first = \"a\"\n        meta.app.second = 2\n        data = data\n      }\n    }\n  }\n  operator p {\n    on in where meta.app.first == \"a\" { out = data }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
+    let reads = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.first = \"a\"\n        meta.app.second = 2\n        data = data\n      }\n    }\n  }\n  operator p {\n    on in where meta.app.first == \"a\" { out = data }\n  }\n  in -> o\n  o -> p\n  p -> out\n}\n";
     compile(
         &[reads],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -94,7 +94,7 @@ fn inference_is_order_independent() {
 
 #[test]
 fn a_type_conflict_names_both_sites() {
-    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.flag = \"text\"\n        data = data\n      }\n    }\n  }\n  operator p {\n    on in {\n      out = {\n        meta.app.flag = 7\n        data = data\n      }\n    }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.flag = \"text\"\n        data = data\n      }\n    }\n  }\n  operator p {\n    on in {\n      out = {\n        meta.app.flag = 7\n        data = data\n      }\n    }\n  }\n  in -> o\n  o -> p\n  p -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -115,7 +115,7 @@ fn a_type_conflict_names_both_sites() {
 fn prefix_collisions_refuse() {
     // `audit` leaf + `audit.origin` branch cannot coexist.
     refuses_with(
-        "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.audit = \"leaf\"\n        meta.app.audit.origin = \"branch\"\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.audit = \"leaf\"\n        meta.app.audit.origin = \"branch\"\n        data = data\n      }\n    }\n  }\n  in -> o -> out\n}\n",
         "E-META-PREFIX",
     );
 }
@@ -124,7 +124,7 @@ fn prefix_collisions_refuse() {
 fn a_reserved_node_name_refuses() {
     for name in ["meta", "data", "sys", "app", "ext"] {
         let source = format!(
-            "graph g : App {{\n  operator {name} {{\n    on in {{ out = data }}\n  }}\n  . -> {name} -> .\n}}\n"
+            "graph g : App {{\n  operator {name} {{\n    on in {{ out = data }}\n  }}\n  in -> {name} -> out\n}}\n"
         );
         let bag = compile(
             &[source.as_str()],
@@ -151,7 +151,7 @@ graph g : App {
   operator o {
     on in { out = data }
   }
-  . -> o -> .
+  in -> o -> out
 }
 
 lab g {
@@ -175,7 +175,7 @@ graph g : App {
   operator o {
     on in { out = data }
   }
-  . -> o -> .
+  in -> o -> out
 }
 
 lab g {
@@ -206,7 +206,7 @@ graph g : App {
       }
     }
   }
-  . -> o -> .
+  in -> o -> out
 }
 
 lab g {
@@ -246,7 +246,7 @@ graph g : App {
       }
     }
   }
-  . -> o -> .
+  in -> o -> out
 }
 "#;
     let compilation = compile(
@@ -265,7 +265,7 @@ fn the_lab_never_moves_the_production_hash() {
     // The proof D-2026-08-10-1 demands: adding a Lab — fixtures,
     // mocks, expectations — changes neither the plan nor the
     // semantic hash of the deployed graph.
-    let graph = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.kept = \"x\"\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let graph = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.kept = \"x\"\n        data = data\n      }\n    }\n  }\n  in -> o -> out\n}\n";
     let with_lab = format!(
         "{graph}\nlab g {{\n  simulation probing on app {{\n    scenario s \"observes\" {{\n      app.in = {{ v = 1 }}\n      expect \"out\" app.out count == 1 where meta.app.kept == \"x\"\n    }}\n  }}\n}}\n"
     );
@@ -302,7 +302,7 @@ fn content_type_follows_the_payload_not_the_merge() {
 
     let run = |body: &str| {
         let source = format!(
-            "graph g : App {{\n  input in: text\n  operator o {{\n    on in {{\n{body}\n    }}\n  }}\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  input in: text\n  operator o {{\n    on in {{\n{body}\n    }}\n  }}\n  in -> o -> out\n}}\n"
         );
         let compilation = compile(
             &[source.as_str()],

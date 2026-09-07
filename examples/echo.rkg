@@ -16,7 +16,7 @@ graph echo : App {
     }
   }
 
-  . -> relay -> shell -> .
+  in -> relay -> shell -> out
   shell.err -> nothing
   shell.exit -> nothing
 }

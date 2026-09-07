@@ -4,17 +4,13 @@ This directory contains implementation views derived from the normative
 specification. It answers *how Rastok is built*; it does not define new
 language or runtime behavior.
 
-The active cutover is recorded in
-[`rework-r4-plan.md`](rework-r4-plan.md) and the latest
-[`R7 manager/recovery checkpoint`](rework-r7-manager-recovery.md#9-graph-calls-and-correlated-quiescence--2026-09-07).
-Core/HIR share Dispatch and routing with independent expression, scope,
-composition and Contract validation. Categorical v16 executes Operator and
-outbound Call Loops and a fuel-bounded Operator/Call Graph profile. Exact
-admissions, delivery contexts, deadlines and journal recovery are qualified
-there; wider Graph/exchange profiles and fixture migration remain open.
-The earlier source/HIR evidence is
-[`rework-r3-source-hir.md`](rework-r3-source-hir.md). These checkpoints do not
-claim a green complete workspace or a finished release.
+The current v16 implementation and its migration evidence are recorded in
+[R9 qualification](rework-r9-qualification.md). Core/HIR share Dispatch and
+routing with independent expression, scope, composition and Contract validation.
+Operator, Graph and outbound Call Loops execute and recover within the
+[named proof subset](../spec/loop.md). Original deadlines, run contexts and
+committed deliveries remain journal-owned. Earlier R0–R8 reports are dated
+checkpoints, not the current completion status.
 
 Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 
@@ -56,8 +52,8 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
   hand-written host traces, repository claims and identity movement ledger;
 - [`rework-r1-host-contracts.md`](rework-r1-host-contracts.md) for the exact
   Operator, Graph and outbound-Call Loop profiles and six versioned Contract
-  `@2` sheets. These are design gates only; R3 is the first implementation
-  gate, and the M1.7 files remain historical evidence for v14/v15;
+  `@2` sheets, now exercised by the R8/R9 host matrix; the M1.7 files remain
+  historical evidence for v14/v15;
 - [`rework-r2-supersession.md`](rework-r2-supersession.md) for the live-doc
   alignment matrix, current-v15/target-v16 boundary, repository-contact
   corrections and the explicit review stop before R3;
@@ -73,11 +69,8 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
   data forms, interfaces, dependency direction, and current status;
 - [`spec-to-code.md`](spec-to-code.md) for the map from normative
   documents to implementation responsibilities;
-- [`plan-package.md`](plan-package.md) for current categorical v15, its retained
-  v9 owner/instance and v7 type/value/expression registries, stable Connector
-  identities/roles/exchange lifecycles, H4.1 `media_type` extension, canonical
-  schema-policy tables, and the validation boundary; its opening note points
-  to the frozen v16 movement ledger without assigning wire tags before R4;
+- [`plan-package.md`](plan-package.md) for the categorical v16 package and
+  independent validation boundary, with earlier format ledgers marked historical;
 - [`parallelism-notes.md`](parallelism-notes.md) for the keyed-mailbox
   concurrency model and the decisions left for physical parallelism;
 - [`spike-rp2350-emulated.md`](spike-rp2350-emulated.md) for the measured

@@ -1,31 +1,10 @@
 # The Execution Model — mailboxes, ordering, time, and the two planes
 
-> **Status (2026-09-05): normative, including the plan-v16 target in
-> D-2026-09-05-1.** The Node-owned instance model in
-> [instances.md](instances.md) supersedes the unreleased P0–P3
-> named-partition implementation. Categorical plan-package v15 retains the v9
-> realigned owner tree and instance policies. R3 routes every delivery through
-> one hierarchical instance reference shared by journal, mailbox, state,
-> calls, timers, lifecycle, and cursors. R4 executes persistent, idle, fixed,
-> single-pass, and processing-time tumbling lifetimes with journal-derived
-> generations. R5 executes explicit bounded Closing, successor-generation
-> admission, cancellation, settlement, terminal `OutcomeUnknown`, and
-> inner-first Graph closure. R6 executes nested composition and bounded joins;
-> R7 closes the one-worker slice and proves physical Worker assignment is not
-> a causal input. D-2026-08-25-1 adds the M1.6 distinction between Event,
-> Call and Session exchanges; H1 makes §6.6's generic session fold executable,
-> H2 publishes their concrete sheets and Lab bindings, H3 selects the private
-> bounded hosted-engine seam, H4 executes HttpClient through the ordinary
-> Call lifecycle over H1/H2/H3, and H4.1 types its schema/header boundary
-> without changing that lifecycle. D-2026-08-26-5 makes the generic inbound
-> Call lifecycle executable; H5.1 binds ack-mode HTTP/1.1–2 to it with bounded
-> listener/stream/body pressure; H5.2 adds the generic direct-lineage response
-> return with one real consumed cursor. Final H5 executes server Calls over
-> HTTP/1.1–3; H6 executes WebSocket Sessions over all three handshakes; H7
-> closes static assembly and portability evidence. R0–R2 now separate
-> structural Graphs from transactional Executors, replace a handler body with
-> recursive Dispatch, make Driver activations explicit, and define temporal
-> Extension-manager transactions. Those v16 forms begin implementation at R3.
+> **Status (2026-09-07): normative categorical v16.** Graph scopes own
+> lifecycle, not application transactions. Operators and Connectors share the
+> transactional execution mechanism; temporal managers own their commands.
+> [R9 qualification](../architecture/rework-r9-qualification.md) records the
+> implemented Dispatch, routing, Loop and recovery boundaries.
 > Companion to
 > [envelope.md](envelope.md) (identity, journal-relative contract) — this doc
 > pins the rules envelope.md deferred to the execution model : the

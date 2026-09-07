@@ -359,7 +359,7 @@ graph g : App {
     output failure: Failure
     on in { failure = Broken { message = "no" } }
   }
-  . -> o
+  in -> o
   o.failure -> nothing
 }
 "#,
@@ -369,7 +369,7 @@ graph g : App {
   input in: variant
   output out: variant
   operator o { on in where data is Customer { out = data.id } }
-  . -> o -> .
+  in -> o -> out
 }
 "#,
         r#"
@@ -381,7 +381,7 @@ graph g : App {
     output out: int | text
     on in { out = 5 }
   }
-  . -> o -> .
+  in -> o -> out
 }
 "#,
     ];
@@ -414,7 +414,7 @@ graph g : App {
     on in { out = . }
     on stop { visits = visits + 1 }
   }
-  . -> relay -> .
+  in -> relay -> out
 }
 "#;
     let compilation = compile(
@@ -465,10 +465,10 @@ graph g : App {
       on in { out = prefix + data }
     }
 
-    . -> greet -> .
+    in -> greet -> out
   }
 
-  . -> sessions -> .
+  in -> sessions -> out
 }
 "#;
     let compilation = compile(
@@ -519,10 +519,10 @@ graph g : App {
       out = left.data
     }
   }
-  .left -> pair.left
-  .right -> pair.right
-  pair.out -> .out
-  pair.expired -> .expired
+  left -> pair.left
+  right -> pair.right
+  pair.out -> out
+  pair.expired -> expired
 }
 "#;
     let compilation = compile(
@@ -546,24 +546,8 @@ graph g : App {
 
 #[test]
 fn the_example_package_matches_its_golden() {
-    // M1.3 final review removes the lowering-only Operator runtime-fault
-    // `err` row. The source hash is intentionally unchanged: that invented
-    // row never belonged to canonical HIR identity. M1.4 R2 then moves only
-    // the package to categorical v9: the root/Node owner table and scoped
-    // edges are derived plan structure, not a semantic change to this graph.
-    // M1.4 R5 deliberately moves both hash and package because the exact
-    // ProcessExit union gains the empty OutcomeUnknown settlement case.
-    // M1.5 C1 deliberately moves both again: stable `rastok/process@2` and
-    // its outbound role replace the source symbol in identity, while v10
-    // carries those categorical facts. The causal trace remains unchanged.
-    // M1.6 H1 adds the explicit Call exchange tag and categorically moves the
-    // container to v11. Existing Call causal records remain byte-identical.
-    // M1.6 H4.1 adds `media_type` to the type/expression registry and moves
-    // every container categorically to v12. M1.7 L2 moves containers to v13
-    // so Graph aspect contracts and their ordinary handlers can travel. L6
-    // moves containers to v14 so optional checked Loop proofs are explicit.
-    // M1.8 A2 moves containers to v15 for sparse schema-policy tables. This
-    // example has none, so only the categorical version/checksum change.
+    // The v16 package move is enumerated before blessing in
+    // docs/architecture/rework-r9-qualification.md. Its trace is unchanged.
     let (_, _, bytes) = packaged_example();
     let rendered: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/echo.rkp");
@@ -791,7 +775,7 @@ fn the_boundary_value_matrix_executes_identically_across_the_trip() {
         "0 - 9223372036854775807",
     ] {
         let source = format!(
-            "graph probe : App {{\n  input in: text\n  output out: variant\n  operator o {{\n    on in {{ out = {literal} }}\n  }}\n\n  . -> o -> .\n}}\n"
+            "graph probe : App {{\n  input in: text\n  output out: variant\n  operator o {{\n    on in {{ out = {literal} }}\n  }}\n\n  in -> o -> out\n}}\n"
         );
         let compilation = compile(
             &[source.as_str()],
@@ -964,7 +948,7 @@ fn nested_additions(count: usize) -> String {
     let additions = "+ 1 ".repeat(count);
     format!(
         "graph deep : App {{\n  input in: text\n  operator o {{\n    var seen : int = 0\n\n    on in {{\n      \
-         seen = 1 {additions}\n      out = data\n    }}\n  }}\n\n  . -> o -> .\n}}\n"
+         seen = 1 {additions}\n      out = data\n    }}\n  }}\n\n  in -> o -> out\n}}\n"
     )
 }
 
@@ -1001,7 +985,7 @@ fn a_nan_plan_equals_itself_across_the_trip() {
     // is canonical-bits equality, so the round trip preserves the
     // claim the header test makes — "structural equality across the
     // trip" — instead of a plan that stops equalling itself.
-    let source = "graph g : App {\n  input in: text\n  operator o {\n    var seen : double = 0.0 / 0.0\n\n    on in {\n      out = data\n    }\n  }\n\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: text\n  operator o {\n    var seen : double = 0.0 / 0.0\n\n    on in {\n      out = data\n    }\n  }\n\n  in -> o -> out\n}\n";
     let compilation = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1019,7 +1003,7 @@ fn the_zero_signs_are_two_plans() {
     // packages differ, so equality may not say otherwise.
     let with_zero = |zero: &str| {
         let source = format!(
-            "graph g : App {{\n  input in: text\n  operator o {{\n    var seen : double = {zero}\n\n    on in {{\n      out = data\n    }}\n  }}\n\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  input in: text\n  operator o {{\n    var seen : double = {zero}\n\n    on in {{\n      out = data\n    }}\n  }}\n\n  in -> o -> out\n}}\n"
         );
         compile(
             &[source.as_str()],
@@ -1066,7 +1050,7 @@ fn a_hostile_depth_source_refuses_and_the_process_survives() {
         // — the parser's own guard must refuse it.
         let tower = format!(
             "graph g : App {{\n  input in: text\n  operator o {{\n    var seen : int = 0\n\n    on in {{\n      \
-             seen = {}1{}\n      out = data\n    }}\n  }}\n\n  . -> o -> .\n}}\n",
+             seen = {}1{}\n      out = data\n    }}\n  }}\n\n  in -> o -> out\n}}\n",
             "(".repeat(5_000),
             ")".repeat(5_000),
         );
@@ -1126,7 +1110,7 @@ fn the_depth_boundaries_are_exact() {
     let parens = |n: usize| {
         format!(
             "graph g : App {{\n  input in: text\n  operator o {{\n    var seen : int = 0\n\n    on in {{\n      \
-             seen = {}1{}\n      out = data\n    }}\n  }}\n\n  . -> o -> .\n}}\n",
+             seen = {}1{}\n      out = data\n    }}\n  }}\n\n  in -> o -> out\n}}\n",
             "(".repeat(n),
             ")".repeat(n),
         )

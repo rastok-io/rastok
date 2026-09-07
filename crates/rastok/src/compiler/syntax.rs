@@ -968,7 +968,7 @@ mod tests {
 
     #[test]
     fn a_minimal_app_graph_is_representable() {
-        // graph m0 : App { . -> shout -> . }
+        // graph m0 : App { in -> shout -> out }
         let tree = SyntaxTree {
             decls: vec![TopDecl::Graph(GraphDecl {
                 name: name("m0", 6..8),

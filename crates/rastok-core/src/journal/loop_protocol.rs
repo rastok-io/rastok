@@ -367,7 +367,14 @@ mod tests {
             assert!(!refs[..index].contains(reference));
             assert_ne!(
                 *reference,
-                super::super::ids::loop_run_ref(&instance, envelope)
+                LoopRunRef::new(Id::derive(
+                    0x13,
+                    &[
+                        instance.address().as_bytes(),
+                        &instance.generation().to_le_bytes(),
+                        envelope.as_bytes(),
+                    ]
+                ))
             );
         }
         let successor = InstanceRef::new(instance.address().clone(), 1);
@@ -406,7 +413,14 @@ mod tests {
         assert_ne!(admission, again.id());
         assert_ne!(
             admission,
-            super::super::ids::loop_reentry_id(run, 1, again.id())
+            Id::derive(
+                0x05,
+                &[
+                    run.id().as_bytes(),
+                    &1_u64.to_le_bytes(),
+                    again.id().as_bytes()
+                ]
+            )
         );
         assert_ne!(admission, admission_ref(run, 2, again));
         assert_ne!(admission, admission_ref(run, 1, done));

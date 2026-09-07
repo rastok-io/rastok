@@ -1,4 +1,8 @@
 graph export : App {
+  input in: text
+  output out: text
+  output err: union { TimeoutExpired {} }
+
   connector exporter : Process {
     mode = job ; command = "cat"
     codec = lines
@@ -7,10 +11,17 @@ graph export : App {
   }
 
   operator relay {
+    input in: text
+    output out: text
     on in {
       out = data
     }
   }
 
-  . -> relay -> exporter -> .
+  in -> relay -> exporter -> out
+  exporter.err -> nothing
+  exporter.exit -> match {
+    TimeoutExpired -> err
+    _ -> nothing
+  }
 }

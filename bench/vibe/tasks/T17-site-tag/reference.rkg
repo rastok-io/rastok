@@ -1,9 +1,14 @@
 graph tagging : App {
+  input in: text
+  output out: struct { site: text, reading: text }
+
   operator tag {
+    input in: text
+    output out: struct { site: text, reading: text }
     on in {
       out = {site = "alpha-7", reading = data}
     }
   }
 
-  . -> tag -> .
+  in -> tag -> out
 }

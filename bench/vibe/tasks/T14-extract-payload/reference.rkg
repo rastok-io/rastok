@@ -1,4 +1,7 @@
 graph extract : App {
+  input in: struct { site: text, payload: text }
+  output out: text
+
   connector forwarder : Process {
     mode = job ; command = "cat"
     codec = lines
@@ -6,10 +9,14 @@ graph extract : App {
   }
 
   operator unwrap {
+    input in: struct { site: text, payload: text }
+    output out: text
     on in {
       out = data.payload
     }
   }
 
-  . -> unwrap -> forwarder -> .
+  in -> unwrap -> forwarder -> out
+  forwarder.err -> nothing
+  forwarder.exit -> nothing
 }

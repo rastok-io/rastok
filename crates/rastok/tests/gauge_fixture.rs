@@ -6,7 +6,7 @@
 //! owe (D-2026-08-08-2/-3): one graph carrying a TYPED named
 //! boundary input, typed operator ports, and a typed named output,
 //! with its Lab scenario. Pinned here: the exact semantic hash (the
-//! identity move of the port-table presence tag), the current v15 package
+//! identity move of the port-table presence tag), the current v16 package
 //! bytes, and the full golden trace whose INBOUND record seals the
 //! ingress port as key 24.
 
@@ -27,46 +27,8 @@ fn compilation() -> rastok::compiler::Compilation {
     .expect("a valid unit")
 }
 
-/// The identity move of the typed-port lift, pinned to the byte:
-/// this hash includes the port-table presence tags and the pinned
-/// types (D-2026-08-08-3). It moves only when the language does —
-/// deliberately, with this constant re-blessed in review.
-// DELIBERATE MOVE 2026-08-10 (D-2026-08-10-7): trees seal
-// [type, root] — see lower.rs's pinned-hash note.
-// M1.3 final review keeps this connector-free semantic hash unchanged and
-// removes the lowering-only Operator `err` row from its package. That row
-// was never canonical HIR identity and never belonged in the plan.
-// DELIBERATE CONTAINER MOVE 2026-08-16 (M1.4 P1): the unpublished v8 draft
-// transported partition descriptors and lifecycle activations. Gauge declared neither,
-// so its semantic hash and causal trace stay fixed while the package checksum
-// changes with the format version.
-// DELIBERATE CONTAINER MOVE 2026-08-21 (M1.4 R2 checkpoint): categorical
-// v9 replaces that draft with the mandatory root owner, reciprocal Node owner
-// references and scoped edges. Gauge remains a persistent singleton, so its
-// semantic hash stays fixed while the package body moves.
-// DELIBERATE TRACE MOVE 2026-08-21 (M1.4 R3): even singleton routes and
-// transactions now carry their complete instance references. The semantic
-// hash and package remain fixed; only the causal trace moves.
-// R3 REVIEW CLOSURE: owner paths are sealed as segment arrays instead of
-// dotted display text. The same trace moves again; hash and package do not.
-// DELIBERATE CONTAINER MOVE 2026-08-22 (M1.5 C1): categorical v10 adds
-// Connector ids and roles. Gauge has no Connector, so only its package
-// version/checksum moves; semantic hash and causal trace stay byte-identical.
-// DELIBERATE CONTAINER MOVE 2026-08-25 (M1.6 H1): categorical v11 adds the
-// mandatory Connector exchange tag. Gauge again moves only at the container;
-// its connector-free semantic hash and causal trace remain byte-identical.
-// DELIBERATE CONTAINER MOVE 2026-08-26 (M1.6 H4.1): categorical v12 adds
-// `media_type` to the type/expression registry. Gauge moves only at the
-// container; its semantic hash and causal trace remain byte-identical.
-// DELIBERATE CONTAINER MOVE 2026-08-28 (M1.7 L2): categorical v13 adds
-// Graph aspect and handler-owner transport. Gauge has no aspect; only its
-// version, derived empty owner rows and checksum move. Hash/trace stay fixed.
-// DELIBERATE CONTAINER MOVE 2026-08-28 (M1.7 L6): categorical v14 makes
-// optional Loop proof transport explicit. Gauge has no Loop; only its version
-// and checksum move. Hash/trace stay fixed.
-// DELIBERATE CONTAINER MOVE 2026-08-30 (M1.8 A2): categorical v15 adds
-// sparse schema-policy tables. Gauge has no annotation, so only its version
-// and checksum move; its semantic hash and causal trace stay byte-identical.
+// Gauge witnesses semantic and causal neutrality. Only the v16 container moves;
+// see docs/architecture/rework-r9-qualification.md for exact body/checksum sizes.
 const GAUGE_HASH: &str = "0d3ad43d9fb09c8626146342f6a50d1f4c387a8de52a47a3134a408cf74cb22e";
 
 #[test]

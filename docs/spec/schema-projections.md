@@ -5,7 +5,7 @@
 > [`DataType`](types.md). A Connector may implement a strict subset, but it may
 > not reinterpret or weaken a refusal. Library iteration order and physical
 > container layout never become type identity. The v7 registry transports
-> every resulting logical type and union discriminant; categorical package v15
+> every resulting logical type and union discriminant; categorical package v16
 > retains that registry (v12 added the open `media_type` scalar) alongside v9's
 > instance ownership. B9
 > implements the adapters in `rastok::schema_projection` and pins their reverse

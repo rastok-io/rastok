@@ -4,5 +4,6 @@ graph http_server_interop : App {
     codec = text
     versions = ["http/2", "http/1.1"]
   }
-  server -> .
+  server -> out
+  server.exit -> nothing
 }

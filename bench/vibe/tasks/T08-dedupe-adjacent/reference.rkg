@@ -1,5 +1,10 @@
 graph dedupe : App {
+  input in: text
+  output out: text
+
   operator changes_only {
+    input in: text
+    output out: text
     var previous : text = ""
     on in where data != previous {
       previous = data
@@ -7,5 +12,5 @@ graph dedupe : App {
     }
   }
 
-  . -> changes_only -> .
+  in -> changes_only -> out
 }

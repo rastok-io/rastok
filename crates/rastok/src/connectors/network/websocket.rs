@@ -3213,7 +3213,7 @@ graph websocket : App {{
     max_message = "{max_message}"
     versions = ["{version}"]
   }}
-  . -> socket -> .
+  in -> socket -> out
   socket.exit -> nothing
 }}
 "#
@@ -3238,7 +3238,7 @@ graph websocket : App {{
     effect = idempotent ; behavior = deterministic
     versions = ["{version}"]
   }}
-  . -> socket -> .
+  in -> socket -> out
   socket.exit -> nothing
 }}
 "#
@@ -3818,7 +3818,7 @@ graph websocket : App {
     effect = idempotent ; behavior = deterministic
     versions = ["http/3"]
   }
-  . -> socket -> .
+  in -> socket -> out
   socket.exit -> nothing
 }
 "#;
@@ -3978,7 +3978,7 @@ graph websocket : App {
     effect = idempotent ; behavior = deterministic
     versions = ["http/2", "http/1.1"]
   }
-  . -> socket -> .
+  in -> socket -> out
   socket.exit -> nothing
 }
 "#;

@@ -18,7 +18,7 @@ fn emitted(body: &str) -> rastok::envelope::Data {
     use rastok::runtime::vm::Vm;
 
     let source = format!(
-        "graph g : App {{\n  input in: variant\n  operator o {{\n    output out: variant\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
+        "graph g : App {{\n  input in: variant\n  operator o {{\n    output out: variant\n    on in {{ out = {body} }}\n  }}\n  in -> o -> out\n}}\n"
     );
     let compilation = compile(
         &[source.as_str()],
@@ -48,7 +48,7 @@ fn emitted(body: &str) -> rastok::envelope::Data {
 
 fn hash_of(body: &str) -> String {
     let source = format!(
-        "graph g : App {{\n  input in: variant\n  operator o {{\n    output out: variant\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
+        "graph g : App {{\n  input in: variant\n  operator o {{\n    output out: variant\n    on in {{ out = {body} }}\n  }}\n  in -> o -> out\n}}\n"
     );
     compile(
         &[source.as_str()],
@@ -90,7 +90,7 @@ fn base64_refusals_are_located() {
         ("base64! { SG!s }", "alphabet"),
     ] {
         let source = format!(
-            "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  in -> o -> out\n}}\n"
         );
         let bag = compile(
             &[source.as_str()],
@@ -116,7 +116,7 @@ fn base64_with_a_content_type_is_whole_payload() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = base64!(\"image/png\") { AAEC } }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = base64!(\"image/png\") { AAEC } }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -184,7 +184,7 @@ fn maps_are_colon_punctuated_and_run() {
 fn mixing_struct_and_map_punctuation_refuses() {
     for body in ["{ a = 1, \"b\": 2 }", "{ \"b\": 2, a = 1 }"] {
         let source = format!(
-            "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  in -> o -> out\n}}\n"
         );
         let bag = compile(
             &[source.as_str()],
@@ -274,7 +274,7 @@ fn json_refusals_are_located() {
         ("json! { \"a\": }", "syntax"),
     ] {
         let source = format!(
-            "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  in -> o -> out\n}}\n"
         );
         let bag = compile(
             &[source.as_str()],
@@ -320,7 +320,7 @@ fn assets_resolve_at_build_and_seal_by_content() {
 
     // Whole-data with a content type, plus a second use of the SAME
     // content under a different path: one deduplicated blob.
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = asset(\"assets/logo.bin\", \"application/octet-stream\") }\n  }\n  operator p {\n    on in { out = asset(\"assets/same.bin\") }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = asset(\"assets/logo.bin\", \"application/octet-stream\") }\n  }\n  operator p {\n    on in { out = asset(\"assets/same.bin\") }\n  }\n  in -> o\n  o -> p\n  p -> out\n}\n";
     let compilation = compile_with_assets(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -334,7 +334,7 @@ fn assets_resolve_at_build_and_seal_by_content() {
     );
     // The hash seals the CONTENT digest, not the path: the same
     // program via the other spelling is the same identity.
-    let swapped = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = asset(\"assets/same.bin\", \"application/octet-stream\") }\n  }\n  operator p {\n    on in { out = asset(\"assets/logo.bin\") }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
+    let swapped = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = asset(\"assets/same.bin\", \"application/octet-stream\") }\n  }\n  operator p {\n    on in { out = asset(\"assets/logo.bin\") }\n  }\n  in -> o\n  o -> p\n  p -> out\n}\n";
     let other = compile_with_assets(
         &[swapped],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -356,7 +356,7 @@ fn asset_refusals_are_named() {
     std::fs::create_dir_all(&root).unwrap();
     let refuses = |body: &str, root: Option<&std::path::Path>, want: &str| {
         let source = format!(
-            "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  in -> o -> out\n}}\n"
         );
         let bag = compile_with_assets(
             &[source.as_str()],
@@ -396,7 +396,7 @@ fn an_asset_emission_runs_and_carries_its_type() {
     let mut file = std::fs::File::create(root.join("report.bin")).unwrap();
     file.write_all(b"PDFISH").unwrap();
 
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = asset(\"report.bin\", \"application/pdf\") }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = asset(\"report.bin\", \"application/pdf\") }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile_with_assets(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -437,7 +437,7 @@ fn an_asset_emission_runs_and_carries_its_type() {
 #[test]
 fn named_types_are_structural_sugar() {
     // An alias resolves to its structure in a pin…
-    let aliased = "type Tag = text\n\ngraph g : App {\n  operator o {\n    input evt : Tag\n    on evt { out = data }\n  }\n  . -> o.evt\n  o -> .\n}\n";
+    let aliased = "type Tag = text\n\ngraph g : App {\n  operator o {\n    input evt : Tag\n    on evt { out = data }\n  }\n  in -> o.evt\n  o -> out\n}\n";
     let first = compile(
         &[aliased],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -445,7 +445,7 @@ fn named_types_are_structural_sugar() {
     .expect("the alias resolves");
     // …and RENAMING it is not an identity move: same structure, same
     // hash (D-2026-08-10-8).
-    let renamed = "type Label = text\n\ngraph g : App {\n  operator o {\n    input evt : Label\n    on evt { out = data }\n  }\n  . -> o.evt\n  o -> .\n}\n";
+    let renamed = "type Label = text\n\ngraph g : App {\n  operator o {\n    input evt : Label\n    on evt { out = data }\n  }\n  in -> o.evt\n  o -> out\n}\n";
     let second = compile(
         &[renamed],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -453,7 +453,7 @@ fn named_types_are_structural_sugar() {
     .expect("the rename resolves");
     assert_eq!(first.hash, second.hash, "names are sugar, never identity");
     // The bare structural spelling is the SAME program too.
-    let bare = "graph g : App {\n  operator o {\n    input evt : text\n    on evt { out = data }\n  }\n  . -> o.evt\n  o -> .\n}\n";
+    let bare = "graph g : App {\n  operator o {\n    input evt : text\n    on evt { out = data }\n  }\n  in -> o.evt\n  o -> out\n}\n";
     let third = compile(
         &[bare],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -465,7 +465,7 @@ fn named_types_are_structural_sugar() {
 #[test]
 fn type_declarations_refuse_duplicates_cycles_and_unknowns() {
     // Duplicate.
-    let source = "type T = text\ntype T = int\n\ngraph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
+    let source = "type T = text\ntype T = int\n\ngraph g : App {\n  operator o {\n    on in { out = data }\n  }\n  in -> o -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -478,7 +478,7 @@ fn type_declarations_refuse_duplicates_cycles_and_unknowns() {
         "{bag:?}"
     );
     // Cycle — the reform's own Node example refuses in v1.
-    let source = "type Node = struct { label: text, children: array<Node> }\n\ngraph g : App {\n  operator o {\n    input evt : Node\n    on evt { out = data }\n  }\n  . -> o.evt\n  o -> .\n}\n";
+    let source = "type Node = struct { label: text, children: array<Node> }\n\ngraph g : App {\n  operator o {\n    input evt : Node\n    on evt { out = data }\n  }\n  in -> o.evt\n  o -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -491,7 +491,7 @@ fn type_declarations_refuse_duplicates_cycles_and_unknowns() {
         "{bag:?}"
     );
     // Unknown name at a use site.
-    let source = "graph g : App {\n  operator o {\n    input evt : Ghost\n    on evt { out = data }\n  }\n  . -> o.evt\n  o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    input evt : Ghost\n    on evt { out = data }\n  }\n  in -> o.evt\n  o -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -536,7 +536,7 @@ fn bare_forms_embed_in_records_and_typed_forms_refuse_there() {
         Some(&Value::Array(vec![Value::Int(1)]))
     );
     // A content-typed form nested in a record refuses with the rule.
-    let source = "graph g : App {\n  operator o {\n    on in { out = { document = base64!(\"image/png\") { AAEC } } }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in { out = { document = base64!(\"image/png\") { AAEC } } }\n  }\n  in -> o -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -563,7 +563,7 @@ fn the_carry_survives_a_dead_earlier_write() {
     // `data = "temp"` then `data = data`: last-write-wins — the
     // final value is the input payload, so the representation and
     // its content type CARRY (the reviewer's counter-example).
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        data = \"temp\"\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        data = \"temp\"\n        data = data\n      }\n    }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -619,7 +619,7 @@ fn inject_holds_the_ext_zone_to_the_schema() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -654,7 +654,7 @@ fn inject_holds_the_ext_zone_to_the_schema() {
 fn a_zone_alias_cannot_dodge_the_grid() {
     // `val m = meta.app; out = m.ghost` must refuse at CHECK — a
     // zone is not a value (the reviewer's escape).
-    let source = "graph g : App {\n  operator o {\n    on in {\n      val m = meta.app\n      out = m.ghost\n    }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in {\n      val m = meta.app\n      out = m.ghost\n    }\n  }\n  in -> o -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -671,7 +671,7 @@ fn a_zone_alias_cannot_dodge_the_grid() {
 #[test]
 fn a_non_meta_typed_app_write_refuses_or_converts() {
     // An array<scalar> write now CONVERTS (spec-admitted meta)…
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.tags = [\"a\", \"b\"]\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.tags = [\"a\", \"b\"]\n        data = data\n      }\n    }\n  }\n  in -> o -> out\n}\n";
     compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -681,7 +681,7 @@ fn a_non_meta_typed_app_write_refuses_or_converts() {
     // `media_type` field. The metadata and port gates use the same
     // assignability relation,
     // and ports, so the refusal is static rather than a runtime surprise.
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = { data = \"x\", meta.ext.content_type = data } }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = { data = \"x\", meta.ext.content_type = data } }\n  }\n  in -> o -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -703,7 +703,7 @@ fn the_meta_type_grid_is_closed_end_to_end() {
         ("meta.app.ttl = duration(\"1s\")", "a duration leaf"),
     ] {
         let source = format!(
-            "graph g : App {{\n  operator o {{\n    on in {{\n      out = {{\n        {body}\n        data = data\n      }}\n    }}\n  }}\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  operator o {{\n    on in {{\n      out = {{\n        {body}\n        data = data\n      }}\n    }}\n  }}\n  in -> o -> out\n}}\n"
         );
         let bag = compile(
             &[source.as_str()],
@@ -725,7 +725,7 @@ fn the_meta_type_grid_is_closed_end_to_end() {
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -759,7 +759,7 @@ fn the_meta_type_grid_is_closed_end_to_end() {
 #[test]
 fn a_branch_alias_cannot_dodge_the_grid_either() {
     // The refined escape: a projected BRANCH leaving as a value.
-    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.audit.origin = \"x\"\n        data = data\n      }\n    }\n  }\n  operator p {\n    on in {\n      val m = meta.app.audit\n      out = m\n    }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.audit.origin = \"x\"\n        data = data\n      }\n    }\n  }\n  operator p {\n    on in {\n      val m = meta.app.audit\n      out = m\n    }\n  }\n  in -> o\n  o -> p\n  p -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -772,7 +772,7 @@ fn a_branch_alias_cannot_dodge_the_grid_either() {
         "{bag:?}"
     );
     // And a sys LEAF takes no extra segments.
-    let source = "graph g : App {\n  operator o {\n    on in where meta.sys.id.extra == \"x\" { out = data }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in where meta.sys.id.extra == \"x\" { out = data }\n  }\n  in -> o -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -809,9 +809,9 @@ fn comments_are_trivia_in_every_expression_form() {
     }
     // Before `}` on the same line, and before the line's end.
     let plain =
-        "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
-    let brace = "graph g : App {\n  operator o {\n    on in { out = data /* same */ }\n  }\n  . -> o -> .\n}\n";
-    let eol = "graph g : App {\n  operator o {\n    on in {\n      out = data // end\n    }\n  }\n  . -> o -> .\n}\n";
+        "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  in -> o -> out\n}\n";
+    let brace = "graph g : App {\n  operator o {\n    on in { out = data /* same */ }\n  }\n  in -> o -> out\n}\n";
+    let eol = "graph g : App {\n  operator o {\n    on in {\n      out = data // end\n    }\n  }\n  in -> o -> out\n}\n";
     let hash = |source: &str| {
         let typed = source.replacen("graph g : App {", "graph g : App {\n  input in: variant", 1);
         compile(
@@ -825,21 +825,21 @@ fn comments_are_trivia_in_every_expression_form() {
     assert_eq!(hash(plain), hash(brace), "before `}}`");
     assert_eq!(hash(plain), hash(eol), "before the newline");
     // A terminator INSIDE a comment never terminates.
-    let guarded = "graph g : App {\n  operator o {\n    on in { out = 1 /* ; } */ + 2 }\n  }\n  . -> o -> .\n}\n";
+    let guarded = "graph g : App {\n  operator o {\n    on in { out = 1 /* ; } */ + 2 }\n  }\n  in -> o -> out\n}\n";
     let bare =
-        "graph g : App {\n  operator o {\n    on in { out = 1 + 2 }\n  }\n  . -> o -> .\n}\n";
+        "graph g : App {\n  operator o {\n    on in { out = 1 + 2 }\n  }\n  in -> o -> out\n}\n";
     assert_eq!(hash(guarded), hash(bare), "`;`/`}}` inside a comment");
     // A line's end only ends a value at depth ZERO (review round 2's
     // blocker, its exact reproductions): comments inside a
     // multiline array and a parenthesized guard are trivia, and the
     // commented twin is the SAME program.
-    let array_bare = "graph g : App {\n  operator o {\n    on in {\n      out = size([\n        1,\n        2\n      ])\n    }\n  }\n  . -> o -> .\n}\n";
-    let array_line = "graph g : App {\n  operator o {\n    on in {\n      out = size([\n        1, // premier\n        2\n      ])\n    }\n  }\n  . -> o -> .\n}\n";
-    let array_block = "graph g : App {\n  operator o {\n    on in {\n      out = size([\n        1, /* premier */\n        2\n      ])\n    }\n  }\n  . -> o -> .\n}\n";
+    let array_bare = "graph g : App {\n  operator o {\n    on in {\n      out = size([\n        1,\n        2\n      ])\n    }\n  }\n  in -> o -> out\n}\n";
+    let array_line = "graph g : App {\n  operator o {\n    on in {\n      out = size([\n        1, // premier\n        2\n      ])\n    }\n  }\n  in -> o -> out\n}\n";
+    let array_block = "graph g : App {\n  operator o {\n    on in {\n      out = size([\n        1, /* premier */\n        2\n      ])\n    }\n  }\n  in -> o -> out\n}\n";
     assert_eq!(hash(array_bare), hash(array_line), "array + line comment");
     assert_eq!(hash(array_bare), hash(array_block), "array + block comment");
-    let guard_bare = "graph g : App {\n  operator o {\n    on in where (\n      true\n      && true\n    ) {\n      out = data\n    }\n  }\n  . -> o -> .\n}\n";
-    let guard_line = "graph g : App {\n  operator o {\n    on in where (\n      true // condition\n      && true\n    ) {\n      out = data\n    }\n  }\n  . -> o -> .\n}\n";
+    let guard_bare = "graph g : App {\n  operator o {\n    on in where (\n      true\n      && true\n    ) {\n      out = data\n    }\n  }\n  in -> o -> out\n}\n";
+    let guard_line = "graph g : App {\n  operator o {\n    on in where (\n      true // condition\n      && true\n    ) {\n      out = data\n    }\n  }\n  in -> o -> out\n}\n";
     assert_eq!(hash(guard_bare), hash(guard_line), "guard + line comment");
 }
 
@@ -848,7 +848,7 @@ fn a_named_decimal_is_the_same_program_family() {
     // D-2026-08-13-1 (review round): naming a constant expression
     // must not change validity — the folded declared-scale constant
     // travels the package like the direct call.
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    val p = decimal(\"1.50\")\n    on in { out = p }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    val p = decimal(\"1.50\")\n    on in { out = p }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -868,7 +868,7 @@ fn the_validator_matches_the_decoder_on_decimals_and_digests() {
     // typed decimal and a trailing-zero typed decimal are both honest. The
     // document-origin integer fold remains a reader rule, not a package
     // decoder rule applied without the schema context.
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    var seen : int = 0\n    on in { seen = seen + 1\n      out = data }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    var seen : int = 0\n    on in { seen = seen + 1\n      out = data }\n  }\n  in -> o -> out\n}\n";
     let mut plan = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -913,7 +913,7 @@ fn the_validator_matches_the_decoder_on_decimals_and_digests() {
     let bytes = rastok::plan::encode(&validated, &rastok::plan::SemanticHash::from_bytes([8; 32]));
     rastok::plan::decode(&bytes).expect("the trailing-zero decimal reads back");
     // A blob lying about its digest cannot obtain validation.
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  in -> o -> out\n}\n";
     let mut plan = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -957,8 +957,8 @@ fn asset_order_is_digest_canonical() {
 
     // The same two assets, used in OPPOSITE source order, produce
     // the same package bytes: the table is digest-sorted at seal.
-    let ab = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = asset(\"a.bin\") }\n  }\n  operator p {\n    on in { out = asset(\"b.bin\") }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
-    let ba = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = asset(\"b.bin\") }\n  }\n  operator p {\n    on in { out = asset(\"a.bin\") }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
+    let ab = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = asset(\"a.bin\") }\n  }\n  operator p {\n    on in { out = asset(\"b.bin\") }\n  }\n  in -> o\n  o -> p\n  p -> out\n}\n";
+    let ba = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = asset(\"b.bin\") }\n  }\n  operator p {\n    on in { out = asset(\"a.bin\") }\n  }\n  in -> o\n  o -> p\n  p -> out\n}\n";
     let first = compile_with_assets(
         &[ab],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1065,7 +1065,7 @@ graph app : App {{
 fn the_review_round_three_matrix_holds() {
     use rastok::envelope::{Data, Value};
     // uint refuses statically — the runtime cannot represent it.
-    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.n = 3u\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.n = 3u\n        data = data\n      }\n    }\n  }\n  in -> o -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1080,7 +1080,7 @@ fn the_review_round_three_matrix_holds() {
     // Metadata keeps its deliberately narrower rule: one field has one
     // type. B2 must not hide an int/text conflict behind `variant` or a
     // synthesized union.
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.x = 1\n        data = data\n      }\n    }\n  }\n  operator p {\n    on in {\n      out = {\n        meta.app.x = \"not an int\"\n        data = data\n      }\n    }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.x = 1\n        data = data\n      }\n    }\n  }\n  operator p {\n    on in {\n      out = {\n        meta.app.x = \"not an int\"\n        data = data\n      }\n    }\n  }\n  in -> o\n  o -> p\n  p -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1093,7 +1093,7 @@ fn the_review_round_three_matrix_holds() {
         "{bag:?}"
     );
     // app.content_type is an ORDINARY app field — no special rule.
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.content_type = 7\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.content_type = 7\n        data = data\n      }\n    }\n  }\n  in -> o -> out\n}\n";
     compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1123,7 +1123,7 @@ fn deep_structural_types_meet_the_depth_budget() {
         ty = format!("array<{ty}>");
     }
     let source = format!(
-        "type Deep = {ty}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  . -> o -> .\n}}\n"
+        "type Deep = {ty}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  in -> o -> out\n}}\n"
     );
     let bag = compile(
         &[source.as_str()],
@@ -1160,7 +1160,7 @@ fn lab_assets_never_reach_the_production_plan() {
         "mock shell { on in { out = asset(\"seed.bin\") } }\n      app.in = \"x\"",
     ] {
         let source = format!(
-            "graph g : App {{\n  connector shell : Process {{\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }}\n  . -> shell -> .\n}}\n\nlab g {{\n  simulation probing on app {{\n    scenario s \"lab asset\" {{\n      {body}\n      expect \"out\" app.out count == 1\n    }}\n  }}\n}}\n"
+            "graph g : App {{\n  connector shell : Process {{\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }}\n  in -> shell -> out\n}}\n\nlab g {{\n  simulation probing on app {{\n    scenario s \"lab asset\" {{\n      {body}\n      expect \"out\" app.out count == 1\n    }}\n  }}\n}}\n"
         );
         let bag = compile_with_assets(
             &[source.as_str()],
@@ -1181,7 +1181,7 @@ fn lab_assets_never_reach_the_production_plan() {
 #[test]
 fn the_validator_only_admits_executable_schemas() {
     use rastok::plan::{PlanValidationError, ValidatedExecutionPlan};
-    let base = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
+    let base = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  in -> o -> out\n}\n";
     // A uint schema entry: no value can ever satisfy it — named as
     // the TYPE refusal it is.
     let mut plan = compile(
@@ -1245,7 +1245,7 @@ fn a_decimal_meta_value_round_trips_through_a_copy() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.price = data\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.price = data\n        data = data\n      }\n    }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1302,7 +1302,7 @@ fn values_nest_recursively_across_struct_and_map() {
     assert_eq!(inner.get("x"), Some(&Value::Int(1)));
     // A non-empty STRUCT inside a map: inexpressible in v1, deferred
     // BY NAME (the D-6 amendment) — dynamic nesting spells `json`.
-    let source = "graph g : App {\n  operator o {\n    on in { out = { \"row\": { x = 1 } } }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in { out = { \"row\": { x = 1 } } }\n  }\n  in -> o -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1318,7 +1318,7 @@ fn values_nest_recursively_across_struct_and_map() {
 
 #[test]
 fn an_inline_enum_is_a_complete_field_type() {
-    let source = "type Capture = struct { reason: enum { budget, capacity } }\n\ngraph g : App {\n  input in: text\n  output out: text\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
+    let source = "type Capture = struct { reason: enum { budget, capacity } }\n\ngraph g : App {\n  input in: text\n  output out: text\n  operator o {\n    on in { out = data }\n  }\n  in -> o -> out\n}\n";
     compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1352,7 +1352,7 @@ fn broken_type_declarations_refuse_even_unused() {
         ),
     ] {
         let source = format!(
-            "type Broken = {source_ty}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  . -> o -> .\n}}\n"
+            "type Broken = {source_ty}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  in -> o -> out\n}}\n"
         );
         let bag = compile(
             &[source.as_str()],
@@ -1391,7 +1391,7 @@ fn broken_type_declarations_refuse_even_unused() {
     // alternative: 5000 branches refuse.
     let wide = (0..5000).map(|_| "text").collect::<Vec<_>>().join(" | ");
     let source = format!(
-        "type Wide = {wide}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  . -> o -> .\n}}\n"
+        "type Wide = {wide}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  in -> o -> out\n}}\n"
     );
     let bag = compile(
         &[source.as_str()],
@@ -1411,7 +1411,7 @@ fn broken_type_declarations_refuse_even_unused() {
 fn map_keys_keep_their_string_semantics() {
     // A duplicate key refuses AT CHECK, on the SECOND key — the
     // registered code, never an internal-plan surprise.
-    let source = "graph g : App {\n  operator o {\n    on in { out = { \"a\": 1, \"a\": 2 } }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in { out = { \"a\": 1, \"a\": 2 } }\n  }\n  in -> o -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1430,7 +1430,7 @@ fn map_keys_keep_their_string_semantics() {
     assert_eq!(rkg, expr, "one escape semantics, one hash");
     // And the decoded key is REALLY the newline form: two escaped
     // twins collide as duplicates.
-    let source = "graph g : App {\n  operator o {\n    on in { out = { \"a\\nb\": 1, \"a\\nb\": 2 } }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in { out = { \"a\\nb\": 1, \"a\\nb\": 2 } }\n  }\n  in -> o -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1455,7 +1455,7 @@ fn content_type_arguments_are_literals_only() {
         "text!() {\n      hi\n    }",
     ] {
         let source = format!(
-            "graph g : App {{\n  input in: variant\n  output out: variant\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  input in: variant\n  output out: variant\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  in -> o -> out\n}}\n"
         );
         let bag = compile(
             &[source.as_str()],
@@ -1486,11 +1486,11 @@ fn alias_and_bare_spellings_share_the_node_budget() {
     // top: the aliased and bare spellings have exactly the same
     // acceptance at the boundary (D-2026-08-10-8).
     let at_budget_bare = format!(
-        "type Wide = {}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  . -> o -> .\n}}\n",
+        "type Wide = {}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  in -> o -> out\n}}\n",
         (0..4096).map(|_| "text").collect::<Vec<_>>().join(" | ")
     );
     let at_budget_aliased = format!(
-        "type T = text\ntype Wide = {}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  . -> o -> .\n}}\n",
+        "type T = text\ntype Wide = {}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  in -> o -> out\n}}\n",
         (0..4096).map(|_| "T").collect::<Vec<_>>().join(" | ")
     );
     assert_eq!(
@@ -1507,11 +1507,11 @@ fn alias_and_bare_spellings_share_the_node_budget() {
         "sugar carries no budget weight"
     );
     let over_bare = format!(
-        "type Wide = {}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  . -> o -> .\n}}\n",
+        "type Wide = {}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  in -> o -> out\n}}\n",
         (0..4097).map(|_| "text").collect::<Vec<_>>().join(" | ")
     );
     let over_aliased = format!(
-        "type T = text\ntype Wide = {}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  . -> o -> .\n}}\n",
+        "type T = text\ntype Wide = {}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  in -> o -> out\n}}\n",
         (0..4097).map(|_| "T").collect::<Vec<_>>().join(" | ")
     );
     assert!(
@@ -1533,7 +1533,7 @@ fn alias_and_bare_spellings_share_the_node_budget() {
 #[test]
 fn nested_content_type_gets_its_own_diagnostic() {
     // The dedicated code, on the TAG's span — never E-META-ZONE.
-    let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64!(\"image/png\") { AAEC } } }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64!(\"image/png\") { AAEC } } }\n  }\n  in -> o -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1553,7 +1553,7 @@ fn nested_content_type_gets_its_own_diagnostic() {
     assert!(!hit.spans().is_empty(), "the tag is underlined");
     // Arity refuses FIRST: a malformed call is malformed wherever
     // it sits.
-    let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64!(\"a\", \"b\") { AAEC } } }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64!(\"a\", \"b\") { AAEC } } }\n  }\n  in -> o -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1582,7 +1582,7 @@ fn alias_chains_meet_their_own_budget() {
         source.push_str(&format!("type T{i} = T{}\n", i - 1));
     }
     source.push_str(
-        "\ngraph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
+        "\ngraph g : App {\n  operator o {\n    on in { out = data }\n  }\n  in -> o -> out\n}\n",
     );
     let bag = compile(
         &[source.as_str()],
@@ -1602,7 +1602,7 @@ fn alias_chains_meet_their_own_budget() {
         source.push_str(&format!("type T{i} = T{}\n", i - 1));
     }
     source.push_str(
-        "\ngraph g : App {\n  operator o {\n    input evt : T99\n    on evt { out = data }\n  }\n  . -> o.evt\n  o -> .\n}\n",
+        "\ngraph g : App {\n  operator o {\n    input evt : T99\n    on evt { out = data }\n  }\n  in -> o.evt\n  o -> out\n}\n",
     );
     compile(
         &[source.as_str()],
@@ -1616,7 +1616,7 @@ fn a_misplaced_malformed_call_refuses_once_for_the_malformation() {
     // The pipeline order: shape → arguments → position. A nested
     // call with a NON-STRING argument gets the argument truth, one
     // diagnostic, never E-CONTENT-TYPE noise.
-    let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64!(\"image/\" + \"png\") { AAEC } } }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64!(\"image/\" + \"png\") { AAEC } } }\n  }\n  in -> o -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1640,7 +1640,7 @@ fn the_alias_boundary_keeps_its_variable() {
     // silently dropped at the boundary. 257 refuses typed.
     let graph_with = |ty: &str| {
         format!(
-            "graph g : App {{\n  input in: text\n  operator o {{\n    var seen : {ty} = \"x\"\n    on in {{ seen = data\n      out = data }}\n  }}\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  input in: text\n  operator o {{\n    var seen : {ty} = \"x\"\n    on in {{ seen = data\n      out = data }}\n  }}\n  in -> o -> out\n}}\n"
         )
     };
     let chain = |n: usize| {
@@ -1682,7 +1682,7 @@ fn the_alias_boundary_keeps_its_variable() {
     // The same boundary on a PORT pin.
     let port_with = |ty: &str| {
         format!(
-            "graph g : App {{\n  operator o {{\n    input evt : {ty}\n    on evt {{ out = data }}\n  }}\n  . -> o.evt\n  o -> .\n}}\n"
+            "graph g : App {{\n  operator o {{\n    input evt : {ty}\n    on evt {{ out = data }}\n  }}\n  in -> o.evt\n  o -> out\n}}\n"
         )
     };
     let port_chain = {
@@ -1713,7 +1713,7 @@ fn the_alias_boundary_keeps_its_variable() {
 fn the_shape_gate_owns_the_body_and_speaks_once() {
     // A content-typed base64 with no payload is a malformed frontend
     // value: framing, never placement, owns the refusal.
-    let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64!(\"image/png\") } }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64!(\"image/png\") } }\n  }\n  in -> o -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1734,7 +1734,7 @@ fn the_shape_gate_owns_the_body_and_speaks_once() {
     // one diagnostic, not a parse+check cascade.
     for tag in ["text", "base64", "asset"] {
         let source = format!(
-            "graph g : App {{\n  operator o {{\n    on in {{ out = {tag} }}\n  }}\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  operator o {{\n    on in {{ out = {tag} }}\n  }}\n  in -> o -> out\n}}\n"
         );
         let bag = compile(
             &[source.as_str()],
@@ -1748,7 +1748,7 @@ fn the_shape_gate_owns_the_body_and_speaks_once() {
         );
     }
     // Both asset arguments faulty: the PATH speaks first.
-    let source = "graph g : App {\n  operator o {\n    on in { out = asset(\"a\" + \".bin\", \"x\" + \"y\") }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in { out = asset(\"a\" + \".bin\", \"x\" + \"y\") }\n  }\n  in -> o -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1779,7 +1779,7 @@ fn empty_parentheses_speak_once_through_the_checker() {
         ("asset()", "takes a path"),
     ] {
         let source = format!(
-            "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  in -> o -> out\n}}\n"
         );
         let bag = compile(
             &[source.as_str()],

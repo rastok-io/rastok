@@ -126,7 +126,7 @@ mod tests {
         // A real semantic rule, not a parser accident: an emission
         // leaving by an input port.
         let source =
-            "graph g : App {\n  operator o {\n    on in { in = . }\n  }\n  . -> o -> .\n}\n";
+            "graph g : App {\n  operator o {\n    on in { in = . }\n  }\n  in -> o -> out\n}\n";
         let Err(bag) = compile(
             &[source],
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -154,7 +154,7 @@ mod tests {
     #[test]
     fn rendering_is_total_even_without_sources() {
         let source =
-            "graph g : App {\n  operator o {\n    on in { in = . }\n  }\n  . -> o -> .\n}\n";
+            "graph g : App {\n  operator o {\n    on in { in = . }\n  }\n  in -> o -> out\n}\n";
         let Err(bag) = compile(
             &[source],
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),

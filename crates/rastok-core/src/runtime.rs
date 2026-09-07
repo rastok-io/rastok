@@ -1257,13 +1257,11 @@ impl<'plan> HandlerExecutor<'plan> {
                 close_scope: close_requested.then(|| instance.clone()),
                 exchange_exit: None,
                 loop_record: application.map(|application| {
-                    Box::new(crate::journal::LoopRecord::R2(
-                        crate::journal::loop_protocol::Packet {
-                            context: vec![application.run],
-                            produced: commands,
-                            ..Default::default()
-                        },
-                    ))
+                    Box::new(crate::journal::loop_protocol::Packet {
+                        context: vec![application.run],
+                        produced: commands,
+                        ..Default::default()
+                    })
                 }),
                 logical_time,
                 trigger: trigger.clone(),

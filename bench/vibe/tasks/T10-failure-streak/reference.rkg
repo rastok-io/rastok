@@ -1,5 +1,10 @@
 graph streaks : App {
+  input in: struct { ok: bool }
+  output out: struct { streak: int }
+
   operator count_failures {
+    input in: struct { ok: bool }
+    output out: struct { streak: int }
     var streak : int = 0
     on in {
       streak = data.ok ? 0 : streak + 1
@@ -7,5 +12,5 @@ graph streaks : App {
     }
   }
 
-  . -> count_failures -> .
+  in -> count_failures -> out
 }

@@ -39,7 +39,7 @@ graph happy : App {
     }
   }
 
-  . -> shout -> echo -> .
+  in -> shout -> echo -> out
   echo.err -> nothing
   echo.exit -> nothing
 }
@@ -59,7 +59,7 @@ graph failing : App {
     on in { out = data.text }
   }
 
-  . -> shout -> boom -> .
+  in -> shout -> boom -> out
   boom.err -> nothing
   boom.exit -> nothing
 }
@@ -78,7 +78,7 @@ graph missing : App {
     on in { out = data.text }
   }
 
-  . -> shout -> ghost -> .
+  in -> shout -> ghost -> out
   ghost.err -> nothing
   ghost.exit -> nothing
 }
@@ -98,7 +98,7 @@ graph garbling : App {
     on in { out = data.text }
   }
 
-  . -> shout -> garble -> .
+  in -> shout -> garble -> out
   garble.err -> nothing
   garble.exit -> nothing
 }
@@ -120,7 +120,7 @@ graph flooding : App {
     on in { out = data.text }
   }
 
-  . -> shout -> leaky -> .
+  in -> shout -> leaky -> out
   leaky.err -> nothing
   leaky.exit -> nothing
 }
@@ -141,7 +141,7 @@ graph mute : App {
     on in { out = data.text }
   }
 
-  . -> shout -> hang -> .
+  in -> shout -> hang -> out
   hang.err -> nothing
   hang.exit -> nothing
 }
@@ -171,8 +171,8 @@ graph pair : App {
     on in { out = data.b }
   }
 
-  . -> ra -> left -> .
-  . -> rb -> right -> .
+  in -> ra -> left -> out
+  in -> rb -> right -> out
   left.err -> nothing
   left.exit -> nothing
   right.err -> nothing

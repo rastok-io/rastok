@@ -2255,7 +2255,7 @@ graph m0_probe : App {
     }
   }
 
-  . -> shout -> echo -> .
+  in -> shout -> echo -> out
   echo.err -> nothing
   echo.exit -> nothing
 }
@@ -2404,7 +2404,7 @@ graph app : App {
       out = .
     }
   }
-  . -> o -> .
+  in -> o -> out
 }
 "#;
         let registry = ContractCatalog::try_m0().expect("the standard catalogue holds");
@@ -2435,7 +2435,7 @@ graph app : App {
         let registry = ContractCatalog::try_m0().expect("the standard catalogue holds");
         let source = |annotation: &str| {
             format!(
-                "graph app : App {{\n  operator o {{\n    input in: text{annotation}\n    on in {{ out = data }}\n  }}\n  . -> o -> .\n}}\n"
+                "graph app : App {{\n  operator o {{\n    input in: text{annotation}\n    on in {{ out = data }}\n  }}\n  in -> o -> out\n}}\n"
             )
         };
         let plain =
@@ -2485,7 +2485,7 @@ graph app : App {
     output out: int
     on in { out = data.tokens }
   }
-  . -> relay -> project -> .
+  in -> relay -> project -> out
 }
 "#;
         let registry = ContractCatalog::try_m0().expect("the standard catalogue holds");
@@ -2549,7 +2549,7 @@ graph app : App {
   operator increment {
     on in { out = data + 1 }
   }
-  . -> increment -> .
+  in -> increment -> out
 }
 "#;
         let compilation = compile(
@@ -2596,7 +2596,7 @@ graph app : App {
     output out: text
     on in where data.allow { out = data.payload }
   }
-  . -> gate -> .
+  in -> gate -> out
 }
 "#;
         let compilation = compile(
@@ -2633,7 +2633,7 @@ graph app : App {
     output out: text
     on in { out = label }
   }
-  . -> relay -> .
+  in -> relay -> out
 }
 "#;
         let compilation = compile(
@@ -2677,9 +2677,9 @@ graph app : App {
     on metered { out = data }
     on plain { out = data }
   }
-  .metered -> merge.metered
-  .plain -> merge.plain
-  merge.out -> .out
+  metered -> merge.metered
+  plain -> merge.plain
+  merge.out -> out
 }
 "#;
         let diagnostics = compile(
@@ -2710,7 +2710,7 @@ type Classified = text @sensitive(level = confidential)
 graph app : App {
   input in: Classified
   operator relay { on in { out = data } }
-  . -> relay -> .
+  in -> relay -> out
 }
 "#;
         let compilation = compile(
@@ -2750,7 +2750,7 @@ type Classified = text @sensitive(level = confidential)
 graph app : App {
   input in: Classified
   operator relay { on in { out = data } }
-  . -> relay -> .
+  in -> relay -> out
 }
 "#;
         let compilation = compile(
@@ -2961,7 +2961,7 @@ graph app : App {
     effect = idempotent
     behavior = deterministic
   }
-  . -> model -> .
+  in -> model -> out
   model.exit -> nothing
 }
 "#],
@@ -3161,7 +3161,7 @@ graph m0_probe : App {
     behavior = deterministic
   }
 
-  . -> shout -> echo -> .
+  in -> shout -> echo -> out
   echo.exit -> nothing
   echo.err -> nothing
 }
@@ -3211,48 +3211,8 @@ graph m0_probe : App {
 
     #[test]
     fn the_semantic_hash_is_pinned_byte_for_byte() {
-        // The frozen identity of the M0 probe. If this test fails, the
-        // canonical form changed: that is an identity-contract change
-        // and must be deliberate, reviewed, and re-blessed.
-        // DELIBERATE MOVE 2026-08-10 (D-2026-08-10-7): a compiled
-        // tree seals its STATIC TYPE with its root, so a `json`
-        // document and its Rastok expression twin are distinct programs — every
-        // tree-carrying graph moved once.
-        // DELIBERATE MOVE 2026-08-12 (D-2026-08-12-1): contract
-        // defaults are injected into the effective HIR before the
-        // hash (`args = []`, `max_output = "8MiB"`,
-        // `on_timeout = kill` on this probe) — omission and the
-        // exact spelling of a default are ONE identity, so every
-        // Process-carrying graph moved once.
-        // DELIBERATE MOVE 2026-08-12, same day (review round): the
-        // former Process error set gained `CaptureFailed` (a pipe READ
-        // fault is its own kind).
-        // DELIBERATE FIXTURE MIGRATION 2026-08-14 (M1.3 B2): the
-        // probe now emits `data.text`, not a one-field record, because
-        // the Process `lines` input is text. The identity recipe did
-        // not move; this previously ill-typed program did.
-        // DELIBERATE MOVE 2026-08-15 (M1.3 B5): complete resolved
-        // Connector port rows and their routing policies replace the
-        // travelling error set. The Process sheet also materializes
-        // `err_codec = lines` before hashing.
-        // DELIBERATE MOVE 2026-08-15 (M1.3 B7): jsonl replies are unit
-        // emissions, stderr has its resolved framing, and every Process
-        // invocation terminates on the explicit `exit` port.
-        // DELIBERATE MOVE 2026-08-15 (M1.3 B8): v7 seals exact resolved
-        // types and the total effective port table. The former Process.exit
-        // and decimal transport bridges are gone; wide integer literals keep
-        // their honest int64 type.
-        // DELIBERATE FIXTURE MIGRATION 2026-08-15 (M1.3 B9): the first
-        // structural inspection now names the operator's closed input type;
-        // `variant` can no longer be inspected without `is`/`as` narrowing.
-        // DELIBERATE MOVE 2026-08-22 (M1.5 C1): the source symbol
-        // `Process` resolves to `rastok/process@2`, and the stable id plus
-        // required outbound role are now canonical HIR identity.
-        // DELIBERATE MOVE 2026-08-25 (M1.6 H1): the contract's Call exchange
-        // lifecycle becomes explicit canonical HIR and categorical v11 plan
-        // data. Existing Call causal records do not move.
-        // H4.1 moves only this Process package container to v12; the probe
-        // uses no newly typed media field, so its semantic hash stays fixed.
+        // The v16 Contract/Dispatch identity move is enumerated in
+        // docs/architecture/rework-r9-qualification.md; spelling is neutral.
         let hash = compile(
             &[M0_PROBE],
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -3261,14 +3221,14 @@ graph m0_probe : App {
         .hash;
         assert_eq!(
             hash.to_string(),
-            "2933618d21f03ae7b7835998f1f150aac5de27eb78e8aea9412db7dde76489b0"
+            "d8c35016ba0d9a1c8a6b57e1abd83192840a5e9c11c63abd7efc977e365f126f"
         );
     }
 
     #[test]
     fn boundary_ports_are_identity_material() {
-        let bare = "graph g : App {\n  operator o { input in: struct { anchor: text } on in where data.anchor == \"\" { out = . } }\n  . -> o -> .\n}\n";
-        let with_port = "graph g : App {\n  input feed: text\n  operator o { input in: struct { anchor: text } on in where data.anchor == \"\" { out = . } }\n  . -> o -> .\n}\n";
+        let bare = "graph g : App {\n  operator o { input in: struct { anchor: text } on in where data.anchor == \"\" { out = . } }\n  in -> o -> out\n}\n";
+        let with_port = "graph g : App {\n  input feed: text\n  operator o { input in: struct { anchor: text } on in where data.anchor == \"\" { out = . } }\n  in -> o -> out\n}\n";
         let bare_hash = compile(
             &[bare],
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -3296,8 +3256,8 @@ graph m0_probe : App {
 
     #[test]
     fn the_plan_and_the_hash_share_one_edge_order() {
-        let forward = "graph g : App {\n  operator a { input in: struct { anchor: text } on in where data.anchor == \"\" { out = . } }\n  operator b { on in { out = . } }\n  . -> a -> b -> .\n}\n";
-        let reordered = "graph g : App {\n  operator a { input in: struct { anchor: text } on in where data.anchor == \"\" { out = . } }\n  operator b { on in { out = . } }\n  b -> .\n  a -> b\n  . -> a\n}\n";
+        let forward = "graph g : App {\n  operator a { input in: struct { anchor: text } on in where data.anchor == \"\" { out = . } }\n  operator b { on in { out = . } }\n  in -> a -> b -> out\n}\n";
+        let reordered = "graph g : App {\n  operator a { input in: struct { anchor: text } on in where data.anchor == \"\" { out = . } }\n  operator b { on in { out = . } }\n  b -> out\n  a -> b\n  in -> a\n}\n";
         let one = compile(
             &[forward],
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -3316,7 +3276,7 @@ graph m0_probe : App {
     fn unordered_collections_ship_canonically() {
         let with_attrs = |attrs: &str| {
             format!(
-                "graph g : App {{\n  connector c : Process {{\n{attrs}  }}\n  . -> c -> .\n  c.err -> nothing\n  c.exit -> nothing\n}}\n"
+                "graph g : App {{\n  connector c : Process {{\n{attrs}  }}\n  in -> c -> out\n  c.err -> nothing\n  c.exit -> nothing\n}}\n"
             )
         };
         let one = compile(
@@ -3337,7 +3297,7 @@ graph m0_probe : App {
         // Map literals: one canonical form for hash, plan, and eval.
         let with_map = |map: &str| {
             format!(
-                "graph g : App {{\n  operator o {{\n    input in: struct {{ anchor: text }}\n    on in where data.anchor == \"\" && size({map}) > 0 {{ out = . }}\n  }}\n  . -> o -> .\n}}\n"
+                "graph g : App {{\n  operator o {{\n    input in: struct {{ anchor: text }}\n    on in where data.anchor == \"\" && size({map}) > 0 {{ out = . }}\n  }}\n  in -> o -> out\n}}\n"
             )
         };
         let forward = compile(
@@ -3356,7 +3316,7 @@ graph m0_probe : App {
 
     #[test]
     fn inferred_ports_travel_in_the_plan() {
-        let source = "graph g : App {\n  input feed: text\n  output sink\n  operator o {\n    on event { result = . }\n  }\n  .feed -> o.event\n  o.result -> .sink\n}\n";
+        let source = "graph g : App {\n  input feed: text\n  output sink\n  operator o {\n    on event { result = . }\n  }\n  feed -> o.event\n  o.result -> sink\n}\n";
         let compilation = compile(
             &[source],
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -3376,7 +3336,7 @@ graph m0_probe : App {
     fn constants_reach_both_the_hash_and_the_plan() {
         let with_val = |n: &str| {
             format!(
-                "graph g : App {{\n  operator o {{\n    input in: struct {{ n: int }}\n    val threshold = {n}\n    on in where data.n > threshold {{ out = . }}\n  }}\n  . -> o -> .\n}}\n"
+                "graph g : App {{\n  operator o {{\n    input in: struct {{ n: int }}\n    val threshold = {n}\n    on in where data.n > threshold {{ out = . }}\n  }}\n  in -> o -> out\n}}\n"
             )
         };
         let five = compile(
@@ -3405,7 +3365,7 @@ graph m0_probe : App {
     #[test]
     fn a_plan_with_errors_is_unrepresentable() {
         let bag = compile(
-            &["graph g : App {\n  connector c : Process { }\n  . -> c -> .\n}\n"],
+            &["graph g : App {\n  connector c : Process { }\n  in -> c -> out\n}\n"],
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect_err("missing mandatory attributes must refuse");

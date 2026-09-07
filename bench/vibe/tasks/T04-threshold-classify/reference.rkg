@@ -1,9 +1,14 @@
 graph classify : App {
+  input in: struct { peak: int }
+  output out: struct { status: text }
+
   operator label {
+    input in: struct { peak: int }
+    output out: struct { status: text }
     on in {
       out = {status = data.peak > 100 ? "alarm" : "normal"}
     }
   }
 
-  . -> label -> .
+  in -> label -> out
 }

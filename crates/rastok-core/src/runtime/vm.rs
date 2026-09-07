@@ -4595,9 +4595,7 @@ impl<'plan> Vm<'plan> {
         {
             self.prepare_operator_loop_verdict(slot, &mut outcome.record)?;
         }
-        if let Some(crate::journal::LoopRecord::R2(packet)) =
-            outcome.record.loop_record.as_deref_mut()
-        {
+        if let Some(packet) = outcome.record.loop_record.as_deref_mut() {
             packet.context = self.graph_context(delivery).to_vec();
             if let Some((run, _)) = application
                 && packet.context.last() != Some(&run)
@@ -4716,9 +4714,7 @@ impl<'plan> Vm<'plan> {
                 }),
             )
             .map_err(VmError::Fault)?;
-        if let Some(crate::journal::LoopRecord::R2(packet)) =
-            outcome.record.loop_record.as_deref_mut()
-        {
+        if let Some(packet) = outcome.record.loop_record.as_deref_mut() {
             packet.context = context.to_vec();
         }
         self.retain_graph_verdicts(&mut outcome.record)?;

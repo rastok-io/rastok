@@ -657,7 +657,7 @@ fn a_routed_loop_context_must_name_a_retained_delivery() {
                 .then(|| (index, record.as_ref().clone()))
         })
         .unwrap();
-    let Some(rastok::journal::LoopRecord::R2(packet)) = forged.loop_record.as_deref_mut() else {
+    let Some(packet) = forged.loop_record.as_deref_mut() else {
         panic!("the producer carries r2");
     };
     packet
@@ -777,9 +777,6 @@ fn a_rejected_transaction_does_not_update_the_journal_loop_projection() {
         .unwrap();
     let Some(packet) = transaction.loop_record.as_deref_mut() else {
         panic!("the selected record must carry the opening fact");
-    };
-    let rastok::journal::LoopRecord::R2(packet) = packet else {
-        panic!("the selected record must use r2");
     };
     for fact in &mut packet.facts {
         if let Fact::Open {
@@ -1115,9 +1112,6 @@ fn retained_timer_bytes_are_required_for_delays_but_not_part_of_the_causal_seal(
             }
             2 => {
                 let packet = transaction.loop_record.as_deref_mut().unwrap();
-                let rastok::journal::LoopRecord::R2(packet) = packet else {
-                    unreachable!()
-                };
                 let Fact::Advance { due_at, .. } = &mut packet.facts[0] else {
                     unreachable!()
                 };

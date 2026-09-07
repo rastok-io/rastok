@@ -219,108 +219,24 @@ takes semantic priority; no public date overrides its R0–R9 exit gates.
   cross-layer audit, three-register identity ledger, independent interop,
   three-ISA `no_std` builds and Cortex-M33 evidence; see the
   [exit report](docs/architecture/m1.8-exit-report.md).
-- The v16 semantic rework is now the active work and deliberately ignores the
-  former calendar pressure. R0 freezes Node/Graph/Executor/Connector/Extension,
-  Dispatch, dispositions, multi-emission and three Loop host machines; R1
-  freezes exact entry/cardinality/terminal/effect contracts and six Connector
-  Contract `@2` sheets; R2 supersedes the normative prose and stops for review.
-  R3–R8 implement source/HIR, one categorical v16 move, explicit destinations,
-  route Dispatch, manager/recovery, and the Operator/Graph/outbound-Call host
-  matrix. R9 migrates examples and only then resumes the UI. The design
-  evidence starts at
-  [`rework-r0-algebra.md`](docs/architecture/rework-r0-algebra.md) and
-  [`rework-r1-host-contracts.md`](docs/architecture/rework-r1-host-contracts.md),
-  with the review stop recorded in
-  [`rework-r2-supersession.md`](docs/architecture/rework-r2-supersession.md).
-  **Current checkpoint, 2026-09-07:** `rework/v16` reads and writes v16;
-  Dispatch, case routing, multi-emission and command Operator/Call Loops execute
-  through that reader. Operator measure certificates are re-derived, and
-  Operator/Call mailboxes, state, commands, timed joins, lifetimes and bounded
-  Closing recover from retained prefixes without replaying producers or
-  starting old effects. Exact deadlines are retained at their accepting
-  commits; recovery uses the generation state at each record, not the final
-  journal state. Explicit destinations are checked at
-  source and independently through retained nested boundary routing. Retired
-  Graph-handler states and their dead proof/projection branches are removed;
-  raw plans cannot attach DSL handlers to Connectors. R7's first journal gate
-  binds r2 packets to their exact instance scope, retained deliveries and
-  published expiry, with atomic refusal and unchanged witness identities. See
-  [`rework-r7-manager-recovery.md`](docs/architecture/rework-r7-manager-recovery.md).
-  Recovery now also binds contexts to exact consumed admissions and re-derives
-  Call verdicts. R8's pure fixed/tumbling window path preserves recipient state
-  through upstream stop products and supports lazily entered intermediate
-  Graph scopes; it has no Graph application handler.
-  R7 also executes fuel-bounded Graph Loops with Operator and finite outbound
-  Call bodies, including an App Loop: one boundary admission precedes fan-out,
-  exact contexts carry `Loop.state`, and commands wait for sibling work before
-  recurrence. Call response/terminal correlation, exact boundary timer identities
-  and complete-application effect safety are independently checked. Every
-  committed prefix of the reference run recovers identically. Nested/adjacent
-  runs, annotated recurrence, entry-preserving Graph measures, boundary-only
-  applications and unconditional same-context joins are qualified. Inbound
-  Calls and Sessions retain exchange state and original deadlines on recovery,
-  without reconnecting or repeating I/O. Stronger per-run proofs for retained
-  joins/lifecycle-dependent bodies and the R9 fixture/UI migration remain open.
-  No golden is blessed;
-  R4's review preserves the 128 KiB embedded heap gate (19,620 B headroom
-  after retaining the live delivery schedules) and allocates exact retained
-  timer schedules under key 56 before blessing. R7 now uses that allocation;
-  the wider Graph control-proof profiles remain gated;
-  the full workspace is not green. See the current §10 of
-  [`rework-r4-plan.md`](docs/architecture/rework-r4-plan.md).
-  The following records the **pre-cutover R3/R4 checkpoints**, not today's
-  package capability. R3 has the source/HIR checkpoint: recursive typed Dispatch, canonical
-  case routing and sets, ordered multi-emission, named ownership refusals,
-  Loop entry/terminal/state/command resolution and complete conditional HIR
-  identity. New forms remain behind the categorical v16 packaging gate. See
-  [`rework-r3-source-hir.md`](docs/architecture/rework-r3-source-hir.md) for
-  tests and the explicitly retained v15 migration seams. R4 is open: the core
-  independently verifies closed-case partitions, local Dispatch expressions
-  and scopes, and canonical route sets with cross-declaration conflicts.
-  Dispatch and routing share one algebra with HIR; source consumers use those
-  proofs, and the duplicate hosted conflict implementation is removed.
-  Contract-derived Call profiles now replace the special-case Loop host test
-  and check direct own-command routes for frame cardinality and repeat-safe
-  effects. One emission/write algebra also spans source checking, proofs,
-  transport and execution, without a second conversion model. Executable
-  handler leaves now use `DispatchStep` directly; the duplicate `Step` and its
-  conversion bridges are removed. `HandlerExecutor` prepares ordered
-  emissions in scratch state, with broadcast evaluation once and tuple values
-  in authored order. Raw-plan validation keeps the new statements behind the
-  v16 gate just like source lowering. The shared recursive decision selector
-  now executes Lab mocks, including pure prefixes and per-leaf atomic replies;
-  the Lab never enters the production package or its identity.
-  Decision and routing fields now round-trip through canonical CBOR with
-  independent local proofs, strict ordering and combined nesting bounds;
-  source-to-field tests preserve desugaring and shared-edge identities.
-  These fields do not grant package execution. Full handler/route integration,
-  Extension/Loop transport, control and the single categorical v16 move remain
-  pending, as listed in
-  [`rework-r4-plan.md`](docs/architecture/rework-r4-plan.md).
-- M1.9 is paused until R9. Its retained design implements the optional hosted
-  execution UI: `run --ui` and
-  `simulate --ui` start paused behind a capability-protected loopback page,
-  freeze logical time during debugger suspension, advance at the VM transaction
-  boundary, keep lifecycle facts, Lab actions and causal records under distinct
-  `B`/`A`/`R` ordinals, and
-  derive compound topology with collision-scored labels, movable side-constrained
-  Graph ports and overlap-separated lanes rendered as smooth cubic routes,
-  inspectable current mailbox FIFOs, a visible envelope motion, pannable/zoomable
-  canvas, resizable inspector and readable one- or four-event-per-second Play,
-  linked Graph/Node filters, redacted structured state
-  and separate `META`/`DATA`, Calls/Sessions, full in-memory history and exact
-  `CostReport` from existing authorities. The next checked Lab injection is a
-  typed read-only projection of source-authored DATA before ordinary immutable
-  envelope admission. Real runs expose past frames read-only while
-  continuing live; simulations can replay an exact prior boundary into a new
-  immutable branch before taking a different path.
-  Reduced builds omit the
-  complete capability without changing plans or execution semantics. See
-  [`ui.md`](docs/spec/ui.md) and the
-  [ordered M1.9 backlog](docs/architecture/m1.9-ui-backlog.md). Its code,
-  portability and protocol gates are green; the real-browser visual/keyboard
-  pass remains explicit in the release-qualification inventory before the
-  complete exit statement is claimed.
+- The v16 semantic rework has reached R9. Node/Graph/Executor/Connector/Extension,
+  explicit destinations, recursive Dispatch, case routing and multi-emission
+  execute through one independently validated package. Operator, Graph and
+  outbound Call Loops retain exact run contexts and recover committed commands,
+  mailboxes, exchanges and original deadlines. The proof subset remains named
+  in [loop.md](docs/spec/loop.md); unsupported profiles refuse at check.
+  [R9 qualification](docs/architecture/rework-r9-qualification.md) owns the
+  single golden move, unchanged gauge/hash/causal witnesses, migration inventory
+  and final gates. Earlier R0–R8 reports remain dated checkpoint evidence.
+- R9 realigns the visual debugger with this model: `simulate --ui` only,
+  initially paused, read-only retained history, source-authored inputs and no
+  branch authoring. Reset opens a fresh simulation session; past sessions remain
+  inspectable. Real ports, mailbox FIFOs, instances, Loop-run dependencies,
+  redacted DATA/META and CostReport are projections of existing authorities.
+  Manager commands never create spatial edges. Playback, pan/zoom, inspector
+  tabs and splitters remain physical UI state. See [ui.md](docs/spec/ui.md).
+  The external browser/keyboard pass remains in the
+  [release qualification](docs/architecture/release-qualification.md) inventory.
 - A rich terminal debugger remains a later projection over the same controller
   and redacted read model; its CLI spelling is deliberately not frozen in M1.9.
 - A guided example gallery seeded by the benchmark's reference

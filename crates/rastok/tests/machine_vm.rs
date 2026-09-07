@@ -82,7 +82,7 @@ on in where data.text != "" {
 }
   }
 
-  . -> shout -> echo -> .
+  in -> shout -> echo -> out
   echo.err -> nothing
   echo.exit -> nothing
 }
@@ -227,10 +227,10 @@ graph bounded_closing : App {
     behavior = deterministic
   }
 
-  . -> shell
+  in -> shell
   shell.out -> nothing
   shell.err -> nothing
-  shell.exit -> .exit
+  shell.exit -> exit
 }
 "#;
 
@@ -475,7 +475,7 @@ graph file_path : App {
     path = data as text
   }
 
-  . -> file
+  in -> file
   file.out -> nothing
   file.exit -> nothing
 }
@@ -590,7 +590,7 @@ graph rooted : App {
     on in { out = . }
   }
 
-  . -> first -> second -> .
+  in -> first -> second -> out
 }
 "#;
     let compilation = compile(
@@ -665,7 +665,7 @@ graph nested : App {
     }
   }
 
-  . -> counter -> .
+  in -> counter -> out
 }
 "#;
     let compilation = compile(
@@ -711,10 +711,10 @@ graph nested : App {
       output out: text
       on in { out = prefix + data }
     }
-    . -> greet -> .
+    in -> greet -> out
   }
 
-  . -> sessions -> .
+  in -> sessions -> out
 }
 "#;
     let compilation = compile(
@@ -789,10 +789,10 @@ graph joined : App {
     }
   }
 
-  .left -> pair.left
-  .right -> pair.right
-  pair.out -> .out
-  pair.expired -> .expired
+  left -> pair.left
+  right -> pair.right
+  pair.out -> out
+  pair.expired -> expired
 }
 "#;
 
@@ -935,10 +935,10 @@ graph selected : App {
     }
   }
 
-  .left -> pair.left
-  .right -> pair.right
-  pair.out -> .out
-  pair.expired -> .expired
+  left -> pair.left
+  right -> pair.right
+  pair.out -> out
+  pair.expired -> expired
 }
 "#;
 
@@ -1038,10 +1038,10 @@ graph timed : App {
     on (left, right) within duration("1s") { out = left.data + right.data }
   }
 
-  .left -> pair.left
-  .right -> pair.right
-  pair.out -> .out
-  pair.expired -> .expired
+  left -> pair.left
+  right -> pair.right
+  pair.out -> out
+  pair.expired -> expired
 }
 "#;
 
@@ -1124,10 +1124,10 @@ graph keyed_join : App {
     on (left, right) last 2 { out = left.data }
   }
 
-  .left -> pair.left
-  .right -> pair.right
-  pair.out -> .out
-  pair.expired -> .expired
+  left -> pair.left
+  right -> pair.right
+  pair.out -> out
+  pair.expired -> expired
 }
 "#;
 
@@ -1208,9 +1208,9 @@ graph attributed : App {
     on in { out = meta.app.token }
   }
 
-  .left -> mark_left -> pair.left
-  .right -> mark_right -> pair.right
-  pair.out -> read_pick -> .out
+  left -> mark_left -> pair.left
+  right -> mark_right -> pair.right
+  pair.out -> read_pick -> out
   pair.expired -> nothing
 }
 
@@ -1260,9 +1260,9 @@ graph attributed : App {
     on (left, right) { out = left.data }
   }
 
-  .left -> pair.left
-  .right -> mark_right -> pair.right
-  pair.out -> .out
+  left -> pair.left
+  right -> mark_right -> pair.right
+  pair.out -> out
 }
 "#;
     let compilation = compile(
@@ -1304,9 +1304,9 @@ graph lazy_join : App {{
     output out: {output_type}
     on (left, right) {{ out = {body} }}
   }}
-  .left -> pair.left
-  .right -> pair.right
-  pair.out -> .out
+  left -> pair.left
+  right -> pair.right
+  pair.out -> out
 }}
 "#
         );
@@ -1403,8 +1403,8 @@ graph dynamic_binding : App {
     behavior = deterministic
   }
 
-  . -> shell
-  shell.out -> .out
+  in -> shell
+  shell.out -> out
   shell.err -> nothing
   shell.exit -> nothing
 }
@@ -1495,7 +1495,7 @@ graph failing_bundle : App {
     on in { out = . }
   }
 
-  . -> relay -> .
+  in -> relay -> out
 }
 "#;
     let compilation = compile(
@@ -1562,7 +1562,7 @@ graph keyed : App {
     on in { out = . }
   }
 
-  . -> counter -> sink -> .
+  in -> counter -> sink -> out
 }
 "#;
     let compilation = compile(
@@ -1688,9 +1688,9 @@ graph lifecycle : App {
     on stop { stopped = count }
   }
 
-  . -> counter
-  counter.out -> .out
-  counter.stopped -> .stopped
+  in -> counter
+  counter.out -> out
+  counter.stopped -> stopped
 }
 "#;
     let compilation = compile(
@@ -1852,10 +1852,10 @@ graph nested_lifetimes : App {
     behavior = deterministic
   }
 
-  . -> shell
-  shell.out -> .out
+  in -> shell
+  shell.out -> out
   shell.err -> nothing
-  shell.exit -> .exit
+  shell.exit -> exit
 }
 "#;
     let compilation = compile(
@@ -1938,8 +1938,8 @@ graph draining : App {
     on in { out = . }
   }
 
-  . -> seed -> collect -> .
-  . -> shell
+  in -> seed -> collect -> out
+  in -> shell
   shell.out -> collect
   shell.err -> nothing
   shell.exit -> nothing
@@ -2290,8 +2290,8 @@ graph two_calls : App {
     effect = idempotent ; behavior = deterministic
   }
 
-  . -> a
-  . -> b
+  in -> a
+  in -> b
   a.out -> nothing ; a.err -> nothing ; a.exit -> nothing
   b.out -> nothing ; b.err -> nothing ; b.exit -> nothing
 }
@@ -2369,7 +2369,7 @@ graph finite : App {{
     on in {{ count = count + 1 ; out = count }}
   }}
 
-  . -> counter -> .
+  in -> counter -> out
 }}
 "#
         );
@@ -2439,7 +2439,7 @@ graph persistent : App {
   input in: int
   output out: int
   operator relay { on in { out = . } }
-  . -> relay -> .
+  in -> relay -> out
 }
 "#;
     let compilation = compile(
@@ -2486,7 +2486,7 @@ graph keyed_fixed : App {
     lifetime = { kind = fixed ; after = duration("1s") }
     on in { out = . }
   }
-  . -> relay -> .
+  in -> relay -> out
 }
 "#;
     let compilation = compile(
@@ -2544,7 +2544,7 @@ graph one : App {
     lifetime = { kind = single_pass }
     on in { out = . }
   }
-  . -> relay -> .
+  in -> relay -> out
 }
 "#;
     let compilation = compile(
@@ -2611,7 +2611,7 @@ graph explicit_stop : App {
     output out: int
     on in { out = . ; stop }
   }
-  . -> relay -> .
+  in -> relay -> out
 }
 "#;
     let compilation = compile(
@@ -2662,7 +2662,7 @@ graph windows : App {
     on in { count = count + 1 ; out = count }
   }
 
-  . -> counter -> .
+  in -> counter -> out
 }
 "#;
     let compilation = compile(
@@ -2749,7 +2749,7 @@ graph clipped : App {
     on in { out = . }
   }
 
-  . -> window -> .
+  in -> window -> out
 }
 "#;
     let compilation = compile(
@@ -2786,7 +2786,7 @@ graph parent : App {
     on in { out = . }
   }
 
-  . -> child -> .
+  in -> child -> out
 }
 "#;
     let compilation = compile(
@@ -2841,8 +2841,8 @@ graph ties : App {
     lifetime = { kind = fixed ; after = duration("1s") }
     on in { out = . }
   }
-  . -> alpha -> nothing
-  . -> beta -> nothing
+  in -> alpha -> nothing
+  in -> beta -> nothing
 }
 "#;
     let run = || {
@@ -3372,7 +3372,7 @@ graph websocket : App {
     codec = text
     effect = idempotent ; behavior = deterministic
   }
-  . -> socket -> .
+  in -> socket -> out
   socket.exit -> nothing
 }
 "#;
@@ -3434,7 +3434,7 @@ graph websocket : App {
     codec = text
     effect = idempotent ; behavior = deterministic
   }
-  . -> socket -> .
+  in -> socket -> out
   socket.exit -> nothing
 }
 "#;
@@ -3486,7 +3486,7 @@ graph websocket : App {
     codec = text
     effect = idempotent ; behavior = deterministic
   }
-  . -> socket -> .
+  in -> socket -> out
   socket.exit -> nothing
 }
 "#;
@@ -3526,7 +3526,7 @@ graph websocket : App {
     handshake_timeout = duration("5s")
     codec = text
   }
-  . -> socket -> .
+  in -> socket -> out
   socket.exit -> nothing
 }
 "#;
@@ -3622,7 +3622,7 @@ on in {
   out = data as text
 }
   }
-  . -> pick -> .
+  in -> pick -> out
 }
 "#;
     let compilation = compile(
@@ -3736,20 +3736,6 @@ impl Journal for FlakyJournal {
         address: &InstanceAddress,
     ) -> Result<InstanceRef, rastok::journal::Error> {
         self.inner.instance_ref_for_admission(address)
-    }
-    fn loop_run(
-        &self,
-        run: &rastok::journal::LoopRunRef,
-    ) -> Result<Option<rastok::journal::LoopRunState>, rastok::journal::Error> {
-        self.inner.loop_run(run)
-    }
-    fn open_loop_runs(
-        &self,
-    ) -> Result<
-        Vec<(rastok::journal::LoopRunRef, rastok::journal::LoopRunState)>,
-        rastok::journal::Error,
-    > {
-        self.inner.open_loop_runs()
     }
     fn commit(
         &mut self,
@@ -4000,11 +3986,7 @@ graph app : App {
         if sabotage == 0 {
             record.consumed.clear();
         } else if sabotage == 1 {
-            let rastok::journal::LoopRecord::R2(packet) =
-                record.loop_record.as_deref_mut().unwrap()
-            else {
-                panic!("r2");
-            };
+            let packet = record.loop_record.as_deref_mut().unwrap();
             packet.context = vec![other];
             let command = &packet.produced[0];
             packet.produced[0] =
@@ -4188,11 +4170,7 @@ fn graph_call_recovery_refuses_missing_contexts_and_unsettled_obligations() {
             let Record::Transaction(record) = prefix.last_mut().unwrap() else {
                 panic!("completion");
             };
-            let rastok::journal::LoopRecord::R2(packet) =
-                record.loop_record.as_deref_mut().unwrap()
-            else {
-                panic!("r2");
-            };
+            let packet = record.loop_record.as_deref_mut().unwrap();
             packet.routes.clear();
             if sabotage == 1 {
                 record.loop_record = None;
@@ -4280,10 +4258,7 @@ fn graph_recovery_rederives_admission_context_and_quiescence() {
         let Record::Transaction(record) = prefix.last_mut().unwrap() else {
             panic!("transaction")
         };
-        let rastok::journal::LoopRecord::R2(packet) = record.loop_record.as_deref_mut().unwrap()
-        else {
-            panic!("r2")
-        };
+        let packet = record.loop_record.as_deref_mut().unwrap();
         match sabotage {
             0 => packet.routes.clear(),
             1 => record.consumed.clear(),
@@ -4376,11 +4351,7 @@ graph app : App {
             let Record::Transaction(record) = forged.last_mut().unwrap() else {
                 panic!("Call completion");
             };
-            let rastok::journal::LoopRecord::R2(packet) =
-                record.loop_record.as_deref_mut().unwrap()
-            else {
-                panic!("r2 completion");
-            };
+            let packet = record.loop_record.as_deref_mut().unwrap();
             let command = &packet.produced[0];
             packet.produced[0] = CommandProduced::new(
                 command.run,
@@ -4532,7 +4503,7 @@ on in where data.text != "" {
 }
   }
 
-  . -> shout -> echo -> .
+  in -> shout -> echo -> out
   echo.err -> nothing
   echo.exit -> nothing
 }
@@ -4551,7 +4522,7 @@ graph logical_time : App {
     on in { out = { first = now(); second = now() } }
   }
 
-  . -> stamp -> .
+  in -> stamp -> out
 }
 "#;
     let compilation = compile(
@@ -4609,7 +4580,7 @@ graph logical_time_guard : App {
     on in where now() < timestamp("1970-01-01T00:00:00Z") { out = . }
   }
 
-  . -> filter -> .
+  in -> filter -> out
 }
 "#;
     let compilation = compile(
@@ -4859,7 +4830,7 @@ input in: struct { text: text }
 on in { out = data.text }
   }
 
-  . -> shout
+  in -> shout
   shout -> alpha -> nothing
   shout -> beta -> nothing
   alpha.err -> nothing
@@ -5026,7 +4997,7 @@ fn a_refused_commit_on_a_queued_expiry_loses_nothing() {
     // Case: the queued delivery expires and the timeout
     // transaction's commit is refused — the delivery must stay.
     let compilation = compile(
-        &["graph g : App {\n  connector echo : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  operator wrap {\n    on in { out = . }\n  }\n  . -> wrap -> echo -> nothing\n  echo.err -> nothing\n  echo.exit -> nothing\n}\n"],
+        &["graph g : App {\n  connector echo : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  operator wrap {\n    on in { out = . }\n  }\n  in -> wrap -> echo -> nothing\n  echo.err -> nothing\n  echo.exit -> nothing\n}\n"],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");

@@ -1,7 +1,7 @@
 lab extract {
   simulation refereeing on app {
     mock forwarder {
-      on in { out = . }
+      on in { out = .; exit = Exited { exit_code = 0; signal = null } }
     }
 
     scenario unwraps "the payload travels bare" {

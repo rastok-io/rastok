@@ -1,5 +1,10 @@
 graph stamp : App {
+  input in: text
+  output out: struct { seq: int, text: text }
+
   operator number {
+    input in: text
+    output out: struct { seq: int, text: text }
     var seen : int = 0
     on in {
       seen = seen + 1
@@ -7,5 +12,5 @@ graph stamp : App {
     }
   }
 
-  . -> number -> .
+  in -> number -> out
 }

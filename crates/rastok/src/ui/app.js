@@ -18,7 +18,6 @@ let playbackTimer = null;
 let historyLimit = 100;
 let selectedTopologyItem = null;
 let selectedMailboxRoute = null;
-let selectedHandlerRelation = null;
 let mailboxVisibleLimit = 100;
 let lastAnimatedActivity = null;
 let pendingCommandRevision = null;
@@ -36,7 +35,7 @@ const COMMAND_HINTS = Object.freeze({
   "run-to-completion": "Continue: run immediately to completion",
   "next-scenario-action": "Step over: execute one complete authored scenario action",
   "run-until-assertion": "Run to expect: continue to the next expect action",
-  "reset-scenario": "Reset: start a clean scenario branch",
+  "reset-scenario": "Reset: start a clean scenario session",
   close: "Close UI",
 });
 
@@ -128,7 +127,7 @@ function renderSnapshot(snapshot) {
   const activityKey = activity
     ? activity.ordinal === null
       ? `external:${activity.records?.from ?? "?"}:${activity.records?.through ?? "?"}`
-      : `branch:${snapshot.timeline?.branch ?? 0}:boundary:${activity.ordinal}`
+      : `session:${snapshot.timeline?.session ?? 0}:boundary:${activity.ordinal}`
     : null;
   const animateBoundary = Boolean(activity) && activityKey !== lastAnimatedActivity;
   renderTopology(snapshot.topology, animateBoundary);
@@ -157,24 +156,24 @@ function renderExecutionState(snapshot) {
 }
 
 function sameTimelinePoint(left, right) {
-  return Number(left?.timeline?.branch || 0) === Number(right?.timeline?.branch || 0)
+  return Number(left?.timeline?.session || 0) === Number(right?.timeline?.session || 0)
     && Number(left?.timeline?.boundary || 0) === Number(right?.timeline?.boundary || 0);
 }
 
-function timelineBranch(branch) {
-  return (timelineIndex?.branches || []).find((candidate) => Number(candidate.branch) === Number(branch));
+function timelineSession(session) {
+  return (timelineIndex?.sessions || []).find((candidate) => Number(candidate.session) === Number(session));
 }
 
-function branchName(branch) {
-  return Number(branch) === 0 ? "Main" : `Branch ${branch}`;
+function sessionName(session) {
+  return Number(session) === 0 ? "Main" : `Session ${session}`;
 }
 
-function timelineFrames(branch) {
-  return timelineBranch(branch)?.frames || [];
+function timelineFrames(session) {
+  return timelineSession(session)?.frames || [];
 }
 
-async function showBoundary(branch, boundary, manual = true) {
-  const response = await fetch(`/api/snapshot?branch=${encodeURIComponent(branch)}&boundary=${encodeURIComponent(boundary)}`, { cache: "no-store" });
+async function showBoundary(session, boundary, manual = true) {
+  const response = await fetch(`/api/snapshot?session=${encodeURIComponent(session)}&boundary=${encodeURIComponent(boundary)}`, { cache: "no-store" });
   if (!response.ok) throw new Error(await response.text());
   manualHistoricalView = manual;
   currentSnapshot = await response.json();
@@ -184,15 +183,15 @@ async function showBoundary(branch, boundary, manual = true) {
 function scheduleBufferedBoundary() {
   if (playbackTimer !== null) return;
   const speed = Number(document.querySelector("#playback-speed").value);
-  const branch = Number(currentSnapshot?.timeline?.branch || 0);
+  const session = Number(currentSnapshot?.timeline?.session || 0);
   const currentBoundary = Number(currentSnapshot?.timeline?.boundary || 0);
-  const next = timelineFrames(branch).find((frame) => Number(frame.boundary) > currentBoundary);
+  const next = timelineFrames(session).find((frame) => Number(frame.boundary) > currentBoundary);
   if (!next) {
-    const liveBranch = Number(liveSnapshot?.timeline?.branch || 0);
+    const liveSession = Number(liveSnapshot?.timeline?.session || 0);
     const liveRunning = liveSnapshot?.execution?.state === "running";
-    if (branch !== liveBranch || !liveRunning) {
+    if (session !== liveSession || !liveRunning) {
       bufferedPlayback = false;
-      manualHistoricalView = branch !== liveBranch;
+      manualHistoricalView = session !== liveSession;
     }
     renderExecutionState(currentSnapshot);
     renderTimeline();
@@ -202,7 +201,7 @@ function scheduleBufferedBoundary() {
   playbackTimer = setTimeout(async () => {
     playbackTimer = null;
     try {
-      await showBoundary(branch, next.boundary, false);
+      await showBoundary(session, next.boundary, false);
       scheduleBufferedBoundary();
     } catch (error) {
       bufferedPlayback = false;
@@ -236,35 +235,35 @@ function pauseBufferedPlayback() {
   renderExecutionState(currentSnapshot);
   renderTimeline();
   updateControls();
-  const branch = Number(currentSnapshot?.timeline?.branch || 0);
+  const session = Number(currentSnapshot?.timeline?.session || 0);
   const boundary = Number(currentSnapshot?.timeline?.boundary || 0);
-  setCommandStatus(`Replay paused on ${branchName(branch)} · B${boundary}; the engine head was not changed.`);
+  setCommandStatus(`Replay paused on ${sessionName(session)} · B${boundary}; the engine head was not changed.`);
 }
 
 function renderTimeline() {
-  const branch = Number(currentSnapshot?.timeline?.branch || 0);
+  const session = Number(currentSnapshot?.timeline?.session || 0);
   const boundary = Number(currentSnapshot?.timeline?.boundary || 0);
-  const liveBranch = Number(liveSnapshot?.timeline?.branch || branch);
-  const liveBoundary = Number(liveSnapshot?.timeline?.boundary || boundary);
-  const frames = timelineFrames(branch);
-  const branchSelector = document.querySelector("#timeline-branch");
-  const branches = timelineIndex?.branches || [];
-  branchSelector.replaceChildren(...branches.map((candidate) => {
+  const liveSession = Number(liveSnapshot?.timeline?.session ?? session);
+  const liveBoundary = Number(liveSnapshot?.timeline?.boundary ?? boundary);
+  const frames = timelineFrames(session);
+  const sessionSelector = document.querySelector("#timeline-session");
+  const sessions = timelineIndex?.sessions || [];
+  sessionSelector.replaceChildren(...sessions.map((candidate) => {
     const option = document.createElement("option");
     const candidateFrames = candidate.frames || [];
     const lastBoundary = Number(candidateFrames.at(-1)?.boundary || 0);
-    option.value = String(candidate.branch);
-    option.textContent = `${branchName(candidate.branch)} · B0–B${lastBoundary}`;
-    option.selected = Number(candidate.branch) === branch;
+    option.value = String(candidate.session);
+    option.textContent = `${sessionName(candidate.session)} · B0–B${lastBoundary}`;
+    option.selected = Number(candidate.session) === session;
     return option;
   }));
-  branchSelector.disabled = branches.length < 2;
+  sessionSelector.disabled = sessions.length < 2;
   const slider = document.querySelector("#timeline");
   slider.min = String(frames[0]?.boundary ?? 0);
   slider.max = String(frames.at(-1)?.boundary ?? boundary);
   slider.value = String(boundary);
   slider.disabled = frames.length < 2;
-  const atLive = branch === liveBranch && boundary === liveBoundary;
+  const atLive = session === liveSession && boundary === liveBoundary;
   document.body.classList.toggle("historical-view", !atLive);
   const view = atLive
     ? "LIVE"
@@ -273,22 +272,14 @@ function renderTimeline() {
       : replayPaused
         ? "REPLAY PAUSED"
         : "HISTORY";
-  text("timeline-position", `${view} · ${branchName(branch)} · B${boundary}`);
-  text("timeline-head", `live ${branchName(liveBranch)} · B${liveBoundary}`);
+  text("timeline-position", `${view} · ${sessionName(session)} · B${boundary}`);
+  text("timeline-head", `live ${sessionName(liveSession)} · B${liveBoundary}`);
   const returnLive = document.querySelector("#return-live");
   returnLive.hidden = atLive;
-  const returnLabel = `Return to live ${branchName(liveBranch)} · B${liveBoundary}`;
+  const returnLabel = `Return to live ${sessionName(liveSession)} · B${liveBoundary}`;
   returnLive.querySelector("span").textContent = returnLabel;
   returnLive.title = returnLabel;
   returnLive.setAttribute("aria-label", returnLabel);
-  const branchButton = document.querySelector("#branch-here");
-  branchButton.hidden = currentSnapshot?.mode !== "simulate" || atLive;
-  const branchLabel = `Create a new simulation branch from ${branchName(branch)} · B${boundary}`;
-  branchButton.title = branchLabel;
-  branchButton.setAttribute("aria-label", branchLabel);
-  branchButton.disabled = !controls
-    || liveSnapshot?.execution?.state === "running"
-    || !(liveSnapshot?.execution?.legal_commands || []).includes("branch-from");
 }
 
 function renderRelatedPanels(snapshot) {
@@ -305,6 +296,9 @@ function renderRelatedPanels(snapshot) {
   renderHistory(snapshot.history, selection);
   renderInjections(snapshot, selection);
   renderInstances(snapshot.instances, selection);
+  renderGeneric("loop-runs", Array.isArray(snapshot.loop_runs)
+    ? snapshot.loop_runs.filter((run) => rowMatchesSelection(run, selection, ["owner"]))
+    : snapshot.loop_runs, "No admitted Loop run.");
   renderExchanges(snapshot.exchanges, selection);
   renderCost(snapshot.cost_report, selection);
 }
@@ -364,7 +358,6 @@ function inspectScenarioDefinition() {
   scenarioDefinitionActive = true;
   selectedTopologyItem = null;
   selectedMailboxRoute = null;
-  selectedHandlerRelation = null;
   renderTopology(currentSnapshot?.topology, false);
   if (currentSnapshot) renderRelatedPanels(currentSnapshot);
   activateInspectorTab("definition");
@@ -427,9 +420,9 @@ function scenarioDefinitionPanel(scenario) {
 function updateControls() {
   const legal = new Set(liveSnapshot?.execution?.legal_commands || currentSnapshot?.execution?.legal_commands || []);
   const atLive = sameTimelinePoint(currentSnapshot, liveSnapshot);
-  const branch = Number(currentSnapshot?.timeline?.branch || 0);
+  const session = Number(currentSnapshot?.timeline?.session || 0);
   const boundary = Number(currentSnapshot?.timeline?.boundary || 0);
-  const frames = timelineFrames(branch);
+  const frames = timelineFrames(session);
   const canReplayForward = frames.some((frame) => Number(frame.boundary) > boundary);
   for (const button of document.querySelectorAll("button[data-command]")) {
     const command = button.dataset.command;
@@ -446,9 +439,7 @@ function updateControls() {
       if (pendingCommandRevision !== null) reason = "the previous command is still being retained";
       else if (!controls) reason = "this browser is an observer; take control first";
       else if (!atLive && !physicalControl) {
-        reason = command === "reset-scenario"
-          ? "available in LIVE only; select Return live"
-          : "available in LIVE only; select Return live or branch from here";
+        reason = "available in LIVE only; select Return live";
       } else if (!legal.has(command)) reason = "not legal at the current execution state";
     }
     button.title = reason ? `${base} — unavailable: ${reason}.` : base;
@@ -462,7 +453,7 @@ function updateControls() {
   const back = document.querySelector("#back-boundary");
   back.disabled = frames.findIndex((frame) => Number(frame.boundary) === boundary) <= 0;
   back.title = back.disabled
-    ? "Back — no earlier retained boundary exists on this branch."
+    ? "Back — no earlier retained boundary exists on this session."
     : "Back: view the previous retained boundary";
   document.querySelector("#take-control").hidden = controls;
 }
@@ -602,7 +593,7 @@ function installGraphViewport(canvas, layer) {
 
   let drag = null;
   canvas.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0 || event.target.closest("button, .graph-node, .graph-instance-badge, .edge-counter, .control-relation, .graph-scope-title-hit, text")) return;
+    if (event.button !== 0 || event.target.closest("button, .graph-node, .graph-instance-badge, .edge-counter, .graph-scope-title-hit, text")) return;
     drag = { x: event.clientX, y: event.clientY, panX: graphViewport.x, panY: graphViewport.y };
     canvas.classList.add("panning");
     canvas.setPointerCapture(event.pointerId);
@@ -715,29 +706,7 @@ function renderTopology(topology, animateBoundary = false) {
     orient: "auto",
   });
   activeMarker.append(svgElement("path", { d: "M 0 0 L 7 3.5 L 0 7 z" }));
-  const controlMarker = svgElement("marker", {
-    id: "graph-arrow-control",
-    viewBox: "0 0 11 7",
-    refX: "11",
-    refY: "3.5",
-    markerWidth: "11",
-    markerHeight: "7",
-    markerUnits: "userSpaceOnUse",
-    orient: "auto",
-  });
-  controlMarker.append(svgElement("path", { d: "M 0 0 L 7 3.5 L 0 7 z" }));
-  const temporalMarker = svgElement("marker", {
-    id: "graph-arrow-temporal",
-    viewBox: "0 0 11 7",
-    refX: "11",
-    refY: "3.5",
-    markerWidth: "11",
-    markerHeight: "7",
-    markerUnits: "userSpaceOnUse",
-    orient: "auto",
-  });
-  temporalMarker.append(svgElement("path", { d: "M 0 0 L 7 3.5 L 0 7 z" }));
-  definitions.append(marker, activeMarker, controlMarker, temporalMarker);
+  definitions.append(marker, activeMarker);
   svg.append(definitions);
 
   const scopeLayer = svgElement("g", { class: "graph-scope-layer" });
@@ -851,14 +820,11 @@ function renderTopology(topology, animateBoundary = false) {
     if (!source || !destination || !sourcePosition || !destinationPosition) continue;
     const activityPhase = activeRoutes.get(edge.route) || null;
     const active = activityPhase !== null;
-    const relation = edge.relation || null;
-    const queuedNow = !relation && Number(edge.queued_count || 0) > 0;
-    const mailbox = !relation && edge.target?.kind === "node";
-    const selected = relation
-      ? selectedHandlerRelation?.route === edge.route
-      : selectedMailboxRoute === edge.route;
+    const queuedNow = Number(edge.queued_count || 0) > 0;
+    const mailbox = edge.target?.kind === "node";
+    const selected = selectedMailboxRoute === edge.route;
     const group = svgElement("g", {
-      class: `graph-edge${relation ? ` control-relation relation-${relation}` : ""}${active ? " active" : ""}${queuedNow ? " queued" : ""}${selected ? " selected" : ""}${active && animateBoundary ? " moving" : ""}`,
+      class: `graph-edge${active ? " active" : ""}${queuedNow ? " queued" : ""}${selected ? " selected" : ""}${active && animateBoundary ? " moving" : ""}`,
       "data-route": edge.route,
       "data-activity": activityPhase || "idle",
     });
@@ -870,54 +836,14 @@ function renderTopology(topology, animateBoundary = false) {
       d: pathData,
       "marker-end": active
         ? "url(#graph-arrow-active)"
-        : relation === "temporal" || relation === "manager"
-          ? "url(#graph-arrow-temporal)"
-          : relation
-            ? "url(#graph-arrow-control)"
-            : "url(#graph-arrow)",
+        : "url(#graph-arrow)",
     });
     const title = svgElement("title");
-    title.textContent = relation
-      ? `${edge.description} · control relation, no envelope mailbox`
-      : mailbox
+    title.textContent = mailbox
       ? `${edge.route} · ${edge.queued_count || "0"} messages waiting`
       : edge.route;
     path.append(title);
     group.append(path);
-
-    if (relation) {
-      const inspectRelation = (event) => {
-        event.stopPropagation();
-        inspectHandlerRelation(edge);
-      };
-      group.setAttribute("role", "button");
-      group.setAttribute("tabindex", "0");
-      group.setAttribute("aria-label", `Inspect ${edge.description}`);
-      group.append(svgElement("path", {
-        class: "graph-control-relation-hit",
-        d: pathData,
-      }));
-      group.addEventListener("click", inspectRelation);
-      group.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          inspectRelation(event);
-        }
-      });
-      if (edge.show_label) {
-        const badge = svgElement("g", {
-          class: "graph-handler-label",
-          transform: `translate(${route.label.x - 13} ${route.label.y - 9})`,
-        });
-        const badgeTitle = svgElement("title");
-        badgeTitle.textContent = edge.description;
-        badge.append(svgElement("rect", { width: "26", height: "18", rx: "2" }));
-        const label = svgElement("text", { x: "13", y: "13", "text-anchor": "middle" });
-        label.textContent = edge.relation === "manager" ? "mgr" : "on";
-        badge.append(badgeTitle, label);
-        group.append(badge);
-      }
-    }
 
     if (active && animateBoundary) {
       const packet = svgElement("circle", {
@@ -979,7 +905,7 @@ function renderTopology(topology, animateBoundary = false) {
     const position = layout.positions.get(node.id);
     if (!position) continue;
     const active = activity?.node === node.path;
-    const selectable = Boolean(node.definition || node.inspect_owner);
+    const selectable = Boolean(node.definition);
     const selected = selectedTopologyItem === node.id;
     const boundary = node.kind === "boundary" || node.kind === "discard";
     const group = svgElement("g", {
@@ -987,36 +913,18 @@ function renderTopology(topology, animateBoundary = false) {
       transform: `translate(${position.x} ${position.y})`,
     });
     if (selectable) {
-      const inspectId = node.inspect_owner || node.id;
+      const inspectId = node.id;
       group.setAttribute("role", "button");
       group.setAttribute("tabindex", "0");
       group.setAttribute("aria-pressed", String(selected));
-      group.setAttribute("aria-label", node.kind === "control"
-        ? `Inspect ${node.label} control source`
-        : `Inspect ${node.path} definition`);
+      group.setAttribute("aria-label", `Inspect ${node.path} definition`);
       group.addEventListener("click", () => {
-        if (node.kind === "control") {
-          selectedHandlerRelation = null;
-          selectedTopologyItem = inspectId;
-          renderTopology(currentSnapshot?.topology, false);
-          if (currentSnapshot) renderRelatedPanels(currentSnapshot);
-          activateInspectorTab("definition");
-        } else {
-          selectTopologyItem(inspectId);
-        }
+        selectTopologyItem(inspectId);
       });
       group.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          if (node.kind === "control") {
-            selectedHandlerRelation = null;
-            selectedTopologyItem = inspectId;
-            renderTopology(currentSnapshot?.topology, false);
-            if (currentSnapshot) renderRelatedPanels(currentSnapshot);
-            activateInspectorTab("definition");
-          } else {
-            selectTopologyItem(inspectId);
-          }
+          selectTopologyItem(inspectId);
         }
       });
     }
@@ -1116,7 +1024,11 @@ function renderTopology(topology, animateBoundary = false) {
       const portTitle = svgElement("title");
       const drained = port.direction === "output"
         && drainedOutputs.has(`${node.id}\u0000${port.name}`);
-      portTitle.textContent = drained
+      const commands = (topology.commands || []).filter((command) =>
+        command.source_owner === node.path && command.source_port === port.name);
+      portTitle.textContent = commands.length
+        ? `${port.direction} port ${port.name} · ${commands.map((command) => `${command.command} on ${command.owner || "App"}`).join("; ")} · manager command, not a spatial edge`
+        : drained
         ? `output port ${port.name} · drained to nothing; no downstream mailbox`
         : `${port.direction} port ${port.name}`;
       pin.append(portTitle);
@@ -1153,7 +1065,7 @@ function renderTopology(topology, animateBoundary = false) {
 
   const legend = document.createElement("div");
   legend.className = "graph-legend";
-  for (const [kind, label] of [["operator", "Operator"], ["connector", "Connector"], ["scope", "Graph scope"], ["input", "Input"], ["output", "Output"], ["handler", "Handler choice"], ["temporal", "Temporal control"]]) {
+  for (const [kind, label] of [["operator", "Operator"], ["connector", "Connector"], ["scope", "Graph scope"], ["input", "Input"], ["output", "Output"]]) {
     const item = document.createElement("span");
     item.className = `legend-${kind}`;
     item.textContent = label;
@@ -1182,7 +1094,6 @@ function visibleKeyValue(value) {
 function selectTopologyItem(id) {
   scenarioDefinitionActive = false;
   selectedMailboxRoute = null;
-  selectedHandlerRelation = null;
   selectedTopologyItem = selectedTopologyItem === id ? null : id;
   renderTopology(currentSnapshot?.topology, false);
   if (currentSnapshot) renderRelatedPanels(currentSnapshot);
@@ -1191,28 +1102,11 @@ function selectTopologyItem(id) {
 function inspectMailbox(route) {
   scenarioDefinitionActive = false;
   selectedTopologyItem = null;
-  selectedHandlerRelation = null;
   selectedMailboxRoute = route;
   mailboxVisibleLimit = 100;
   renderTopology(currentSnapshot?.topology, false);
   if (currentSnapshot) renderRelatedPanels(currentSnapshot);
   activateInspectorTab("mailbox");
-}
-
-function inspectHandlerRelation(edge) {
-  scenarioDefinitionActive = false;
-  selectedMailboxRoute = null;
-  selectedHandlerRelation = {
-    route: edge.route,
-    owner: edge.owner,
-    activation: edge.activation,
-    target: edge.target?.port,
-    description: edge.description,
-  };
-  selectedTopologyItem = edge.owner;
-  renderTopology(currentSnapshot?.topology, false);
-  if (currentSnapshot) renderRelatedPanels(currentSnapshot);
-  activateInspectorTab("definition", true);
 }
 
 function activateInspectorTab(name, focus = false) {
@@ -1382,18 +1276,11 @@ function definitionPanel(item) {
 
   const badges = document.createElement("div");
   badges.className = "node-definition-badges";
-  for (const label of [item.type, ...(item.aspects || []).map((aspect) => `+ ${aspect}`)]) {
+  for (const label of [item.type, ...(item.extensions || []).map((extension) => `+ ${extension}`)]) {
     if (!label) continue;
     const badge = document.createElement("span");
     badge.textContent = label;
     badges.append(badge);
-  }
-  const relation = selectedHandlerRelation?.owner === item.id
-    ? document.createElement("p")
-    : null;
-  if (relation) {
-    relation.className = "handler-relation-context";
-    relation.textContent = selectedHandlerRelation.description;
   }
   const location = document.createElement("p");
   location.className = "node-definition-location";
@@ -1407,8 +1294,20 @@ function definitionPanel(item) {
   code.textContent = item.definition.code;
   pre.append(code);
   panel.append(heading, badges);
-  if (relation) panel.append(relation);
   panel.append(location, pre);
+  const commands = (currentSnapshot?.topology?.commands || []).filter((command) =>
+    command.source_owner === item.path || command.owner === item.path);
+  if (commands.length) {
+    const heading = document.createElement("h3");
+    heading.textContent = "Manager commands · not spatial edges";
+    panel.append(heading);
+    for (const command of commands) {
+      const line = document.createElement("p");
+      const cases = command.cases.length ? ` [${command.cases.join(" | ")}]` : "";
+      line.textContent = `${command.source_owner || "App"}.${command.source_port}${cases} → ${command.owner || "App"}.${command.command}`;
+      panel.append(line);
+    }
+  }
   return panel;
 }
 
@@ -1423,14 +1322,14 @@ function svgElement(name, attributes = {}) {
 }
 
 function itemDescriptor(item) {
-  return [item.type || item.kind, ...(item.aspects || []).map((aspect) => `+${aspect}`)]
+  return [item.type || item.kind, ...(item.extensions || []).map((extension) => `+${extension}`)]
     .filter(Boolean)
     .join(" · ");
 }
 
 function scopeDescriptor(owner) {
   const base = owner.parent === null ? "App" : (owner.type || "Graph");
-  return [base, ...(owner.aspects || [])].join(" + ");
+  return [base, ...(owner.extensions || []).filter((extension) => extension !== base)].join(" + ");
 }
 
 function nodeSubtitle(node) {
@@ -1567,19 +1466,19 @@ function historyTable(label, rows, columns, open) {
 }
 
 async function showRecordBoundary(recordIndex) {
-  const branch = Number(currentSnapshot?.timeline?.branch || 0);
+  const session = Number(currentSnapshot?.timeline?.session || 0);
   const boundary = boundaryForRecord(recordIndex);
-  const frame = timelineFrames(branch).find((candidate) => Number(candidate.boundary) === boundary);
+  const frame = timelineFrames(session).find((candidate) => Number(candidate.boundary) === boundary);
   if (!frame) throw new Error(`no retained boundary contains R${recordIndex}`);
   clearPlaybackTimer();
   bufferedPlayback = false;
   replayPaused = false;
-  await showBoundary(branch, frame.boundary, true);
+  await showBoundary(session, frame.boundary, true);
 }
 
 function boundaryForRecord(recordIndex) {
-  const branch = Number(currentSnapshot?.timeline?.branch || 0);
-  const frame = timelineFrames(branch).find((candidate) =>
+  const session = Number(currentSnapshot?.timeline?.session || 0);
+  const frame = timelineFrames(session).find((candidate) =>
     candidate.record_through !== null
       && candidate.record_through !== undefined
       && Number(candidate.record_through) >= Number(recordIndex));
@@ -1600,10 +1499,10 @@ function renderInjections(snapshot, selection) {
     empty(target, selection ? "No admitted injection for this selection." : "No admitted injection.");
     return;
   }
-  const branch = Number(snapshot?.timeline?.branch || 0);
+  const session = Number(snapshot?.timeline?.session || 0);
   const table = document.createElement("table");
   const header = document.createElement("tr");
-  for (const label of ["Key", "Logical time", "Boundary", "Branch"]) {
+  for (const label of ["Key", "Logical time", "Boundary", "Session"]) {
     const cell = document.createElement("th");
     cell.textContent = label;
     header.append(cell);
@@ -1620,7 +1519,7 @@ function renderInjections(snapshot, selection) {
     if (boundary !== null) {
       line.tabIndex = 0;
       line.setAttribute("role", "button");
-      const open = () => showBoundary(branch, boundary, true)
+      const open = () => showBoundary(session, boundary, true)
         .catch((error) => setCommandStatus(`Injection history unavailable: ${error.message}`));
       line.addEventListener("click", open);
       line.addEventListener("keydown", (event) => {
@@ -1633,7 +1532,7 @@ function renderInjections(snapshot, selection) {
     const logical = delivery?.meta?.sys?.logical_time_ns
       ?? delivery?.meta?.sys?.timestamp_ns
       ?? null;
-    const values = [visibleKeyValue(delivery.data) || truncate(origin, 10), logical === null ? "…" : formatLogicalTime(logical), boundary === null ? "—" : `B${boundary}`, branchName(branch)];
+    const values = [visibleKeyValue(delivery.data) || truncate(origin, 10), logical === null ? "…" : formatLogicalTime(logical), boundary === null ? "—" : `B${boundary}`, sessionName(session)];
     const cells = [];
     for (const value of values) {
       const cell = document.createElement("td");
@@ -1642,7 +1541,7 @@ function renderInjections(snapshot, selection) {
       cells.push(cell);
     }
     if (logical === null && boundary !== null) {
-      fetch(`/api/snapshot?branch=${encodeURIComponent(branch)}&boundary=${encodeURIComponent(boundary)}`, { cache: "no-store" })
+      fetch(`/api/snapshot?session=${encodeURIComponent(session)}&boundary=${encodeURIComponent(boundary)}`, { cache: "no-store" })
         .then((response) => response.ok ? response.json() : null)
         .then((frame) => { cells[1].textContent = frame ? formatLogicalTime(frame.execution?.logical_time_ns) : "—"; })
         .catch(() => { cells[1].textContent = "—"; });
@@ -1916,9 +1815,9 @@ for (const button of document.querySelectorAll("button[data-command]")) {
   button.addEventListener("click", async () => {
     if (pendingCommandRevision !== null) return;
     const command = button.dataset.command;
-    const branch = Number(currentSnapshot?.timeline?.branch || 0);
+    const session = Number(currentSnapshot?.timeline?.session || 0);
     const boundary = Number(currentSnapshot?.timeline?.boundary || 0);
-    const hasReplayAhead = timelineFrames(branch)
+    const hasReplayAhead = timelineFrames(session)
       .some((frame) => Number(frame.boundary) > boundary);
     if (command === "resume" && !sameTimelinePoint(currentSnapshot, liveSnapshot) && hasReplayAhead) {
       startBufferedPlayback();
@@ -1976,15 +1875,15 @@ for (const button of document.querySelectorAll("[data-inspector-tab]")) {
   });
 }
 document.querySelector("#back-boundary").addEventListener("click", () => {
-  const branch = Number(currentSnapshot?.timeline?.branch || 0);
+  const session = Number(currentSnapshot?.timeline?.session || 0);
   const boundary = Number(currentSnapshot?.timeline?.boundary || 0);
-  const frames = timelineFrames(branch);
+  const frames = timelineFrames(session);
   const index = frames.findIndex((frame) => Number(frame.boundary) === boundary);
   if (index <= 0) return;
   clearPlaybackTimer();
   bufferedPlayback = false;
   replayPaused = false;
-  showBoundary(branch, frames[index - 1].boundary, true)
+  showBoundary(session, frames[index - 1].boundary, true)
     .catch((error) => setCommandStatus(`Historical view unavailable: ${error.message}`));
 });
 document.querySelector("#return-live").addEventListener("click", () => {
@@ -1994,44 +1893,24 @@ document.querySelector("#return-live").addEventListener("click", () => {
   replayPaused = false;
   if (liveSnapshot) renderSnapshot(liveSnapshot);
 });
-document.querySelector("#branch-here").addEventListener("click", async () => {
-  const branch = Number(currentSnapshot?.timeline?.branch || 0);
-  const boundary = Number(currentSnapshot?.timeline?.boundary || 0);
-  const previousHistoricalView = manualHistoricalView;
-  try {
-    clearPlaybackTimer();
-    manualHistoricalView = false;
-    bufferedPlayback = false;
-    replayPaused = false;
-    setCommandStatus(`Replaying ${branchName(branch)} through B${boundary} into a new branch…`);
-    pendingCommandRevision = liveSnapshot?.revision ?? 0;
-    updateControls();
-    await post(`/api/command/branch-from?branch=${encodeURIComponent(branch)}&boundary=${encodeURIComponent(boundary)}`);
-  } catch (error) {
-    manualHistoricalView = previousHistoricalView;
-    pendingCommandRevision = null;
-    updateControls();
-    setCommandStatus(`Branch refused: ${error.message}`);
-  }
-});
 document.querySelector("#timeline").addEventListener("change", (event) => {
-  const branch = Number(currentSnapshot?.timeline?.branch || 0);
+  const session = Number(currentSnapshot?.timeline?.session || 0);
   clearPlaybackTimer();
   bufferedPlayback = false;
   replayPaused = false;
-  showBoundary(branch, Number(event.target.value), true)
+  showBoundary(session, Number(event.target.value), true)
     .catch((error) => setCommandStatus(`Historical view unavailable: ${error.message}`));
 });
-document.querySelector("#timeline-branch").addEventListener("change", (event) => {
-  const branch = Number(event.target.value);
-  const frames = timelineFrames(branch);
+document.querySelector("#timeline-session").addEventListener("change", (event) => {
+  const session = Number(event.target.value);
+  const frames = timelineFrames(session);
   const target = frames.at(-1);
   if (!target) return;
   clearPlaybackTimer();
   bufferedPlayback = false;
   replayPaused = false;
-  showBoundary(branch, target.boundary, true)
-    .catch((error) => setCommandStatus(`Historical branch unavailable: ${error.message}`));
+  showBoundary(session, target.boundary, true)
+    .catch((error) => setCommandStatus(`Historical session unavailable: ${error.message}`));
 });
 document.querySelector("#playback-speed").addEventListener("change", () => {
   clearPlaybackTimer();

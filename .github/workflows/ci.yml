@@ -63,7 +63,7 @@ jobs:
             -semihosting-config enable=on,target=native -icount shift=0 \
             | tee spike.out
           grep -q "SPIKE_OK" spike.out
-          grep -q "semantic_hash: e50026eeb0b8dc77fe2f5e52de6dfaa33b50cc351211cd87c21081d28aa43709" spike.out
+          grep -q "semantic_hash: 5ffba3ea18c52a98a538a63ed0a7bf23cd3b4be0fa1b7d7acc51ba85dd73cfa3" spike.out
 
   # The benchmark's proofs: the runner's own tests, every reference
   # solution green against its referee, and the dry rehearsal of the
@@ -90,5 +90,5 @@ jobs:
           cargo build --manifest-path runner/Cargo.toml
           ./runner/target/debug/vibe-runner --tasks tasks \
             --author canned:fixtures/dry --rastok ../../target/debug/rastok \
-            --prompt prompts/v1.md --out results/ci --wave ci-dry
+            --prompt prompts/v3.md --out results/ci --wave ci-dry-v16
           test "$(grep -c '"outcome":"passed"' results/ci/metrics.jsonl)" = "3"

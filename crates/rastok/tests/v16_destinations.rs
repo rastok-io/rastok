@@ -9,17 +9,19 @@ fn compile(source: &str) -> Result<compiler::Compilation, rastok::diagnostics::B
 }
 
 #[test]
-fn boundary_spelling_is_neutral_before_the_migration_gate() {
-    for (ports, old_wiring, new_wiring) in [
+fn removed_boundary_spelling_refuses_without_moving_explicit_identity() {
+    for (ports, old_wiring, new_wiring, hash) in [
         (
             "input in: int; output out: int",
             ". -> worker -> .",
             "in -> worker -> out",
+            "61847c2351b663e8b18c83332baa9137f5877f05c2a5b827e0dddc06e373b666",
         ),
         (
             "input request: int; output answer: int",
             ".request -> worker\nworker.out -> .answer",
             "request -> worker\nworker.out -> answer",
+            "87ee3cbb9ade925b9f41d796ddd232bc40eecacae0271a3b88f8821ceded1e93",
         ),
     ] {
         let source = |wiring| {
@@ -27,13 +29,25 @@ fn boundary_spelling_is_neutral_before_the_migration_gate() {
                 "graph app : App {{\n{ports}\noperator worker {{ input in: int; output out: int; on in {{ out = data }} }}\n{wiring}\n}}"
             )
         };
-        let old = compile(&source(old_wiring)).unwrap();
+        let old = compile(&source(old_wiring)).unwrap_err();
+        assert!(
+            old.diagnostics()
+                .iter()
+                .all(
+                    |diagnostic| diagnostic.code().as_str() == "E-WIRING-MIGRATION"
+                        && diagnostic.message().contains("write")
+                ),
+            "{old:?}"
+        );
         let explicit = compile(&source(new_wiring)).unwrap();
-        assert_eq!(old.hash, explicit.hash);
-        assert_eq!(old.plan, explicit.plan);
         assert_eq!(
-            plan::encode(&old.plan, &old.hash),
-            plan::encode(&explicit.plan, &explicit.hash)
+            explicit.hash.to_string(),
+            hash,
+            "identity measured on both accepted spellings before the migration gate"
+        );
+        assert_eq!(
+            plan::decode(&plan::encode(&explicit.plan, &explicit.hash)).unwrap(),
+            (explicit.plan, explicit.hash)
         );
     }
 }

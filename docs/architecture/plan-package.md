@@ -1,20 +1,10 @@
 # The plan package — the transportable, verifiable ExecutionPlan
 
-> **V16 cutover (2026-09-06), not yet qualified.** The current reader accepts
-> only v16. The historical paragraphs below remain the v15 byte ledger;
-> current v16 keys, tags, candidate checksums and outstanding execution gates
-> are recorded in [R4 §§9–10](rework-r4-plan.md#9-candidate-v16-allocation-2026-09-06).
-> D-2026-09-05-1 freezes the categorical movements and
-> non-movements in
-> [rework-r0-identity.md](rework-r0-identity.md): `ExtensionSpec`, recursive
-> `Dispatch`, `RouteRule`, canonical destination sets, manager commands,
-> Loop r2 and the new opening-admission-derived `LoopRunRef`, together with
-> removal of Graph handlers, `ChildPort`, `unwired`, RootSink and Loop's old
-> port-shaped control. Body key 10 holds flattened case/manager selections;
-> sparse key 11 retains the complete unflattened routing inventory for nested
-> Graph boundaries. Validation re-composes it, checks physical-edge agreement
-> and independently verifies crossed boundary types and dispositions.
-> No retired field or tag is reinterpreted; v15 packages refuse by version.
+> **Categorical v16 (2026-09-07).** The reader accepts only v16. The current
+> tables below replace the previous format; no retired field or tag is
+> reinterpreted. [R9 qualification](rework-r9-qualification.md) records the
+> single package blessing and independently validated identities. Historical
+> format notes remain evidence, not alternative readable formats.
 
 > Format note — the bytes follow this document, never precede it.
 > Specified 2026-08-06 (M0.5 item 4), after the delivery-reference
@@ -246,7 +236,7 @@ module carries it.
 package := magic "RKPB"                      4 raw bytes, sniffable
            ("Rastok Plan Binary" — the pinned meaning of the magic)
         ┌ canonical CBOR map ─────────────────────────────────┐
-        │ 1 : format_version   uint      (13)                 │
+        │ 1 : format_version   uint      (16)                 │
         │ 2 : semantic_hash    bytes(32) (the plan's identity)│
         │ 3 : body             bytes     (embedded, see below)│
         │ 4 : checksum         bytes(32) (see recipe below)   │
@@ -281,8 +271,8 @@ of the contract, in order:
    every referenced port declared with the right direction, every Node and
    owner row reciprocally linked, one root Graph and a parent-before-child
    lexical tree, every edge scoped to a Graph, every handler owned by its
-   executable Node or aspect Graph, activation on a typed input or direct
-   child output, emission on an output port, paths and
+   Operator, activation on a typed input/join/lifecycle, emission on an output
+   or a validated manager command, paths and
    names unique, every state write resolvable. Well-shaped bytes naming impossible structure (an
    edge to slot 999) refuse typed — and the machine's `Vm::boot`
    accepts only the validated type, so no raw plan reaches it by
@@ -292,9 +282,10 @@ of the contract, in order:
    path order with a preceding Graph parent, Node port tables sorted and unique with
    untyped conventional rows omitted (a typed `in`/`out`/`err` row is a
    real source constraint), edges by their endpoint text,
-   handlers by (tagged owner, activation key, complete canonical handler),
-   with multiple same-activation Graph handlers admitted only under the
-   Loop control proof, immutable bindings, vars and attributes sorted. Immutable
+   handlers by (owner, activation key, complete canonical Dispatch),
+   with exactly one handler per activation; immutable bindings, vars and
+   attributes sorted. Case routes, dispositions, productibility and Loop
+   entry/terminal/control/effect proofs are independently re-derived. Immutable
    owner expressions additionally have an acyclic lexical dependency graph,
    one derived earliest phase, and (at Plan) one independently reproduced
    reduction. Attributes are the
@@ -325,15 +316,14 @@ the compiler surfaces that refusal as the user diagnostic
 `E-PLAN-DEPTH` — so what `encode` accepts, `decode` reads back, with
 no gap at the boundary.
 
-Expression typing and arbitrary compiler-ContractCatalog coherence remain the
-compiler's job. For executable built-ins, the package validates the resolved
-contract facts it must dereference: the active `Process` attributes and exact
-four-row port table are checked without a Registry. The package's validation holds the *structural*
-invariants the runtime dereferences without checking. Refusals are
-typed and total; there is no silent migration — a new format is a
-new version, and an old decoder refuses it by name.
+The package re-derives expression/Dispatch types, the exact six built-in
+Connector Contracts, port tables, routed narrowing, composition, productibility,
+Extensions and Loop control/measure/effect evidence without the hosted
+ContractCatalog. Unknown contracts or unsupported execution profiles refuse.
+Checksums do not substitute for these proofs. Refusals are typed and total;
+there is no silent migration.
 
-V15 applies the same rule to data policy without consulting the compiler
+Data policy applies the same rule to data policy without consulting the compiler
 catalogue: every local table is reconstructed, resolved against its adjacent
 logical type and checked against the closed measure/currency registries. A raw
 port row is a declaration; resolved-port policy is a separately transported
@@ -341,7 +331,7 @@ effective claim. A3 follows the canonical operation graph and requires that
 claim to equal its independent derivation exactly. It never rewrites the raw
 row or recovers meaning from payload strings.
 
-## Body tables (format v15)
+## Body tables (format v16)
 
 The body is one canonical CBOR value encoding the `ExecutionPlan`.
 Compound values use fixed-shape arrays with a leading numeric
@@ -359,7 +349,8 @@ closed field contract, and validation checks conformance before encoding.
 ```text
 plan       := {1: [node*], 2: [port_decl*], 3: [edge*], 4: [handler*],
                5: app_schema?, 6: ext_schema?, 7: [asset_bytes*]?,
-               8: resolved_ports, 9: [owner*]}
+               8: resolved_ports, 9: [owner*],
+               10: [route_rule*], 11: [route_rule*]?}
                                                   // 2 is the App boundary
                                                   // 5/6 are travelling zone schemas:
                                                   //   [[field (text), type]*], sorted, prefix-free
@@ -369,6 +360,9 @@ plan       := {1: [node*], 2: [port_decl*], 3: [edge*], 4: [handler*],
                                                   // 7 is raw asset content in digest order
                                                   // 8 is mandatory and re-derived at decode
                                                   // 9 is mandatory, including the root Graph
+                                                  // 10 is sparse flattened case/command routing
+                                                  // 11 retains unflattened boundary routing when needed;
+                                                  // independent recomposition must reproduce 3/10
 
 node       := {1: path (text), 2: node_kind, 3: [port_decl*],
                4: [var*], 5: owner_slot}
@@ -380,7 +374,7 @@ node_kind  := 1                                   — operator
 
 owner      := {1: path (text), 2: parent_owner_slot | null,
                3: owner_kind, 4: instance, 5: [owner_val*],
-               6: [port_decl*], 7: [aspect_spec*]}
+               6: [port_decl*], 7: [extension_spec*]}
 owner_kind := [1]                                 — graph
             | [2, node_slot]                      — executable Node owner
               // Canonical root-first path order. The root App Graph is the
@@ -390,11 +384,13 @@ owner_kind := [1]                                 — graph
               // Key 6 is empty on the root Graph because plan key 2 is its
               // sole boundary authority; it is the complete canonical
               // boundary on a nested Graph and empty on a Node owner.
-              // Key 7 is a canonical closed aspect list on Graphs and empty
-              // on Node owners. V15 retains Loop as the sole executable aspect.
+              // Key 7 is a canonical Extension list; App occurs once on the
+              // root Graph, Loop on an admissible owner, no implicit order.
 
-aspect_spec := [1, loop_spec]                     — Loop
-loop_spec   := {1: fuel?, 2: delay?, 3: proof?}
+extension_spec := [2]                            — App
+                | [3, loop_spec]                — Loop r2; tag 1 retired
+loop_spec   := {1: fuel?, 2: delay?, 3: proof?,
+                4: entry (text), 5: [terminal (text)*]}
               // At least one of fuel/proof is mandatory.
 fuel        := plan_constant
 delay       := [1, plan_constant]                 — fixed(after)
@@ -402,7 +398,7 @@ delay       := [1, plan_constant]                 — fixed(after)
 proof       := {1: measure_tree, 2: invariant_tree?,
                 3: [positive_decrement (uint)*]}
               // Decrements are a sorted multiset. Validation derives the
-              // same evidence from Graph handlers and compares exactly;
+              // same evidence from the host's checked control graph and compares exactly;
               // this map is never trusted as a compiler claim.
 plan_constant := [tree, tagged_value]
               // Lowering substitutes every lexical `val`, so tree is closed
@@ -442,11 +438,11 @@ owner_val  := {1: name (text), 2: evaluation_site, 3: tree,
               // requires exact equality with the transported reduction.
               // Invocation refuses for owner vals; invocation-local vals
               // remain handler steps.
-spec       := {1: connector_id (text), 2: effect,
+spec       := {1: contract_id (text), 2: effect,
                3: behavior (uint: 1 deterministic · 2 probabilistic),
                4: [[name (text), attr]*], 6: connector_roles,
                7: connector_exchange}
-              // connector_id is canonical <namespace>/<name>@<major>
+              // contract_id is canonical <namespace>/<name>@<major>
               // connector_roles := uint: 1 inbound · 2 outbound ·
               //                            3 inbound+outbound
               // connector_exchange := uint: 1 event · 2 call · 3 session
@@ -465,19 +461,12 @@ attr       := [1, word (text)] | [2, tagged_value]
               // Form 3 may not claim Plan: a plan result uses form 2.
 evaluation_site := uint: 1 plan · 2 boot · 3 instance · 4 invocation
 port_decl  := [name (text), mode, type?, annotation_table?]
-mode       := uint: 1 input/require-wire · 2 output/require-wire ·
-                    3 output/root-sink
-              // mode 4 (input/root-sink) is decoder-recognized only so a
-              // forged body receives a precise typed refusal; encode never emits it
+mode       := uint: 1 input · 2 output
+              // Old unwired-policy modes refuse; disposition is explicit routing.
               — the third element is the PINNED type (same encoding
               as var types), present exactly when the source
               annotates: an unannotated port keeps its two-element
-              form in the BODY. The claim is scoped: the body bytes
-              of an unannotated plan are unchanged, but the PACKAGE
-              moved to v3 with this widening (version is checksum
-              material), and the semantic hash of any graph with a
-              port table moved with the annotation's identity slot —
-              both pinned by the gauge fixture (D-2026-08-08-3)
+              form in the BODY. The effective type is independently reconstructed below.
               — since M1.3 B2, validation derives a separate total
               ResolvedPortTable (effective type + Declared/Inferred origin)
               from these rows, connector pins and graph constraints; an
@@ -485,7 +474,7 @@ mode       := uint: 1 input/require-wire · 2 output/require-wire ·
               — since B5, every Connector contract row is present and typed;
               Operator/Graph rows may still be source constraints; their
               mandatory effective type is carried by resolved_ports
-              — v15 appends the table only when non-empty. If an inferred raw
+              — annotation tables are appended only when non-empty. If an inferred raw
               port owns policy, element 3 is explicit null so element 4 is
               unambiguous; its effective type remains mandatory below.
 resolved_ports := [boundary_resolved, [node_resolved*]]
@@ -495,7 +484,7 @@ resolved_port := [name (text), direction, type, origin, annotation_table?]
 direction    := uint: 1 input · 2 output
 origin       := uint: 1 declared · 2 inferred
               // rows use the same canonical (name,direction) order as the
-              // derived table; node row count equals the Node table. V15
+              // derived table; node row count equals the Node table. Validation
               // requires its policy table to equal the raw re-derived row.
 var        := {1: name (text), 2: type, 3: init (tagged_value)?,
                4: annotation_table?}
@@ -535,29 +524,36 @@ endpoint   := [node_slot (uint) | null, port (text)]
               // executable Node table. Edge scope independently preserves the
               // lexical Graph whose boundary owns the route.
 
-handler    := {1: handler_owner, 2: activation, 3: guard (tree)?, 4: [step*]}
-handler_owner := [1, node_slot]                   — Operator or Connector
-               | [2, owner_slot]                 — aspect-owning Graph
+handler    := {1: handler_owner, 2: activation, 3: join_guard (tree)?, 4: dispatch}
+handler_owner := [1, node_slot]                   — Operator only; tag 2 retired
 activation := [1, port (text)]
             | [2, lifecycle]
             | [3, [port (text)+], within_ns (signed) | null,
                   last (positive uint32) | null]
-            | [4, child_path (text), port (text)]
-              // join ports stay in source-declared order; >=2 and distinct.
-              // A bound requires exact typed output `expired`; `where` lives
-              // in handler key 3 and no second correlation key is transported.
-              // Tag 4 is one direct child output observed by a Graph-owned
-              // handler; validation proves lexical parenthood and exact type.
+              // Tag 4 retired. Join ports retain declared order, >=2 distinct.
+              // Key 3 is an admission guard on a join only. A single-port
+              // where is already OpenMatch, with a no-emission fallback.
+dispatch   := [1, [step*]]                         — Linear
+            | [2, [pure_let*], tree, [[case_set, dispatch]*]] — ClosedMatch
+            | [3, [pure_let*], [[tree, dispatch]*], dispatch] — OpenMatch + fallback
+case_set   := [case_name (text)+]                  — canonical, disjoint
+              // Closed arms cover the source domain; open arms keep source
+              // order. Decisions <=32 deep, combined CBOR depth <=128.
 lifecycle  := uint: 1 start · 2 stop · 3 compensate · 4 next ·
-                    5 timeout · 6 evict · 7 recover · 8 closing · 9 reply
+                    5 timeout · 6 evict · 7 recover · 8 closing · 9 reply · 10 exit
               // registry is closed and extend-only; M1.4 instance lifecycle
               // activates start/stop. `reply` is an internal inbound-Call
               // transaction and is never admitted as a source handler;
-              // aspect/supervision rows remain governed by their gates
+              // supervision rows remain internal; only start/stop are DSL handlers
 step       := [1, name (text), tree, annotation_table?] — let
             | [2, port (text), emission]          — emit
             | [3, name (text), tree]              — set var
             | [4]                                 — stop current instance
+            | [5, [port (text)+], multi_values]   — ordered multi-emission
+            | [6, command]                      — own Loop manager command
+multi_values := [1, emission]                    — evaluate once, broadcast
+              | [2, [emission+]]                 — ordered tuple, exact arity
+command    := [1, emission] | [2] | [3]           — Next / Again / Done
 emission   := [1] | [2, [write*]] | [3, [write*]] | [4, tree] | [5]
               identity · patch · replace · data · nothing
 write      := [target, tree]
@@ -567,6 +563,18 @@ target     := [1, [seg (text)*]]                  — data path (empty = whole d
                                                   // 3 (custom namespace) and 4 (mime) are RETIRED
                                                   //   draft tags — extend-only, never reused
               data path · app field · ext field (D-2026-08-10-1)
+
+route_rule := [route_endpoint, selection]
+selection  := [1, [destination+]]                 — all cases
+            | [2, [[case_set, [destination+]]+]]  — closed case partition
+destination := [1, route_endpoint] | [2]          — port / explicit nothing
+             | [3, route_owner, command_kind]    — manager, never PhysicalEdge
+route_endpoint := [route_owner, port (text)]
+route_owner := [1, node_path (text)] | [2, owner_path (text)]
+command_kind := uint: 1 next · 2 again · 3 done
+              // Route rows use canonical encoded-byte order. Destination sets
+              // use domain order, independent of source spelling. Same-case
+              // duplicate destinations and nothing + real destination refuse.
 
 tree       := [type, expr]
 type       := 1                                   — null

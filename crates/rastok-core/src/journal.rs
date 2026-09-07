@@ -45,7 +45,7 @@ pub mod timing;
 /// `envelope.md` §2, with its domain tags.
 pub mod ids {
     use super::{
-        CallRef, Id, InboundEnvelopeProvenance, InstanceRef, LoopRunRef, OwnerPath, SessionRef,
+        CallRef, Id, InboundEnvelopeProvenance, InstanceRef, OwnerPath, SessionRef,
         SessionWriteRef, node,
     };
     use alloc::string::ToString;
@@ -63,10 +63,6 @@ pub mod ids {
     const SESSION: u8 = 0x11;
     /// Domain tag of one write obligation within a session.
     const SESSION_WRITE: u8 = 0x12;
-    /// Domain tag of one logical Loop run.
-    const LOOP_RUN: u8 = 0x13;
-    /// Envelope-id domain of one manager-produced Loop re-entry.
-    const LOOP_REENTRY: u8 = 0x05;
     /// Domain tag of a delivery reference.
     const DELIVERY: u8 = 0x20;
     /// Domain tag of an instance-lifetime obligation. Outside envelope-id
@@ -134,36 +130,6 @@ pub mod ids {
                 parent.as_bytes(),
                 port.name().as_bytes(),
                 &index.to_le_bytes(),
-            ],
-        )
-    }
-
-    /// Placement-neutral identity of one Loop run. The complete instance
-    /// reference separates generations and the root envelope separates
-    /// concurrent runs inside one generation.
-    #[must_use]
-    pub fn loop_run_ref(instance: &InstanceRef, root: Id) -> LoopRunRef {
-        LoopRunRef::new(Id::derive(
-            LOOP_RUN,
-            &[
-                instance.address().as_bytes(),
-                &instance.generation().to_le_bytes(),
-                root.as_bytes(),
-            ],
-        ))
-    }
-
-    /// Identity of the iteration-state envelope born from one selected
-    /// `next` emission. The ordinal is part of the recipe, so a duplicate or
-    /// skipped progress fact cannot alias another iteration.
-    #[must_use]
-    pub fn loop_reentry_id(run: LoopRunRef, iteration: u64, selected: Id) -> Id {
-        Id::derive(
-            LOOP_REENTRY,
-            &[
-                run.id().as_bytes(),
-                &iteration.to_le_bytes(),
-                selected.as_bytes(),
             ],
         )
     }
@@ -344,24 +310,6 @@ pub(crate) fn recorded_envelope(records: &[Record], id: Id) -> Option<&Envelope>
                         .envelopes()
                         .find(|envelope| envelope.meta().sys().id() == id)
                 })
-            })
-            .or_else(|| match transaction.loop_fact() {
-                Some(LoopFact::Open { state, .. } | LoopFact::Next { state, .. })
-                    if state.meta().sys().id() == id =>
-                {
-                    Some(state)
-                }
-                Some(LoopFact::Expired { output, .. }) if output.meta().sys().id() == id => {
-                    Some(output)
-                }
-                Some(
-                    LoopFact::Open { .. }
-                    | LoopFact::Next { .. }
-                    | LoopFact::Admit { .. }
-                    | LoopFact::Close { .. }
-                    | LoopFact::Expired { .. },
-                )
-                | None => None,
             }),
         Record::Inbound(_) | Record::Outbound(_) => None,
     })
@@ -442,15 +390,6 @@ fn transaction_origin(records: &[Record], transaction: &TransactionRecord) -> Op
         .emissions
         .first()
         .map(|emission| emission.envelope.meta().sys().origin_id())
-        .or_else(|| {
-            transaction.loop_fact().and_then(|fact| match fact {
-                LoopFact::Open { state, .. } | LoopFact::Next { state, .. } => {
-                    Some(state.meta().sys().origin_id())
-                }
-                LoopFact::Expired { output, .. } => Some(output.meta().sys().origin_id()),
-                LoopFact::Admit { .. } | LoopFact::Close { .. } => None,
-            })
-        })
         .or_else(|| {
             transaction
                 .cause
@@ -582,256 +521,6 @@ pub(crate) fn observations_for_records_from(
         .collect()
 }
 
-fn envelope_descends_from(records: &[Record], descendant: Id, ancestor: Id) -> bool {
-    let mut cursor = Some(descendant);
-    let mut seen = BTreeSet::new();
-    while let Some(id) = cursor {
-        if id == ancestor {
-            return true;
-        }
-        if !seen.insert(id) {
-            return false;
-        }
-        cursor =
-            recorded_envelope(records, id).and_then(|envelope| envelope.meta().sys().parent_id());
-    }
-    false
-}
-
-/// Rebuilds one Loop run from the ordinary transaction records which carry
-/// its facts. This is the recovery authority: an in-memory index may make the
-/// query cheaper, but it may never mint an ordinal or restore fuel which is
-/// absent from this fold.
-///
-/// # Errors
-///
-/// A duplicate open, a skipped or duplicated ordinal, or any transition after
-/// a terminal fact is rejected as a corrupt Loop history.
-pub fn fold_loop_run(records: &[Record], run: LoopRunRef) -> Result<Option<LoopRunState>, Error> {
-    let invalid = |detail| Error::InvalidLoopTransition { run, detail };
-    let mut folded: Option<LoopRunState> = None;
-    for transaction in records.iter().filter_map(|record| match record {
-        Record::Transaction(transaction)
-            if transaction
-                .loop_fact()
-                .is_some_and(|fact| fact.run() == run) =>
-        {
-            Some(transaction)
-        }
-        _ => None,
-    }) {
-        let fact = transaction
-            .loop_fact()
-            .ok_or(Error::UnknownLoopRun { run })?;
-        match fact {
-            LoopFact::Open {
-                instance,
-                root,
-                fuel,
-                state,
-                ..
-            } => {
-                if folded.is_some() {
-                    return Err(Error::DuplicateLoopRun { run });
-                }
-                let in_trigger = matches!(
-                    &transaction.trigger,
-                    node::Trigger::Port(port) if port.name() == "in"
-                );
-                if *fuel == 0
-                    || instance != &transaction.instance
-                    || transaction.cause != Some(*root)
-                    || !in_trigger
-                    || state.meta().sys().id() != *root
-                    || state.meta().sys().origin_id() != *root
-                    || state.meta().sys().parent_id().is_some()
-                    || run != ids::loop_run_ref(instance, *root)
-                {
-                    return Err(Error::CorruptLoopOpen);
-                }
-                folded = Some(LoopRunState {
-                    instance: instance.clone(),
-                    root: *root,
-                    iteration: 0,
-                    remaining: *fuel,
-                    state: state.clone(),
-                    due_at: None,
-                    iteration_admitted: true,
-                    phase: LoopRunPhase::Open,
-                });
-            }
-            LoopFact::Next {
-                iteration,
-                remaining,
-                selected,
-                state,
-                due_at,
-                ..
-            } => {
-                let current = folded.as_mut().ok_or(Error::UnknownLoopRun { run })?;
-                if current.phase != LoopRunPhase::Open {
-                    return Err(invalid("progress followed a terminal fact"));
-                }
-                if !current.iteration_admitted
-                    || current.remaining <= 1
-                    || *iteration != current.iteration.saturating_add(1)
-                    || *remaining != current.remaining - 1
-                {
-                    return Err(invalid("the ordinal or remaining fuel skipped its fold"));
-                }
-                let selected_envelope = transaction
-                    .emissions
-                    .iter()
-                    .find(|emission| {
-                        emission.port.name() == "next"
-                            && emission.envelope.meta().sys().id() == *selected
-                    })
-                    .map(|emission| &emission.envelope)
-                    .ok_or_else(|| invalid("the selected next emission is absent"))?;
-                if state.meta().sys().id() != ids::loop_reentry_id(run, *iteration, *selected)
-                    || state.meta().sys().parent_id() != Some(*selected)
-                    || state.meta().sys().origin_id() != current.root
-                    || transaction.cause.is_none_or(|cause| {
-                        !envelope_descends_from(records, cause, current.state.meta().sys().id())
-                    })
-                    || state.data() != selected_envelope.data()
-                    || state.meta().app() != selected_envelope.meta().app()
-                    || state.meta().ext() != selected_envelope.meta().ext()
-                {
-                    return Err(invalid(
-                        "the l:next envelope contradicts its selected state",
-                    ));
-                }
-                current.iteration = *iteration;
-                current.remaining = *remaining;
-                current.state = state.clone();
-                current.due_at = *due_at;
-                current.iteration_admitted = false;
-            }
-            LoopFact::Admit { iteration, .. } => {
-                let current = folded.as_mut().ok_or(Error::UnknownLoopRun { run })?;
-                if current.phase != LoopRunPhase::Open
-                    || current.iteration_admitted
-                    || *iteration != current.iteration
-                    || transaction.instance != current.instance
-                    || transaction.trigger != node::Trigger::Lifecycle(node::Lifecycle::Next)
-                    || transaction.cause != Some(current.state.meta().sys().id())
-                    || !transaction.consumed.is_empty()
-                    || !transaction.join_inputs.is_empty()
-                    || !transaction.state_delta.is_empty()
-                    || !transaction.emissions.is_empty()
-                    || transaction
-                        .routes
-                        .iter()
-                        .any(|route| route.delivery != current.state.meta().sys().id())
-                    || !transaction.timers.is_empty()
-                    || transaction.close_scope.is_some()
-                    || transaction.exchange_exit.is_some()
-                    || transaction.logical_time.is_some()
-                {
-                    return Err(invalid(
-                        "the iteration admission is duplicated or names the wrong state",
-                    ));
-                }
-                current.due_at = None;
-                current.iteration_admitted = true;
-            }
-            LoopFact::Close { iteration, .. } => {
-                let current = folded.as_mut().ok_or(Error::UnknownLoopRun { run })?;
-                if current.phase != LoopRunPhase::Open {
-                    return Err(invalid("closure followed a terminal fact"));
-                }
-                if !current.iteration_admitted
-                    || *iteration != current.iteration
-                    || transaction.cause.is_none_or(|cause| {
-                        !envelope_descends_from(records, cause, current.state.meta().sys().id())
-                    })
-                {
-                    return Err(invalid("closure names the wrong iteration"));
-                }
-                current.due_at = None;
-                current.phase = LoopRunPhase::Closed;
-            }
-            LoopFact::Expired {
-                iteration,
-                selected,
-                output,
-                ..
-            } => {
-                let current = folded.as_mut().ok_or(Error::UnknownLoopRun { run })?;
-                if current.phase != LoopRunPhase::Open {
-                    return Err(invalid("exhaustion followed a terminal fact"));
-                }
-                if !current.iteration_admitted
-                    || *iteration != current.iteration
-                    || current.remaining != 1
-                {
-                    return Err(invalid(
-                        "exhaustion occurred before the last body application",
-                    ));
-                }
-                let selected_envelope = transaction
-                    .emissions
-                    .iter()
-                    .find(|emission| {
-                        emission.port.name() == "next"
-                            && emission.envelope.meta().sys().id() == *selected
-                    })
-                    .map(|emission| &emission.envelope)
-                    .ok_or_else(|| invalid("the exhausted next emission is absent"))?;
-                let expected_port = node::Port::new("expired")
-                    .map_err(|_| invalid("the expired port is not representable"))?;
-                let expected_id = ids::graph_emission_id(
-                    &transaction.owner_path,
-                    &node::Trigger::Lifecycle(node::Lifecycle::Next),
-                    *selected,
-                    &expected_port,
-                    0,
-                );
-                let output_is_emitted = transaction.emissions.iter().any(|emission| {
-                    emission.port == expected_port
-                        && emission.index == 0
-                        && emission.envelope == *output
-                });
-                let exact_payload = match (selected_envelope.data(), output.data()) {
-                    (
-                        crate::envelope::Data::Materialized(last_state),
-                        crate::envelope::Data::Materialized(crate::value::Value::TaggedUnion(
-                            tagged,
-                        )),
-                    ) => {
-                        tagged.case == "LoopExpired"
-                            && tagged.payload.as_slice()
-                                == [(
-                                    alloc::string::String::from("last_state"),
-                                    last_state.clone(),
-                                )]
-                    }
-                    _ => false,
-                };
-                if !output_is_emitted
-                    || output.meta().sys().id() != expected_id
-                    || output.meta().sys().parent_id() != Some(*selected)
-                    || output.meta().sys().origin_id() != current.root
-                    || transaction.cause.is_none_or(|cause| {
-                        !envelope_descends_from(records, cause, current.state.meta().sys().id())
-                    })
-                    || output.meta().app() != selected_envelope.meta().app()
-                    || output.meta().ext() != selected_envelope.meta().ext()
-                    || !exact_payload
-                {
-                    return Err(invalid(
-                        "the expired envelope contradicts its selected state",
-                    ));
-                }
-                current.due_at = None;
-                current.phase = LoopRunPhase::Expired;
-            }
-        }
-    }
-    Ok(folded)
-}
-
 /// An accepted inbound envelope and its record (`identity.md` §3,
 /// keys 20–28). The record autonomously reconstructs its root id from
 /// `(connector_path, replica, seq)`.
@@ -944,7 +633,7 @@ pub struct Emission {
 pub struct LoopRunRef(Id);
 
 impl LoopRunRef {
-    /// Wraps an identity derived by [`ids::loop_run_ref`].
+    /// Wraps an identity derived by [`loop_protocol::run_ref`].
     #[must_use]
     pub const fn new(id: Id) -> Self {
         Self(id)
@@ -961,131 +650,6 @@ impl fmt::Display for LoopRunRef {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(formatter)
     }
-}
-
-/// One transition of the replay-derived Loop fold. It is an extension of an
-/// ordinary transaction, never a fourth record kind or a mutable ledger.
-#[derive(Debug, Clone, PartialEq)]
-pub enum LoopFact {
-    /// The first body application of one external root.
-    Open {
-        /// Derived run identity.
-        run: LoopRunRef,
-        /// Exact Loop owner generation.
-        instance: InstanceRef,
-        /// External lineage root which opened the run.
-        root: Id,
-        /// Positive body-application budget.
-        fuel: u64,
-        /// Complete state envelope of iteration zero.
-        state: Envelope,
-    },
-    /// A selected `next` became the following iteration state.
-    Next {
-        /// Run being advanced.
-        run: LoopRunRef,
-        /// New zero-based iteration ordinal.
-        iteration: u64,
-        /// Body applications remaining after the completed traversal.
-        remaining: u64,
-        /// User emission which selected continuation.
-        selected: Id,
-        /// Manager-produced `l:next` entry envelope.
-        state: Envelope,
-        /// Derived scheduler annotation. It is deliberately omitted from the
-        /// canonical record projection; the causal timer reference remains
-        /// the re-entry envelope id.
-        due_at: Option<i64>,
-    },
-    /// The current iteration state crossed the temporal boundary into its
-    /// Graph body. Keeping admission distinct from selecting `next` lets a
-    /// delayed or backpressured spatial body reserve and journal its routes
-    /// only when it can actually enter them.
-    Admit {
-        /// Run whose current iteration is admitted.
-        run: LoopRunRef,
-        /// Current zero-based iteration ordinal.
-        iteration: u64,
-    },
-    /// A traversal selected ordinary terminal output(s) and/or `stop`.
-    Close {
-        /// Run being closed.
-        run: LoopRunRef,
-        /// Final zero-based iteration ordinal.
-        iteration: u64,
-    },
-    /// The last permitted traversal selected `next`; the manager published
-    /// the proposed state as `LoopExpired` instead of re-entering.
-    Expired {
-        /// Run being closed.
-        run: LoopRunRef,
-        /// Final zero-based iteration ordinal.
-        iteration: u64,
-        /// User emission which proposed one more state.
-        selected: Id,
-        /// Manager-produced terminal envelope.
-        output: Envelope,
-    },
-}
-
-impl LoopFact {
-    /// Run advanced by this fact.
-    #[must_use]
-    pub const fn run(&self) -> LoopRunRef {
-        match self {
-            Self::Open { run, .. }
-            | Self::Next { run, .. }
-            | Self::Admit { run, .. }
-            | Self::Close { run, .. }
-            | Self::Expired { run, .. } => *run,
-        }
-    }
-}
-
-/// Terminal state of one replay-derived Loop run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LoopRunPhase {
-    /// Another traversal may still select progress.
-    Open,
-    /// Ordinary output(s) or `stop` terminated the run.
-    Closed,
-    /// Fuel exhaustion terminated the run on `expired`.
-    Expired,
-}
-
-/// Complete projection rebuilt by folding [`LoopFact`] values.
-#[derive(Debug, Clone, PartialEq)]
-pub struct LoopRunState {
-    /// Exact Loop owner generation.
-    pub instance: InstanceRef,
-    /// External lineage root.
-    pub root: Id,
-    /// Current zero-based iteration ordinal.
-    pub iteration: u64,
-    /// Body applications still available at this state.
-    pub remaining: u64,
-    /// Current iteration-entry envelope.
-    pub state: Envelope,
-    /// Derived scheduler annotation for the current entry. `None` means the
-    /// entry is immediately runnable; a date is persisted outside canonical
-    /// causal identity so recovery can re-arm the same obligation.
-    pub due_at: Option<i64>,
-    /// Whether the current state has crossed into one body traversal. A
-    /// selected `next` clears it; the subsequent `Admit` sets it exactly
-    /// once. This is replay state, not Worker choreography.
-    pub iteration_admitted: bool,
-    /// Whether and how the run terminated.
-    pub phase: LoopRunPhase,
-}
-
-/// Mutually exclusive Loop record domains. Historical key 53 and command
-/// protocol key 55 retain their own meaning; a transaction cannot carry both.
-#[derive(Debug, Clone, PartialEq)]
-pub enum LoopRecord {
-    /// Retained `rastok.loop.r1` transition (key 53).
-    R1(LoopFact),
-    /// `rastok.loop.r2` context, commands and transitions (key 55).
-    R2(loop_protocol::Packet),
 }
 
 /// The atomic commit packet of one node firing (`identity.md` §3,
@@ -1124,9 +688,9 @@ pub struct TransactionRecord {
     /// transaction. The transaction's last emission must be the sole
     /// conventional `exit`.
     pub exchange_exit: Option<Box<InboundExchangeExitRecord>>,
-    /// One sparse, versioned Loop domain. Boxing keeps its absence to one
+    /// One sparse Loop protocol packet. Boxing keeps its absence to one
     /// pointer in every retained non-Loop transaction.
-    pub loop_record: Option<Box<LoopRecord>>,
+    pub loop_record: Option<Box<loop_protocol::Packet>>,
     /// The transaction's fixed logical instant when one of its checked
     /// expressions can observe `now()`. Omitted for handlers that do not read
     /// time, so old causal facts and time-insensitive programs keep their
@@ -1156,22 +720,10 @@ pub struct TransactionRecord {
 }
 
 impl TransactionRecord {
-    /// Historical Loop transition, never interpreted as an r2 command.
-    #[must_use]
-    pub fn loop_fact(&self) -> Option<&LoopFact> {
-        match self.loop_record.as_deref() {
-            Some(LoopRecord::R1(fact)) => Some(fact),
-            Some(LoopRecord::R2(_)) | None => None,
-        }
-    }
-
     /// Command-based Loop packet, absent on all other transactions.
     #[must_use]
     pub fn loop_protocol(&self) -> Option<&loop_protocol::Packet> {
-        match self.loop_record.as_deref() {
-            Some(LoopRecord::R2(packet)) => Some(packet),
-            Some(LoopRecord::R1(_)) | None => None,
-        }
+        self.loop_record.as_deref()
     }
 }
 
@@ -1420,29 +972,10 @@ pub enum Error {
         /// Generation whose lifecycle was truncated.
         instance: InstanceRef,
     },
-    /// An opening does not derive from its root, owner generation and fuel.
-    CorruptLoopOpen,
     /// An r2 command packet contradicts the replay-derived protocol.
     InvalidLoopProtocol(loop_protocol::Error),
     /// Retained scheduler evidence contradicts the accepted obligations.
     InvalidTimerSchedule(crate::canonical_cbor::DecodeError),
-    /// The same root attempted to open one Loop run twice.
-    DuplicateLoopRun {
-        /// Derived run identity.
-        run: LoopRunRef,
-    },
-    /// Progress or closure named no open Loop run.
-    UnknownLoopRun {
-        /// Referenced run identity.
-        run: LoopRunRef,
-    },
-    /// A Loop transition skipped, duplicated or contradicted its fold.
-    InvalidLoopTransition {
-        /// Referenced run identity.
-        run: LoopRunRef,
-        /// Closed invariant that failed.
-        detail: &'static str,
-    },
     /// A call ref matching no journaled call.
     UnknownCall,
     /// An inbound Call marker contradicts its root or source instance.
@@ -1544,18 +1077,8 @@ impl fmt::Display for Error {
                 instance.generation(),
                 instance.address().owner()
             ),
-            Self::CorruptLoopOpen => {
-                f.write_str("the Loop open fact does not derive from its root and owner generation")
-            }
             Self::InvalidLoopProtocol(error) => error.fmt(f),
             Self::InvalidTimerSchedule(error) => write!(f, "invalid timer schedule: {error}"),
-            Self::DuplicateLoopRun { run } => {
-                write!(f, "Loop run {run} is already open or terminal")
-            }
-            Self::UnknownLoopRun { run } => write!(f, "Loop run {run} has no open fact"),
-            Self::InvalidLoopTransition { run, detail } => {
-                write!(f, "Loop run {run} carries an invalid transition: {detail}")
-            }
             Self::UnknownCall => f.write_str("no outbound record for this call"),
             Self::CorruptInboundCall => {
                 f.write_str("the inbound Call marker contradicts its committed root or source")
@@ -1726,23 +1249,6 @@ pub trait Journal {
     /// transactions; no Worker-local counter participates.
     fn instance_ref_for_admission(&self, address: &InstanceAddress) -> Result<InstanceRef, Error>;
 
-    /// Complete state of one run, rebuilt exclusively from committed Loop
-    /// facts. Runtime caches may mirror this projection but never replace it.
-    ///
-    /// # Errors
-    ///
-    /// A corrupt or non-contiguous Loop history.
-    fn loop_run(&self, run: &LoopRunRef) -> Result<Option<LoopRunState>, Error>;
-
-    /// Every non-terminal Loop run reconstructed in canonical run-reference
-    /// order. A fresh Worker uses this query to restore recurrence work; the
-    /// journal facts, not the Worker, decide the next ordinal and fuel.
-    ///
-    /// # Errors
-    ///
-    /// A corrupt or non-contiguous Loop history.
-    fn open_loop_runs(&self) -> Result<Vec<(LoopRunRef, LoopRunState)>, Error>;
-
     /// Reconstructs the command-based Loop protocol from committed facts.
     ///
     /// # Errors
@@ -1863,11 +1369,7 @@ pub struct MemJournal {
     /// Replay-derived inbound Call fold. The opening INBOUND fact and terminal
     /// TRANSACTION remain the only authorities.
     inbound_calls: BTreeMap<InboundCallRef, InboundCallLifecycle>,
-    /// Replay-derived Loop fold. This index removes a quadratic scan from
-    /// immediate recurrence; transaction key 53 remains the sole authority
-    /// and [`fold_loop_run`] independently reconstructs the same projection.
-    loop_runs: BTreeMap<LoopRunRef, LoopRunState>,
-    /// Disposable r2 projection, replaced only with the committed record.
+    /// Replay-derived Loop fold, replaced only with the committed record.
     /// The independent Fold reader reconstructs it from `records`; ordinary
     /// non-Loop journals allocate nothing for this index.
     command_loops: Option<Box<loop_protocol::Fold>>,
@@ -1918,7 +1420,6 @@ impl MemJournal {
             active_close_roots: BTreeSet::new(),
             sessions: BTreeMap::new(),
             inbound_calls: BTreeMap::new(),
-            loop_runs: BTreeMap::new(),
             command_loops: None,
         }
     }
@@ -1987,331 +1488,6 @@ impl MemJournal {
             cursor = lifecycle.parent;
         }
         false
-    }
-
-    fn prepare_loop_transition(
-        &self,
-        transaction: &TransactionRecord,
-    ) -> Result<Option<(LoopRunRef, LoopRunState)>, Error> {
-        let Some(fact) = transaction.loop_fact() else {
-            return Ok(None);
-        };
-        let invalid = |run, detail| Error::InvalidLoopTransition { run, detail };
-        match fact {
-            LoopFact::Open {
-                run,
-                instance,
-                root,
-                fuel,
-                state,
-            } => {
-                if self.loop_run(run)?.is_some() {
-                    return Err(Error::DuplicateLoopRun { run: *run });
-                }
-                let in_trigger = matches!(
-                    &transaction.trigger,
-                    node::Trigger::Port(port) if port.name() == "in"
-                );
-                if *fuel == 0
-                    || instance != &transaction.instance
-                    || transaction.cause != Some(*root)
-                    || !in_trigger
-                    || state.meta().sys().id() != *root
-                    || state.meta().sys().origin_id() != *root
-                    || state.meta().sys().parent_id().is_some()
-                    || *run != ids::loop_run_ref(instance, *root)
-                {
-                    return Err(Error::CorruptLoopOpen);
-                }
-                Ok(())
-            }
-            LoopFact::Next {
-                run,
-                iteration,
-                remaining,
-                selected,
-                state,
-                due_at,
-            } => {
-                let current = self
-                    .loop_run(run)?
-                    .ok_or(Error::UnknownLoopRun { run: *run })?;
-                if current.phase != LoopRunPhase::Open {
-                    return Err(invalid(*run, "progress followed a terminal fact"));
-                }
-                if !self.instance_is_within(&transaction.instance, &current.instance) {
-                    return Err(invalid(
-                        *run,
-                        "the firing instance is outside the Loop owner",
-                    ));
-                }
-                if !current.iteration_admitted
-                    || current.remaining <= 1
-                    || *iteration != current.iteration.saturating_add(1)
-                    || *remaining != current.remaining - 1
-                {
-                    return Err(invalid(
-                        *run,
-                        "the ordinal or remaining fuel skipped its fold",
-                    ));
-                }
-                let selected_envelope = transaction
-                    .emissions
-                    .iter()
-                    .find(|emission| {
-                        emission.port.name() == "next"
-                            && emission.envelope.meta().sys().id() == *selected
-                    })
-                    .map(|emission| &emission.envelope)
-                    .ok_or_else(|| invalid(*run, "the selected next emission is absent"))?;
-                if state.meta().sys().id() != ids::loop_reentry_id(*run, *iteration, *selected)
-                    || state.meta().sys().parent_id() != Some(*selected)
-                    || state.meta().sys().origin_id() != current.root
-                    || transaction.cause.is_none_or(|cause| {
-                        !envelope_descends_from(
-                            &self.records,
-                            cause,
-                            current.state.meta().sys().id(),
-                        )
-                    })
-                    || state.data() != selected_envelope.data()
-                    || state.meta().app() != selected_envelope.meta().app()
-                    || state.meta().ext() != selected_envelope.meta().ext()
-                {
-                    return Err(invalid(
-                        *run,
-                        "the l:next envelope contradicts its selected state",
-                    ));
-                }
-                let timer = (timer_kind::LOOP_DELAY, state.meta().sys().id());
-                let matching = transaction
-                    .timers
-                    .iter()
-                    .filter(|candidate| **candidate == timer)
-                    .count();
-                let loop_timers = transaction
-                    .timers
-                    .iter()
-                    .filter(|(kind, _)| *kind == timer_kind::LOOP_DELAY)
-                    .count();
-                if (due_at.is_some() && (matching != 1 || loop_timers != 1))
-                    || (due_at.is_none() && loop_timers != 0)
-                {
-                    return Err(invalid(
-                        *run,
-                        "the delayed l:next obligation contradicts its timer fact",
-                    ));
-                }
-                Ok(())
-            }
-            LoopFact::Admit { run, iteration } => {
-                let current = self
-                    .loop_run(run)?
-                    .ok_or(Error::UnknownLoopRun { run: *run })?;
-                if current.phase != LoopRunPhase::Open
-                    || current.iteration_admitted
-                    || *iteration != current.iteration
-                    || transaction.instance != current.instance
-                    || transaction.trigger != node::Trigger::Lifecycle(node::Lifecycle::Next)
-                    || transaction.cause != Some(current.state.meta().sys().id())
-                    || !transaction.consumed.is_empty()
-                    || !transaction.join_inputs.is_empty()
-                    || !transaction.state_delta.is_empty()
-                    || !transaction.emissions.is_empty()
-                    || transaction
-                        .routes
-                        .iter()
-                        .any(|route| route.delivery != current.state.meta().sys().id())
-                    || !transaction.timers.is_empty()
-                    || transaction.close_scope.is_some()
-                    || transaction.exchange_exit.is_some()
-                    || transaction.logical_time.is_some()
-                {
-                    return Err(invalid(
-                        *run,
-                        "the iteration admission is duplicated or names the wrong state",
-                    ));
-                }
-                Ok(())
-            }
-            LoopFact::Close { run, iteration } => {
-                let current = self
-                    .loop_run(run)?
-                    .ok_or(Error::UnknownLoopRun { run: *run })?;
-                if current.phase != LoopRunPhase::Open {
-                    return Err(invalid(*run, "closure followed a terminal fact"));
-                }
-                if !current.iteration_admitted
-                    || !self.instance_is_within(&transaction.instance, &current.instance)
-                    || *iteration != current.iteration
-                    || transaction.cause.is_none_or(|cause| {
-                        !envelope_descends_from(
-                            &self.records,
-                            cause,
-                            current.state.meta().sys().id(),
-                        )
-                    })
-                {
-                    return Err(invalid(
-                        *run,
-                        "closure names the wrong instance or iteration",
-                    ));
-                }
-                Ok(())
-            }
-            LoopFact::Expired {
-                run,
-                iteration,
-                selected,
-                output,
-            } => {
-                let current = self
-                    .loop_run(run)?
-                    .ok_or(Error::UnknownLoopRun { run: *run })?;
-                if current.phase != LoopRunPhase::Open {
-                    return Err(invalid(*run, "exhaustion followed a terminal fact"));
-                }
-                if !current.iteration_admitted
-                    || !self.instance_is_within(&transaction.instance, &current.instance)
-                    || *iteration != current.iteration
-                    || current.remaining != 1
-                {
-                    return Err(invalid(
-                        *run,
-                        "exhaustion occurred before the last body application",
-                    ));
-                }
-                let selected_envelope = transaction
-                    .emissions
-                    .iter()
-                    .find(|emission| {
-                        emission.port.name() == "next"
-                            && emission.envelope.meta().sys().id() == *selected
-                    })
-                    .map(|emission| &emission.envelope)
-                    .ok_or_else(|| invalid(*run, "the exhausted next emission is absent"))?;
-                let expected_port = node::Port::new("expired")
-                    .map_err(|_| invalid(*run, "the expired port is not representable"))?;
-                let expected_id = ids::graph_emission_id(
-                    &transaction.owner_path,
-                    &node::Trigger::Lifecycle(node::Lifecycle::Next),
-                    *selected,
-                    &expected_port,
-                    0,
-                );
-                let output_is_emitted = transaction.emissions.iter().any(|emission| {
-                    emission.port == expected_port
-                        && emission.index == 0
-                        && emission.envelope == *output
-                });
-                let exact_payload = match (selected_envelope.data(), output.data()) {
-                    (
-                        crate::envelope::Data::Materialized(last_state),
-                        crate::envelope::Data::Materialized(crate::value::Value::TaggedUnion(
-                            tagged,
-                        )),
-                    ) => {
-                        tagged.case == "LoopExpired"
-                            && tagged.payload.as_slice()
-                                == [(
-                                    alloc::string::String::from("last_state"),
-                                    last_state.clone(),
-                                )]
-                    }
-                    _ => false,
-                };
-                if !output_is_emitted
-                    || output.meta().sys().id() != expected_id
-                    || output.meta().sys().parent_id() != Some(*selected)
-                    || output.meta().sys().origin_id() != current.root
-                    || transaction.cause.is_none_or(|cause| {
-                        !envelope_descends_from(
-                            &self.records,
-                            cause,
-                            current.state.meta().sys().id(),
-                        )
-                    })
-                    || output.meta().app() != selected_envelope.meta().app()
-                    || output.meta().ext() != selected_envelope.meta().ext()
-                    || !exact_payload
-                {
-                    return Err(invalid(
-                        *run,
-                        "the expired envelope contradicts its selected state",
-                    ));
-                }
-                Ok(())
-            }
-        }?;
-        let run = fact.run();
-        let projected = match fact {
-            LoopFact::Open {
-                instance,
-                root,
-                fuel,
-                state,
-                ..
-            } => LoopRunState {
-                instance: instance.clone(),
-                root: *root,
-                iteration: 0,
-                remaining: *fuel,
-                state: state.clone(),
-                due_at: None,
-                iteration_admitted: true,
-                phase: LoopRunPhase::Open,
-            },
-            LoopFact::Next {
-                iteration,
-                remaining,
-                state,
-                due_at,
-                ..
-            } => {
-                let mut current = self
-                    .loop_runs
-                    .get(&run)
-                    .cloned()
-                    .ok_or(Error::UnknownLoopRun { run })?;
-                current.iteration = *iteration;
-                current.remaining = *remaining;
-                current.state = state.clone();
-                current.due_at = *due_at;
-                current.iteration_admitted = false;
-                current
-            }
-            LoopFact::Admit { .. } => {
-                let mut current = self
-                    .loop_runs
-                    .get(&run)
-                    .cloned()
-                    .ok_or(Error::UnknownLoopRun { run })?;
-                current.due_at = None;
-                current.iteration_admitted = true;
-                current
-            }
-            LoopFact::Close { .. } => {
-                let mut current = self
-                    .loop_runs
-                    .get(&run)
-                    .cloned()
-                    .ok_or(Error::UnknownLoopRun { run })?;
-                current.phase = LoopRunPhase::Closed;
-                current.due_at = None;
-                current
-            }
-            LoopFact::Expired { .. } => {
-                let mut current = self
-                    .loop_runs
-                    .get(&run)
-                    .cloned()
-                    .ok_or(Error::UnknownLoopRun { run })?;
-                current.phase = LoopRunPhase::Expired;
-                current.due_at = None;
-                current
-            }
-        };
-        Ok(Some((run, projected)))
     }
 
     /// Outermost durable close root governing this active generation.
@@ -2922,7 +2098,6 @@ impl Journal for MemJournal {
                 return Err(Error::InvalidInboundCallExit);
             }
         }
-        let loop_projection = self.prepare_loop_transition(&transaction)?;
         // Canonicalize the declaratively sorted collections so an
         // invalid ordering is not constructible through the journal.
         transaction.consumed.sort();
@@ -2954,9 +2129,6 @@ impl Journal for MemJournal {
             self.command_loops = Some(fold);
         }
         self.instance_lifecycles.insert(address, lifecycle);
-        if let Some((run, state)) = loop_projection {
-            self.loop_runs.insert(run, state);
-        }
         if let Some(InboundExchangeExitRecord::Session(session_ref)) = exchange_exit
             && let Some(session) = self.sessions.get_mut(&session_ref)
         {
@@ -2986,19 +2158,6 @@ impl Journal for MemJournal {
             lifecycle.starts
         };
         Ok(InstanceRef::new(address.clone(), generation))
-    }
-
-    fn loop_run(&self, run: &LoopRunRef) -> Result<Option<LoopRunState>, Error> {
-        Ok(self.loop_runs.get(run).cloned())
-    }
-
-    fn open_loop_runs(&self) -> Result<Vec<(LoopRunRef, LoopRunState)>, Error> {
-        Ok(self
-            .loop_runs
-            .iter()
-            .filter(|(_, state)| state.phase == LoopRunPhase::Open)
-            .map(|(run, state)| (*run, state.clone()))
-            .collect())
     }
 
     fn open_outbound(&mut self, intent: Intent) -> Result<(), Error> {
@@ -3813,187 +2972,6 @@ mod tests {
         journal
             .commit(lifecycle_transaction(second_root, node::Lifecycle::Stop))
             .unwrap();
-    }
-
-    #[test]
-    fn loop_progress_is_a_close_once_journal_fold() {
-        let mut journal = MemJournal::new(GraphVersion(1));
-        let root = journal
-            .append_inbound(InboundSubmission {
-                provenance: provenance("loop"),
-                port: node::Port::new("in").unwrap(),
-                draft: Draft {
-                    data: Data::materialized(crate::value::Value::Int(2)),
-                    ext: Namespace::new(),
-                },
-                sequence: SubmissionSequence::Next,
-            })
-            .expect("the external root is durable")
-            .envelope;
-        activate_root(&mut journal);
-        let instance = InstanceRef::new(InstanceAddress::singleton(&OwnerPath::root()), 0);
-        let run = ids::loop_run_ref(&instance, root.meta().sys().id());
-        let mut open = lifecycle_transaction(instance.clone(), node::Lifecycle::Start);
-        open.trigger = node::Trigger::Port(node::Port::new("in").unwrap());
-        open.cause = Some(root.meta().sys().id());
-        open.loop_record = Some(Box::new(crate::journal::LoopRecord::R1(LoopFact::Open {
-            run,
-            instance: instance.clone(),
-            root: root.meta().sys().id(),
-            fuel: 3,
-            state: root.clone(),
-        })));
-        journal.commit(open.clone()).expect("the run opens once");
-        assert_eq!(
-            journal.commit(open).unwrap_err(),
-            Error::DuplicateLoopRun { run }
-        );
-
-        let trigger = node::Trigger::Port(node::Port::new("in").unwrap());
-        let next_port = node::Port::new("next").unwrap();
-        let selected_id = ids::graph_emission_id(
-            &OwnerPath::root(),
-            &trigger,
-            root.meta().sys().id(),
-            &next_port,
-            0,
-        );
-        let selected = Envelope::new(
-            Meta::new(MetaSys::emission(
-                selected_id,
-                root.meta().sys(),
-                GraphVersion(1).0,
-            )),
-            Data::materialized(crate::value::Value::Int(1)),
-        );
-        let reentry = Envelope::new(
-            Meta::new(MetaSys::emission(
-                ids::loop_reentry_id(run, 1, selected_id),
-                selected.meta().sys(),
-                GraphVersion(1).0,
-            )),
-            selected.data().clone(),
-        );
-        let mut progress = lifecycle_transaction(instance.clone(), node::Lifecycle::Start);
-        progress.trigger = trigger;
-        progress.cause = Some(root.meta().sys().id());
-        progress.emissions.push(Emission {
-            port: next_port,
-            index: 0,
-            envelope: selected,
-        });
-        progress.loop_record = Some(Box::new(crate::journal::LoopRecord::R1(LoopFact::Next {
-            run,
-            iteration: 1,
-            remaining: 2,
-            selected: selected_id,
-            state: reentry.clone(),
-            due_at: None,
-        })));
-        let mut wrong_parent = progress.clone();
-        let wrong_state = Envelope::new(
-            Meta::new(MetaSys::emission(
-                ids::loop_reentry_id(run, 1, selected_id),
-                root.meta().sys(),
-                GraphVersion(1).0,
-            )),
-            reentry.data().clone(),
-        );
-        wrong_parent.loop_record = Some(Box::new(crate::journal::LoopRecord::R1(LoopFact::Next {
-            run,
-            iteration: 1,
-            remaining: 2,
-            selected: selected_id,
-            state: wrong_state,
-            due_at: None,
-        })));
-        assert!(matches!(
-            journal.commit(wrong_parent).unwrap_err(),
-            Error::InvalidLoopTransition {
-                run: found,
-                detail: "the l:next envelope contradicts its selected state"
-            } if found == run
-        ));
-        let mut missing_timer = progress.clone();
-        let Some(LoopRecord::R1(LoopFact::Next { due_at, .. })) =
-            missing_timer.loop_record.as_deref_mut()
-        else {
-            panic!("the fixture is one Loop progress fact");
-        };
-        *due_at = Some(1_000);
-        assert!(matches!(
-            journal.commit(missing_timer).unwrap_err(),
-            Error::InvalidLoopTransition {
-                run: found,
-                detail: "the delayed l:next obligation contradicts its timer fact"
-            } if found == run
-        ));
-        journal
-            .commit(progress.clone())
-            .expect("one exact next transition advances the fold");
-        assert!(matches!(
-            journal.commit(progress).unwrap_err(),
-            Error::InvalidLoopTransition {
-                run: found,
-                detail: "the ordinal or remaining fuel skipped its fold"
-            } if found == run
-        ));
-
-        let mut admit = lifecycle_transaction(instance.clone(), node::Lifecycle::Next);
-        admit.cause = Some(reentry.meta().sys().id());
-        admit.loop_record = Some(Box::new(crate::journal::LoopRecord::R1(LoopFact::Admit {
-            run,
-            iteration: 1,
-        })));
-        journal
-            .commit(admit.clone())
-            .expect("the selected state is admitted exactly once");
-        assert!(matches!(
-            journal.commit(admit).unwrap_err(),
-            Error::InvalidLoopTransition {
-                run: found,
-                detail: "the iteration admission is duplicated or names the wrong state"
-            } if found == run
-        ));
-
-        let mut close = lifecycle_transaction(instance, node::Lifecycle::Start);
-        close.trigger = node::Trigger::Port(node::Port::new("in").unwrap());
-        close.cause = Some(reentry.meta().sys().id());
-        close.loop_record = Some(Box::new(crate::journal::LoopRecord::R1(LoopFact::Close {
-            run,
-            iteration: 1,
-        })));
-        journal.commit(close).expect("the run closes once");
-        let folded = journal
-            .loop_run(&run)
-            .expect("the committed Loop history is valid")
-            .expect("the run remains replayable");
-        let replayed = fold_loop_run(journal.records(), run)
-            .expect("a fresh replay accepts the committed Loop history")
-            .expect("the run survives reconstruction without a RAM index");
-        assert_eq!(replayed, folded);
-        assert_eq!(folded.phase, LoopRunPhase::Closed);
-        assert_eq!(folded.iteration, 1);
-        assert_eq!(folded.remaining, 2);
-
-        let mut after_close = lifecycle_transaction(folded.instance, node::Lifecycle::Start);
-        after_close.trigger = node::Trigger::Port(node::Port::new("in").unwrap());
-        after_close.cause = Some(reentry.meta().sys().id());
-        after_close.loop_record = Some(Box::new(crate::journal::LoopRecord::R1(LoopFact::Next {
-            run,
-            iteration: 2,
-            remaining: 1,
-            selected: selected_id,
-            state: reentry,
-            due_at: None,
-        })));
-        assert!(matches!(
-            journal.commit(after_close).unwrap_err(),
-            Error::InvalidLoopTransition {
-                run: found,
-                detail: "progress followed a terminal fact"
-            } if found == run
-        ));
     }
 
     #[test]

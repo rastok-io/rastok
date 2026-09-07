@@ -46,7 +46,7 @@ graph accounting_probe : App {
     output out: Usage
     on in { out = data }
   }
-  . -> copy -> .
+  in -> copy -> out
 }
 "#;
     let compilation = compile(
@@ -142,7 +142,7 @@ graph priced_call : App {
     on in { out = data as int }
   }
 
-  . -> model -> typed_usage -> .
+  in -> model -> typed_usage -> out
   model.err -> nothing
   model.exit -> nothing
 }

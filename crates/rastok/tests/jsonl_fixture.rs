@@ -27,63 +27,9 @@ fn compilation() -> rastok::compiler::Compilation {
     .expect("a valid unit")
 }
 
-/// The fixture's identity, pinned to the byte. It moves only when
-/// the language does — deliberately, re-blessed in review.
-// DELIBERATE MOVE 2026-08-12 (D-2026-08-12-1): contract defaults
-// are injected into the effective HIR before the hash — this
-// fixture gained `args = []`, `max_output = "8MiB"` and
-// `on_timeout = kill` (`mode = job` was written).
-// DELIBERATE MOVE 2026-08-12, same day (review round): the Process
-// former error set gained `CaptureFailed` — a pipe READ fault is its own
-// kind, and the set travelled in the plan.
-// DELIBERATE MOVE 2026-08-15 (M1.3 B5): the complete resolved
-// Process port contract replaces that set, carries routing policy,
-// and injects `err_codec = lines` before hashing.
-// DELIBERATE MOVE 2026-08-15 (M1.3 B7): jsonl stdout is a sequence of
-// unit `variant` emissions and each invocation adds one typed terminal
-// `exit`; the completion closure seals both ordered drafts.
-// DELIBERATE MOVE 2026-08-15 (M1.3 B8): format v7 seals the complete
-// resolved type registry and total effective port table; the raw exit bridge
-// disappears without changing the connector's runtime contract.
-// DELIBERATE FIXTURE MIGRATION 2026-08-15 (M1.3 B9): each jsonl frame
-// remains `variant` at the connector, then the sift explicitly narrows it to
-// the declared JSON-object map before indexing. Dynamic indexing is gone.
-// M1.3 final review: the semantic hash stays fixed while the package drops
-// the lowering-only Operator runtime-fault `err` row. It was never part of
-// canonical HIR identity and no causal trace changes.
-// DELIBERATE CONTAINER MOVE 2026-08-16 (M1.4 P1): the unpublished v8 draft
-// added partition descriptors and lifecycle activations. This graph declares none,
-// so its semantic hash and trace remain fixed while its package checksum moves.
-// DELIBERATE CONTAINER MOVE 2026-08-21 (M1.4 R2 checkpoint): categorical
-// v9 replaces that draft with the root/Node owner table and scoped edges.
-// JSONL declares no instance semantics, so its hash remains fixed.
-// DELIBERATE TRACE MOVE 2026-08-21 (M1.4 R3): singleton routes and
-// transactions now carry complete instance references. The package and hash
-// remain fixed; only the causal trace moves.
-// R3 REVIEW CLOSURE: owner paths are sealed as segment arrays instead of
-// dotted display text. The same trace moves again; hash and package do not.
-// DELIBERATE MOVE 2026-08-21 (M1.4 R5): bounded Closing may have to settle an
-// unconfirmed cancellation, so ProcessExit gains the empty OutcomeUnknown
-// case. The closed port type is source identity; existing traces do not move.
-// DELIBERATE MOVE 2026-08-22 (M1.5 C1): `rastok/process@2` and its required
-// outbound role replace the source-level `Process` symbol in canonical HIR;
-// categorical v10 carries both. The causal trace is unchanged.
-// DELIBERATE MOVE 2026-08-25 (M1.6 H1): the Call exchange lifecycle becomes
-// explicit canonical HIR and categorical v11 plan data. Session-only causal
-// fields are omitted, so this fixture's trace remains byte-identical.
-// DELIBERATE CONTAINER MOVE 2026-08-26 (M1.6 H4.1): categorical v12 adds
-// `media_type` to the type/expression registry. The graph does not use it, so
-// its semantic hash and causal trace remain byte-identical.
-// DELIBERATE CONTAINER MOVE 2026-08-28 (M1.7 L2): categorical v13 adds
-// Graph aspect and handler-owner transport. This graph has no aspect, so its
-// semantic hash and causal trace remain byte-identical.
-// DELIBERATE CONTAINER MOVE 2026-08-28 (M1.7 L6): categorical v14 makes
-// optional Loop proof transport explicit. This graph has no Loop, so only its
-// container version/checksum move; semantic hash and trace remain identical.
-// DELIBERATE CONTAINER MOVE 2026-08-30 (M1.8 A2): categorical v15 adds
-// sparse schema-policy tables. This graph is unannotated, so its body,
-// semantic hash and causal trace remain identical; only version/checksum move.
-const JSONL_HASH: &str = "036f7ea5346fac883a3bad155fbdf41b303f6e54bef93f8c850ff5f138f769de";
+// Process @2 and canonical Dispatch move this witness in v16. The complete
+// ledger is docs/architecture/rework-r9-qualification.md; its trace is unchanged.
+const JSONL_HASH: &str = "2f89c8b5fa22f7fbe489d6aa770d517c3c9db8f92e850028c1e2bb1280efb2fc";
 
 #[test]
 fn the_semantic_hash_is_pinned() {

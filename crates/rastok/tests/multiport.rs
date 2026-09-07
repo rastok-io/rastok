@@ -25,9 +25,9 @@ graph sorter : App {
     }
   }
 
-  . -> route
-  route.hot -> .high
-  route.cold -> .low
+  in -> route
+  route.hot -> high
+  route.cold -> low
 }
 
 lab sorter {
@@ -60,9 +60,9 @@ graph merge : App {
     }
   }
 
-  .alpha -> join.a
-  .beta -> join.b
-  join -> .
+  alpha -> join.a
+  beta -> join.b
+  join -> out
 }
 
 lab merge {
@@ -144,8 +144,8 @@ graph merge : App {
     }
   }
 
-  .alpha -> join.a
-  join -> .
+  alpha -> join.a
+  join -> out
 }
 "#;
 
@@ -283,8 +283,8 @@ graph typed : App {
     }
   }
 
-  .feed -> gauge.evt
-  gauge.score -> .
+  feed -> gauge.evt
+  gauge.score -> out
 }
 
 lab typed {
@@ -306,7 +306,7 @@ fn a_typed_graph_rides_the_lab() {
 fn a_pinned_input_types_the_handler_data() {
     // `data` is TEXT in this handler — multiplying it must refuse at
     // check; with the old `dyn`, this compiled and faulted at run.
-    let source = "graph g : App {\n  operator o {\n    input evt : text\n    on evt { out = data * 2 }\n  }\n  . -> o.evt\n  o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    input evt : text\n    on evt { out = data * 2 }\n  }\n  in -> o.evt\n  o -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -322,7 +322,7 @@ fn a_pinned_input_types_the_handler_data() {
 
 #[test]
 fn an_emission_against_a_pinned_output_refuses() {
-    let source = "graph g : App {\n  operator o {\n    output score : int\n    on in { score = \"nope\" }\n  }\n  . -> o\n  o.score -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    output score : int\n    on in { score = \"nope\" }\n  }\n  in -> o\n  o.score -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -338,7 +338,7 @@ fn an_emission_against_a_pinned_output_refuses() {
 
 #[test]
 fn mismatched_pinned_edge_ends_refuse() {
-    let source = "graph g : App {\n  operator a {\n    output score : int\n    on in { score = 1 }\n  }\n  operator b {\n    input evt : text\n    on evt { out = data }\n  }\n  . -> a\n  a.score -> b.evt\n  b -> .\n}\n";
+    let source = "graph g : App {\n  operator a {\n    output score : int\n    on in { score = 1 }\n  }\n  operator b {\n    input evt : text\n    on evt { out = data }\n  }\n  in -> a\n  a.score -> b.evt\n  b -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -354,7 +354,7 @@ fn mismatched_pinned_edge_ends_refuse() {
 
 #[test]
 fn a_typed_injection_refuses_by_contract() {
-    let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  .alpha -> o.a\n  o -> .\n}\n\nlab g {\n  simulation probing on app {\n    scenario s \"x\" {\n      app.alpha = \"text\"\n      expect \"y\" app.out count == 1\n    }\n  }\n}\n";
+    let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  alpha -> o.a\n  o -> out\n}\n\nlab g {\n  simulation probing on app {\n    scenario s \"x\" {\n      app.alpha = \"text\"\n      expect \"y\" app.out count == 1\n    }\n  }\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -413,7 +413,7 @@ fn typed_ports_travel_in_the_package() {
 fn the_annotation_is_identity() {
     // Pinning a type is a public contract — two graphs differing only
     // by the annotation are two identities.
-    let annotated = "graph g : App {\n  input in: text\n  output out: text\n  operator o {\n    input evt : text\n    on evt { out = data }\n  }\n  . -> o.evt\n  o -> .\n}\n";
+    let annotated = "graph g : App {\n  input in: text\n  output out: text\n  operator o {\n    input evt : text\n    on evt { out = data }\n  }\n  in -> o.evt\n  o -> out\n}\n";
     let bare = annotated.replace(" : text", "");
     let one = compile(
         &[annotated],
@@ -469,7 +469,7 @@ fn an_expectation_on_an_input_refuses_by_direction() {
 fn gauge_graph(body: &str) -> String {
     format!(
         "graph g : App {{\n  operator o {{\n    input evt : text\n    output score : int\n\n    \
-         on evt {{\n      {body}\n    }}\n  }}\n\n  . -> o.evt\n  o.score -> .\n}}\n"
+         on evt {{\n      {body}\n    }}\n  }}\n\n  in -> o.evt\n  o.score -> out\n}}\n"
     )
 }
 
@@ -525,7 +525,7 @@ fn conforming_forms_pass() {
     )
     .expect("nothing conforms");
     // Identity through matching pins.
-    let echoed = "graph g : App {\n  operator o {\n    input evt : text\n    output echo : text\n\n    on evt {\n      echo = .\n    }\n  }\n\n  . -> o.evt\n  o.echo -> .\n}\n";
+    let echoed = "graph g : App {\n  operator o {\n    input evt : text\n    output echo : text\n\n    on evt {\n      echo = .\n    }\n  }\n\n  in -> o.evt\n  o.echo -> out\n}\n";
     compile(
         &[echoed],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -537,7 +537,7 @@ fn conforming_forms_pass() {
 fn a_typed_injection_matrix_holds_at_the_boundary() {
     let inject = |value: &str| {
         format!(
-            "graph g : App {{\n  input alpha : int\n\n  operator o {{\n    on a {{ out = data }}\n  }}\n  .alpha -> o.a\n  o -> .\n}}\n\nlab g {{\n  simulation probing on app {{\n    scenario s \"x\" {{\n      app.alpha = {value}\n      expect \"y\" app.out count == 1\n    }}\n  }}\n}}\n"
+            "graph g : App {{\n  input alpha : int\n\n  operator o {{\n    on a {{ out = data }}\n  }}\n  alpha -> o.a\n  o -> out\n}}\n\nlab g {{\n  simulation probing on app {{\n    scenario s \"x\" {{\n      app.alpha = {value}\n      expect \"y\" app.out count == 1\n    }}\n  }}\n}}\n"
         )
     };
     // The reviewer's map through the int input.
@@ -649,7 +649,7 @@ fn a_resolved_contract_port_table_enters_the_validated_plan_complete() {
         .expect("the standard catalogue holds")
         .try_with(PROBE_SHEET)
         .expect("a valid sheet enters");
-    let source = "graph g : App {\n  connector probe : Probe {\n    effect = idempotent ; behavior = deterministic\n  }\n\n  operator relay {\n    on in { out = data }\n  }\n\n  . -> relay -> probe -> .\n  probe.err -> nothing\n  probe.exit -> nothing\n}\n";
+    let source = "graph g : App {\n  connector probe : Probe {\n    effect = idempotent ; behavior = deterministic\n  }\n\n  operator relay {\n    on in { out = data }\n  }\n\n  in -> relay -> probe -> out\n  probe.err -> nothing\n  probe.exit -> nothing\n}\n";
     let compilation = compile(&[source], &registry).expect("the sheet resolves every port type");
     let probe = compilation
         .plan
@@ -734,7 +734,7 @@ fn a_named_connector_edge_defers_by_name() {
     // The OutboundConnectorDriver seam does not speak named connector ports yet:
     // wiring one refuses BY NAME instead of compiling into an
     // execution that silently answers on `out`.
-    let source = "graph g : App {\n  connector probe : Probe {\n    effect = idempotent ; behavior = deterministic\n  }\n\n  operator relay {\n    on in { out = data }\n  }\n\n  . -> relay\n  relay.out -> probe.request\n  probe.response -> .\n}\n";
+    let source = "graph g : App {\n  connector probe : Probe {\n    effect = idempotent ; behavior = deterministic\n  }\n\n  operator relay {\n    on in { out = data }\n  }\n\n  in -> relay\n  relay.out -> probe.request\n  probe.response -> out\n}\n";
     let bag = compile(&[source], &registry).expect_err("not yet executable");
     assert!(
         bag.diagnostics()
@@ -763,7 +763,7 @@ fn the_fold_follows_the_runtime_order() {
 fn a_metadata_only_injection_still_carries_the_draft_struct() {
     // The draft is BORN a struct (`lab::draft`); patching only meta
     // does not change what crosses the pinned scalar input.
-    let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  .alpha -> o.a\n  o -> .\n}\n\nlab g {\n  simulation probing on app {\n    scenario s \"x\" {\n      app.alpha = {meta.tag = \"x\"}\n      expect \"y\" app.out count == 1\n    }\n  }\n}\n";
+    let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  alpha -> o.a\n  o -> out\n}\n\nlab g {\n  simulation probing on app {\n    scenario s \"x\" {\n      app.alpha = {meta.tag = \"x\"}\n      expect \"y\" app.out count == 1\n    }\n  }\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -791,7 +791,7 @@ fn the_braced_record_is_physically_a_struct() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        v = 7\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        v = 7\n      }\n    }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -879,7 +879,7 @@ graph g : App {
       }
     }
   }
-  . -> o -> .
+  in -> o -> out
 }
 
 lab g {
@@ -907,7 +907,7 @@ fn an_empty_brace_is_an_empty_record() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = {} }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = {} }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -950,7 +950,7 @@ fn a_whole_data_write_is_the_payload_itself() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = {data = 1} }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = {data = 1} }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -985,7 +985,7 @@ fn a_whole_data_write_is_the_payload_itself() {
 fn a_mixed_brace_refuses_with_the_dedicated_diagnostic() {
     // An ordinary field beside a reserved root is never silently
     // reinterpreted — E-BRACE-MIXED names the offending field.
-    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        v = 1\n        meta.flag = true\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        v = 1\n        meta.flag = true\n      }\n    }\n  }\n  in -> o -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1008,7 +1008,7 @@ fn a_block_entry_carries_its_root_into_the_classification() {
     // `ordinary { … }` beside `meta.*` is a MIX — and the diagnostic
     // names the block, because a sub-block's root is its name, not
     // an empty string.
-    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        ordinary { x = 1 }\n        meta.flag = true\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        ordinary { x = 1 }\n        meta.flag = true\n      }\n    }\n  }\n  in -> o -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1028,7 +1028,7 @@ fn a_block_entry_carries_its_root_into_the_classification() {
     // envelope form — then refuses as the DEAD block spelling with
     // its migration (dotted `meta.field = …` entries), never
     // silently a record (D-2026-08-12-1).
-    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta { flag = true }\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta { flag = true }\n      }\n    }\n  }\n  in -> o -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1058,7 +1058,7 @@ fn identity_re_emits_the_materialized_envelope_whole() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = . }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1119,7 +1119,7 @@ fn an_empty_nested_record_is_a_value_not_an_absence() {
 
     let run = |body: &str| {
         let source = format!(
-            "graph g : App {{\n  input in: variant\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  input in: variant\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  in -> o -> out\n}}\n"
         );
         let compilation = compile(
             &[source.as_str()],
@@ -1172,7 +1172,7 @@ fn the_empty_record_travels_and_hashes_stably() {
     // The empty record remains a useful boundary case of the complete v7
     // struct family: it survives the package round trip, revalidates, and its
     // hash is deterministic across compiles.
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = { parent = {} } }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = { parent = {} } }\n  }\n  in -> o -> out\n}\n";
     let first = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1205,7 +1205,7 @@ graph g : App {
   operator relay {
     on in { out = data }
   }
-  . -> relay -> .
+  in -> relay -> out
 }
 
 lab g {
@@ -1242,8 +1242,8 @@ graph g : App {
     }
   }
 
-  .feed -> o.evt
-  o.score -> .result
+  feed -> o.evt
+  o.score -> result
 }
 
 lab g {
@@ -1414,7 +1414,7 @@ fn a_raw_ingress_holds_the_pin_before_any_append() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  .alpha -> o.a\n  o -> .\n}\n";
+    let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  alpha -> o.a\n  o -> out\n}\n";
     let compilation = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1453,8 +1453,8 @@ graph g : App {
     }
   }
 
-  . -> o
-  o.score -> .result
+  in -> o
+  o.score -> result
 }
 
 lab g {
@@ -1500,8 +1500,8 @@ graph g : App {
     }
   }
 
-  . -> o
-  o.out -> .result
+  in -> o
+  o.out -> result
 }
 
 lab g {
@@ -1554,9 +1554,9 @@ graph g : App {
     }
   }
 
-  . -> shell
+  in -> shell
   shell.out -> gauge.evt
-  gauge -> .
+  gauge -> out
 }
 
 lab g {
@@ -1651,7 +1651,7 @@ fn the_validator_refuses_mismatched_edge_pins() {
 fn a_named_constant_answers_like_its_literal() {
     // `val huge = 2147483648` then `score = huge` must refuse exactly
     // like the literal — the visible constants feed the bound check.
-    let source = "graph g : App {\n  operator o {\n    val huge = 2147483648\n    output score : int\n    on in { score = huge }\n  }\n  . -> o\n  o.score -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    val huge = 2147483648\n    output score : int\n    on in { score = huge }\n  }\n  in -> o\n  o.score -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1672,14 +1672,14 @@ fn an_explicit_variant_is_dynamic_not_an_inference_hole() {
     // `variant` is a resolved logical type. Precise values can enter
     // it, but a dynamic value cannot enter a precise port without an
     // explicit narrowing operation.
-    let flexible = "graph g : App {\n  input in: variant\n  operator o {\n    output flexible : variant\n    on in { flexible = 1 }\n  }\n  . -> o\n  o.flexible -> .\n}\n";
+    let flexible = "graph g : App {\n  input in: variant\n  operator o {\n    output flexible : variant\n    on in { flexible = 1 }\n  }\n  in -> o\n  o.flexible -> out\n}\n";
     compile(
         &[flexible],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("an int through a variant pin");
 
-    let variant_to_int = "graph g : App {\n  input in: variant\n  operator a {\n    output flexible : variant\n    on in { flexible = data }\n  }\n  operator b {\n    input evt : int\n    on evt { out = data }\n  }\n  . -> a\n  a.flexible -> b.evt\n  b -> .\n}\n";
+    let variant_to_int = "graph g : App {\n  input in: variant\n  operator a {\n    output flexible : variant\n    on in { flexible = data }\n  }\n  operator b {\n    input evt : int\n    on evt { out = data }\n  }\n  in -> a\n  a.flexible -> b.evt\n  b -> out\n}\n";
     let bag = compile(
         &[variant_to_int],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1691,7 +1691,7 @@ fn an_explicit_variant_is_dynamic_not_an_inference_hole() {
             .any(|diagnostic| diagnostic.code().as_str() == "E-PORT-TYPE")
     );
 
-    let int_to_variant = "graph g : App {\n  input in: variant\n  operator a {\n    output score : int\n    on in { score = 1 }\n  }\n  operator b {\n    input evt : variant\n    on evt { out = data }\n  }\n  . -> a\n  a.score -> b.evt\n  b -> .\n}\n";
+    let int_to_variant = "graph g : App {\n  input in: variant\n  operator a {\n    output score : int\n    on in { score = 1 }\n  }\n  operator b {\n    input evt : variant\n    on evt { out = data }\n  }\n  in -> a\n  a.score -> b.evt\n  b -> out\n}\n";
     let compilation = compile(
         &[int_to_variant],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1724,10 +1724,10 @@ graph g : App {
     on evt { out = data }
   }
 
-  . -> source
+  in -> source
   source.err -> sink.evt
-  source -> .
-  sink -> .
+  source -> out
+  sink -> out
 }
 "#;
     let compilation = compile(
@@ -1767,8 +1767,8 @@ graph g : App {
     on in { err = Rejected { reason = "no" } }
   }
 
-  . -> decide
-  decide.err -> .rejected
+  in -> decide
+  decide.err -> rejected
 }
 
 lab g {
@@ -1801,10 +1801,10 @@ graph g : App {
     on evt { out = data }
   }
 
-  . -> shell
+  in -> shell
   shell.err -> sink.evt
-  shell.out -> .
-  sink -> .
+  shell.out -> out
+  sink -> out
 }
 
 lab g {
@@ -1846,7 +1846,7 @@ fn the_bare_data_relay_preserves_the_logical_type() {
     use rastok::runtime::vm::Vm;
     use std::collections::BTreeMap;
 
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1901,7 +1901,7 @@ fn an_ingress_pin_violation_is_a_named_error() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::{Vm, VmError};
 
-    let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  .alpha -> o.a\n  o -> .\n}\n";
+    let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  alpha -> o.a\n  o -> out\n}\n";
     let compilation = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1955,7 +1955,7 @@ graph g : App {
     on in { out = "ping" }
   }
 
-  . -> relay -> shell -> .
+  in -> relay -> shell -> out
   shell.err -> nothing
   shell.exit -> nothing
 }
@@ -2024,7 +2024,7 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
     use rastok::datatype::DataType;
     use rastok::node::Direction;
     use rastok::plan::{Edge, EndpointRef, PortDecl, Slot, ValidatedExecutionPlan};
-    let source = "graph g : App {\n  input in: text\n  output out: text\n  connector probe : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  . -> probe -> .\n  probe.err -> nothing\n  probe.exit -> nothing\n}\n";
+    let source = "graph g : App {\n  input in: text\n  output out: text\n  connector probe : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  in -> probe -> out\n  probe.err -> nothing\n  probe.exit -> nothing\n}\n";
     let mut plan = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -2110,7 +2110,7 @@ fn the_struct_witness_survives_every_equivalent_spelling() {
 
     let relay = |body: &str, data: Value| {
         let source = format!(
-            "graph g : App {{\n  input in: variant\n  operator o {{\n    on in {{\n      {body}\n    }}\n  }}\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  input in: variant\n  operator o {{\n    on in {{\n      {body}\n    }}\n  }}\n  in -> o -> out\n}}\n"
         );
         let compilation = compile(
             &[source.as_str()],
@@ -2179,7 +2179,7 @@ graph g : App {
     on in { out = "ping" }
   }
 
-  . -> relay -> shell -> .
+  in -> relay -> shell -> out
   shell.err -> nothing
   shell.exit -> nothing
 }
@@ -2227,7 +2227,7 @@ fn an_encoded_bare_relay_passes_the_representation_through() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -2274,7 +2274,7 @@ fn a_spawn_failure_cannot_cross_a_pin() {
     // The exact failure kind is irrelevant to the graph type: the
     // variant error port cannot enter an int input without narrowing.
 
-    let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"/definitely/not/a/binary\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n\n  operator sink {\n    input evt : int\n    on evt { out = data }\n  }\n\n  . -> shell\n  shell.err -> sink.evt\n  shell.out -> .\n  sink -> .\n}\n";
+    let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"/definitely/not/a/binary\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n\n  operator sink {\n    input evt : int\n    on evt { out = data }\n  }\n\n  in -> shell\n  shell.err -> sink.evt\n  shell.out -> out\n  sink -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -2305,10 +2305,10 @@ graph g : App {
     on evt { out = data }
   }
 
-  . -> shell
+  in -> shell
   shell.err -> sink.evt
-  shell.out -> .
-  sink -> .
+  shell.out -> out
+  sink -> out
 }
 
 lab g {
@@ -2342,7 +2342,7 @@ fn a_struct_initializer_cannot_enter_an_int_state_cell() {
     // V7 carries struct constants, but the resolved state-cell type still
     // judges the initializer before a hand-built plan can become executable.
     use rastok::plan::{PlanValidationError, ValidatedExecutionPlan};
-    let source = "graph g : App {\n  input in: variant\n  operator relay {\n    var seen : int = 0\n    on in { seen = seen + 1\n      out = data }\n  }\n  . -> relay -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator relay {\n    var seen : int = 0\n    on in { seen = seen + 1\n      out = data }\n  }\n  in -> relay -> out\n}\n";
     let mut plan = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -2416,7 +2416,7 @@ fn data_materializes_only_on_demand() {
     // A guard reading nothing + identity: bytes, encoding, and MIME
     // survive whole.
     let (result, outputs, errors) = run(
-        "graph g : App {\n  input in: variant\n  operator o {\n    on in where true { out = . }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  input in: variant\n  operator o {\n    on in where true { out = . }\n  }\n  in -> o -> out\n}\n",
     );
     result.expect("no opaque read was asked for");
     assert_eq!(errors, 0, "no opaque read was asked for");
@@ -2435,20 +2435,20 @@ fn data_materializes_only_on_demand() {
     );
     // A false guard consumes without decoding and without error.
     let (result, outputs, errors) = run(
-        "graph g : App {\n  input in: variant\n  operator o {\n    on in where false { out = . }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  input in: variant\n  operator o {\n    on in where false { out = . }\n  }\n  in -> o -> out\n}\n",
     );
     result.expect("the false branch performs no read");
     assert_eq!((outputs.len(), errors), (0, 0));
     // A meta-only guard touches meta, never data.
     let (result, outputs, errors) = run(
-        "graph g : App {\n  input in: variant\n  operator o {\n    on in where meta.sys.graph_version == 1 { out = . }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  input in: variant\n  operator o {\n    on in where meta.sys.graph_version == 1 { out = . }\n  }\n  in -> o -> out\n}\n",
     );
     result.expect("the meta-only branch performs no data read");
     assert_eq!(errors, 0);
     assert_eq!(outputs.len(), 1);
     // A state write independent of data materializes nothing.
     let (result, outputs, errors) = run(
-        "graph g : App {\n  input in: variant\n  operator o {\n    var seen : int = 0\n    on in {\n      seen = seen + 1\n      out = .\n    }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  input in: variant\n  operator o {\n    var seen : int = 0\n    on in {\n      seen = seen + 1\n      out = .\n    }\n  }\n  in -> o -> out\n}\n",
     );
     result.expect("the state-only transaction performs no data read");
     assert_eq!(errors, 0);
@@ -2504,13 +2504,13 @@ fn short_circuits_never_demand_the_data() {
     // `false && (data as bool)`: the right side never evaluates —
     // filtered, no decode, no fault.
     let (result, outputs, errors) = run(
-        "graph g : App {\n  input in: variant\n  operator o {\n    on in where false && (data as bool) { out = . }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  input in: variant\n  operator o {\n    on in where false && (data as bool) { out = . }\n  }\n  in -> o -> out\n}\n",
     );
     result.expect("the short-circuited right side performs no read");
     assert_eq!((outputs.len(), errors), (0, 0), "filtered without a fault");
     // `true || (data as bool)`: the identity ships the bytes whole.
     let (result, outputs, errors) = run(
-        "graph g : App {\n  input in: variant\n  operator o {\n    on in where true || (data as bool) { out = . }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  input in: variant\n  operator o {\n    on in where true || (data as bool) { out = . }\n  }\n  in -> o -> out\n}\n",
     );
     result.expect("the short-circuited right side performs no read");
     assert_eq!(errors, 0, "the right side never ran");
@@ -2520,7 +2520,7 @@ fn short_circuits_never_demand_the_data() {
     ));
     // `false ? size(data) : 1`: the untaken arm never demands.
     let (result, outputs, errors) = run(
-        "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = false ? size(data) : 1 }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = false ? size(data) : 1 }\n  }\n  in -> o -> out\n}\n",
     );
     result.expect("the untaken ternary arm performs no read");
     assert_eq!(errors, 0, "the untaken arm never ran");
@@ -2531,7 +2531,7 @@ fn short_circuits_never_demand_the_data() {
     // The control: a taken read is an engine fault. It commits no graph
     // emission and reaches supervision; it is not synthesized on `err`.
     let (result, outputs, errors) = run(
-        "graph g : App {\n  input in: variant\n  operator o {\n    on in where true && (data as bool) { out = . }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  input in: variant\n  operator o {\n    on in where true && (data as bool) { out = . }\n  }\n  in -> o -> out\n}\n",
     );
     assert!(
         matches!(result, Err(rastok::runtime::vm::VmError::Fault(_))),
@@ -2560,7 +2560,7 @@ fn the_carry_is_as_lazy_as_the_name() {
 
     let run = |body: &str, encoding: Encoding, bytes: &'static [u8]| {
         let source = format!(
-            "graph g : App {{\n  input in: variant\n  operator o {{\n    on in {{\n{body}\n    }}\n  }}\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  input in: variant\n  operator o {{\n    on in {{\n{body}\n    }}\n  }}\n  in -> o -> out\n}}\n"
         );
         let compilation = compile(
             &[source.as_str()],
@@ -2662,7 +2662,7 @@ fn an_inspection_then_identity_ships_the_filled_cell() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in where size(data) > 0 { out = . }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in where size(data) > 0 { out = . }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -2757,7 +2757,7 @@ fn a_duplicated_struct_field_refuses_at_the_door() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = . }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -2806,7 +2806,7 @@ fn the_conformance_judgement_is_matchable() {
     use rastok::runtime::vm::{Vm, VmError};
     use rastok_core::runtime::{ConformanceReason, ValueKind};
 
-    let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  .alpha -> o.a\n  o -> .\n}\n";
+    let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  alpha -> o.a\n  o -> out\n}\n";
     let compilation = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),

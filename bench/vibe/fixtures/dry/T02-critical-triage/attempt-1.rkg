@@ -1,14 +1,21 @@
 graph triage : App {
+  input in: struct { level: text, message: text }
+  output out: text
+
   connector notifier : Process {
     mode = job ; command = "cat"
     codec = lines
   }
 
   operator gate {
+    input in: struct { level: text, message: text }
+    output out: text
     on in where data.level == "critical" {
       out = data.message
     }
   }
 
-  . -> gate -> notifier -> .
+  in -> gate -> notifier -> out
+  notifier.err -> nothing
+  notifier.exit -> nothing
 }

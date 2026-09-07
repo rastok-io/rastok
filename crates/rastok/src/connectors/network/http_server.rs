@@ -1775,7 +1775,7 @@ graph api : App {{
     {extra_settings}
   }}
   operator relay {{ input in: {input_type} ; on in {{ out = data }} }}
-  server -> relay -> .
+  server -> relay -> out
   server.exit -> nothing
 }}
 "#,

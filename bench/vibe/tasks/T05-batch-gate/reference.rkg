@@ -1,9 +1,14 @@
 graph batches : App {
+  input in: struct { readings: array<variant>, peak: int }
+  output out: struct { count: int, status: text }
+
   operator summarize {
+    input in: struct { readings: array<variant>, peak: int }
+    output out: struct { count: int, status: text }
     on in where size(data.readings) > 0 {
       out = {count = size(data.readings), status = data.peak > 100 ? "alarm" : "normal"}
     }
   }
 
-  . -> summarize -> .
+  in -> summarize -> out
 }

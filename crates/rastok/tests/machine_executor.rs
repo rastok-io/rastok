@@ -37,7 +37,7 @@ on in where data.text != "" {
 }
   }
 
-  . -> shout -> echo -> .
+  in -> shout -> echo -> out
   echo.err -> nothing
   echo.exit -> nothing
 }
@@ -107,7 +107,7 @@ fn trigger_in() -> node::Trigger {
 
 #[test]
 fn an_identity_emission_inherits_everything_but_its_spine() {
-    let source = "graph g : App {\n  input in: variant\n  operator relay {\n    on in { out = . }\n  }\n  . -> relay -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator relay {\n    on in { out = . }\n  }\n  in -> relay -> out\n}\n";
     let compilation = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -277,7 +277,7 @@ fn metadata_writes_land_where_the_spec_says() {
     // lands in the app zone as a flat dotted key,
     // `meta.ext.content_type` is the standard ext field, and a
     // metadata-only patch never transcodes the payload.
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.flag = \"yes\"\n        meta.app.audit.origin = \"trace\"\n        meta.ext.content_type = \"text/x-rastok\"\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.flag = \"yes\"\n        meta.app.audit.origin = \"trace\"\n        meta.ext.content_type = \"text/x-rastok\"\n      }\n    }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),

@@ -175,19 +175,17 @@ impl Vm<'_> {
                 "a retained timer has no admitted transaction obligation",
             ));
         }
-        if record.loop_fact().is_some()
-            || record.timers.iter().any(|(kind, _)| {
-                !matches!(
-                    *kind,
-                    crate::journal::timer_kind::LOOP_DELAY
-                        | crate::journal::timer_kind::CALL_TIMEOUT
-                        | crate::journal::timer_kind::SESSION_HANDSHAKE
-                        | crate::journal::timer_kind::JOIN_WITHIN
-                        | crate::journal::timer_kind::INSTANCE_DRAIN
-                        | crate::journal::timer_kind::INSTANCE_SETTLEMENT
-                )
-            })
-        {
+        if record.timers.iter().any(|(kind, _)| {
+            !matches!(
+                *kind,
+                crate::journal::timer_kind::LOOP_DELAY
+                    | crate::journal::timer_kind::CALL_TIMEOUT
+                    | crate::journal::timer_kind::SESSION_HANDSHAKE
+                    | crate::journal::timer_kind::JOIN_WITHIN
+                    | crate::journal::timer_kind::INSTANCE_DRAIN
+                    | crate::journal::timer_kind::INSTANCE_SETTLEMENT
+            )
+        }) {
             return Err(invalid(
                 index,
                 "the transaction carries an unsupported recovery obligation",
@@ -297,8 +295,7 @@ impl Vm<'_> {
         }
         if self.graph_loops.is_some() {
             let mut derived = record.clone();
-            if let Some(crate::journal::LoopRecord::R2(packet)) = derived.loop_record.as_deref_mut()
-            {
+            if let Some(packet) = derived.loop_record.as_deref_mut() {
                 packet.produced.retain(|command| {
                     self.loop_manager
                         .as_deref()

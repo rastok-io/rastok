@@ -1,7 +1,6 @@
 # Delivery Semantics — the journal, the transaction, and the boundary
 
-> **Status (2026-09-05): normative, including the v16 target under
-> D-2026-09-05-1.**
+> **Status (2026-09-07): normative v16 under D-2026-09-05-1.**
 > Companion to [envelope.md](envelope.md) (identity ; its §7 journal stub is
 > filled by §6 below) and [execution-model.md](execution-model.md)
 > (Executor/manager transactions, ordering, and the dated-events queue).

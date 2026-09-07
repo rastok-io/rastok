@@ -5,6 +5,44 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-09-07-8 — Finish v16 migration and align the simulation debugger
+
+R9 removes the active r1 Loop carrier/fold, completes explicit-boundary source
+migration and blesses the three categorical packages once, after independent
+decode and the enumerated [identity ledger](../architecture/rework-r9-qualification.md).
+Echo and JSONL move with Process `@2`; gauge's semantic hash stays fixed.
+Their causal trace goldens are unchanged. The parser AST snapshot moves for
+source shape/spans, not as a second semantic or package version.
+The old/new boundary-spelling twins were proven identical before enabling
+`E-WIRING-MIGRATION`; full-envelope value `.` is unaffected. No old runtime
+fold survives merely to keep a retired fixture green.
+
+R9 follows the user's post-UI-review scope: the visual debugger controls only
+checked simulations from disk. `run --ui` refuses before effects, with a named
+real-I/O experiment gate. History is read-only backward/forward inspection;
+Reset starts another scenario session, not a mutable branch. Branch replay
+commands and the real-run UI controller are removed. This supersedes those
+parts of D-2026-08-31-2 and D-2026-09-02-1, not normal CLI `run`.
+Manager commands are not ports or PhysicalEdges. The UI exposes them and the
+journal-derived Loop runs as dependencies/control details; only actual ports,
+edges and mailboxes enter the spatial view. Loop state is identified by its
+retained envelope reference, not re-exported through an unclassified payload path.
+
+Code, protocol and deterministic layout tests do not substitute for visual
+qualification. A real-browser/keyboard pass stays a named pre-public gate if
+the browser controller is unavailable; no captures or visual pass are claimed.
+The v16 semantic/core qualification is separate from that external UI gate.
+
+Benchmark v1/v2 prompt cards remain frozen for old-wave attribution; a new v3
+card describes current v16. Reference/referee pairs gain explicit types,
+Contract terminals and source-specific observations while preserving their
+business assertions. Canned errors remain intentional correction tasks.
+
+**Rejected:** re-blessing causal witnesses without semantic cause; rewriting
+frozen prompt cards; keeping r1 execution as test scaffolding; manufacturing
+manager ports, simulation branches or another accounting/policy authority;
+claiming full M1.9 visual qualification from layout tests alone.
+
 ## D-2026-09-07-1 — Preserve the embedded heap gate through the v16 cutover
 
 The R4 review measured 130,772 B against the unchanged 131,072 B heap gate.

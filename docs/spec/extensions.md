@@ -1,8 +1,8 @@
 # Node, Graph, Executor, Connector, and Extension
 
-> **Status:** normative target for plan v16. D-2026-09-05-1 supersedes the
-> v15 `Kind × Type × Aspect` taxonomy. Until R3–R8 land, current binaries fail
-> closed rather than partially executing this target.
+> **Status (2026-09-07): normative categorical v16.** Implementation and
+> independent validation are qualified in [R9](../architecture/rework-r9-qualification.md).
+> Unsupported Extension profiles refuse by name before effects.
 
 This document owns Rastok's structural and extension taxonomy. Loop's temporal
 protocol lives in [loop.md](loop.md); Saga's future contract lives in
@@ -222,7 +222,7 @@ slot before a handler can execute. This does not remove controller-owned
 Graph lifecycle facts from the journal.
 
 The historical `AspectSpec` tag and `rastok.aspects.r1` domain are never
-reinterpreted. V15 refuses categorically once v16 lands.
+reinterpreted. V15 refuses categorically by package version.
 
 ## 10. Migration
 
@@ -231,10 +231,10 @@ NodeType are removed from the live model. Source using old annotation forms
 gets a named migration diagnostic. Historic M1.7 decisions and reports remain
 accurate descriptions of v13–v15; D-2026-09-05-1 supersedes their live model.
 
-Staging at R3: old `.`/`.foo` boundary wiring still compiles without a
-diagnostic. Its named migration refusal lands at R9 only after equivalent
-explicit-boundary sources have proved plan/hash neutrality. This exception is
-about wiring migration, not an alias in the final v16 language.
+Old `.`/`.foo` boundary wiring now refuses with `E-WIRING-MIGRATION` and the
+exact explicit-boundary replacement. R9 enabled this refusal after the source
+twins proved plan/hash neutrality; `out = .` remains a full-envelope value,
+not a wiring alias.
 
 Rust target renames are `node::Aspect -> node::Extension`,
 `AspectSpec -> ExtensionSpec`, `ConnectorId -> ContractId`, and

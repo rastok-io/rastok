@@ -2,10 +2,10 @@
 
 > Implementation blueprint — non-normative and under review.
 
-> **V16 design freeze (2026-09-05).** R0–R2 specify the target
-> Node/Graph/Executor/Connector/Extension model, explicit dispositions, recursive
-> Dispatch and Loop manager recovery. Current Rust remains categorical v15;
-> R3 is the first code gate. M1.9 and UI evolution are paused until R9.
+> **V16 implementation (2026-09-07).** The Node/Graph/Executor/Connector/Extension
+> model, explicit dispositions, recursive Dispatch and Loop manager recovery
+> are executable. [R9](docs/architecture/rework-r9-qualification.md) records
+> the qualification and remaining named limits.
 
 This document explains how the current Rastok specification becomes an
 executable system. It defines implementation boundaries, dependency direction,
@@ -200,25 +200,23 @@ M1.7 proved temporal recursion on that deterministic boundary using the v14
 Graph-Aspect form retained by v15. Its public Lab and Cortex-M33 evidence
 remain recorded in the
 [M1.7 exit report](docs/architecture/m1.7-exit-report.md), but
-D-2026-09-05-1 supersedes its live ontology. The v16 target keeps fuel,
+D-2026-09-05-1 supersedes its live ontology. V16 keeps fuel,
 proof, explicit logical time and journal authority while making Graph passive,
 sharing execution mechanics between Operator and Connector, and moving
 Next/Again/Done into durable manager commands outside the spatial DAG. See the
 [R0 algebra](docs/architecture/rework-r0-algebra.md) and
 [R1 host contracts](docs/architecture/rework-r1-host-contracts.md).
 
-The paused M1.9 design keeps interactive execution outside that boundary. The optional
-`hosted-ui` feature embeds one loopback HTTP/SSE page and a physical controller
-whose `Step` command invokes exactly one existing VM transaction during a real
-run. In simulation the same primary gesture advances exactly one authored
-action or one ready VM transaction, never both. It derives history, structured
-redacted values and `CostReport` from existing read seams. Its layered graph
-folds exact route facts into cumulative edge-envelope counts and identifies
-the owner of the latest transaction without hiding lifecycle steps;
-capabilities,
-controller ownership, browser revisions and port numbers enter no package,
-semantic or causal identity. Reduced and embedded builds omit the server and
-assets entirely.
+The optional `hosted-ui` feature embeds one loopback HTTP/SSE debugger for
+simulation. Each Step invokes one existing VM boundary or authored Lab action,
+never a second execution model. Immutable snapshots retain history, current
+mailbox contents, instances, Loop-run dependencies, redacted values and the
+public CostReport. Manager commands are not rendered as spatial edges. Reset
+creates a fresh session; historical inspection neither forks nor executes it.
+Capabilities, controller ownership, browser revisions, presentation speed and
+port numbers enter no package, semantic or causal identity. Reduced and
+embedded builds omit the server and assets entirely. Real-I/O experiment
+debugging remains a separate gate; `run --ui` refuses before effects.
 
 ## Views
 

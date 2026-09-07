@@ -9,7 +9,7 @@ constrained enough for an LLM to generate without hiding the result
 behind a visual low-code format.
 
 A Rastok graph connects existing services, models, tools, data, and
-business processes. In the v16 target agreed on 2026-09-05, a Node is either
+business processes. In the v16 model, a Node is either
 a passive Graph scope or an Executor:
 
 - **Graphs** compose a typed boundary, children and static wiring. They own
@@ -25,21 +25,15 @@ bindings, commands, constraints and, only when necessary, ports. `App` marks
 the one public root Graph; `Loop` adds finite temporal recurrence through a
 journal-owned manager; `Saga` remains a future Extension. A manager is neither
 a Node nor an edge, so temporal recurrence never creates a spatial cycle.
-The `rework/v16` branch is migrating to categorical v16. Recursive Dispatch,
-case routing, multi-emission and command-based Operator and outbound Call Loops
-cross the new package reader. Operator measures and recovery of Operator/Call
-mailboxes, joins, lifetimes, Closing and command Loops are tested. Nested
-boundary routing is retained and re-derived at decode. Window stop products
-drain through live sibling state before the Graph scope closes. Fuel-bounded
-Graph Loops with Operator and finite outbound Call bodies retain one admission
-before fan-out, carry exact delivery contexts and recover their commands after
-causal quiescence. Call response/terminal correlation and run-scoped effect
-safety are re-derived independently. Graph joins, nested Loops, annotated
-recurrence and complete obligation recovery remain gated.
-This is an unqualified cutover, not a finished release: the old Loop
-fixtures and categorical goldens still need migration. The
-[current evidence and remaining gates](docs/architecture/rework-r4-plan.md)
-distinguish implemented paths from the complete target.
+The categorical v16 package carries recursive Dispatch, case routing,
+ordered multi-emission and command-based Operator, Graph and outbound Call
+Loops. Independent core validation re-derives their contracts, routes and
+proofs. Recovery reconstructs retained deliveries, state, commands, exchanges
+and original timer deadlines without re-executing producers or repeating I/O.
+Nested runs, same-context joins, annotations and entry-preserving measures
+are qualified within the [named Loop proof subset](docs/spec/loop.md#16-deferred-by-name).
+The [R9 qualification ledger](docs/architecture/rework-r9-qualification.md)
+records the one format move, unchanged causal witnesses and final checks.
 
 This separation makes effects replaceable. In production, Connectors
 interact with real systems. In a simulation sandbox called the
@@ -124,8 +118,8 @@ opening admission, and represents Next/Again/Done as durable manager commands.
 The frozen [R0 algebra](docs/architecture/rework-r0-algebra.md),
 [reference traces](docs/architecture/rework-r0-reference-traces.md), and
 [R1 host contracts](docs/architecture/rework-r1-host-contracts.md) lead to the
-[R2 review handoff](docs/architecture/rework-r2-supersession.md). They are
-design documents; no executable v16 claim is made before R3–R8.
+[R2 review handoff](docs/architecture/rework-r2-supersession.md). The [R9 qualification](docs/architecture/rework-r9-qualification.md)
+links that design to the executable host and recovery tests.
 
 M1.8 is closed on categorical package v15. The source front end
 recognizes the closed `@sensitive`/`@secret`/`@personal`/`@measure`/`@cost` family,
@@ -163,36 +157,21 @@ The optional OpenTelemetry transport is explicitly deferred until exact
 temporal observations exist; no exporter timestamp is presented as commit
 time.
 
-The M1.9 UI work is paused until the v16 R9 migration. Its retained design adds
-an optional local execution UI without a second engine or causal authority. A
-binary built with `hosted-ui` accepts `--ui` on `run` and
-`simulate`, binds an OS-selected loopback port by default, prints a
-capability-bearing URL and starts paused before the first semantic
-transaction. Pausing freezes hosted logical time, so inspection cannot consume
-timeout, lifetime or Loop-delay budgets. The page separates lifecycle facts,
-Lab actions and port transactions, retains the complete in-memory causal
-history after completion, and presents a compound topology, frame-owned ports,
-separate `META`/`DATA`, logical instances, Calls/Sessions, structured redacted
-state and the exact `CostReport`. Smooth cubic routes follow deterministic
-crossing-reduced lanes; `≡ n` badges show only current mailbox occupancy and
-open the exact redacted FIFO; labels avoid the routed pipes, and each retained
-`B<n>` boundary animates the exact envelope movement or lifecycle owner. The
-current v15-only dotted control layer explains historical Graph-handler
-emissions; R9 removes that layer instead of inventing an equivalent v16 port.
-`⧉ n` opens the current logical instances. The
-canvas pans and zooms, its inspector is resizable, and Play presents those same
-boundaries at one or four events per second.
-`A<n>` identifies scenario actions and `R<n>` causal records. Selecting a Node
-or Graph filters those linked views without truncating the retained authorities.
-The timeline can inspect exact prior state while a real run continues; a
-simulation may deterministically replay a prior boundary into a new immutable
-branch and continue from there.
-Before a checked simulation `inject`, its typed redacted `DATA` is visible
-read-only; inputs remain authored in the `.rkg` scenario and are still admitted
-through the ordinary immutable-envelope path. Non-UI execution, plan identity
-and causal records are unchanged. See
-[`ui.md`](docs/spec/ui.md) and the
-[M1.9 backlog](docs/architecture/m1.9-ui-backlog.md).
+The visual debugger is available through `simulate --ui`. It starts paused,
+uses the checked scenario on disk, and retains a read-only timeline of every
+boundary. Back/forward inspection does not fork or mutate the simulation;
+Reset starts a fresh session and preserves the old history. The embedded page
+shows real compound topology, current mailbox FIFOs (`≡ n`), instances
+(`⧉ n`), source definitions, Loop-run state dependencies, redacted `META`/
+`DATA` and the public `CostReport`. Manager commands are described as commands,
+never invented ports or spatial edges. Play presents the same boundaries at
+one or four events per second. The canvas pans/zooms and the inspector resizes.
+
+`run --ui` and `check --ui` refuse before effects. Editing, simulation
+branches and real-I/O experiment debugging remain separate future work.
+See [ui.md](docs/spec/ui.md) and the
+[M1.9 backlog](docs/architecture/m1.9-ui-backlog.md) for the presentation and
+external visual-qualification boundary.
 
 For hosted execution or simulation, `--deployment <profile.json>` supplies
 typed boot values, versioned secret coordinates and the optional privacy
@@ -210,11 +189,9 @@ Pass `--json-logs` to `rastok run` for newline-delimited structured events on
 stderr. Boundary outputs remain on stdout. Logging is deliberately lossy under
 exporter pressure; the journal-backed report input is not.
 
-For a local paused debugger, build the optional hosted UI and use either
-execution mode:
+For a local paused debugger, build the optional hosted UI:
 
 ```sh
-cargo run -p rastok --features hosted-ui -- run app.rkg --ui
 cargo run -p rastok --features hosted-ui -- simulate app.rkg --ui
 ```
 

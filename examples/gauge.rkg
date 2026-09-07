@@ -11,8 +11,8 @@ graph gauge : App {
     }
   }
 
-  .feed -> meter.evt
-  meter.score -> .measure
+  feed -> meter.evt
+  meter.score -> measure
 }
 
 lab gauge {

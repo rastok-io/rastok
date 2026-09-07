@@ -1210,7 +1210,7 @@ mod tests {
     /// pre-scan of every handler would fail both cases below.
     fn opaque_answer(mock_body: &str) -> (Option<Completion>, Vec<String>) {
         let source = format!(
-            "graph g : App {{\n  connector echo : Process {{\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }}\n  . -> echo -> .\n  echo.err -> nothing\n  echo.exit -> nothing\n}}\n\nlab g {{\n  simulation probing on app {{\n    mock echo {{\n{mock_body}\n    }}\n    scenario s \"unused\" {{\n      app.in = {{v = 1}}\n    }}\n  }}\n}}\n"
+            "graph g : App {{\n  connector echo : Process {{\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }}\n  in -> echo -> out\n  echo.err -> nothing\n  echo.exit -> nothing\n}}\n\nlab g {{\n  simulation probing on app {{\n    mock echo {{\n{mock_body}\n    }}\n    scenario s \"unused\" {{\n      app.in = {{v = 1}}\n    }}\n  }}\n}}\n"
         );
         let compilation = compile(
             &[source.as_str()],
@@ -1393,7 +1393,7 @@ graph m0_probe : App {
     }
   }
 
-  . -> shout -> echo -> .
+  in -> shout -> echo -> out
   echo.err -> nothing
   echo.exit -> nothing
 }
@@ -1615,7 +1615,7 @@ graph network_call : App {
     codec = json
     effect = idempotent ; behavior = deterministic
   }
-  . -> network -> .
+  in -> network -> out
   network.exit -> nothing
 }
 "#,
@@ -1625,7 +1625,7 @@ graph http_source : App {
     listen = "127.0.0.1:8080"
     codec = json
   }
-  network -> .
+  network -> out
   network.exit -> nothing
 }
 "#,
@@ -1637,7 +1637,7 @@ graph websocket_client_source : App {
     codec = json
     effect = idempotent ; behavior = deterministic
   }
-  network -> .
+  network -> out
   network.exit -> nothing
 }
 "#,
@@ -1648,7 +1648,7 @@ graph websocket_server_source : App {
     handshake_timeout = duration("5s")
     codec = json
   }
-  network -> .
+  network -> out
   network.exit -> nothing
 }
 "#,
@@ -1679,7 +1679,7 @@ graph h2_http : App {
     codec = json
     effect = idempotent ; behavior = deterministic
   }
-  . -> client -> .
+  in -> client -> out
   client.exit -> nothing
 }
 
@@ -1788,7 +1788,7 @@ graph m0_probe : App {
       out = data.text
     }
   }
-  . -> wide -> .
+  in -> wide -> out
 }
 
 lab m0_probe {
@@ -1833,7 +1833,7 @@ graph m0_probe : App {
     on in { out = data.text }
   }
 
-  . -> shout -> echo -> .
+  in -> shout -> echo -> out
   echo.err -> nothing
   echo.exit -> nothing
 }

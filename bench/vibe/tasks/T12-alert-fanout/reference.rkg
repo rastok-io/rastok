@@ -1,4 +1,7 @@
 graph fanout : App {
+  input in: struct { level: text, message: text }
+  output out: text
+
   connector archive : Process {
     mode = job ; command = "cat"
     codec = lines
@@ -12,14 +15,20 @@ graph fanout : App {
   }
 
   operator gate {
+    input in: struct { level: text, message: text }
+    output out: text
     on in where data.level == "critical" {
       out = data.message
     }
   }
 
-  . -> gate
+  in -> gate
   gate.out -> archive.in
   gate.out -> pager.in
-  archive.out -> .
-  pager.out -> .
+  archive.out -> out
+  pager.out -> out
+  archive.err -> nothing
+  archive.exit -> nothing
+  pager.err -> nothing
+  pager.exit -> nothing
 }

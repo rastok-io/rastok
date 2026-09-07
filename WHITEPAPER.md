@@ -1,9 +1,9 @@
 # Rastok — White Paper
 
-> **Model revision (2026-09-05).** Sections 2–3 describe the plan-v16 target
-> frozen by D-2026-09-05-1. Current binaries remain v15 while R3–R9 implement
-> it; no target capability is claimed executable merely because it is
-> described here.
+> **Model revision (2026-09-07).** The v16 Node/Executor/Extension model is
+> executable. [R9 qualification](docs/architecture/rework-r9-qualification.md)
+> distinguishes tested capabilities, proof-subset limits and external release
+> qualifications; this white paper is not a production-readiness claim.
 
 > **Integrate AI faster. Keep production calm.**
 >
@@ -2863,7 +2863,7 @@ Contracts through one exact-id/role registry and one VM boundary; the Lab
 composes both through the same binding and protocol. Static Driver selection is
 implemented. A data-only capability manifest proves the future discovery seam,
 but no plugin loader or native ABI is claimed. Four exact HTTP/WebSocket
-  contracts now cross source, checked v15 plan, Registry-free validation and
+  contracts now cross source, checked v16 plan, Registry-free validation and
 Contract-owned Lab binding with codec-selected ports, lossless protocol metadata
 and typed terminal unions. H3 pins one bounded private hosted
 pump, Hyper/Rustls for HTTP/1.1-2, quiche/BoringSSL for HTTP/3 and Tungstenite
@@ -2895,7 +2895,7 @@ unmaintained runner or convert that missing report into a production claim.
 Closed M1.7 remains the evidence that finite journal-owned recurrence, exact
 fuel exhaustion, logical delay and a re-derived integer measure work on v14/v15.
 D-2026-09-05-1 supersedes its Graph-handler and port-shaped control ontology.
-R0–R2 now freeze v16 before code: passive Graph scopes; Operator and Connector
+V16 now executes: passive Graph scopes; Operator and Connector
 as the two shared-mechanics Executors; canonical Extensions; explicit output
 dispositions; recursive Dispatch and case routing; ordered atomic
 multi-emission; and Loop over Operator, Graph and outbound finite Call through
@@ -2903,11 +2903,11 @@ durable Next/Again/Done manager commands. A run derives from its exact opening
 admission, and recovery reconstructs every pending command and spatial delivery
 from the journal. The six boundary Contracts move to `@2` because they
 gain cardinality, terminal and effect-visibility evidence while losing implicit
-unwired policy. R3 is the first implementation gate; this paragraph makes no
-claim that current v15 binaries execute the target.
+unwired policy. R9 records the full migration and qualification. Stronger Loop body proofs,
+real-I/O experiment debugging and durable storage remain named future gates.
 
 Closed M1.8 executes the `@sensitive`, `@secret`, `@personal`,
-`@measure` and `@cost` family through source, checked HIR and categorical v15 as canonical
+`@measure` and `@cost` family through source, checked HIR and categorical v16 as canonical
 side-tables beside logical schemas. Independent package validation re-derives
 every local structural path, legal target, registered measure carrier,
 currency authority and effective resolved-port policy through canonical

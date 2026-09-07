@@ -8,6 +8,6 @@ graph http_client_interop : App {
     max_body = "1MiB"
     effect = idempotent ; behavior = deterministic
   }
-  . -> client -> .
+  in -> client -> out
   client.exit -> nothing
 }

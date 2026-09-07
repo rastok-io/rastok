@@ -1,9 +1,8 @@
 # Standard library contracts
 
-> **Status (2026-09-05): normative.** The `@1` contracts are executable
-> through M1.8. Plan v16 moves the Contracts of the six executable Connectors to `@2`
-> by adding the production/cardinality/terminal/effect-stage facts in §1.1;
-> those target identities become executable at R4–R8. HttpClient and
+> **Status (2026-09-07): normative v16.** The six executable Connector
+> Contracts use `@2`, with independently checked production/cardinality/
+> terminal/effect-stage facts in §1.1. HttpClient and
 > HttpServer are live over HTTP/1.1–3, including bounded `ack` and `respond`;
 > WebSocketClient and WebSocketServer are live over HTTP/1.1 Upgrade and
 > HTTP/2–3 Extended CONNECT. M1.8 A4 adds versioned boot binding for
@@ -36,8 +35,7 @@ optional — a Connector whose contract leaves a case blank is not spec'd:
 Every admitted sheet also has one canonical versioned `ContractId` and a
 closed required Driver-role fact. The source-facing contract name is ergonomic
 syntax; the id and effective roles are the semantic facts transported by the
-plan. Current v15 Rust calls the same value `ConnectorId`; R3 renames the type
-without changing its text or wire meaning. Physical crates, features, libraries, Hosts and Workers are never
+plan. Rust names this value `ContractId`. Physical crates, features, libraries, Hosts and Workers are never
 contract identity.
 
 | # | Case | Why it is mandatory |

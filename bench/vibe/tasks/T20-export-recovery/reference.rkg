@@ -1,4 +1,8 @@
 graph guarded : App {
+  input in: struct { valid: bool, reading: text }
+  output out: text
+  output err: union { TimeoutExpired {} }
+
   connector uplink : Process {
     mode = job ; command = "cat"
     codec = lines
@@ -7,10 +11,17 @@ graph guarded : App {
   }
 
   operator gate {
+    input in: struct { valid: bool, reading: text }
+    output out: text
     on in where data.valid {
       out = data.reading
     }
   }
 
-  . -> gate -> uplink -> .
+  in -> gate -> uplink -> out
+  uplink.err -> nothing
+  uplink.exit -> match {
+    TimeoutExpired -> err
+    _ -> nothing
+  }
 }

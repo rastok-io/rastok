@@ -2758,7 +2758,7 @@ mod tests {
         let mut bag = Bag::new();
         let tree = parse(
             SourceId::new(0),
-            "graph g : App {\n  operator o {\n    on in { out = json! {\"a\": ???}; out = data }\n  }\n  . -> o -> .\n}\n",
+            "graph g : App {\n  operator o {\n    on in { out = json! {\"a\": ???}; out = data }\n  }\n  in -> o -> out\n}\n",
             &mut bag,
         );
         assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
@@ -2787,7 +2787,7 @@ mod tests {
     /// parse bag — the §6/§7 dispatch probes read the AST directly.
     fn first_value(value: &str) -> (Value, Bag) {
         let source = format!(
-            "graph g : App {{\n  operator o {{\n    on in {{ out = {value} }}\n  }}\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  operator o {{\n    on in {{ out = {value} }}\n  }}\n  in -> o -> out\n}}\n"
         );
         let mut bag = Bag::new();
         let tree = parse(SourceId::new(0), &source, &mut bag);
@@ -2881,7 +2881,7 @@ mod tests {
         // no body, the value is the bare word, and the unterminated
         // comment is diagnosed by the ONE trivia authority, never by
         // a JSON or Rastok expression reader.
-        let source = "graph g : App {\n  operator o {\n    on in { out = json /* never closed\n  }\n  . -> o -> .\n}\n";
+        let source = "graph g : App {\n  operator o {\n    on in { out = json /* never closed\n  }\n  in -> o -> out\n}\n";
         let mut bag = Bag::new();
         let _ = parse(SourceId::new(0), source, &mut bag);
         assert!(
@@ -2903,7 +2903,7 @@ mod tests {
         for (label, source) in [
             (
                 "following source is commented out",
-                "graph g : App {\n  operator o {\n    on in {\n      out = 1 /* never\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+                "graph g : App {\n  operator o {\n    on in {\n      out = 1 /* never\n      out = data\n    }\n  }\n  in -> o -> out\n}\n",
             ),
             (
                 "physical end of file",
@@ -2926,7 +2926,7 @@ mod tests {
             );
         }
 
-        let closed = "graph g : App {\n  operator o {\n    on in {\n      out = 1 /* closed */\n      out = data\n    }\n  }\n  . -> o -> .\n}\n";
+        let closed = "graph g : App {\n  operator o {\n    on in {\n      out = 1 /* closed */\n      out = data\n    }\n  }\n  in -> o -> out\n}\n";
         crate::compiler::compile(&[closed], &registry)
             .expect("a closed trailing comment remains ordinary trivia");
     }
@@ -2961,7 +2961,7 @@ mod tests {
         for expression in expressions {
             for (label, shape, statements_wanted) in &contexts {
                 let source = format!(
-                    "graph g : App {{\n  operator o {{\n    {}\n  }}\n  . -> o -> .\n}}\n",
+                    "graph g : App {{\n  operator o {{\n    {}\n  }}\n  in -> o -> out\n}}\n",
                     shape(expression)
                 );
                 let mut bag = Bag::new();
@@ -3030,13 +3030,13 @@ mod tests {
         for (label, source, diagnostics, tagged) in [
             (
                 "no args",
-                "graph g : App {\n  operator o {\n    on in {\n      out = measure { x = 1 }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+                "graph g : App {\n  operator o {\n    on in {\n      out = measure { x = 1 }\n      out = data\n    }\n  }\n  in -> o -> out\n}\n",
                 0,
                 true,
             ),
             (
                 "with args",
-                "graph g : App {\n  operator o {\n    on in {\n      out = on_crash(\"x\") { y = 2 }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+                "graph g : App {\n  operator o {\n    on in {\n      out = on_crash(\"x\") { y = 2 }\n      out = data\n    }\n  }\n  in -> o -> out\n}\n",
                 1,
                 false,
             ),
@@ -3069,11 +3069,11 @@ mod tests {
         for (label, source) in [
             (
                 "object",
-                "graph g : App {\n  operator o {\n    on in { out = json! {\"a\": ???}; out = data }\n  }\n  . -> o -> .\n}\n",
+                "graph g : App {\n  operator o {\n    on in { out = json! {\"a\": ???}; out = data }\n  }\n  in -> o -> out\n}\n",
             ),
             (
                 "array",
-                "graph g : App {\n  operator o {\n    on in { out = json! [1, ???]; out = data }\n  }\n  . -> o -> .\n}\n",
+                "graph g : App {\n  operator o {\n    on in { out = json! [1, ???]; out = data }\n  }\n  in -> o -> out\n}\n",
             ),
         ] {
             let (statements, bag) = handler_statements(source);
@@ -3103,17 +3103,17 @@ mod tests {
         for (label, source, code) in [
             (
                 "bad json form + block comment hiding `;` and `}`",
-                "graph g : App {\n  operator o {\n    on in {\n      out = json! foo /* ; } */\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+                "graph g : App {\n  operator o {\n    on in {\n      out = json! foo /* ; } */\n      out = data\n    }\n  }\n  in -> o -> out\n}\n",
                 E_JSON_VALUE,
             ),
             (
                 "bad json form + line comment hiding `;` and `}`",
-                "graph g : App {\n  operator o {\n    on in {\n      out = json! foo // ; }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+                "graph g : App {\n  operator o {\n    on in {\n      out = json! foo // ; }\n      out = data\n    }\n  }\n  in -> o -> out\n}\n",
                 E_JSON_VALUE,
             ),
             (
                 "dead initializer + comment before its opener",
-                "graph g : App {\n  operator o {\n    on in {\n      out = on_crash /* ) */ (foo)\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+                "graph g : App {\n  operator o {\n    on in {\n      out = on_crash /* ) */ (foo)\n      out = data\n    }\n  }\n  in -> o -> out\n}\n",
                 E_PARSE_EXPECTED,
             ),
         ] {
@@ -3157,7 +3157,7 @@ mod tests {
         for op in ["==", "!=", "<=", ">=", "&&", "||", "*", "/", "%", "-"] {
             for spelled in [format!("data {op} data"), format!("data{op}data")] {
                 let source = format!(
-                    "graph g : App {{\n  operator o {{\n    on in {{\n      {spelled}\n    }}\n  }}\n  . -> o -> .\n}}\n"
+                    "graph g : App {{\n  operator o {{\n    on in {{\n      {spelled}\n    }}\n  }}\n  in -> o -> out\n}}\n"
                 );
                 let mut bag = Bag::new();
                 let tree = parse(SourceId::new(0), &source, &mut bag);
@@ -3191,12 +3191,12 @@ mod tests {
         // Round 6's remaining frontier proofs, committed: `text`
         // content is verbatim (apostrophes are data), and a closer
         // inside a comment never ends an opaque dead region.
-        let text = "graph g : App {\n  operator o {\n    on in { out = text! {\n  don't panic\n} }\n  }\n  . -> o -> .\n}\n";
+        let text = "graph g : App {\n  operator o {\n    on in { out = text! {\n  don't panic\n} }\n  }\n  in -> o -> out\n}\n";
         let mut bag = Bag::new();
         let tree = parse(SourceId::new(0), text, &mut bag);
         assert!(bag.diagnostics().is_empty(), "verbatim: {bag:?}");
         let _ = tree;
-        let dead = "graph g : App {\n  operator o {\n    on in {\n      out = on_crash(foo /* ) */ bar)\n      out = data\n    }\n  }\n  . -> o -> .\n}\n";
+        let dead = "graph g : App {\n  operator o {\n    on in {\n      out = on_crash(foo /* ) */ bar)\n      out = data\n    }\n  }\n  in -> o -> out\n}\n";
         let (statements, bag) = handler_statements(dead);
         assert_eq!(bag.diagnostics().len(), 1, "one migration voice: {bag:?}");
         assert_eq!(statements.len(), 2, "the sibling lives: {statements:?}");
@@ -3221,7 +3221,7 @@ mod tests {
             ("guest", "jq! { .x }"),
         ] {
             let source = format!(
-                "graph g : App {{\n  operator o {{\n    on in {{\n      {bare}\n      out = data\n    }}\n  }}\n  . -> o -> .\n}}\n"
+                "graph g : App {{\n  operator o {{\n    on in {{\n      {bare}\n      out = data\n    }}\n  }}\n  in -> o -> out\n}}\n"
             );
             let (statements, bag) = handler_statements(&source);
             assert_eq!(bag.diagnostics().len(), 1, "{label}: one voice — {bag:?}");
@@ -3244,7 +3244,7 @@ mod tests {
         }
 
         let (statements, bag) = handler_statements(
-            "graph g : App { operator o { on in { nothing } } . -> o -> nothing }",
+            "graph g : App { operator o { on in { nothing } } in -> o -> nothing }",
         );
         assert!(
             bag.diagnostics().is_empty(),
@@ -3261,12 +3261,12 @@ mod tests {
         // lexicon. Balanced twins compile; a quoted lone closer ends
         // the block early (the named limitation: hostile text
         // belongs to a Rastok expression string).
-        let balanced = "graph g : App {\n  operator o {\n    on in { out = text! { a \"{x}\" b } }\n  }\n  . -> o -> .\n}\n";
+        let balanced = "graph g : App {\n  operator o {\n    on in { out = text! { a \"{x}\" b } }\n  }\n  in -> o -> out\n}\n";
         let mut bag = Bag::new();
         let _ = parse(SourceId::new(0), balanced, &mut bag);
         assert!(bag.diagnostics().is_empty(), "balanced: {bag:?}");
         // The balanced twin also keeps its sibling whole.
-        let with_sibling = "graph g : App {\n  operator o {\n    on in {\n      out = text! { a \"{x}\" b }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n";
+        let with_sibling = "graph g : App {\n  operator o {\n    on in {\n      out = text! { a \"{x}\" b }\n      out = data\n    }\n  }\n  in -> o -> out\n}\n";
         let (statements, bag) = handler_statements(with_sibling);
         assert!(bag.diagnostics().is_empty(), "balanced + sibling: {bag:?}");
         assert_eq!(statements.len(), 2, "{statements:?}");
@@ -3275,7 +3275,7 @@ mod tests {
         // remainder (`\" b }`) as an unterminated string anchored
         // AFTER the early close; the cascade that follows belongs to
         // the mis-framed remainder, not to the framer.
-        let lone_closer = "graph g : App {\n  operator o {\n    on in { out = text! { a \"}\" b } }\n  }\n  . -> o -> .\n}\n";
+        let lone_closer = "graph g : App {\n  operator o {\n    on in { out = text! { a \"}\" b } }\n  }\n  in -> o -> out\n}\n";
         let mut bag = Bag::new();
         let _ = parse(SourceId::new(0), lone_closer, &mut bag);
         assert!(!bag.diagnostics().is_empty(), "the limitation refuses");
@@ -3306,7 +3306,7 @@ mod tests {
             ("alien bytes", "@ # $"),
         ] {
             let source = format!(
-                "graph g : App {{\n  operator o {{\n    on in {{\n      {garbage}\n      out = data\n    }}\n  }}\n  . -> o -> .\n}}\n"
+                "graph g : App {{\n  operator o {{\n    on in {{\n      {garbage}\n      out = data\n    }}\n  }}\n  in -> o -> out\n}}\n"
             );
             let (statements, bag) = handler_statements(&source);
             assert!(!bag.diagnostics().is_empty(), "{label}: the refusal speaks");
@@ -3346,7 +3346,7 @@ mod tests {
             ("Rastok expression unary", "!size(\n        data\n      )"),
         ] {
             let source = format!(
-                "graph g : App {{\n  operator o {{\n    on in {{\n      {bare}\n      out = data\n    }}\n  }}\n  . -> o -> .\n}}\n"
+                "graph g : App {{\n  operator o {{\n    on in {{\n      {bare}\n      out = data\n    }}\n  }}\n  in -> o -> out\n}}\n"
             );
             let (statements, bag) = handler_statements(&source);
             assert_eq!(bag.diagnostics().len(), 1, "{label}: {bag:?}");
@@ -3395,7 +3395,7 @@ mod tests {
             ("escaped double quote newline", "\"unterminated\\"),
         ] {
             let source = format!(
-                "graph g : App {{\n  operator o {{\n    on in {{\n      {garbage}\n      out = data\n    }}\n  }}\n  . -> o -> .\n}}\n"
+                "graph g : App {{\n  operator o {{\n    on in {{\n      {garbage}\n      out = data\n    }}\n  }}\n  in -> o -> out\n}}\n"
             );
             let (statements, bag) = handler_statements(&source);
             assert_eq!(bag.diagnostics().len(), 1, "{label}: {bag:?}");
@@ -3415,7 +3415,7 @@ mod tests {
         // A block comment really extends to EOF, so no sibling can
         // be recovered. Its structural lexical fault must still be
         // the first and truthful voice; a scratch bag cannot erase it.
-        let source = "graph g : App {\n  operator o {\n    on in {\n      data + /* unterminated\n      out = data\n    }\n  }\n  . -> o -> .\n}\n";
+        let source = "graph g : App {\n  operator o {\n    on in {\n      data + /* unterminated\n      out = data\n    }\n  }\n  in -> o -> out\n}\n";
         let mut bag = Bag::new();
         let _ = parse(SourceId::new(0), source, &mut bag);
         assert_eq!(
@@ -3441,7 +3441,7 @@ mod tests {
             ("unclosed array", "[1,"),
         ] {
             let source = format!(
-                "graph g : App {{\n  operator o {{\n    on in {{\n      out = {malformed}\n      out = data\n    }}\n  }}\n  . -> o -> .\n}}\n"
+                "graph g : App {{\n  operator o {{\n    on in {{\n      out = {malformed}\n      out = data\n    }}\n  }}\n  in -> o -> out\n}}\n"
             );
             let (statements, parse_bag) = handler_statements(&source);
             assert!(
@@ -3490,11 +3490,11 @@ mod tests {
         for (label, source) in [
             (
                 "attribute",
-                "graph g : App {\n  connector shell : Process {\n    command = \"oops\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  . -> shell -> .\n}\n",
+                "graph g : App {\n  connector shell : Process {\n    command = \"oops\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  in -> shell -> out\n}\n",
             ),
             (
                 "guard",
-                "graph g : App {\n  operator o {\n    on in where true == \"oops\n    { out = data }\n  }\n  . -> o -> .\n}\n",
+                "graph g : App {\n  operator o {\n    on in where true == \"oops\n    { out = data }\n  }\n  in -> o -> out\n}\n",
             ),
         ] {
             let rejected = crate::compiler::compile(&[source], &registry)
@@ -3517,7 +3517,7 @@ mod tests {
         // Asset is an ordinary expression call. The host owns only the complete
         // expression extent; comments and line breaks inside its parens do not
         // create a second host argument grammar.
-        let multiline_string = "graph g : App {\n  operator o {\n    on in { out = asset(\n  \"README.md\"\n) }\n  }\n  . -> o -> .\n}\n";
+        let multiline_string = "graph g : App {\n  operator o {\n    on in { out = asset(\n  \"README.md\"\n) }\n  }\n  in -> o -> out\n}\n";
         let (statements, bag) = handler_statements(multiline_string);
         assert!(bag.diagnostics().is_empty(), "multiline string: {bag:?}");
         let Statement::Assign {
@@ -3531,7 +3531,7 @@ mod tests {
             call.text.contains("\"README.md\""),
             "the expression owns the multiline call: {call:?}"
         );
-        let commented = "graph g : App {\n  operator o {\n    on in { out = asset( /* path\n      continues */ \"a.bin\" ) }\n  }\n  . -> o -> .\n}\n";
+        let commented = "graph g : App {\n  operator o {\n    on in { out = asset( /* path\n      continues */ \"a.bin\" ) }\n  }\n  in -> o -> out\n}\n";
         let (statements, bag) = handler_statements(commented);
         assert!(
             bag.diagnostics().is_empty(),
@@ -3547,7 +3547,7 @@ mod tests {
         assert!(call.text.contains("/* path"), "{call:?}");
 
         // An arbitrary expression call obeys exactly the same framing.
-        let continued = "graph g : App {\n  operator o {\n    on in { out = bounded(\"x\"\n  + \"y\") }\n  }\n  . -> o -> .\n}\n";
+        let continued = "graph g : App {\n  operator o {\n    on in { out = bounded(\"x\"\n  + \"y\") }\n  }\n  in -> o -> out\n}\n";
         let (statements, bag) = handler_statements(continued);
         assert!(bag.diagnostics().is_empty(), "continuation: {bag:?}");
         let Statement::Assign {
@@ -3938,7 +3938,7 @@ graph m0_probe : App {
     }
   }
 
-  . -> shout -> echo -> .
+  in -> shout -> echo -> out
 }
 "#;
 
@@ -3971,7 +3971,7 @@ graph m0_probe : App {
         assert_eq!(edge.endpoints.len(), 4);
         assert!(matches!(
             &edge.endpoints[0],
-            EdgeEndpoint::Ref(port) if port.boundary && port.segments.is_empty()
+            EdgeEndpoint::Ref(port) if !port.boundary && port.segments[0].text == "in"
         ));
         assert!(matches!(
             &edge.endpoints[2],
@@ -4094,10 +4094,8 @@ graph m0_probe : App {
     }
 
     #[test]
-    fn boundary_and_path_dots_respect_line_separation() {
-        // `b -> .` then `a -> .` on the next line: the dots must not
-        // swallow the identifiers across the dropped newlines.
-        let source = "graph g : App {\n  . -> a -> .\n  b -> .\n}\n";
+    fn boundary_and_child_paths_respect_line_separation() {
+        let source = "graph g : App {\n  in -> a -> out\n  b -> out\n}\n";
         let tree = parse_clean(source);
         let TopDecl::Graph(graph) = &tree.decls[0] else {
             panic!("expected a graph");
@@ -4108,7 +4106,7 @@ graph m0_probe : App {
         };
         assert!(matches!(
             &first.endpoints[2],
-            EdgeEndpoint::Ref(port) if port.boundary && port.segments.is_empty()
+            EdgeEndpoint::Ref(port) if !port.boundary && port.segments[0].text == "out"
         ));
         let GraphItem::Edge(second) = &graph.body[1] else {
             panic!("expected the second edge");
@@ -4118,7 +4116,7 @@ graph m0_probe : App {
             EdgeEndpoint::Ref(port) if !port.boundary && port.segments[0].text == "b"
         ));
         // Adjacency still admits tight forms on one line.
-        let tight = parse_clean("graph g : App {\n  .feed -> x.in\n  output feed\n}\n");
+        let tight = parse_clean("graph g : App {\n  feed -> x.in\n  output feed\n}\n");
         let TopDecl::Graph(graph) = &tight.decls[0] else {
             panic!("expected a graph");
         };
@@ -4127,7 +4125,7 @@ graph m0_probe : App {
         };
         assert!(matches!(
             &edge.endpoints[0],
-            EdgeEndpoint::Ref(port) if port.boundary && port.segments[0].text == "feed"
+            EdgeEndpoint::Ref(port) if !port.boundary && port.segments[0].text == "feed"
         ));
     }
 
@@ -4135,7 +4133,7 @@ graph m0_probe : App {
     fn spaces_and_comments_around_dots_stay_trivia() {
         // Same line: spacing and comments must not change the parse.
         let spaced = parse_clean(
-            "graph g : App {\n  output feed\n  o . out -> . feed\n  operator o { on in { out = . } }\n}\n",
+            "graph g : App {\n  output feed\n  o . out -> feed\n  operator o { on in { out = . } }\n}\n",
         );
         let TopDecl::Graph(graph) = &spaced.decls[0] else {
             panic!("expected a graph");
@@ -4149,10 +4147,10 @@ graph m0_probe : App {
         ));
         assert!(matches!(
             &edge.endpoints[1],
-            EdgeEndpoint::Ref(port) if port.boundary && port.segments[0].text == "feed"
+            EdgeEndpoint::Ref(port) if !port.boundary && port.segments[0].text == "feed"
         ));
         let commented = parse_clean(
-            "graph g : App {\n  output feed\n  o.out -> ./* target */feed\n  operator o { on in { out = . } }\n}\n",
+            "graph g : App {\n  output feed\n  o/* child */. /* port */out -> /* target */feed\n  operator o { on in { out = . } }\n}\n",
         );
         let TopDecl::Graph(graph) = &commented.decls[0] else {
             panic!("expected a graph");

@@ -90,7 +90,7 @@ fn assert_exit<'a>(exits: &'a [Value], expected: &str) -> &'a [(String, Value)] 
     &tagged.payload
 }
 
-const CAT_JSONL: &str = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"cat\"\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n  shell.err -> nothing\n  shell.exit -> nothing\n}\n";
+const CAT_JSONL: &str = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"cat\"\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  in -> shell -> out\n  shell.err -> nothing\n  shell.exit -> nothing\n}\n";
 
 #[test]
 fn a_structured_value_round_trips_through_a_real_process() {
@@ -128,7 +128,7 @@ fn a_structured_value_round_trips_through_a_real_process() {
 fn multiple_lines_decode_to_multiple_variants() {
     // A process emitting several JSON lines: each is one ordinary `out`
     // emission, in order.
-    let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"printf\"\n    args = [\"1\\n{\\\"a\\\":2}\\n[3]\\n\"]\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n  shell.err -> nothing\n  shell.exit -> nothing\n}\n";
+    let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"printf\"\n    args = [\"1\\n{\\\"a\\\":2}\\n[3]\\n\"]\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  in -> shell -> out\n  shell.err -> nothing\n  shell.exit -> nothing\n}\n";
     let (outputs, errors, exits) = drive(source, Value::Int(1));
     assert_eq!(errors, Vec::<Value>::new(), "no fault");
     let items: Vec<&Value> = outputs
@@ -149,7 +149,7 @@ fn multiple_lines_decode_to_multiple_variants() {
 fn an_unparseable_line_is_a_typed_decode_error() {
     // `echo not-json` answers garbage: the terminal fact is DecodeFailed
     // carrying the offending line — never a silent skip.
-    let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"echo\"\n    args = [\"not json\"]\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n  shell.err -> nothing\n  shell.exit -> nothing\n}\n";
+    let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"echo\"\n    args = [\"not json\"]\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  in -> shell -> out\n  shell.err -> nothing\n  shell.exit -> nothing\n}\n";
     let (outputs, errors, exits) = drive(source, Value::Int(1));
     assert_eq!(outputs.len(), 0, "nothing crosses on out");
     assert!(errors.is_empty(), "stderr is independent of decoding");
@@ -186,7 +186,7 @@ fn an_unserializable_request_refuses_before_any_spawn() {
 
 #[test]
 fn empty_stdout_emits_no_out_frame() {
-    let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"true\"\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n  shell.err -> nothing\n  shell.exit -> nothing\n}\n";
+    let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"true\"\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  in -> shell -> out\n  shell.err -> nothing\n  shell.exit -> nothing\n}\n";
     let (outputs, errors, exits) = drive(source, Value::Int(1));
     assert_eq!(errors, Vec::<Value>::new());
     assert!(outputs.is_empty(), "no line means no out envelope");
@@ -231,9 +231,9 @@ graph g : App {
     on in where data is Reply && data["status"] == "ok" { out = data["value"] }
   }
 
-  . -> shell
+  in -> shell
   shell.out -> sift
-  sift -> .
+  sift -> out
   shell.err -> nothing
   shell.exit -> nothing
 }
@@ -339,7 +339,7 @@ fn a_null_line_is_the_null_value() {
     // `null` is a JSON value like any other (D-2026-08-11-1): a
     // line carrying it decodes to the null element, never a
     // DecodeFailed.
-    let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"printf\"\n    args = [\"null\\n\"]\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n  shell.err -> nothing\n  shell.exit -> nothing\n}\n";
+    let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"printf\"\n    args = [\"null\\n\"]\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  in -> shell -> out\n  shell.err -> nothing\n  shell.exit -> nothing\n}\n";
     let (outputs, errors, exits) = drive(source, Value::Int(1));
     assert_eq!(errors, Vec::<Value>::new(), "no fault");
     assert_eq!(
@@ -355,7 +355,7 @@ fn json_null_is_an_executable_value() {
     // `json` takes documents only (D-2026-08-13-1), and a BARE
     // `null` emission stays deferred with the null static type —
     // but null inside a document must EXECUTE, not merely compile.
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = json! [null] }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = json! [null] }\n  }\n  in -> o -> out\n}\n";
     let (outputs, errors, _) = drive(source, Value::Int(1));
     assert_eq!(errors, Vec::<Value>::new(), "no fault");
     assert_eq!(
@@ -388,9 +388,9 @@ graph g : App {
     on in where meta.app.token == "tok" { out = meta.app.token }
   }
 
-  . -> stamp -> shell
+  in -> stamp -> shell
   shell.out -> probe
-  probe -> .
+  probe -> out
   shell.err -> nothing
   shell.exit -> nothing
 }
@@ -427,9 +427,9 @@ graph g : App {
     on in where meta.app.token == "tok" { out = meta.app.token }
   }
 
-  . -> stamp -> shell
+  in -> stamp -> shell
   shell.out -> probe
-  probe -> .
+  probe -> out
   shell.err -> nothing
   shell.exit -> nothing
 }

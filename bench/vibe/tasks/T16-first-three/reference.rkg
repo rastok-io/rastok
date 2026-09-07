@@ -1,5 +1,10 @@
 graph window : App {
+  input in: text
+  output out: text
+
   operator first_three {
+    input in: text
+    output out: text
     var passed : int = 0
     on in where passed < 3 {
       passed = passed + 1
@@ -7,5 +12,5 @@ graph window : App {
     }
   }
 
-  . -> first_three -> .
+  in -> first_three -> out
 }

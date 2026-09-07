@@ -1,9 +1,14 @@
 graph convert : App {
+  input in: struct { celsius: int }
+  output out: struct { fahrenheit: int }
+
   operator to_fahrenheit {
+    input in: struct { celsius: int }
+    output out: struct { fahrenheit: int }
     on in {
       out = {fahrenheit = (data.celsius * 9) / 5 + 32}
     }
   }
 
-  . -> to_fahrenheit -> .
+  in -> to_fahrenheit -> out
 }

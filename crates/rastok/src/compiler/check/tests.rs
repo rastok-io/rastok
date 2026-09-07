@@ -136,7 +136,7 @@ on in where data.text != "" {
 }
   }
 
-  . -> shout -> echo -> .
+  in -> shout -> echo -> out
   echo.err -> nothing
   echo.exit -> nothing
 }
@@ -205,7 +205,7 @@ input in: text
 output out: text
 on in { out = . }
   }
-  . -> relay -> .
+  in -> relay -> out
 }
 "#;
     let explicit = implicit.replace("operator relay {", "operator relay : Operator {");
@@ -225,9 +225,9 @@ graph app : App {
 input in: text
 output out: text
 operator relay { on in { out = . } }
-. -> relay -> .
+in -> relay -> out
   }
-  . -> child -> .
+  in -> child -> out
 }
 "#;
     let explicit_graph = implicit_graph.replace("graph child {", "graph child : Graph {");
@@ -248,9 +248,9 @@ input in: text
 output out: text
 Loop.fuel = 3
 operator relay { on in { out = . } }
-. -> relay -> .
+in -> relay -> out
   }
-  . -> retry -> .
+  in -> retry -> out
   retry.Loop.expired -> nothing
 }
 "#;
@@ -293,9 +293,9 @@ Loop.delay = {
   ceiling = duration("5s")
 }
 operator relay { on in { out = . } }
-. -> relay -> .
+in -> relay -> out
   }
-  . -> retry -> .
+  in -> retry -> out
   retry.Loop.expired -> nothing
 }
 "#;
@@ -373,7 +373,7 @@ fn structural_kinds_and_extensions_have_one_compatibility_gate() {
         ),
     ];
     for (declaration, expected) in cases {
-        let source = format!("graph app : App {{ {declaration} . -> o -> . }}");
+        let source = format!("graph app : App {{ {declaration} in -> o -> out }}");
         let (_, bag) = check_source(&source);
         assert!(
             bag.diagnostics().iter().any(|diagnostic| {
@@ -939,7 +939,7 @@ fn graph_ports_and_children_share_one_namespace_in_both_orders() {
 
 #[test]
 fn a_meta_sys_write_carries_its_normative_code() {
-    let source = "graph g : App {\n  operator o {\n    on in {\n      out = { meta.sys.id = data.x }\n    }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = { meta.sys.id = data.x }\n    }\n  }\n  in -> o -> out\n}\n";
     let (_, bag) = check_source(source);
     let diagnostic = bag
         .diagnostics()
@@ -1129,7 +1129,7 @@ fn duplicate_nodes_are_refused() {
 
 #[test]
 fn expression_faults_map_back_to_source_spans() {
-    let source = "graph g : App {\n  operator o {\n    on in where mystery > 0 { out = . }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in where mystery > 0 { out = . }\n  }\n  in -> o -> out\n}\n";
     let (_, bag) = check_source(source);
     let diagnostic = bag
         .diagnostics()
@@ -1143,7 +1143,7 @@ fn expression_faults_map_back_to_source_spans() {
 
 #[test]
 fn a_missing_mandatory_axis_violates_the_sheet() {
-    let source = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; codec = lines\n    behavior = deterministic\n  }\n  . -> c -> .\n}\n";
+    let source = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; codec = lines\n    behavior = deterministic\n  }\n  in -> c -> out\n}\n";
     let (_, bag) = check_source(source);
     let diagnostic = bag
         .diagnostics()
@@ -1155,7 +1155,7 @@ fn a_missing_mandatory_axis_violates_the_sheet() {
 
 #[test]
 fn a_domain_violation_names_the_sheet() {
-    let source = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; codec = utf16\n    effect = idempotent ; behavior = deterministic\n  }\n  . -> c -> .\n}\n";
+    let source = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; codec = utf16\n    effect = idempotent ; behavior = deterministic\n  }\n  in -> c -> out\n}\n";
     let (_, bag) = check_source(source);
     let diagnostic = bag
         .diagnostics()
@@ -1169,7 +1169,7 @@ fn a_domain_violation_names_the_sheet() {
 fn correlate_on_a_job_names_the_owning_profile() {
     // D-2026-08-12-1: a field of another profile is ABSENT here,
     // and the diagnostic names its owner — never "forbidden".
-    let source = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; codec = lines\n    effect = idempotent ; behavior = deterministic\n    correlate = data.id\n  }\n  . -> c -> .\n}\n";
+    let source = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; codec = lines\n    effect = idempotent ; behavior = deterministic\n    correlate = data.id\n  }\n  in -> c -> out\n}\n";
     let (_, bag) = check_source(source);
     let diagnostic = bag
         .diagnostics()
@@ -1194,7 +1194,7 @@ fn correlate_on_a_job_names_the_owning_profile() {
 
 #[test]
 fn unavailable_and_unknown_connector_types_split() {
-    let declared = "graph g : App {\n  connector c : Timer { }\n  . -> c -> .\n}\n";
+    let declared = "graph g : App {\n  connector c : Timer { }\n  in -> c -> out\n}\n";
     let (_, bag) = check_source(declared);
     assert!(diagnostic_codes(&bag).contains(&E_CONNECTOR_UNAVAILABLE));
     assert!(bag.diagnostics()[0].message().contains("catalogue"));
@@ -1208,7 +1208,7 @@ fn unavailable_and_unknown_connector_types_split() {
             .contains("renamed to `Timer`")
     );
 
-    let unknown = "graph g : App {\n  connector d : Postgres { }\n  . -> d -> .\n}\n";
+    let unknown = "graph g : App {\n  connector d : Postgres { }\n  in -> d -> out\n}\n";
     let (_, bag) = check_source(unknown);
     assert!(bag.diagnostics().iter().any(|diagnostic| {
         diagnostic
@@ -1221,7 +1221,7 @@ fn unavailable_and_unknown_connector_types_split() {
 fn a_map_emission_compiles_to_the_map_literal_form() {
     // `{ "n": 1 }` is an executable emission now — the entries
     // compile into the existing MapLit expression.
-    let source = "graph g : App {\n  operator o {\n    on in { out = { \"n\": 1 } }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in { out = { \"n\": 1 } }\n  }\n  in -> o -> out\n}\n";
     let (hir, bag) = check_source(source);
     assert!(!bag.has_errors(), "{:#?}", bag.diagnostics());
     let hir = hir.expect("a checked unit");
@@ -1249,7 +1249,7 @@ on in where data is Customer {
 }
   }
 
-  . -> inspect -> .
+  in -> inspect -> out
 }
 "#;
     let hir = check_clean(source);
@@ -1281,7 +1281,7 @@ fn the_removed_struct_spelling_is_gone_from_the_grammar() {
     // cleanly — a braced record IS the struct. The old spelling
     // now falls outside the grammar and refuses; it never parses
     // as anything else.
-    let source = "graph g : App {\n  operator o {\n    on in { out = struct { n = 1 } }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in { out = struct { n = 1 } }\n  }\n  in -> o -> out\n}\n";
     let (_, bag) = check_source(source);
     assert!(
         !bag.diagnostics().is_empty(),
@@ -1296,7 +1296,7 @@ fn non_idempotent_effects_are_deferred_until_their_invariants_run() {
     // in this subset, so the words refuse instead of lying.
     for word in ["compensable", "irreversible"] {
         let source = format!(
-            "graph g : App {{\n  connector c : Process {{\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = {word} ; behavior = deterministic\n  }}\n  . -> c -> .\n}}\n"
+            "graph g : App {{\n  connector c : Process {{\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = {word} ; behavior = deterministic\n  }}\n  in -> c -> out\n}}\n"
         );
         let (_, bag) = check_source(&source);
         assert!(
@@ -1312,14 +1312,14 @@ fn non_idempotent_effects_are_deferred_until_their_invariants_run() {
 
 #[test]
 fn an_unwired_output_refuses_until_discarded_explicitly() {
-    let source = "graph g : App {\n  operator o {\n    on in {\n      out = .\n      side = .\n    }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = .\n      side = .\n    }\n  }\n  in -> o -> out\n}\n";
     let (_, bag) = check_source(source);
     assert!(bag.has_errors(), "a possible emission needs a disposition");
     assert!(bag.diagnostics().iter().any(|diagnostic| {
         diagnostic.code() == E_UNWIRED_OUTPUT && diagnostic.to_string().contains("o.side")
     }));
     // Discarding in writing silences it.
-    let discarded = "graph g : App {\n  operator o {\n    on in {\n      out = .\n      side = .\n    }\n  }\n  . -> o -> .\n  o.side -> nothing\n}\n";
+    let discarded = "graph g : App {\n  operator o {\n    on in {\n      out = .\n      side = .\n    }\n  }\n  in -> o -> out\n  o.side -> nothing\n}\n";
     let (_, bag) = check_source(discarded);
     assert!(
         !bag.diagnostics()
@@ -1330,7 +1330,7 @@ fn an_unwired_output_refuses_until_discarded_explicitly() {
 
 #[test]
 fn a_second_handler_for_one_trigger_is_refused() {
-    let source = "graph g : App {\n  operator o {\n    on in { out = . }\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in { out = . }\n    on in { out = . }\n  }\n  in -> o -> out\n}\n";
     let (_, bag) = check_source(source);
     assert!(bag.diagnostics().iter().any(|diagnostic| {
         diagnostic.code() == E_HANDLER_DUPLICATE && diagnostic.fields()[1].1 == "p:in"
@@ -2057,7 +2057,7 @@ fn removed_execution_and_wiring_forms_name_their_replacement() {
 
 #[test]
 fn lifecycle_handlers_enter_the_general_handler_table() {
-    let source = "graph g : App {\n  operator o {\n    on start { out = . }\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on start { out = . }\n    on in { out = . }\n  }\n  in -> o -> out\n}\n";
     let hir = check_clean(source);
     assert!(hir.app.nodes[0].handlers.iter().any(|handler| {
         handler.activation == node::HandlerActivation::Lifecycle(node::Lifecycle::Start)
@@ -2066,7 +2066,7 @@ fn lifecycle_handlers_enter_the_general_handler_table() {
 
 #[test]
 fn an_admission_lifecycle_requires_a_causal_input() {
-    let source = "graph g : App {\n  operator source {\n    output out: int\n    on start { out = 1 }\n  }\n  source -> .\n}\n";
+    let source = "graph g : App {\n  operator source {\n    output out: int\n    on start { out = 1 }\n  }\n  source -> out\n}\n";
     let (_, bag) = check_source(source);
     assert!(bag.diagnostics().iter().any(|diagnostic| {
         diagnostic.code() == E_INSTANCE
@@ -2076,7 +2076,7 @@ fn an_admission_lifecycle_requires_a_causal_input() {
 
 #[test]
 fn unrepresentable_emissions_refuse_at_check_not_at_runtime() {
-    let source = "graph g : App {\n  operator o {\n    on in { out = duration(\"3s\") }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in { out = duration(\"3s\") }\n  }\n  in -> o -> out\n}\n";
     let (_, bag) = check_source(source);
     assert!(
         bag.diagnostics().iter().any(|diagnostic| {
@@ -2092,7 +2092,7 @@ fn unrepresentable_emissions_refuse_at_check_not_at_runtime() {
 fn the_jsonl_codec_compiles() {
     // M1 item 2 (D-2026-08-11-1): the JSON chain exists — the
     // deferral lifted with it.
-    let source = "graph g : App {\n  connector c : Process {\n    mode = job ; command = \"cat\"\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n  }\n  . -> c -> .\n}\n";
+    let source = "graph g : App {\n  connector c : Process {\n    mode = job ; command = \"cat\"\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n  }\n  in -> c -> out\n}\n";
     let (_, bag) = check_source(source);
     assert!(
         !bag.diagnostics()
@@ -2107,7 +2107,7 @@ fn the_jsonl_codec_compiles() {
 fn unknown_and_unproduced_expectation_targets_refuse() {
     // A typo or an unproduced conventional name cannot create an
     // observation target; predicates still owe a boolean.
-    let base = "graph g : App {\n  operator relay {\n    on in { out = . }\n  }\n  . -> relay -> .\n}\n\nlab g {\n  simulation s on app {\n    scenario sc {\n      app.in = { text = \"x\" }\n      EXPECT\n    }\n  }\n}\n";
+    let base = "graph g : App {\n  operator relay {\n    on in { out = . }\n  }\n  in -> relay -> out\n}\n\nlab g {\n  simulation s on app {\n    scenario sc {\n      app.in = { text = \"x\" }\n      EXPECT\n    }\n  }\n}\n";
     let cases = [
         ("expect nothing relay.typo", E_PORT_UNKNOWN),
         ("expect nothing app.typo", E_PORT_UNKNOWN),
@@ -2130,7 +2130,7 @@ fn unknown_and_unproduced_expectation_targets_refuse() {
 
 #[test]
 fn lab_fragments_merge_and_homonym_simulations_refuse() {
-    let source = "graph g : App {\n  operator o {\n    on in { out = . }\n  }\n  . -> o -> .\n}\n\nlab g {\n  simulation a on app { }\n}\n\nlab g {\n  simulation b on app { }\n}\n\nlab g {\n  simulation a on app { }\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in { out = . }\n  }\n  in -> o -> out\n}\n\nlab g {\n  simulation a on app { }\n}\n\nlab g {\n  simulation b on app { }\n}\n\nlab g {\n  simulation a on app { }\n}\n";
     let (hir, bag) = check_source(source);
     // Fragments merged into one corpus of two simulations…
     let hir = hir.expect("the unit checks");
@@ -2144,7 +2144,7 @@ fn lab_fragments_merge_and_homonym_simulations_refuse() {
 
 #[test]
 fn an_inferred_output_also_requires_a_destination() {
-    let source = "graph g : App {\n  operator o {\n    on in { out = . }\n  }\n  . -> o\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in { out = . }\n  }\n  in -> o\n}\n";
     let (_, bag) = check_source(source);
     assert!(
         bag.diagnostics().iter().any(|diagnostic| {
@@ -2161,7 +2161,7 @@ fn a_duplicated_edge_refuses_whatever_its_spelling() {
     // one endpoint pair and the second refuses with its own span.
     for second in ["o -> p", "o.out -> p.in"] {
         let source = format!(
-            "graph g : App {{\n  operator o {{\n    on in {{ out = . }}\n  }}\n  operator p {{\n    on in {{ out = . }}\n  }}\n  . -> o -> p -> .\n  {second}\n}}\n"
+            "graph g : App {{\n  operator o {{\n    on in {{ out = . }}\n  }}\n  operator p {{\n    on in {{ out = . }}\n  }}\n  in -> o -> p -> out\n  {second}\n}}\n"
         );
         let (_, bag) = check_source(&source);
         assert!(
@@ -2176,7 +2176,7 @@ fn a_duplicated_edge_refuses_whatever_its_spelling() {
 
 #[test]
 fn duplicate_mocks_refuse_at_both_levels() {
-    let base = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  operator o {\n    input in: struct { text: text }\n    on in { out = data.text }\n  }\n  . -> o -> shell -> .\n}\n\nlab g {\n  simulation s on app {\nBODY  }\n}\n";
+    let base = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  operator o {\n    input in: struct { text: text }\n    on in { out = data.text }\n  }\n  in -> o -> shell -> out\n}\n\nlab g {\n  simulation s on app {\nBODY  }\n}\n";
     let simulation_level = base.replace(
         "BODY",
         "    mock shell { on in { out = . } }\n    mock shell { on in { out = . } }\n",
@@ -2217,7 +2217,7 @@ fn no_top_level_declaration_is_silently_ignored() {
 
 #[test]
 fn recognized_data_annotations_reach_the_annotated_port_schema() {
-    let source = "type Prompt = text @sensitive(level = confidential)\ngraph g : App {\n  operator o {\n    input in: Prompt\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
+    let source = "type Prompt = text @sensitive(level = confidential)\ngraph g : App {\n  operator o {\n    input in: Prompt\n    on in { out = . }\n  }\n  in -> o -> out\n}\n";
     let (hir, bag) = check_source(source);
     assert!(!bag.has_errors(), "v15 carries valid policy metadata");
     let hir = hir.expect("the annotation reaches checked HIR");
@@ -2249,7 +2249,7 @@ graph g : App {
 input in: Result
 on in { out = . }
   }
-  . -> o -> .
+  in -> o -> out
 }
 "#;
     let (hir, bag) = check_source(source);
@@ -2297,7 +2297,7 @@ graph g : App {
 input in: Choice
 on in { out = . }
   }
-  . -> o -> .
+  in -> o -> out
 }
 "#;
     let (hir, bag) = check_source(source);
@@ -2553,7 +2553,7 @@ on in {
   out = .
 }
   }
-  . -> o -> .
+  in -> o -> out
 }
 "#;
     let (hir, bag) = check_source(source);
@@ -2574,7 +2574,7 @@ fn executable_secret_schemas_refuse_until_fields_can_be_externalized() {
         "type Secret = text @secret\ngraph g : App { operator o { input in: Secret } }\n",
         "type Secret = text @secret\ngraph g : App { val token: Secret = \"x\" }\n",
         "type Secret = text @secret\ngraph g : App { operator o { var token: Secret = \"x\" } }\n",
-        "type Secret = text @secret\ngraph g : App { operator o { on in { val token: Secret = \"x\"; out = . } } . -> o -> . }\n",
+        "type Secret = text @secret\ngraph g : App { operator o { on in { val token: Secret = \"x\"; out = . } } in -> o -> out }\n",
     ];
     for source in cases {
         let (_, bag) = check_source(source);
@@ -2600,7 +2600,7 @@ fn boot_reference_functions_name_their_restricted_positions() {
         ("env(\"SERVICE_URL\")", "HttpClient.url"),
     ] {
         let source = format!(
-            "graph g : App {{ operator o {{ on in {{ out = {function} }} }} . -> o -> . }}\n"
+            "graph g : App {{ operator o {{ on in {{ out = {function} }} }} in -> o -> out }}\n"
         );
         let (_, bag) = check_source(&source);
         let diagnostic = bag
@@ -2751,7 +2751,7 @@ input right: Bad
 
 #[test]
 fn a_var_initializer_must_fit_its_declared_type() {
-    let source = "graph g : App {\n  operator o {\n    var count : int = \"oops\"\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    var count : int = \"oops\"\n    on in { out = . }\n  }\n  in -> o -> out\n}\n";
     let (_, bag) = check_source(source);
     let diagnostic = bag
         .diagnostics()
@@ -2763,7 +2763,7 @@ fn a_var_initializer_must_fit_its_declared_type() {
 
 #[test]
 fn shadowing_and_reserved_names_are_refused() {
-    let source = "graph g : App {\n  val limit = 1\n  operator o {\n    var limit : int = 0\n    var data : int = 0\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  val limit = 1\n  operator o {\n    var limit : int = 0\n    var data : int = 0\n    on in { out = . }\n  }\n  in -> o -> out\n}\n";
     let (_, bag) = check_source(source);
     let shadows: Vec<&str> = bag
         .diagnostics()
@@ -2779,7 +2779,7 @@ fn handler_and_emission_ports_are_inferred() {
     // The reviewer's reproduction: `on event` implies an input,
     // `result = .` implies an output — no declaration
     // needed. This program is conforming and must check cleanly.
-    let source = "graph g : App {\n  input feed\n  output sink\n\n  operator o {\n    on event {\n      result = .\n    }\n  }\n\n  .feed -> o.event\n  o.result -> .sink\n}\n";
+    let source = "graph g : App {\n  input feed\n  output sink\n\n  operator o {\n    on event {\n      result = .\n    }\n  }\n\n  feed -> o.event\n  o.result -> sink\n}\n";
     let hir = check_clean(source);
     let ports = &hir.app.nodes[0].ports;
     assert!(
@@ -2797,18 +2797,18 @@ fn handler_and_emission_ports_are_inferred() {
 #[test]
 fn conflicting_port_roles_are_refused() {
     // The same name inferred as input and output.
-    let source = "graph g : App {\n  operator o {\n    on chan {\n      chan = .\n    }\n  }\n  . -> o.chan -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on chan {\n      chan = .\n    }\n  }\n  in -> o.chan -> out\n}\n";
     let (_, bag) = check_source(source);
     assert!(diagnostic_codes(&bag).contains(&E_PORT_CONFLICT));
     // Explicit double declaration at the boundary.
-    let source = "graph g : App {\n  input feed\n  output feed\n  operator o { on in { out = . } }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input feed\n  output feed\n  operator o { on in { out = . } }\n  in -> o -> out\n}\n";
     let (_, bag) = check_source(source);
     assert!(diagnostic_codes(&bag).contains(&E_PORT_CONFLICT));
 }
 
 #[test]
 fn a_connector_never_declares_ports() {
-    let source = "graph g : App {\n  connector c : Process {\n    input extra\n    command = \"cat\" ; codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  . -> c -> .\n}\n";
+    let source = "graph g : App {\n  connector c : Process {\n    input extra\n    command = \"cat\" ; codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  in -> c -> out\n}\n";
     let (_, bag) = check_source(source);
     let diagnostic = bag
         .diagnostics()
@@ -2820,7 +2820,7 @@ fn a_connector_never_declares_ports() {
 
 #[test]
 fn physical_integer_types_are_not_silently_merged() {
-    let long = "graph g : App {\n  operator o {\n    var n : long = 0\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
+    let long = "graph g : App {\n  operator o {\n    var n : long = 0\n    on in { out = . }\n  }\n  in -> o -> out\n}\n";
     let (hir, bag) = check_source(long);
     assert!(
         !bag.has_errors(),
@@ -2831,7 +2831,7 @@ fn physical_integer_types_are_not_silently_merged() {
         hir.expect("one App").app.nodes[0].vars[0].ty,
         DataType::LONG
     );
-    let overflow = "graph g : App {\n  operator o {\n    var n : int = 2147483648\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
+    let overflow = "graph g : App {\n  operator o {\n    var n : int = 2147483648\n    on in { out = . }\n  }\n  in -> o -> out\n}\n";
     let (_, bag) = check_source(overflow);
     assert!(
         bag.diagnostics()
@@ -2858,7 +2858,8 @@ fn ports_are_used_with_their_direction() {
         "handler + edge source: {:#?}",
         bag.diagnostics()
     );
-    let emission = "graph g : App {\n  operator o {\n    on in { in = . }\n  }\n  . -> o -> .\n}\n";
+    let emission =
+        "graph g : App {\n  operator o {\n    on in { in = . }\n  }\n  in -> o -> out\n}\n";
     let (_, bag) = check_source(emission);
     assert!(diagnostic_codes(&bag).contains(&E_PORT_DIRECTION));
 }
@@ -2866,14 +2867,18 @@ fn ports_are_used_with_their_direction() {
 #[test]
 fn boundary_ports_carry_direction() {
     let source =
-        "graph g : App {\n  input feed\n  operator o { on in { out = . } }\n  o.out -> .feed\n}\n";
+        "graph g : App {\n  input feed\n  operator o { on in { out = . } }\n  o.out -> feed\n}\n";
     let (_, bag) = check_source(source);
     let diagnostic = bag
         .diagnostics()
         .iter()
         .find(|diagnostic| diagnostic.code() == E_PORT_DIRECTION)
         .expect("an input boundary port cannot drain the graph");
-    assert!(diagnostic.message().contains("boundary edge target"));
+    assert!(
+        diagnostic
+            .message()
+            .contains("its output port is a destination")
+    );
 }
 
 #[test]
@@ -2886,7 +2891,7 @@ fn wiring_cycles_are_refused() {
         .find(|diagnostic| diagnostic.code() == E_GRAPH_CYCLE)
         .expect("the cycle must refuse");
     assert!(diagnostic.message().contains("DAG"));
-    let chain = "graph g : App {\n  operator a { on in { out = . } }\n  operator b { on in { out = . } }\n  . -> a -> b -> .\n}\n";
+    let chain = "graph g : App {\n  operator a { on in { out = . } }\n  operator b { on in { out = . } }\n  in -> a -> b -> out\n}\n";
     let (_, bag) = check_source(chain);
     assert!(!diagnostic_codes(&bag).contains(&E_GRAPH_CYCLE));
 
@@ -2913,7 +2918,7 @@ handshake_timeout = duration("5s")
 
 #[test]
 fn repeated_attributes_and_port_declarations_are_refused() {
-    let repeated_attr = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; command = \"false\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  . -> c -> .\n}\n";
+    let repeated_attr = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; command = \"false\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  in -> c -> out\n}\n";
     let (_, bag) = check_source(repeated_attr);
     assert!(
         bag.diagnostics()
@@ -2921,7 +2926,7 @@ fn repeated_attributes_and_port_declarations_are_refused() {
             .any(|diagnostic| diagnostic.code() == E_CONTRACT_ATTR
                 && diagnostic.message().contains("twice"))
     );
-    let repeated_port = "graph g : App {\n  operator o {\n    input event\n    input event\n    on event { out = . }\n  }\n  .feed -> o.event\n  input feed\n  o -> .\n}\n";
+    let repeated_port = "graph g : App {\n  operator o {\n    input event\n    input event\n    on event { out = . }\n  }\n  feed -> o.event\n  input feed\n  o -> out\n}\n";
     let (_, bag) = check_source(repeated_port);
     assert!(
         bag.diagnostics()
@@ -2949,7 +2954,7 @@ fn key_and_lifetime_are_orthogonal_in_all_four_combinations() {
     ];
     for (attributes, keyed, lifetime) in policies {
         let source = format!(
-            "graph g : App {{\n  input in: text\n  output out: text\n  operator relay {{\n    input in: text\n    output out: text\n    {attributes}\n    on in {{ out = . }}\n  }}\n  . -> relay -> .\n}}\n"
+            "graph g : App {{\n  input in: text\n  output out: text\n  operator relay {{\n    input in: text\n    output out: text\n    {attributes}\n    on in {{ out = . }}\n  }}\n  in -> relay -> out\n}}\n"
         );
         let hir = check_clean(&source);
         let policy = &hir.app.nodes[0].instance;
@@ -2973,7 +2978,7 @@ fn key_and_lifetime_are_orthogonal_in_all_four_combinations() {
 fn omitted_and_explicit_persistent_lifetimes_share_one_identity() {
     let source = |attribute: &str| {
         format!(
-            "graph g : App {{\n  operator relay {{\n    {attribute}\n    on in {{ out = . }}\n  }}\n  . -> relay -> .\n}}\n"
+            "graph g : App {{\n  operator relay {{\n    {attribute}\n    on in {{ out = . }}\n  }}\n  in -> relay -> out\n}}\n"
         )
     };
     let omitted = check_clean(&source(""));
@@ -3002,7 +3007,7 @@ codec = lines
 effect = idempotent
 behavior = deterministic
   }
-  . -> shell -> .
+  in -> shell -> out
   shell.err -> nothing
   shell.exit -> nothing
 }
@@ -3043,7 +3048,7 @@ fn every_r4_lifetime_reaches_hir_with_its_duration() {
     ];
     for (attribute, expected) in cases {
         let source = format!(
-            "graph g : App {{\n  input in: text\n  output out: text\n  operator relay {{\n    {attribute}\n    on in {{ out = . }}\n  }}\n  . -> relay -> .\n}}\n"
+            "graph g : App {{\n  input in: text\n  output out: text\n  operator relay {{\n    {attribute}\n    on in {{ out = . }}\n  }}\n  in -> relay -> out\n}}\n"
         );
         let hir = check_clean(&source);
         let lifetime = &hir.app.nodes[0]
@@ -3075,7 +3080,7 @@ output out: int
 closing = { drain_for = duration("2s") ; settle_for = duration("3s") }
 on in { out = . ; stop }
   }
-  . -> relay -> .
+  in -> relay -> out
 }
 "#;
     let hir = check_clean(source);
@@ -3131,9 +3136,9 @@ instance = { key = data.tenant }
 on a { out = data.tenant }
 on b { out = data.tenant }
   }
-  .alpha -> relay.a
-  .beta -> relay.b
-  relay -> .
+  alpha -> relay.a
+  beta -> relay.b
+  relay -> out
 }
 "#;
     let hir = check_clean(source);
@@ -3157,7 +3162,7 @@ output out: text
 instance = { key = { request = meta.sys.id ; tenant = data } }
 on in { out = . }
   }
-  . -> relay -> .
+  in -> relay -> out
 }
 "#;
     let hir = check_clean(source);
@@ -3197,7 +3202,7 @@ fn instance_sheets_refuse_malformed_values_before_lowering() {
     ];
     for (attribute, expected) in cases {
         let source = format!(
-            "graph g : App {{\n  input in: variant\n  output out: variant\n  operator o {{\n    input in: variant\n    output out: variant\n    {attribute}\n    on in {{ out = . }}\n  }}\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  input in: variant\n  output out: variant\n  operator o {{\n    input in: variant\n    output out: variant\n    {attribute}\n    on in {{ out = . }}\n  }}\n  in -> o -> out\n}}\n"
         );
         let (_, bag) = check_source(&source);
         assert!(
@@ -3215,37 +3220,37 @@ fn superseded_instance_spellings_have_exactly_one_migration_diagnostic() {
     let sources = [
         (
             "named partition",
-            "graph g : App { partition p { key = 1 ; lifetime = persistent } operator o { on in { out = . } } . -> o -> . }",
+            "graph g : App { partition p { key = 1 ; lifetime = persistent } operator o { on in { out = . } } in -> o -> out }",
             "`partition`",
         ),
         (
             "plural instance attribute",
-            "graph g : App { operator o { instances = { key = data } ; on in { out = . } } . -> o -> . }",
+            "graph g : App { operator o { instances = { key = data } ; on in { out = . } } in -> o -> out }",
             "`instances` was superseded",
         ),
         (
             "Graph per",
-            "graph g : App per p { operator o { on in { out = . } } . -> o -> . }",
+            "graph g : App per p { operator o { on in { out = . } } in -> o -> out }",
             "`per`",
         ),
         (
             "Operator inline per",
-            "graph g : App { operator o per (key = 1, lifetime = persistent) { on in { out = . } } . -> o -> . }",
+            "graph g : App { operator o per (key = 1, lifetime = persistent) { on in { out = . } } in -> o -> out }",
             "`per`",
         ),
         (
             "Connector per",
-            "graph g : App { connector p : Process per p { command = \"cat\" ; codec = lines ; effect = idempotent ; behavior = deterministic } . -> p -> . }",
+            "graph g : App { connector p : Process per p { command = \"cat\" ; codec = lines ; effect = idempotent ; behavior = deterministic } in -> p -> out }",
             "`per`",
         ),
         (
             "join by",
-            "type JoinExpiry = union { JoinExpired {} } graph g : App { operator j { input a: int ; input b: int ; output out: int ; output expired: JoinExpiry ; on (a, b) by a.data within duration(\"1s\") { out = a.data + b.data } } . -> j.a ; . -> j.b ; j -> . ; j.expired -> nothing }",
+            "type JoinExpiry = union { JoinExpired {} } graph g : App { operator j { input a: int ; input b: int ; output out: int ; output expired: JoinExpiry ; on (a, b) by a.data within duration(\"1s\") { out = a.data + b.data } } in -> j.a ; in -> j.b ; j -> out ; j.expired -> nothing }",
             "join `by`",
         ),
         (
             "targeted stop",
-            "graph g : App { operator o { on in { stop p } } . -> o -> . }",
+            "graph g : App { operator o { on in { stop p } } in -> o -> out }",
             "targeted `stop`",
         ),
     ];

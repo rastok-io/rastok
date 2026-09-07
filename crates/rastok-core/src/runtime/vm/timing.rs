@@ -233,7 +233,7 @@ impl Vm<'_> {
         prepared: &PreparedEmissions,
     ) -> Result<(), VmError> {
         record.routes = self.routed_deliveries(prepared);
-        if let Some(crate::journal::LoopRecord::R2(packet)) = record.loop_record.as_deref_mut() {
+        if let Some(packet) = record.loop_record.as_deref_mut() {
             packet.routes = prepared.contexts.clone();
         }
         let mut arms = record

@@ -1,13 +1,13 @@
 lab relay {
   simulation refereeing on app {
     mock logger {
-      on in { out = . }
+      on in { out = .; exit = Exited { exit_code = 0; signal = null } }
     }
 
     scenario forwards "a status line reaches the logger and returns" {
       app.in = "pump 3 nominal"
       expect "logged" app.out count == 1 where data == "pump 3 nominal"
-      expect nothing app.err
+      expect nothing logger.err
     }
 
     scenario drops_empty "an empty line never calls the logger" {

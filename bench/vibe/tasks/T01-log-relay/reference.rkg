@@ -1,4 +1,7 @@
 graph relay : App {
+  input in: text
+  output out: text
+
   connector logger : Process {
     mode = job ; command = "cat"
     codec = lines
@@ -6,10 +9,14 @@ graph relay : App {
   }
 
   operator screen {
+    input in: text
+    output out: text
     on in where data != "" {
       out = data
     }
   }
 
-  . -> screen -> logger -> .
+  in -> screen -> logger -> out
+  logger.err -> nothing
+  logger.exit -> nothing
 }

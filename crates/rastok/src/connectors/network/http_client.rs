@@ -1750,7 +1750,7 @@ graph bounded_request : App {
     versions = ["VERSION"]
     effect = idempotent ; behavior = deterministic
   }
-  . -> client -> .
+  in -> client -> out
   client.exit -> nothing
 }
 "#

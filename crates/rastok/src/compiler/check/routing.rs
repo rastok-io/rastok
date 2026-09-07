@@ -861,54 +861,23 @@ impl Checker<'_, '_> {
         is_source: bool,
     ) -> Option<Endpoint> {
         if reference.boundary {
-            // As a source the boundary feeds the graph (an input port
-            // of the graph); as a target it drains it (an output).
-            let expected = if is_source {
-                Direction::Input
-            } else {
-                Direction::Output
-            };
-            let port_name = match reference.segments.first() {
-                None => {
-                    if is_source {
-                        "in"
-                    } else {
-                        "out"
-                    }
-                }
-                Some(name) => {
-                    let Some(decl) = graph
-                        .boundary
-                        .iter()
-                        .find(|decl| decl.port.name() == name.text)
-                    else {
-                        self.bag.push(
-                            Diagnostic::new(
-                                E_PORT_UNKNOWN,
-                                Phase::Check,
-                                format!("`.{}` names no declared boundary port", name.text),
-                            )
-                            .with_span(name.span)
-                            .with_field("port", name.text.clone()),
-                        );
-                        return None;
-                    };
-                    if decl.direction != expected {
-                        let required = if is_source {
-                            "a boundary edge source must be an input of the graph"
-                        } else {
-                            "a boundary edge target must be an output of the graph"
-                        };
-                        self.wrong_direction(name.span, &name.text, decl.direction, required);
-                        return None;
-                    }
+            let replacement = reference
+                .segments
+                .first()
+                .map_or(if is_source { "in" } else { "out" }, |name| {
                     name.text.as_str()
-                }
-            };
-            return node::Port::new(port_name).ok().map(|port| Endpoint {
-                owner: EndpointOwner::Graph(graph.path.clone()),
-                port,
-            });
+                });
+            self.bag.push(
+                Diagnostic::new(
+                    E_WIRING_MIGRATION,
+                    Phase::Check,
+                    format!("the leading `.` in wiring was removed; write `{replacement}`"),
+                )
+                .with_span(reference.span)
+                .with_field("construct", "boundary dot")
+                .with_field("replacement", replacement),
+            );
+            return None;
         }
         if reference
             .segments

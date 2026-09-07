@@ -37,12 +37,12 @@ graph codex_websocket_gateway : App {
   }
 
   clients.out -> codex.in
-  .peer -> codex.in
+  peer -> codex.in
   codex.out -> clients.in
-  codex.out -> .reply
+  codex.out -> reply
   codex.err -> nothing
-  clients.exit -> .session_exit
-  codex.exit -> .process_exit
+  clients.exit -> session_exit
+  codex.exit -> process_exit
 }
 
 lab codex_websocket_gateway {

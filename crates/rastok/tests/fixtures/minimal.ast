@@ -130,14 +130,25 @@ SyntaxTree {
                             endpoints: [
                                 Ref(
                                     PortRef {
-                                        boundary: true,
-                                        segments: [],
+                                        boundary: false,
+                                        segments: [
+                                            Name {
+                                                text: "in",
+                                                span: Span {
+                                                    source: SourceId(
+                                                        0,
+                                                    ),
+                                                    start: 67,
+                                                    end: 69,
+                                                },
+                                            },
+                                        ],
                                         span: Span {
                                             source: SourceId(
                                                 0,
                                             ),
                                             start: 67,
-                                            end: 68,
+                                            end: 69,
                                         },
                                     },
                                 ),
@@ -151,8 +162,8 @@ SyntaxTree {
                                                     source: SourceId(
                                                         0,
                                                     ),
-                                                    start: 72,
-                                                    end: 77,
+                                                    start: 73,
+                                                    end: 78,
                                                 },
                                             },
                                         ],
@@ -160,21 +171,32 @@ SyntaxTree {
                                             source: SourceId(
                                                 0,
                                             ),
-                                            start: 72,
-                                            end: 77,
+                                            start: 73,
+                                            end: 78,
                                         },
                                     },
                                 ),
                                 Ref(
                                     PortRef {
-                                        boundary: true,
-                                        segments: [],
+                                        boundary: false,
+                                        segments: [
+                                            Name {
+                                                text: "out",
+                                                span: Span {
+                                                    source: SourceId(
+                                                        0,
+                                                    ),
+                                                    start: 82,
+                                                    end: 85,
+                                                },
+                                            },
+                                        ],
                                         span: Span {
                                             source: SourceId(
                                                 0,
                                             ),
-                                            start: 81,
-                                            end: 82,
+                                            start: 82,
+                                            end: 85,
                                         },
                                     },
                                 ),
@@ -187,7 +209,7 @@ SyntaxTree {
                                     0,
                                 ),
                                 start: 67,
-                                end: 82,
+                                end: 85,
                             },
                         },
                     ),
@@ -197,7 +219,7 @@ SyntaxTree {
                         0,
                     ),
                     start: 0,
-                    end: 84,
+                    end: 87,
                 },
             },
         ),

@@ -1509,7 +1509,7 @@ graph mixed : App {
     mode = job ; command = "cat" ; codec = lines
     effect = idempotent ; behavior = deterministic
   }
-  . -> first -> second -> .
+  in -> first -> second -> out
   first.err -> nothing ; first.exit -> nothing
   second.err -> nothing ; second.exit -> nothing
 }
@@ -1569,8 +1569,8 @@ graph inbound : App {
     effect = idempotent ; behavior = deterministic
   }
   operator relay { input in: text ; on in { out = data } }
-  . -> nothing
-  source.out -> relay -> . ; source.err -> nothing
+  in -> nothing
+  source.out -> relay -> out ; source.err -> nothing
   source.exit -> nothing
 }
 "#;
@@ -2230,7 +2230,7 @@ graph api : App {
     instance = { key = data }
   }
   operator relay { input in: text ; on in { out = "response" } }
-  server -> relay -> .
+  server -> relay -> out
   server.exit -> nothing
 }
 "#;
@@ -2291,7 +2291,7 @@ graph api : App {
     codec = text
   }
   operator relay { input in: text ; on in { out = data } }
-  server -> relay -> .
+  server -> relay -> out
   server.exit -> nothing
 }
 "#;

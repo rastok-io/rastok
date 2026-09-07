@@ -1,14 +1,14 @@
 lab guarded {
   simulation refereeing on app {
     scenario exports "a valid reading uplinks" {
-      mock uplink { on in { out = . } }
+      mock uplink { on in { out = .; exit = Exited { exit_code = 0; signal = null } } }
       app.in = {valid = true, reading = "flow 12"}
       expect "uplinked" app.out count == 1 where data == "flow 12"
       expect nothing app.err
     }
 
     scenario rejected "an invalid reading never uplinks" {
-      mock uplink { on in { out = . } }
+      mock uplink { on in { out = .; exit = Exited { exit_code = 0; signal = null } } }
       app.in = {valid = false, reading = "flow 13"}
       expect nothing uplink.in
       expect nothing app.out
@@ -18,7 +18,7 @@ lab guarded {
       mock uplink { on in { out = nothing } }
       app.in = {valid = true, reading = "flow 14"}
       advance duration("1s")
-      expect "the typed timeout" app.err count == 1 where data.kind == "TimeoutExpired"
+      expect "the typed timeout" app.err count == 1 where data is TimeoutExpired
       expect nothing app.out
     }
   }

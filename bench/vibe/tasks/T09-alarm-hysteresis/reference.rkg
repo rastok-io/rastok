@@ -1,5 +1,10 @@
 graph hysteresis : App {
+  input in: struct { value: int }
+  output out: struct { state: text }
+
   operator latch {
+    input in: struct { value: int }
+    output out: struct { state: text }
     var state : text = "normal"
     on in {
       state = data.value > 120 ? "tripped" : (data.value < 80 ? "normal" : state)
@@ -7,5 +12,5 @@ graph hysteresis : App {
     }
   }
 
-  . -> latch -> .
+  in -> latch -> out
 }

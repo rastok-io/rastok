@@ -5,7 +5,7 @@ const test = require("node:test");
 const layoutEngine = require("./graph_layout.js");
 
 function owner(id, parent, ports = []) {
-  return { id, parent, label: parent === null ? "App" : id, ports, aspects: [] };
+  return { id, parent, label: parent === null ? "App" : id, ports, extensions: [] };
 }
 
 function operator(id, ownerId, ports) {
@@ -251,72 +251,25 @@ test("explicit nothing drains remain local output ports", () => {
   assert.equal(routes.size, 0);
 });
 
-test("Graph handler choices reach boundary outputs without becoming mailboxes", () => {
+test("manager commands never create spatial nodes or ports", () => {
   const topology = {
     owners: [owner("owner:0", null, [
       { name: "in", direction: "input" },
-      { name: "done", direction: "output" },
-      { name: "next", direction: "output" },
-      { name: "expired", direction: "output" },
+      { name: "out", direction: "output" },
+      { name: "Loop.expired", direction: "output" },
     ])],
-    nodes: [{ ...operator("model", "owner:0", [
-      { name: "in", direction: "input" },
-      { name: "exit", direction: "output" },
-    ]), kind: "connector" }],
-    control_nodes: [{
-      id: "control:owner:0:loop",
-      owner: "owner:0",
-      kind: "control",
-      label: "Loop manager",
-      type: "control",
-      ports: [{ name: "fuel", direction: "output" }],
-      inspect_owner: "owner:0",
-    }],
-    edges: [edge(0, "boundary:input:in", "in", "model", "in")],
-    handler_relations: [
-      {
-        index: 1,
-        route: "@control:0:model.exit>done",
-        relation: "handler",
-        owner: "owner:0",
-        activation: "model.exit",
-        show_label: true,
-        source: { id: "model", port: "exit", kind: "node" },
-        target: { id: "boundary:output:done", port: "done", kind: "output", owner: "owner:0" },
-      },
-      {
-        index: 2,
-        route: "@control:0:model.exit>next",
-        relation: "temporal",
-        owner: "owner:0",
-        activation: "model.exit",
-        show_label: false,
-        source: { id: "model", port: "exit", kind: "node" },
-        target: { id: "boundary:output:next", port: "next", kind: "output", owner: "owner:0" },
-      },
-      {
-        index: 3,
-        route: "@control:0:loop>expired",
-        relation: "manager",
-        owner: "owner:0",
-        activation: "Loop fuel exhausted",
-        show_label: false,
-        source: { id: "control:owner:0:loop", port: "fuel", kind: "control" },
-        target: { id: "boundary:output:expired", port: "expired", kind: "output", owner: "owner:0" },
-      },
-    ],
+    nodes: [operator("judge", "owner:0", [
+      { name: "in", direction: "input" }, { name: "revised", direction: "output" },
+    ])],
+    edges: [edge(0, "boundary:input:in", "in", "judge", "in")],
+    commands: [{ source: "judge.revised", owner: "App", command: "Loop.next", cases: [] }],
   };
   const { graph, routes } = render(topology);
-  assert.equal(graph.edges.length, 4);
-  assert.equal(graph.byId.get("control:owner:0:loop").kind, "control");
-  assert.equal(graph.byId.get("boundary:output:done").kind, "boundary");
-  assert.equal(routes.size, 4);
-  assert.deepEqual(
-    graph.edges.filter((candidate) => candidate.relation).map((candidate) => candidate.relation),
-    ["handler", "temporal", "manager"],
-  );
-  assert.ok(graph.edges.filter((candidate) => candidate.relation).every((candidate) =>
-    candidate.mailbox === undefined && candidate.queued_count === undefined));
+  assert.equal(graph.edges.length, 1);
+  assert.equal(routes.size, 1);
+  assert.ok(graph.nodes.every((node) => node.kind === "operator" || node.kind === "boundary"));
+  assert.ok(graph.nodes.every((node) => node.ports.every((port) =>
+    !["Loop.next", "Loop.again", "Loop.done"].includes(port.name))));
 });
 
 test("Graph outputs keep a non-overlapping side band without synthetic sinks", () => {

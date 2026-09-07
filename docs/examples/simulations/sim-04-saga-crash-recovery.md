@@ -1,11 +1,11 @@
 # Reference simulation 4 — saga compensation × crash recovery (the fold)
 
-> **Status : Reference derivation — not yet executable.** The expected trace
-> is derived by hand from
-> [delivery-semantics.md](../../spec/delivery-semantics.md) §5-§7 and
-> [effects-and-sagas.md](../../spec/effects-and-sagas.md). It is a
-> conformance target for explicit typed rollback routing, the state fold, recovery during
-> rollback and idempotent compensation replay.
+> **Historical pre-v16 design derivation, not executable or normative.** The
+> source and hand-derived trace below use removed `on compensate`, guarded
+> wiring and the previous Saga proposal. They are preserved as design history,
+> not accepted syntax or a claim of recovery qualification. The current
+> [Saga direction](../../spec/effects-and-sagas.md) is deferred by name and
+> requires its own contract and evidence before implementation.
 
 ## 1. What this sim exercises
 

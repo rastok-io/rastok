@@ -156,11 +156,11 @@ fn probe(name: &str, url: &str, codec: &str, timeout: &str, max_body: &str) -> S
     input in: struct { text: text }
     on in { out = data.text }
   }
-  . -> body -> client -> .
+  in -> body -> client -> out
   client.exit -> nothing
 "#
     } else {
-        "\n  . -> client -> .\n  client.exit -> nothing\n"
+        "\n  in -> client -> out\n  client.exit -> nothing\n"
     };
     format!(
         r#"
@@ -201,8 +201,8 @@ graph pair : App {{
     input in: struct {{ a: text, b: text }}
     on in {{ out = data.b }}
   }}
-  . -> a -> left -> .
-  . -> b -> right -> .
+  in -> a -> left -> out
+  in -> b -> right -> out
   left.exit -> nothing
   right.exit -> nothing
 }}
@@ -289,7 +289,7 @@ graph authenticated : App {
     versions = ["http/1.1"]
     effect = idempotent ; behavior = deterministic
   }
-  . -> client -> .
+  in -> client -> out
   client.exit -> nothing
 }
 

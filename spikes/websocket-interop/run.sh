@@ -18,10 +18,12 @@ trap finish EXIT INT TERM
 
 sed "s/__PORT__/$port/g" "$here/gateway.rkg.in" > "$tmp/gateway.rkg"
 cargo build --quiet --manifest-path "$repo/Cargo.toml" -p rastok --features hosted-websocket
+# Validate before the bounded I/O probe; cold host loading is not a protocol budget.
+"$repo/target/debug/rastok" check "$tmp/gateway.rkg" >"$tmp/check.out"
 "$repo/target/debug/rastok" run "$tmp/gateway.rkg" >"$tmp/server.out" 2>"$tmp/server.err" &
 server_pid=$!
 
-python3 - "$port" <<'PY'
+if ! python3 - "$port" <<'PY'
 import socket
 import sys
 import time
@@ -37,6 +39,10 @@ while True:
             raise
         time.sleep(0.02)
 PY
+then
+  cat "$tmp/server.err" >&2
+  exit 1
+fi
 
 (cd "$here" && npm ci --silent)
 node "$here/node-client.mjs" "ws://127.0.0.1:$port/echo" "node-independent"

@@ -41,7 +41,7 @@ graph probe : App {
     }
   }
 
-  . -> relay -> shell -> .
+  in -> relay -> shell -> out
   shell.err -> nothing
   shell.exit -> nothing
 }
@@ -130,7 +130,7 @@ fn raw_join(bounded: bool) -> ExecutionPlan {
     };
     let bound = if bounded { "last 2" } else { "" };
     let expiry_edge = if bounded {
-        "pair.expired -> .expired"
+        "pair.expired -> expired"
     } else {
         ""
     };
@@ -148,9 +148,9 @@ fn raw_join(bounded: bool) -> ExecutionPlan {
     {expiry_ports}
     on (left, right) {bound} {{ out = left.data }}
   }}
-  .left -> pair.left
-  .right -> pair.right
-  pair.out -> .out
+  left -> pair.left
+  right -> pair.right
+  pair.out -> out
   {expiry_edge}
 }}
 "#
@@ -427,7 +427,7 @@ graph probe : App {
     }
   }
 
-  . -> o -> .
+  in -> o -> out
 }
 "#;
     compile(
@@ -453,7 +453,7 @@ graph g : App {
     }
   }
 
-  . -> o -> .
+  in -> o -> out
 }
 "#;
     let compilation = compile(
@@ -483,7 +483,7 @@ graph g : App {
     on in { out = "done" }
   }
 
-  . -> o -> .
+  in -> o -> out
 }
 "#;
     let compilation = compile(
@@ -1177,7 +1177,7 @@ graph g : App {
     }
   }
 
-  . -> o -> .
+  in -> o -> out
 }
 "#;
     let bag = compile(
@@ -1208,7 +1208,7 @@ graph probe : App {
     }
   }
 
-  . -> o -> .
+  in -> o -> out
 }
 "#;
     let bag = compile(
@@ -1270,7 +1270,7 @@ fn a_process_plan_cannot_omit_the_effective_err_codec() {
 
 #[test]
 fn a_boundary_input_cannot_be_an_edge_target() {
-    // `operator.out -> .request` with `request` declared as a graph
+    // `operator.out -> request` with `request` declared as a graph
     // INPUT: the boundary convention inverts the node one, and the
     // checker refuses this shape — the type must too.
     let mut plan = raw_probe();
@@ -1409,8 +1409,8 @@ graph probe : App {
     }
   }
 
-  . -> relay.exit
-  relay -> .
+  in -> relay.exit
+  relay -> out
 }
 "#;
     compile(
@@ -1642,7 +1642,7 @@ fn an_edge_to_an_unknown_port_refuses() {
     );
 }
 
-const TWO_TRIGGERS: &str = "graph g : App {\n  operator o {\n    input a: text\n    input b: text\n    on a { out = data }\n    on b { out = data }\n  }\n  . -> o.a\n  . -> o.b\n  o -> .\n}\n";
+const TWO_TRIGGERS: &str = "graph g : App {\n  operator o {\n    input a: text\n    input b: text\n    on a { out = data }\n    on b { out = data }\n  }\n  in -> o.a\n  in -> o.b\n  o -> out\n}\n";
 
 #[test]
 fn a_non_adjacent_duplicate_wins_over_the_broken_order() {
@@ -1742,10 +1742,10 @@ graph joined : App {
     output expired: JoinExpiry
     on (left, right) within duration("1s") last 2 { out = left.data }
   }
-  .left -> pair.left
-  .right -> pair.right
-  pair.out -> .out
-  pair.expired -> .expired
+  left -> pair.left
+  right -> pair.right
+  pair.out -> out
+  pair.expired -> expired
 }
 "#;
     let registry = ContractCatalog::try_m0().expect("the standard catalogue holds");
@@ -1931,9 +1931,9 @@ graph attributed : App {
     on in { out = meta.app.token }
   }
 
-  .left -> mark_left -> pair.left
-  .right -> mark_right -> pair.right
-  pair.out -> read_pick -> .out
+  left -> mark_left -> pair.left
+  right -> mark_right -> pair.right
+  pair.out -> read_pick -> out
 }
 "#;
     let bag = compile(
@@ -2301,7 +2301,7 @@ graph g : App {
     on in where data is text { out = data }
   }
 
-  . -> o -> .
+  in -> o -> out
 }
 "#;
     let compilation = compile(

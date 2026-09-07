@@ -1,44 +1,34 @@
-# Rastok DSL — Examples
+# Rastok DSL — current fixtures and historical design sketches
 
-Polished `.rkg` snippets that exercise the syntax conventions
-([`docs/spec/grammar.md`](../spec/grammar.md) § *Syntax conventions*)
-and its formal grammar.
+## Current v16 entry points
 
-The model behind the syntax is laid out in [WHITEPAPER.md](../../WHITEPAPER.md) :
-the two Node families (Operator vs Connector), the flat declarative
-shape (`input`, `output`, `var`, `on`, with the default `in` / `out` /
-`err` ports), the value-type tree (`variant`, scalars, `struct` /
-`map` / `array`), the three dynamic dispatch primitives, and the
-orthogonal instance-key and lifetime model. Examples below exercise
-these concepts concretely. Stdlib aliases (`HttpClient`, `Process`,
-`File`, …) name Connector types in the target catalogue;
-the primitive `operator` / `connector` keywords stand on their own
-when no alias fits.
+Use [grammar.md](../spec/grammar.md) and the
+[v16 syntax card](../../bench/vibe/prompts/v3.md) for authoring. The current
+ontology is Node / Graph / Executor / Connector / Extension: Graphs own no
+application handlers, all productible outputs have explicit destinations,
+and Loop uses qualified manager commands rather than spatial feedback ports.
 
-The parser is a forward lexeme stream. Categorical plan-package v15 retains
-v9's lexical owners, Node-owned instance policy, scoped edges and phased
-immutable expressions plus the complete v7 M1.3 type/value/expression
-registry, extended by H4.1's `media_type`; it also carries stable Connector
-ids, required roles, and exchange lifecycles. As of 2026-08-26,
-`Process(mode = job)` with `lines`/`jsonl`/`bytes`, multiport completion,
-the three metadata zones, `IDENT!` frontends, structural and tagged types,
-typed narrowing, all five Graph/Node lifetime profiles, and the one-file
-`File(read|replace)` Driver execute. The former
-named-partition P0-P3 implementation is superseded by the
-`instance`/`lifetime` model. Hierarchical routing, keyed/nested Graph
-dispatch, Graph lifecycle facts, explicit bounded closing, and bounded
-presence joins execute. R7 has audited the removed surface and physical
-placement neutrality without claiming a cluster runtime. Graph lifecycle
-handlers outside an admitted aspect, File append/watch/directory profiles,
-nested Loop owners, direct spatial Loop-boundary verdicts, Process service
-mode, and guest engines are still pending or guarded. Closed M1.7 executes
-immediate or delayed root-Graph Loops across ordinary flattened nested Graphs
-from their replay-derived fuel fold, composes their wakeups with ordinary
-instance lifetimes, and admits the first proof-only direct integer countdown
-after a `no_std` certificate check. Thus these are
-parser- and design-reference snippets, not a claim
-that every section runs today. The small executable fixtures under
-[`examples/`](../../examples/) are the run/simulate proofs.
+The checked examples are:
+
+- [echo](../../examples/echo.rkg) and [JSONL](../../examples/jsonl.rkg):
+  Process Calls with explicit output dispositions and deterministic Lab traces;
+- [gauge](../../examples/gauge.rkg): typed data and unchanged semantic identity;
+- [countdown](../../examples/countdown.rkg): an Operator Loop with a verified measure;
+- [keyed retry](../../examples/keyed-retry.rkg): a Graph Loop, two isolated
+  conversations and explicitly routed Call outcomes;
+- [WebSocket gateway](codex-websocket-gateway.rkg): the checked session boundary.
+
+Their qualification is recorded in [R9](../architecture/rework-r9-qualification.md).
+
+## Historical designs below — not the executable v16 surface
+
+The remaining sections preserve the pre-v16 integration sketches. They include
+unimplemented guests, storage and service profiles as well as superseded
+implicit destinations and interface inference. Their prose, syntax and traces
+are historical, not extensions to the current grammar. In particular, they
+must not be copied as current authoring examples or counted as passing fixtures.
+Use the entry points above; future integration work needs its own checked
+example and contract rather than treating a sketch as an executable promise.
 
 ## 1. Minimal — HTTP echo + log
 

@@ -23,7 +23,7 @@ use rastok::{connectors, lab, node};
 use std::io::{BufRead, Write as _};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: rastok check <file.rkg>...\n       rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs] [--ui [--ui-port <port>]]\n       rastok simulate <file.rkg>... [--deployment <profile.json>] [--golden <dir>] [--bless] [--ui [--ui-port <port>]]\n       rastok --resolve-open-api <project-dir> [--check]";
+const USAGE: &str = "usage: rastok check <file.rkg>...\n       rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs]\n       rastok simulate <file.rkg>... [--deployment <profile.json>] [--golden <dir>] [--bless] [--ui [--ui-port <port>]]\n       rastok --resolve-open-api <project-dir> [--check]";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct UiOptions {
@@ -82,7 +82,7 @@ fn main() -> ExitCode {
                 .iter()
                 .any(|argument| matches!(argument.as_str(), "--ui" | "--ui-port"))
             {
-                eprintln!("error: --ui is available only for `run` and `simulate`");
+                eprintln!("error: --ui is available only for `simulate`");
                 return ExitCode::from(2);
             }
             check(paths)
@@ -92,7 +92,6 @@ fn main() -> ExitCode {
             let mut file_root: Option<std::path::PathBuf> = None;
             let mut deployment: Option<std::path::PathBuf> = None;
             let mut json_logs = false;
-            let mut ui = UiOptions::default();
             let mut rest = paths.iter();
             while let Some(argument) = rest.next() {
                 match argument.as_str() {
@@ -117,17 +116,11 @@ fn main() -> ExitCode {
                         eprintln!("error: --json-logs may be supplied only once");
                         return ExitCode::from(2);
                     }
-                    "--ui" => {
-                        if let Err(error) = ui.enable() {
-                            eprintln!("error: {error}");
-                            return ExitCode::from(2);
-                        }
-                    }
-                    "--ui-port" => {
-                        if let Err(error) = ui.set_port(rest.next().map(String::as_str)) {
-                            eprintln!("error: {error}");
-                            return ExitCode::from(2);
-                        }
+                    "--ui" | "--ui-port" => {
+                        eprintln!(
+                            "error: --ui is available only for `simulate`; real-I/O experiments are not yet available in the visual debugger"
+                        );
+                        return ExitCode::from(2);
                     }
                     _ => files.push(argument.clone()),
                 }
@@ -144,14 +137,7 @@ fn main() -> ExitCode {
                 }
                 None => None,
             };
-            let ui = match ui.validate() {
-                Ok(ui) => ui,
-                Err(error) => {
-                    eprintln!("error: {error}");
-                    return ExitCode::from(2);
-                }
-            };
-            run(&files, file_root.as_deref(), boot.as_ref(), json_logs, ui)
+            run(&files, file_root.as_deref(), boot.as_ref(), json_logs)
         }
         "simulate" => {
             let mut files = Vec::new();
@@ -350,54 +336,13 @@ impl HostedTimeSource {
     }
 }
 
-/// Physical UI suspension excluded from the hosted-to-logical time mapping.
-///
-/// The VM remains the sole owner of logical time. This adapter only prevents
-/// time spent under debugger control from being presented as elapsed runtime
-/// when execution resumes.
-#[cfg(feature = "hosted-ui")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct UiLogicalClock {
-    hosted_offset: i64,
-    frozen_at: Option<i64>,
-}
-
-#[cfg(feature = "hosted-ui")]
-impl UiLogicalClock {
-    fn start_paused(hosted_now: i64, logical_now: i64) -> Self {
-        Self {
-            hosted_offset: hosted_now.saturating_sub(logical_now),
-            frozen_at: Some(logical_now),
-        }
-    }
-
-    fn logical_now(self, hosted_now: i64) -> i64 {
-        self.frozen_at
-            .unwrap_or_else(|| hosted_now.saturating_sub(self.hosted_offset))
-    }
-
-    fn pause(&mut self, hosted_now: i64) {
-        if self.frozen_at.is_none() {
-            self.frozen_at = Some(self.logical_now(hosted_now));
-        }
-    }
-
-    fn resume(&mut self, hosted_now: i64) {
-        if let Some(logical_now) = self.frozen_at.take() {
-            self.hosted_offset = hosted_now.saturating_sub(logical_now);
-        }
-    }
-}
-
 /// Runs the App against the real Drivers: each stdin line is one
-/// text submission; boundary envelopes print to stdout, root errors
-/// to stderr.
+/// text submission; public boundary envelopes print to stdout.
 fn run(
     paths: &[String],
     file_root: Option<&std::path::Path>,
     boot: Option<&rastok::deployment::BootBindings>,
     json_logs: bool,
-    ui: UiOptions,
 ) -> ExitCode {
     let Ok((compilation, _)) = load(paths) else {
         return ExitCode::FAILURE;
@@ -484,25 +429,6 @@ fn run(
         let _ = lines.send(None);
     });
     let mut printed_outputs = 0;
-    #[cfg(feature = "hosted-ui")]
-    if ui.enabled {
-        return run_with_ui(
-            &compilation,
-            boot,
-            ui,
-            &time,
-            &mut vm,
-            &mut journal,
-            &mut world,
-            &mut log_projector,
-            &inbound_path,
-            polls_inbound,
-            &input,
-            &mut printed_outputs,
-        );
-    }
-    #[cfg(not(feature = "hosted-ui"))]
-    let _ = ui;
     let mut stdin_open = true;
     loop {
         let mut progressed = false;
@@ -598,270 +524,6 @@ fn drive_boundary<'plan>(
 }
 
 #[cfg(feature = "hosted-ui")]
-#[allow(clippy::too_many_arguments)]
-fn run_with_ui<'plan>(
-    compilation: &'plan Compilation,
-    boot: Option<&rastok::deployment::BootBindings>,
-    options: UiOptions,
-    time: &HostedTimeSource,
-    vm: &mut Vm<'plan>,
-    journal: &mut MemJournal,
-    world: &mut connectors::RuntimeBindings<'plan>,
-    log_projector: &mut Option<rastok::observability::JournalLogProjector>,
-    inbound_path: &node::Path,
-    polls_inbound: bool,
-    input: &std::sync::mpsc::Receiver<Option<std::io::Result<String>>>,
-    printed_outputs: &mut usize,
-) -> ExitCode {
-    use rastok::ui::{ActivityView, ExecutionState, FaultView, UiCommand, UiServer};
-
-    let mut state = ExecutionState::Paused;
-    let mut ui_time = UiLogicalClock::start_paused(time.logical_now(), vm.now());
-    let mut revision = 0_u64;
-    let mut fault: Option<FaultView> = None;
-    let mut activity: Option<ActivityView> = None;
-    let mut boundary_ordinal = 0_u64;
-    let initial = match rastok::ui::snapshot(rastok::ui::SnapshotInput {
-        revision,
-        mode: "run",
-        state,
-        plan: &compilation.plan,
-        definitions: &compilation.source_definitions,
-        vm,
-        journal,
-        cost_profile: boot.and_then(rastok::deployment::BootBindings::cost_profile),
-        fault: None,
-        activity: None,
-        scenario: None,
-        branch: 0,
-        boundary: boundary_ordinal,
-    }) {
-        Ok(snapshot) => snapshot,
-        Err(error) => {
-            eprintln!("error: the initial UI view could not be serialized: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let mut server = match UiServer::start(options.port, initial) {
-        Ok(server) => server,
-        Err(error) => {
-            eprintln!("error: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
-    println!("ui: {}", server.url());
-
-    let mut stdin_open = true;
-    let mut step_requested = false;
-    let mut close_requested = false;
-    loop {
-        let records_before = journal.records().len();
-        let observations_before = vm.observations().len();
-        let mut dirty = false;
-        while let Some(command) = server.try_command() {
-            match command {
-                UiCommand::Resume | UiCommand::RunToCompletion
-                    if !matches!(state, ExecutionState::Faulted | ExecutionState::Completed) =>
-                {
-                    ui_time.resume(time.logical_now());
-                    state = ExecutionState::Running;
-                    step_requested = false;
-                    dirty = true;
-                }
-                UiCommand::Pause if state == ExecutionState::Running => {
-                    state = if vm.awaiting_outbound_calls() == 0 {
-                        ExecutionState::Paused
-                    } else {
-                        ExecutionState::PauseRequested
-                    };
-                    dirty = true;
-                }
-                UiCommand::Step if state == ExecutionState::Paused => {
-                    step_requested = true;
-                    dirty = true;
-                }
-                UiCommand::RetryStep
-                    if state == ExecutionState::Faulted
-                        && fault.as_ref().is_some_and(|fault| fault.retryable) =>
-                {
-                    fault = None;
-                    state = ExecutionState::Paused;
-                    step_requested = true;
-                    dirty = true;
-                }
-                UiCommand::Close => close_requested = true,
-                UiCommand::NextScenarioAction
-                | UiCommand::RunUntilAssertion
-                | UiCommand::ResetScenario
-                | UiCommand::SelectScenario { .. }
-                | UiCommand::BranchFrom { .. }
-                | UiCommand::Pause
-                | UiCommand::Step
-                | UiCommand::RetryStep
-                | UiCommand::Resume
-                | UiCommand::RunToCompletion => {}
-            }
-        }
-        if close_requested {
-            return if state == ExecutionState::Faulted {
-                ExitCode::FAILURE
-            } else {
-                ExitCode::SUCCESS
-            };
-        }
-
-        let mut progressed = false;
-        let executing_one = step_requested && state == ExecutionState::Paused;
-        if state == ExecutionState::Running || executing_one {
-            match admit_one_run_input(vm, journal, world, inbound_path, input, &mut stdin_open) {
-                Ok(admitted) => progressed |= admitted,
-                Err(error) => {
-                    fault = Some(FaultView {
-                        message: error,
-                        help: String::from(
-                            "The refused admission committed nothing. Correct the input or close this run.",
-                        ),
-                        commit: String::from("the refused admission committed no input fact"),
-                        retryable: false,
-                    });
-                    state = ExecutionState::Faulted;
-                    step_requested = false;
-                    dirty = true;
-                }
-            }
-            if state != ExecutionState::Faulted {
-                match vm.step_with_bindings(journal, world) {
-                    Ok(ran) => {
-                        progressed |= ran;
-                        dirty |= ran;
-                        if !ran && state == ExecutionState::Running {
-                            let target = ui_time.logical_now(time.logical_now());
-                            if target > vm.now() {
-                                match vm.advance(journal, world, target) {
-                                    Ok(()) => {}
-                                    Err(error) => {
-                                        fault = Some(boundary_fault(error.to_string()));
-                                        state = ExecutionState::Faulted;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        fault = Some(transaction_fault(error.to_string()));
-                        state = ExecutionState::Faulted;
-                        dirty = true;
-                    }
-                }
-            }
-            if state != ExecutionState::Faulted {
-                match pump_run_boundaries(vm, journal, world, state == ExecutionState::Running) {
-                    Ok(boundary) => {
-                        progressed |= boundary;
-                        dirty |= boundary;
-                    }
-                    Err(error) => {
-                        fault = Some(boundary_fault(error));
-                        state = ExecutionState::Faulted;
-                        dirty = true;
-                    }
-                }
-            }
-            if executing_one && state != ExecutionState::Faulted {
-                step_requested = false;
-                // Step starts from an already-safe pause. It exposes an open
-                // Call at that boundary instead of silently turning into the
-                // stronger wait-for-return contract of an explicit Pause.
-                state = ExecutionState::Paused;
-                dirty = true;
-            }
-        } else if matches!(
-            state,
-            ExecutionState::Paused | ExecutionState::PauseRequested
-        ) {
-            // A durable open must be offered to its Driver, and Session
-            // transports retain their bounded contract, even while scheduling
-            // is paused. No completion transaction runs here.
-            match vm.pump(journal, world) {
-                Ok(report) => {
-                    if report.settled > 0
-                        || !report.rejected.is_empty()
-                        || !report.rejected_sessions.is_empty()
-                    {
-                        dirty = true;
-                        progressed = true;
-                    }
-                    for (_, reason) in &report.rejected {
-                        eprintln!("err: a reply was refused before closure: {reason}");
-                    }
-                }
-                Err(error) => {
-                    fault = Some(boundary_fault(error.to_string()));
-                    state = ExecutionState::Faulted;
-                    dirty = true;
-                }
-            }
-            if state == ExecutionState::PauseRequested && vm.awaiting_outbound_calls() == 0 {
-                state = ExecutionState::Paused;
-                dirty = true;
-            }
-        }
-
-        if state == ExecutionState::Running
-            && !stdin_open
-            && !polls_inbound
-            && !vm.has_open_obligations()
-            && !progressed
-        {
-            state = ExecutionState::Completed;
-            dirty = true;
-        }
-        if state != ExecutionState::Running {
-            ui_time.pause(time.logical_now());
-        }
-        if let Some(projector) = log_projector {
-            let batch = projector.project_journal(journal);
-            dirty |= batch.queued > 0 || batch.dropped > 0;
-        }
-        let before_outputs = *printed_outputs;
-        print_new_outputs(vm, printed_outputs);
-        dirty |= before_outputs != *printed_outputs;
-        dirty |= records_before != journal.records().len()
-            || observations_before != vm.observations().len();
-        if records_before != journal.records().len() {
-            boundary_ordinal = boundary_ordinal.saturating_add(1);
-            activity =
-                ActivityView::journal_change(journal, records_before, Some(boundary_ordinal));
-        }
-
-        if dirty {
-            revision = revision.saturating_add(1);
-            match rastok::ui::snapshot(rastok::ui::SnapshotInput {
-                revision,
-                mode: "run",
-                state,
-                plan: &compilation.plan,
-                definitions: &compilation.source_definitions,
-                vm,
-                journal,
-                cost_profile: boot.and_then(rastok::deployment::BootBindings::cost_profile),
-                fault: fault.as_ref(),
-                activity: activity.as_ref(),
-                scenario: None,
-                branch: 0,
-                boundary: boundary_ordinal,
-            }) {
-                Ok(snapshot) => server.publish(snapshot),
-                Err(error) => eprintln!("warning: the UI view was dropped: {error}"),
-            }
-        } else {
-            server.flush();
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-    }
-}
-
-#[cfg(feature = "hosted-ui")]
 fn transaction_fault(message: String) -> rastok::ui::FaultView {
     rastok::ui::FaultView {
         message,
@@ -885,63 +547,6 @@ fn boundary_fault(message: String) -> rastok::ui::FaultView {
         ),
         retryable: false,
     }
-}
-
-#[cfg(feature = "hosted-ui")]
-fn admit_one_run_input<'plan>(
-    vm: &mut Vm<'plan>,
-    journal: &mut MemJournal,
-    world: &mut connectors::RuntimeBindings<'plan>,
-    inbound_path: &node::Path,
-    input: &std::sync::mpsc::Receiver<Option<std::io::Result<String>>>,
-    stdin_open: &mut bool,
-) -> Result<bool, String> {
-    if *stdin_open {
-        match input.try_recv() {
-            Ok(Some(Ok(line))) => {
-                vm.inject(journal, cli_submission(inbound_path, line))
-                    .map_err(|error| format!("the submission was refused: {error}"))?;
-                return Ok(true);
-            }
-            Ok(Some(Err(error))) => return Err(format!("stdin: {error}")),
-            Ok(None) => *stdin_open = false,
-            Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => *stdin_open = false,
-        }
-    }
-    world
-        .pump_inbound(vm, journal)
-        .map(|report| report.is_some())
-        .map_err(|error| error.to_string())
-}
-
-#[cfg(feature = "hosted-ui")]
-fn pump_run_boundaries<'plan>(
-    vm: &mut Vm<'plan>,
-    journal: &mut MemJournal,
-    world: &mut connectors::RuntimeBindings<'plan>,
-    poll_inbound_protocols: bool,
-) -> Result<bool, String> {
-    let mut progressed = false;
-    if poll_inbound_protocols {
-        let responses = world
-            .pump_inbound_call_responses(vm)
-            .map_err(|error| error.to_string())?;
-        let timeouts = world
-            .pump_inbound_call_timeouts(vm)
-            .map_err(|error| error.to_string())?;
-        let events = world
-            .pump_inbound_call_events(vm)
-            .map_err(|error| error.to_string())?;
-        progressed |= responses.started > 0 || timeouts.started > 0 || events.queued > 0;
-    }
-    let report = vm.pump(journal, world).map_err(|error| error.to_string())?;
-    for (_, reason) in &report.rejected {
-        eprintln!("err: a reply was refused before closure: {reason}");
-    }
-    progressed |=
-        report.settled > 0 || !report.rejected.is_empty() || !report.rejected_sessions.is_empty();
-    Ok(progressed)
 }
 
 fn cli_submission(inbound_path: &node::Path, line: String) -> InboundSubmission {
@@ -1077,148 +682,6 @@ fn simulate(
 }
 
 #[cfg(feature = "hosted-ui")]
-#[derive(Debug, Clone)]
-enum SimulationReplayOperation {
-    NextAction,
-    StepTransaction,
-    PollWorld,
-}
-
-#[cfg(feature = "hosted-ui")]
-#[derive(Debug, Clone)]
-struct SimulationBoundaryCheckpoint {
-    operation_count: usize,
-    records: Vec<rastok::journal::Record>,
-    inspection: rastok::runtime::vm::VmInspection,
-    observations: Vec<rastok::runtime::vm::Observed>,
-    logical_time: i64,
-    next_action: usize,
-    quiescent: bool,
-    failures: Vec<String>,
-    activity: Option<rastok::ui::ActivityView>,
-}
-
-#[cfg(feature = "hosted-ui")]
-#[derive(Debug, Clone)]
-struct SimulationReplayBranch {
-    simulation: String,
-    scenario: String,
-    operations: Vec<SimulationReplayOperation>,
-    checkpoints: std::collections::BTreeMap<u64, SimulationBoundaryCheckpoint>,
-}
-
-#[cfg(feature = "hosted-ui")]
-impl SimulationReplayBranch {
-    fn initial(session: &lab::ScenarioSession<'_, '_>) -> Self {
-        let mut checkpoints = std::collections::BTreeMap::new();
-        checkpoints.insert(
-            0,
-            SimulationBoundaryCheckpoint {
-                operation_count: 0,
-                records: session.journal().records().to_vec(),
-                inspection: session.vm().inspection(),
-                observations: session.vm().observations().to_vec(),
-                logical_time: session.vm().now(),
-                next_action: session.next_action_index(),
-                quiescent: session.is_quiescent(),
-                failures: session.failures().to_vec(),
-                activity: None,
-            },
-        );
-        Self {
-            simulation: session.simulation().to_owned(),
-            scenario: session.scenario().to_owned(),
-            operations: Vec::new(),
-            checkpoints,
-        }
-    }
-
-    fn retain(
-        &mut self,
-        boundary: u64,
-        session: &lab::ScenarioSession<'_, '_>,
-        activity: Option<&rastok::ui::ActivityView>,
-    ) {
-        self.checkpoints.insert(
-            boundary,
-            SimulationBoundaryCheckpoint {
-                operation_count: self.operations.len(),
-                records: session.journal().records().to_vec(),
-                inspection: session.vm().inspection(),
-                observations: session.vm().observations().to_vec(),
-                logical_time: session.vm().now(),
-                next_action: session.next_action_index(),
-                quiescent: session.is_quiescent(),
-                failures: session.failures().to_vec(),
-                activity: activity.cloned(),
-            },
-        );
-    }
-
-    fn prefix(&self, through: u64) -> Option<Self> {
-        let operation_count = self.checkpoints.get(&through)?.operation_count;
-        Some(Self {
-            simulation: self.simulation.clone(),
-            scenario: self.scenario.clone(),
-            operations: self.operations[..operation_count].to_vec(),
-            checkpoints: self
-                .checkpoints
-                .range(..=through)
-                .map(|(boundary, checkpoint)| (*boundary, checkpoint.clone()))
-                .collect(),
-        })
-    }
-}
-
-#[cfg(feature = "hosted-ui")]
-fn replay_simulation_boundary<'plan>(
-    compilation: &'plan Compilation,
-    boot: Option<&rastok::deployment::BootBindings>,
-    simulation: &str,
-    scenario: &str,
-    branch: &SimulationReplayBranch,
-    boundary: u64,
-) -> Result<lab::ScenarioSession<'plan, 'plan>, String> {
-    let checkpoint = branch
-        .checkpoints
-        .get(&boundary)
-        .ok_or_else(|| format!("branch has no retained boundary B{boundary}"))?;
-    let mut replayed = recreate_scenario(compilation, simulation, scenario, boot)?;
-    for operation in &branch.operations[..checkpoint.operation_count] {
-        match operation {
-            SimulationReplayOperation::NextAction => {
-                if replayed.next_action()?.is_none() {
-                    return Err(String::from(
-                        "the retained replay recipe advanced beyond the authored scenario",
-                    ));
-                }
-            }
-            SimulationReplayOperation::StepTransaction => {
-                replayed
-                    .step_transaction()
-                    .map_err(|error| error.to_string())?;
-            }
-            SimulationReplayOperation::PollWorld => {
-                replayed.poll_world()?;
-            }
-        }
-    }
-    let exact = replayed.journal().records() == checkpoint.records
-        && replayed.vm().inspection() == checkpoint.inspection
-        && replayed.vm().observations() == checkpoint.observations
-        && replayed.vm().now() == checkpoint.logical_time
-        && replayed.next_action_index() == checkpoint.next_action
-        && replayed.is_quiescent() == checkpoint.quiescent
-        && replayed.failures() == checkpoint.failures;
-    if !exact {
-        return Err(format!(
-            "deterministic replay diverged at B{boundary}; the current simulation was left unchanged"
-        ));
-    }
-    Ok(replayed)
-}
-
-#[cfg(feature = "hosted-ui")]
 fn simulate_with_ui(
     compilation: &Compilation,
     golden_dir: Option<&std::path::Path>,
@@ -1261,10 +724,8 @@ fn simulate_with_ui(
     let mut fault: Option<FaultView> = None;
     let mut activity: Option<ActivityView> = None;
     let mut boundary_ordinal = 0_u64;
-    let mut branch = 0_u64;
-    let mut next_branch = 1_u64;
-    let mut replay_branches =
-        std::collections::BTreeMap::from([(branch, SimulationReplayBranch::initial(&session))]);
+    let mut session_id = 0_u64;
+    let mut next_session_id = 1_u64;
     let initial = match rastok::ui::snapshot(rastok::ui::SnapshotInput {
         revision,
         mode: "simulate",
@@ -1277,7 +738,7 @@ fn simulate_with_ui(
         fault: None,
         activity: None,
         scenario: Some(simulation_view(compilation, &session, &[])),
-        branch,
+        session: session_id,
         boundary: boundary_ordinal,
     }) {
         Ok(snapshot) => snapshot,
@@ -1356,12 +817,6 @@ fn simulate_with_ui(
                     let action_records_before = session.journal().records().len();
                     match session.next_action() {
                         Ok(Some(action)) => {
-                            let replay = replay_branches
-                                .entry(branch)
-                                .or_insert_with(|| SimulationReplayBranch::initial(&session));
-                            replay
-                                .operations
-                                .push(SimulationReplayOperation::NextAction);
                             fault = None;
                             reported = false;
                             boundary_ordinal = boundary_ordinal.saturating_add(1);
@@ -1371,7 +826,6 @@ fn simulate_with_ui(
                                 action_records_before,
                                 boundary_ordinal,
                             ));
-                            replay.retain(boundary_ordinal, &session, activity.as_ref());
                             activity_decided = true;
                         }
                         Ok(None) => {}
@@ -1397,10 +851,8 @@ fn simulate_with_ui(
                     ) {
                         Ok(recreated) => {
                             session = recreated;
-                            branch = next_branch;
-                            next_branch = next_branch.saturating_add(1);
-                            replay_branches
-                                .insert(branch, SimulationReplayBranch::initial(&session));
+                            session_id = next_session_id;
+                            next_session_id = next_session_id.saturating_add(1);
                             state = ExecutionState::Paused;
                             fault = None;
                             activity = None;
@@ -1421,10 +873,8 @@ fn simulate_with_ui(
                     match recreate_scenario(compilation, &simulation, &scenario, boot) {
                         Ok(selected) => {
                             session = selected;
-                            branch = next_branch;
-                            next_branch = next_branch.saturating_add(1);
-                            replay_branches
-                                .insert(branch, SimulationReplayBranch::initial(&session));
+                            session_id = next_session_id;
+                            next_session_id = next_session_id.saturating_add(1);
                             state = ExecutionState::Paused;
                             fault = None;
                             activity = None;
@@ -1449,88 +899,12 @@ fn simulate_with_ui(
                     }
                     dirty = true;
                 }
-                UiCommand::BranchFrom {
-                    branch: source_branch,
-                    boundary: source_boundary,
-                } if matches!(
-                    state,
-                    ExecutionState::Paused | ExecutionState::Faulted | ExecutionState::Completed
-                ) =>
-                {
-                    let rebuilt = replay_branches
-                        .get(&source_branch)
-                        .ok_or_else(|| format!("unknown simulation branch {source_branch}"))
-                        .and_then(|source| {
-                            replay_simulation_boundary(
-                                compilation,
-                                boot,
-                                &source.simulation,
-                                &source.scenario,
-                                source,
-                                source_boundary,
-                            )
-                        });
-                    match rebuilt {
-                        Ok(rebuilt) => {
-                            let Some(new_script) = replay_branches
-                                .get(&source_branch)
-                                .and_then(|source| source.prefix(source_boundary))
-                            else {
-                                fault = Some(boundary_fault(String::from(
-                                    "the selected simulation boundary has no replay recipe",
-                                )));
-                                dirty = true;
-                                continue;
-                            };
-                            let target_branch = next_branch;
-                            if !server.fork_timeline(source_branch, source_boundary, target_branch)
-                            {
-                                fault = Some(boundary_fault(String::from(
-                                    "the selected simulation boundary is no longer retained",
-                                )));
-                                dirty = true;
-                                continue;
-                            }
-                            activity = new_script
-                                .checkpoints
-                                .get(&source_boundary)
-                                .and_then(|checkpoint| checkpoint.activity.clone());
-                            replay_branches.insert(target_branch, new_script);
-                            session = rebuilt;
-                            branch = target_branch;
-                            next_branch = next_branch.saturating_add(1);
-                            boundary_ordinal = source_boundary;
-                            state = ExecutionState::Paused;
-                            fault = None;
-                            step_requested = false;
-                            until_assertion = false;
-                            activity_decided = true;
-                            reported = false;
-                            any_failed = false;
-                            golden_failures.clear();
-                        }
-                        Err(message) => {
-                            fault = Some(FaultView {
-                                message,
-                                help: String::from(
-                                    "Choose a retained boundary from the current scenario timeline.",
-                                ),
-                                commit: String::from(
-                                    "the live simulation branch was left unchanged",
-                                ),
-                                retryable: false,
-                            });
-                        }
-                    }
-                    dirty = true;
-                }
                 UiCommand::Close => close_requested = true,
                 UiCommand::Pause
                 | UiCommand::Step
                 | UiCommand::RetryStep
                 | UiCommand::NextScenarioAction
                 | UiCommand::RunUntilAssertion
-                | UiCommand::BranchFrom { .. }
                 | UiCommand::Resume
                 | UiCommand::RunToCompletion => {}
             }
@@ -1549,12 +923,6 @@ fn simulate_with_ui(
                 Ok(ran) => {
                     let records_changed =
                         transaction_records_before != session.journal().records().len();
-                    let replay = replay_branches
-                        .entry(branch)
-                        .or_insert_with(|| SimulationReplayBranch::initial(&session));
-                    replay
-                        .operations
-                        .push(SimulationReplayOperation::StepTransaction);
                     if ran || records_changed {
                         boundary_ordinal = boundary_ordinal.saturating_add(1);
                         activity = ActivityView::journal_change(
@@ -1569,7 +937,6 @@ fn simulate_with_ui(
                                 "The transaction boundary advanced without a causal record",
                             ))
                         });
-                        replay.retain(boundary_ordinal, &session, activity.as_ref());
                         activity_decided = true;
                     }
                     // Step starts from an already-safe pause. An opened Call
@@ -1595,10 +962,6 @@ fn simulate_with_ui(
                 Ok(progressed) => {
                     dirty |= progressed;
                     if progressed {
-                        let replay = replay_branches
-                            .entry(branch)
-                            .or_insert_with(|| SimulationReplayBranch::initial(&session));
-                        replay.operations.push(SimulationReplayOperation::PollWorld);
                         boundary_ordinal = boundary_ordinal.saturating_add(1);
                         activity = ActivityView::journal_change(
                             session.journal(),
@@ -1612,7 +975,6 @@ fn simulate_with_ui(
                                 "A Connector boundary observation became ready",
                             ))
                         });
-                        replay.retain(boundary_ordinal, &session, activity.as_ref());
                         activity_decided = true;
                     }
                 }
@@ -1637,10 +999,6 @@ fn simulate_with_ui(
                 Ok(progressed) => {
                     dirty |= progressed;
                     if progressed {
-                        let replay = replay_branches
-                            .entry(branch)
-                            .or_insert_with(|| SimulationReplayBranch::initial(&session));
-                        replay.operations.push(SimulationReplayOperation::PollWorld);
                         boundary_ordinal = boundary_ordinal.saturating_add(1);
                         activity = ActivityView::journal_change(
                             session.journal(),
@@ -1654,7 +1012,6 @@ fn simulate_with_ui(
                                 "A Connector boundary observation became ready",
                             ))
                         });
-                        replay.retain(boundary_ordinal, &session, activity.as_ref());
                         activity_decided = true;
                     }
                 }
@@ -1676,12 +1033,6 @@ fn simulate_with_ui(
                 let action_records_before = session.journal().records().len();
                 match session.next_action() {
                     Ok(Some(action)) => {
-                        let replay = replay_branches
-                            .entry(branch)
-                            .or_insert_with(|| SimulationReplayBranch::initial(&session));
-                        replay
-                            .operations
-                            .push(SimulationReplayOperation::NextAction);
                         boundary_ordinal = boundary_ordinal.saturating_add(1);
                         activity = Some(ActivityView::scenario_action(
                             scenario_action_name(action),
@@ -1689,7 +1040,6 @@ fn simulate_with_ui(
                             action_records_before,
                             boundary_ordinal,
                         ));
-                        replay.retain(boundary_ordinal, &session, activity.as_ref());
                         activity_decided = true;
                         dirty = true;
                     }
@@ -1709,12 +1059,6 @@ fn simulate_with_ui(
                     Ok(ran) => {
                         let records_changed =
                             transaction_records_before != session.journal().records().len();
-                        let replay = replay_branches
-                            .entry(branch)
-                            .or_insert_with(|| SimulationReplayBranch::initial(&session));
-                        replay
-                            .operations
-                            .push(SimulationReplayOperation::StepTransaction);
                         if ran || records_changed {
                             boundary_ordinal = boundary_ordinal.saturating_add(1);
                             activity = ActivityView::journal_change(
@@ -1729,7 +1073,6 @@ fn simulate_with_ui(
                                     "The transaction boundary advanced without a causal record",
                                 ))
                             });
-                            replay.retain(boundary_ordinal, &session, activity.as_ref());
                             activity_decided = true;
                         }
                         dirty = true;
@@ -1776,9 +1119,6 @@ fn simulate_with_ui(
                 records_before,
                 Some(boundary_ordinal),
             );
-            if let Some(replay) = replay_branches.get_mut(&branch) {
-                replay.retain(boundary_ordinal, &session, activity.as_ref());
-            }
         }
         if dirty {
             revision = revision.saturating_add(1);
@@ -1794,7 +1134,7 @@ fn simulate_with_ui(
                 fault: fault.as_ref(),
                 activity: activity.as_ref(),
                 scenario: Some(simulation_view(compilation, &session, &golden_failures)),
-                branch,
+                session: session_id,
                 boundary: boundary_ordinal,
             }) {
                 Ok(snapshot) => server.publish(snapshot),
@@ -2008,75 +1348,5 @@ fn render_data(
             .trim_end_matches('\n')
             .to_string(),
         other => format!("{other:?}"),
-    }
-}
-
-#[cfg(all(test, feature = "hosted-ui"))]
-mod ui_time_tests {
-    use super::{
-        SimulationReplayBranch, SimulationReplayOperation, UiLogicalClock, load, recreate_scenario,
-        replay_simulation_boundary,
-    };
-
-    #[test]
-    fn debugger_suspension_never_becomes_logical_elapsed_time() {
-        let mut clock = UiLogicalClock::start_paused(100, 90);
-        assert_eq!(clock.logical_now(400), 90);
-
-        clock.resume(400);
-        assert_eq!(clock.logical_now(400), 90);
-        assert_eq!(clock.logical_now(450), 140);
-
-        clock.pause(450);
-        assert_eq!(clock.logical_now(900), 140);
-
-        clock.resume(900);
-        assert_eq!(clock.logical_now(930), 170);
-    }
-
-    #[test]
-    fn a_simulation_rewind_replays_an_exact_prefix_before_branching() {
-        let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../examples/keyed-retry.rkg")
-            .to_string_lossy()
-            .into_owned();
-        let (compilation, _) = load(&[example]).expect("the checked UI example compiles");
-        let mut session = recreate_scenario(&compilation, "ui_tour", "two_tenants", None)
-            .expect("the scenario world composes");
-        let mut replay = SimulationReplayBranch::initial(&session);
-
-        session.next_action().expect("the injection is admitted");
-        replay
-            .operations
-            .push(SimulationReplayOperation::NextAction);
-        replay.retain(1, &session, None);
-        session
-            .step_transaction()
-            .expect("the first lifecycle transaction runs");
-        replay
-            .operations
-            .push(SimulationReplayOperation::StepTransaction);
-        replay.retain(2, &session, None);
-
-        let rewound =
-            replay_simulation_boundary(&compilation, None, "ui_tour", "two_tenants", &replay, 1)
-                .expect("the journal and mutable inspection replay exactly");
-        assert_eq!(
-            rewound.journal().records(),
-            replay.checkpoints.get(&1).expect("B1 exists").records,
-        );
-        assert_eq!(rewound.next_action_index(), 1);
-
-        let mut forged = replay.clone();
-        forged
-            .checkpoints
-            .get_mut(&1)
-            .expect("B1 exists")
-            .logical_time += 1;
-        assert!(
-            replay_simulation_boundary(&compilation, None, "ui_tour", "two_tenants", &forged, 1,)
-                .is_err(),
-            "a branch cannot start from a checkpoint that replay did not reproduce exactly",
-        );
     }
 }

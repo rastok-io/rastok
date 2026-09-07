@@ -26,6 +26,7 @@ fn example() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/echo.rkg")
 }
 
+#[cfg(feature = "hosted-ui")]
 fn keyed_retry_example() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/keyed-retry.rkg")
 }
@@ -53,7 +54,7 @@ fn check_renders_a_semantic_refusal_in_the_rustc_shape() {
     // leaving by an input port.
     std::fs::write(
         &path,
-        "graph g : App {\n  operator o {\n    on in { in = . }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  operator o {\n    on in { in = . }\n  }\n  in -> o -> out\n}\n",
     )
     .expect("a writable temp dir");
     let output = rastok()
@@ -79,7 +80,7 @@ fn check_refuses_the_execution_ui_by_name() {
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("--ui is available only for `run` and `simulate`"),
+        stderr.contains("--ui is available only for `simulate`"),
         "{stderr}"
     );
 }
@@ -371,6 +372,29 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
             && snapshot["history"]["records"] == serde_json::json!([])
     });
     assert_eq!(reset["scenario"]["current"]["next_action_index"], 0);
+    assert_eq!(reset["timeline"]["session"], 1);
+    assert_eq!(reset["timeline"]["boundary"], 0);
+    let retained = ui_http(
+        address,
+        &format!(
+            "GET /api/snapshot?session=0&boundary={}&token={token}",
+            completed["timeline"]["boundary"]
+        ),
+        &[],
+    );
+    assert!(retained.starts_with("HTTP/1.1 200"), "{retained}");
+    let (_, retained_body) = retained.split_once("\r\n\r\n").expect("HTTP body");
+    let retained: serde_json::Value = serde_json::from_str(retained_body).expect("JSON frame");
+    assert_eq!(retained["history"], completed["history"]);
+    assert_eq!(retained["timeline"]["session"], 0);
+    assert_eq!(ui_snapshot(address, token)["timeline"]["session"], 1);
+    let branch = ui_http(
+        address,
+        &format!("POST /api/command/branch-from?session=0&boundary=0&token={token}"),
+        &headers,
+    );
+    assert!(branch.starts_with("HTTP/1.1 400"), "{branch}");
+    assert!(branch.ends_with("unknown command"), "{branch}");
     let mut manually_stepped = reset;
     for _ in 0..64 {
         manually_stepped = wait_ui_snapshot(address, token, |snapshot| {
@@ -544,96 +568,19 @@ fn simulation_step_keeps_a_silent_call_paused_and_reaches_the_next_lab_action() 
     }
 }
 
-#[cfg(feature = "hosted-ui")]
 #[test]
-fn run_ui_admits_no_stdin_before_resume_and_preserves_normal_output() {
-    use std::io::{BufRead as _, Read as _};
-
-    let _network_guard = LIVE_NETWORK_CLI_TEST
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut child = rastok()
+fn run_refuses_the_simulation_only_debugger_before_effects() {
+    let output = rastok()
         .arg("run")
         .arg(example())
         .arg("--ui")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("the UI binary starts");
-    child
-        .stdin
-        .take()
-        .expect("stdin is piped")
-        .write_all(b"salut\n")
-        .expect("one input is available before resume");
-    let stdout = child.stdout.take().expect("stdout is piped");
-    let mut stdout = std::io::BufReader::new(stdout);
-    let mut url_line = String::new();
-    stdout
-        .read_line(&mut url_line)
-        .expect("the UI URL is printed");
-    let url = url_line
-        .trim()
-        .strip_prefix("ui: http://")
-        .expect("the URL uses the documented prefix");
-    let (address, token) = url
-        .split_once("/?token=")
-        .expect("the URL carries one capability");
-    let address: std::net::SocketAddr = address.parse().expect("the address parses");
-    let initial = ui_snapshot(address, token);
-    assert_eq!(initial["execution"]["state"], "paused");
-    assert_eq!(initial["history"]["records"], serde_json::json!([]));
-
-    let origin = format!("http://{address}");
-    let headers = [
-        ("Origin", origin.as_str()),
-        ("X-Rastok-Controller", "run-cli-test"),
-    ];
-    let claim = ui_http(
-        address,
-        &format!("POST /api/control/claim?token={token}"),
-        &headers,
-    );
-    assert!(claim.starts_with("HTTP/1.1 200"), "{claim}");
-    let run = ui_http(
-        address,
-        &format!("POST /api/command/run-to-completion?token={token}"),
-        &headers,
-    );
-    assert!(run.starts_with("HTTP/1.1 202"), "{run}");
-    let completed = wait_ui_snapshot(address, token, |snapshot| {
-        snapshot["execution"]["state"] == "completed"
-    });
+        .output()
+        .expect("the binary runs");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty(), "no server or Driver starts");
     assert!(
-        completed["history"]["records"]
-            .as_array()
-            .is_some_and(|records| !records.is_empty())
+        String::from_utf8_lossy(&output.stderr).contains("--ui is available only for `simulate`")
     );
-    let close = ui_http(
-        address,
-        &format!("POST /api/command/close?token={token}"),
-        &headers,
-    );
-    assert!(close.starts_with("HTTP/1.1 202"), "{close}");
-
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while child
-        .try_wait()
-        .expect("child status is readable")
-        .is_none()
-    {
-        if std::time::Instant::now() >= deadline {
-            child.kill().expect("a stuck UI can be stopped");
-            panic!("the UI process did not close");
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    let mut remainder = String::new();
-    stdout
-        .read_to_string(&mut remainder)
-        .expect("remaining output reads");
-    assert_eq!(remainder, "out: salut\n");
 }
 
 #[cfg(feature = "hosted-ui")]
@@ -757,7 +704,7 @@ fn run_can_bind_the_real_file_driver_with_an_explicit_root() {
     mode = read
     path = "artifact.bin"
   }
-  . -> file -> .
+  in -> file -> out
   file.exit -> nothing
 }
 "#,
@@ -815,13 +762,17 @@ fn run_polls_an_inbound_http_server_without_a_stdin_submission() {
     codec = text
     versions = ["http/1.1"]
   }}
-  server -> .
+  server -> out
   server.exit -> nothing
 }}
 "#,
         ),
     )
     .expect("the HTTP CLI source writes");
+    // Validate the fixture before timing its I/O boundary. Cold executable
+    // loading is not an HTTP response/handshake budget.
+    let checked = rastok().arg("check").arg(&source).output().unwrap();
+    assert!(checked.status.success(), "{checked:?}");
     let mut child = rastok()
         .arg("run")
         .arg(&source)
@@ -912,6 +863,8 @@ fn run_composes_a_live_websocket_gateway_with_process() {
         ),
     )
     .expect("the WebSocket gateway source writes");
+    let checked = rastok().arg("check").arg(&source).output().unwrap();
+    assert!(checked.status.success(), "{checked:?}");
     let mut child = rastok()
         .arg("run")
         .arg(&source)
@@ -928,7 +881,20 @@ fn run_composes_a_live_websocket_gateway_with_process() {
             Err(_) if std::time::Instant::now() < deadline => {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
-            Err(error) => panic!("the standalone WebSocketServer never started: {error}"),
+            Err(error) => {
+                let status = child.try_wait().expect("the gateway status is readable");
+                if status.is_none() {
+                    child.kill().expect("the late gateway can be stopped");
+                }
+                let output = child
+                    .wait_with_output()
+                    .expect("the gateway output is readable");
+                panic!(
+                    "the standalone WebSocketServer never started: {error}; \
+                     status before cleanup: {status:?}; stderr: {}",
+                    String::from_utf8_lossy(&output.stderr),
+                );
+            }
         }
     };
     stream
@@ -1007,7 +973,7 @@ fn simulate_resolves_boot_refs_from_a_profile_without_cli_secret_values() {
     codec = text
     effect = idempotent ; behavior = deterministic
   }
-  . -> client -> .
+  in -> client -> out
   client.exit -> nothing
 }
 lab deployed {

@@ -31,10 +31,7 @@
 
   function materializeGraph(topology) {
     const rootOwner = (topology.owners || []).find((owner) => owner.parent === null)?.id || "owner:0";
-    const semanticNodes = [
-      ...(topology.nodes || []),
-      ...(topology.control_nodes || []),
-    ].map((node) => ({
+    const semanticNodes = (topology.nodes || []).map((node) => ({
       ...node,
       owner: node.owner || rootOwner,
       ports: node.ports || [],
@@ -43,10 +40,7 @@
     // `-> nothing` is a semantic drain, not a destination that a reader can
     // inspect. Keep the source port visible, but do not invent a sink box or a
     // pipe which appears to carry an envelope somewhere.
-    const edges = [
-      ...(topology.edges || []).filter((edge) => edge.target?.kind !== "discard"),
-      ...(topology.handler_relations || []),
-    ];
+    const edges = (topology.edges || []).filter((edge) => edge.target?.kind !== "discard");
     for (const edge of edges) {
       for (const endpoint of [edge.source, edge.target]) {
         if (!endpoint || nodes.has(endpoint.id)) continue;
@@ -161,10 +155,8 @@
       const inputs = (node.ports || []).filter((port) => port.direction === "input").length;
       const outputs = (node.ports || []).filter((port) => port.direction === "output").length;
       return [node.id, {
-        width: node.kind === "control" ? 104 : 126,
-        height: node.kind === "control"
-          ? Math.max(34, (Math.max(inputs, outputs) + 1) * 15)
-          : Math.max(42, (Math.max(inputs, outputs) + 1) * 15),
+        width: 126,
+        height: Math.max(42, (Math.max(inputs, outputs) + 1) * 15),
       }];
     }));
 
@@ -984,12 +976,9 @@
     const ordered = [...routes.entries()].sort(([left], [right]) => left - right);
     for (const [routeIndex, route] of ordered) {
       const samples = routeSamples.get(routeIndex) || [route.start, route.end];
-      const edge = graph.edges.find((candidate) => candidate.index === routeIndex);
-      // A mailbox belongs to the receiving input, whereas the small `on`
-      // marker belongs close to the handler trigger. The same obstacle scorer
-      // remains the final placement authority for both presentation facts.
-      const preferred = edge?.relation ? 0.28 : 0.82;
-      const start = edge?.relation ? 0.12 : 0.58;
+      // A mailbox belongs to the receiving input, not the producer.
+      const preferred = 0.82;
+      const start = 0.58;
       const fractions = Array.from({ length: 25 }, (_, index) => start + index * 0.015)
         .sort((left, right) => Math.abs(left - preferred) - Math.abs(right - preferred) || left - right);
       const candidates = fractions.map((fraction, order) => ({

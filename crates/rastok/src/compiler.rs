@@ -578,10 +578,10 @@ graph inspected : App {
     operator inner {
       on in { out = . }
     }
-    . -> inner -> .
+    in -> inner -> out
   }
 
-  . -> relay -> nested -> .
+  in -> relay -> nested -> out
 }
 "#;
         let compilation = compile(
@@ -627,7 +627,7 @@ graph inferred_instance : App {
     instance = { key = data }
     on in { out = . }
   }
-  . -> relay -> .
+  in -> relay -> out
 }
 "#;
         let compilation = compile(
@@ -661,7 +661,7 @@ graph g : App {
     effect = idempotent
     behavior = deterministic
   }
-  . -> shell -> nothing
+  in -> shell -> nothing
   shell.err -> nothing
   shell.exit -> nothing
 }
@@ -687,7 +687,7 @@ graph inferred_composite : App {
     instance = { key = { payload = data } }
     on in { out = . }
   }
-  . -> relay -> .
+  in -> relay -> out
 }
 "#;
         let compilation = compile(
@@ -713,7 +713,7 @@ graph keyed_graph : App {
   input in: text
   instance = { key = data }
   operator relay { on in { out = . } }
-  . -> relay -> nothing
+  in -> relay -> nothing
 }
 "#;
         compile(
@@ -729,7 +729,7 @@ graph finite_singleton : App {
     lifetime = { kind = fixed ; after = duration("30s") }
     on in { out = . }
   }
-  . -> relay -> nothing
+  in -> relay -> nothing
 }
 "#;
         let compilation = compile(
@@ -757,7 +757,7 @@ graph dynamic_instance : App {
     instance = { key = data }
     on in { out = . }
   }
-  . -> relay -> .
+  in -> relay -> out
 }
 "#;
         let bag = compile(
@@ -788,9 +788,9 @@ graph conflicting_instance : App {
     on a { out = 1 }
     on b { out = 1 }
   }
-  .alpha -> relay.a
-  .beta -> relay.b
-  relay -> .
+  alpha -> relay.a
+  beta -> relay.b
+  relay -> out
 }
 "#;
         let bag = compile(

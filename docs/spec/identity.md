@@ -6,7 +6,7 @@
 > journal records.
 >
 > The registry below retains the executable v7 value registry inside
-> categorical plan-package v15. V12 introduced the
+> categorical plan-package v16. V12 introduced the
 > open `media_type` scalar and its constructor, and specifies the M1.4 instance-address
 > extension under D-2026-08-18-1. V9 refuses the old unpublished v8
 > named-partition draft and carries the parent-linked owner tree, scoped edges,
@@ -61,11 +61,11 @@
 > from the plan constraints and requires exact agreement with the transported
 > claim.
 >
-> D-2026-09-05-1 freezes the **conceptual v16 identity ledger** in §1.1.
-> Exact numeric package tags and append-only journal keys are allocated once
-> at R4, after source/HIR stabilization. Tables in §3 remain the exact landed
-> v15 registry until that allocation; they are historical input and no listed
-> key may be reused.
+> D-2026-09-05-1 and R4 allocate the v16 ledger in §1.1. The current
+> package tables live in [plan-package.md](../architecture/plan-package.md);
+> §3 includes r2 journal key 55 and retained timer key 56. Key 53 stays
+> historical, never reinterpreted. [R9 qualification](../architecture/rework-r9-qualification.md)
+> records the single blessing and unchanged causal witnesses.
 
 ## 1. The semantic hash
 
@@ -423,11 +423,11 @@ three semantic witnesses above remain exact, and no causal trace moves.
 The additive A3.1 privacy registry uses the existing policy stream only for
 programs that write `@personal`; all earlier annotated witnesses remain exact.
 
-### 1.1 Plan v16 target ledger
+### 1.1 Plan v16 ledger
 
 Plan v16 is one categorical move, not a sequence of partially readable
-packages. R4 allocates its exact tags only after R3 stabilizes the source/HIR
-algebra. The movement set is:
+packages. R4 allocated its exact tags after R3 stabilized the source/HIR
+algebra; R9 blessed the three independently validated package witnesses once. The movement set is:
 
 - `ExtensionSpec` replaces active Aspect transport; historical tags and
   `rastok.aspects.r1` keep their old meaning;
@@ -462,8 +462,7 @@ Canonicalization rules:
 - `CommandProduced` and `CommandConsumed` are distinct append-only facts;
 - no retired tag, key, or domain is assigned another meaning.
 
-R3 checks these identities before a v16 package exists. Its additive HIR
-streams are `rastok.dispatch.r1` for decisions outside the exact v15 linear
+The additive semantic HIR streams are `rastok.dispatch.r1` for decisions outside the exact v15 linear
 projection, `rastok.routing.r1` for case selection and manager destinations,
 and `rastok.loop.r2` for command-based Loop owners, their entry, terminals,
 fuel, delay, and authored measure/invariant. Ordinary unconditional fan-out
@@ -471,9 +470,8 @@ keeps the existing edge stream: writing a destination set or its separate
 arrows has the same identity. Universal destinations are merged into each
 case row, and case/destination order is canonical. Changing a case's target
 or a command kind changes the hash even when physical edges are identical.
-Historical v15 Loop Graphs keep their old stream during staged migration.
-These HIR streams allocate no plan tag or journal key; R3 refuses to package
-new routing, multi-emission, recursive Dispatch, or command-based Loop in v15.
+Old Loop domains remain historical. The current compiler and reader use only
+v16; no active r1 fold or compatibility execution path remains.
 
 The re-bless set is determined before R4. All package containers move
 categorically. Semantic hashes move only for programs affected by the new
@@ -482,15 +480,14 @@ the exact pre-bump baselines used to prove the scope:
 
 | Witness | Semantic hash | v15 body size |
 |---|---|---:|
-| echo / Cortex-M33 semantic witness | `e50026eeb0b8dc77fe2f5e52de6dfaa33b50cc351211cd87c21081d28aa43709` | 988 B |
-| JSONL Process witness | `036f7ea5346fac883a3bad155fbdf41b303f6e54bef93f8c850ff5f138f769de` | 1,032 B |
-| connector-free gauge | `0d3ad43d9fb09c8626146342f6a50d1f4c387a8de52a47a3134a408cf74cb22e` | 323 B |
+| echo / Cortex-M33 semantic witness | `e50026eeb0b8dc77fe2f5e52de6dfaa33b50cc351211cd87c21081d28aa43709` | 907 B |
+| JSONL Process witness | `036f7ea5346fac883a3bad155fbdf41b303f6e54bef93f8c850ff5f138f769de` | 951 B |
+| connector-free gauge | `0d3ad43d9fb09c8626146342f6a50d1f4c387a8de52a47a3134a408cf74cb22e` | 243 B |
 
-Whether the two Process witnesses can remain semantically identical despite
-the required Contract `@2` move is an R4 test, not an assumption: the Contract
-id is semantic identity, so they are expected to move. The connector-free
-gauge must remain byte-identical semantically; only its package container
-version/checksum changes.
+The two Process semantic witnesses move with Contract `@2`; the gauge hash
+stays identical. Body sizes become 939 / 983 / 249 B. The complete hashes,
+checksums and unchanged causal seals are in the
+[R9 ledger](../architecture/rework-r9-qualification.md), recorded before blessing.
 
 The complete pre-allocation register and re-bless protocol are in
 [rework-r0-identity.md](../architecture/rework-r0-identity.md).
@@ -551,11 +548,10 @@ a separate categorical transport change (D-2026-08-14-1).
 
 ## 3. The canonical record form
 
-The tables in this section are the exact **landed v15** form. V16 extends them
-only through the R4 allocation described in §1.1: old key 53 and its r1
-subtags remain historical, while Loop r2 receives new append-only
-Produced/Consumed/Admit/Close/Expired facts and exact opening/context
-references. Reading this section must never reinterpret r1 bytes as r2.
+These tables describe the current v16 causal projection. Historical key 53
+is retained in the registry solely to prevent reuse; active Loop state uses
+key 55. Required timer dates are retained separately at key 56 and are not
+part of the causal seal.
 
 Two byte formats exist and are never the same object : the **durable
 journal encoding** (free to evolve) and the **canonical form**
@@ -648,7 +644,7 @@ causal record.
 **TRANSACTION** (kind 2 — one Executor/manager firing or one controller-owned
 Node lifecycle fact;
 the commit packet of
-execution-model §1) — keys `30–39` and `48–54`:
+execution-model §1) — keys `30–39`, `48–52` and `54–55`:
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
@@ -666,8 +662,36 @@ execution-model §1) — keys `30–39` and `48–54`:
 | 49 | close_scope_ref | array | present exactly on the transaction whose close request wins (`l:closing`, or a handler transaction containing bare `stop`); the fixed instance reference of the root of the Closing scope. Descendant work may drain under this reference, and later external admission reserves its successor. Omitted on ordinary firings. |
 | 50 | session_exit_ref | bytes(16) | present exactly on the Connector transaction that terminates a Session. That transaction emits exactly one conventional `exit`, last; its envelope projects the same reference as `meta.ext.session_id`. The fold refuses a second exit, an exit with an open write, or any later message/write. |
 | 52 | inbound_call_exit_ref | bytes(16) | present exactly on the Connector `l:reply` transaction that terminates the inbound Call opened by INBOUND key 28. Its cause is the root request; fixed ack consumes zero positions, while a graph response consumes exactly its one real delivery position. Owner/instance equal the opening source and exactly one conventional `exit` is last. The fold refuses an unmatched trigger or any second terminal. |
-| 53 | loop_fact | array | present only on one `: Loop` run transition. Extend-only tags: `open = [1, run_ref, instance_ref, root_id, fuel, state_spine]`; `next = [2, run_ref, iteration, remaining, selected_next_id, state_spine]`; `close = [3, run_ref, iteration]`; `expired = [4, run_ref, iteration, selected_next_id, output_spine]`; `admit = [5, run_ref, iteration]`. Open is unique; next advances the ordinal and decrements fuel exactly; admit crosses the recorded state into one body application exactly once; close/expired are terminal. A delayed next may retain its due instant as a non-canonical journal annotation; that instant is never an additional array field. Omitted for every non-Loop transaction. |
+| 53 | retired loop_fact | array | Historical r1 form, never emitted or reinterpreted by v16. |
 | 54 | logical_time | int | the signed nanosecond logical instant since the Unix epoch, present exactly when a checked firing handler can observe `now()`; fixed across guard selection and body evaluation, omitted otherwise. This is an explicit transaction input, not a scheduler due date or host `committed_at`. |
+| 55 | loop_protocol | map | Sparse r2 packet: 1 context, 2 routed contexts, 3 produced commands, 4 consumed commands, 5 manager facts. Exact forms below; absent for unrelated transactions. |
+
+**Loop r2 packet — key 55.** Empty subfields are omitted. Contexts are
+ordered outer-to-inner; outgoing contexts are sorted by delivery reference.
+Commands and facts retain their validated causal order. The journal binds
+these claims to exact committed admissions and independently checks the fold.
+
+```text
+packet := {1: [run_ref*]?, 2: [[delivery_id, [run_ref+]]*]?,
+           3: [command_produced*]?, 4: [command_ref*]?, 5: [fact*]?}
+command_produced := [command_ref, run_ref, iteration, command_value]
+command_value := [1, state_spine]                  // Next
+               | [2, cause_id]                    // Again
+               | [3, [cause_id, done_kind]]        // Done
+done_kind := 1 natural | 2 explicit
+fact := [1, run_ref, instance_ref, opening, entry, fuel, state_spine]
+      | [2, run_ref, from_iteration, to_iteration, remaining, command_ref, state_spine]
+      | [3, run_ref, iteration, admission_id, admitted_spine]
+      | [4, run_ref, iteration, close_reason]
+      | [5, run_ref, iteration, command_ref, last_state_spine, expired_spine]
+opening := [1, inbound_id, entry_port] | [2, delivery_id]
+close_reason := 1 natural | 2 explicit_done | 3 stopped
+```
+
+Fact tags are Open/Advance/Admit/Close/Expired. Retained Advance also owns its
+optional due instant, excluded from this causal form and checked against key 56.
+Domains are run `0x14`, command `0x15` and re-admission `0x06`; exact opening
+admission, not only business origin, identifies a run. See [Loop](loop.md).
 
 **Retained scheduler metadata — not part of the causal seal**
 (D-2026-09-07-2):
@@ -680,9 +704,10 @@ Storage integrity must cover this required recovery evidence independently of
 the causal seal. Key 37 keeps its existing sealed timer references; key 54
 keeps its observable `now()` meaning. Key 56 changes neither graph identity,
 package bytes nor causal projection. A causal trace alone is not a complete
-recovery backup. The R4 field codec and r2 delay producer are executable;
-complete R7 recovery remains refused for the profiles whose accepting arm
-facts are not yet retained. Missing dates never default to restart time.
+recovery backup. The field codec and every admitted timer producer retain original dates;
+recovery restores Calls, joins, lifetimes, Closing and Loop wakes from accepting
+prefixes. Missing dates never default to restart time. Storage is still an
+in-memory implementation; this is not a durable-backend claim.
 
 **OUTBOUND / Call** (kind 3 — one external call's WAL record ;
 delivery-semantics §4) — keys `40–47` :
@@ -842,7 +867,7 @@ cannot diverge on bytes for the same journal :
   scheduler due instant outside the canonical key-53 array and seals
   `(5, reentry_envelope_id)` in key 37, so recovery can re-arm the same
   obligation without changing causal identity. V16 does not extend or reuse
-  this shape; the r2 ledger in §1.1 receives newly allocated fields at R4.
+  this shape; the current r2 form uses key 55 below.
 - **`app_meta` values (spine key 9)** : each triple's third element is
   a `tagged_value` (per the registry above).
 - **`timers` (TX key 37)** = tuples `[timer_kind (uint), ref (bytes 16)]`,

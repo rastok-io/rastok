@@ -1168,7 +1168,7 @@ graph real : App {
     }
   }
 
-  . -> shout -> echo -> .
+  in -> shout -> echo -> out
   echo.err -> nothing
   echo.exit -> nothing
 }
@@ -1301,7 +1301,7 @@ graph binary : App {
     codec = bytes
     effect = idempotent ; behavior = deterministic
   }
-  . -> echo -> .
+  in -> echo -> out
   echo.err -> nothing
   echo.exit -> nothing
 }
@@ -1327,7 +1327,7 @@ graph lines : App {
     codec = lines
     effect = idempotent ; behavior = deterministic
   }
-  . -> child -> .
+  in -> child -> out
   child.err -> nothing
   child.exit -> nothing
 }
@@ -1361,7 +1361,7 @@ graph configured : App {
     codec = lines
     effect = idempotent ; behavior = deterministic
   }
-  . -> child -> .
+  in -> child -> out
   child.err -> nothing
   child.exit -> nothing
 }
@@ -1389,7 +1389,7 @@ graph binary_err : App {
     err_codec = bytes
     effect = idempotent ; behavior = deterministic
   }
-  . -> child
+  in -> child
   child.out -> nothing
   child.err -> nothing
   child.exit -> nothing
@@ -1432,7 +1432,7 @@ graph failing : App {
     on in { out = data.text }
   }
 
-  . -> shout -> boom -> .
+  in -> shout -> boom -> out
   boom.err -> nothing
   boom.exit -> nothing
 }
@@ -1463,7 +1463,7 @@ graph missing : App {
     on in { out = data.text }
   }
 
-  . -> shout -> ghost -> .
+  in -> shout -> ghost -> out
   ghost.err -> nothing
   ghost.exit -> nothing
 }
@@ -1494,7 +1494,7 @@ graph mute : App {
     on in { out = data.text }
   }
 
-  . -> shout -> hang -> .
+  in -> shout -> hang -> out
   hang.err -> nothing
   hang.exit -> nothing
 }
@@ -1536,7 +1536,7 @@ graph closing : App {
     on in { out = data.text }
   }
 
-  . -> shout -> hang -> .
+  in -> shout -> hang -> out
   hang.err -> nothing
   hang.exit -> nothing
 }
@@ -1584,7 +1584,7 @@ graph orphaning : App {
     on in { out = data.text }
   }
 
-  . -> shout -> fork -> .
+  in -> shout -> fork -> out
   fork.err -> nothing
   fork.exit -> nothing
 }
@@ -1624,7 +1624,7 @@ graph wedge : App {
     on in { out = data.text }
   }
 
-  . -> shout -> leaky -> .
+  in -> shout -> leaky -> out
   leaky.err -> nothing
   leaky.exit -> nothing
 }
@@ -1659,7 +1659,7 @@ graph flood : App {
     on in { out = data.text }
   }
 
-  . -> shout -> noisy -> .
+  in -> shout -> noisy -> out
   noisy.err -> nothing
   noisy.exit -> nothing
 }
@@ -1690,7 +1690,7 @@ graph capped : App {
     on in { out = data.text }
   }
 
-  . -> shout -> wide -> .
+  in -> shout -> wide -> out
   wide.err -> nothing
   wide.exit -> nothing
 }
@@ -1723,7 +1723,7 @@ graph hoarse : App {
     on in { out = data.text }
   }
 
-  . -> shout -> noisy -> .
+  in -> shout -> noisy -> out
   noisy.err -> nothing
   noisy.exit -> nothing
 }
@@ -1764,7 +1764,7 @@ graph unframeable : App {
     on in { out = . }
   }
 
-  . -> shout -> echo -> .
+  in -> shout -> echo -> out
   echo.err -> nothing
   echo.exit -> nothing
 }

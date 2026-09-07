@@ -45,7 +45,7 @@ graph instances : App {
       var visits: int = 0
       on in { visits = visits + 1 ; out = visits }
     }
-    . -> counter -> .
+    in -> counter -> out
   }
 
   operator keep {
@@ -102,26 +102,26 @@ graph instances : App {
       on in { }
       on stop { stopped = "child" }
     }
-    . -> child
-    child.stopped -> .stopped
+    in -> child
+    child.stopped -> stopped
   }
 
-  .counted -> sessions.in
-  sessions.out -> .count
-  .persistent -> keep.in
-  keep.started -> .persistent_started
-  .idle -> idle_scope.in
-  idle_scope.stopped -> .idle_stopped
-  .fixed -> fixed_scope.in
-  fixed_scope.stopped -> .fixed_stopped
-  .one_shot -> one.in
-  one.started -> .one_shot_started
-  one.stopped -> .one_shot_stopped
-  .window -> boxes.in
-  boxes.started -> .window_started
-  boxes.stopped -> .window_stopped
-  .cascade -> closing_parent.in
-  closing_parent.stopped -> .cascade_stopped
+  counted -> sessions.in
+  sessions.out -> count
+  persistent -> keep.in
+  keep.started -> persistent_started
+  idle -> idle_scope.in
+  idle_scope.stopped -> idle_stopped
+  fixed -> fixed_scope.in
+  fixed_scope.stopped -> fixed_stopped
+  one_shot -> one.in
+  one.started -> one_shot_started
+  one.stopped -> one_shot_stopped
+  window -> boxes.in
+  boxes.started -> window_started
+  boxes.stopped -> window_stopped
+  cascade -> closing_parent.in
+  closing_parent.stopped -> cascade_stopped
 }
 
 lab instances {
@@ -200,10 +200,10 @@ graph joined : App {
       out = left.data + right.data
     }
   }
-  .left -> pair.left
-  .right -> pair.right
-  pair.out -> .out
-  pair.expired -> .expired
+  left -> pair.left
+  right -> pair.right
+  pair.out -> out
+  pair.expired -> expired
 }
 
 lab joined {
@@ -433,7 +433,7 @@ graph invalid : App {{
     instance = {{ key = {key} }}
     on in {{ out = . }}
   }}
-  . -> relay -> .
+  in -> relay -> out
 }}
 "#
         );
@@ -468,14 +468,14 @@ graph cyclic : App {
       output out: int
       on in { out = data }
     }
-    .in -> inner.in
-    inner.out -> .out
+    in -> inner.in
+    inner.out -> out
   }
 
-  .in -> outer.in
+  in -> outer.in
   outer.out -> nested.in
   nested.out -> outer.in
-  outer.out -> .out
+  outer.out -> out
 }
 "#;
     let bag = compile(

@@ -2,5 +2,5 @@ graph hello : App {
   operator greet {
     on in { out = . }
   }
-  . -> greet -> .
+  in -> greet -> out
 }

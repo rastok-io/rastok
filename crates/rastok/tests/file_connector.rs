@@ -66,7 +66,7 @@ graph file_probe : App {{
     path = "{path}"{max_read}
   }}
 
-  . -> file
+  in -> file
   file.out -> out
   file.exit -> nothing
 }}
@@ -194,7 +194,7 @@ graph dynamic_file : App {
     path = data as text
   }
 
-  . -> file
+  in -> file
   file.out -> out
   file.exit -> nothing
 }

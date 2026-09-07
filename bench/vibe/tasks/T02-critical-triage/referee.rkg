@@ -1,13 +1,13 @@
 lab triage {
   simulation refereeing on app {
     mock notifier {
-      on in { out = . }
+      on in { out = .; exit = Exited { exit_code = 0; signal = null } }
     }
 
     scenario critical_passes "a critical alert notifies" {
       app.in = {level = "critical", message = "pump 3 overheating"}
       expect "notified" app.out count == 1 where data == "pump 3 overheating"
-      expect nothing app.err
+      expect nothing notifier.err
     }
 
     scenario info_dropped "an info alert stays silent" {

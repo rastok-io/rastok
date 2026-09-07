@@ -69,14 +69,6 @@ pub enum UiCommand {
         /// Checked scenario name.
         scenario: String,
     },
-    /// Rebuild a simulation at one retained boundary and continue on a new
-    /// append-only presentation branch. Real runs never admit this command.
-    BranchFrom {
-        /// Source presentation branch.
-        branch: u64,
-        /// Atomic boundary retained on that branch.
-        boundary: u64,
-    },
     /// End the hosted UI session.
     Close,
 }
@@ -86,7 +78,7 @@ pub enum UiCommand {
 pub struct UiSnapshot {
     revision: u64,
     json: Bytes,
-    branch: u64,
+    session: u64,
     boundary: u64,
     kind: String,
     summary: String,
@@ -101,8 +93,8 @@ impl UiSnapshot {
     /// JSON serialization failure is returned before the current projection
     /// is changed.
     pub fn new(revision: u64, value: &JsonValue) -> Result<Self, serde_json::Error> {
-        let branch = value
-            .pointer("/timeline/branch")
+        let session = value
+            .pointer("/timeline/session")
             .and_then(JsonValue::as_u64)
             .unwrap_or(0);
         let boundary = value
@@ -125,7 +117,7 @@ impl UiSnapshot {
         serde_json::to_vec(value).map(|json| Self {
             revision,
             json: Bytes::from(json),
-            branch,
+            session,
             boundary,
             kind,
             summary,
@@ -138,14 +130,6 @@ impl UiSnapshot {
     pub const fn revision(&self) -> u64 {
         self.revision
     }
-
-    fn on_branch(&self, branch: u64) -> Option<Self> {
-        let mut value = serde_json::from_slice::<JsonValue>(&self.json).ok()?;
-        value.pointer_mut("/timeline/branch").map(|field| {
-            *field = JsonValue::from(branch);
-        })?;
-        Self::new(self.revision, &value).ok()
-    }
 }
 
 /// Complete in-memory debugger history. These are exact disposable
@@ -153,22 +137,22 @@ impl UiSnapshot {
 #[derive(Debug)]
 struct TimelineStore {
     live: UiSnapshot,
-    branches: BTreeMap<u64, BTreeMap<u64, UiSnapshot>>,
+    sessions: BTreeMap<u64, BTreeMap<u64, UiSnapshot>>,
 }
 
 impl TimelineStore {
     fn new(initial: UiSnapshot) -> Self {
         let mut store = Self {
             live: initial.clone(),
-            branches: BTreeMap::new(),
+            sessions: BTreeMap::new(),
         };
         store.retain(initial);
         store
     }
 
     fn retain(&mut self, snapshot: UiSnapshot) {
-        self.branches
-            .entry(snapshot.branch)
+        self.sessions
+            .entry(snapshot.session)
             .or_default()
             .insert(snapshot.boundary, snapshot.clone());
         if snapshot.revision >= self.live.revision {
@@ -176,35 +160,16 @@ impl TimelineStore {
         }
     }
 
-    fn frame(&self, branch: u64, boundary: u64) -> Option<&UiSnapshot> {
-        self.branches.get(&branch)?.get(&boundary)
-    }
-
-    fn fork(&mut self, source: u64, through: u64, target: u64) -> bool {
-        let Some(source_frames) = self.branches.get(&source) else {
-            return false;
-        };
-        let copied = source_frames
-            .range(..=through)
-            .filter_map(|(boundary, snapshot)| {
-                snapshot
-                    .on_branch(target)
-                    .map(|snapshot| (*boundary, snapshot))
-            })
-            .collect::<BTreeMap<_, _>>();
-        if copied.is_empty() {
-            return false;
-        }
-        self.branches.insert(target, copied);
-        true
+    fn frame(&self, session: u64, boundary: u64) -> Option<&UiSnapshot> {
+        self.sessions.get(&session)?.get(&boundary)
     }
 
     fn index_json(&self) -> JsonValue {
         json!({
-            "active_branch": self.live.branch,
+            "active_session": self.live.session,
             "live_boundary": self.live.boundary,
-            "branches": self.branches.iter().map(|(branch, frames)| json!({
-                "branch": branch,
+            "sessions": self.sessions.iter().map(|(session, frames)| json!({
+                "session": session,
                 "frames": frames.values().map(|snapshot| json!({
                     "boundary": snapshot.boundary,
                     "kind": snapshot.kind,
@@ -350,15 +315,6 @@ impl UiServer {
             Err(TrySendError::Disconnected(_)) => {}
         }
     }
-
-    /// Copies an immutable prefix into a new simulation branch. The
-    /// execution owner calls this only after it has independently replayed
-    /// and verified the corresponding semantic state.
-    pub fn fork_timeline(&mut self, source: u64, through: u64, target: u64) -> bool {
-        self.timeline
-            .lock()
-            .is_ok_and(|mut timeline| timeline.fork(source, through, target))
-    }
 }
 
 impl Drop for UiServer {
@@ -478,11 +434,11 @@ async fn handle(
 
 fn historical_snapshot(request: &Request<Incoming>, context: &ServerContext) -> Response<HttpBody> {
     let requested = request.uri().query().and_then(|query| {
-        let branch = query_value(query, "branch")?.parse::<u64>().ok()?;
+        let session = query_value(query, "session")?.parse::<u64>().ok()?;
         let boundary = query_value(query, "boundary")?.parse::<u64>().ok()?;
-        Some((branch, boundary))
+        Some((session, boundary))
     });
-    if let Some((branch, boundary)) = requested {
+    if let Some((session, boundary)) = requested {
         let Ok(timeline) = context.timeline.lock() else {
             return response(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -490,7 +446,7 @@ fn historical_snapshot(request: &Request<Incoming>, context: &ServerContext) -> 
                 "timeline unavailable",
             );
         };
-        return timeline.frame(branch, boundary).map_or_else(
+        return timeline.frame(session, boundary).map_or_else(
             || {
                 response(
                     StatusCode::NOT_FOUND,
@@ -731,13 +687,6 @@ fn command_from_request(spelling: &str, request: &Request<Incoming>) -> Option<U
         "next-scenario-action" => Some(UiCommand::NextScenarioAction),
         "run-until-assertion" => Some(UiCommand::RunUntilAssertion),
         "reset-scenario" => Some(UiCommand::ResetScenario),
-        "branch-from" => {
-            let query = request.uri().query()?;
-            Some(UiCommand::BranchFrom {
-                branch: query_value(query, "branch")?.parse().ok()?,
-                boundary: query_value(query, "boundary")?.parse().ok()?,
-            })
-        }
         "close" => Some(UiCommand::Close),
         "select-scenario" => {
             let query = request.uri().query()?;
@@ -876,13 +825,13 @@ mod tests {
             .expect("static JSON")
     }
 
-    fn timeline_frame(revision: u64, branch: u64, boundary: u64) -> UiSnapshot {
+    fn timeline_frame(revision: u64, session: u64, boundary: u64) -> UiSnapshot {
         UiSnapshot::new(
             revision,
             &serde_json::json!({
                 "revision": revision,
                 "timeline": {
-                    "branch": branch,
+                    "session": session,
                     "boundary": boundary,
                     "record_through": boundary.checked_sub(1),
                 },
@@ -1015,10 +964,10 @@ mod tests {
                 "graphLayout.curvedCorridorPath(route.presentationPoints || route.points)"
             )
         );
-        assert!(APP_JS.contains("showBoundary(branch, frames[index - 1].boundary, true)"));
-        assert!(INDEX_HTML.contains("Branch from here"));
-        assert!(INDEX_HTML.contains("id=\"timeline-branch\""));
-        assert!(APP_JS.contains("Historical branch unavailable"));
+        assert!(APP_JS.contains("showBoundary(session, frames[index - 1].boundary, true)"));
+        assert!(!INDEX_HTML.contains("Branch from here"));
+        assert!(INDEX_HTML.contains("id=\"timeline-session\""));
+        assert!(APP_JS.contains("Historical session unavailable"));
         assert!(GRAPH_LAYOUT_JS.contains("minimizeAdjacentCrossings("));
         assert!(GRAPH_LAYOUT_JS.contains("allocateSideItems("));
         assert!(GRAPH_LAYOUT_JS.contains("occupiedVertical"));
@@ -1057,11 +1006,11 @@ mod tests {
         assert!(!INDEX_HTML.contains("Inject now"));
         assert!(!APP_JS.contains("typeBadge("));
         assert!(GRAPH_LAYOUT_JS.contains("edge.target?.kind !== \"discard\""));
-        assert!(GRAPH_LAYOUT_JS.contains("topology.handler_relations"));
+        assert!(!GRAPH_LAYOUT_JS.contains("topology.handler_relations"));
         assert!(!APP_JS.contains("graph-port-terminal"));
         assert!(APP_JS.contains("drained to nothing; no downstream mailbox"));
-        assert!(APP_JS.contains("control relation, no envelope mailbox"));
-        assert!(APP_JS.contains("inspectHandlerRelation(edge)"));
+        assert!(APP_JS.contains("Manager commands · not spatial edges"));
+        assert!(!APP_JS.contains("inspectHandlerRelation(edge)"));
         assert!(APP_JS.contains("`≡ ${edge.queued_count || \"0\"}`"));
         assert!(APP_JS.contains("`⧉ ${instances.length}`"));
         assert!(APP_JS.contains("Unavailable: ${reason}"));
@@ -1073,7 +1022,7 @@ mod tests {
     }
 
     #[test]
-    fn every_boundary_remains_addressable_and_a_fork_preserves_its_prefix() {
+    fn every_boundary_remains_addressable_and_reset_preserves_the_previous_session() {
         let mut server = UiServer::start(None, timeline_frame(0, 0, 0)).expect("server starts");
         server.publish(timeline_frame(1, 0, 1));
         server.publish(timeline_frame(2, 0, 2));
@@ -1091,23 +1040,35 @@ mod tests {
         let historical = request(
             server.address,
             &format!(
-                "GET /api/snapshot?branch=0&boundary=1&token={} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                "GET /api/snapshot?session=0&boundary=1&token={} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
                 server.capability, server.address
             ),
         );
         assert!(historical.contains("\"boundary\":1"), "{historical}");
         assert!(!historical.contains("\"boundary\":2"), "{historical}");
 
-        assert!(server.fork_timeline(0, 1, 7));
-        let forked = request(
+        server.publish(timeline_frame(3, 1, 0));
+        let reset = request(
             server.address,
             &format!(
-                "GET /api/snapshot?branch=7&boundary=1&token={} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                "GET /api/snapshot?session=1&boundary=0&token={} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
                 server.capability, server.address
             ),
         );
-        assert!(forked.contains("\"branch\":7"), "{forked}");
-        assert!(forked.contains("\"boundary\":1"), "{forked}");
+        assert!(reset.contains("\"session\":1"), "{reset}");
+        assert!(reset.contains("\"boundary\":0"), "{reset}");
+        let retained = request(
+            server.address,
+            &format!(
+                "GET /api/snapshot?session=0&boundary=1&token={} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                server.capability, server.address
+            ),
+        );
+        assert_eq!(
+            historical.split_once("\r\n\r\n").map(|(_, body)| body),
+            retained.split_once("\r\n\r\n").map(|(_, body)| body),
+            "reset never rewrites a retained frame"
+        );
     }
 
     #[test]

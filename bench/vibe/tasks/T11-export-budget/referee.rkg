@@ -2,7 +2,7 @@ lab export {
   simulation refereeing on app {
     scenario answers "a live exporter replies in time" {
       mock exporter {
-        on in { out = . }
+        on in { out = .; exit = Exited { exit_code = 0; signal = null } }
       }
       app.in = "reading 42"
       expect "exported" app.out count == 1 where data == "reading 42"
@@ -15,7 +15,7 @@ lab export {
       }
       app.in = "reading 43"
       advance duration("2s")
-      expect "the typed timeout" app.err count == 1 where data.kind == "TimeoutExpired"
+      expect "the typed timeout" app.err count == 1 where data is TimeoutExpired
       expect nothing app.out
     }
   }

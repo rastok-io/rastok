@@ -603,62 +603,6 @@ fn record_tree(record: &Record) -> Cbor {
                 }
                 None => {}
             }
-            if let Some(fact) = transaction.loop_fact() {
-                let tree = match fact {
-                    crate::journal::LoopFact::Open {
-                        run,
-                        instance,
-                        root,
-                        fuel,
-                        state,
-                    } => Cbor::Array(vec![
-                        Cbor::Uint(1),
-                        Cbor::Bytes(run.id().as_bytes().to_vec()),
-                        instance.tree(),
-                        Cbor::Bytes(root.as_bytes().to_vec()),
-                        Cbor::Uint(*fuel),
-                        spine(state),
-                    ]),
-                    crate::journal::LoopFact::Next {
-                        run,
-                        iteration,
-                        remaining,
-                        selected,
-                        state,
-                        due_at: _,
-                    } => Cbor::Array(vec![
-                        Cbor::Uint(2),
-                        Cbor::Bytes(run.id().as_bytes().to_vec()),
-                        Cbor::Uint(*iteration),
-                        Cbor::Uint(*remaining),
-                        Cbor::Bytes(selected.as_bytes().to_vec()),
-                        spine(state),
-                    ]),
-                    crate::journal::LoopFact::Admit { run, iteration } => Cbor::Array(vec![
-                        Cbor::Uint(5),
-                        Cbor::Bytes(run.id().as_bytes().to_vec()),
-                        Cbor::Uint(*iteration),
-                    ]),
-                    crate::journal::LoopFact::Close { run, iteration } => Cbor::Array(vec![
-                        Cbor::Uint(3),
-                        Cbor::Bytes(run.id().as_bytes().to_vec()),
-                        Cbor::Uint(*iteration),
-                    ]),
-                    crate::journal::LoopFact::Expired {
-                        run,
-                        iteration,
-                        selected,
-                        output,
-                    } => Cbor::Array(vec![
-                        Cbor::Uint(4),
-                        Cbor::Bytes(run.id().as_bytes().to_vec()),
-                        Cbor::Uint(*iteration),
-                        Cbor::Bytes(selected.as_bytes().to_vec()),
-                        spine(output),
-                    ]),
-                };
-                pairs.insert(53, tree);
-            }
             if let Some(logical_time) = transaction.logical_time {
                 pairs.insert(
                     54,
@@ -945,7 +889,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_loop_fact_registry_pins_open_and_admit() {
+    fn the_loop_protocol_registry_pins_open_admit_and_observed_time() {
+        use crate::journal::loop_protocol::{Fact, OpeningAdmissionRef, Packet, run_ref};
         let owner = crate::plan::OwnerPath::root();
         let instance = crate::identity::InstanceRef::new(
             crate::identity::InstanceAddress::singleton(&owner),
@@ -956,7 +901,12 @@ mod tests {
             crate::envelope::Meta::new(crate::envelope::MetaSys::root(root, 1)),
             Data::materialized(crate::value::Value::Int(7)),
         );
-        let run = crate::journal::ids::loop_run_ref(&instance, root);
+        let entry = crate::node::Port::new("in").unwrap();
+        let opening = OpeningAdmissionRef::Ingress {
+            inbound: root,
+            port: entry.clone(),
+        };
+        let run = run_ref(&instance, &opening);
         let record = Record::Transaction(Box::new(crate::journal::TransactionRecord {
             owner_path: owner,
             instance: instance.clone(),
@@ -965,15 +915,17 @@ mod tests {
             trigger: crate::node::Trigger::Port(crate::node::Port::new("in").unwrap()),
             cause: Some(root),
             exchange_exit: None,
-            loop_record: Some(Box::new(crate::journal::LoopRecord::R1(
-                crate::journal::LoopFact::Open {
+            loop_record: Some(Box::new(Packet {
+                facts: vec![Fact::Open {
                     run,
                     instance: instance.clone(),
-                    root,
+                    opening,
+                    entry,
                     fuel: 9,
                     state: state.clone(),
-                },
-            ))),
+                }],
+                ..Packet::default()
+            })),
             logical_time: None,
             timer_schedule: None,
             consumed: Vec::new(),
@@ -988,15 +940,27 @@ mod tests {
             panic!("a transaction projects as a canonical map")
         };
         assert_eq!(
-            tree.get(&53),
-            Some(&Cbor::Array(vec![
-                Cbor::Uint(1),
-                Cbor::Bytes(run.id().as_bytes().to_vec()),
-                instance.tree(),
-                Cbor::Bytes(root.as_bytes().to_vec()),
-                Cbor::Uint(9),
-                spine(&state),
-            ]))
+            tree.get(&55),
+            Some(&Cbor::Map(BTreeMap::from([(
+                5,
+                Cbor::Array(vec![Cbor::Array(vec![
+                    Cbor::Uint(1),
+                    Cbor::Bytes(run.id().as_bytes().to_vec()),
+                    instance.tree(),
+                    Cbor::Array(vec![
+                        Cbor::Uint(1),
+                        Cbor::Bytes(root.as_bytes().to_vec()),
+                        Cbor::Text("in".into())
+                    ]),
+                    Cbor::Text("in".into()),
+                    Cbor::Uint(9),
+                    spine(&state),
+                ])])
+            )])))
+        );
+        assert!(
+            !tree.contains_key(&53),
+            "retired record keys are not reused"
         );
         assert!(!tree.contains_key(&54), "time-insensitive facts omit time");
 
@@ -1013,19 +977,30 @@ mod tests {
             unreachable!("the fixture is a transaction")
         };
         admit.trigger = crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Next);
-        admit.loop_record = Some(Box::new(crate::journal::LoopRecord::R1(
-            crate::journal::LoopFact::Admit { run, iteration: 4 },
-        )));
+        admit.loop_record = Some(Box::new(Packet {
+            facts: vec![Fact::Admit {
+                run,
+                iteration: 0,
+                admission: root,
+                envelope: state.clone(),
+            }],
+            ..Packet::default()
+        }));
         let Cbor::Map(admit_tree) = record_tree(&Record::Transaction(admit)) else {
             panic!("an admission projects as a canonical map")
         };
         assert_eq!(
-            admit_tree.get(&53),
-            Some(&Cbor::Array(vec![
-                Cbor::Uint(5),
-                Cbor::Bytes(run.id().as_bytes().to_vec()),
-                Cbor::Uint(4),
-            ]))
+            admit_tree.get(&55),
+            Some(&Cbor::Map(BTreeMap::from([(
+                5,
+                Cbor::Array(vec![Cbor::Array(vec![
+                    Cbor::Uint(3),
+                    Cbor::Bytes(run.id().as_bytes().to_vec()),
+                    Cbor::Uint(0),
+                    Cbor::Bytes(root.as_bytes().to_vec()),
+                    spine(&state),
+                ])])
+            )])))
         );
     }
 

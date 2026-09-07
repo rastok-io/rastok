@@ -1,5 +1,9 @@
 # R0 identity ledger — target categorical plan v16 and Loop r2
 
+> Final allocation and the single golden update are enumerated in
+> [R9 qualification](rework-r9-qualification.md). This document records
+> the pre-implementation movement contract, not a remaining code gate.
+
 > Frozen before implementation on 2026-09-05. This is a pre-commit ledger, not
 > a claim that v16 has landed. Numeric tags and keys are allocated in R4 only
 > after the source/HIR shapes stabilize; no existing number may be reused.

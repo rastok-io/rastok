@@ -61,7 +61,7 @@ graph {name} : App {{
     max_read = "{max_read}"
   }}
 
-  . -> file
+  in -> file
   file.out -> out
   file.exit -> nothing
 }}
@@ -85,8 +85,8 @@ graph pair : App {
     max_read = "32B"
   }
 
-  . -> left
-  . -> right
+  in -> left
+  in -> right
   left.out -> out
   right.out -> out
   left.exit -> nothing

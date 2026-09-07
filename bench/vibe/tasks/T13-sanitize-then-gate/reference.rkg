@@ -1,15 +1,22 @@
 graph pipeline : App {
+  input in: struct { value: int }
+  output out: struct { value: int }
+
   operator clamp {
+    input in: struct { value: int }
+    output out: struct { value: int }
     on in {
       out = {value = data.value < 0 ? 0 : (data.value > 200 ? 200 : data.value)}
     }
   }
 
   operator gate {
+    input in: struct { value: int }
+    output out: struct { value: int }
     on in where data.value > 150 {
       out = data
     }
   }
 
-  . -> clamp -> gate -> .
+  in -> clamp -> gate -> out
 }

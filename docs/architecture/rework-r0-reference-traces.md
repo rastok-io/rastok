@@ -1,7 +1,7 @@
 # R0 reference traces — Loop r2 by host
 
 > Hand-written semantic traces, frozen 2026-09-05. These are review fixtures,
-> not claims about current v15 output bytes. `T` denotes a TRANSACTION record,
+> not claims about the then-current v15 output bytes. `T` denotes a TRANSACTION record,
 > `I` an INBOUND record, and `O` an OUTBOUND record. Bracketed annotations such
 > as due time are deliberately outside the canonical causal seal.
 
@@ -19,6 +19,27 @@ Q?       quiescence test; an observation, not a journal record
 Each `Produced` item is part of the producer's transaction. Each `Consumed`
 item is part of a later manager transaction. A crash between them is therefore
 recoverable without replaying the producer.
+
+### R9 executable correspondence — 2026-09-07
+
+The frozen sketches below omit ordinary lifecycle records and have two
+record-granularity inaccuracies; they are not byte-for-byte journal goldens:
+
+- `LC[r0]` on an opening route names the eventual application. The executable
+  journal does not claim that context before the manager has committed Open
+  and Admit; it derives it at admission from the retained opening reference.
+- Graph trace rows 3–4 and Call trace rows 3–4 are **one OUTBOUND open** in
+  the implementation, not an additional request-consuming TRANSACTION followed
+  by open. Preparation is pure; the committed open retains and claims the
+  request. Its cursor is consumed once, in the completion transaction after
+  the correlated closure. No effect starts before the open commit.
+
+The authorities are `Vm::open_loop_application`, `Vm::admit_graph_loop` and
+the outbound delivery/completion path; executable prefix comparisons live in
+`v16_loop.rs` and `v16_recovery.rs`, including
+`call_recovery_restores_the_held_delivery_without_restarting_the_driver`.
+These corrections change the illustrative mapping, not the v16 record format,
+effect order, or command-produced/command-consumed crash window.
 
 ## 1. Operator — two applications, natural Done
 

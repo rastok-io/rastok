@@ -39,8 +39,8 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
 
 - Firmware: `spikes/rp2350-emu` — a standalone crate outside the
   product workspace (its embedded runtime dependencies are
-  spike-only). Its current M1.8 A8 transaction-time measurement embeds the
-  blessed **v15 policy-capable package** of `examples/echo.rkg` as a `static`,
+  spike-only). The current R9 measurement embeds the
+  blessed **v16 package** of `examples/echo.rkg` as a `static`,
   opens it with
   `rastok_core::plan::decode` — which now validates
   structurally and re-encodes for canonicity — boots the `Vm` over a
@@ -549,6 +549,31 @@ candidate package bytes and the three-witness hash/causal ledger hold. These
 numbers qualify the linked-code cost and existing relay, not peak memory of
 an executing Graph Call body or its recovery. No gate was raised.
 
+### R9 final package and linked runtime (2026-09-07)
+
+The tracked fixture is now the independently validated and blessed v16 echo
+package, semantic hash `5ffba3ea…`. Its bytes match the candidate measured
+through R4–R8; replacing the fixture does not introduce another identity move.
+The final runtime includes scoped Graph/Operator/Call Loops, inherited state,
+retained exchange recovery and removal of the retired r1 index.
+
+| Measurement | R9 |
+|---|---:|
+| calibration, 2,000,000 exact instructions | 39,999 ticks |
+| package decode | 21,287 ticks |
+| relay average / minimum / maximum | 1,879 / 1,823 / 2,065 ticks |
+| slowest relay, calibration-adjusted | about 103.3 k instructions, below 150 k |
+| heap after opening | 6,440 B |
+| true allocator high-water mark | **111,452 B** |
+| headroom to 128 KiB | **19,620 B (14.97%)** |
+| text + read-only data | 859,004 + 68,056 = **927,060 B**, below 1 MiB |
+| retained records | 67, `SPIKE_OK` |
+
+No gate is raised. This remains the persistent non-Loop relay workload: it
+prices linked-code size and this exact workload, **not** peak memory while
+executing or recovering a Graph Loop. Those paths have host-side semantic
+tests, not a new embedded workload measurement.
+
 From the repository root (the crate must be built from its own
 directory — its `.cargo/config.toml` sets the target and linker
 script, and Cargo only reads that file from the working directory):
@@ -572,18 +597,11 @@ llvm-objdump -d target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350 \
 
 ## Verdict
 
-**GO (provisional), re-issued 2026-08-07 on the corrected
-instrumentation and last re-measured 2026-08-31 at the M1.8 A8 closure.**
-These measurements price complete hierarchical routing, causal instance
-references, the executable lifetime machine, bounded Closing, joins, and the
-R7 closure-only keyed drain. All four
-criteria of record hold: no patched dependencies, 148.3 k instructions for
-the slowest measured relay transaction against the 150 k bound (1.011×), a
-126.9 KiB true high-water mark against 128 KiB (1,100 B / 0.84% / 1.008×
-margin), and 712.1 KiB of flash against
-1 MiB. The
-margins are thinner than first
-claimed and are reported as measured. The option stays dormant as
-planned — no embedded chantier opens. Silicon confirmation (volet B)
-pending an RP2350 board; a NO-GO there would name flash wait states
-as the first suspect.
+**GO for the measured emulated relay, re-measured 2026-09-07 at R9.**
+All four criteria hold: no patched dependency, about 103.3 k instructions for
+the slowest relay against 150 k (about 1.45×), 111,452 B true peak heap against
+128 KiB (19,620 B headroom), and 927,060 B text plus read-only data against
+1 MiB. Historical measurements above retain their original scope and dates.
+The embedded product option remains dormant. Silicon confirmation (volet B)
+still requires an RP2350 board; flash wait states remain a named risk of the
+instruction-proportional proxy, not something this emulation measures.

@@ -68,13 +68,7 @@ impl Vm<'_> {
         if !facts.is_empty() {
             let packet = record
                 .loop_record
-                .get_or_insert_with(|| Box::new(crate::journal::LoopRecord::R2(Packet::default())));
-            let crate::journal::LoopRecord::R2(packet) = packet.as_mut() else {
-                return Err(loop_error(
-                    instance,
-                    "an instance closure mixed Loop record domains",
-                ));
-            };
+                .get_or_insert_with(|| Box::new(Packet::default()));
             packet.facts.extend(facts);
         }
         Ok(())
@@ -254,7 +248,7 @@ impl Vm<'_> {
         slot: Slot,
         record: &mut crate::journal::TransactionRecord,
     ) -> Result<(), VmError> {
-        let Some(crate::journal::LoopRecord::R2(packet)) = record.loop_record.as_deref_mut() else {
+        let Some(packet) = record.loop_record.as_deref_mut() else {
             return Ok(());
         };
         let owner = &self.plan.owners[self.plan.nodes[slot.index()].owner.index()];
@@ -341,15 +335,14 @@ impl Vm<'_> {
             return Ok(());
         };
         if application.instance != *instance {
-            record.loop_record = Some(Box::new(crate::journal::LoopRecord::R2(Packet {
+            record.loop_record = Some(Box::new(Packet {
                 context: vec![run],
                 ..Packet::default()
-            })));
+            }));
             // Closing this Call settles one obligation of the containing
             // Graph, not the whole application. Only its selected routes can
             // produce that Graph's verdict.
-            if let Some(crate::journal::LoopRecord::R2(packet)) = record.loop_record.as_deref_mut()
-            {
+            if let Some(packet) = record.loop_record.as_deref_mut() {
                 packet.context = self.graph_context(delivery).to_vec();
             }
             return self.retain_graph_verdicts(record);
@@ -428,7 +421,7 @@ impl Vm<'_> {
                 },
             ));
         }
-        record.loop_record = Some(Box::new(crate::journal::LoopRecord::R2(packet)));
+        record.loop_record = Some(Box::new(packet));
         self.retain_graph_verdicts(record)
     }
 
@@ -542,8 +535,7 @@ impl Vm<'_> {
                     target: current.instance.clone(),
                 });
                 if !current.enclosing.is_empty()
-                    && let Some(crate::journal::LoopRecord::R2(packet)) =
-                        record.loop_record.as_deref_mut()
+                    && let Some(packet) = record.loop_record.as_deref_mut()
                 {
                     packet.routes.push(protocol::RoutedContext {
                         delivery: ids::delivery_ref(&edge, envelope.meta().sys().id()),
@@ -844,7 +836,7 @@ pub(super) fn manager_record(
         parent_instance: None,
         close_scope: None,
         exchange_exit: None,
-        loop_record: Some(Box::new(crate::journal::LoopRecord::R2(packet))),
+        loop_record: Some(Box::new(packet)),
         logical_time: None,
         timer_schedule: None,
         trigger: node::Trigger::Lifecycle(node::Lifecycle::Next),

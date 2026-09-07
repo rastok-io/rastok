@@ -12,11 +12,11 @@ graph relay : App {
     on in where data is Reply && data["status"] == "ok" { out = data["value"] }
   }
 
-  . -> shell
+  in -> shell
   shell.out -> sift
   shell.err -> nothing
   shell.exit -> nothing
-  sift -> .
+  sift -> out
 }
 
 lab relay {

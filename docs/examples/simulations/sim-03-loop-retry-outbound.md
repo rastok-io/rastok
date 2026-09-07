@@ -1,13 +1,13 @@
 # Reference simulation 3 — Loop retry × outbound WAL × key stability
 
-> **Status : Reference derivation — this complete HTTP/idempotency spelling is
-> not yet executable.** The M1.7 Process retry core is exercised through the
-> public Lab in
-> [`loop_control.rs`](../../../crates/rastok/tests/loop_control.rs); the expected
-> HTTP recovery trace below is still derived by hand from
-> [delivery-semantics.md](../../spec/delivery-semantics.md) §4 and
-> [loop.md](../../spec/loop.md). It is a conformance target for the outbound
-> record lifecycle, the call-closed rule and stable idempotency keys.
+> **Historical pre-v16 derivation, not a current conformance target.** The
+> source below includes removed Graph handlers and port-shaped Loop control;
+> its trace must not be reinterpreted as the r2 protocol. Current Loop Call
+> and recovery evidence lives in
+> [`v16_loop.rs`](../../../crates/rastok/tests/v16_loop.rs),
+> [`loop_control.rs`](../../../crates/rastok/tests/loop_control.rs) and the
+> [R9 ledger](../../architecture/rework-r9-qualification.md). The proposed
+> provider-side business-idempotency integration below remains a design sketch.
 
 ## 1. What this sim exercises
 

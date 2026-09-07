@@ -1,9 +1,9 @@
 # Rastok DSL — Grammar notes
 
-> **Status (2026-09-05): normative v16 target under D-2026-09-05-1.**
-> R0–R2 define the source contract before its R3 implementation. Existing
-> v15 binaries therefore fail closed on the new forms rather than partially
-> executing them. V16 preserves Node-owned `instance`, `lifetime`, `closing`,
+> **Status (2026-09-07): normative v16 under D-2026-09-05-1.**
+> The implemented subset and migration evidence are recorded in
+> [R9](../architecture/rework-r9-qualification.md). Unsupported forms refuse
+> by name at check. V16 preserves Node-owned `instance`, `lifetime`, `closing`,
 > nested Graph composition, and instance-local joins. It replaces the old
 > Kind/Type/Aspect model with Node/Graph/Executor/Connector/Extension, removes Graph
 > and Connector handlers, adds Operator Dispatch and case routing, makes
@@ -1160,11 +1160,11 @@ does not claim implementation or release status.
 | Aggregator pattern | Reducer with `instance.key` | executable without an annotation |
 | Window pattern | stateful owner with a finite `lifetime` | processing-time profiles executable; sliding/event-time deferred |
 | Joiner pattern | Operator with an `on (a, b)` join handler | executable without an annotation |
-| Router pattern | closed/open Dispatch emitting to declared output ports | v16 target; `: Router` refuses |
-| Fanout pattern | atomic multi-emit statement `(a, b, c) = x` | v16 target; no category |
-| Dispatch | recursive `Linear | ClosedMatch | OpenMatch` within one Operator transaction | v16 target |
+| Router pattern | closed/open Dispatch emitting to declared output ports | v16; `: Router` refuses |
+| Fanout pattern | atomic multi-emit statement `(a, b, c) = x` | v16; no category |
+| Dispatch | recursive `Linear | ClosedMatch | OpenMatch` within one Operator transaction | v16 |
 | `Saga` Extension | future compensation orchestration | direction only; fail closed |
-| `Loop` Extension | finite temporal recurrence over an admissible host | v16 target in [loop.md](loop.md) |
+| `Loop` Extension | finite temporal recurrence over an admissible host | v16 in [loop.md](loop.md) |
 | `-> nothing` | Discard sink (built-in) | not a node — `nothing` as an edge target ; non-blocking drain |
 | `RequestReply` | Correlated call pattern | design intent ; may lower to Connector + Operator composition |
 | `Metrics` | Sink Connector | future |
