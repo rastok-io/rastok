@@ -3938,17 +3938,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     let mut successors = vec![Vec::new(); plan.nodes.len()];
     for edge in &plan.edges {
         if let (Some(from), Some(to)) = (edge.from.node, edge.to.as_ref().and_then(|to| to.node)) {
-            let target_is_inbound_boundary =
-                plan.nodes[to.index()].connector().is_some_and(|spec| {
-                    spec.roles.has_inbound()
-                        && (matches!(spec.exchange, crate::connector::ConnectorExchange::Session)
-                            || (!spec.roles.has_outbound()
-                                && matches!(
-                                    spec.exchange,
-                                    crate::connector::ConnectorExchange::Call
-                                )))
-                });
-            if target_is_inbound_boundary {
+            if !plan.nodes[to.index()].input_drives_outputs() {
                 // An inbound Call or duplex Session node has two boundary
                 // halves, not an implicit `in -> out` execution arc. A
                 // response/message terminates at `in`; a later world message

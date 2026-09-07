@@ -234,6 +234,34 @@ impl InstanceAddress {
         self.owner.as_ref()
     }
 
+    /// Structural address containment only. A lifecycle fact must separately
+    /// prove the parent generation; matching keys cannot establish it.
+    pub(crate) fn contains_address(&self, descendant: &Self) -> bool {
+        if !descendant
+            .owner
+            .segments()
+            .starts_with(self.owner.segments())
+        {
+            return false;
+        }
+        let Ok((Cbor::Array(ancestor), _)) = crate::canonical_cbor::decode(&self.bytes) else {
+            return false;
+        };
+        let Ok((Cbor::Array(descendant), _)) = crate::canonical_cbor::decode(&descendant.bytes)
+        else {
+            return false;
+        };
+        let (Some(Cbor::Array(own_frames)), Some(Cbor::Array(frames))) =
+            (ancestor.get(1), descendant.get(1))
+        else {
+            return false;
+        };
+        own_frames.iter().eq(frames.iter().take_while(|frame| {
+            matches!(frame, Cbor::Array(parts) if matches!(parts.first(),
+                Some(Cbor::Array(owner)) if owner.len() <= self.owner.segments().len()))
+        }))
+    }
+
     /// Maps this logical address onto a stable virtual shard.
     ///
     /// The first eight BLAKE3 bytes are interpreted big-endian before the
@@ -306,6 +334,49 @@ fn signed(value: i64) -> Cbor {
 mod tests {
     use super::*;
     use crate::datatype::{DataType, DateUnit, EnumType, StructType, TemporalType, TypeField};
+
+    #[test]
+    fn address_containment_preserves_every_ancestor_key_and_time_box() {
+        let parent = OwnerPath::new(["window"]).unwrap();
+        let child = OwnerPath::new(["window", "worker"]).unwrap();
+        let frames = |key: &str, at| {
+            vec![
+                InstanceFrame::SelectedKey {
+                    owner: parent.clone(),
+                    ty: DataType::Text,
+                    value: Value::Text(key.into()),
+                },
+                InstanceFrame::ProcessingTimeBox {
+                    owner: parent.clone(),
+                    start_ns: at,
+                },
+            ]
+        };
+        let address = InstanceAddress::new(&parent, &frames("alice", 10)).unwrap();
+        for (key, at, matches) in [
+            ("alice", 10, true),
+            ("bob", 10, false),
+            ("alice", 11, false),
+        ] {
+            let mut frames = frames(key, at);
+            frames.push(InstanceFrame::SelectedKey {
+                owner: child.clone(),
+                ty: DataType::INT,
+                value: Value::Int(7),
+            });
+            let descendant = InstanceAddress::new(&child, &frames).unwrap();
+            assert_eq!(address.contains_address(&descendant), matches);
+            assert!(!descendant.contains_address(&address));
+        }
+        assert!(!address.contains_address(&InstanceAddress::singleton(&child)));
+        assert!(
+            !InstanceAddress::singleton(&parent)
+                .contains_address(&InstanceAddress::new(&child, &frames("alice", 10)).unwrap())
+        );
+        assert!(!address.contains_address(&InstanceAddress::singleton(
+            &OwnerPath::new(["other"]).unwrap()
+        )));
+    }
 
     #[test]
     fn instance_addresses_seal_type_value_and_owner_order() {

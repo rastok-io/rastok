@@ -506,6 +506,19 @@ under 150 k. Text 771,436 B + rodata 66,020 B = **837,456 B**, under 1 MiB.
 causal ledger hold. This workload still does not qualify Graph Loop or its
 not-yet-executable complete recovery path.
 
+### R7 exact consumption and R8 window recipients (2026-09-07)
+
+The same persistent non-Loop witness was re-measured after exact consumed
+Loop-context/Call-verdict validation and the pure window-closing correction.
+Peak heap remains **111,452 B**, with **19,620 B (14.97%)** headroom, 6,440 B
+after opening and 67 retained records. Relay remains
+**1,871 / 1,820 / 2,046** ticks against the same calibration; decode is
+21,271 ticks. Text 775,892 B plus rodata 66,272 B = **842,164 B**, an increase
+of **4,708 B** over the preceding checkpoint, below 1 MiB. `SPIKE_OK`, the
+candidate package/hash and the separate three-witness causal ledgers hold.
+No gate was raised. This workload does **not** qualify peak memory during
+window closing or Graph Loop execution/recovery.
+
 From the repository root (the crate must be built from its own
 directory — its `.cargo/config.toml` sets the target and linker
 script, and Cargo only reads that file from the working directory):

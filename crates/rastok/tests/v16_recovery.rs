@@ -506,6 +506,116 @@ graph app : App {
 }
 
 #[test]
+fn graph_window_stop_products_reach_live_siblings_before_parent_stop() {
+    for (aggregate, formatter, bridge, lifetime) in [
+        ("a_total", "z_print", false, "fixed"),
+        ("z_total", "a_print", false, "fixed"),
+        ("z_total", "a_print", true, "fixed"),
+        ("z_total", "a_print", true, "tumbling"),
+    ] {
+        let bound = if lifetime == "tumbling" {
+            "every"
+        } else {
+            "after"
+        };
+        let bridge_decl = if bridge {
+            r#"graph bridge {
+              input in: int
+              output out: int
+              operator relay {
+                input in: int
+                output out: int
+                on in { out = data }
+              }
+              in -> relay -> out
+            }"#
+        } else {
+            ""
+        };
+        let bridge_route = if bridge { "bridge -> " } else { "" };
+        let plan = compile(&format!(
+            r#"
+graph app : App {{
+  input in: int
+  output out: int
+  graph window {{
+    input in: int
+    output out: int
+    lifetime = {{ kind = {lifetime}; {bound} = duration("3s") }}
+    operator {aggregate} {{
+      input in: int
+      output out: int
+      var sum: int = 0
+      on in {{ sum = sum + data }}
+      on stop {{ out = sum }}
+    }}
+    operator {formatter} {{
+      input seed: int
+      input in: int
+      output out: int
+      var prefix: int = 0
+      on seed {{ prefix = prefix + 10 }}
+      on in {{ out = data + prefix }}
+    }}
+    in -> {{ {aggregate}; {formatter}.seed }}
+    {bridge_decl}
+    {aggregate} -> {bridge_route}{formatter} -> out
+  }}
+  in -> window -> out
+}}
+"#
+        ));
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut world = World::default();
+        inject(&mut vm, &mut journal, "in", 3);
+        inject(&mut vm, &mut journal, "in", 4);
+        vm.drain(&mut journal).unwrap();
+        assert!(vm.outputs().is_empty());
+        let mut recovered = Vm::boot(&plan, GraphVersion(1));
+        recovered.recover_from_journal(&journal).unwrap();
+        recovered
+            .advance(&mut journal, &mut world, 3_000_000_000)
+            .unwrap();
+        assert_eq!(recovered.outputs().len(), 1, "{aggregate} -> {formatter}");
+        assert_eq!(
+            recovered.outputs()[0].envelope.data(),
+            &Data::materialized(Value::Int(27)),
+            "the existing formatter state must survive until the upstream stop product"
+        );
+        let stops: Vec<_> = journal
+            .records()
+            .iter()
+            .filter_map(|record| match record {
+                Record::Transaction(record)
+                    if record.trigger
+                        == rastok::node::Trigger::Lifecycle(rastok::node::Lifecycle::Stop) =>
+                {
+                    Some(record.owner_path.to_string())
+                }
+                _ => None,
+            })
+            .collect();
+        let at = |name: &str| stops.iter().position(|path| path == name).unwrap();
+        assert!(at(&format!("window.{aggregate}")) < at(&format!("window.{formatter}")));
+        assert!(at(&format!("window.{formatter}")) < at("window"));
+        assert_eq!(journal.records().iter().filter(|record| matches!(record,
+            Record::Transaction(record)
+                if record.owner_path.to_string() == format!("window.{formatter}")
+                && record.trigger == rastok::node::Trigger::Lifecycle(rastok::node::Lifecycle::Start)
+        )).count(), 1, "a closing receiver is not recreated in a successor generation");
+        let retained = journal.records().to_vec();
+        let mut closed = Vm::boot_at(&plan, GraphVersion(1), 3_000_000_000);
+        closed.recover_from_journal(&journal).unwrap();
+        closed
+            .advance(&mut journal, &mut world, 4_000_000_000)
+            .unwrap();
+        assert_eq!(journal.records(), retained);
+        assert_eq!(closed.outputs(), recovered.outputs());
+    }
+}
+
+#[test]
 fn lifetimes_recover_the_original_admission_deadline_and_idle_renewals() {
     for kind in ["idle", "fixed", "tumbling"] {
         let attribute = if kind == "tumbling" { "every" } else { "after" };

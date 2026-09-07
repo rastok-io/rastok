@@ -2379,6 +2379,70 @@ impl MemJournal {
         })
     }
 
+    fn ancestor_route_was_reserved(
+        &self,
+        target: &InstanceRef,
+        parent: &InstanceRef,
+        cause: Option<Id>,
+    ) -> bool {
+        let Some(cause) = cause else { return false };
+        let after_stop = self
+            .records
+            .iter()
+            .rposition(|record| {
+                matches!(record,
+                    Record::Transaction(record)
+                        if record.instance.address() == target.address()
+                            && record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Stop)
+                )
+            })
+            .map_or(0, |index| index + 1);
+        self.records
+            .iter()
+            .enumerate()
+            .skip(after_stop)
+            .any(|(index, record)| {
+                let Record::Transaction(record) = record else {
+                    return false;
+                };
+                if !record.routes.iter().any(|route| {
+                    route.delivery == cause
+                        && route.target.address().owner() != target.address().owner()
+                        && target.address().contains_address(route.target.address())
+                }) {
+                    return false;
+                }
+                // The reserved leaf also admits its as-yet-unstarted Graph
+                // ancestors. The producer must belong to this exact parent
+                // generation at its commit, not merely share a lexical path.
+                // Its stop may already have committed by the time the child starts.
+                let mut source = &record.instance;
+                loop {
+                    if source == parent {
+                        return true;
+                    }
+                    let ancestor =
+                        self.records[..index]
+                            .iter()
+                            .rev()
+                            .find_map(|record| match record {
+                                Record::Transaction(record)
+                                    if record.instance == *source
+                                        && record.trigger
+                                            == node::Trigger::Lifecycle(node::Lifecycle::Start) =>
+                                {
+                                    record.parent_instance.as_ref()
+                                }
+                                _ => None,
+                            });
+                    let Some(ancestor) = ancestor else {
+                        return false;
+                    };
+                    source = ancestor;
+                }
+            })
+    }
+
     fn prepare_inbound_fact(
         &self,
         submission: InboundSubmission,
@@ -2756,6 +2820,11 @@ impl Journal for MemJournal {
             }
             if self.closing_scope(parent).is_some()
                 && !self.route_was_reserved(&transaction.instance)
+                && !self.ancestor_route_was_reserved(
+                    &transaction.instance,
+                    parent,
+                    transaction.cause,
+                )
             {
                 return Err(Error::InvalidParentInstance {
                     instance: transaction.instance,
@@ -3352,6 +3421,108 @@ mod tests {
         journal
             .commit(lifecycle_transaction(root, node::Lifecycle::Start))
             .expect("the root lifecycle starts");
+    }
+
+    #[test]
+    fn reserved_descendants_prove_ancestor_admission_but_not_another_key_or_generation() {
+        use crate::identity::InstanceFrame;
+        let mut journal = MemJournal::new(GraphVersion(1));
+        activate_root(&mut journal);
+        let parent = InstanceRef::new(
+            InstanceAddress::singleton(&OwnerPath::new(["window"]).unwrap()),
+            0,
+        );
+        journal
+            .commit(lifecycle_transaction(
+                parent.clone(),
+                node::Lifecycle::Start,
+            ))
+            .unwrap();
+        let source = InstanceRef::new(
+            InstanceAddress::singleton(&OwnerPath::new(["window", "total"]).unwrap()),
+            0,
+        );
+        let mut start = lifecycle_transaction(source.clone(), node::Lifecycle::Start);
+        start.parent_instance = Some(parent.clone());
+        journal.commit(start).unwrap();
+        let outside = InstanceRef::new(
+            InstanceAddress::singleton(&OwnerPath::new(["outside"]).unwrap()),
+            0,
+        );
+        journal
+            .commit(lifecycle_transaction(
+                outside.clone(),
+                node::Lifecycle::Start,
+            ))
+            .unwrap();
+        request_close(&mut journal, parent.clone());
+        let owner = OwnerPath::new(["window", "bridge"]).unwrap();
+        let address = |path: &OwnerPath, key: &str| {
+            InstanceAddress::new(
+                path,
+                &[InstanceFrame::SelectedKey {
+                    owner: owner.clone(),
+                    ty: crate::datatype::DataType::Text,
+                    value: crate::value::Value::Text(key.into()),
+                }],
+            )
+            .unwrap()
+        };
+        let child = InstanceRef::new(address(&owner, "alice"), 0);
+        let leaf = InstanceRef::new(
+            address(
+                &OwnerPath::new(["window", "bridge", "relay"]).unwrap(),
+                "alice",
+            ),
+            0,
+        );
+        let cause = Id::from_bytes([1; 16]);
+        let mut stop = lifecycle_transaction(source, node::Lifecycle::Stop);
+        stop.routes.push(RoutedDelivery {
+            delivery: cause,
+            edge: "window.total.out>window.bridge.relay.in".into(),
+            target: leaf.clone(),
+        });
+        journal.commit(stop).unwrap();
+        let mut external = lifecycle_transaction(outside, node::Lifecycle::Recover);
+        external.trigger = node::Trigger::Port(node::Port::new("in").unwrap());
+        external.routes.push(RoutedDelivery {
+            delivery: Id::from_bytes([2; 16]),
+            edge: "outside.out>window.bridge.relay.in".into(),
+            target: leaf,
+        });
+        journal.commit(external).unwrap();
+        let mut start = lifecycle_transaction(child.clone(), node::Lifecycle::Start);
+        start.parent_instance = Some(parent);
+        start.cause = Some(cause);
+        for wrong_key in [false, true] {
+            let mut forged = start.clone();
+            if wrong_key {
+                forged.instance = InstanceRef::new(address(&owner, "bob"), 0);
+            } else {
+                forged.cause = Some(Id::from_bytes([2; 16]));
+            }
+            let before = journal.records().to_vec();
+            assert!(matches!(
+                journal.commit(forged),
+                Err(Error::InvalidParentInstance { .. })
+            ));
+            assert_eq!(journal.records(), before);
+        }
+        journal.commit(start.clone()).unwrap();
+        journal
+            .commit(lifecycle_transaction(child.clone(), node::Lifecycle::Stop))
+            .unwrap();
+        start.instance = InstanceRef::new(child.address().clone(), 1);
+        let before = journal.records().to_vec();
+        assert!(
+            matches!(
+                journal.commit(start),
+                Err(Error::InvalidParentInstance { .. })
+            ),
+            "the prior generation's descendant reservation is not a second admission"
+        );
+        assert_eq!(journal.records(), before);
     }
 
     #[test]

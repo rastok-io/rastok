@@ -721,3 +721,22 @@ categorical expectations. The embedded heap margin is unchanged at 24,828 B;
 linked text and read-only data shrink by **25,792 B**. This cleanup closes the
 retired raw-state item, not the remaining Graph Loop, full recovery or R9
 qualification gates.
+
+## 14. Exact recovery and window recipients — 2026-09-07
+
+The subsequent R7 checkpoints retain exact temporal obligations, bind Loop
+contexts to consumed admissions, and re-derive Call verdicts from retained
+completion facts. The pure fixed/tumbling Graph-window qualification also
+preserves a sibling's live state while upstream `on stop` products drain;
+lazy ancestors require proof from a committed in-scope route, not a fresh
+external admission. See the [recovery report](rework-r7-manager-recovery.md),
+§§5–7, and D-2026-09-07-4 for the named timed-lifetime and closing causal
+corrections. No second format bump or golden re-bless occurred.
+
+The current matrix is **1,178 passed / 32 failed**, 32 suite reports, zero
+ignored. The failures are still 25 old Loop/Graph/UI forms and seven
+categorical expectations. fmt, clippy, docs and three no-std targets pass;
+all three candidate package/hash/causal witnesses are unchanged. Cortex-M33
+retains **111,452 B** peak, **19,620 B** heap headroom and **842,164 B** text
+plus rodata. Graph Loop, remaining exchange recovery and R9 qualification
+are not closed by these checkpoints.

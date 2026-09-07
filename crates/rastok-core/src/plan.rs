@@ -608,6 +608,17 @@ impl Node {
             NodeExecution::Operator => None,
         }
     }
+
+    /// An inbound Call or duplex Session has separate world-facing halves:
+    /// delivering a response/message to `in` cannot cause a new root on `out`.
+    pub(crate) fn input_drives_outputs(&self) -> bool {
+        !self.connector().is_some_and(|spec| {
+            spec.roles.has_inbound()
+                && (spec.exchange == crate::connector::ConnectorExchange::Session
+                    || (!spec.roles.has_outbound()
+                        && spec.exchange == crate::connector::ConnectorExchange::Call))
+        })
+    }
 }
 
 /// Compile-time resolved owner reference. Like [`Slot`], the freely

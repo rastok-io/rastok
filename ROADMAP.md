@@ -246,6 +246,10 @@ takes semantic priority; no public date overrides its R0–R9 exit gates.
   binds r2 packets to their exact instance scope, retained deliveries and
   published expiry, with atomic refusal and unchanged witness identities. See
   [`rework-r7-manager-recovery.md`](docs/architecture/rework-r7-manager-recovery.md).
+  Recovery now also binds contexts to exact consumed admissions and re-derives
+  Call verdicts. R8's pure fixed/tumbling window path preserves recipient state
+  through upstream stop products and supports lazily entered intermediate
+  Graph scopes; it has no Graph application handler.
   Graph Loops, complete recovery, stronger productibility proofs and the fixture
   migration remain open. No golden is blessed;
   R4's review preserves the 128 KiB embedded heap gate (19,620 B headroom

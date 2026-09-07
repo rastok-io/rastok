@@ -47,6 +47,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 mod call_completion;
+mod closing;
 mod loop_manager;
 mod recovery;
 mod timing;
@@ -3734,6 +3735,7 @@ impl<'plan> Vm<'plan> {
         if self.closing.is_empty() {
             return;
         }
+        let mut stop_receivers = BTreeMap::new();
         let mut ready: Vec<(usize, InstanceRef)> = self
             .closing
             .iter()
@@ -3750,6 +3752,13 @@ impl<'plan> Vm<'plan> {
                 !self.scope_has_work(scope)
                     && !self.instance_has_direct_work(reference)
                     && !self.instance_has_descendants(reference)
+                    && match self.plan.owners[self.instances[*reference].owner.index()].kind {
+                        OwnerKind::Graph => true,
+                        OwnerKind::Node(slot) => !stop_receivers
+                            .entry(scope.clone())
+                            .or_insert_with(|| self.pending_stop_receivers(scope))
+                            .contains(&slot),
+                    }
             })
             .map(|(reference, instance)| {
                 (

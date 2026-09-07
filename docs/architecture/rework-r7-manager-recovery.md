@@ -232,3 +232,52 @@ prefixes recover successfully before the corresponding mutations are tested.
 No package, semantic or causal identity changes. This qualifies existing
 Operator/Call consumption; it does not implement Graph boundary push/pop,
 cross-context joins or Graph quiescence from §4.
+
+## 7. Window closure qualification and current matrix — 2026-09-07
+
+The pure Graph-window regression exposed a live-state loss: an aggregator's
+`on stop` product reached a sibling formatter only after that formatter had
+stopped. Reopening it yielded **7 instead of 27**. Equal-length node names,
+tested in both lexical orders, keep canonical address ordering from hiding
+the defect. The scheduler now preserves possible recipients of pending stop
+products until those products have drained. Graphs remain scopes: no Graph
+handler, application transaction or mailbox is introduced.
+
+A nested version exposed a second refusal: the committed route named a leaf
+whose intermediate Graph had not yet started, so the closing parent could
+not admit that ancestor. The journal now verifies the exact retained route's
+cause, ancestor keys/time boxes and parent generation. A different key, an
+external producer, or a reservation predating that ancestor's previous stop
+cannot authorize admission. This is a proof from existing records, not a
+new capability bit or ambient owner-path inference.
+
+Four variants cover opposite node orders, lazy nested routing, and fixed and
+tumbling lifetimes. Each recovers before expiry, checks preserved formatter
+state and stop ordering, then recovers the closed prefix without additional
+outputs or stops. This qualifies the pure window path, not every bounded
+Closing/exchange profile. D-2026-09-07-4 names the affected closing traces and
+results; no package format or semantic hash moves.
+
+| Check executed on §§6–7 | Result |
+|---|---|
+| fmt, `git diff --check` | pass |
+| workspace/all-targets/all-features clippy, warnings denied | pass |
+| `cargo doc --workspace --no-deps` | pass |
+| workspace/all-features, no-fail-fast | **1,178 passed, 32 failed**, 32 suite reports, zero ignored |
+| core / v16 Loop / v16 recovery | **313 / 25 / 9 passed** |
+| no-std, the same three ISA targets as §3 | pass |
+| candidate echo/JSONL/gauge ledger | every package byte, semantic hash and causal seal unchanged |
+| Cortex-M33 | `SPIKE_OK`; **111,452 B** peak, **19,620 B** below 128 KiB |
+
+The failing test-name multiset is identical to §5: 25 old Loop/Graph/UI forms
+and seven categorical expectations. Five new tests pass across §§6–7; none
+is ignored and no golden is re-blessed. The embedded witness still opens at
+6,440 B and retains 67 records. Relay average/minimum/maximum remains
+**1,871 / 1,820 / 2,046** ticks with the same calibration. Decode takes
+21,271 ticks. Text 775,892 B plus rodata 66,272 B = **842,164 B**, an increase
+of 4,708 B over §5, still under 1 MiB. The heap watermark is unchanged.
+That persistent non-Loop witness does not measure the window-closing or
+Graph-Loop workload.
+
+Graph Loop admission/context/quiescence, Event/inbound-Call/Session recovery,
+the full three-host R8 matrix and R9 migration remain open and fail-closed.

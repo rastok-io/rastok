@@ -140,6 +140,43 @@ resume/promotion; accepting missing timing as zero; manufacturing a Response
 for scheduler-owned Timeout/Abandoned; silently claiming identity neutrality
 for the corrected timed-lifetime traces.
 
+## D-2026-09-07-4 — Keep window stop products in their live recipient generations
+
+The R8 window probe exposed two defects in Graph-scope closure. A recipient
+could stop before an upstream `on stop`, then restart with empty private state
+to consume the final aggregate. Also, a reserved delivery to a leaf did not
+authorize starting its new intermediate Graph under the closing parent.
+
+At quiescence, a closing scope now retains every possible recipient of its
+pending Operator stop products, including transitive ordinary execution paths.
+Only after the producer stops and its products drain may those recipients
+stop. Unrelated scopes do not wait. Inbound Call/Session input halves are
+destinations, not fictitious paths to new external output roots; the same
+Contract distinction is used by the spatial DAG validator. No new Graph
+handler or application transaction is introduced.
+
+A committed internal leaf reservation also proves admission of its intermediate
+Graph scopes. The journal requires the exact producing envelope, compatible
+canonical key/time-box frames, and the producer's retained parent-generation
+chain at that commit. A reservation predating the intermediate owner's last
+stop cannot be reused for its successor. A same-path foreign key or an
+outside producer cannot authorize this opening under the closing parent.
+These checks use retained routes and lifecycle facts, not a new record field,
+address recipe, persistent index or package bump.
+
+This corrects causal order and results for affected closing pipelines. It is
+not identity-neutral for those runs: the spurious successor start disappears
+and the final value uses the original recipient state. Nonaffected echo,
+JSONL and gauge witnesses remain unchanged. The pure fixed/tumbling window
+probe qualifies this path, including a lazily entered intermediate Graph and
+recovery before/after closure; it does not qualify Graph Loop orchestration
+or every bounded-Closing exchange profile.
+
+**Rejected:** choosing stop order by owner spelling alone; reopening a
+recipient with fresh state; accepting an ancestor start from lexical path or
+business origin alone; granting a second generation the same reservation;
+turning a Graph into an application Executor to emit its aggregate.
+
 ## D-2026-09-05-1 — Graph is structure; Executors transition; Loop uses durable manager commands
 
 The pre-public Node model is revised before plan v16. A `Node` is either a

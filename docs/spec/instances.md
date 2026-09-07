@@ -596,7 +596,13 @@ graph account_window {
 
 During inner-first Closing, the child `on stop` commits while sibling routes
 in the parent scope remain drainable. Its emission crosses the Graph boundary
-before the parent's `l:stop`. R8 must test that ordering explicitly.
+before the parent's `l:stop`. A live recipient cannot stop while a pending
+upstream `on stop` can still feed it, directly or through ordinary execution
+paths; otherwise routing would recreate it with empty state. New intermediate
+Graph scopes require the retained leaf reservation and exact parent-generation
+evidence, not merely a matching owner path. The R8 fixed/tumbling window probe
+tests both owner orders, a lazy intermediate Graph and recovery, as recorded
+in D-2026-09-07-4.
 
 ## 8. Joins
 
