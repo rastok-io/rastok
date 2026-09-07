@@ -88,13 +88,15 @@ impl Vm<'_> {
     }
 
     pub(super) fn loop_manager_ready(&self) -> bool {
-        self.loop_manager.as_deref().is_some_and(|fold| {
-            fold.runs().any(|(_, state)| {
-                state.pending.is_some()
-                    || (state.phase == Phase::AwaitingAdmission
-                        && state.due_at.is_none_or(|due| due <= self.now))
+        self.graph_admission_ready()
+            || self.loop_manager.as_deref().is_some_and(|fold| {
+                fold.runs().any(|(run, state)| {
+                    state.pending.is_some()
+                        || (state.phase == Phase::AwaitingAdmission
+                            && self.graph_admission_is_head(*run)
+                            && state.due_at.is_none_or(|due| due <= self.now))
+                })
             })
-        })
     }
 
     pub(super) fn loop_application(
@@ -103,6 +105,12 @@ impl Vm<'_> {
         delivery: &Delivery,
     ) -> Option<(LoopRunRef, &protocol::RunState)> {
         let fold = self.loop_manager.as_deref()?;
+        if let Some(run) = self.graph_context(delivery).last().copied() {
+            return fold
+                .run(run)
+                .filter(|state| state.phase == Phase::Active)
+                .map(|state| (run, state));
+        }
         let reference = ids::delivery_ref(&delivery.edge, delivery.envelope.meta().sys().id());
         fold.runs().find_map(|(run, state)| {
             (state.instance == *instance
@@ -392,8 +400,9 @@ impl Vm<'_> {
     pub(super) fn step_loop_manager(&mut self, journal: &mut dyn Journal) -> Result<bool, VmError> {
         let selected = self.loop_manager.as_deref().and_then(|fold| {
             fold.runs().find_map(|(run, state)| {
-                (state.pending.is_some()
+                ((state.pending.is_some() && !self.graph_run_has_work(*run))
                     || (state.phase == Phase::AwaitingAdmission
+                        && self.graph_admission_is_head(*run)
                         && state.due_at.is_none_or(|due| due <= self.now)))
                 .then(|| (*run, state.clone()))
             })
@@ -401,22 +410,23 @@ impl Vm<'_> {
         let Some((run, current)) = selected else {
             return Ok(false);
         };
-        let (slot, owner) = self
+        let (owner, slot) = self
             .plan
-            .nodes
+            .owners
             .iter()
             .enumerate()
-            .find_map(|(index, node)| {
-                (node.path.segments() == current.instance.address().owner().segments()).then(|| {
+            .find_map(|(index, owner)| {
+                (owner.path == *current.instance.address().owner()).then(|| {
                     (
-                        Slot::new(u32::try_from(index).unwrap_or(u32::MAX)),
-                        node.owner,
+                        OwnerSlot::new(index as u32),
+                        match owner.kind {
+                            OwnerKind::Node(slot) => Some(slot),
+                            OwnerKind::Graph => None,
+                        },
                     )
                 })
             })
-            .ok_or_else(|| {
-                loop_error(&current.instance, "the Loop host is not an executable Node")
-            })?;
+            .ok_or_else(|| loop_error(&current.instance, "the Loop host has no declared owner"))?;
         if !matches!(
             self.instances
                 .get(&current.instance)
@@ -441,6 +451,7 @@ impl Vm<'_> {
         }
         if current.phase == Phase::AwaitingAdmission {
             if current.iteration > 0
+                && let Some(slot) = slot
                 && !self
                     .scheduler
                     .mailboxes
@@ -448,26 +459,9 @@ impl Vm<'_> {
             {
                 return Ok(false);
             }
-            let envelope = match current.reentry_cause {
-                None => current.state.clone(),
-                Some(cause) => {
-                    let source = journal.find_envelope(cause).ok_or_else(|| {
-                        loop_error(
-                            &current.instance,
-                            "the recurrence command lost its causal envelope",
-                        )
-                    })?;
-                    Envelope::new(
-                        Meta::new(MetaSys::emission(
-                            current.admission,
-                            source.meta().sys(),
-                            self.graph_version.0,
-                        ))
-                        .with_app(current.state.meta().app().clone())
-                        .with_ext(current.state.meta().ext().clone()),
-                        current.state.data().clone(),
-                    )
-                }
+            let envelope = application_envelope(journal, self.graph_version, &current)?;
+            let Some(slot) = slot else {
+                return self.admit_graph_loop(journal, owner, run, &current, envelope);
             };
             let mut record = manager_record(
                 &current.instance,
@@ -663,11 +657,18 @@ impl Vm<'_> {
             })?;
             record.timer_schedule = Some(Box::new(schedule));
         }
-        let prepared =
-            self.validate_and_prepare_emissions(journal, slot, &current.instance, &record)?;
+        let prepared = match slot {
+            Some(slot) => {
+                self.validate_and_prepare_emissions(journal, slot, &current.instance, &record)?
+            }
+            None => self.prepare_graph_emissions(journal, owner, &current.instance, &record)?,
+        };
         self.retain_emission_routes(&mut record, &prepared)?;
         journal.commit(record).map_err(VmError::Journal)?;
-        self.route_emissions(slot, &current.instance, prepared);
+        match slot {
+            Some(slot) => self.route_emissions(slot, &current.instance, prepared),
+            None => self.route_graph_emissions(owner, &current.instance, prepared),
+        }
         if let Some(at) = due {
             self.scheduler.arm(
                 at,
@@ -728,6 +729,32 @@ pub(super) fn manager_edge(run: LoopRunRef, entry: &node::Port) -> String {
     format!("@loop:{run}:{entry}")
 }
 
+pub(super) fn application_envelope(
+    journal: &dyn Journal,
+    graph_version: GraphVersion,
+    current: &protocol::RunState,
+) -> Result<Envelope, VmError> {
+    let Some(cause) = current.reentry_cause else {
+        return Ok(current.state.clone());
+    };
+    let source = journal.find_envelope(cause).ok_or_else(|| {
+        loop_error(
+            &current.instance,
+            "the recurrence command lost its causal envelope",
+        )
+    })?;
+    Ok(Envelope::new(
+        Meta::new(MetaSys::emission(
+            current.admission,
+            source.meta().sys(),
+            graph_version.0,
+        ))
+        .with_app(current.state.meta().app().clone())
+        .with_ext(current.state.meta().ext().clone()),
+        current.state.data().clone(),
+    ))
+}
+
 fn loop_error(instance: &InstanceRef, reason: &'static str) -> VmError {
     VmError::InvalidLoopDecision {
         owner: instance.address().owner().clone(),
@@ -735,7 +762,7 @@ fn loop_error(instance: &InstanceRef, reason: &'static str) -> VmError {
     }
 }
 
-fn manager_record(
+pub(super) fn manager_record(
     instance: &InstanceRef,
     cause: Id,
     packet: Packet,

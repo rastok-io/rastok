@@ -1,12 +1,13 @@
 # R7 — manager contexts and spatial recovery
 
-> Work in progress, 2026-09-07. This checkpoint strengthens the r2 journal
-> boundary used by the existing Operator/Call Loops. It does **not** open the
-> Graph Loop execution gate or qualify complete Worker recovery.
+> Work in progress, 2026-09-07. The latest checkpoint (§8) opens fuel-bounded
+> pure-Operator Graph Loops, including the App, with exact boundary admission,
+> delivery contexts, quiescence and recovery. Wider Graph obligation profiles
+> and complete Worker recovery remain gated.
 
-The second checkpoint (§5) additionally qualifies outbound Call, join,
-lifetime and Closing recovery. The first-checkpoint counts below are retained
-as history, not substituted for the current matrix.
+The second checkpoint (§5) qualifies outbound Call, join, lifetime and Closing
+recovery. Earlier checkpoint counts and gates below are retained as history,
+not substituted for the current matrix in §8.
 
 ## 1. Invariant and repository contact
 
@@ -281,3 +282,104 @@ Graph-Loop workload.
 
 Graph Loop admission/context/quiescence, Event/inbound-Call/Session recovery,
 the full three-host R8 matrix and R9 migration remain open and fail-closed.
+
+## 8. Pure Graph Loop admission and quiescence — 2026-09-07
+
+D-2026-09-07-5 opens one fuel-bounded Graph Loop whose body consists of
+finite Operator port handlers. A public App Loop and a nested Loop Graph
+both cross source, v16 serialization, Registry-free validation and the VM.
+The Graph owns no application handler, synthetic Node or executable mailbox.
+Its attached manager retains the opening admission under the existing Worker
+bound before expanding the boundary into its internal fan-out. Twelve arrivals
+on one edge consume in FIFO order, not run-hash order. Two admissions with the
+same business origin open distinct runs, while one admission fanning out to
+two children still opens only one run.
+
+`Open` retains the exact admission; the following `Admit` consumes its ordinary
+cursor and commits all selected internal routes and their exact r2 contexts.
+Subsequent child transactions inherit context from the delivery they consume,
+not an owner-path guess. `Loop.state` remains the application's opening envelope
+even after an intermediate Operator overwrites DATA. Egress pops the context;
+downstream parent work is no longer an obligation of that run. Routed Next,
+Again and explicit Done, and natural terminal boundary crossings, produce
+commands in the child transaction. Pending sibling deliveries postpone command
+consumption, and obligations of another run cannot prevent this run closing.
+
+Delay starts at command consumption after quiescence. Recovery retains the
+original due date, restores a committed unconsumed command without rerunning
+its producer, and restores an initial admission without injecting another
+root. Exhaustion publishes `Loop.expired`, including directly on an App Loop.
+Closing discards pending admissions/commands and invalidates a delayed reentry
+without migrating it to another generation.
+
+The independent plan proof composes possible verdict counts over the ordinary
+DAG, saturating at two. A transaction coalesces its own terminal crossings;
+different child transactions do not. Every Dispatch path must have exactly
+one verdict. The route validator independently verifies the selected type of
+Next against the Graph entry: changing Again(text) to Next(text) in a plan
+whose entry is int now refuses. No serialized productivity or control claim
+substitutes for these derivations.
+
+Fourteen new integration regressions cover:
+
+- every committed prefix of the three-application, two-child reference run;
+- concurrent runs, a same-origin fan-out, FIFO admission and bounded precommit
+  capacity; the 1,025th pending admission appends no INBOUND;
+- inherited state after DATA rewriting, all three commands, natural terminal
+  output, App expiry, delay and Closing after recovery, and current-instant
+  work preceding a future `advance` deadline;
+- refused storage commits at every boundary, followed by the same successful
+  record sequence;
+- hostile omitted admission cursors/contexts, a substituted verdict, and a
+  manager consumption moved ahead of its sibling's work. These histories pass
+  the protocol-only fold but refuse spatial recovery without changing the live
+  VM or original journal.
+
+Four existing source-checker tests are updated for the actual opening of this
+gate: the contributed expiry now needs an explicit disposition, the pure Graph
+plan validates, and nested Loop binding resolution remains source-visible but
+its execution still refuses independently. No old-form test is ignored or
+deleted and no golden is re-blessed.
+
+**Named profile limits:** exactly one Loop owner in the plan; positive authored
+fuel, not a Graph measure certificate; no Connectors, joins or lifecycle
+handlers; no classified/annotated state, values or ports; no descendant-local
+stop/lifetime; and no immediate boundary-only verdict. Descendant commands use
+output routing, not direct command statements. A descendant cannot bypass the
+entry to obtain a context. These paths refuse by name at plan validation;
+they do not silently run with weaker quiescence or policy semantics. Operator
+and standalone outbound Call Loop profiles remain unchanged. Their existing
+measure and temporal-recovery evidence is not evidence for these wider Graph
+profiles. R8 and R9 remain open, and the UI stays paused.
+
+**Identity:** no field, tag, Contract, domain or package version is added. Key 11
+already retains the boundary inventory, key 55 the r2 packets and key 56 the
+deadlines. This first Graph profile now produces its specified admission,
+context and manager facts; they are not old Graph-handler traces reinterpreted.
+The separate echo/JSONL/gauge candidate ledger remains the nonaffected control.
+
+| Check executed on §8 | Result |
+|---|---|
+| fmt, `git diff --check` | pass |
+| workspace/all-targets/all-features clippy, warnings denied | pass |
+| `cargo doc --workspace --no-deps` | pass |
+| workspace/all-features, no-fail-fast | **1,192 passed, 32 failed**, 32 suite reports, zero ignored |
+| core / v16 Loop / v16 recovery | **313 / 37 / 9 passed** |
+| no-std, the same three ISA targets as §3 | pass |
+| candidate echo/JSONL/gauge ledger | package files compared byte-for-byte; every semantic hash and causal seal unchanged |
+| Cortex-M33 | `SPIKE_OK`; **111,452 B** peak, **19,620 B** below 128 KiB |
+
+The failing test-name multiset is identical to §7: 25 old Graph/Loop/UI forms
+and seven categorical expectations. Fourteen new tests pass. The new graph
+admission/command projection is absent on the embedded control workload.
+It still retains 67 records and opens at 6,440 B; relay average/minimum/maximum
+is **1,887 / 1,831 / 2,073** ticks, decode 21,274 ticks, with the unchanged
+39,999-tick calibration per 2,000,000 instructions. Text 830,556 B plus rodata
+68,248 B = **898,804 B**, 56,640 B above §7 and below 1 MiB. These are linked
+code and relay measurements, not a Graph Loop workload memory qualification.
+
+An earlier mixed-build qualification run had four extra CLI startup failures
+because concurrent default-feature builds replaced the all-feature CLI under
+test. The final workspace run used one consistent all-feature binary; those
+four tests passed without changing their source or timeout. The evidence above
+uses that completed run, not the transient mixed-artifact result.

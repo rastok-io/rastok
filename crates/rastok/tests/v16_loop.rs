@@ -14,6 +14,455 @@ use rastok::journal::{
 use rastok::plan::{self, GraphVersion};
 use rastok::runtime::vm::Vm;
 
+const GRAPH_LOOP: &str = r#"
+graph app : App {
+  input in: int
+  output out: int
+  output expired: union { LoopExpired { last_state: int } }
+  graph cycle : Loop {
+    input in: int
+    output out: int
+    Loop.fuel = 3
+    operator choose {
+      input in: int
+      output revised: int
+      output accepted: int
+      on in match {
+        data > 0 => revised = data - 1
+        _ => accepted = data
+      }
+    }
+    operator audit {
+      input in: int
+      on in { nothing }
+    }
+    in -> { choose; audit }
+    choose.revised -> Loop.next
+    choose.accepted -> out
+  }
+  in -> cycle
+  cycle.out -> out
+  cycle.Loop.expired -> expired
+}
+"#;
+
+#[test]
+fn the_app_graph_can_loop_and_publish_its_own_expiry() {
+    let source = r#"
+graph app : App + Loop {
+  input in: int
+  output out: int
+  Loop.fuel = 2
+  operator choose {
+    input in: int
+    output revised: int
+    output accepted: int
+    on in match { data > 0 => revised = data - 1; _ => accepted = data }
+  }
+  in -> choose
+  choose.revised -> Loop.next
+  choose.accepted -> out
+}
+"#;
+    let compilation = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let (plan, _) = plan::decode(&plan::encode(&compilation.plan, &compilation.hash)).unwrap();
+    for (input, port) in [(1, "out"), (2, "Loop.expired")] {
+        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut journal = MemJournal::new(GraphVersion(1));
+        inject(&mut vm, &mut journal, input);
+        while !vm.is_stable() {
+            assert!(
+                vm.has_ready_transaction(),
+                "the retained Graph admission is ready"
+            );
+            assert!(vm.step(&mut journal).unwrap());
+        }
+        assert_eq!(vm.outputs().len(), 1, "input {input}");
+        assert_eq!(vm.outputs()[0].port.name(), port);
+        let mut restored = Vm::boot(&plan, GraphVersion(1));
+        restored.recover_from_journal(&journal).unwrap();
+        assert_eq!(restored.outputs(), vm.outputs());
+        assert!(restored.is_stable());
+    }
+}
+
+#[test]
+fn two_graph_loop_admissions_with_one_origin_open_distinct_runs() {
+    let source = GRAPH_LOOP.replace(
+        "  in -> cycle",
+        r#"
+  operator duplicate {
+    input in: int
+    output first: int
+    output second: int
+    on in { (first, second) = data }
+  }
+  in -> duplicate
+  { duplicate.first; duplicate.second } -> cycle
+"#,
+    );
+    let compilation = compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut journal = MemJournal::new(GraphVersion(1));
+    inject(&mut vm, &mut journal, 1);
+    vm.drain(&mut journal).unwrap();
+    assert_eq!(vm.outputs().len(), 2);
+    assert_eq!(
+        vm.outputs()[0].envelope.meta().sys().origin_id(),
+        vm.outputs()[1].envelope.meta().sys().origin_id()
+    );
+    let fold = Fold::from_records(journal.records()).unwrap();
+    assert_eq!(fold.runs().count(), 2);
+    assert!(fold.runs().all(|(_, run)| run.phase == Phase::Closed));
+    let mut restored = Vm::boot(&compilation.plan, GraphVersion(1));
+    restored.recover_from_journal(&journal).unwrap();
+    assert_eq!(restored.outputs(), vm.outputs());
+}
+
+#[test]
+fn a_forged_graph_next_cannot_change_the_entry_type() {
+    let source = GRAPH_LOOP
+        .replace("output revised: int", "output revised: text")
+        .replace("revised = data - 1", "revised = \"retry\"")
+        .replace(
+            "choose.revised -> Loop.next",
+            "choose.revised -> Loop.again",
+        );
+    let compilation = compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let mut forged = compilation.plan.plan().clone();
+    for route in forged.routes.iter_mut().chain(&mut forged.boundary_routes) {
+        if let plan::RouteSelection::All(destinations) = &mut route.selection {
+            for destination in destinations {
+                if let plan::RouteDestination::LoopCommand(command) = destination {
+                    command.kind = plan::LoopCommandKind::Next;
+                }
+            }
+        }
+    }
+    let error = plan::ValidatedExecutionPlan::try_new(forged).unwrap_err();
+    assert!(error.to_string().contains("entry type"), "{error}");
+}
+
+#[test]
+fn graph_admissions_consume_each_edge_in_delivery_order() {
+    let compilation =
+        compiler::compile(&[GRAPH_LOOP], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut journal = MemJournal::new(GraphVersion(1));
+    for _ in 0..12 {
+        inject(&mut vm, &mut journal, 0);
+    }
+    vm.drain(&mut journal).unwrap();
+    let consumed: Vec<_> = journal
+        .records()
+        .iter()
+        .filter_map(|record| match record {
+            Record::Transaction(record)
+                if record.loop_protocol().is_some_and(|packet| {
+                    packet
+                        .facts
+                        .iter()
+                        .any(|fact| matches!(fact, Fact::Admit { iteration: 0, .. }))
+                }) =>
+            {
+                Some(record.consumed[0].seq)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(consumed, (1..=12).collect::<Vec<_>>());
+    assert_eq!(vm.outputs().len(), 12);
+}
+
+#[test]
+fn a_graph_loop_retains_one_boundary_admission_before_its_internal_fanout() {
+    let compilation =
+        compiler::compile(&[GRAPH_LOOP], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let (plan, _) = plan::decode(&plan::encode(&compilation.plan, &compilation.hash)).unwrap();
+    let mut vm = Vm::boot(&plan, GraphVersion(1));
+    let mut journal = MemJournal::new(GraphVersion(1));
+    inject(&mut vm, &mut journal, 2);
+    vm.drain(&mut journal).unwrap();
+    let fold = Fold::from_records(journal.records()).unwrap();
+    assert_eq!(
+        fold.runs().count(),
+        1,
+        "one Graph input, not one run per leaf"
+    );
+    let (_, run) = fold.runs().next().unwrap();
+    assert_eq!((run.iteration, run.phase), (2, Phase::Closed));
+    assert_eq!(vm.outputs().len(), 1);
+    assert_eq!(
+        vm.outputs()[0].envelope.data(),
+        &Data::materialized(Value::Int(0))
+    );
+    assert!(vm.is_stable());
+    let expected = journal.records().to_vec();
+    for cut in 1..=expected.len() {
+        let mut running = Vm::boot(&plan, GraphVersion(1));
+        let mut prefix = MemJournal::new(GraphVersion(1));
+        inject(&mut running, &mut prefix, 2);
+        while prefix.records().len() < cut {
+            assert!(running.step(&mut prefix).unwrap());
+        }
+        let mut restored = Vm::boot(&plan, GraphVersion(1));
+        restored
+            .recover_from_journal(&prefix)
+            .unwrap_or_else(|error| panic!("cut {cut}: {error}"));
+        assert_eq!(prefix.records().len(), cut);
+        restored.drain(&mut prefix).unwrap();
+        assert_eq!(prefix.records(), expected, "cut {cut}");
+        assert_eq!(restored.outputs(), vm.outputs(), "cut {cut}");
+    }
+}
+
+#[test]
+fn graph_loop_commands_wait_for_siblings_and_keep_concurrent_runs_separate() {
+    // The decision sorts before the audit, so a command exists while work remains.
+    let source = GRAPH_LOOP
+        .replace("choose", "a_decide")
+        .replace("audit", "z_audit");
+    let compilation = compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut journal = MemJournal::new(GraphVersion(1));
+    inject(&mut vm, &mut journal, 2);
+    inject(&mut vm, &mut journal, 1);
+    vm.drain(&mut journal).unwrap();
+    assert_eq!(vm.outputs().len(), 2);
+    let fold = Fold::from_records(journal.records()).unwrap();
+    assert_eq!(fold.runs().count(), 2);
+    assert!(fold.runs().all(|(_, state)| state.phase == Phase::Closed));
+    // Every manager consumption follows exactly one audit for that iteration.
+    let mut audits = std::collections::BTreeMap::new();
+    let mut saw_pending_sibling = false;
+    for record in journal.records() {
+        let Record::Transaction(record) = record else {
+            continue;
+        };
+        let Some(packet) = record.loop_protocol() else {
+            continue;
+        };
+        if record.owner_path.to_string() == "cycle.z_audit" {
+            for run in &packet.context {
+                *audits.entry(*run).or_insert(0_usize) += 1;
+            }
+        }
+        for command in &packet.produced {
+            if audits.get(&command.run).copied().unwrap_or(0) == command.iteration as usize {
+                saw_pending_sibling = true;
+            }
+        }
+        for fact in &packet.facts {
+            let iteration = match fact {
+                Fact::Advance { from_iteration, .. } => Some(*from_iteration),
+                Fact::Close { iteration, .. } => Some(*iteration),
+                _ => None,
+            };
+            if let Some(iteration) = iteration {
+                assert_eq!(
+                    audits.get(&fact.run()).copied(),
+                    Some(iteration as usize + 1)
+                );
+            }
+        }
+    }
+    assert!(
+        saw_pending_sibling,
+        "a command is produced before its sibling audit commits"
+    );
+}
+
+#[test]
+fn graph_loop_state_belongs_to_the_consumed_application() {
+    let source = GRAPH_LOOP
+        .replace("data > 0", "Loop.state.data > 0")
+        .replace("revised = data - 1", "revised = Loop.state.data - 1")
+        .replace("accepted = data", "accepted = Loop.state.data")
+        .replace(
+            "    in -> { choose; audit }",
+            r#"
+    operator rewrite {
+      input in: int
+      output out: int
+      on in { out = 99 }
+    }
+    in -> rewrite
+    rewrite.out -> { choose; audit }
+"#,
+        );
+    let compilation = compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let (plan, _) = plan::decode(&plan::encode(&compilation.plan, &compilation.hash)).unwrap();
+    let mut vm = Vm::boot(&plan, GraphVersion(1));
+    let mut journal = MemJournal::new(GraphVersion(1));
+    inject(&mut vm, &mut journal, 2);
+    vm.drain(&mut journal).unwrap();
+    assert_eq!(vm.outputs().len(), 1);
+    assert_eq!(
+        vm.outputs()[0].envelope.data(),
+        &Data::materialized(Value::Int(0))
+    );
+}
+
+#[test]
+fn graph_again_retains_state_and_explicit_done_emits_no_domain_output() {
+    for (input, expected) in [(1, Phase::Expired), (0, Phase::Closed)] {
+        let source = GRAPH_LOOP
+            .replace(
+                "choose.revised -> Loop.next",
+                "choose.revised -> Loop.again",
+            )
+            .replace("choose.accepted -> out", "choose.accepted -> Loop.done");
+        let compilation =
+            compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        let mut journal = MemJournal::new(GraphVersion(1));
+        inject(&mut vm, &mut journal, input);
+        vm.drain(&mut journal).unwrap();
+        let fold = Fold::from_records(journal.records()).unwrap();
+        let (_, run) = fold.runs().next().unwrap();
+        assert_eq!(run.phase, expected);
+        assert_eq!(run.state.data(), &Data::materialized(Value::Int(input)));
+        assert_eq!(vm.outputs().len(), usize::from(expected == Phase::Expired));
+        let mut restored = Vm::boot(&compilation.plan, GraphVersion(1));
+        restored.recover_from_journal(&journal).unwrap();
+        assert_eq!(restored.outputs(), vm.outputs());
+    }
+}
+
+#[test]
+fn graph_manager_admissions_reserve_capacity_before_ingress_commits() {
+    let compilation =
+        compiler::compile(&[GRAPH_LOOP], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut journal = MemJournal::new(GraphVersion(1));
+    for _ in 0..1024 {
+        inject(&mut vm, &mut journal, 0);
+    }
+    let count = journal.records().len();
+    let error = vm
+        .inject(
+            &mut journal,
+            InboundSubmission {
+                provenance: InboundEnvelopeProvenance::single(
+                    rastok::node::Path::new(["test"]).unwrap(),
+                ),
+                port: rastok::node::Port::new("in").unwrap(),
+                draft: Draft {
+                    data: Data::materialized(Value::Int(0)),
+                    ext: Namespace::new(),
+                },
+                sequence: SubmissionSequence::Next,
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        rastok::runtime::vm::VmError::LoopQueueFull { .. }
+    ));
+    assert_eq!(journal.records().len(), count);
+}
+
+#[test]
+fn graph_loop_delay_and_expiry_recover_without_restarting_the_wait() {
+    let source = GRAPH_LOOP.replace(
+        "Loop.fuel = 3",
+        "Loop.fuel = 2\n Loop.delay = { kind = fixed; after = duration(\"1s\") }",
+    );
+    let compilation = compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut journal = MemJournal::new(GraphVersion(1));
+    inject(&mut vm, &mut journal, 2);
+    vm.drain(&mut journal).unwrap();
+    assert!(vm.outputs().is_empty());
+    let mut restored = Vm::boot_at(&compilation.plan, GraphVersion(1), 500_000_000);
+    restored.recover_from_journal(&journal).unwrap();
+    let mut world =
+        RuntimeBindings::try_new(&compilation.plan, &DriverRegistry::default()).unwrap();
+    restored
+        .advance(&mut journal, &mut world, 1_000_000_000)
+        .unwrap();
+    assert_eq!(restored.outputs().len(), 1);
+    assert_eq!(restored.outputs()[0].port.name(), "expired");
+    let fold = Fold::from_records(journal.records()).unwrap();
+    assert!(
+        fold.runs()
+            .all(|(_, state)| state.phase == Phase::Expired && state.iteration == 1)
+    );
+    let last = journal.records().to_vec();
+    let mut closed = Vm::boot_at(&compilation.plan, GraphVersion(1), 2_000_000_000);
+    closed.recover_from_journal(&journal).unwrap();
+    closed
+        .advance(&mut journal, &mut world, 3_000_000_000)
+        .unwrap();
+    assert_eq!(journal.records(), last);
+    assert_eq!(closed.outputs(), restored.outputs());
+}
+
+#[test]
+fn closing_a_graph_loop_invalidates_its_pending_reentry() {
+    let source = GRAPH_LOOP.replace("Loop.fuel = 3", "Loop.fuel = 3\n lifetime = { kind = fixed; after = duration(\"2s\") }\n Loop.delay = { kind = fixed; after = duration(\"5s\") }");
+    let compilation = compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut world =
+        RuntimeBindings::try_new(&compilation.plan, &DriverRegistry::default()).unwrap();
+    inject(&mut vm, &mut journal, 2);
+    vm.drain(&mut journal).unwrap();
+    vm.advance(&mut journal, &mut world, 2_000_000_000).unwrap();
+    assert!(vm.outputs().is_empty());
+    let records = journal.records().to_vec();
+    assert!(
+        Fold::from_records(&records)
+            .unwrap()
+            .runs()
+            .all(|(_, state)| state.phase == Phase::Closed)
+    );
+    let mut restored = Vm::boot_at(&compilation.plan, GraphVersion(1), 2_000_000_000);
+    restored.recover_from_journal(&journal).unwrap();
+    restored
+        .advance(&mut journal, &mut world, 6_000_000_000)
+        .unwrap();
+    assert_eq!(journal.records(), records);
+    assert!(restored.is_stable());
+}
+
+#[test]
+fn logical_advance_drains_graph_admissions_before_a_future_closure() {
+    let source = GRAPH_LOOP.replace(
+        "Loop.fuel = 3",
+        "Loop.fuel = 3\n lifetime = { kind = fixed; after = duration(\"1s\") }",
+    );
+    let compilation = compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut journal = MemJournal::new(GraphVersion(1));
+    for _ in 0..12 {
+        inject(&mut vm, &mut journal, 1);
+    }
+    let mut world =
+        RuntimeBindings::try_new(&compilation.plan, &DriverRegistry::default()).unwrap();
+    vm.advance(&mut journal, &mut world, 2_000_000_000).unwrap();
+    // `advance` drains the current instant before moving to a future deadline.
+    assert_eq!(vm.outputs().len(), 12);
+    assert_eq!(
+        Fold::from_records(journal.records())
+            .unwrap()
+            .runs()
+            .count(),
+        12
+    );
+    assert!(vm.is_stable());
+    let mut restored = Vm::boot_at(&compilation.plan, GraphVersion(1), 2_000_000_000);
+    restored.recover_from_journal(&journal).unwrap();
+    assert!(restored.is_stable());
+    inject(&mut restored, &mut journal, 0);
+    restored.drain(&mut journal).unwrap();
+    assert_eq!(
+        restored.outputs().len(),
+        13,
+        "the successor can admit new work"
+    );
+}
+
 #[test]
 fn the_countdown_example_executes_from_the_v16_package() {
     let compilation = compiler::compile(

@@ -519,6 +519,21 @@ candidate package/hash and the separate three-witness causal ledgers hold.
 No gate was raised. This workload does **not** qualify peak memory during
 window closing or Graph Loop execution/recovery.
 
+### R7 pure Graph Loop profile (2026-09-07)
+
+Retained Graph admissions and exact run-context routing leave the same
+non-Loop witness at **111,452 B** peak, **19,620 B (14.97%)** heap headroom,
+6,440 B after opening and 67 records. No Graph admission/context index is
+allocated on this workload. Relay average/minimum/maximum becomes
+**1,887 / 1,831 / 2,073** ticks against the same calibration (about **103.7 k**
+worst-case instructions, under 150 k). Decode is 21,274 ticks.
+
+Text **830,556 B** plus rodata **68,248 B** totals **898,804 B**, an increase
+of **56,640 B** over the preceding checkpoint, under the unchanged 1 MiB
+gate. `SPIKE_OK`, candidate package bytes/hash and all three witness causal
+ledgers hold. This measures linked-code cost and the existing relay workload,
+not peak memory of a Graph Loop or a recovery operation.
+
 From the repository root (the crate must be built from its own
 directory — its `.cargo/config.toml` sets the target and linker
 script, and Cargo only reads that file from the working directory):

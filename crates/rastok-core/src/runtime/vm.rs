@@ -48,6 +48,7 @@ use alloc::vec::Vec;
 
 mod call_completion;
 mod closing;
+mod graph_loop;
 mod loop_manager;
 mod recovery;
 mod timing;
@@ -548,6 +549,8 @@ struct LifecycleWork {
 struct PreparedEdge {
     edge: Edge,
     target: Option<PreparedTarget>,
+    /// A retained Graph boundary is a routing stage, not an executable Node.
+    boundary: Option<Box<graph_loop::BoundaryRoute>>,
 }
 
 /// One emission coupled to the edge fan-out selected for its exact envelope.
@@ -563,6 +566,7 @@ struct PreparedEmission {
 struct PreparedEmissions {
     emissions: Vec<PreparedEmission>,
     candidates: BTreeMap<InstanceRef, InstanceCandidate>,
+    contexts: Vec<crate::journal::loop_protocol::RoutedContext>,
 }
 
 /// One Operator activation selected without removing mailbox work. Join
@@ -973,6 +977,7 @@ pub struct Vm<'plan> {
     /// Whether command-based Loop work can exist. Non-Loop plans do not
     /// build or scan a manager fold.
     has_loops: bool,
+    graph_loops: Option<Box<graph_loop::GraphLoops>>,
     /// Persistent-only plans do not inspect owner lifetimes on each route.
     has_lifetime_deadlines: bool,
     /// A committed single-pass start creates a recoverable close obligation.
@@ -1267,9 +1272,9 @@ impl<'plan> Vm<'plan> {
         }
         self.plan.owners.iter().find_map(|owner| {
             let spec = owner.loop_spec()?;
-            let supported = matches!(owner.kind, crate::plan::OwnerKind::Node(slot)
+            let supported = (owner.kind == OwnerKind::Graph || matches!(owner.kind, crate::plan::OwnerKind::Node(slot)
                     if matches!(self.plan.nodes[slot.index()].execution, NodeExecution::Operator)
-                        || self.plan.nodes[slot.index()].connector().and_then(crate::plan::ConnectorSpec::call_semantics).is_some())
+                        || self.plan.nodes[slot.index()].connector().and_then(crate::plan::ConnectorSpec::call_semantics).is_some()))
                 && (spec.fuel.is_some() || spec.proof.is_some());
             (!supported).then(|| VmError::UnsupportedExtension {
                 owner: owner.path.clone(),
@@ -1360,6 +1365,11 @@ impl<'plan> Vm<'plan> {
                     .iter()
                     .any(|aspect| aspect.extension() == node::Extension::Loop)
             }),
+            graph_loops: plan
+                .owners
+                .iter()
+                .any(|owner| owner.kind == OwnerKind::Graph && owner.loop_spec().is_some())
+                .then(|| Box::new(graph_loop::GraphLoops::default())),
             has_lifetime_deadlines: plan.owners.iter().any(|owner| {
                 matches!(
                     owner.instance.lifetime,
@@ -2083,6 +2093,9 @@ impl<'plan> Vm<'plan> {
         self.progress_closures();
         if !self.lifecycle.is_empty() {
             self.fire_lifecycle_next(journal)?;
+            return Ok(true);
+        }
+        if self.graph_loops.is_some() && self.open_graph_loop(journal)? {
             return Ok(true);
         }
         if self.has_loops && self.step_loop_manager(journal)? {
@@ -4096,6 +4109,9 @@ impl<'plan> Vm<'plan> {
                 );
         }
         if work.lifecycle == node::Lifecycle::Stop {
+            record
+                .consumed
+                .extend(self.graph_stop_cursors(&work.instance));
             self.close_instance_loops(&work.instance, &mut record)?;
         }
         journal.commit(record.clone()).map_err(VmError::Journal)?;
@@ -4120,6 +4136,7 @@ impl<'plan> Vm<'plan> {
             self.route_emissions(slot, &work.instance, prepared);
         }
         if work.lifecycle == node::Lifecycle::Stop {
+            self.discard_graph_admissions(&work.instance);
             if let Some(slot) = node_slot {
                 self.state
                     .take_unchecked(self.plan.plan(), slot, &work.instance);
@@ -4568,7 +4585,13 @@ impl<'plan> Vm<'plan> {
             ),
         }
         .map_err(VmError::Fault)?;
-        self.prepare_operator_loop_verdict(slot, &mut outcome.record)?;
+        if self.plan.owners[self.plan.nodes[slot.index()].owner.index()]
+            .loop_spec()
+            .is_some()
+        {
+            self.prepare_operator_loop_verdict(slot, &mut outcome.record)?;
+        }
+        self.retain_graph_verdicts(slot, &mut outcome.record)?;
         let close_request = outcome.record.close_scope.clone();
         if let Some(scope) = &close_request {
             outcome.record.timers.extend(self.closing_timers(scope));
@@ -5388,6 +5411,11 @@ impl<'plan> Vm<'plan> {
         }
         self.check_room_for_routes(prepared.iter().map(|emission| emission.routes.as_slice()))?;
         Ok(PreparedEmissions {
+            contexts: if self.graph_loops.is_some() {
+                self.graph_emission_contexts(record, &prepared)
+            } else {
+                Vec::new()
+            },
             emissions: prepared,
             candidates,
         })
@@ -5404,6 +5432,16 @@ impl<'plan> Vm<'plan> {
         envelope: &Envelope,
         candidates: &mut BTreeMap<InstanceRef, InstanceCandidate>,
     ) -> Result<Vec<PreparedEdge>, VmError> {
+        if self.graph_loops.is_some() {
+            return self.prepare_graph_routes(
+                journal,
+                &self.graph_endpoint(from),
+                source_instance,
+                envelope,
+                candidates,
+                false,
+            );
+        }
         let mut prepared = Vec::new();
         let selected_value = self
             .plan
@@ -5449,7 +5487,11 @@ impl<'plan> Vm<'plan> {
                 ),
                 None => None,
             };
-            prepared.push(PreparedEdge { edge, target });
+            prepared.push(PreparedEdge {
+                edge,
+                target,
+                boundary: None,
+            });
         }
         Ok(prepared)
     }
@@ -5615,7 +5657,7 @@ impl<'plan> Vm<'plan> {
             .iter()
             .filter_map(|route| {
                 route.target.as_ref().map(|target| RouteTarget {
-                    edge: self.edge_text(&route.edge),
+                    edge: self.prepared_edge_text(route),
                     target: target.reference.clone(),
                 })
             })
@@ -5632,7 +5674,7 @@ impl<'plan> Vm<'plan> {
                 emission.routes.iter().filter_map(|route| {
                     route.target.as_ref().map(|target| RoutedDelivery {
                         delivery: emission.emission.envelope.meta().sys().id(),
-                        edge: self.edge_text(&route.edge),
+                        edge: self.prepared_edge_text(route),
                         target: target.reference.clone(),
                     })
                 })
@@ -5650,12 +5692,40 @@ impl<'plan> Vm<'plan> {
         candidates: &mut BTreeMap<InstanceRef, InstanceCandidate>,
     ) -> Result<PreparedTarget, VmError> {
         let target_owner = self.plan.nodes[target.index()].owner;
+        self.prepare_owner_target(
+            journal,
+            scope,
+            source_instance,
+            target_owner,
+            envelope,
+            candidates,
+        )
+    }
+
+    fn prepare_owner_target(
+        &self,
+        journal: &(impl InstanceAdmissions + ?Sized),
+        scope: OwnerSlot,
+        source_instance: Option<&InstanceRef>,
+        target_owner: OwnerSlot,
+        envelope: &Envelope,
+        candidates: &mut BTreeMap<InstanceRef, InstanceCandidate>,
+    ) -> Result<PreparedTarget, VmError> {
+        let refusal = |reason| match self.plan.owners[target_owner.index()].kind {
+            OwnerKind::Node(slot) => VmError::PlanInvariant {
+                node: self.plan.nodes[slot.index()].path.clone(),
+                reason,
+            },
+            OwnerKind::Graph => VmError::InvalidLoopDecision {
+                owner: self.plan.owners[target_owner.index()].path.clone(),
+                reason,
+            },
+        };
         let chain = self.owner_chain(target_owner)?;
         let Some(scope_index) = chain.iter().position(|owner| *owner == scope) else {
-            return Err(VmError::PlanInvariant {
-                node: self.plan.nodes[target.index()].path.clone(),
-                reason: "the edge scope is not an ancestor of its target owner",
-            });
+            return Err(refusal(
+                "the edge scope is not an ancestor of its target owner",
+            ));
         };
         let mut selected = Vec::with_capacity(chain.len());
         let mut admitted = Vec::with_capacity(chain.len().saturating_sub(scope_index));
@@ -5682,17 +5752,11 @@ impl<'plan> Vm<'plan> {
         let reference = selected
             .last()
             .cloned()
-            .ok_or_else(|| VmError::PlanInvariant {
-                node: self.plan.nodes[target.index()].path.clone(),
-                reason: "an executable node has no owner chain",
-            })?;
+            .ok_or_else(|| refusal("a routed owner has no owner chain"))?;
         let scope = selected
             .get(scope_index)
             .cloned()
-            .ok_or_else(|| VmError::PlanInvariant {
-                node: self.plan.nodes[target.index()].path.clone(),
-                reason: "the selected owner chain lost its edge scope",
-            })?;
+            .ok_or_else(|| refusal("the selected owner chain lost its edge scope"))?;
         Ok(PreparedTarget {
             reference,
             scope,
@@ -6258,6 +6322,11 @@ impl<'plan> Vm<'plan> {
         let mut loop_owner = None;
         for routes in routes {
             for prepared in routes {
+                if let Some(owner) = self.prepared_graph_entry(prepared) {
+                    loop_admissions = loop_admissions.saturating_add(1);
+                    loop_owner.get_or_insert(owner);
+                    continue;
+                }
                 let Some(to) = &prepared.edge.to else {
                     continue;
                 };
@@ -6300,7 +6369,11 @@ impl<'plan> Vm<'plan> {
             }
         }
         if let Some(owner) = loop_owner
-            && self.loop_admission_load().saturating_add(loop_admissions) > WORKER_MAILBOX_CAPACITY
+            && self
+                .loop_admission_load()
+                .saturating_add(self.graph_admission_load())
+                .saturating_add(loop_admissions)
+                > WORKER_MAILBOX_CAPACITY
         {
             return Err(VmError::LoopQueueFull {
                 owner: self.plan.owners[owner.index()].path.clone(),
@@ -6320,6 +6393,7 @@ impl<'plan> Vm<'plan> {
         let PreparedEmissions {
             emissions,
             candidates,
+            contexts,
         } = prepared;
         for PreparedEmission { emission, routes } in emissions {
             // The emission itself is observable at its source port —
@@ -6336,6 +6410,9 @@ impl<'plan> Vm<'plan> {
                 Some(source_instance),
             );
         }
+        if self.graph_loops.is_some() {
+            self.install_graph_contexts(contexts);
+        }
     }
 
     /// Applies a preselected fan-out; returns how many edges claimed the
@@ -6348,11 +6425,16 @@ impl<'plan> Vm<'plan> {
         source_instance: Option<&InstanceRef>,
     ) -> usize {
         let claimed = routes.len();
-        for PreparedEdge {
-            edge,
-            target: selected,
-        } in routes
-        {
+        for route in routes {
+            if self.deliver_graph_admission(&route, candidates, envelope, source_instance) {
+                continue;
+            }
+            let edge_text = self.prepared_edge_text(&route);
+            let PreparedEdge {
+                edge,
+                target: selected,
+                ..
+            } = route;
             match &edge.to {
                 None => {} // `-> nothing`: the explicit, written discard
                 Some(to) => match to.node {
@@ -6368,7 +6450,6 @@ impl<'plan> Vm<'plan> {
                             .unwrap_or_else(|| unreachable!("a node route has a target bundle"));
                         let source = source_instance.unwrap_or(&prepared.scope).clone();
                         self.install_target(prepared, candidates, envelope);
-                        let edge_text = self.edge_text(&edge);
                         self.scheduler
                             .mailboxes
                             .deliver(

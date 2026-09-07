@@ -14,6 +14,7 @@ mod dispatch;
 mod dispatch_resolution;
 mod dispatch_validation;
 mod emission;
+mod graph_loop;
 mod productibility;
 mod routing;
 mod routing_validation;

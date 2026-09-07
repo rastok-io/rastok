@@ -3805,6 +3805,120 @@ graph app : App {
     }
 }
 
+const GRAPH_MANAGER_PROBE: &str = r#"
+graph app : App {
+  input in: text
+  output expired: union { LoopExpired { last_state: text } }
+  graph cycle : Loop {
+    input in: text
+    Loop.fuel = 2
+    operator worker {
+      input in: text
+      output out: text
+      on in { out = data }
+    }
+    operator z_audit { input in: text; on in { nothing } }
+    in -> { worker; z_audit }
+    worker.out -> Loop.again
+  }
+  in -> cycle
+  cycle.Loop.expired -> expired
+}
+"#;
+
+#[test]
+fn graph_manager_commit_failures_preserve_the_next_boundary() {
+    let compilation = compile(&[GRAPH_MANAGER_PROBE], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let mut expected = FlakyJournal::healthy(GraphVersion(1));
+    let mut continuous = Vm::boot(&compilation.plan, GraphVersion(1));
+    continuous
+        .inject(&mut expected, text_submission("same"))
+        .unwrap();
+    continuous.drain(&mut expected).unwrap();
+    let mut journal = FlakyJournal::healthy(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    vm.inject(&mut journal, text_submission("same")).unwrap();
+    while vm.has_ready_transaction() {
+        let before = vm.inspection();
+        let records = journal.inner.records().to_vec();
+        journal.refuse_commits = true;
+        assert!(matches!(
+            vm.step(&mut journal),
+            Err(VmError::Journal(rastok::journal::Error::Storage(_)))
+        ));
+        assert_eq!(vm.inspection(), before);
+        assert_eq!(journal.inner.records(), records);
+        journal.refuse_commits = false;
+        assert!(vm.step(&mut journal).unwrap());
+    }
+    assert_eq!(journal.inner.records(), expected.inner.records());
+    assert_eq!(vm.outputs(), continuous.outputs());
+}
+
+#[test]
+fn graph_recovery_rederives_admission_context_and_quiescence() {
+    use rastok::journal::loop_protocol::{CommandProduced, CommandValue, Fact, Fold};
+    let compilation = compile(&[GRAPH_MANAGER_PROBE], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let mut journal = FlakyJournal::healthy(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    vm.inject(&mut journal, text_submission("same")).unwrap();
+    vm.drain(&mut journal).unwrap();
+    let original = journal.inner.records().to_vec();
+    for sabotage in 0..4 {
+        let index = original
+            .iter()
+            .position(|record| {
+                let Record::Transaction(record) = record else {
+                    return false;
+                };
+                record.loop_protocol().is_some_and(|packet| match sabotage {
+                    0 | 1 => packet
+                        .facts
+                        .iter()
+                        .any(|fact| matches!(fact, Fact::Admit { .. })),
+                    2 => !packet.produced.is_empty(),
+                    _ => packet
+                        .facts
+                        .iter()
+                        .any(|fact| matches!(fact, Fact::Advance { .. })),
+                })
+            })
+            .unwrap();
+        let mut prefix = original[..=index].to_vec();
+        journal.recovery_records = Some(prefix.clone());
+        let mut valid = Vm::boot(&compilation.plan, GraphVersion(1));
+        valid.recover_from_journal(&journal).unwrap();
+        let Record::Transaction(record) = prefix.last_mut().unwrap() else {
+            panic!("transaction")
+        };
+        let rastok::journal::LoopRecord::R2(packet) = record.loop_record.as_deref_mut().unwrap()
+        else {
+            panic!("r2")
+        };
+        match sabotage {
+            0 => packet.routes.clear(),
+            1 => record.consumed.clear(),
+            2 => {
+                let command = &packet.produced[0];
+                packet.produced[0] = CommandProduced::new(command.run, command.iteration, CommandValue::Done { cause: command.value.cause(), kind: rastok::journal::loop_protocol::DoneKind::Explicit });
+            }
+            _ => prefix.retain(|record| !matches!(record, Record::Transaction(record) if record.owner_path.to_string() == "cycle.z_audit" && matches!(record.trigger, node::Trigger::Port(_)))),
+        }
+        Fold::from_records(&prefix).unwrap();
+        journal.recovery_records = Some(prefix);
+        let before = vm.inspection();
+        assert!(
+            matches!(
+                vm.recover_from_journal(&journal),
+                Err(VmError::InvalidRecovery { .. })
+            ),
+            "sabotage {sabotage}"
+        );
+        assert_eq!(vm.inspection(), before);
+        assert_eq!(journal.inner.records(), original);
+    }
+}
+
 #[test]
 fn call_recovery_requires_run_admission_and_the_retained_terminal_verdict() {
     use rastok::journal::loop_protocol::{CommandProduced, CommandValue, Fold};

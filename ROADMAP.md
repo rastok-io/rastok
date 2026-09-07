@@ -250,12 +250,16 @@ takes semantic priority; no public date overrides its R0–R9 exit gates.
   Call verdicts. R8's pure fixed/tumbling window path preserves recipient state
   through upstream stop products and supports lazily entered intermediate
   Graph scopes; it has no Graph application handler.
-  Graph Loops, complete recovery, stronger productibility proofs and the fixture
-  migration remain open. No golden is blessed;
+  R7 also executes fuel-bounded Graph Loops with pure Operator bodies, including
+  an App Loop: one boundary admission precedes fan-out, exact contexts carry
+  `Loop.state`, and commands wait for sibling work before recurrence. Every
+  committed prefix of the reference run recovers identically. Graph Calls,
+  joins, nested Loops, annotated recurrence, complete recovery, stronger
+  productibility proofs and the fixture migration remain open. No golden is blessed;
   R4's review preserves the 128 KiB embedded heap gate (19,620 B headroom
   after retaining the live delivery schedules) and allocates exact retained
   timer schedules under key 56 before blessing. R7 now uses that allocation;
-  Graph contexts and Event/inbound-Call/Session recovery remain gated;
+  the wider Graph obligation profiles and Event/inbound-Call/Session recovery remain gated;
   the full workspace is not green. See the current §10 of
   [`rework-r4-plan.md`](docs/architecture/rework-r4-plan.md).
   The following records the **pre-cutover R3/R4 checkpoints**, not today's

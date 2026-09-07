@@ -166,29 +166,69 @@ pub(super) fn validate_plan_routing(
         let path = format!("routes[{index}]");
         let source = physical(&rule.source)
             .ok_or_else(|| RouteValidationError::at(&path, RouteErrorKind::UnknownEndpoint))?;
-        let sets: Vec<&[RouteDestination]> = match &rule.selection {
-            RouteSelection::All(destinations) => alloc::vec![destinations],
-            RouteSelection::Cases(arms) => {
-                arms.iter().map(|arm| arm.destinations.as_slice()).collect()
-            }
+        let sets = match &rule.selection {
+            RouteSelection::All(destinations) => alloc::vec![(None, destinations.as_slice())],
+            RouteSelection::Cases(arms) => arms
+                .iter()
+                .map(|arm| (Some(arm.cases.as_slice()), arm.destinations.as_slice()))
+                .collect(),
         };
-        for destination in sets.into_iter().flatten() {
+        for (cases, destination) in sets.into_iter().flat_map(|(cases, destinations)| {
+            destinations
+                .iter()
+                .map(move |destination| (cases, destination))
+        }) {
             if let RouteDestination::LoopCommand(command) = destination {
-                let admitted = command.owner == rule.source.owner
-                    && source.node.is_some_and(|slot| {
-                        let node = &plan.nodes[slot.index()];
-                        plan.owners[node.owner.index()].loop_spec().is_some()
-                            && node
-                                .connector()
-                                .and_then(super::ConnectorSpec::call_semantics)
-                                .is_some()
-                    });
+                let graph_command = match (&command.owner, &rule.source.owner) {
+                    (super::EndpointOwner::Graph(owner), super::EndpointOwner::Node(source)) => {
+                        source.segments().starts_with(owner.segments())
+                            && plan.owners.iter().any(|candidate| {
+                                candidate.path == *owner && candidate.loop_spec().is_some()
+                            })
+                    }
+                    _ => false,
+                };
+                let admitted = graph_command
+                    || command.owner == rule.source.owner
+                        && source.node.is_some_and(|slot| {
+                            let node = &plan.nodes[slot.index()];
+                            plan.owners[node.owner.index()].loop_spec().is_some()
+                                && node
+                                    .connector()
+                                    .and_then(super::ConnectorSpec::call_semantics)
+                                    .is_some()
+                        });
                 if !admitted {
                     return Err(RouteValidationError::at(
                         &path,
                         RouteErrorKind::UnsupportedManagerCommand,
                     )
                     .into());
+                }
+                if graph_command && command.kind == super::LoopCommandKind::Next {
+                    let selected = ports.endpoint_type(&source).and_then(|ty| match cases {
+                        Some(cases) => super::routing::selected_case_type(ty, cases),
+                        None => Some(ty.clone()),
+                    });
+                    let entry = plan.owners.iter().enumerate().find_map(|(index, owner)| {
+                        if command.owner != super::EndpointOwner::Graph(owner.path.clone()) {
+                            return None;
+                        }
+                        let spec = owner.loop_spec()?;
+                        plan.graph_ports(super::OwnerSlot::new(u32::try_from(index).ok()?))?
+                            .iter()
+                            .find(|port| port.port == spec.entry)?
+                            .ty
+                            .as_ref()
+                    });
+                    if !matches!((selected, entry), (Some(from), Some(to)) if from.is_assignable_to(to))
+                    {
+                        return Err(super::PlanValidationError::InvalidLoopControl {
+                            owner: format!("{:?}", command.owner),
+                            path: path.clone(),
+                            detail: "Loop.next must preserve the recurrent entry type",
+                        });
+                    }
                 }
                 continue;
             }

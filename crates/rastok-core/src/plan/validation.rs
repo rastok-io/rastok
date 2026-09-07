@@ -1407,6 +1407,24 @@ fn handler_signature(
             .with("Loop.state", DataType::Variant)
             .with("Loop.state.data", state.clone())
             .with_metadata("Loop.state.meta");
+    } else if matches!(handler.activation, node::HandlerActivation::Port(_)) {
+        let mut ancestor = plan.owners[node.owner.index()].parent;
+        while let Some(owner) = ancestor {
+            if let Some(spec) = plan.owners[owner.index()].loop_spec() {
+                if let Some(state) = plan
+                    .graph_ports(owner)
+                    .and_then(|ports| ports.iter().find(|port| port.port == spec.entry))
+                    .and_then(|port| port.ty.clone())
+                {
+                    signature = signature
+                        .with("Loop.state", DataType::Variant)
+                        .with("Loop.state.data", state)
+                        .with_metadata("Loop.state.meta");
+                }
+                break;
+            }
+            ancestor = plan.owners[owner.index()].parent;
+        }
     }
     for value in &plan.owners[node.owner.index()].vals {
         signature = signature.with(&value.name, value.expr.ty.clone());
@@ -4238,11 +4256,7 @@ fn loop_control_holds(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         match owner.kind {
             OwnerKind::Node(slot) => operator_loop_control(plan, slot, &owner_name)?,
             OwnerKind::Graph => {
-                return Err(PlanValidationError::InvalidLoopControl {
-                    owner: owner_name,
-                    path: String::from("entry"),
-                    detail: "Graph Loop requires routed run contexts and causal quiescence",
-                });
+                super::graph_loop::validate(plan, owner)?;
             }
         }
     }

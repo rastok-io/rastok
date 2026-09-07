@@ -251,6 +251,7 @@ operator relay { on in { out = . } }
 . -> relay -> .
   }
   . -> retry -> .
+  retry.Loop.expired -> nothing
 }
 "#;
     let (hir, bag) = check_source(source);
@@ -295,6 +296,7 @@ operator relay { on in { out = . } }
 . -> relay -> .
   }
   . -> retry -> .
+  retry.Loop.expired -> nothing
 }
 "#;
     let (hir, bag) = check_source(source);
@@ -1518,7 +1520,7 @@ on alternate {{ Loop.done }}
 }
 
 #[test]
-fn graph_loop_requires_boundary_orchestration_before_shipping() {
+fn graph_loop_retains_its_boundary_orchestration_in_the_validated_plan() {
     let hir = check_clean(
         r#"
 graph g : App {
@@ -1536,8 +1538,14 @@ in -> pass -> out
 }
 "#,
     );
-    let error = crate::compiler::lower::lower(&hir).expect_err("Graph Loop needs orchestration");
-    assert!(error.detail.contains("causal quiescence"), "{error:?}");
+    let (plan, _) = crate::compiler::lower::lower(&hir).unwrap();
+    let plan = crate::plan::ValidatedExecutionPlan::try_new(plan).unwrap();
+    assert!(!plan.boundary_routes.is_empty());
+    assert_eq!(
+        plan.handlers.len(),
+        1,
+        "only the explicit child owns a handler"
+    );
 }
 
 #[test]
@@ -1580,7 +1588,16 @@ in -> project -> nested -> out
         ("", "", "Loop.state.data.n"),
         (": Loop", "Loop.fuel = 2", "Loop.state.data"),
     ] {
-        let hir = check_clean(&source(extension, attributes, state));
+        let source = source(extension, attributes, state);
+        let source = if extension.is_empty() {
+            source
+        } else {
+            source.replace(
+                "in -> project -> nested -> out",
+                "in -> project -> nested -> out\nnested.Loop.expired -> nothing",
+            )
+        };
+        let hir = check_clean(&source);
         let read = &hir.app.graphs[0].graphs[0].nodes[0];
         let Dispatch::Linear(body) = &read.handlers[0].dispatch else {
             panic!("expected the reader's linear handler");
@@ -1589,7 +1606,18 @@ in -> project -> nested -> out
             matches!(body.as_slice(), [Statement::Emit { value: EmitValue::Data(tree), .. }]
             if tree.ty == DataType::INT)
         );
-        assert!(crate::compiler::lower::lower(&hir).is_err());
+        let (plan, _) = crate::compiler::lower::lower(&hir).unwrap();
+        if extension.is_empty() {
+            crate::plan::ValidatedExecutionPlan::try_new(plan).unwrap();
+        } else {
+            let error = crate::plan::ValidatedExecutionPlan::try_new(plan).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("nested or adjacent Graph Loop contexts"),
+                "{error}"
+            );
+        }
     }
 }
 

@@ -1726,6 +1726,24 @@ impl Checker<'_, '_> {
             );
         }
         graph.loop_spec = self.loop_declaration(decl, &graph, &signature, &consts);
+        if let Some(spec) = &graph.loop_spec
+            && let Some(state) = graph
+                .boundary
+                .iter()
+                .find(|port| port.port == spec.entry)
+                .and_then(|port| port.ty.clone())
+            && let (Ok(port), Ok(ty)) = (
+                node::Port::new("Loop.expired"),
+                node::loop_expired_type(state),
+            )
+        {
+            graph.boundary.push(crate::plan::PortDecl {
+                port,
+                direction: Direction::Output,
+                ty: Some(ty),
+                annotations: Default::default(),
+            });
+        }
         for (item, mut child_signature, child_consts) in children {
             if let Some(spec) = &graph.loop_spec {
                 let state_type = graph

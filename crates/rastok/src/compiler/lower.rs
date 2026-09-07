@@ -379,6 +379,11 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                 let RouteDestination::LoopCommand(command) = destination else {
                     return false;
                 };
+                if let crate::plan::EndpointOwner::Graph(owner) = &command.owner {
+                    return !sorted_graphs(hir)
+                        .iter()
+                        .any(|graph| graph.path == *owner && graph.loop_spec.is_some());
+                }
                 command.owner != route.source.owner || !nodes.iter().any(|node|
                 matches!(&route.source.owner, crate::plan::EndpointOwner::Node(path) if *path == node.path)
                 && matches!(node.semantics, NodeSemantics::Connector { .. })
@@ -396,12 +401,6 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
             return Err(LowerError {
                 owner: graph.path.to_string(),
                 detail: "Loop manager commands require the R7 execution protocol",
-            });
-        }
-        if graph.loop_spec.is_some() {
-            return Err(LowerError {
-                owner: graph.path.to_string(),
-                detail: "Loop on Graph requires retained boundary admissions, causal quiescence and spatial recovery",
             });
         }
     }

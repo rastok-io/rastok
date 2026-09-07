@@ -30,8 +30,11 @@ case routing, multi-emission and command-based Operator and outbound Call Loops
 cross the new package reader. Operator measures and recovery of Operator/Call
 mailboxes, joins, lifetimes, Closing and command Loops are tested. Nested
 boundary routing is retained and re-derived at decode. Window stop products
-drain through live sibling state before the Graph scope closes;
-Graph Loop orchestration and full obligation recovery remain gated.
+drain through live sibling state before the Graph scope closes. Fuel-bounded
+Graph Loops with pure Operator bodies now retain one admission before fan-out,
+carry exact delivery contexts and recover their commands after causal
+quiescence. Graph Calls, joins, nested Loops, annotated recurrence and complete
+obligation recovery remain gated.
 This is an unqualified cutover, not a finished release: the old Loop
 fixtures and categorical goldens still need migration. The
 [current evidence and remaining gates](docs/architecture/rework-r4-plan.md)

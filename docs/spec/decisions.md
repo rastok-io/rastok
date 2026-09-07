@@ -177,6 +177,45 @@ recipient with fresh state; accepting an ancestor start from lexical path or
 business origin alone; granting a second generation the same reservation;
 turning a Graph into an application Executor to emit its aggregate.
 
+## D-2026-09-07-5 — Open Graph Loop only with retained admission and qualified obligations
+
+The first executable Graph Loop profile is fuel-bounded and contains pure
+Operator port applications. The manager retains one boundary admission before
+fan-out, under the same 1,024-slot Worker bound as the other Loop hosts. The
+Graph remains a scope, not an application Executor. Open and Admit are separate
+commits; Admit consumes the exact FIFO delivery cursor and retains the selected
+internal routes. A public App admission has its own ingress identity, never a
+spatial self-edge. Same-origin admissions are distinct; internal fan-out is not
+another run.
+
+Contexts are derived from exact consumed deliveries and carried only across
+routes that remain inside the corresponding instance. Next/Again/Done commands
+and natural terminal crossings commit with their child transaction. A manager
+consumes its command only after its other causal deliveries drain. Recovery
+reconstructs the same admission, contexts, command and deadlines in a scratch
+VM; producer transactions never rerun. Missing contexts/cursors, substituted
+verdicts and consumption before sibling work all refuse independently of the
+protocol-only fold. The selected Next type is independently checked against the
+entry. Closing wins over delayed recurrence.
+
+This is a qualified profile, not removal of all Graph gates. Nested/adjacent
+Loops, Graph Calls, joins, lifecycle handlers, descendant-local stopping,
+annotated recurrence, measure-only Graphs, direct descendant command statements
+and boundary-only verdicts still refuse with their named qualification limit.
+No assumption about absent effects, secrets or future work is inferred from
+passing the pure-Operator tests. The complete R8 matrix and R9 stay open.
+
+No v16 field or tag is added. The manager uses retained key 11 routing and
+existing r2/timing facts; unused Graph indexes are absent from non-Graph-Loop
+VMs. The three nonaffected candidate package/causal witnesses remain unchanged.
+No golden is blessed. Exact tests, current failures and embedded measurements
+are recorded in [R7 §8](../architecture/rework-r7-manager-recovery.md#8-pure-graph-loop-admission-and-quiescence--2026-09-07).
+
+**Rejected:** opening one run per flattened child edge; using origin or lexical
+membership as a delivery context; consuming manager admissions in hash order;
+advancing while a sibling still owns work; resetting deadlines on recovery;
+admitting unqualified classified/effectful graphs; adding another format bump.
+
 ## D-2026-09-05-1 — Graph is structure; Executors transition; Loop uses durable manager commands
 
 The pre-public Node model is revised before plan v16. A `Node` is either a

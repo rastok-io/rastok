@@ -1,11 +1,12 @@
 # Loop — finite temporal recursion
 
-> **Status (2026-09-06): normative target for categorical plan v16.**
+> **Status (2026-09-07): normative target for categorical plan v16.**
 > The v15 Graph-handler implementation is historical and is superseded by
 > D-2026-09-05-1. Operator and outbound Call hosts execute through v16;
-> Graph orchestration and complete spatial recovery remain fail-closed.
-> [R4 §10](../architecture/rework-r4-plan.md#10-executable-boundary-and-outstanding-work)
-> lists the executable evidence; it is not a claim of full Loop qualification.
+> Fuel-bounded Graph Loops with pure Operator bodies also execute and recover.
+> Graph Calls, joins, nested Loops, annotated recurrence and complete spatial
+> recovery remain fail-closed. [R7 §8](../architecture/rework-r7-manager-recovery.md#8-pure-graph-loop-admission-and-quiescence--2026-09-07)
+> lists the exact profile and evidence; this is not full Loop qualification.
 
 `Loop` is a temporal Extension which applies one finite host application,
 then either terminates or re-enters the same host input. Recurrence is a

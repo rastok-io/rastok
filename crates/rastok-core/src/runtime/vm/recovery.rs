@@ -314,11 +314,24 @@ impl Vm<'_> {
 
         let slot = match self.plan.owners[owner.index()].kind {
             OwnerKind::Graph => {
-                if !record.consumed.is_empty()
+                if record.loop_protocol().is_some()
+                    && record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Next)
+                {
+                    return self.restore_graph_manager(
+                        journal, admissions, index, owner, record, resume_at,
+                    );
+                }
+                let stopped = record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Stop);
+                let mut expected = record.clone();
+                expected.loop_record = None;
+                if stopped {
+                    self.close_instance_loops(&record.instance, &mut expected)?;
+                }
+                if (!stopped && !record.consumed.is_empty())
                     || !record.state_delta.is_empty()
                     || !record.emissions.is_empty()
                     || !record.routes.is_empty()
-                    || record.loop_protocol().is_some()
+                    || record.loop_record != expected.loop_record
                 {
                     return Err(invalid(
                         index,
@@ -328,6 +341,7 @@ impl Vm<'_> {
                 self.check_recovered_delivery_timers(index, record.timer_schedule.as_deref(), &[])?;
                 self.restore_instance_closure(journal, index, record, None)?;
                 if record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Stop) {
+                    self.discard_graph_admissions(&record.instance);
                     self.instances.remove(&record.instance);
                 }
                 return Ok(());
@@ -335,6 +349,22 @@ impl Vm<'_> {
             OwnerKind::Node(slot) => slot,
         };
         self.check_consumed_loop_context(index, slot, record)?;
+        if self.graph_loops.is_some() {
+            let mut derived = record.clone();
+            if let Some(crate::journal::LoopRecord::R2(packet)) = derived.loop_record.as_deref_mut()
+            {
+                packet.produced.clear();
+            }
+            self.retain_graph_verdicts(slot, &mut derived)?;
+            if record.loop_protocol().map(|packet| &packet.produced)
+                != derived.loop_protocol().map(|packet| &packet.produced)
+            {
+                return Err(invalid(
+                    index,
+                    "Graph verdicts differ from the consumed context and output routes",
+                ));
+            }
+        }
         let mut consumed_cause = None;
         for consumed in record
             .consumed
@@ -388,6 +418,17 @@ impl Vm<'_> {
 
         let prepared =
             self.validate_and_prepare_emissions(admissions, slot, &record.instance, record)?;
+        if self.graph_loops.is_some()
+            && record
+                .loop_protocol()
+                .map_or(&[][..], |packet| packet.routes.as_slice())
+                != prepared.contexts
+        {
+            return Err(invalid(
+                index,
+                "routed contexts differ from the consumed Graph application",
+            ));
+        }
         let mut expected_arms = self.emission_timer_arms(&prepared);
         let mut expected = self.routed_deliveries(&prepared);
         let mut recurrence = None;
@@ -628,6 +669,7 @@ impl Vm<'_> {
                 seq: delivery.seq,
             })
             .collect();
+        expected.extend(self.graph_stop_cursors(&record.instance));
         expected.sort();
         if expected != record.consumed {
             return Err(invalid(
@@ -710,7 +752,7 @@ impl Vm<'_> {
         Ok(())
     }
 
-    fn check_recovered_delivery_timers(
+    pub(super) fn check_recovered_delivery_timers(
         &self,
         index: usize,
         schedule: Option<&crate::journal::timing::TimerSchedule>,
