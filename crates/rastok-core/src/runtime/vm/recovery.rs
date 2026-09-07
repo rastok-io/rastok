@@ -5,17 +5,22 @@ use super::*;
 use crate::journal::{Record, TransactionRecord, loop_protocol as protocol};
 
 mod calls;
+mod exchanges;
+mod ingress;
+mod loops;
 
 impl Vm<'_> {
-    /// Restores Operator and outbound Call instances, timed joins, lifetimes,
+    /// Restores Executor instances, exchanges, timed joins, lifetimes,
     /// Closing, mailboxes/cursors, and command Loops from the committed journal prefix. No
     /// producer executes and no new record is appended during reconstruction.
     /// The explicitly supplied boot time is the resume instant; Loop deadlines
     /// come from retained `Advance` facts, never from that instant.
     ///
     /// A scheduler-owned Call closure needs the pure Contract projection from
-    /// [`Self::recover_with_bindings`]. Event, inbound Call and Session
-    /// profiles still require their complete exchange recovery fold.
+    /// [`Self::recover_with_bindings`]. Reconstructed exchanges retain their
+    /// obligations; recovery never reopens a socket or repeats a write. An
+    /// inbound response already eligible for handoff is conservatively held
+    /// until its original transport supplies a terminal fact.
     ///
     /// # Errors
     /// An unsupported recovery profile, an inconsistent committed prefix, or
@@ -37,14 +42,6 @@ impl Vm<'_> {
         bindings: &mut B,
     ) -> Result<(), VmError> {
         self.preflight(journal)?;
-        if self.plan.nodes.iter().any(|node| {
-            node.connector()
-                .is_some_and(|connector| connector.call_semantics().is_none())
-        }) {
-            return Err(VmError::RecoveryUnavailable {
-                reason: "Event, inbound Call and Session obligations need their recovery fold",
-            });
-        }
         let resume_at = self.now;
         let mut candidate = Self::boot_at(self.plan, self.graph_version, 0);
         candidate.expected_deployment = self.expected_deployment.clone();
@@ -103,6 +100,7 @@ impl Vm<'_> {
             })
             .map_err(VmError::Journal)?;
         result?;
+        candidate.retain_recovered_responses()?;
         candidate.dispatcher = Dispatcher::resume(journal);
         candidate.now = resume_at;
         *self = candidate;
@@ -119,68 +117,7 @@ impl Vm<'_> {
         resume_at: i64,
     ) -> Result<(), VmError> {
         match record {
-            Record::Inbound(inbound) => {
-                if inbound.connector_path.is_some() || inbound.exchange.is_some() {
-                    return Err(invalid(
-                        index,
-                        "Connector ingress is not part of this recovery profile",
-                    ));
-                }
-                if inbound.envelope.meta().sys().graph_version() != self.graph_version.0 {
-                    return Err(invalid(
-                        index,
-                        "the ingress graph version differs from the deployed plan",
-                    ));
-                }
-                if inbound
-                    .timer_schedule
-                    .iter()
-                    .flat_map(|schedule| schedule.arms())
-                    .any(|arm| {
-                        !matches!(
-                            arm.kind,
-                            crate::journal::timer_kind::CALL_TIMEOUT
-                                | crate::journal::timer_kind::JOIN_WITHIN
-                                | crate::journal::timer_kind::INSTANCE_LIFETIME
-                                | crate::journal::timer_kind::SESSION_HANDSHAKE
-                        )
-                    })
-                {
-                    return Err(invalid(
-                        index,
-                        "ingress carries a timer without an admitted obligation",
-                    ));
-                }
-                let mut candidates = BTreeMap::new();
-                let routes = self.prepare_routes(
-                    admissions,
-                    &EndpointRef {
-                        node: None,
-                        port: inbound.port.clone(),
-                    },
-                    None,
-                    &inbound.envelope,
-                    &mut candidates,
-                )?;
-                let mut expected = self.inbound_route_targets(&routes);
-                expected.sort();
-                let mut retained = inbound.routes.clone();
-                retained.sort();
-                if expected != retained {
-                    return Err(invalid(
-                        index,
-                        "ingress routes disagree with the plan and instance addresses",
-                    ));
-                }
-                self.check_room_for_routes(core::iter::once(routes.as_slice()))?;
-                self.check_recovered_delivery_timers(
-                    index,
-                    inbound.timer_schedule.as_deref(),
-                    &self.route_timer_arms(&routes, &candidates, &inbound.envelope),
-                )?;
-                self.route_prepared(routes, &candidates, &inbound.envelope, None);
-                Ok(())
-            }
+            Record::Inbound(inbound) => self.restore_ingress(admissions, index, inbound),
             Record::Transaction(transaction) => {
                 self.restore_transaction(journal, admissions, index, transaction, resume_at)?;
                 if self.has_loops {
@@ -196,10 +133,9 @@ impl Vm<'_> {
             Record::Outbound(crate::journal::OutboundRecord::Call(record)) => {
                 self.restore_call(journal, bindings, index, record)
             }
-            Record::Outbound(_) => Err(invalid(
-                index,
-                "an outbound obligation requires exchange recovery",
-            )),
+            Record::Outbound(crate::journal::OutboundRecord::Session(record)) => {
+                self.restore_session(index, record)
+            }
         }
     }
 
@@ -221,6 +157,7 @@ impl Vm<'_> {
                 !matches!(
                     arm.kind,
                     crate::journal::timer_kind::CALL_TIMEOUT
+                        | crate::journal::timer_kind::SESSION_HANDSHAKE
                         | crate::journal::timer_kind::JOIN_WITHIN
                         | crate::journal::timer_kind::INSTANCE_LIFETIME
                         | crate::journal::timer_kind::LOOP_DELAY
@@ -239,12 +176,12 @@ impl Vm<'_> {
             ));
         }
         if record.loop_fact().is_some()
-            || record.exchange_exit.is_some()
             || record.timers.iter().any(|(kind, _)| {
                 !matches!(
                     *kind,
                     crate::journal::timer_kind::LOOP_DELAY
                         | crate::journal::timer_kind::CALL_TIMEOUT
+                        | crate::journal::timer_kind::SESSION_HANDSHAKE
                         | crate::journal::timer_kind::JOIN_WITHIN
                         | crate::journal::timer_kind::INSTANCE_DRAIN
                         | crate::journal::timer_kind::INSTANCE_SETTLEMENT
@@ -302,6 +239,8 @@ impl Vm<'_> {
                 | node::Lifecycle::Evict
                 | node::Lifecycle::Closing,
             ) => {}
+            node::Trigger::Lifecycle(node::Lifecycle::Reply | node::Lifecycle::Exit)
+                if record.exchange_exit.is_some() => {}
             node::Trigger::Lifecycle(node::Lifecycle::Next) if record.loop_protocol().is_some() => {
             }
             _ => {
@@ -348,14 +287,26 @@ impl Vm<'_> {
             }
             OwnerKind::Node(slot) => slot,
         };
-        self.check_consumed_loop_context(index, slot, record)?;
+        let exchange_consumed = self.restore_exchange_exit(index, slot, record)?;
+        if record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Next)
+            && record.loop_protocol().is_some()
+        {
+            self.check_node_manager(journal, index, slot, record, resume_at)?;
+        } else if record.exchange_exit.is_none() {
+            self.check_consumed_loop_context(index, slot, record)?;
+        }
         if self.graph_loops.is_some() {
             let mut derived = record.clone();
             if let Some(crate::journal::LoopRecord::R2(packet)) = derived.loop_record.as_deref_mut()
             {
-                packet.produced.clear();
+                packet.produced.retain(|command| {
+                    self.loop_manager
+                        .as_deref()
+                        .and_then(|fold| fold.run(command.run))
+                        .is_some_and(|state| state.instance == record.instance)
+                });
             }
-            self.retain_graph_verdicts(slot, &mut derived)?;
+            self.retain_graph_verdicts(&mut derived)?;
             if record.loop_protocol().map(|packet| &packet.produced)
                 != derived.loop_protocol().map(|packet| &packet.produced)
             {
@@ -371,6 +322,9 @@ impl Vm<'_> {
             .iter()
             .filter(|_| record.trigger != node::Trigger::Lifecycle(node::Lifecycle::Stop))
         {
+            if exchange_consumed.contains(consumed) {
+                continue;
+            }
             if self.restore_call_consumption(admissions, index, slot, record, consumed)? {
                 continue;
             }
@@ -418,17 +372,7 @@ impl Vm<'_> {
 
         let prepared =
             self.validate_and_prepare_emissions(admissions, slot, &record.instance, record)?;
-        if self.graph_loops.is_some()
-            && record
-                .loop_protocol()
-                .map_or(&[][..], |packet| packet.routes.as_slice())
-                != prepared.contexts
-        {
-            return Err(invalid(
-                index,
-                "routed contexts differ from the consumed Graph application",
-            ));
-        }
+        let mut expected_contexts = prepared.contexts.clone();
         let mut expected_arms = self.emission_timer_arms(&prepared);
         let mut expected = self.routed_deliveries(&prepared);
         let mut recurrence = None;
@@ -460,6 +404,15 @@ impl Vm<'_> {
                         target: record.instance.clone(),
                     });
                     recurrence = Some((state.entry.clone(), edge, envelope.clone()));
+                    if !state.enclosing.is_empty() {
+                        expected_contexts.push(protocol::RoutedContext {
+                            delivery: ids::delivery_ref(
+                                &super::loop_manager::manager_edge(*run, &state.entry),
+                                envelope.meta().sys().id(),
+                            ),
+                            runs: state.enclosing.clone(),
+                        });
+                    }
                     if let Some(AttrSetting::Value(crate::value::Value::Duration(timeout))) =
                         self.plan.nodes[slot.index()]
                             .connector()
@@ -478,6 +431,17 @@ impl Vm<'_> {
             }
         }
         expected.sort();
+        expected_contexts.sort_by_key(|route| route.delivery);
+        if record
+            .loop_protocol()
+            .map_or(&[][..], |packet| packet.routes.as_slice())
+            != expected_contexts
+        {
+            return Err(invalid(
+                index,
+                "routed contexts differ from the exact application",
+            ));
+        }
         if expected != record.routes {
             return Err(invalid(
                 index,
@@ -546,6 +510,7 @@ impl Vm<'_> {
                     envelope,
                 )
                 .map_err(|_| invalid(index, "a recurrent delivery exceeds its mailbox capacity"))?;
+            self.install_graph_contexts(expected_contexts);
         }
         if record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Stop) {
             self.state
@@ -604,10 +569,15 @@ impl Vm<'_> {
                     "a Loop entry is consumed before its retained run admission",
                 ));
             }
-            let run = application.map(|(run, _)| run);
+            let mut runs = self.graph_context(delivery).to_vec();
+            if let Some((run, _)) = application
+                && runs.last() != Some(&run)
+            {
+                runs.push(run);
+            }
             if position == 0 {
-                context.extend(run);
-            } else if context.as_slice() != run.as_slice() {
+                context = runs;
+            } else if context != runs {
                 return Err(invalid(
                     index,
                     "consumed deliveries belong to different Loop contexts",

@@ -673,40 +673,9 @@ impl<'plan> HandlerExecutor<'plan> {
         instance_values: &BTreeMap<String, Value>,
         application: LoopFiring<'_>,
     ) -> Result<TransactionOutcome, Fault> {
-        let binding = String::from("loop_state");
-        let named = [Delivery {
-            port: node::Port::new(binding.clone())
-                .map_err(|error| Fault::Unrepresentable(error.to_string()))?,
-            edge: String::from("@loop.state"),
-            seq: 0,
-            source_instance: instance.clone(),
-            envelope: application.state.clone(),
-        }];
-        let loop_state = expr::EvalValue::Struct(vec![
-            (
-                String::from("data"),
-                expr::EvalValue::Payload(expr::PayloadRef::Named(binding.clone())),
-            ),
-            (
-                String::from("meta"),
-                expr::EvalValue::from(meta_value(application.state.meta())),
-            ),
-        ]);
-        let extra = BTreeMap::from([
-            (
-                String::from("Loop.state.data"),
-                expr::EvalValue::Payload(expr::PayloadRef::Named(binding)),
-            ),
-            (
-                String::from("Loop.state.meta"),
-                expr::EvalValue::from(meta_value(application.state.meta())),
-            ),
-            (String::from("Loop.state"), loop_state.clone()),
-            (
-                String::from("Loop"),
-                expr::EvalValue::Struct(vec![(String::from("state"), loop_state)]),
-            ),
-        ]);
+        let mut named = vec![];
+        let mut extra = BTreeMap::new();
+        bind_loop_state(instance, &application, &mut named, &mut extra)?;
         self.fire_activation(
             slot,
             instance,
@@ -787,6 +756,7 @@ impl<'plan> HandlerExecutor<'plan> {
     /// declared port order; the trigger is the member that arrived last in
     /// the owning mailbox. Every cursor and contribution id commits in the
     /// same transaction.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn fire_join(
         &self,
         slot: Slot,
@@ -794,8 +764,14 @@ impl<'plan> HandlerExecutor<'plan> {
         candidate: JoinCandidate<'_>,
         state: &BTreeMap<String, Value>,
         instance_values: &BTreeMap<String, Value>,
+        application: Option<LoopFiring<'_>>,
     ) -> Result<TransactionOutcome, Fault> {
-        let (input, extra) = join_context(self.plan.plan(), candidate.trigger, candidate.inputs);
+        let (input, mut extra) =
+            join_context(self.plan.plan(), candidate.trigger, candidate.inputs);
+        let mut named = candidate.inputs.to_vec();
+        if let Some(application) = &application {
+            bind_loop_state(instance, application, &mut named, &mut extra)?;
+        }
         let consumed = candidate
             .inputs
             .iter()
@@ -817,8 +793,8 @@ impl<'plan> HandlerExecutor<'plan> {
             state,
             instance_values,
             &extra,
-            candidate.inputs,
-            None,
+            &named,
+            application,
         )?;
         outcome.record.join_inputs = candidate
             .inputs
@@ -2478,6 +2454,40 @@ fn join_context(
         );
     }
     (input, bindings)
+}
+
+fn bind_loop_state(
+    instance: &InstanceRef,
+    application: &LoopFiring<'_>,
+    named: &mut Vec<Delivery>,
+    bindings: &mut BTreeMap<String, expr::EvalValue>,
+) -> Result<(), Fault> {
+    // This payload slot cannot collide with an authored join input name.
+    let binding = String::from("@Loop.state");
+    named.push(Delivery {
+        port: node::Port::new(binding.clone())
+            .map_err(|error| Fault::Unrepresentable(error.to_string()))?,
+        edge: String::from("@loop.state"),
+        seq: 0,
+        source_instance: instance.clone(),
+        envelope: application.state.clone(),
+    });
+    let data = expr::EvalValue::Payload(expr::PayloadRef::Named(binding));
+    let meta = expr::EvalValue::from(meta_value(application.state.meta()));
+    let state = expr::EvalValue::Struct(vec![
+        (String::from("data"), data.clone()),
+        (String::from("meta"), meta.clone()),
+    ]);
+    bindings.extend([
+        (String::from("Loop.state.data"), data),
+        (String::from("Loop.state.meta"), meta),
+        (String::from("Loop.state"), state.clone()),
+        (
+            String::from("Loop"),
+            expr::EvalValue::Struct(vec![(String::from("state"), state)]),
+        ),
+    ]);
+    Ok(())
 }
 
 /// The handler-facing logical view of an envelope's metadata: the full

@@ -1,12 +1,11 @@
 # Loop — finite temporal recursion
 
 > **Status (2026-09-07): normative target for categorical plan v16.**
-> The v15 Graph-handler implementation is historical and is superseded by
-> D-2026-09-05-1. Operator and outbound Call hosts execute through v16;
-> Fuel-bounded Graph Loops with Operator and finite outbound Call bodies also
-> execute and recover. Graph joins, nested Loops, annotated recurrence and
-> complete spatial recovery remain fail-closed. [R7 §9](../architecture/rework-r7-manager-recovery.md#9-graph-calls-and-correlated-quiescence--2026-09-07)
-> lists the exact profile and evidence; this is not full Loop qualification.
+> Operator, outbound Call and Graph hosts execute and recover, including nested
+> runs, annotated recurrence, entry-preserving Graph measures, boundary-only
+> bodies and unconditional same-context joins. The control-proof limits below
+> remain explicit. [R7 §10](../architecture/rework-r7-manager-recovery.md#10-context-composition-and-exchange-recovery--2026-09-07)
+> records the checkpoint; R9 migration and final qualification are in progress.
 
 `Loop` is a temporal Extension which applies one finite host application,
 then either terminates or re-enters the same host input. Recurrence is a
@@ -435,6 +434,14 @@ needed by every application must enter through the opening state, be retained
 in `Loop.state`, and travel through `Loop.next`; alternatively, perform the
 join outside the Loop Graph. Cross-context joins are deferred until they have
 an explicit run-association rule.
+
+The spatial control proof admits an unconditional join only when each
+application supplies exactly one candidate to each input. A join with `where`,
+`within` or `last`, or a descendant lifecycle/lifetime-dependent application,
+requires a stronger per-run completion proof and refuses at check today. The
+proof also refuses beyond 1,024 distinct outcome combinations; it never admits
+a program using approximate evidence. Joins and windows outside a Loop
+application are unaffected.
 
 ## 17. Related documents
 

@@ -91,7 +91,10 @@ impl Vm<'_> {
         self.graph_admission_ready()
             || self.loop_manager.as_deref().is_some_and(|fold| {
                 fold.runs().any(|(run, state)| {
-                    (state.pending.is_some() && !self.graph_run_has_work(*run))
+                    self.graph_entry_verdict(*run, state)
+                        .is_ok_and(|record| record.is_some())
+                        || self.graph_run_awaits_verdict(*run, state)
+                        || (state.pending.is_some() && !self.graph_run_has_work(*run))
                         || (state.phase == Phase::AwaitingAdmission
                             && self.graph_admission_is_head(*run)
                             && state.due_at.is_none_or(|due| due <= self.now))
@@ -105,22 +108,23 @@ impl Vm<'_> {
         delivery: &Delivery,
     ) -> Option<(LoopRunRef, &protocol::RunState)> {
         let fold = self.loop_manager.as_deref()?;
-        if let Some(run) = self.graph_context(delivery).last().copied() {
-            return fold
-                .run(run)
-                .filter(|state| state.phase == Phase::Active)
-                .map(|state| (run, state));
-        }
         let reference = ids::delivery_ref(&delivery.edge, delivery.envelope.meta().sys().id());
-        fold.runs().find_map(|(run, state)| {
-            (state.instance == *instance
-                && state.phase == Phase::Active
-                && ((state.iteration == 0 && state.admission == reference)
-                    || (state.iteration > 0
-                        && state.admission == delivery.envelope.meta().sys().id()
-                        && delivery.edge == manager_edge(*run, &state.entry))))
-            .then_some((*run, state))
-        })
+        fold.runs()
+            .find_map(|(run, state)| {
+                (state.instance == *instance
+                    && state.phase == Phase::Active
+                    && ((state.iteration == 0 && state.admission == reference)
+                        || (state.iteration > 0
+                            && state.admission == delivery.envelope.meta().sys().id()
+                            && delivery.edge == manager_edge(*run, &state.entry))))
+                .then_some((*run, state))
+            })
+            .or_else(|| {
+                let run = self.graph_context(delivery).last().copied()?;
+                fold.run(run)
+                    .filter(|state| state.phase == Phase::Active)
+                    .map(|state| (run, state))
+            })
     }
 
     pub(super) fn open_loop_application(
@@ -134,7 +138,11 @@ impl Vm<'_> {
         let Some(spec) = owner.loop_spec() else {
             return Ok(false);
         };
-        if spec.entry != delivery.port || self.loop_application(instance, delivery).is_some() {
+        if spec.entry != delivery.port
+            || self
+                .loop_application(instance, delivery)
+                .is_some_and(|(_, state)| state.instance == *instance)
+        {
             return Ok(false);
         }
         let opening = protocol::OpeningAdmissionRef::Delivery(ids::delivery_ref(
@@ -171,6 +179,7 @@ impl Vm<'_> {
             instance,
             delivery.envelope.meta().sys().id(),
             Packet {
+                context: self.graph_context(delivery).to_vec(),
                 facts: vec![Fact::Open {
                     run,
                     instance: instance.clone(),
@@ -213,7 +222,10 @@ impl Vm<'_> {
             .ok_or_else(|| loop_error(instance, "an expiring Loop entry lost its queued delivery"))?
             .clone();
         self.open_loop_application(journal, slot, instance, &delivery)?;
-        if self.loop_application(instance, &delivery).is_some() {
+        if self
+            .loop_application(instance, &delivery)
+            .is_some_and(|(_, state)| state.instance == *instance)
+        {
             return Ok(());
         }
         let opening = protocol::OpeningAdmissionRef::Delivery(ids::delivery_ref(edge, envelope));
@@ -222,6 +234,7 @@ impl Vm<'_> {
             instance,
             envelope,
             Packet {
+                context: self.graph_context(&delivery).to_vec(),
                 facts: vec![Fact::Admit {
                     run,
                     iteration: 0,
@@ -327,7 +340,7 @@ impl Vm<'_> {
         let Some((run, application)) = self.loop_application(instance, delivery) else {
             return Ok(());
         };
-        if !self.graph_context(delivery).is_empty() {
+        if application.instance != *instance {
             record.loop_record = Some(Box::new(crate::journal::LoopRecord::R2(Packet {
                 context: vec![run],
                 ..Packet::default()
@@ -335,7 +348,11 @@ impl Vm<'_> {
             // Closing this Call settles one obligation of the containing
             // Graph, not the whole application. Only its selected routes can
             // produce that Graph's verdict.
-            return self.retain_graph_verdicts(slot, record);
+            if let Some(crate::journal::LoopRecord::R2(packet)) = record.loop_record.as_deref_mut()
+            {
+                packet.context = self.graph_context(delivery).to_vec();
+            }
+            return self.retain_graph_verdicts(record);
         }
         let node = &self.plan.nodes[slot.index()];
         let terminal = terminal
@@ -345,7 +362,12 @@ impl Vm<'_> {
             reason,
         };
         let mut packet = Packet {
-            context: vec![run],
+            context: application
+                .enclosing
+                .iter()
+                .copied()
+                .chain(core::iter::once(run))
+                .collect(),
             ..Packet::default()
         };
         for emission in &record.emissions {
@@ -376,6 +398,9 @@ impl Vm<'_> {
                     let RouteDestination::LoopCommand(command) = destination else {
                         continue;
                     };
+                    if command.owner != crate::plan::EndpointOwner::Node(node.path.clone()) {
+                        continue;
+                    }
                     let value = match command.kind {
                         LoopCommandKind::Next => CommandValue::Next(emission.envelope.clone()),
                         LoopCommandKind::Again => CommandValue::Again(emission.envelope.meta().sys().id()),
@@ -404,13 +429,28 @@ impl Vm<'_> {
             ));
         }
         record.loop_record = Some(Box::new(crate::journal::LoopRecord::R2(packet)));
-        Ok(())
+        self.retain_graph_verdicts(record)
     }
 
     pub(super) fn step_loop_manager(&mut self, journal: &mut dyn Journal) -> Result<bool, VmError> {
+        if let Some(fold) = self.loop_manager.as_deref() {
+            let mut entry = None;
+            for (run, state) in fold.runs() {
+                if let Some(record) = self.graph_entry_verdict(*run, state)? {
+                    entry = Some(record);
+                    break;
+                }
+            }
+            if let Some(record) = entry {
+                journal.commit(record).map_err(VmError::Journal)?;
+                self.refresh_loop_manager(journal)?;
+                return Ok(true);
+            }
+        }
         let selected = self.loop_manager.as_deref().and_then(|fold| {
             fold.runs().find_map(|(run, state)| {
-                ((state.pending.is_some() && !self.graph_run_has_work(*run))
+                (self.graph_run_awaits_verdict(*run, state)
+                    || (state.pending.is_some() && !self.graph_run_has_work(*run))
                     || (state.phase == Phase::AwaitingAdmission
                         && self.graph_admission_is_head(*run)
                         && state.due_at.is_none_or(|due| due <= self.now)))
@@ -447,6 +487,7 @@ impl Vm<'_> {
                 &current.instance,
                 current.state.meta().sys().id(),
                 Packet {
+                    context: current.enclosing.clone(),
                     facts: vec![Fact::Close {
                         run,
                         iteration: current.iteration,
@@ -477,6 +518,7 @@ impl Vm<'_> {
                 &current.instance,
                 envelope.meta().sys().id(),
                 Packet {
+                    context: current.enclosing.clone(),
                     facts: vec![Fact::Admit {
                         run,
                         iteration: current.iteration,
@@ -499,6 +541,15 @@ impl Vm<'_> {
                     edge: edge.clone(),
                     target: current.instance.clone(),
                 });
+                if !current.enclosing.is_empty()
+                    && let Some(crate::journal::LoopRecord::R2(packet)) =
+                        record.loop_record.as_deref_mut()
+                {
+                    packet.routes.push(protocol::RoutedContext {
+                        delivery: ids::delivery_ref(&edge, envelope.meta().sys().id()),
+                        runs: current.enclosing.clone(),
+                    });
+                }
                 if call_timeout.is_some() {
                     record.timers.push((
                         crate::journal::timer_kind::CALL_TIMEOUT,
@@ -534,6 +585,14 @@ impl Vm<'_> {
                             "a pre-reserved recurrence mailbox became full",
                         )
                     })?;
+                self.install_graph_contexts(if current.enclosing.is_empty() {
+                    vec![]
+                } else {
+                    vec![protocol::RoutedContext {
+                        delivery: ids::delivery_ref(&edge, envelope.meta().sys().id()),
+                        runs: current.enclosing.clone(),
+                    }]
+                });
                 if let Some(timeout) = call_timeout {
                     self.scheduler.arm(
                         self.now.saturating_add(timeout),
@@ -550,9 +609,10 @@ impl Vm<'_> {
             return Ok(true);
         }
         let command = current.pending.as_ref().ok_or_else(|| {
-            loop_error(&current.instance, "the manager selected no pending verdict")
+            loop_error(&current.instance, "LoopNoVerdict: the application became quiescent without Next, Again, Done, or stop")
         })?;
         let mut packet = Packet {
+            context: current.enclosing.clone(),
             consumed: vec![command.reference],
             ..Packet::default()
         };
@@ -648,6 +708,7 @@ impl Vm<'_> {
         }
         let mut record = manager_record(&current.instance, command.value.cause(), packet);
         record.emissions.extend(emission);
+        self.retain_graph_verdicts(&mut record)?;
         if let Some(due_at) = due {
             let timer = (
                 crate::journal::timer_kind::LOOP_DELAY,
@@ -696,7 +757,7 @@ impl Vm<'_> {
     }
 }
 
-fn entry_measure_budget(
+pub(super) fn entry_measure_budget(
     proof: &crate::loop_proof::Certificate,
     envelope: &Envelope,
     instance: &InstanceRef,

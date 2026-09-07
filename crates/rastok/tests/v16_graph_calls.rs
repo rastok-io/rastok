@@ -38,6 +38,47 @@ graph app : App + Loop {
 "#;
 
 #[test]
+fn the_lab_resolves_nested_mocks_and_observations_by_exact_path() {
+    let nested = HTTP_GRAPH.replace("graph app : App + Loop", "graph worker : Loop");
+    let source = format!(
+        r#"
+graph app : App {{
+  input in: text
+  output out: text
+  {nested}
+  in -> worker -> out
+  worker.Loop.expired -> nothing
+}}
+lab app {{
+  simulation nested on app {{
+    mock worker.request {{ on in {{ out = "ready"; exit = Completed {{ status = 200 }} }} }}
+    scenario one {{
+      app.in = "request"
+      expect worker.judge.in count == 1 where data == "ready"
+      expect app.out count == 1 where data == "ready"
+    }}
+  }}
+}}
+"#
+    );
+    let compiled = compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let runs = rastok::lab::run(&compiled.plan, GraphVersion(1), &compiled.labs[0]);
+    assert!(runs[0].report.passed(), "{:?}", runs[0].report.failures);
+    let unknown = source.replace("mock worker.request", "mock wrong.request");
+    let error = compiler::compile(&[&unknown], &ContractCatalog::try_m0().unwrap()).unwrap_err();
+    assert!(
+        error
+            .diagnostics()
+            .iter()
+            .any(
+                |diagnostic| diagnostic.code().as_str() == "E-RESOLVE-UNKNOWN"
+                    && diagnostic.message().contains("wrong.request")
+            ),
+        "{error:?}"
+    );
+}
+
+#[test]
 fn a_graph_call_correlates_its_single_response_with_its_terminal_case() {
     for (reply, assertion, phase, iteration) in [
         ("ready", "expect app.out count == 1", Phase::Closed, 0),

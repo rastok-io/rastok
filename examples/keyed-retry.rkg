@@ -14,6 +14,16 @@ type Answer = struct {
   attempts: int
 }
 
+type ModelExit = union {
+  CaptureFailed {}
+  DecodeFailed { line: text?, message: text }
+  Exited { exit_code: int, signal: int? }
+  OutcomeUnknown {}
+  OutputOverflow { limit: uint, reason: enum { budget, capacity } }
+  SpawnFailed { message: text }
+  TimeoutExpired {}
+}
+
 graph agent_retry : App + Loop {
   input in: Attempt
   output done: Answer
@@ -21,6 +31,7 @@ graph agent_retry : App + Loop {
 
   instance = { key = data.tenant }
   Loop.fuel = 2
+  Loop.terminal = [done, failed]
   Loop.delay = { kind = fixed; after = duration("1s") }
 
   graph audit {
@@ -33,7 +44,7 @@ graph agent_retry : App + Loop {
       on in { out = data.tenant }
     }
 
-    . -> observe
+    in -> observe
     observe.out -> nothing
   }
 
@@ -47,30 +58,38 @@ graph agent_retry : App + Loop {
     max_output = "1 MiB"
   }
 
-  . -> audit
-  . -> model
+  operator decide {
+    input in: ModelExit
+    output retry: Attempt
+    output done: Answer
+    output failed: text
+
+    on in match data {
+      TimeoutExpired => retry = {
+        tenant = Loop.state.data.tenant
+        prompt = Loop.state.data.prompt
+        attempt = Loop.state.data.attempt + 1
+      }
+      Exited => done = {
+        tenant = Loop.state.data.tenant
+        prompt = Loop.state.data.prompt
+        attempts = Loop.state.data.attempt + 1
+      }
+      CaptureFailed  => failed = "capture"
+      DecodeFailed   => failed = "decode"
+      OutcomeUnknown => failed = "unknown"
+      OutputOverflow => failed = "overflow"
+      SpawnFailed    => failed = "spawn"
+    }
+  }
+
+  in -> { audit; model }
   model.out -> nothing
   model.err -> nothing
-
-  on model.exit where data is TimeoutExpired {
-    next = {
-      tenant = Loop.state.data.tenant
-      prompt = Loop.state.data.prompt
-      attempt = Loop.state.data.attempt + 1
-    }
-  }
-  on model.exit where data is Exited {
-    done = {
-      tenant = Loop.state.data.tenant
-      prompt = Loop.state.data.prompt
-      attempts = Loop.state.data.attempt + 1
-    }
-  }
-  on model.exit where data is CaptureFailed  { failed = "capture" }
-  on model.exit where data is DecodeFailed   { failed = "decode" }
-  on model.exit where data is OutcomeUnknown { failed = "unknown" }
-  on model.exit where data is OutputOverflow { failed = "overflow" }
-  on model.exit where data is SpawnFailed    { failed = "spawn" }
+  model.exit -> decide
+  decide.retry -> Loop.next
+  decide.done -> done
+  decide.failed -> failed
 }
 
 lab agent_retry {

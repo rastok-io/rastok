@@ -1,5 +1,4 @@
-//! M1.7 L3: one finite progress verdict is proved from the ordinary Graph,
-//! independently of the name or number of terminal outputs.
+//! Loop control, proof and public Lab behavior across Operator and Graph hosts.
 
 #![allow(clippy::disallowed_methods, clippy::expect_used, clippy::panic)]
 
@@ -16,8 +15,23 @@ fn compile_one(source: &str) -> Result<rastok::compiler::Compilation, rastok::di
 }
 
 fn loop_source(boundary: &str, handlers: &str) -> String {
+    let outputs: Vec<_> = boundary
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("output "))
+        .filter_map(|line| line.split_once(':').map(|(port, _)| port.trim()))
+        .collect();
+    let terminals = if outputs.len() > 1 {
+        format!("Loop.terminal = [{}]", outputs.join(", "))
+    } else {
+        String::new()
+    };
+    let dispositions = outputs
+        .iter()
+        .map(|port| format!("finite.{port} -> nothing"))
+        .collect::<Vec<_>>()
+        .join("\n");
     format!(
-        "graph finite : App + Loop {{\n  input in: int\n{boundary}\n  Loop.fuel = 5\n{handlers}\n}}\n"
+        "graph app : App {{ input in: int\noperator finite : Loop {{\n  input in: int\n{boundary}\n  Loop.fuel = 5\n{terminals}\n{handlers}\n}}\nin -> finite\n{dispositions}\nfinite.Loop.expired -> nothing\n}}\n"
     )
 }
 
@@ -69,13 +83,21 @@ graph singleton : App + Loop {
     n: int
   }
   output done: text
-  Loop.measure = data.n
+  Loop.measure = Loop.state.data.n
   Loop.delay = { kind = fixed; after = duration("1s") }
 
-  on in where data.n <= 0 { done = data.label }
-  on in where data.n > 0 {
-    next = { label = data.label; n = data.n - 1 }
+  operator decide {
+    input in: struct { label: text, n: int }
+    output done: text
+    output revised: struct { label: text, n: int }
+    on in match {
+      data.n > 0 => revised = { label = data.label; n = data.n - 1 }
+      _ => done = data.label
+    }
   }
+  in -> decide
+  decide.done -> done
+  decide.revised -> Loop.next
 }
 
 lab singleton {
@@ -99,6 +121,15 @@ type Attempt = struct {
   tenant: text
   attempt: int
 }
+type ProcessExit = union {
+  CaptureFailed {}
+  DecodeFailed { line: text?, message: text }
+  Exited { exit_code: int, signal: int? }
+  OutcomeUnknown {}
+  OutputOverflow { limit: uint, reason: enum { budget, capacity } }
+  SpawnFailed { message: text }
+  TimeoutExpired {}
+}
 
 graph keyed_retry : App + Loop {
   input in: Attempt
@@ -106,6 +137,7 @@ graph keyed_retry : App + Loop {
   output failed: text
   instance = { key = data.tenant }
   Loop.fuel = 2
+  Loop.terminal = [done, failed]
   Loop.delay = { kind = fixed; after = duration("1s") }
 
   graph audit {
@@ -115,7 +147,7 @@ graph keyed_retry : App + Loop {
       output out: text
       on in { out = data.tenant }
     }
-    . -> observe
+    in -> observe
     observe.out -> nothing
   }
 
@@ -129,22 +161,31 @@ graph keyed_retry : App + Loop {
     max_output = "1 MiB"
   }
 
-  . -> audit
-  . -> shell
+  in -> { audit; shell }
   shell.out -> nothing
   shell.err -> nothing
-  on shell.exit where data is TimeoutExpired {
-    next = {
-      tenant = Loop.state.data.tenant
-      attempt = Loop.state.data.attempt + 1
+  operator decide {
+    input in: ProcessExit
+    output retry: Attempt
+    output done: text
+    output failed: text
+    on in match data {
+      TimeoutExpired => retry = {
+        tenant = Loop.state.data.tenant
+        attempt = Loop.state.data.attempt + 1
+      }
+      Exited => done = Loop.state.data.tenant
+      CaptureFailed => failed = "capture"
+      DecodeFailed => failed = "decode"
+      OutcomeUnknown => failed = "unknown"
+      OutputOverflow => failed = "overflow"
+      SpawnFailed => failed = "spawn"
     }
   }
-  on shell.exit where data is Exited          { done = Loop.state.data.tenant }
-  on shell.exit where data is CaptureFailed  { failed = "capture" }
-  on shell.exit where data is DecodeFailed   { failed = "decode" }
-  on shell.exit where data is OutcomeUnknown { failed = "unknown" }
-  on shell.exit where data is OutputOverflow { failed = "overflow" }
-  on shell.exit where data is SpawnFailed    { failed = "spawn" }
+  shell.exit -> decide
+  decide.retry -> Loop.next
+  decide.done -> done
+  decide.failed -> failed
 }
 
 lab keyed_retry {
@@ -185,10 +226,18 @@ graph closing : App + Loop {
   Loop.fuel = 2
   Loop.delay = { kind = fixed; after = duration("2s") }
 
-  on in where data.n <= 0 { done = data.label }
-  on in where data.n > 0 {
-    next = { label = data.label; n = data.n - 1 }
+  operator decide {
+    input in: struct { label: text, n: int }
+    output done: text
+    output revised: struct { label: text, n: int }
+    on in match {
+      data.n > 0 => revised = { label = data.label; n = data.n - 1 }
+      _ => done = data.label
+    }
   }
+  in -> decide
+  decide.done -> done
+  decide.revised -> Loop.next
 }
 
 lab closing {
@@ -202,7 +251,7 @@ lab closing {
       expect app.done count == 1 where data == "new"
       advance duration("1s")
       expect nothing app.done
-      expect nothing app.expired
+      expect nothing app.Loop.expired
     }
   }
 }
@@ -212,14 +261,20 @@ const LOOP_EXHAUSTION_LAB: &str = r#"
 graph exhaustion : App + Loop {
   input in: int
   Loop.fuel = 1
-  on in { next = data + 1 }
+  operator revise {
+    input in: int
+    output out: int
+    on in { out = data + 1 }
+  }
+  in -> revise
+  revise.out -> Loop.next
 }
 
 lab exhaustion {
   simulation bounded on app {
     scenario the_last_proposed_state_is_observable {
       app.in = 7
-      expect app.expired count == 1 where data is LoopExpired
+      expect app.Loop.expired count == 1 where data is LoopExpired
     }
   }
 }
@@ -236,10 +291,9 @@ fn public_lab_runs_independent_roots_in_one_singleton_loop_instance() {
             matches!(
                 record,
                 Record::Transaction(transaction)
-                    if matches!(
-                        transaction.loop_fact(),
-                        Some(rastok::journal::LoopFact::Open { .. })
-                    )
+                    if transaction.loop_protocol().is_some_and(|packet| packet.facts.iter().any(|fact|
+                        matches!(fact, rastok::journal::loop_protocol::Fact::Open { .. })
+                    ))
             )
         })
         .count();
@@ -324,7 +378,7 @@ fn terminal_outputs_keep_domain_names_and_stop_is_explicit_termination() {
 }
 
 #[test]
-fn a_wired_loop_requires_explicit_terminals_and_the_v16_transport() {
+fn a_wired_loop_requires_explicit_terminals_and_round_trips_v16() {
     let relayed = r#"
 graph finite : App + Loop {
   input in: int
@@ -350,36 +404,30 @@ graph finite : App + Loop {
         "Loop.fuel = 5",
         "Loop.fuel = 5\n  Loop.terminal = [result, audit]",
     );
-    let bag = compile_one(&explicit)
-        .expect_err("the new Loop protocol must not silently execute as a v15 Graph handler");
-    assert_eq!(bag.diagnostics().len(), 1, "{bag:#?}");
-    assert!(
-        bag.diagnostics()[0]
-            .message()
-            .contains("a command-based Loop Graph requires the categorical v16 plan"),
-        "{bag:#?}"
-    );
+    let compilation = compile_one(&explicit).expect("the wired Loop has one terminal transaction");
+    let (decoded, hash) =
+        rastok::plan::decode(&rastok::plan::encode(&compilation.plan, &compilation.hash)).unwrap();
+    assert_eq!(decoded, compilation.plan);
+    assert_eq!(hash, compilation.hash);
 }
 
 #[test]
-fn the_iteration_state_is_the_loops_only_input() {
+fn a_loop_with_ambiguous_inputs_requires_an_explicit_entry() {
     let source = r#"
 graph finite : App + Loop {
-  input in: int
-  input interrupt: int
+  input request: int
+  input other: int
   output out: int
   Loop.fuel = 5
-  on in { out = data }
+  request -> out
+  other -> nothing
 }
 "#;
-    let bag = compile_one(source).expect_err("a second input would be a second run protocol");
+    let bag = compile_one(source).expect_err("the admission port must be unambiguous");
     assert_eq!(bag.diagnostics().len(), 1, "{bag:#?}");
-    assert_eq!(bag.diagnostics()[0].code().as_str(), "E-LOOP");
-    assert!(
-        bag.diagnostics()[0]
-            .message()
-            .contains("one iteration input")
-    );
+    assert_eq!(bag.diagnostics()[0].code().as_str(), "E-LOOP-ENTRY");
+    compile_one(&source.replace("Loop.fuel = 5", "Loop.fuel = 5\nLoop.entry = request"))
+        .expect("an explicit recurrent entry resolves the ambiguity");
 }
 
 #[test]
@@ -390,30 +438,35 @@ graph finite : App + Loop {
   output early: int
   output late: int
   Loop.fuel = 5
+  Loop.terminal = [early, late]
 
   operator relay {
     input in: int
     output out: int
     on in { out = data }
   }
-  . -> relay
-  relay.out -> nothing
-  on in { early = data }
-  on relay.out { late = data }
+  operator second {
+    input in: int
+    output out: int
+    on in { out = data }
+  }
+  in -> { relay; second }
+  relay.out -> early
+  second.out -> late
 }
 "#;
-    refusal(source, "more than one terminal transaction");
+    refusal(source, "exactly one verdict");
 }
 
 #[test]
-fn complementary_guards_prove_one_progress_branch_and_ignore_declaration_order() {
+fn closed_dispatch_arms_prove_one_branch_and_ignore_declaration_order() {
     let forward = loop_source(
         "  output done: int",
-        "  on in where data <= 0 { done = data }\n  on in where data > 0 { next = data - 1 }",
+        "  on in match data > 0 { false => done = data; true => Loop.next = data - 1 }",
     );
     let reversed = loop_source(
         "  output done: int",
-        "  on in where data > 0 { next = data - 1 }\n  on in where data <= 0 { done = data }",
+        "  on in match data > 0 { true => Loop.next = data - 1; false => done = data }",
     );
     let forward = compile_one(&forward).expect("the complementary partition is total");
     let reversed = compile_one(&reversed).expect("source order is not control semantics");
@@ -423,18 +476,18 @@ fn complementary_guards_prove_one_progress_branch_and_ignore_declaration_order()
 
 #[test]
 fn a_checked_integer_measure_can_replace_the_operational_fuel_cap() {
-    let source = r#"
-graph finite : App + Loop {
-  input in: int
-  output done: int
-  Loop.measure = data
-
-  on in where data <= 0 { done = data }
-  on in where data > 0  { next = data - 1 }
-}
-"#;
-    let compilation = compile_one(source).expect("the affine countdown is proved finite");
-    let spec = compilation.plan.owners[0].loop_spec().unwrap();
+    let source = loop_source(
+        "output done: int",
+        "on in match { data > 0 => Loop.next = data - 1; _ => done = data }",
+    )
+    .replace("Loop.fuel = 5", "Loop.measure = Loop.state.data");
+    let compilation = compile_one(&source).expect("the affine countdown is proved finite");
+    let spec = compilation
+        .plan
+        .owners
+        .iter()
+        .find_map(|owner| owner.loop_spec())
+        .unwrap();
     assert!(spec.fuel.is_none());
     let proof = spec.proof.as_ref().expect("the proof travels");
     assert_eq!(proof.decreases, [1]);
@@ -446,15 +499,19 @@ graph finite : App + Loop {
     label: text
   }
   output done: text
-  Loop.measure = data.n
-
-  on in where data.n <= 0 { done = data.label }
-  on in where data.n > 0 {
-    next = {
-      n = data.n - 1
-      label = data.label
+  Loop.measure = Loop.state.data.n
+  operator decide {
+    input in: struct { n: int, label: text }
+    output done: text
+    output revised: struct { n: int, label: text }
+    on in match {
+      data.n > 0 => revised = { n = data.n - 1; label = data.label }
+      _ => done = data.label
     }
   }
+  in -> decide
+  decide.done -> done
+  decide.revised -> Loop.next
 }
 "#;
     let compilation = compile_one(structured).expect("a struct field can be the ranking measure");
@@ -471,18 +528,11 @@ fn a_measure_that_does_not_prove_finiteness_fails_at_its_source() {
         ("data", "strictly decrease"),
         ("data + 1", "strictly decrease"),
     ] {
-        let source = format!(
-            r#"
-graph finite : App + Loop {{
-  input in: int
-  output done: int
-  Loop.measure = data
-
-  on in where data <= 0 {{ done = data }}
-  on in where data > 0  {{ next = {next} }}
-}}
-"#
-        );
+        let source = loop_source(
+            "output done: int",
+            &format!("on in match {{ data > 0 => Loop.next = {next}; _ => done = data }}"),
+        )
+        .replace("Loop.fuel = 5", "Loop.measure = Loop.state.data");
         let bag = compile_one(&source).expect_err("an unproved recurrence must fail closed");
         assert_eq!(bag.diagnostics().len(), 1, "{bag:#?}");
         assert_eq!(bag.diagnostics()[0].code().as_str(), "E-LOOP");
@@ -501,16 +551,11 @@ graph finite : App + Loop {{
 
 #[test]
 fn a_measure_uses_a_signed_well_founded_carrier_and_a_checked_invariant() {
-    let unsigned = r#"
-graph finite : App + Loop {
-  input in: number
-  output done: number
-  Loop.measure = data
-  on in where data == 0 { done = data }
-  on in where data > 0 { next = data - 1 }
-}
-"#;
-    let bag = compile_one(unsigned).expect_err("the first proof carrier is signed integer");
+    let unsigned = loop_source("output done: number", "on in { done = data }")
+        .replace("input in: int", "input in: number")
+        .replace("Loop.fuel = 5", "Loop.measure = Loop.state.data")
+        .replace("finite.Loop.expired -> nothing", "");
+    let bag = compile_one(&unsigned).expect_err("the first proof carrier is signed integer");
     assert_eq!(bag.diagnostics().len(), 1, "{bag:#?}");
     assert_eq!(bag.diagnostics()[0].code().as_str(), "E-LOOP");
     assert!(
@@ -520,17 +565,15 @@ graph finite : App + Loop {
         "{bag:#?}"
     );
 
-    let invariant = r#"
-graph finite : App + Loop {
-  input in: int
-  output done: int
-  Loop.measure = data
-  Loop.invariant = data >= 0
-  on in where data <= 0 { done = data }
-  on in where data > 0 { next = data - 1 }
-}
-"#;
-    let bag = compile_one(invariant).expect_err("an unproved invariant must fail closed");
+    let invariant = loop_source(
+        "output done: int",
+        "on in match { data > 0 => Loop.next = data - 1; _ => done = data }",
+    )
+    .replace(
+        "Loop.fuel = 5",
+        "Loop.measure = Loop.state.data\nLoop.invariant = Loop.state.data >= 0",
+    );
+    let bag = compile_one(&invariant).expect_err("an unproved invariant must fail closed");
     assert_eq!(bag.diagnostics().len(), 1, "{bag:#?}");
     assert_eq!(bag.diagnostics()[0].code().as_str(), "E-LOOP");
     assert!(
@@ -545,51 +588,56 @@ graph finite : App + Loop {
 fn silence_repeated_next_and_mixed_verdicts_refuse_by_one_code() {
     refusal(
         &loop_source("", "  on in { val held = data }"),
-        "finish silently",
+        "exactly one of Next, Again, Done, or stop",
     );
     refusal(
-        &loop_source("", "  on in { next = data; next = data }"),
-        "more than once",
+        &loop_source("", "  on in { Loop.next = data; Loop.next = data }"),
+        "exactly one of Next, Again, Done, or stop",
     );
     refusal(
-        &loop_source("  output exit: int", "  on in { next = data; exit = data }"),
-        "mixes `next` continuation",
+        &loop_source(
+            "  output exit: int",
+            "  on in { Loop.next = data; exit = data }",
+        ),
+        "exactly one of Next, Again, Done, or stop",
     );
 }
 
 #[test]
-fn guarded_families_must_be_disjoint_and_exhaustive() {
+fn a_filter_cannot_leave_a_loop_silent_and_duplicate_handlers_refuse() {
     refusal(
         &loop_source(
             "  output done: int",
             "  on in where data < 0 { done = data }",
         ),
-        "without a progress branch",
+        "exactly one of Next, Again, Done, or stop",
     );
-    refusal(
-        &loop_source(
-            "  output done: int",
-            "  on in { done = data }\n  on in where data >= 0 { next = data }",
-        ),
-        "same input value",
-    );
-    refusal(
-        &loop_source(
-            "  output done: int",
-            "  on in where data >= 0 { done = data }\n  on in where data >= 0 { done = data }",
-        ),
-        "declared twice",
-    );
+    for handlers in [
+        "on in { done = data }\non in where data >= 0 { Loop.next = data }",
+        "on in where data >= 0 { done = data }\non in where data >= 0 { done = data }",
+    ] {
+        let bag = compile_one(&loop_source("output done: int", handlers)).unwrap_err();
+        assert!(
+            bag.diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code().as_str() == "E-HANDLER-DUPLICATE"),
+            "{bag:?}"
+        );
+    }
 }
 
 #[test]
 fn expired_is_manager_owned() {
-    refusal(
-        &loop_source(
-            "",
-            "  on in { expired = LoopExpired { last_state = data } }",
-        ),
-        "produced only by the Loop manager",
+    let source = loop_source(
+        "",
+        "on in { Loop.expired = LoopExpired { last_state = data } }",
+    );
+    let bag = compile_one(&source).unwrap_err();
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.message().contains("Loop.expired")),
+        "{bag:?}"
     );
 }
 
@@ -611,10 +659,10 @@ graph finite : App + Loop {
     max_output = "1 MiB"
   }
 
-  . -> shell
+  in -> shell
   shell.out -> nothing
   shell.err -> nothing
-  on shell.exit { stop }
+  shell.exit -> Loop.done
 }
 "#;
     compile_one(bounded).expect("the exactly-once Call exit supplies one terminal verdict");
@@ -623,41 +671,35 @@ graph finite : App + Loop {
         "  closing = { drain_for = duration(\"1s\"); settle_for = duration(\"1s\") }\n",
         "",
     );
-    let bag = compile_one(&implicit_closing)
-        .expect_err("a Loop stop cannot invent an implicit Connector grace period");
-    assert_eq!(bag.diagnostics().len(), 1, "{bag:#?}");
-    assert_eq!(bag.diagnostics()[0].code().as_str(), "E-INSTANCE");
-    assert!(bag.diagnostics()[0].message().contains("requires `closing"));
+    compile_one(&implicit_closing)
+        .expect("Done closes a run, not its instance: it needs no Closing grace period");
 
-    let repeated = bounded
-        .replace("  shell.out -> nothing\n", "  output result: text\n")
-        .replace(
-            "  on shell.exit { stop }",
-            "  on shell.out { result = data }\n  on shell.exit { stop }",
-        );
-    refusal(&repeated, "zero-or-more Connector output");
+    let repeated = bounded.replace(
+        "  shell.out -> nothing\n",
+        "  output result: text\n  shell.out -> result\n",
+    );
+    refusal(&repeated, "exactly one verdict");
 
     let unbounded = bounded.replace("    timeout = duration(\"1s\")\n", "");
-    refusal(&unbounded, "positive plan-constant `timeout`");
+    refusal(&unbounded, "positive plan-constant timeout");
 }
 
 #[test]
 fn every_case_of_a_typed_exit_union_is_a_finite_guard_domain() {
     let branches = [
-        "  on shell.exit where data is CaptureFailed { stop }",
-        "  on shell.exit where data is DecodeFailed { stop }",
-        "  on shell.exit where data is Exited { result = data.exit_code }",
-        "  on shell.exit where data is OutcomeUnknown { stop }",
-        "  on shell.exit where data is OutputOverflow { stop }",
-        "  on shell.exit where data is SpawnFailed { stop }",
-        "  on shell.exit where data is TimeoutExpired { next = Loop.state.data }",
+        "CaptureFailed -> Loop.done",
+        "DecodeFailed -> Loop.done",
+        "Exited -> Loop.done",
+        "OutcomeUnknown -> Loop.done",
+        "OutputOverflow -> Loop.done",
+        "SpawnFailed -> Loop.done",
+        "TimeoutExpired -> Loop.again",
     ]
     .join("\n");
     let source = format!(
         r#"
 graph finite : App + Loop {{
   input in: text
-  output result: int
   Loop.fuel = 3
   closing = {{ drain_for = duration("1s"); settle_for = duration("1s") }}
   connector shell : Process {{
@@ -669,18 +711,23 @@ graph finite : App + Loop {{
     timeout = duration("1s")
     max_output = "1 MiB"
   }}
-  . -> shell
+  in -> shell
   shell.out -> nothing
   shell.err -> nothing
+  shell.exit -> match {{
 {branches}
+  }}
 }}
 "#
     );
     compile_one(&source).expect("all typed exit cases form one exhaustive partition");
 
-    let missing = source.replace(
-        "  on shell.exit where data is TimeoutExpired { next = Loop.state.data }\n",
-        "",
+    let missing = source.replace("TimeoutExpired -> Loop.again", "");
+    let bag = compile_one(&missing).unwrap_err();
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code().as_str() == "E-MATCH-NONEXHAUSTIVE"),
+        "{bag:?}"
     );
-    refusal(&missing, "without a progress branch");
 }

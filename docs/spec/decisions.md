@@ -263,6 +263,51 @@ the Graph's Done; checking effects only at the command source; global rather
 than run-scoped quiescence; rebuilding a timeout from restart time; recovering
 by recalling an old Call; silently opening unrelated Graph profiles.
 
+## D-2026-09-07-7 — Retain nested application contexts and exchange obligations through recovery
+
+The Graph profile gates of D-2026-09-07-5/6 are extended by executable
+qualification. Nested runs retain the exact enclosing context from Open.
+Deliveries and held Calls carry it; a parent waits for that child run, including
+its delayed recurrence, not unrelated work in the instance. Crossing a Graph
+boundary removes its context from the outgoing delivery. An unconditional join
+consumes candidates with one complete context and sees the nearest `Loop.state`.
+
+A Graph made only of wiring needs no synthetic Operator. After admission its
+manager records the verdict selected from the entry routes, then consumes it
+under the ordinary quiescence rule. Production and consumption remain separate
+crash points. Recovery re-derives the packet from the admitted state and static
+routes, without re-emission or producer execution. No command becomes a port.
+
+The integer measure fragment follows unchanged Graph entry state through
+passive boundaries to its deciding Operator. The core independently re-derives
+every decrease; transformed/opaque producers still need fuel. Annotation
+propagation follows the same entry/command/boundary inventory, including
+inherited state and expiry. Accounting meanings must agree after fixed-point
+resolution; classification cannot disappear on Again.
+
+The conservative Graph control proof refuses beyond 1,024 distinct outcomes
+per combination instead of allocating an unbounded Cartesian product. Retained
+or expiring joins and descendant lifecycle/lifetime decisions still need a
+per-run completion proof outside this fragment and refuse at check. This is
+not a claim that those programs cannot terminate.
+
+Worker recovery reconstructs inbound Calls and Sessions, peer messages,
+Session openings, pending writes and terminal cursors. Original handshake
+deadlines remain facts; crossed/repeated exchange records refuse atomically.
+It does not reconnect sockets or repeat committed/ambiguous I/O. An inbound
+response already eligible for handoff is conservatively held until its original
+transport supplies a terminal fact. Recovery cannot invent a missing transport.
+
+**Identity:** no new wire key, record kind, Contract id or causal domain.
+v16 keys 55/56 already carry these protocol and timing facts. Previously gated
+profiles gain their specified facts; unrelated programs stay unchanged. R9
+witness re-blessing remains separate and enumerated. Nested Lab mocks and
+Executor observations resolve by exact path, outside plan identity.
+
+**Rejected:** ambient state per instance; context reconstructed from `origin_id`;
+waiting for another run; replaying a producer to recreate a command; projecting
+a Session event as a fictitious Call; retrying because a physical handle is lost.
+
 ## D-2026-09-05-1 — Graph is structure; Executors transition; Loop uses durable manager commands
 
 The pre-public Node model is revised before plan v16. A `Node` is either a

@@ -1,13 +1,13 @@
 # R7 — manager contexts and spatial recovery
 
-> Work in progress, 2026-09-07. The latest checkpoint (§9) opens fuel-bounded
-> Graph Loops containing Operators and finite outbound Calls, with exact boundary
-> admission, delivery contexts, quiescence and recovery. Wider Graph obligation profiles
-> and complete Worker recovery remain gated.
+> Work in progress, 2026-09-07. The latest checkpoint (§10) qualifies nested and
+> adjacent runs, annotations, Graph measures, boundary-only applications,
+> same-context joins and inbound Call/Session recovery. R9 migration and the
+> complete qualification matrix remain in progress.
 
 The second checkpoint (§5) qualifies outbound Call, join, lifetime and Closing
 recovery. Earlier checkpoint counts and gates below are retained as history,
-not substituted for the current matrix in §9.
+not substituted for the current evidence in §10.
 
 ## 1. Invariant and repository contact
 
@@ -459,3 +459,41 @@ against the unchanged 39,999-tick calibration per 2,000,000 instructions.
 Text 832,244 B plus rodata 68,432 B = **900,676 B**, 1,872 B above §8 and below
 1 MiB. No memory gate was raised; Graph Call workload peak memory remains a
 separate qualification.
+
+## 10. Context composition and exchange recovery — 2026-09-07
+
+D-2026-09-07-7 lifts the corresponding gates from §9. Coverage now includes
+adjacent and nested Graph/Operator Loops, nested timed Calls, annotations on
+Next/Again/expiry, entry-preserving Graph measure certificates, unconditional
+same-context joins, and pure boundary wiring without an artificial Executor.
+Recovery retains parent/child contexts, due admissions, unconsumed commands
+and quiescence at every tested prefix. A state transformation is not silently
+accepted as an unchanged measure path. The independent control proof refuses
+at 1,024 distinct outcomes rather than making unchecked approximations.
+
+Inbound Call and Session replay reconstructs requests, opening state, messages,
+write obligations, settlements and terminal consumption. The original Session
+handshake deadline survives restart. Crossed connector facts, missing deadlines
+and duplicate openings refuse before replacing the VM. No physical connection
+is recreated and no old effect is re-offered. This is semantic reconstruction,
+not a claim that a lost peer socket can be reattached.
+
+Migration evidence: the 17 public Loop control/Lab tests and all 74 VM tests
+pass. Old timer tests now assert r2 facts and successful spatial recovery;
+none is ignored. The keyed retry tour uses an explicit `decide` Operator and
+typed closed Dispatch instead of Graph child-output handlers. The qualified
+`app.Loop.expired` observation uses the real App boundary. The old and explicit
+boundary spellings have also produced identical plans, hashes and packages in
+the pre-removal twin test.
+
+The earlier full-workspace result remains a historical checkpoint, not a green
+R9 claim. Additional focused suites, current clippy and the final full matrix
+are being run. No golden is re-blessed in this checkpoint. The latest embedded
+control run retains a 111,452 B peak (19,620 B below 128 KiB), 6,440 B after
+open, and 67 records; relay average 1,885 ticks, decode 21,288 ticks against the
+same 39,999-tick calibration. It is still the non-Loop control workload.
+
+Remaining control-proof restrictions: retained/expiring joins and descendant
+lifecycle/lifetime decisions inside a Loop body. Ordinary windows and joins
+outside Loop retain their qualified behavior. The R9 source, fixture, identity
+and UI migration remains open.

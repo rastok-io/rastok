@@ -357,6 +357,28 @@ impl Vm<'_> {
                     .values()
                     .any(|admission| self.graph_context(&admission.delivery).contains(&run))
             })
+            || self.loop_manager.as_deref().is_some_and(|fold| {
+                fold.runs().any(|(_, state)| {
+                    matches!(
+                        state.phase,
+                        protocol::Phase::Active | protocol::Phase::AwaitingAdmission
+                    ) && state.enclosing.contains(&run)
+                })
+            })
+    }
+
+    pub(super) fn graph_run_awaits_verdict(
+        &self,
+        run: LoopRunRef,
+        state: &protocol::RunState,
+    ) -> bool {
+        state.phase == protocol::Phase::Active
+            && state.pending.is_none()
+            && self.instances.get(&state.instance).is_some_and(|instance| {
+                matches!(instance.phase, InstancePhase::Open)
+                    && self.plan.owners[instance.owner.index()].kind == OwnerKind::Graph
+            })
+            && !self.graph_run_has_work(run)
     }
 
     pub(super) fn graph_stop_cursors(
@@ -405,6 +427,16 @@ impl Vm<'_> {
         let fuel = match spec.fuel.as_ref().map(|fuel| &fuel.resolved) {
             Some(crate::value::Value::Int(value)) if *value > 0 => *value as u64,
             Some(crate::value::Value::Uint(value)) if *value > 0 => *value,
+            None if spec.proof.is_some() => super::loop_manager::entry_measure_budget(
+                spec.proof.as_ref().ok_or_else(|| {
+                    graph_error(
+                        admission.instance.address().owner(),
+                        "a Loop admission lost its measure",
+                    )
+                })?,
+                &admission.delivery.envelope,
+                &admission.instance,
+            )?,
             _ => {
                 return Err(graph_error(
                     admission.instance.address().owner(),
@@ -416,6 +448,7 @@ impl Vm<'_> {
             &admission.instance,
             admission.delivery.envelope.meta().sys().id(),
             Packet {
+                context: self.graph_context(&admission.delivery).to_vec(),
                 facts: vec![Fact::Open {
                     run: protocol::run_ref(&admission.instance, &admission.opening),
                     instance: admission.instance.clone(),
@@ -498,6 +531,7 @@ impl Vm<'_> {
             &current.instance,
             envelope.meta().sys().id(),
             Packet {
+                context: current.enclosing.clone(),
                 facts: vec![Fact::Admit {
                     run,
                     iteration: current.iteration,
@@ -541,14 +575,13 @@ impl Vm<'_> {
                 })
             })
             .collect();
-        let contexts: Vec<_> = record
-            .routes
+        let context: Vec<_> = current
+            .enclosing
             .iter()
-            .map(|route| protocol::RoutedContext {
-                delivery: ids::delivery_ref(&route.edge, route.delivery),
-                runs: vec![run],
-            })
+            .copied()
+            .chain(core::iter::once(run))
             .collect();
+        let contexts = self.graph_route_contexts(&context, &routes, envelope.meta().sys().id());
         if let Some(crate::journal::LoopRecord::R2(packet)) = record.loop_record.as_deref_mut() {
             packet.routes = contexts.clone();
             packet.routes.sort_by_key(|route| route.delivery);
@@ -584,30 +617,42 @@ impl Vm<'_> {
         };
         let mut contexts = Vec::new();
         for emission in emissions {
-            for route in &emission.routes {
-                let Some(target) = &route.target else {
-                    continue;
-                };
-                let runs: Vec<_> = packet
-                    .context
-                    .iter()
-                    .copied()
-                    .filter(|run| {
-                        self.loop_manager
-                            .as_deref()
-                            .and_then(|fold| fold.run(*run))
-                            .is_some_and(|state| target.chain.contains(&state.instance))
-                    })
-                    .collect();
-                if !runs.is_empty() {
-                    contexts.push(protocol::RoutedContext {
-                        delivery: ids::delivery_ref(
-                            &self.prepared_edge_text(route),
-                            emission.emission.envelope.meta().sys().id(),
-                        ),
-                        runs,
-                    });
-                }
+            contexts.extend(self.graph_route_contexts(
+                &packet.context,
+                &emission.routes,
+                emission.emission.envelope.meta().sys().id(),
+            ));
+        }
+        contexts.sort_by_key(|route| route.delivery);
+        contexts
+    }
+
+    fn graph_route_contexts(
+        &self,
+        context: &[LoopRunRef],
+        routes: &[PreparedEdge],
+        envelope: Id,
+    ) -> Vec<protocol::RoutedContext> {
+        let mut contexts = Vec::new();
+        for route in routes {
+            let Some(target) = &route.target else {
+                continue;
+            };
+            let runs: Vec<_> = context
+                .iter()
+                .copied()
+                .filter(|run| {
+                    self.loop_manager
+                        .as_deref()
+                        .and_then(|fold| fold.run(*run))
+                        .is_some_and(|state| target.chain.contains(&state.instance))
+                })
+                .collect();
+            if !runs.is_empty() {
+                contexts.push(protocol::RoutedContext {
+                    delivery: ids::delivery_ref(&self.prepared_edge_text(route), envelope),
+                    runs,
+                });
             }
         }
         contexts.sort_by_key(|route| route.delivery);
@@ -616,7 +661,6 @@ impl Vm<'_> {
 
     pub(super) fn retain_graph_verdicts(
         &self,
-        slot: Slot,
         record: &mut crate::journal::TransactionRecord,
     ) -> Result<(), VmError> {
         if self.graph_loops.is_none() {
@@ -626,14 +670,51 @@ impl Vm<'_> {
             .loop_protocol()
             .map_or(&[][..], |packet| packet.context.as_slice())
             .to_vec();
+        let owner = self
+            .plan
+            .owners
+            .iter()
+            .find(|owner| owner.path == record.owner_path)
+            .ok_or_else(|| graph_error(&record.owner_path, "a producer has no declared owner"))?;
+        let produced = self.graph_verdicts(
+            &context,
+            record.emissions.iter().map(|emission| {
+                (
+                    Endpoint {
+                        owner: match owner.kind {
+                            OwnerKind::Graph => EndpointOwner::Graph(owner.path.clone()),
+                            OwnerKind::Node(slot) => {
+                                EndpointOwner::Node(self.plan.nodes[slot.index()].path.clone())
+                            }
+                        },
+                        port: emission.port.clone(),
+                    },
+                    &emission.envelope,
+                )
+            }),
+        )?;
+        if !produced.is_empty() {
+            let Some(crate::journal::LoopRecord::R2(packet)) = record.loop_record.as_deref_mut()
+            else {
+                return Err(graph_error(
+                    &record.owner_path,
+                    "a Graph verdict lost its application context",
+                ));
+            };
+            packet.produced.extend(produced);
+        }
+        Ok(())
+    }
+
+    fn graph_verdicts<'e>(
+        &self,
+        context: &[LoopRunRef],
+        sources: impl IntoIterator<Item = (Endpoint, &'e Envelope)>,
+    ) -> Result<Vec<protocol::CommandProduced>, VmError> {
         let mut produced = Vec::new();
         let mut terminals = BTreeMap::new();
-        for emission in &record.emissions {
-            let source = Endpoint {
-                owner: EndpointOwner::Node(self.plan.nodes[slot.index()].path.clone()),
-                port: emission.port.clone(),
-            };
-            let selected = self.select_graph_routes(&source, &emission.envelope)?;
+        for (source, envelope) in sources {
+            let selected = self.select_graph_routes(&source, envelope)?;
             for command in selected.commands {
                 let EndpointOwner::Graph(owner) = command.owner else {
                     continue;
@@ -655,22 +736,20 @@ impl Vm<'_> {
                     })?;
                 let value = match command.kind {
                     crate::plan::LoopCommandKind::Next => {
-                        protocol::CommandValue::Next(emission.envelope.clone())
+                        protocol::CommandValue::Next(envelope.clone())
                     }
                     crate::plan::LoopCommandKind::Again => {
-                        protocol::CommandValue::Again(emission.envelope.meta().sys().id())
+                        protocol::CommandValue::Again(envelope.meta().sys().id())
                     }
                     crate::plan::LoopCommandKind::Done => protocol::CommandValue::Done {
-                        cause: emission.envelope.meta().sys().id(),
+                        cause: envelope.meta().sys().id(),
                         kind: protocol::DoneKind::Explicit,
                     },
                 };
                 produced.push(protocol::CommandProduced::new(run, state.iteration, value));
             }
             for owner in selected.terminals {
-                terminals
-                    .entry(owner)
-                    .or_insert(emission.envelope.meta().sys().id());
+                terminals.entry(owner).or_insert(envelope.meta().sys().id());
             }
         }
         for (owner, cause) in terminals {
@@ -699,17 +778,54 @@ impl Vm<'_> {
                 },
             ));
         }
-        if !produced.is_empty() {
-            let Some(crate::journal::LoopRecord::R2(packet)) = record.loop_record.as_deref_mut()
-            else {
-                return Err(graph_error(
-                    &OwnerPath::root(),
-                    "a Graph verdict lost its application context",
-                ));
-            };
-            packet.produced.extend(produced);
+        Ok(produced)
+    }
+
+    pub(super) fn graph_entry_verdict(
+        &self,
+        run: LoopRunRef,
+        current: &protocol::RunState,
+    ) -> Result<Option<crate::journal::TransactionRecord>, VmError> {
+        if current.phase != protocol::Phase::Active
+            || current.pending.is_some()
+            || !self
+                .instances
+                .get(&current.instance)
+                .is_some_and(|instance| matches!(instance.phase, InstancePhase::Open))
+            || !self.plan.owners.iter().any(|owner| {
+                owner.path == *current.instance.address().owner() && owner.kind == OwnerKind::Graph
+            })
+        {
+            return Ok(None);
         }
-        Ok(())
+        let context: Vec<_> = current
+            .enclosing
+            .iter()
+            .copied()
+            .chain(core::iter::once(run))
+            .collect();
+        let produced = self.graph_verdicts(
+            &context,
+            core::iter::once((
+                Endpoint {
+                    owner: EndpointOwner::Graph(current.instance.address().owner().clone()),
+                    port: current.entry.clone(),
+                },
+                &current.state,
+            )),
+        )?;
+        if produced.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(super::loop_manager::manager_record(
+            &current.instance,
+            current.state.meta().sys().id(),
+            Packet {
+                context,
+                produced,
+                ..Packet::default()
+            },
+        )))
     }
 
     pub(super) fn install_graph_contexts(&mut self, contexts: Vec<protocol::RoutedContext>) {
@@ -822,18 +938,41 @@ impl Vm<'_> {
         let packet = record
             .loop_protocol()
             .ok_or_else(|| invalid("a Graph manager record has no retained protocol"))?;
+        if packet.facts.is_empty() {
+            let run = packet
+                .context
+                .last()
+                .ok_or_else(|| invalid("an entry verdict has no application context"))?;
+            let state = self
+                .loop_manager
+                .as_deref()
+                .and_then(|fold| fold.run(*run))
+                .ok_or_else(|| invalid("an entry verdict has no admitted run"))?;
+            if self.graph_entry_verdict(*run, state)?.as_ref() != Some(record) {
+                return Err(invalid(
+                    "a Graph entry verdict differs from its admitted source routes",
+                ));
+            }
+            return Ok(());
+        }
         if record.trigger != node::Trigger::Lifecycle(node::Lifecycle::Next)
             || record.parent_instance.is_some()
             || record.close_scope.is_some()
             || !record.state_delta.is_empty()
             || !record.join_inputs.is_empty()
-            || !packet.context.is_empty()
-            || !packet.produced.is_empty()
             || packet.facts.len() != 1
         {
             return Err(invalid(
                 "a Graph manager record carries application work or competing transitions",
             ));
+        }
+        let mut derived = record.clone();
+        if let Some(crate::journal::LoopRecord::R2(packet)) = derived.loop_record.as_deref_mut() {
+            packet.produced.clear();
+        }
+        self.retain_graph_verdicts(&mut derived)?;
+        if derived.loop_protocol().map(|packet| &packet.produced) != Some(&packet.produced) {
+            return Err(invalid("a manager emission changed its enclosing verdicts"));
         }
         match &packet.facts[0] {
             Fact::Open {
@@ -855,16 +994,27 @@ impl Vm<'_> {
                     .ok_or_else(|| {
                         invalid("a Graph Open has no exact retained boundary admission")
                     })?;
-                let expected = self.plan.owners[owner.index()]
+                let spec = self.plan.owners[owner.index()]
                     .loop_spec()
-                    .and_then(|spec| spec.fuel.as_ref())
-                    .map(|fuel| &fuel.resolved);
-                let expected = match expected {
+                    .ok_or_else(|| invalid("a Graph opening has no Loop specification"))?;
+                let expected = match spec.fuel.as_ref().map(|fuel| &fuel.resolved) {
                     Some(crate::value::Value::Int(fuel)) if *fuel > 0 => Some(*fuel as u64),
                     Some(crate::value::Value::Uint(fuel)) if *fuel > 0 => Some(*fuel),
+                    None => spec
+                        .proof
+                        .as_ref()
+                        .map(|proof| {
+                            super::loop_manager::entry_measure_budget(
+                                proof,
+                                &admission.delivery.envelope,
+                                &admission.instance,
+                            )
+                        })
+                        .transpose()?,
                     _ => None,
                 };
                 if *run != protocol::run_ref(instance, opening)
+                    || packet.context != self.graph_context(&admission.delivery)
                     || expected != Some(*fuel)
                     || *entry != admission.delivery.port
                     || *state != admission.delivery.envelope
@@ -894,6 +1044,7 @@ impl Vm<'_> {
                     .and_then(|fold| fold.run(*run))
                     .ok_or_else(|| invalid("a Graph Admit has no retained opening"))?;
                 if *iteration != current.iteration
+                    || packet.context != current.enclosing
                     || *admission != current.admission
                     || !self.graph_admission_is_head(*run)
                     || record.cause != Some(envelope.meta().sys().id())
@@ -972,14 +1123,14 @@ impl Vm<'_> {
                     })
                     .collect();
                 expected.sort();
-                let mut contexts: Vec<_> = expected
+                let context: Vec<_> = current
+                    .enclosing
                     .iter()
-                    .map(|route| protocol::RoutedContext {
-                        delivery: ids::delivery_ref(&route.edge, route.delivery),
-                        runs: vec![*run],
-                    })
+                    .copied()
+                    .chain(core::iter::once(*run))
                     .collect();
-                contexts.sort_by_key(|route| route.delivery);
+                let contexts =
+                    self.graph_route_contexts(&context, &routes, envelope.meta().sys().id());
                 if record.routes != expected || packet.routes != contexts {
                     return Err(invalid(
                         "Graph expansion disagrees with its retained routes or contexts",
@@ -1015,6 +1166,7 @@ impl Vm<'_> {
                     .as_ref()
                     .ok_or_else(|| invalid("a Graph transition has no produced command"))?;
                 if self.graph_run_has_work(run)
+                    || packet.context != current.enclosing
                     || !record.consumed.is_empty()
                     || record.cause != Some(command.value.cause())
                     || packet.consumed.as_slice() != [command.reference]

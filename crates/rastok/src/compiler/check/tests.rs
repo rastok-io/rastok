@@ -1607,17 +1607,7 @@ in -> project -> nested -> out
             if tree.ty == DataType::INT)
         );
         let (plan, _) = crate::compiler::lower::lower(&hir).unwrap();
-        if extension.is_empty() {
-            crate::plan::ValidatedExecutionPlan::try_new(plan).unwrap();
-        } else {
-            let error = crate::plan::ValidatedExecutionPlan::try_new(plan).unwrap_err();
-            assert!(
-                error
-                    .to_string()
-                    .contains("nested or adjacent Graph Loop contexts"),
-                "{error}"
-            );
-        }
+        crate::plan::ValidatedExecutionPlan::try_new(plan).unwrap();
     }
 }
 

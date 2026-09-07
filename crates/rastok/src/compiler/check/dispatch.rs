@@ -518,7 +518,21 @@ impl Checker<'_, '_> {
                         self.deferred("a typed assignment", target.span);
                     }
                     if target.segments.len() > 1 {
-                        if target.segments[0].text == "meta" && target.segments[1].text == "sys" {
+                        if target.segments.len() == 2
+                            && target.segments[0].text == "Loop"
+                            && target.segments[1].text == "expired"
+                        {
+                            self.bag.push(
+                                Diagnostic::new(E_LOOP_CONTROL, Phase::Check,
+                                    "`Loop.expired` is produced only by the Loop manager; use Loop.next, Loop.again, or Loop.done")
+                                .with_span(target.span)
+                                .with_field("owner", node.path.to_string())
+                                .with_field("path", "Loop.expired")
+                                .with_field("detail", "manager-owned output"),
+                            );
+                        } else if target.segments[0].text == "meta"
+                            && target.segments[1].text == "sys"
+                        {
                             self.meta_sys_write(target.span);
                         } else {
                             self.deferred("a dotted statement target", target.span);

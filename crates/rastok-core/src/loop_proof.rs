@@ -13,6 +13,9 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
+mod graph;
+pub use graph::derive_graph;
+
 /// One canonical termination certificate.
 ///
 /// `decreases` is the sorted multiset of literal strict decrements on every

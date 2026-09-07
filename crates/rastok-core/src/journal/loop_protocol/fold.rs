@@ -10,6 +10,7 @@ use crate::identity::InstanceRef;
 use crate::journal::{LoopRunRef, Record, TransactionRecord};
 use crate::node::{Lifecycle, Port, Trigger};
 use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::vec::Vec;
 use core::fmt;
 
 /// A rejected causal packet. No part of the packet changes the fold.
@@ -79,6 +80,8 @@ pub enum Phase {
 /// Reconstructible state of one run, including an unconsumed command.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunState {
+    /// Exact enclosing applications retained by the opening transaction.
+    pub enclosing: Vec<LoopRunRef>,
     /// Exact owner generation.
     pub instance: InstanceRef,
     /// Recurrent host input.
@@ -338,6 +341,7 @@ impl Fold {
                 self.runs.insert(
                     *run,
                     RunState {
+                        enclosing: packet.context.clone(),
                         instance: instance.clone(),
                         entry: entry.clone(),
                         iteration: 0,

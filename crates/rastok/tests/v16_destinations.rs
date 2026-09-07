@@ -9,6 +9,36 @@ fn compile(source: &str) -> Result<compiler::Compilation, rastok::diagnostics::B
 }
 
 #[test]
+fn boundary_spelling_is_neutral_before_the_migration_gate() {
+    for (ports, old_wiring, new_wiring) in [
+        (
+            "input in: int; output out: int",
+            ". -> worker -> .",
+            "in -> worker -> out",
+        ),
+        (
+            "input request: int; output answer: int",
+            ".request -> worker\nworker.out -> .answer",
+            "request -> worker\nworker.out -> answer",
+        ),
+    ] {
+        let source = |wiring| {
+            format!(
+                "graph app : App {{\n{ports}\noperator worker {{ input in: int; output out: int; on in {{ out = data }} }}\n{wiring}\n}}"
+            )
+        };
+        let old = compile(&source(old_wiring)).unwrap();
+        let explicit = compile(&source(new_wiring)).unwrap();
+        assert_eq!(old.hash, explicit.hash);
+        assert_eq!(old.plan, explicit.plan);
+        assert_eq!(
+            plan::encode(&old.plan, &old.hash),
+            plan::encode(&explicit.plan, &explicit.hash)
+        );
+    }
+}
+
+#[test]
 fn a_productible_operator_output_requires_a_written_destination() {
     let errors = compile(
         r#"graph app : App {

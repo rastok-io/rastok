@@ -2,7 +2,8 @@
 
 use alloc::collections::BTreeMap;
 use alloc::format;
-use alloc::string::String;
+use alloc::string::{String, ToString};
+use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::data_policy::{
@@ -16,8 +17,8 @@ use crate::schema_annotation::{AnnotationTable, SchemaPathSegment};
 
 use super::type_resolution::ResolvedPortTable;
 use super::{
-    DispatchStep, Emission, EndpointRef, ExecutionPlan, ExtensionSpec, Handler, OwnerKind,
-    OwnerSlot, Slot,
+    DispatchStep, Emission, Endpoint, EndpointOwner, EndpointRef, ExecutionPlan, Handler,
+    LoopCommand, LoopCommandKind, OwnerKind, OwnerSlot, RouteDestination, RouteSelection, Slot,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,6 +186,14 @@ impl<'a> Solver<'a> {
     }
 
     fn solve(mut self) -> Result<Outcome, ResolutionError> {
+        // A recurrence may initially read an as-yet empty inferred entry.
+        // Establish the fixed point before requiring exact accounting meaning
+        // on every producer. The strict pass is mandatory before publication.
+        let mut strict = !self
+            .plan
+            .owners
+            .iter()
+            .any(|owner| owner.loop_spec().is_some());
         let limit = self
             .ports
             .len()
@@ -199,7 +208,7 @@ impl<'a> Solver<'a> {
                 let derived = match port_producers.get(&state.key) {
                     None => AnnotationTable::empty(),
                     Some(producers) => {
-                        alternatives(producers.clone()).map_err(|reason| ResolutionError {
+                        producer_policy(producers, strict).map_err(|reason| ResolutionError {
                             location: port_location(self.plan, &state.key),
                             reason,
                         })?
@@ -217,7 +226,7 @@ impl<'a> Solver<'a> {
                 let derived = match var_producers.get(&state.key) {
                     None => AnnotationTable::empty(),
                     Some(producers) => {
-                        alternatives(producers.clone()).map_err(|reason| ResolutionError {
+                        producer_policy(producers, strict).map_err(|reason| ResolutionError {
                             location: var_location(self.plan, &state.key),
                             reason,
                         })?
@@ -235,7 +244,7 @@ impl<'a> Solver<'a> {
                 let derived = match value_producers.get(&state.key) {
                     None => AnnotationTable::empty(),
                     Some(producers) => {
-                        alternatives(producers.clone()).map_err(|reason| ResolutionError {
+                        producer_policy(producers, strict).map_err(|reason| ResolutionError {
                             location: value_location(self.plan, &state.key),
                             reason,
                         })?
@@ -250,6 +259,10 @@ impl<'a> Solver<'a> {
                 state.current = next;
             }
             if !changed {
+                if !strict {
+                    strict = true;
+                    continue;
+                }
                 return Ok(Outcome {
                     ports: self
                         .ports
@@ -270,7 +283,12 @@ impl<'a> Solver<'a> {
         let mut vars = BTreeMap::<VarKey, Vec<AnnotationTable>>::new();
         let mut values = BTreeMap::<ValueKey, Vec<AnnotationTable>>::new();
 
-        for edge in &self.plan.edges {
+        for edge in self
+            .plan
+            .edges
+            .iter()
+            .filter(|_| self.plan.boundary_routes.is_empty())
+        {
             let source = endpoint_key(&edge.from);
             let Some(target) = edge.to.as_ref().map(endpoint_key) else {
                 continue;
@@ -287,25 +305,78 @@ impl<'a> Solver<'a> {
             ports.entry(target).or_default().push(table);
         }
 
-        // Temporal recurrence is a route into the next iteration, not a
-        // spatial edge. It nevertheless carries the exact same policy.
+        // Boundary inventories retain intermediate Graph policies which the
+        // executable edge projection cannot represent. With no inventory,
+        // ordinary edges above and the sparse command rules are sufficient.
+        let rules = if self.plan.boundary_routes.is_empty() {
+            &self.plan.routes
+        } else {
+            &self.plan.boundary_routes
+        };
+        for rule in rules {
+            let source = self.scoped_endpoint_key(&rule.source)?;
+            let arms: Vec<_> = match &rule.selection {
+                RouteSelection::All(destinations) => vec![(None, destinations.as_slice())],
+                RouteSelection::Cases(arms) => arms
+                    .iter()
+                    .map(|arm| (Some(arm.cases.as_slice()), arm.destinations.as_slice()))
+                    .collect(),
+            };
+            for (cases, destinations) in arms {
+                let table = self.port(&source)?.current.clone();
+                let table = match cases {
+                    None => table,
+                    Some(cases) => AnnotationTable::new(table.entries().iter().filter(|(path, _)| {
+                        !matches!(path.segments().first(), Some(SchemaPathSegment::TaggedUnionCase(case)) if !cases.contains(case))
+                    }).map(|(path, set)| (path.clone(), set.clone())).collect()).map_err(|reason| ResolutionError {
+                        location: port_location(self.plan, &source),
+                        reason: PropagationError::InvalidDerivedTable(reason),
+                    })?,
+                };
+                for destination in destinations {
+                    match destination {
+                        RouteDestination::Port(target) if !self.plan.boundary_routes.is_empty() => {
+                            ports
+                                .entry(self.scoped_endpoint_key(target)?)
+                                .or_default()
+                                .push(table.clone());
+                        }
+                        RouteDestination::LoopCommand(command)
+                            if command.kind != LoopCommandKind::Done =>
+                        {
+                            let owner = self.endpoint_owner(&command.owner)?;
+                            let input = self.loop_input_key(owner)?;
+                            let next = if command.kind == LoopCommandKind::Next {
+                                table.clone()
+                            } else {
+                                let taint = security_taint([table.clone()]).map_err(|reason| {
+                                    ResolutionError {
+                                        location: port_location(self.plan, &source),
+                                        reason,
+                                    }
+                                })?;
+                                overlay(&self.port(&input)?.current, &taint).map_err(|reason| {
+                                    ResolutionError {
+                                        location: port_location(self.plan, &input),
+                                        reason,
+                                    }
+                                })?
+                            };
+                            ports.entry(input).or_default().push(next);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
         for (index, owner) in self.plan.owners.iter().enumerate() {
-            if !owner
-                .extensions
-                .iter()
-                .any(|aspect| matches!(aspect, ExtensionSpec::Loop(_)))
-            {
+            if owner.loop_spec().is_none() {
                 continue;
             }
             let owner_slot = OwnerSlot::new(u32::try_from(index).unwrap_or(u32::MAX));
-            let next = self.graph_port_key(owner_slot, "next")?;
-            let input = self.graph_port_key(owner_slot, "in")?;
-            ports
-                .entry(input.clone())
-                .or_default()
-                .push(self.port(&next)?.current.clone());
-
-            let expired = self.graph_port_key(owner_slot, "expired")?;
+            let input = self.loop_input_key(owner_slot)?;
+            let expired = self.owner_port_key(owner_slot, "Loop.expired")?;
             let wrapped = nest(
                 &self.port(&input)?.current,
                 &[
@@ -412,7 +483,35 @@ impl<'a> Solver<'a> {
                                 }
                             }
                         }
-                        DispatchStep::Stop | DispatchStep::LoopCommand(_) => {}
+                        DispatchStep::LoopCommand(command) => {
+                            let owner =
+                                self.loop_owner(handler).ok_or_else(|| ResolutionError {
+                                    location: format!("handler {handler_index} command"),
+                                    reason: PropagationError::UnknownBinding("Loop.state".into()),
+                                })?;
+                            let entry = self.loop_input_key(owner)?;
+                            let table = match command {
+                                LoopCommand::Next(value) => self.emission(
+                                    value,
+                                    input.as_ref(),
+                                    &environment,
+                                    self.port(&entry)?.ty.clone(),
+                                    handler_index,
+                                )?,
+                                LoopCommand::Again => Some(self.port(&entry)?.current.clone()),
+                                LoopCommand::Done => None,
+                            };
+                            if let Some(table) = table {
+                                let derived = overlay(&table, &guard_taint).map_err(|reason| {
+                                    ResolutionError {
+                                        location: port_location(self.plan, &entry),
+                                        reason,
+                                    }
+                                })?;
+                                ports.entry(entry).or_default().push(derived);
+                            }
+                        }
+                        DispatchStep::Stop => {}
                     }
                 }
                 let error = |reason| ResolutionError {
@@ -657,6 +756,22 @@ impl<'a> Solver<'a> {
                 binding.annotations().clone(),
             );
         }
+        if let Some(owner) = self.loop_owner(handler) {
+            let entry = self.loop_input_key(owner)?;
+            let state = self.port(&entry)?;
+            environment.insert("Loop.state.data", state.ty.clone(), state.current.clone());
+            environment.insert(
+                "Loop.state.meta",
+                DataType::Variant,
+                AnnotationTable::empty(),
+            );
+            let envelope = nest(&state.current, &[SchemaPathSegment::Field("data".into())])
+                .map_err(|reason| ResolutionError {
+                    location: port_location(self.plan, &entry),
+                    reason,
+                })?;
+            environment.insert("Loop.state", DataType::Variant, envelope);
+        }
         if let Some((ty, annotations)) = self.instance_key_policy(owner)? {
             environment.insert("instance.key", ty, annotations);
         }
@@ -734,12 +849,58 @@ impl<'a> Solver<'a> {
         Ok(key)
     }
 
-    fn graph_port_key(&self, owner: OwnerSlot, name: &str) -> Result<PortKey, ResolutionError> {
+    fn loop_owner(&self, handler: &Handler) -> Option<OwnerSlot> {
+        if matches!(handler.activation, node::HandlerActivation::Lifecycle(_)) {
+            return None;
+        }
+        let mut current = Some(self.plan.nodes[handler.owner.index()].owner);
+        while let Some(owner) = current {
+            if self.plan.owners[owner.index()].loop_spec().is_some() {
+                return Some(owner);
+            }
+            current = self.plan.owners[owner.index()].parent;
+        }
+        None
+    }
+
+    fn loop_input_key(&self, owner: OwnerSlot) -> Result<PortKey, ResolutionError> {
+        let spec = self.plan.owners[owner.index()]
+            .loop_spec()
+            .ok_or_else(|| ResolutionError {
+                location: self.plan.owners[owner.index()].path.to_string(),
+                reason: PropagationError::UnknownBinding("Loop".into()),
+            })?;
+        self.owner_port_key(owner, spec.entry.name())
+    }
+
+    fn endpoint_owner(&self, endpoint: &EndpointOwner) -> Result<OwnerSlot, ResolutionError> {
+        let path = match endpoint {
+            EndpointOwner::Node(path) => super::OwnerPath::from(path),
+            EndpointOwner::Graph(path) => path.clone(),
+        };
+        self.plan
+            .owners
+            .iter()
+            .position(|owner| owner.path == path)
+            .map(|index| OwnerSlot::new(index as u32))
+            .ok_or_else(|| ResolutionError {
+                location: path.to_string(),
+                reason: PropagationError::UnknownBinding(path.to_string()),
+            })
+    }
+
+    fn scoped_endpoint_key(&self, endpoint: &Endpoint) -> Result<PortKey, ResolutionError> {
+        self.owner_port_key(self.endpoint_owner(&endpoint.owner)?, endpoint.port.name())
+    }
+
+    fn owner_port_key(&self, owner: OwnerSlot, name: &str) -> Result<PortKey, ResolutionError> {
         let port = node::Port::new(name).map_err(|_| ResolutionError {
             location: format!("Graph `{}`", self.plan.owners[owner.index()].path),
             reason: PropagationError::UnknownBinding(name.into()),
         })?;
-        let key = if self.plan.owners[owner.index()].path.is_root() {
+        let key = if let OwnerKind::Node(slot) = self.plan.owners[owner.index()].kind {
+            PortKey::Node(slot, port)
+        } else if self.plan.owners[owner.index()].path.is_root() {
             PortKey::Boundary(port)
         } else {
             PortKey::Graph(owner, port)
@@ -777,6 +938,20 @@ type Pass = (
     BTreeMap<VarKey, Vec<AnnotationTable>>,
     BTreeMap<ValueKey, Vec<AnnotationTable>>,
 );
+
+fn producer_policy(
+    tables: &[AnnotationTable],
+    strict: bool,
+) -> Result<AnnotationTable, PropagationError> {
+    match alternatives(tables.iter().cloned()) {
+        Err(PropagationError::ConflictingMeaning { .. }) if !strict => tables
+            .iter()
+            .try_fold(AnnotationTable::empty(), |known, table| {
+                overlay(&known, table)
+            }),
+        result => result,
+    }
+}
 
 fn endpoint_key(endpoint: &EndpointRef) -> PortKey {
     match endpoint.node {

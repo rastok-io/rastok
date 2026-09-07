@@ -29,7 +29,28 @@ use rastok::boundary::{
 use rastok::compiler::compile;
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Encoding, Namespace, Value};
+use rastok::journal::loop_protocol::{Fact as LoopFact, Fold as LoopFold, Phase as LoopPhase};
 use rastok::journal::{CloseVerdict, MemJournal, OutboundRecord, OutboundStatus, Record};
+
+fn loop_state(
+    journal: &MemJournal,
+    run: rastok::journal::LoopRunRef,
+) -> rastok::journal::loop_protocol::RunState {
+    LoopFold::from_records(journal.records())
+        .unwrap()
+        .run(run)
+        .unwrap()
+        .clone()
+}
+
+fn first_loop(journal: &MemJournal) -> rastok::journal::LoopRunRef {
+    *LoopFold::from_records(journal.records())
+        .unwrap()
+        .runs()
+        .next()
+        .unwrap()
+        .0
+}
 
 fn int_address(owner: &str, value: i64) -> InstanceAddress {
     let owner = OwnerPath::new([owner]).expect("valid owner path");
@@ -3131,6 +3152,216 @@ impl OutboundConnectorBindings for SessionWorld {
 }
 
 #[test]
+fn session_recovery_restores_open_write_settlement_and_terminal_without_repeating_io() {
+    let source = r#"
+graph app : App {
+  input in: text
+  output out: text
+  output exit: variant
+  connector socket : WebSocketClient {
+    url = "ws://example.test/socket"
+    handshake_timeout = duration("5s")
+    codec = text; effect = idempotent; behavior = deterministic
+  }
+  in -> socket
+  socket.out -> out
+  socket.exit -> exit
+}
+"#;
+    let compilation = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let mut expected = None;
+    for restart in [false, true] {
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        let mut world = SessionWorld {
+            hold_writes: true,
+            ..SessionWorld::default()
+        };
+        let recover = |vm: &mut Vm<'_>, journal: &MemJournal| {
+            if restart {
+                let records = journal.records().to_vec();
+                vm.recover_from_journal(journal).unwrap();
+                assert_eq!(records, journal.records());
+            }
+        };
+        vm.inject(&mut journal, text_submission("open")).unwrap();
+        while vm.step_with_bindings(&mut journal, &mut world).unwrap() {
+            recover(&mut vm, &journal);
+        }
+        assert_eq!(world.opened.len(), 1);
+        vm.pump(&mut journal, &mut world).unwrap();
+        recover(&mut vm, &journal);
+        for text in ["first", "second"] {
+            vm.inject(&mut journal, text_submission(text)).unwrap();
+            recover(&mut vm, &journal);
+            while vm.step_with_bindings(&mut journal, &mut world).unwrap() {
+                recover(&mut vm, &journal);
+            }
+        }
+        assert_eq!(world.writes.len(), 2);
+        assert_eq!(journal.open_session_writes().len(), 2);
+        for write in [1, 0] {
+            world.settle_write(write);
+            vm.pump(&mut journal, &mut world).unwrap();
+            recover(&mut vm, &journal);
+        }
+        world.close(world.opened[0]);
+        vm.pump(&mut journal, &mut world).unwrap();
+        while vm.step_with_bindings(&mut journal, &mut world).unwrap() {
+            recover(&mut vm, &journal);
+        }
+        assert_eq!(world.opened.len(), 1, "no repeated handshake");
+        assert_eq!(world.writes.len(), 2, "no repeated message");
+        assert_eq!(vm.outputs().len(), 1);
+        assert!(journal.live_sessions().is_empty());
+        if let Some(expected) = &expected {
+            assert_eq!(
+                journal.records(),
+                expected,
+                "recovery is causally invisible"
+            );
+        } else {
+            expected = Some(journal.records().to_vec());
+        }
+    }
+}
+
+#[test]
+fn session_recovery_keeps_the_original_handshake_deadline_and_rejects_crossed_facts() {
+    let source = r#"
+graph app : App {
+  input in: text
+  output exit: variant
+  connector socket : WebSocketClient {
+    url = "ws://example.test/socket"; handshake_timeout = duration("5s")
+    codec = text; effect = idempotent; behavior = deterministic
+  }
+  in -> socket
+  socket.out -> nothing
+  socket.exit -> exit
+}
+"#;
+    let compilation = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let mut journal = FlakyJournal::healthy(GraphVersion(1));
+    let mut vm = Vm::boot_at(&compilation.plan, GraphVersion(1), 7_000_000_000);
+    let mut world = SessionWorld {
+        pending_opens: true,
+        ..SessionWorld::default()
+    };
+    vm.inject(&mut journal, text_submission("open")).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    let retained = journal.inner.records().to_vec();
+    for sabotage in 0..3 {
+        let mut records = retained.clone();
+        match sabotage {
+            0 => {
+                let Record::Inbound(record) = &mut records[0] else {
+                    panic!("ingress");
+                };
+                record.timer_schedule = None;
+            }
+            1 => {
+                let Record::Outbound(rastok::journal::OutboundRecord::Session(record)) =
+                    records.last_mut().unwrap()
+                else {
+                    panic!("opening");
+                };
+                record.connector_path = node::Path::new(["other"]).unwrap();
+            }
+            _ => {
+                records.push(records.last().unwrap().clone());
+            }
+        }
+        journal.recovery_records = Some(records);
+        let before = vm.inspection();
+        assert!(matches!(
+            vm.recover_from_journal(&journal),
+            Err(VmError::InvalidRecovery { .. })
+        ));
+        assert_eq!(before, vm.inspection());
+        assert_eq!(retained, journal.inner.records());
+    }
+    journal.recovery_records = None;
+    let mut restored = Vm::boot_at(&compilation.plan, GraphVersion(1), 11_000_000_000);
+    restored.recover_from_journal(&journal).unwrap();
+    restored
+        .advance(&mut journal, &mut world, 11_000_000_000)
+        .unwrap();
+    assert!(restored.outputs().is_empty());
+    restored
+        .advance(&mut journal, &mut world, 12_000_000_000)
+        .unwrap();
+    assert_eq!(restored.outputs().len(), 1);
+    assert_eq!(source_exit_cases(&restored), ["TimeoutExpired"]);
+    assert_eq!(
+        world.opened.len(),
+        1,
+        "the retained opening is never re-offered"
+    );
+    restored.recover_from_journal(&journal).unwrap();
+    assert_eq!(restored.outputs().len(), 1);
+}
+
+#[test]
+fn inbound_sessions_recover_peer_messages_without_crossing_two_openings() {
+    let source = r#"
+graph app : App {
+  input in: text
+  output out: text
+  output exit: variant
+  connector socket : WebSocketServer {
+    listen = "127.0.0.1:0"; path = "/socket"
+    handshake_timeout = duration("5s"); codec = text
+  }
+  in -> socket
+  socket.out -> out
+  socket.exit -> exit
+}
+"#;
+    let compilation = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = SessionWorld::default();
+    let mut sessions = Vec::new();
+    for sequence in [1, 2] {
+        let InboundAdmission::Accepted(accepted) = vm
+            .admit_inbound(
+                &mut journal,
+                &websocket_proposal(sequence, "", InboundSession::Open),
+            )
+            .unwrap()
+        else {
+            panic!("opening admitted");
+        };
+        let Some(InboundExchangeRef::Session(session)) = accepted.exchange else {
+            panic!("Session reference");
+        };
+        sessions.push(session);
+        vm.recover_from_journal(&journal).unwrap();
+    }
+    vm.drain(&mut journal).unwrap();
+    for (sequence, text, session) in [(3, "alice", sessions[0]), (4, "bob", sessions[1])] {
+        vm.admit_inbound(
+            &mut journal,
+            &websocket_proposal(sequence, text, InboundSession::Message(session)),
+        )
+        .unwrap();
+        vm.recover_from_journal(&journal).unwrap();
+    }
+    assert_eq!(vm.outputs().len(), 2);
+    for session in sessions.into_iter().rev() {
+        world.close(session);
+        vm.pump(&mut journal, &mut world).unwrap();
+        vm.drain(&mut journal).unwrap();
+        vm.recover_from_journal(&journal).unwrap();
+    }
+    assert_eq!(vm.outputs().len(), 4);
+    assert!(journal.live_sessions().is_empty());
+    assert!(world.opened.is_empty());
+    assert!(world.writes.is_empty());
+}
+
+#[test]
 fn a_websocket_client_session_opens_writes_and_exits_once() {
     let source = r#"
 graph websocket : App {
@@ -4915,8 +5146,18 @@ graph countdown : App + Loop {
   Loop.fuel = 3
   Loop.delay = { kind = fixed ; after = duration("2s") }
 
-  on in where data <= 0 { out = Loop.state.data }
-  on in where data > 0  { next = data - 1 }
+  operator decide {
+    input in: int
+    output done: int
+    output revised: int
+    on in match {
+      data > 0 => revised = data - 1
+      _ => done = Loop.state.data
+    }
+  }
+  in -> decide
+  decide.done -> out
+  decide.revised -> Loop.next
 }
 "#],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -4930,12 +5171,8 @@ graph countdown : App + Loop {
     before_restart
         .drain(&mut journal)
         .expect("the first traversal arms, rather than runs, its successor");
-    let (run, first) = journal
-        .open_loop_runs()
-        .expect("the Loop fold is valid")
-        .into_iter()
-        .next()
-        .expect("one run remains open");
+    let run = first_loop(&journal);
+    let first = loop_state(&journal, run);
     assert_eq!(first.iteration, 1);
     assert_eq!(first.due_at, Some(2_000_000_000));
     assert!(before_restart.outputs().is_empty());
@@ -4952,11 +5189,11 @@ graph countdown : App + Loop {
     recovered
         .advance(&mut journal, &mut world, 1_999_999_999)
         .expect("advancing short of the date is inert");
-    assert_eq!(journal.loop_run(&run).unwrap().unwrap().iteration, 1);
+    assert_eq!(loop_state(&journal, run).iteration, 1);
     recovered
         .advance(&mut journal, &mut world, 2_000_000_000)
         .expect("the exact date admits one traversal");
-    let second = journal.loop_run(&run).unwrap().unwrap();
+    let second = loop_state(&journal, run);
     assert_eq!(second.iteration, 2);
     assert_eq!(second.due_at, Some(4_000_000_000));
     recovered
@@ -4967,19 +5204,18 @@ graph countdown : App + Loop {
         rastok::runtime::data_value(recovered.outputs()[0].envelope.data()).unwrap(),
         Value::Int(0)
     );
-    assert_eq!(
-        journal.loop_run(&run).unwrap().unwrap().phase,
-        rastok::journal::LoopRunPhase::Closed
-    );
+    assert_eq!(loop_state(&journal, run).phase, LoopPhase::Closed);
     let delayed_facts: Vec<_> = journal
         .records()
         .iter()
         .filter_map(|record| match record {
             Record::Transaction(transaction)
-                if matches!(
-                    transaction.loop_fact(),
-                    Some(rastok::journal::LoopFact::Next { .. })
-                ) =>
+                if transaction.loop_protocol().is_some_and(|packet| {
+                    packet
+                        .facts
+                        .iter()
+                        .any(|fact| matches!(fact, LoopFact::Advance { .. }))
+                }) =>
             {
                 Some(transaction)
             }
@@ -5007,8 +5243,18 @@ graph countdown : App + Loop {
     ceiling = duration("3s")
   }
 
-  on in where data <= 0 { out = Loop.state.data }
-  on in where data > 0  { next = data - 1 }
+  operator decide {
+    input in: int
+    output done: int
+    output revised: int
+    on in match {
+      data > 0 => revised = data - 1
+      _ => done = Loop.state.data
+    }
+  }
+  in -> decide
+  decide.done -> out
+  decide.revised -> Loop.next
 }
 "#],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -5019,24 +5265,15 @@ graph countdown : App + Loop {
     let mut world = EchoWorld::default();
     vm.inject(&mut journal, int_submission(3)).unwrap();
     vm.drain(&mut journal).unwrap();
-    let run = journal.open_loop_runs().unwrap()[0].0;
-    assert_eq!(
-        journal.loop_run(&run).unwrap().unwrap().due_at,
-        Some(1_000_000_000)
-    );
+    let run = first_loop(&journal);
+    assert_eq!(loop_state(&journal, run).due_at, Some(1_000_000_000));
     vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
-    assert_eq!(
-        journal.loop_run(&run).unwrap().unwrap().due_at,
-        Some(3_000_000_000)
-    );
+    assert_eq!(loop_state(&journal, run).due_at, Some(3_000_000_000));
     vm.advance(&mut journal, &mut world, 3_000_000_000).unwrap();
-    assert_eq!(
-        journal.loop_run(&run).unwrap().unwrap().due_at,
-        Some(6_000_000_000)
-    );
+    assert_eq!(loop_state(&journal, run).due_at, Some(6_000_000_000));
     vm.advance(&mut journal, &mut world, 6_000_000_000).unwrap();
     assert_eq!(vm.outputs().len(), 1);
-    assert_eq!(journal.loop_run(&run).unwrap().unwrap().remaining, 1);
+    assert_eq!(loop_state(&journal, run).remaining, 1);
 }
 
 #[test]
@@ -5050,8 +5287,18 @@ graph countdown : App + Loop {
   Loop.fuel = 3
   Loop.delay = { kind = fixed ; after = duration("2s") }
 
-  on in where data <= 0 { out = Loop.state.data }
-  on in where data > 0  { next = data - 1 }
+  operator decide {
+    input in: int
+    output done: int
+    output revised: int
+    on in match {
+      data > 0 => revised = data - 1
+      _ => done = Loop.state.data
+    }
+  }
+  in -> decide
+  decide.done -> out
+  decide.revised -> Loop.next
 }
 "#],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -5062,7 +5309,7 @@ graph countdown : App + Loop {
     let mut world = EchoWorld::default();
     vm.inject(&mut journal, int_submission(1)).unwrap();
     vm.drain(&mut journal).unwrap();
-    let old_run = journal.open_loop_runs().unwrap()[0].0;
+    let old_run = first_loop(&journal);
 
     vm.advance(&mut journal, &mut world, 1_000_000_000)
         .expect("the lifetime closes before the later Loop wakeup");
@@ -5074,9 +5321,9 @@ graph countdown : App + Loop {
     vm.advance(&mut journal, &mut world, 2_000_000_000)
         .expect("the stale predecessor wakeup is a harmless observation");
     assert_eq!(vm.outputs().len(), 1, "the stale wakeup did not re-enter");
-    let old = journal.loop_run(&old_run).unwrap().unwrap();
+    let old = loop_state(&journal, old_run);
     assert_eq!(old.iteration, 1);
-    assert_eq!(old.phase, rastok::journal::LoopRunPhase::Open);
+    assert_eq!(old.phase, LoopPhase::Closed);
 }
 
 #[test]
@@ -5089,8 +5336,18 @@ graph countdown : App + Loop {
   Loop.fuel = 3
   Loop.delay = { kind = fixed ; after = duration("1s") }
 
-  on in where data <= 0 { out = Loop.state.data }
-  on in where data > 0  { next = data - 1 }
+  operator decide {
+    input in: int
+    output done: int
+    output revised: int
+    on in match {
+      data > 0 => revised = data - 1
+      _ => done = Loop.state.data
+    }
+  }
+  in -> decide
+  decide.done -> out
+  decide.revised -> Loop.next
 }
 "#],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -5105,10 +5362,12 @@ graph countdown : App + Loop {
         .records()
         .iter()
         .filter_map(|record| match record {
-            Record::Transaction(transaction) => match transaction.loop_fact() {
-                Some(rastok::journal::LoopFact::Open { run, .. }) => Some(*run),
-                _ => None,
-            },
+            Record::Transaction(transaction) => transaction.loop_protocol(),
+            _ => None,
+        })
+        .flat_map(|packet| &packet.facts)
+        .filter_map(|fact| match fact {
+            LoopFact::Open { run, .. } => Some(*run),
             _ => None,
         })
         .collect();
@@ -5119,21 +5378,17 @@ graph countdown : App + Loop {
     let transitions: Vec<_> = journal.records()[before..]
         .iter()
         .filter_map(|record| match record {
-            Record::Transaction(transaction) => transaction.loop_fact().filter(|fact| {
-                matches!(
-                    fact,
-                    rastok::journal::LoopFact::Next { .. }
-                        | rastok::journal::LoopFact::Close { .. }
-                )
-            }),
+            Record::Transaction(transaction) => transaction.loop_protocol(),
             _ => None,
         })
+        .flat_map(|packet| &packet.facts)
+        .filter(|fact| matches!(fact, LoopFact::Advance { .. } | LoopFact::Close { .. }))
         .collect();
     assert!(matches!(
         transitions.as_slice(),
         [
-            rastok::journal::LoopFact::Close { run: first, .. },
-            rastok::journal::LoopFact::Next { run: second, .. }
+            LoopFact::Close { run: first, .. },
+            LoopFact::Advance { run: second, .. }
         ] if *first == runs[0] && *second == runs[1]
     ));
 }
@@ -5158,16 +5413,18 @@ graph retry : App + Loop {
     max_output = "1 MiB"
   }
 
-  . -> shell
+  in -> shell
   shell.out -> nothing
   shell.err -> nothing
-  on shell.exit where data is CaptureFailed  { done = "capture" }
-  on shell.exit where data is DecodeFailed   { done = "decode" }
-  on shell.exit where data is Exited         { done = "exited" }
-  on shell.exit where data is OutcomeUnknown { done = "unknown" }
-  on shell.exit where data is OutputOverflow { done = "overflow" }
-  on shell.exit where data is SpawnFailed    { done = "spawn" }
-  on shell.exit where data is TimeoutExpired { next = Loop.state.data }
+  shell.exit -> match {
+    TimeoutExpired -> Loop.again
+    _ -> finish
+  }
+  operator finish {
+    output out: text
+    on in { out = "completed" }
+  }
+  finish.out -> done
 }
 "#],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -5180,14 +5437,14 @@ graph retry : App + Loop {
     vm.inject(&mut journal, text_submission("again")).unwrap();
     vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     assert_eq!(journal.open_calls().len(), 1);
-    let run = journal.open_loop_runs().unwrap()[0].0;
+    let run = first_loop(&journal);
 
     vm.advance(&mut journal, &mut world, 1_000_000_000)
         .expect("the Call budget publishes TimeoutExpired first");
-    let after_timeout = journal.loop_run(&run).unwrap().unwrap();
+    let after_timeout = loop_state(&journal, run);
     assert_eq!(after_timeout.iteration, 1);
     assert_eq!(after_timeout.due_at, Some(3_000_000_000));
-    assert!(!after_timeout.iteration_admitted);
+    assert_eq!(after_timeout.phase, LoopPhase::AwaitingAdmission);
     assert!(journal.open_calls().is_empty());
 
     vm.advance(&mut journal, &mut world, 2_999_999_999)
@@ -5202,8 +5459,8 @@ graph retry : App + Loop {
     assert!(journal.open_calls().is_empty());
     assert_eq!(vm.outputs().len(), 1);
     assert!(matches!(
-        journal.loop_run(&run).unwrap().unwrap().phase,
-        rastok::journal::LoopRunPhase::Expired
+        loop_state(&journal, run).phase,
+        LoopPhase::Expired
     ));
 
     let call_timeouts = journal
@@ -5227,7 +5484,7 @@ graph retry : App + Loop {
 }
 
 #[test]
-fn spatial_loop_recovery_waits_for_general_instance_recovery() {
+fn spatial_loop_recovery_preserves_the_retained_call_and_delay() {
     let compilation = compile(
         &[r#"
 graph retry : App + Loop {
@@ -5246,16 +5503,18 @@ graph retry : App + Loop {
     max_output = "1 MiB"
   }
 
-  . -> shell
+  in -> shell
   shell.out -> nothing
   shell.err -> nothing
-  on shell.exit where data is CaptureFailed  { done = "capture" }
-  on shell.exit where data is DecodeFailed   { done = "decode" }
-  on shell.exit where data is Exited         { done = "exited" }
-  on shell.exit where data is OutcomeUnknown { done = "unknown" }
-  on shell.exit where data is OutputOverflow { done = "overflow" }
-  on shell.exit where data is SpawnFailed    { done = "spawn" }
-  on shell.exit where data is TimeoutExpired { next = Loop.state.data }
+  shell.exit -> match {
+    TimeoutExpired -> Loop.again
+    _ -> finish
+  }
+  operator finish {
+    output out: text
+    on in { out = "completed" }
+  }
+  finish.out -> done
 }
 "#],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -5272,12 +5531,25 @@ graph retry : App + Loop {
     drop(vm);
 
     let mut recovered = Vm::boot_at(&compilation.plan, GraphVersion(1), 2_000_000_000);
-    let error = recovered
-        .recover_from_journal(&journal)
-        .expect_err("spatial recovery must fail closed until owner bundles are replayed");
-    assert!(
-        error.to_string().contains(
-            "a spatial Loop waits for general instance and Connector obligation recovery"
-        )
+    let before = journal.records().to_vec();
+    recovered
+        .recover_with_bindings(&journal, &mut world)
+        .expect("the spatial fold retains the first timeout and delayed command");
+    assert_eq!(journal.records(), before);
+    recovered
+        .advance(&mut journal, &mut world, 2_999_999_999)
+        .unwrap();
+    assert!(journal.open_calls().is_empty());
+    recovered
+        .advance(&mut journal, &mut world, 3_000_000_000)
+        .unwrap();
+    assert_eq!(journal.open_calls().len(), 1);
+    recovered
+        .advance(&mut journal, &mut world, 4_000_000_000)
+        .unwrap();
+    assert_eq!(recovered.outputs().len(), 1);
+    assert_eq!(
+        loop_state(&journal, first_loop(&journal)).phase,
+        LoopPhase::Expired
     );
 }

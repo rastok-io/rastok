@@ -46,8 +46,8 @@ pub enum RouteErrorKind {
     UnknownEndpoint,
     /// Selected deliveries and the physical edge inventory disagree.
     PhysicalEdgeMismatch,
-    /// The manager protocol has not passed its execution gate.
-    UnsupportedManagerCommand,
+    /// The command has no compatible owner or causal scope.
+    InvalidManagerCommand,
     /// There is no independently resolved type for a case-routed source.
     UnresolvedCaseSource,
     /// A case table contradicts the resolved source type or canonical order.
@@ -99,8 +99,8 @@ impl fmt::Display for RouteValidationError {
             RouteErrorKind::PhysicalEdgeMismatch => {
                 f.write_str("selected destinations and physical edges disagree")
             }
-            RouteErrorKind::UnsupportedManagerCommand => {
-                f.write_str("Loop manager commands require the R7 execution protocol")
+            RouteErrorKind::InvalidManagerCommand => {
+                f.write_str("Loop manager command has no compatible owner or causal scope")
             }
             RouteErrorKind::CasePartition(error) => fmt::Display::fmt(error, f),
             RouteErrorKind::EmptyDestinations => {
@@ -179,15 +179,12 @@ pub(super) fn validate_plan_routing(
                 .map(move |destination| (cases, destination))
         }) {
             if let RouteDestination::LoopCommand(command) = destination {
-                let graph_command = match (&command.owner, &rule.source.owner) {
-                    (super::EndpointOwner::Graph(owner), super::EndpointOwner::Node(source)) => {
-                        source.segments().starts_with(owner.segments())
-                            && plan.owners.iter().any(|candidate| {
-                                candidate.path == *owner && candidate.loop_spec().is_some()
-                            })
-                    }
-                    _ => false,
-                };
+                // Boundary composition validates the real command source.
+                // Its flattened source can precede the Graph run admission.
+                let graph_command = matches!(&command.owner, super::EndpointOwner::Graph(owner)
+                    if plan.owners.iter().any(|candidate| candidate.path == *owner && candidate.loop_spec().is_some())
+                    && (!plan.boundary_routes.is_empty()
+                        || matches!(&rule.source.owner, super::EndpointOwner::Node(source) if source.segments().starts_with(owner.segments()))));
                 let admitted = graph_command
                     || command.owner == rule.source.owner
                         && source.node.is_some_and(|slot| {
@@ -201,7 +198,7 @@ pub(super) fn validate_plan_routing(
                 if !admitted {
                     return Err(RouteValidationError::at(
                         &path,
-                        RouteErrorKind::UnsupportedManagerCommand,
+                        RouteErrorKind::InvalidManagerCommand,
                     )
                     .into());
                 }

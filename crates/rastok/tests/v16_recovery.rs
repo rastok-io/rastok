@@ -184,6 +184,96 @@ impl rastok::boundary::CallConnectorDriver for World {
     }
 }
 
+#[test]
+fn a_nested_call_run_recovers_timeouts_and_never_restarts_an_old_effect() {
+    use rastok::journal::loop_protocol::{Fold, Phase};
+    let plan = compile(
+        r#"
+graph app : App + Loop {
+  input in: int
+  output out: int
+  output exhausted: variant
+  Loop.fuel = 2
+  Loop.terminal = [out, exhausted]
+  connector call : Process + Loop {
+    command = "cat"; codec = jsonl
+    effect = idempotent; behavior = deterministic
+    timeout = duration("3s")
+    Loop.fuel = 2
+    Loop.delay = { kind = fixed; after = duration("1s") }
+  }
+  operator finish { input in: variant; output out: int; on in { out = 1 } }
+  in -> call
+  call.out -> nothing
+  call.err -> nothing
+  call.exit -> match { TimeoutExpired -> call.Loop.again; _ -> finish }
+  finish.out -> out
+  call.Loop.expired -> exhausted
+}
+"#,
+    );
+    for exhausted in [false, true] {
+        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let mut world = World::default();
+        inject(&mut vm, &mut journal, "in", 1);
+        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.pump(&mut journal, &mut world).unwrap();
+        assert_eq!(world.starts, 1);
+        for at in [0, 3_000_000_000, 4_000_000_000] {
+            vm.advance(&mut journal, &mut world, at).unwrap();
+            vm.pump(&mut journal, &mut world).unwrap();
+            let mut restored = Vm::boot_at(&plan, GraphVersion(1), at);
+            restored
+                .recover_with_bindings(&journal, &mut world)
+                .unwrap();
+            assert_eq!(restored.inspection(), vm.inspection());
+            vm = restored;
+        }
+        vm.pump(&mut journal, &mut world).unwrap();
+        assert_eq!(world.starts, 2);
+        if exhausted {
+            vm.advance(&mut journal, &mut world, 7_000_000_000).unwrap();
+        } else {
+            world.answers.push(rastok::boundary::Response {
+                call_ref: journal.open_calls()[0].call_ref,
+                completion: rastok::boundary::Completion::process_exit(
+                    rastok::boundary::ProcessExit::Exited {
+                        exit_code: 0,
+                        signal: None,
+                    },
+                ),
+            });
+            vm.pump(&mut journal, &mut world).unwrap();
+        }
+        for _ in 0..100 {
+            let mut restored = Vm::boot_at(&plan, GraphVersion(1), vm.now());
+            restored
+                .recover_with_bindings(&journal, &mut world)
+                .unwrap();
+            assert_eq!(restored.inspection(), vm.inspection());
+            vm = restored;
+            if vm.is_stable() {
+                break;
+            }
+            assert!(vm.step_with_bindings(&mut journal, &mut world).unwrap());
+        }
+        assert!(vm.is_stable());
+        assert_eq!(world.starts, 2);
+        assert_eq!(vm.outputs().len(), 1);
+        assert_eq!(
+            vm.outputs()[0].port.name(),
+            if exhausted { "exhausted" } else { "out" }
+        );
+        let fold = Fold::from_records(journal.records()).unwrap();
+        assert_eq!(fold.runs().count(), 2);
+        assert!(
+            fold.runs()
+                .all(|(_, state)| matches!(state.phase, Phase::Closed | Phase::Expired))
+        );
+    }
+}
+
 const CALL_LOOP: &str = r#"
 graph app : App {
   input in: int

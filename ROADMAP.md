@@ -255,13 +255,17 @@ takes semantic priority; no public date overrides its R0–R9 exit gates.
   exact contexts carry `Loop.state`, and commands wait for sibling work before
   recurrence. Call response/terminal correlation, exact boundary timer identities
   and complete-application effect safety are independently checked. Every
-  committed prefix of the reference run recovers identically. Graph
-  joins, nested Loops, annotated recurrence, complete recovery, stronger
-  productibility proofs and the fixture migration remain open. No golden is blessed;
+  committed prefix of the reference run recovers identically. Nested/adjacent
+  runs, annotated recurrence, entry-preserving Graph measures, boundary-only
+  applications and unconditional same-context joins are qualified. Inbound
+  Calls and Sessions retain exchange state and original deadlines on recovery,
+  without reconnecting or repeating I/O. Stronger per-run proofs for retained
+  joins/lifecycle-dependent bodies and the R9 fixture/UI migration remain open.
+  No golden is blessed;
   R4's review preserves the 128 KiB embedded heap gate (19,620 B headroom
   after retaining the live delivery schedules) and allocates exact retained
   timer schedules under key 56 before blessing. R7 now uses that allocation;
-  the wider Graph obligation profiles and Event/inbound-Call/Session recovery remain gated;
+  the wider Graph control-proof profiles remain gated;
   the full workspace is not green. See the current §10 of
   [`rework-r4-plan.md`](docs/architecture/rework-r4-plan.md).
   The following records the **pre-cutover R3/R4 checkpoints**, not today's

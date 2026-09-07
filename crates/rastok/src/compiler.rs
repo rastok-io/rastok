@@ -139,7 +139,7 @@ pub fn compile_with_assets(
     }
     let source_definitions = source_definitions(&unit, sources);
     let hash = lower::semantic_hash(&hir);
-    let (plan, symbols) = match lower::lower(&hir) {
+    let (mut plan, symbols) = match lower::lower(&hir) {
         Ok(lowered) => lowered,
         Err(error) => {
             bag.push(
@@ -157,6 +157,45 @@ pub fn compile_with_assets(
             return Err(bag);
         }
     };
+    // A Graph proof is derived from the complete unflattened routing. It is
+    // evidence beside the plan, never a synthetic application handler.
+    for index in 0..plan.owners.len() {
+        let owner = &plan.owners[index];
+        if owner.kind != crate::plan::OwnerKind::Graph {
+            continue;
+        }
+        let Some(proof) = owner.loop_spec().and_then(|spec| spec.proof.as_ref()) else {
+            continue;
+        };
+        let derived = match crate::loop_proof::derive_graph(
+            proof.measure.clone(),
+            proof.invariant.clone(),
+            &plan,
+            owner,
+        ) {
+            Ok(proof) => proof,
+            Err(error) => {
+                bag.push(
+                    Diagnostic::new(
+                        check::E_LOOP,
+                        Phase::Check,
+                        format!(
+                            "Loop `{}` cannot be proved to terminate: {error}",
+                            owner.path
+                        ),
+                    )
+                    .with_field("owner", owner.path.to_string())
+                    .with_field("path", "measure"),
+                );
+                return Err(bag);
+            }
+        };
+        for extension in &mut plan.owners[index].extensions {
+            if let crate::plan::ExtensionSpec::Loop(spec) = extension {
+                spec.proof = Some(derived.clone());
+            }
+        }
+    }
     // A lowering that emits an invalid plan is a compiler bug — but a
     // bug with a controlled error path, not a vanished process: the
     // validator exists precisely to catch this disagreement.

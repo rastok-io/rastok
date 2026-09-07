@@ -1433,7 +1433,7 @@ fn handler_signature(
             .with("Loop.state", DataType::Variant)
             .with("Loop.state.data", state.clone())
             .with_metadata("Loop.state.meta");
-    } else if matches!(handler.activation, node::HandlerActivation::Port(_)) {
+    } else if !matches!(handler.activation, node::HandlerActivation::Lifecycle(_)) {
         let mut ancestor = plan.owners[node.owner.index()].parent;
         while let Some(owner) = ancestor {
             if let Some(spec) = plan.owners[owner.index()].loop_spec() {
@@ -2815,7 +2815,19 @@ fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
                 }
             }
             let verification = match owner.kind {
-                OwnerKind::Graph => Err(crate::loop_proof::Error::UnsupportedActivation),
+                OwnerKind::Graph => crate::loop_proof::derive_graph(
+                    proof.measure.clone(),
+                    proof.invariant.clone(),
+                    plan,
+                    owner,
+                )
+                .and_then(|derived| {
+                    if derived.decreases == proof.decreases {
+                        Ok(())
+                    } else {
+                        Err(crate::loop_proof::Error::CertificateMismatch)
+                    }
+                }),
                 OwnerKind::Node(slot) => plan
                     .handlers
                     .iter()

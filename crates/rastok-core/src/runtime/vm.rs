@@ -1602,6 +1602,57 @@ impl<'plan> Vm<'plan> {
         true
     }
 
+    fn inbound_call_timeout(
+        &self,
+        source: Slot,
+        instance: &InstanceRef,
+        candidates: &BTreeMap<InstanceRef, InstanceCandidate>,
+    ) -> Result<Option<i64>, VmError> {
+        let planned = &self.plan.nodes[source.index()];
+        let spec = planned.connector().ok_or_else(|| VmError::PlanInvariant {
+            node: planned.path.clone(),
+            reason: "an inbound Call source lost its Contract",
+        })?;
+        match spec.attribute("mode") {
+            Some(AttrSetting::Word(mode)) if mode == "ack" => Ok(None),
+            Some(AttrSetting::Word(mode)) if mode == "respond" => {
+                let resolved = spec.attribute("timeout").and_then(|setting| match setting {
+                    AttrSetting::Value(crate::value::Value::Duration(value)) => Some(*value),
+                    AttrSetting::Expr { .. } => candidates
+                        .get(instance)
+                        .map(|candidate| &candidate.settings)
+                        .or_else(|| {
+                            self.instances
+                                .get(instance)
+                                .map(|instance| &instance.settings)
+                        })
+                        .or_else(|| {
+                            self.waiting
+                                .get(instance)
+                                .map(|waiting| &waiting.candidate.settings)
+                        })
+                        .and_then(|settings| settings.get("timeout"))
+                        .and_then(|value| match value {
+                            crate::value::Value::Duration(value) => Some(*value),
+                            _ => None,
+                        }),
+                    AttrSetting::Value(_) | AttrSetting::Word(_) => None,
+                });
+                resolved
+                    .filter(|value| *value > 0)
+                    .map(Some)
+                    .ok_or_else(|| VmError::PlanInvariant {
+                        node: planned.path.clone(),
+                        reason: "a respond-mode inbound Call has no positive resolved timeout",
+                    })
+            }
+            _ => Err(VmError::PlanInvariant {
+                node: planned.path.clone(),
+                reason: "an inbound Call source has no executable mode",
+            }),
+        }
+    }
+
     fn inject_submission(
         &mut self,
         journal: &mut dyn Journal,
@@ -1755,57 +1806,7 @@ impl<'plan> Vm<'plan> {
                         node: self.plan.nodes[source.index()].path.clone(),
                     });
                 }
-                let spec = self.plan.nodes[source.index()].connector().ok_or_else(|| {
-                    VmError::PlanInvariant {
-                        node: self.plan.nodes[source.index()].path.clone(),
-                        reason: "an inbound Call source lost its connector specification",
-                    }
-                })?;
-                let timeout = match spec.attribute("mode") {
-                    Some(AttrSetting::Word(mode)) if mode == "ack" => None,
-                    Some(AttrSetting::Word(mode)) if mode == "respond" => {
-                        let resolved =
-                            spec.attribute("timeout").and_then(|setting| match setting {
-                                AttrSetting::Value(crate::value::Value::Duration(value)) => {
-                                    Some(*value)
-                                }
-                                AttrSetting::Expr { .. } => candidates
-                                    .get(&target.reference)
-                                    .map(|candidate| &candidate.settings)
-                                    .or_else(|| {
-                                        self.instances
-                                            .get(&target.reference)
-                                            .map(|instance| &instance.settings)
-                                    })
-                                    .or_else(|| {
-                                        self.waiting
-                                            .get(&target.reference)
-                                            .map(|waiting| &waiting.candidate.settings)
-                                    })
-                                    .and_then(|settings| settings.get("timeout"))
-                                    .and_then(|value| match value {
-                                        crate::value::Value::Duration(value) => Some(*value),
-                                        _ => None,
-                                    }),
-                                AttrSetting::Value(_) | AttrSetting::Word(_) => None,
-                            });
-                        match resolved {
-                            Some(value) if value > 0 => Some(value),
-                            _ => {
-                                return Err(VmError::PlanInvariant {
-                                    node: self.plan.nodes[source.index()].path.clone(),
-                                    reason: "a respond-mode inbound Call has no positive resolved timeout",
-                                });
-                            }
-                        }
-                    }
-                    _ => {
-                        return Err(VmError::PlanInvariant {
-                            node: self.plan.nodes[source.index()].path.clone(),
-                            reason: "an inbound Call source has no executable mode",
-                        });
-                    }
-                };
+                let timeout = self.inbound_call_timeout(source, &target.reference, &candidates)?;
                 let call_ref = InboundCallRef::from_root(inbound.envelope().meta().sys().id());
                 let timers = timeout
                     .map(|_| {
@@ -4474,7 +4475,10 @@ impl<'plan> Vm<'plan> {
                         queue
                             .iter()
                             .take(trigger_index)
-                            .filter(|delivery| &delivery.port == port)
+                            .filter(|delivery| {
+                                &delivery.port == port
+                                    && self.graph_context(delivery) == self.graph_context(trigger)
+                            })
                             .cloned()
                             .collect()
                     };
@@ -4591,7 +4595,17 @@ impl<'plan> Vm<'plan> {
         {
             self.prepare_operator_loop_verdict(slot, &mut outcome.record)?;
         }
-        self.retain_graph_verdicts(slot, &mut outcome.record)?;
+        if let Some(crate::journal::LoopRecord::R2(packet)) =
+            outcome.record.loop_record.as_deref_mut()
+        {
+            packet.context = self.graph_context(delivery).to_vec();
+            if let Some((run, _)) = application
+                && packet.context.last() != Some(&run)
+            {
+                packet.context.push(run);
+            }
+        }
+        self.retain_graph_verdicts(&mut outcome.record)?;
         let close_request = outcome.record.close_scope.clone();
         if let Some(scope) = &close_request {
             outcome.record.timers.extend(self.closing_timers(scope));
@@ -4663,6 +4677,17 @@ impl<'plan> Vm<'plan> {
         trigger: &Delivery,
         inputs: &[Delivery],
     ) -> Result<(), VmError> {
+        let context = self.graph_context(trigger);
+        if inputs
+            .iter()
+            .any(|input| self.graph_context(input) != context)
+        {
+            return Err(VmError::InvalidLoopDecision {
+                owner: instance.address().owner().clone(),
+                reason: "E-LOOP-CONTEXT: join candidates belong to different applications",
+            });
+        }
+        let application = self.loop_application(instance, trigger);
         let executor = HandlerExecutor::at(self.plan, self.graph_version, self.now);
         let state = self.state.cell_unchecked(self.plan.plan(), slot, instance);
         let values = self
@@ -4684,8 +4709,19 @@ impl<'plan> Vm<'plan> {
                 },
                 &state,
                 values,
+                application.map(|(run, state)| crate::runtime::LoopFiring {
+                    run,
+                    iteration: state.iteration,
+                    state: &state.state,
+                }),
             )
             .map_err(VmError::Fault)?;
+        if let Some(crate::journal::LoopRecord::R2(packet)) =
+            outcome.record.loop_record.as_deref_mut()
+        {
+            packet.context = context.to_vec();
+        }
+        self.retain_graph_verdicts(&mut outcome.record)?;
         let close_request = outcome.record.close_scope.clone();
         if let Some(scope) = &close_request {
             outcome.record.timers.extend(self.closing_timers(scope));
@@ -4696,6 +4732,9 @@ impl<'plan> Vm<'plan> {
         journal
             .commit(outcome.record.clone())
             .map_err(VmError::Journal)?;
+        if application.is_some() {
+            self.refresh_loop_manager(journal)?;
+        }
         for delivery in inputs {
             if self
                 .scheduler

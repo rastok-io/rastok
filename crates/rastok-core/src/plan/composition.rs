@@ -92,6 +92,42 @@ pub(super) fn validate(
             return Err(failure(&path, RouteErrorKind::UnknownEndpoint).into());
         }
         for destination in destinations(&rule.selection) {
+            if let RouteDestination::LoopCommand(command) = destination {
+                let valid = match (&command.owner, &rule.source.owner) {
+                    (EndpointOwner::Graph(owner), source) => {
+                        let source = match source {
+                            EndpointOwner::Graph(path) => path.clone(),
+                            EndpointOwner::Node(path) => super::OwnerPath::from(path),
+                        };
+                        source.segments().starts_with(owner.segments())
+                            && plan.owners.iter().any(|candidate| {
+                                candidate.path == *owner && candidate.loop_spec().is_some()
+                            })
+                    }
+                    (EndpointOwner::Node(owner), EndpointOwner::Node(source))
+                        if owner == source =>
+                    {
+                        plan.nodes
+                            .iter()
+                            .find(|node| node.path == *owner)
+                            .is_some_and(|node| {
+                                plan.owners[node.owner.index()].loop_spec().is_some()
+                                    && node
+                                        .connector()
+                                        .and_then(super::ConnectorSpec::call_semantics)
+                                        .is_some()
+                            })
+                    }
+                    _ => false,
+                };
+                if !valid
+                    || (rule.source.owner == command.owner
+                        && rule.source.port.name() == "Loop.expired")
+                {
+                    return Err(failure(&path, RouteErrorKind::InvalidManagerCommand).into());
+                }
+                continue;
+            }
             let RouteDestination::Port(endpoint) = destination else {
                 continue;
             };

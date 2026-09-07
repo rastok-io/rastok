@@ -989,22 +989,19 @@ impl Checker<'_, '_> {
     ) -> Vec<crate::compiler::hir::Mock> {
         let mut mocks = Vec::new();
         for decl in decls {
-            if decl.path.len() > 1 {
-                self.deferred("a mock of a composed node", decl.span);
-                continue;
-            }
             let name = &decl.path[0];
-            let Some(node) = app.nodes.iter().find(|node| {
-                node.path.segments().len() == 1 && node.path.segments()[0] == name.text
-            }) else {
+            let Ok(path) = node::Path::new(decl.path.iter().map(|part| part.text.clone())) else {
+                continue;
+            };
+            let Some(node) = node_at_path(app, &path) else {
                 self.bag.push(
                     Diagnostic::new(
                         E_RESOLVE_UNKNOWN,
                         Phase::Resolve,
-                        format!("`{}` names no node of the App", name.text),
+                        format!("`{path}` names no node of the App"),
                     )
-                    .with_span(name.span)
-                    .with_field("name", name.text.clone()),
+                    .with_span(decl.span)
+                    .with_field("name", path.to_string()),
                 );
                 continue;
             };
@@ -1263,12 +1260,16 @@ impl Checker<'_, '_> {
                     steps.push(ScenarioStep::Advance { nanos });
                 }
                 ScenarioItem::Expect(expect) => {
-                    let segments: Vec<&str> = expect
+                    let mut segments: Vec<&str> = expect
                         .target
                         .segments
                         .iter()
                         .map(|segment| segment.text.as_str())
                         .collect();
+                    if segments.ends_with(&["Loop", "expired"]) {
+                        segments.truncate(segments.len() - 2);
+                        segments.push("Loop.expired");
+                    }
                     let (target, observed_type) = match segments.as_slice() {
                         ["app", port] => {
                             // A boundary observation watches what
@@ -1324,10 +1325,12 @@ impl Checker<'_, '_> {
                                 Err(_) => continue,
                             }
                         }
-                        [name, port] => {
-                            let Some(node) = app.nodes.iter().find(|node| {
-                                node.path.segments().len() == 1 && node.path.segments()[0] == *name
-                            }) else {
+                        [owner @ .., port] if !owner.is_empty() => {
+                            let Ok(path) = node::Path::new(owner.iter().copied()) else {
+                                continue;
+                            };
+                            let name = path.to_string();
+                            let Some(node) = node_at_path(app, &path) else {
                                 self.bag.push(
                                     Diagnostic::new(
                                         E_RESOLVE_UNKNOWN,
@@ -1335,7 +1338,7 @@ impl Checker<'_, '_> {
                                         format!("`{name}` names no node of the App"),
                                     )
                                     .with_span(expect.target.span)
-                                    .with_field("name", (*name).to_string()),
+                                    .with_field("name", name.clone()),
                                 );
                                 continue;
                             };
