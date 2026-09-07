@@ -532,6 +532,10 @@ commit refusal cannot publish a prepared index.
 The independent fold refuses duplicate/misidentified commands, repeated
 consumption, wrong ordinals/fuel, altered Again state, reused re-admission
 identity and fabricated expiry payloads.
+The [R7 record-context checkpoint](rework-r7-manager-recovery.md) additionally
+binds each packet to its carrying instance, retained routed-delivery occurrences
+and published expiry emission, using exact parent-generation lifecycle facts.
+It does not yet prove consumed-context propagation or Graph quiescence.
 
 The direct integer measure now operates on command Dispatch: facts from open
 arms and their false fallthroughs, or a closed bool match, must establish
@@ -578,10 +582,11 @@ Still open, without a claim of closure:
 - migration of the old Loop/UI fixtures, then the single golden blessing;
 - the complete post-cutover qualification matrix.
 
-Latest Cortex-M33 candidate measurement after the raw-plan cleanup: **106,244 B**
+Latest Cortex-M33 candidate measurement after the R7 record-context checks: **106,244 B**
 heap against 131,072 B, **24,828 B (18.94%)** margin; worst relay 1,656 ticks
 at 39,999 calibration ticks per 2,000,000 instructions, approximately 82.9 k
-instructions against 150 k. Text + rodata: **796,908 B**, below 1 MiB.
+instructions against 150 k. Text + rodata: **802,964 B** after the R7
+record-context checks, below 1 MiB.
 Indirect record packets recovered the reserve/reallocation cost without
 dropping history; retained timing adds 256 B to that measurement. The spike
 now refuses `SPIKE_OK` and exits unsuccessfully above the 128 KiB heap gate,

@@ -350,6 +350,12 @@ deliveries and cursors, Calls, timers, runs, pending commands, and due
 re-admissions. A produced but unconsumed command reappears; its producer is not
 re-executed. RAM queues are caches over this fold, never authority.
 
+The r2 packet is validated with its carrying record. Instance scope follows
+exact parent-generation lifecycle links, routed contexts refer to actual
+retained deliveries, and an Expired fact must publish the same ordinary
+`Loop.expired` envelope. Packet algebra alone does not establish these links
+or prove run-scoped quiescence.
+
 The old `rastok.aspects.r1` and `rastok.loop.r1` domains remain historical
 and are not reinterpreted. V16 uses `rastok.loop.r2`.
 

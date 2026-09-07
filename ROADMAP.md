@@ -239,8 +239,11 @@ takes semantic priority; no public date overrides its R0–R9 exit gates.
   prefix without replaying producers. Explicit destinations are checked at
   source and independently through retained nested boundary routing. Retired
   Graph-handler states and their dead proof/projection branches are removed;
-  raw plans cannot attach DSL handlers to Connectors. Graph
-  Loops, complete recovery, stronger productibility proofs and the fixture
+  raw plans cannot attach DSL handlers to Connectors. R7's first journal gate
+  binds r2 packets to their exact instance scope, retained deliveries and
+  published expiry, with atomic refusal and unchanged witness identities. See
+  [`rework-r7-manager-recovery.md`](docs/architecture/rework-r7-manager-recovery.md).
+  Graph Loops, complete recovery, stronger productibility proofs and the fixture
   migration remain open. No golden is blessed;
   R4's review preserves the 128 KiB embedded heap gate (24,828 B headroom
   after the measured storage reduction) and allocates exact retained timer

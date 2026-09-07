@@ -141,7 +141,16 @@ impl Vm<'_> {
                 Ok(())
             }
             Record::Transaction(transaction) => {
-                self.restore_transaction(journal, index, transaction)
+                self.restore_transaction(journal, index, transaction)?;
+                if self.has_loops {
+                    self.loop_manager
+                        .get_or_insert_with(|| Box::new(protocol::Fold::default()))
+                        .apply_transaction(transaction)
+                        .map_err(|error| {
+                            VmError::Journal(crate::journal::Error::InvalidLoopProtocol(error))
+                        })?;
+                }
+                Ok(())
             }
             Record::Outbound(_) => Err(invalid(
                 index,
@@ -324,14 +333,6 @@ impl Vm<'_> {
                 index,
                 "the retained deliveries differ from the selected routes",
             ));
-        }
-        if let Some(packet) = record.loop_protocol() {
-            self.loop_manager
-                .get_or_insert_with(|| Box::new(protocol::Fold::default()))
-                .apply(packet)
-                .map_err(|error| {
-                    VmError::Journal(crate::journal::Error::InvalidLoopProtocol(error))
-                })?;
         }
         self.state.apply_unchecked(
             self.plan.plan(),

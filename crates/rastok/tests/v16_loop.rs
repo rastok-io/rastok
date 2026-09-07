@@ -9,7 +9,7 @@ use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::{
     Journal, MemJournal, Record,
-    loop_protocol::{Fact, Fold, Phase},
+    loop_protocol::{Error as LoopError, Fact, Fold, Phase},
 };
 use rastok::plan::{self, GraphVersion};
 use rastok::runtime::vm::Vm;
@@ -148,6 +148,158 @@ fn every_committed_prefix_restores_cursors_state_and_pending_loop_commands() {
         assert_eq!(restored.outputs(), reference.outputs(), "prefix {prefix}");
         assert!(restored.is_stable());
     }
+}
+
+#[test]
+fn a_loop_packet_cannot_borrow_another_executors_transaction() {
+    let plan = compile("Loop.fuel = 1; on in { Loop.again }");
+    let mut vm = Vm::boot(&plan, GraphVersion(1));
+    let mut journal = MemJournal::new(GraphVersion(1));
+    inject(&mut vm, &mut journal, 7);
+    vm.drain(&mut journal).unwrap();
+    let root = journal
+        .records()
+        .iter()
+        .find_map(|record| match record {
+            Record::Transaction(record) if record.owner_path.is_root() => {
+                Some(record.instance.clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    for (index, record) in journal.records().iter().enumerate() {
+        let Record::Transaction(record) = record else {
+            continue;
+        };
+        if record.loop_protocol().is_none() {
+            continue;
+        }
+        let mut forged = record.as_ref().clone();
+        forged.instance = root.clone();
+        forged.owner_path = plan::OwnerPath::root();
+        assert_loop_record_refused(
+            &plan,
+            journal.records(),
+            index,
+            forged,
+            LoopError::ContextOwner,
+        );
+    }
+}
+
+#[test]
+fn a_routed_loop_context_must_name_a_retained_delivery() {
+    let plan = compile("Loop.fuel = 1; on in { Loop.again }");
+    let mut vm = Vm::boot(&plan, GraphVersion(1));
+    let mut journal = MemJournal::new(GraphVersion(1));
+    inject(&mut vm, &mut journal, 7);
+    vm.drain(&mut journal).unwrap();
+    let (index, mut forged) = journal
+        .records()
+        .iter()
+        .enumerate()
+        .find_map(|(index, record)| {
+            let Record::Transaction(record) = record else {
+                return None;
+            };
+            record
+                .loop_protocol()
+                .is_some_and(|packet| !packet.produced.is_empty())
+                .then(|| (index, record.as_ref().clone()))
+        })
+        .unwrap();
+    let Some(rastok::journal::LoopRecord::R2(packet)) = forged.loop_record.as_deref_mut() else {
+        panic!("the producer carries r2");
+    };
+    packet
+        .routes
+        .push(rastok::journal::loop_protocol::RoutedContext {
+            delivery: rastok::envelope::Id::derive(1, &[b"unretained-delivery"]),
+            runs: packet.context.clone(),
+        });
+    assert_loop_record_refused(
+        &plan,
+        journal.records(),
+        index,
+        forged,
+        LoopError::ContextDelivery,
+    );
+}
+
+#[test]
+fn loop_expiry_cannot_be_folded_without_its_public_emission() {
+    let plan = compile("Loop.fuel = 1; on in { Loop.again }");
+    let mut vm = Vm::boot(&plan, GraphVersion(1));
+    let mut journal = MemJournal::new(GraphVersion(1));
+    inject(&mut vm, &mut journal, 7);
+    vm.drain(&mut journal).unwrap();
+    let (index, forged) = journal
+        .records()
+        .iter()
+        .enumerate()
+        .find_map(|(index, record)| {
+            let Record::Transaction(record) = record else {
+                return None;
+            };
+            record
+                .loop_protocol()
+                .is_some_and(|packet| {
+                    packet
+                        .facts
+                        .iter()
+                        .any(|fact| matches!(fact, Fact::Expired { .. }))
+                })
+                .then(|| (index, record.as_ref().clone()))
+        })
+        .unwrap();
+    for alteration in 0..4 {
+        let mut changed = forged.clone();
+        match alteration {
+            0 => changed.emissions.clear(),
+            1 => changed.emissions[0].port = rastok::node::Port::new("out").unwrap(),
+            2 => changed.emissions[0].index = 1,
+            _ => changed.emissions.push(changed.emissions[0].clone()),
+        }
+        assert_loop_record_refused(
+            &plan,
+            journal.records(),
+            index,
+            changed,
+            LoopError::ExpiryEmission,
+        );
+    }
+}
+
+fn assert_loop_record_refused(
+    plan: &plan::ValidatedExecutionPlan,
+    reference: &[Record],
+    index: usize,
+    forged: rastok::journal::TransactionRecord,
+    error: LoopError,
+) {
+    let mut records = reference[..index].to_vec();
+    records.push(Record::Transaction(Box::new(forged.clone())));
+    assert_eq!(
+        Fold::from_records(&records),
+        Err(error),
+        "forged record {index} replay"
+    );
+
+    let mut vm = Vm::boot(plan, GraphVersion(1));
+    let mut journal = MemJournal::new(GraphVersion(1));
+    inject(&mut vm, &mut journal, 7);
+    while journal.records().len() < index {
+        assert!(vm.step(&mut journal).unwrap());
+    }
+    assert_eq!(journal.records(), &reference[..index]);
+    let before = journal.loop_protocol().unwrap();
+    assert_eq!(
+        journal.commit(forged),
+        Err(rastok::journal::Error::InvalidLoopProtocol(error)),
+        "forged record {index} commit"
+    );
+    assert_eq!(journal.records(), &reference[..index]);
+    assert_eq!(journal.loop_protocol().unwrap(), before);
 }
 
 #[test]

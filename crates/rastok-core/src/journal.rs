@@ -2461,7 +2461,12 @@ impl Journal for MemJournal {
     }
 
     fn loop_protocol(&self) -> Result<loop_protocol::Fold, Error> {
-        Ok(self.command_loops.as_deref().cloned().unwrap_or_default())
+        match self.command_loops.as_deref() {
+            Some(fold) => Ok(fold.clone()),
+            None => {
+                loop_protocol::Fold::from_records(&self.records).map_err(Error::InvalidLoopProtocol)
+            }
+        }
     }
     fn deployment_attestation(&self) -> Option<&crate::deployment::DeploymentAttestation> {
         self.deployment_attestation.as_ref()
@@ -2621,9 +2626,15 @@ impl Journal for MemJournal {
 
     fn commit(&mut self, mut transaction: TransactionRecord) -> Result<(), Error> {
         timing::validate_transaction(&transaction).map_err(Error::InvalidTimerSchedule)?;
-        let command_loops = if let Some(packet) = transaction.loop_protocol() {
-            let mut fold = self.command_loops.as_deref().cloned().unwrap_or_default();
-            fold.apply(packet).map_err(Error::InvalidLoopProtocol)?;
+        let command_loops = if transaction.loop_protocol().is_some()
+            || (self.command_loops.is_some()
+                && matches!(
+                    transaction.trigger,
+                    node::Trigger::Lifecycle(node::Lifecycle::Start | node::Lifecycle::Stop)
+                )) {
+            let mut fold = self.loop_protocol()?;
+            fold.apply_transaction(&transaction)
+                .map_err(Error::InvalidLoopProtocol)?;
             Some(Box::new(fold))
         } else {
             None

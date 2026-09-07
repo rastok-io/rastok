@@ -7,8 +7,8 @@ use super::{
 };
 use crate::envelope::{Envelope, Id};
 use crate::identity::InstanceRef;
-use crate::journal::{LoopRunRef, Record};
-use crate::node::Port;
+use crate::journal::{LoopRunRef, Record, TransactionRecord};
+use crate::node::{Lifecycle, Port, Trigger};
 use alloc::collections::{BTreeMap, BTreeSet};
 use core::fmt;
 
@@ -19,6 +19,12 @@ pub enum Error {
     PacketShape,
     /// A context repeats a run or names a run which is not active.
     Context,
+    /// The carrying Executor or manager is outside the run's exact instance scope.
+    ContextOwner,
+    /// A routed context has no unique delivery in its accepting transaction.
+    ContextDelivery,
+    /// An expiry fact is not published as the same ordinary output emission.
+    ExpiryEmission,
     /// Open identity, entry or application budget contradicts its fields.
     OpenIdentity,
     /// One opening was recorded twice.
@@ -42,6 +48,9 @@ impl fmt::Display for Error {
         f.write_str(match self {
             Self::PacketShape => "Loop packet is empty or non-canonical",
             Self::Context => "Loop context is repeated, unknown, or inactive",
+            Self::ContextOwner => "Loop context or manager fact belongs to another instance scope",
+            Self::ContextDelivery => "Loop routed context has no unique retained delivery",
+            Self::ExpiryEmission => "Loop expiry fact has no matching manager emission",
             Self::OpenIdentity => "Loop opening contradicts its admission, entry, or fuel",
             Self::DuplicateRun => "Loop admission opens the same run twice",
             Self::UnknownRun => "Loop transition has no opening fact",
@@ -96,6 +105,9 @@ pub struct RunState {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Fold {
     runs: BTreeMap<LoopRunRef, RunState>,
+    /// Active parent-generation links from lifecycle records. An owner path
+    /// alone cannot distinguish tenants or successive enclosing generations.
+    parents: BTreeMap<InstanceRef, Option<InstanceRef>>,
 }
 
 impl Fold {
@@ -106,10 +118,8 @@ impl Fold {
     pub fn from_records(records: &[Record]) -> Result<Self, Error> {
         let mut fold = Self::default();
         for record in records {
-            if let Record::Transaction(transaction) = record
-                && let Some(packet) = transaction.loop_protocol()
-            {
-                fold.apply(packet)?;
+            if let Record::Transaction(transaction) = record {
+                fold.apply_transaction(transaction)?;
             }
         }
         Ok(fold)
@@ -126,7 +136,9 @@ impl Fold {
         self.runs.iter()
     }
 
-    /// Applies a complete commit packet atomically.
+    /// Checks the protocol algebra of a packet, without its carrying record.
+    /// Journal acceptance and replay must use [`Self::apply_transaction`] to
+    /// also establish instance scope, routed deliveries and published expiry.
     ///
     /// # Errors
     /// A malformed packet or invalid transition. `self` is unchanged.
@@ -134,6 +146,110 @@ impl Fold {
         let mut candidate = self.clone();
         candidate.apply_inner(packet)?;
         *self = candidate;
+        Ok(())
+    }
+
+    /// Applies lifecycle links and a record's r2 packet atomically. Context
+    /// scope follows exact parent-generation facts, never owner-name prefixes.
+    ///
+    /// This is not a spatial consumption or quiescence proof: those additionally
+    /// need the plan and the retained per-delivery context/cursor fold.
+    ///
+    /// # Errors
+    /// A malformed protocol, foreign instance context, unretained route or
+    /// unpublished expiry. No part of `self` changes on refusal.
+    pub fn apply_transaction(&mut self, record: &TransactionRecord) -> Result<(), Error> {
+        let start = record.trigger == Trigger::Lifecycle(Lifecycle::Start);
+        let stop = record.trigger == Trigger::Lifecycle(Lifecycle::Stop);
+        if record.loop_protocol().is_none() && !start && !stop {
+            return Ok(());
+        }
+        let mut candidate = self.clone();
+        if start {
+            if candidate.parents.contains_key(&record.instance)
+                || record
+                    .parent_instance
+                    .as_ref()
+                    .is_some_and(|parent| !candidate.parents.contains_key(parent))
+            {
+                return Err(Error::ContextOwner);
+            }
+            candidate
+                .parents
+                .insert(record.instance.clone(), record.parent_instance.clone());
+        }
+        if let Some(packet) = record.loop_protocol() {
+            candidate.context(&packet.context)?;
+            candidate.context_chain(&packet.context)?;
+            for run in &packet.context {
+                let state = candidate.runs.get(run).ok_or(Error::UnknownRun)?;
+                if !candidate.within(&record.instance, &state.instance) {
+                    return Err(Error::ContextOwner);
+                }
+            }
+            candidate.apply_inner(packet)?;
+            for fact in &packet.facts {
+                let state = candidate.runs.get(&fact.run()).ok_or(Error::UnknownRun)?;
+                if state.instance != record.instance
+                    || !candidate.parents.contains_key(&record.instance)
+                {
+                    return Err(Error::ContextOwner);
+                }
+                if let Fact::Expired { output, .. } = fact {
+                    let mut emissions = record.emissions.iter().filter(|emission| {
+                        emission.envelope.meta().sys().id() == output.meta().sys().id()
+                    });
+                    if !emissions.next().is_some_and(|emission| {
+                        emission.port.name() == "Loop.expired"
+                            && emission.index == 0
+                            && emission.envelope == *output
+                    }) || emissions.next().is_some()
+                    {
+                        return Err(Error::ExpiryEmission);
+                    }
+                }
+            }
+            for route in &packet.routes {
+                candidate.context_chain(&route.runs)?;
+                let mut retained = record.routes.iter().filter(|delivery| {
+                    crate::journal::ids::delivery_ref(&delivery.edge, delivery.delivery)
+                        == route.delivery
+                });
+                if retained.next().is_none() || retained.next().is_some() {
+                    return Err(Error::ContextDelivery);
+                }
+            }
+        }
+        if stop {
+            candidate.parents.remove(&record.instance);
+        }
+        *self = candidate;
+        Ok(())
+    }
+
+    fn within(&self, instance: &InstanceRef, scope: &InstanceRef) -> bool {
+        let mut cursor = instance;
+        for _ in 0..self.parents.len() {
+            let Some(parent) = self.parents.get(cursor) else {
+                return false;
+            };
+            if cursor == scope {
+                return true;
+            }
+            let Some(parent) = parent else { return false };
+            cursor = parent;
+        }
+        false
+    }
+
+    fn context_chain(&self, context: &[LoopRunRef]) -> Result<(), Error> {
+        for pair in context.windows(2) {
+            let outer = self.runs.get(&pair[0]).ok_or(Error::UnknownRun)?;
+            let inner = self.runs.get(&pair[1]).ok_or(Error::UnknownRun)?;
+            if outer.instance == inner.instance || !self.within(&inner.instance, &outer.instance) {
+                return Err(Error::ContextOwner);
+            }
+        }
         Ok(())
     }
 
@@ -451,6 +567,10 @@ mod tests {
             InstanceAddress::singleton(&OwnerPath::new(["host"]).unwrap()),
             0,
         );
+        open_at(instance, fuel)
+    }
+
+    fn open_at(instance: InstanceRef, fuel: u64) -> (LoopRunRef, InstanceRef, Vec<Packet>) {
         let entry = Port::new("request").unwrap();
         let state = state(2);
         let opening = OpeningAdmissionRef::Ingress {
@@ -504,13 +624,26 @@ mod tests {
         }))
     }
 
+    fn start(instance: &InstanceRef, parent: Option<&InstanceRef>) -> Record {
+        let Record::Transaction(mut transaction) = record(instance, Packet::default()) else {
+            unreachable!()
+        };
+        transaction.trigger = Trigger::Lifecycle(Lifecycle::Start);
+        transaction.parent_instance = parent.cloned();
+        transaction.loop_record = None;
+        Record::Transaction(transaction)
+    }
+
+    fn rooted(instance: &InstanceRef) -> Vec<Record> {
+        let root = InstanceRef::new(InstanceAddress::singleton(&OwnerPath::root()), 0);
+        vec![start(&root, None), start(instance, Some(&root))]
+    }
+
     #[test]
     fn recovery_retains_a_committed_command_without_rerunning_its_producer() {
         let (run, instance, packets) = open(2);
-        let mut records: Vec<_> = packets
-            .into_iter()
-            .map(|packet| record(&instance, packet))
-            .collect();
+        let mut records = rooted(&instance);
+        records.extend(packets.into_iter().map(|packet| record(&instance, packet)));
         let command = CommandProduced::new(run, 0, CommandValue::Next(state(1)));
         records.push(record(
             &instance,
@@ -589,6 +722,198 @@ mod tests {
         })
         .unwrap();
         assert_eq!(live.run(run).unwrap().phase, Phase::Closed);
+    }
+
+    #[test]
+    fn transaction_context_uses_exact_parent_generations_not_owner_prefixes() {
+        let (run, instance, packets) = open(2);
+        let mut records = rooted(&instance);
+        records.extend(packets.into_iter().map(|packet| record(&instance, packet)));
+        let child = InstanceRef::new(
+            InstanceAddress::singleton(&OwnerPath::new(["host", "child"]).unwrap()),
+            0,
+        );
+        records.push(start(&child, Some(&instance)));
+        let fold = Fold::from_records(&records).unwrap();
+        let context = Packet {
+            context: vec![run],
+            ..Packet::default()
+        };
+        let Record::Transaction(valid) = record(&child, context.clone()) else {
+            unreachable!()
+        };
+        fold.clone().apply_transaction(&valid).unwrap();
+
+        let impostor = InstanceRef::new(child.address().clone(), 1);
+        let Record::Transaction(forged) = record(&impostor, context.clone()) else {
+            unreachable!()
+        };
+        let mut attempted = fold.clone();
+        assert_eq!(
+            attempted.apply_transaction(&forged),
+            Err(Error::ContextOwner)
+        );
+        assert_eq!(attempted, fold);
+
+        let mut closed = start(&instance, None);
+        let Record::Transaction(closed) = &mut closed else {
+            unreachable!()
+        };
+        closed.trigger = Trigger::Lifecycle(Lifecycle::Stop);
+        let mut expired_parent = fold.clone();
+        expired_parent.apply_transaction(closed).unwrap();
+        let successor = InstanceRef::new(instance.address().clone(), 1);
+        let root = InstanceRef::new(InstanceAddress::singleton(&OwnerPath::root()), 0);
+        let Record::Transaction(successor_start) = start(&successor, Some(&root)) else {
+            unreachable!()
+        };
+        expired_parent.apply_transaction(&successor_start).unwrap();
+        // The child's retained link still names generation zero. A live parent
+        // with identical address but generation one cannot repair that link.
+        assert_eq!(
+            expired_parent.apply_transaction(&valid),
+            Err(Error::ContextOwner)
+        );
+    }
+
+    #[test]
+    fn transaction_context_stacks_follow_the_retained_instance_tree() {
+        let (outer, parent, packets) = open(2);
+        let mut records = rooted(&parent);
+        records.extend(packets.into_iter().map(|packet| record(&parent, packet)));
+        let child = InstanceRef::new(
+            InstanceAddress::singleton(&OwnerPath::new(["host", "child"]).unwrap()),
+            0,
+        );
+        records.push(start(&child, Some(&parent)));
+        let (inner, _, packets) = open_at(child.clone(), 2);
+        records.extend(packets.into_iter().map(|packet| record(&child, packet)));
+        let fold = Fold::from_records(&records).unwrap();
+        for (context, expected) in [
+            (vec![outer, inner], Ok(())),
+            (vec![inner, outer], Err(Error::ContextOwner)),
+            (vec![outer, outer], Err(Error::Context)),
+        ] {
+            let Record::Transaction(transaction) = record(
+                &child,
+                Packet {
+                    context,
+                    ..Packet::default()
+                },
+            ) else {
+                unreachable!()
+            };
+            let mut attempt = fold.clone();
+            assert_eq!(attempt.apply_transaction(&transaction), expected);
+            assert_eq!(
+                attempt, fold,
+                "a context-only record changes no protocol or lifecycle state"
+            );
+        }
+    }
+
+    #[test]
+    fn a_context_cannot_cross_to_a_sibling_tenants_identical_owner_path() {
+        use crate::datatype::DataType;
+        use crate::identity::InstanceFrame;
+
+        let owner = OwnerPath::new(["host"]).unwrap();
+        let child_owner = OwnerPath::new(["host", "child"]).unwrap();
+        let tenant = |name: &str, path: &OwnerPath| {
+            InstanceRef::new(
+                InstanceAddress::new(
+                    path,
+                    &[InstanceFrame::SelectedKey {
+                        owner: owner.clone(),
+                        ty: DataType::Text,
+                        value: Value::Text(name.into()),
+                    }],
+                )
+                .unwrap(),
+                0,
+            )
+        };
+        let alice = tenant("alice", &owner);
+        let bob = tenant("bob", &owner);
+        let alice_child = tenant("alice", &child_owner);
+        let bob_child = tenant("bob", &child_owner);
+        let root = InstanceRef::new(InstanceAddress::singleton(&OwnerPath::root()), 0);
+        let (run, _, packets) = open_at(alice.clone(), 2);
+        let mut records = vec![
+            start(&root, None),
+            start(&alice, Some(&root)),
+            start(&bob, Some(&root)),
+            start(&alice_child, Some(&alice)),
+            start(&bob_child, Some(&bob)),
+        ];
+        records.extend(packets.into_iter().map(|packet| record(&alice, packet)));
+        let fold = Fold::from_records(&records).unwrap();
+        for (actor, expected) in [
+            (&alice_child, Ok(())),
+            (&bob_child, Err(Error::ContextOwner)),
+            (&bob, Err(Error::ContextOwner)),
+        ] {
+            let Record::Transaction(transaction) = record(
+                actor,
+                Packet {
+                    context: vec![run],
+                    ..Packet::default()
+                },
+            ) else {
+                unreachable!()
+            };
+            let mut attempted = fold.clone();
+            assert_eq!(attempted.apply_transaction(&transaction), expected);
+            assert_eq!(attempted, fold);
+        }
+    }
+
+    #[test]
+    fn routed_context_names_the_exact_retained_edge_and_envelope_occurrence() {
+        let (run, instance, packets) = open(2);
+        let mut records = rooted(&instance);
+        records.extend(packets.into_iter().map(|packet| record(&instance, packet)));
+        let fold = Fold::from_records(&records).unwrap();
+        let target = InstanceRef::new(
+            InstanceAddress::singleton(&OwnerPath::new(["host", "child"]).unwrap()),
+            0,
+        );
+        let envelope = state(1);
+        let delivery = crate::journal::RoutedDelivery {
+            delivery: envelope.meta().sys().id(),
+            edge: "source.out>child.in".into(),
+            target,
+        };
+        let context = super::super::RoutedContext {
+            delivery: crate::journal::ids::delivery_ref(&delivery.edge, delivery.delivery),
+            runs: vec![run],
+        };
+        let Record::Transaction(mut transaction) = record(
+            &instance,
+            Packet {
+                context: vec![run],
+                routes: vec![context],
+                ..Packet::default()
+            },
+        ) else {
+            unreachable!()
+        };
+        transaction.routes.push(delivery);
+        fold.clone().apply_transaction(&transaction).unwrap();
+        for alteration in 0..3 {
+            let mut forged = transaction.clone();
+            match alteration {
+                0 => forged.routes[0].edge = "other.out>child.in".into(),
+                1 => forged.routes[0].delivery = state(0).meta().sys().id(),
+                _ => forged.routes.push(forged.routes[0].clone()),
+            }
+            let mut attempt = fold.clone();
+            assert_eq!(
+                attempt.apply_transaction(&forged),
+                Err(Error::ContextDelivery)
+            );
+            assert_eq!(attempt, fold);
+        }
     }
 
     #[test]

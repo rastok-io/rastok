@@ -476,6 +476,19 @@ of **25,792 B** from the preceding checkpoint. `SPIKE_OK`, the candidate
 semantic hash and the separate three-witness package/causal ledger checks
 are unchanged. Graph Loop and complete recovery remain unqualified paths.
 
+### R7 record-owned contexts (2026-09-07)
+
+After the raw-state cleanup, the same candidate was measured again before
+adding record-aware Loop validation. The new check links r2 packets to their
+carrying instance through retained lifecycle parents, binds route contexts to
+actual retained delivery occurrences, and requires the public expiry emission.
+The no-Loop witness retains **106,244 B** peak, **24,828 B** heap headroom,
+6,440 B after opening, 67 records, relay **1,462 / 1,415 / 1,656** ticks and
+`SPIKE_OK`. Decode is 21,269 ticks, against 21,270 before. Text 738,276 B plus
+rodata 64,688 B = **802,964 B**, an increase of **6,056 B**. The parent index
+is lazy for r2 journals and absent on this witness. No gate, package bytes or
+causal identity moved; Graph Loop execution remains a separate qualification.
+
 From the repository root (the crate must be built from its own
 directory — its `.cargo/config.toml` sets the target and linker
 script, and Cargo only reads that file from the working directory):
