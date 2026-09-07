@@ -762,7 +762,8 @@ Every possibly productible output or closed output case requires a
 disposition. Leaving one unwired is `E-UNWIRED-OUTPUT`, including at a nested
 Graph boundary. Resolve it by wiring a consumer or writing `-> nothing`.
 Only an output whose impossibility is re-derived from the validated program is
-exempt and receives `W-DEAD-OUTPUT`. There is no implicit sink.
+exempt. `W-DEAD-OUTPUT` applies only to outputs declared by the author, not
+impossible contributed ports such as `Loop.expired`. There is no implicit sink.
 
 ### Bidirectional wiring
 

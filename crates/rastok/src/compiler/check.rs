@@ -305,6 +305,7 @@ pub fn check(
         reported_annotation_refusals: BTreeSet::new(),
         pending_instances: Vec::new(),
         pending_connector_attributes: Vec::new(),
+        declared_outputs: BTreeSet::new(),
     };
     // No top-level declaration is silently ignored, and none is
     // silently dropped either: until unit composition and a real
@@ -507,6 +508,9 @@ struct Checker<'bag, 'registry> {
     /// The delay is checker-local: the expression still enters HIR identity
     /// exactly once and the Driver never receives source text.
     pending_connector_attributes: Vec<PendingConnectorAttribute>,
+    /// Source declarations only: contributed/inferred ports have routing
+    /// obligations, but cannot warrant an unused-declaration warning.
+    declared_outputs: BTreeSet<Endpoint>,
 }
 
 #[derive(Clone)]
@@ -1517,6 +1521,14 @@ impl Checker<'_, '_> {
         for item in &decl.body {
             match item {
                 GraphItem::Port(port) => {
+                    if port.direction == crate::compiler::syntax::PortDirection::Output
+                        && let Ok(output) = node::Port::new(&port.name.text)
+                    {
+                        self.declared_outputs.insert(Endpoint {
+                            owner: EndpointOwner::Graph(graph.path.clone()),
+                            port: output,
+                        });
+                    }
                     if !self.guard_binding_name(&port.name, "a boundary port") {
                         continue;
                     }
@@ -3455,6 +3467,14 @@ impl Checker<'_, '_> {
                             .with_field("port", port.name.text.clone()),
                         );
                         continue;
+                    }
+                    if port.direction == crate::compiler::syntax::PortDirection::Output
+                        && let Ok(output) = node::Port::new(&port.name.text)
+                    {
+                        self.declared_outputs.insert(Endpoint {
+                            owner: EndpointOwner::Node(node.path.clone()),
+                            port: output,
+                        });
                     }
                     let (pinned, annotations) = match &port.ty {
                         None => (None, AnnotationTable::empty()),

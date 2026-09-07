@@ -40,6 +40,12 @@ fn a_declared_but_unproduced_output_needs_no_fake_discard() {
         }"#,
     )
     .unwrap();
+    assert!(compilation.warnings.iter().any(|warning| {
+        warning.code().as_str() == "W-DEAD-OUTPUT" && warning.to_string().contains("worker.unused")
+    }));
+    assert!(compilation.warnings.iter().all(|warning| {
+        warning.code().as_str() != "W-DEAD-OUTPUT" || warning.to_string().contains("worker.unused")
+    }));
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
     plan::decode(&bytes).unwrap();
 }
@@ -200,7 +206,7 @@ fn measure_only_expiry_is_dead_but_an_explicit_fuel_cap_can_win() {
       in -> countdown -> out
     }"#;
     let compilation = compile(source).unwrap();
-    assert!(compilation.warnings.iter().any(|warning| {
+    assert!(!compilation.warnings.iter().any(|warning| {
         warning.code().as_str() == "W-DEAD-OUTPUT" && warning.to_string().contains("Loop.expired")
     }));
     plan::decode(&plan::encode(&compilation.plan, &compilation.hash)).unwrap();

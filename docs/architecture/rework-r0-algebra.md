@@ -250,7 +250,9 @@ Possible(source case) => selected dispositions are non-empty
 
 Failure is `E-UNWIRED-OUTPUT`, naming the owner, port, and case when applicable.
 An impossible declared output receives `W-DEAD-OUTPUT` and needs no artificial
-`-> nothing`. An input with no possible producer receives `W-DEAD-INPUT`; the
+`-> nothing`. Impossible contributed outputs have neither an obligation nor
+a dead-declaration warning (D-2026-09-07-2).
+An input with no possible producer receives `W-DEAD-INPUT`; the
 required response half of an inbound Call in `respond` mode remains an error.
 
 If a Driver produces a port or case whose contractual productivity is

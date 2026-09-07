@@ -188,6 +188,9 @@ impl Checker<'_, '_> {
     fn output_disposition(&mut self, graph: &Graph, endpoint: &Endpoint, possible: bool) {
         let name = endpoint_display(endpoint);
         if !possible {
+            if !self.declared_outputs.contains(endpoint) {
+                return;
+            }
             self.bag.push(
                 Diagnostic::new(
                     W_DEAD_OUTPUT,

@@ -241,7 +241,9 @@ It is not an implicit error sink. Internal fallback requires a wrapping Graph
 in v16.
 
 An explicit fuel normally makes expiry productible. A valid measure-only Loop
-proves expiry impossible. If fuel and measure coexist, expiry is impossible
+proves expiry impossible, with no `W-DEAD-OUTPUT` for this contributed port.
+That warning applies only to outputs declared by the author.
+If fuel and measure coexist, expiry is impossible
 only when the proof also establishes termination within the explicit fuel;
 otherwise the checker remains conservative.
 
