@@ -501,6 +501,16 @@ impl Vm<'_> {
                         ids::delivery_ref(&edge, envelope.meta().sys().id()),
                     ));
                 }
+                if let Some(timeout) = call_timeout {
+                    self.retain_timer_arms(
+                        &mut record,
+                        vec![crate::journal::timing::TimerArm {
+                            kind: crate::journal::timer_kind::CALL_TIMEOUT,
+                            reference: ids::delivery_ref(&edge, envelope.meta().sys().id()),
+                            due_at: self.now.saturating_add(timeout),
+                        }],
+                    )?;
+                }
             }
             journal.commit(record).map_err(VmError::Journal)?;
             if current.iteration > 0 {
@@ -655,7 +665,7 @@ impl Vm<'_> {
         }
         let prepared =
             self.validate_and_prepare_emissions(journal, slot, &current.instance, &record)?;
-        record.routes = self.routed_deliveries(&prepared);
+        self.retain_emission_routes(&mut record, &prepared)?;
         journal.commit(record).map_err(VmError::Journal)?;
         self.route_emissions(slot, &current.instance, prepared);
         if let Some(at) = due {

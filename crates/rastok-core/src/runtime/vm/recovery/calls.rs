@@ -1,0 +1,201 @@
+//! Rebuild the held request and the close-once outcome separately. An open
+//! record never grants permission to start that old effect again.
+
+use super::*;
+use crate::journal::{CallRecord, Closure, ConsumedPosition, OutboundStatus};
+
+impl Vm<'_> {
+    pub(super) fn restore_call<B: OutboundConnectorBindings + ?Sized>(
+        &mut self,
+        journal: &dyn Journal,
+        bindings: &mut B,
+        index: usize,
+        record: &CallRecord,
+    ) -> Result<(), VmError> {
+        let intent = &record.intent;
+        let slot = self
+            .plan
+            .nodes
+            .iter()
+            .position(|node| node.path == intent.connector_path)
+            .map(|index| Slot::new(index as u32))
+            .ok_or_else(|| invalid(index, "a retained Call has no planned Connector"))?;
+        let spec = self.plan.nodes[slot.index()]
+            .connector()
+            .filter(|spec| spec.call_semantics().is_some())
+            .ok_or_else(|| invalid(index, "a retained Call contradicts its Connector profile"))?;
+        if spec.effect != node::Effect::Class(intent.effect)
+            || intent.call_ref
+                != ids::call_ref(
+                    ids::delivery_ref(&intent.edge, intent.emitting_id),
+                    intent.prepared.digest(),
+                )
+        {
+            return Err(invalid(
+                index,
+                "a retained Call contradicts its effect or identity",
+            ));
+        }
+        if record.status == OutboundStatus::Open {
+            if self.pending.contains_key(&intent.call_ref) {
+                return Err(invalid(index, "a retained Call opens twice"));
+            }
+            let (instance, delivery) = self
+                .scheduler
+                .mailboxes
+                .find_by_ref_any(slot, &intent.edge, intent.emitting_id)
+                .map(|(instance, delivery)| (instance, delivery.clone()))
+                .ok_or_else(|| invalid(index, "a Call opening has no retained request delivery"))?;
+            if !self.instances.contains_key(&instance)
+                || self.lifecycle.iter().any(|work| {
+                    work.instance == instance && work.lifecycle == node::Lifecycle::Start
+                })
+            {
+                return Err(invalid(index, "a Call opens before its owner starts"));
+            }
+            let settings = self.resolve_invocation_settings(
+                &instance,
+                spec,
+                &intent.connector_path,
+                &delivery.envelope,
+            )?;
+            if settings != intent.resolved_settings {
+                return Err(invalid(
+                    index,
+                    "the Call settings contradict their retained request",
+                ));
+            }
+            self.scheduler.mailboxes.remove_by_ref(
+                slot,
+                &instance,
+                &intent.edge,
+                intent.emitting_id,
+            );
+            self.scheduler.mailboxes.claim(slot, &instance);
+            self.pending.insert(
+                intent.call_ref,
+                PendingCall {
+                    slot,
+                    delivery,
+                    instance,
+                },
+            );
+            return Ok(());
+        }
+        let pending = self
+            .pending
+            .get(&intent.call_ref)
+            .ok_or_else(|| invalid(index, "a Call closure has no retained opening"))?;
+        if journal.find_call(&intent.call_ref).as_ref() != Some(intent)
+            || pending.slot != slot
+            || pending.delivery.edge != intent.edge
+            || pending.delivery.envelope.meta().sys().id() != intent.emitting_id
+            || self
+                .settled
+                .iter()
+                .any(|entry| entry.event.call_ref == intent.call_ref)
+        {
+            return Err(invalid(
+                index,
+                "a Call closure is duplicated or crosses its request",
+            ));
+        }
+        let (completion, trigger) = match &record.status {
+            OutboundStatus::Closed(Closure::Response(completion)) => (
+                completion.clone(),
+                node::Trigger::Port(pending.delivery.port.clone()),
+            ),
+            OutboundStatus::Closed(Closure::Timeout) | OutboundStatus::Abandoned => {
+                let terminal = if record.status == OutboundStatus::Abandoned {
+                    SchedulerCompletion::OutcomeUnknown
+                } else {
+                    SchedulerCompletion::TimeoutExpired
+                };
+                let completion = bindings
+                    .scheduler_completion(&intent.connector_path, terminal)
+                    .map_err(crate::boundary::DispatchError::Driver)
+                    .map_err(VmError::Dispatch)?;
+                (
+                    completion,
+                    node::Trigger::Lifecycle(if record.status == OutboundStatus::Abandoned {
+                        node::Lifecycle::Recover
+                    } else {
+                        node::Lifecycle::Timeout
+                    }),
+                )
+            }
+            OutboundStatus::Open => return Err(invalid(index, "duplicate Call opening")),
+        };
+        PlanGate { plan: self.plan }
+            .admit(&intent.connector_path, &completion)
+            .map_err(|_| invalid(index, "the retained Call completion violates its Contract"))?;
+        self.settled.push_back(SettledEntry {
+            event: BoundaryEvent {
+                call_ref: intent.call_ref,
+                connector_path: intent.connector_path.clone(),
+                emitting_id: intent.emitting_id,
+                completion,
+            },
+            trigger,
+        });
+        Ok(())
+    }
+
+    pub(super) fn restore_call_consumption(
+        &mut self,
+        index: usize,
+        slot: Slot,
+        record: &TransactionRecord,
+        consumed: &ConsumedPosition,
+    ) -> Result<bool, VmError> {
+        let Some((call, pending)) = self
+            .pending
+            .iter()
+            .find(|(_, pending)| {
+                pending.slot == slot
+                    && pending.instance == record.instance
+                    && pending.delivery.edge == consumed.edge
+                    && pending.delivery.source_instance == consumed.source
+                    && pending.delivery.seq == consumed.seq
+            })
+            .map(|(call, pending)| (*call, pending.clone()))
+        else {
+            return Ok(false);
+        };
+        let settled = self
+            .settled
+            .iter()
+            .position(|entry| entry.event.call_ref == call)
+            .ok_or_else(|| invalid(index, "a Call transaction consumes an unsettled request"))?;
+        let entry = &self.settled[settled];
+        let expected = HandlerExecutor::at(self.plan, self.graph_version, self.now)
+            .connector_completion(
+                slot,
+                &pending.instance,
+                &pending.delivery,
+                &entry.trigger,
+                &entry.event.completion,
+            )
+            .map_err(VmError::Fault)?;
+        if record.trigger != entry.trigger
+            || record.consumed != expected.record.consumed
+            || record.emissions != expected.record.emissions
+            || !record.state_delta.is_empty()
+        {
+            return Err(invalid(
+                index,
+                "a Call transaction contradicts its retained completion",
+            ));
+        }
+        self.settled.remove(settled);
+        self.pending.remove(&call);
+        if !self
+            .pending
+            .values()
+            .any(|other| other.slot == slot && other.instance == pending.instance)
+        {
+            self.scheduler.mailboxes.release(slot, &pending.instance);
+        }
+        Ok(true)
+    }
+}

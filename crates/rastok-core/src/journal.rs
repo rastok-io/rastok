@@ -37,6 +37,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
 
+pub(crate) mod admission;
 pub mod loop_protocol;
 pub mod timing;
 
@@ -3351,6 +3352,35 @@ mod tests {
         journal
             .commit(lifecycle_transaction(root, node::Lifecycle::Start))
             .expect("the root lifecycle starts");
+    }
+
+    #[test]
+    fn observable_time_must_match_the_retained_acceptance_instant() {
+        let reference = InstanceRef::new(
+            InstanceAddress::singleton(&crate::plan::OwnerPath::root()),
+            0,
+        );
+        let mut record = lifecycle_transaction(reference, node::Lifecycle::Start);
+        record.logical_time = Some(7);
+        record.timer_schedule = Some(Box::new(
+            timing::TimerSchedule::try_new(
+                8,
+                vec![timing::TimerArm {
+                    kind: timer_kind::JOIN_WITHIN,
+                    reference: Id::from_bytes([1; 16]),
+                    due_at: 10,
+                }],
+            )
+            .unwrap(),
+        ));
+        let mut journal = MemJournal::new(GraphVersion(1));
+        assert!(matches!(
+            journal.commit(record.clone()),
+            Err(Error::InvalidTimerSchedule(_))
+        ));
+        assert!(journal.records().is_empty());
+        record.logical_time = Some(8);
+        journal.commit(record).unwrap();
     }
 
     fn activate(journal: &mut MemJournal, reference: InstanceRef) {

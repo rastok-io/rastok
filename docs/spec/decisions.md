@@ -80,6 +80,66 @@ An impossible contributed output such as `Loop.expired` has no destination
 obligation **and no dead-declaration warning**. `W-DEAD-OUTPUT` is reserved for
 outputs actually declared by the author. This changes diagnostics only.
 
+## D-2026-09-07-3 — Recover temporal obligations from their accepting prefixes
+
+R7 wires key 56 into admission and emitting transactions for Call/handshake
+delivery budgets, timed joins, instance lifetimes and renewals, and bounded
+Closing. The same pure target-derived deadline selection is used before
+commit and for post-commit installation. Recurring Call admissions also retain
+their new request deadline. A record carrying observable `now()` must agree
+with its schedule's arm instant. No new field, timer kind or package bump is
+allocated.
+
+Recovery constructs a candidate VM from the committed prefix, replaces the
+live VM only on success, and appends nothing. A private admission-query seam
+has two real implementations: the live Journal and a read-only prefix fold.
+The latter prevents a later `l:stop` from moving an earlier delivery into a
+successor generation. State deltas, exact routes, consumed cursors, timers,
+close requests and residual stop consumption are checked before publishing
+the candidate. Missing deadlines, changed Call facts, a Call opening before
+its instance start, decreasing retained time and a resume instant earlier
+than retained time all refuse atomically.
+
+Outbound Call opens restore the held request without another `prepare`,
+`start`, `poll` or `cancel`. Response closures restore their retained typed
+completion; Timeout/Abandoned closures require the pure Contract projection
+through `recover_with_bindings`. Consuming that completion is still a later
+ordinary Connector transaction. The dispatcher treats old opens as already
+started; only a genuinely new recurrence may launch a new effect. A queued
+Call whose retained deadline has passed resolves as timeout before any new
+Driver start, even when the caller drains immediately after recovery.
+
+**Repository-contact correction:** fixed and tumbling lifetimes were armed at
+`l:start`, contrary to `instances.md` §6.3's creating-admission rule; idle was
+already armed at admission but its start record claimed the arm. All three
+now retain and install their deadline at the accepting admission. A successor
+waiting behind Closing keeps that original deadline; promotion does not grant
+another lifetime. Its wake stays in the ordered scheduler until its instance
+can start. The obsolete lifetime timer tuple on `l:start` is removed. This is
+an intentional causal-trace change for timed-lifetime programs, not a claim
+that every pre-cutover trace stays fixed. A single-pass start also implies a
+recoverable close request if a crash interrupted the following commit.
+
+Existing retained arms are never rebased onto restart time. New obligations
+not yet committed are dated when their accepting transition actually commits;
+the logical clock does not run backwards to recreate an unrecorded history.
+In particular, key 56 does not establish a universal timestamp for all records
+or reopen the deferred OTLP span claim.
+
+The package, semantic hash and causal seal of the echo, JSONL and gauge
+candidates remain unchanged; none of these witnesses has a timed lifetime.
+The measured Cortex-M33 workload retains all 67 records and uses 111,452 B
+peak, leaving 19,620 B under the unchanged 128 KiB gate. The
+[R7 evidence](../architecture/rework-r7-manager-recovery.md) separates this
+qualified recovery profile from still-gated Graph Loop contexts and
+Event/inbound-Call/Session recovery. No golden is re-blessed.
+
+**Rejected:** querying final generations during prefix replay; rerunning a
+producer or an old effect to reconstruct its result; restarting a deadline at
+resume/promotion; accepting missing timing as zero; manufacturing a Response
+for scheduler-owned Timeout/Abandoned; silently claiming identity neutrality
+for the corrected timed-lifetime traces.
+
 ## D-2026-09-05-1 — Graph is structure; Executors transition; Loop uses durable manager commands
 
 The pre-public Node model is revised before plan v16. A `Node` is either a

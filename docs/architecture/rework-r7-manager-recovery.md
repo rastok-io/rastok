@@ -4,6 +4,10 @@
 > boundary used by the existing Operator/Call Loops. It does **not** open the
 > Graph Loop execution gate or qualify complete Worker recovery.
 
+The second checkpoint (§5) additionally qualifies outbound Call, join,
+lifetime and Closing recovery. The first-checkpoint counts below are retained
+as history, not substituted for the current matrix.
+
 ## 1. Invariant and repository contact
 
 A Loop packet is part of one causal transaction, not a freestanding claim
@@ -127,3 +131,76 @@ The following still require implementation and end-to-end evidence together:
 The source and independent plan gates still refuse Graph Loop orchestration.
 Passing low-level nested-context tests does not override those gates. The full
 workspace also retains its old-form and categorical-fixture migration failures.
+
+## 5. Temporal and outbound Call recovery — 2026-09-07
+
+D-2026-09-07-3 wires the accepting producers of key 56 and restores their
+finite obligations. Admission and producer transactions retain the original
+join, delivery-budget, instance-lifetime/renewal and Closing dates in actual
+arm order. A single pure route helper selects both the retained schedules and
+their post-commit scheduler projections. Recurrent Call admissions retain the
+new request's timeout; no deadline is reconstructed as `resume + duration`.
+Handshake and inbound respond-Call producers also retain their dates, but
+their exchange recovery remains explicitly refused.
+
+Recovery uses a scratch VM and a read-only lifecycle prefix fold. Looking up
+the final Journal generation had routed an early arrival into a later
+generation; the new query follows only records already visited. Each record
+reconstructs its selected targets, immutable instance bindings, private state,
+cursor consumption and deadlines before subsequent records may use them.
+Residual deliveries consumed by `l:stop` must match exactly; a retained drain
+and the stop's consumed positions establish settlement without replaying a
+physical cancellation. A single-pass start also retains its derived pending
+close when a crash interrupted the following close-request commit.
+
+An OUTBOUND open restores its held delivery and claim. A retained response
+restores its typed completion; Timeout/Abandoned need only the Contract's
+pure scheduler projection. No old request is prepared or started again and
+no record is appended by reconstruction. The subsequent completion transaction
+is checked against those retained outputs before consuming the request.
+A queued request already beyond its timeout cannot start an effect when the
+caller drains the recovered VM before calling `advance`.
+
+The original implementation armed fixed/tumbling lifetimes at start, despite
+the specified creating-admission deadline. They now arm at admission, as idle
+already did. A waiting successor keeps its original date, even when it becomes
+eligible after that date. The scheduler does not move logical time backwards
+or extend the deadline on promotion. Removing the incorrect lifetime arm
+claim from `l:start` is a **named timed-lifetime causal move**, not a semantic
+hash or package change. The successor-generation regression now expects its
+already-due close rather than an unearned fresh lifetime.
+
+Eight new integration tests cover ingress/producer schedule retention,
+held and settled Calls, pending recurrence, timeout-before-start, timed-join
+candidate expiry and consumption, repeated generations, idle renewal,
+fixed/tumbling dates, and bounded Closing with residual mailboxes. Two new
+machine tests cover a failed single-pass close commit and hostile prefixes:
+missing/changed deadlines, altered Call closure, open before owner start, and
+backwards retained time. Those forgeries refuse without changing the live VM
+or journal. A core acceptance regression requires observable `logical_time`
+to equal the schedule's arm instant. The targeted tests were first run red
+for the defects they exposed; no existing golden or test was ignored.
+
+| Check executed on this checkpoint | Result |
+|---|---|
+| fmt, `git diff --check` | pass |
+| workspace/all-targets/all-features clippy, warnings denied | pass |
+| `cargo doc --workspace --no-deps` | pass |
+| workspace/all-features, no-fail-fast | **1,173 passed, 32 failed**, 32 suite reports, zero ignored |
+| v16 recovery / v16 Loop | **8 / 25 passed** |
+| no-std, the same three ISA targets as §3 | pass |
+| candidate echo/JSONL/gauge ledger | every package byte, semantic hash and causal seal unchanged |
+| Cortex-M33 | `SPIKE_OK`; **111,452 B** peak, **19,620 B** below 128 KiB |
+
+The failing test-name multiset is identical to §3: 25 old Loop/Graph/UI forms
+and seven categorical expectations. Eleven new tests pass. No golden was
+re-blessed. The embedded witness still opens at 6,440 B and retains 67 records;
+relay average/minimum/maximum is **1,871 / 1,820 / 2,046** ticks with the same
+39,999-tick/2,000,000-instruction calibration. Text 771,436 B plus rodata
+66,020 B = **837,456 B**, under 1 MiB. The 5,208 B heap increase includes
+retaining real Call schedules on this witness; no history is dropped.
+
+**Not closed:** Graph-boundary opening/context/quiescence from §4,
+Event/inbound-Call/Session recovery, the three-host R8 matrix and R9 migration.
+Passing temporal recovery does not make Graph Loop executable. All those
+admission gates remain explicit.

@@ -235,8 +235,11 @@ takes semantic priority; no public date overrides its R0–R9 exit gates.
   **Current checkpoint, 2026-09-07:** `rework/v16` reads and writes v16;
   Dispatch, case routing, multi-emission and command Operator/Call Loops execute
   through that reader. Operator measure certificates are re-derived, and
-  persistent Operator mailboxes/state/commands recover from each committed
-  prefix without replaying producers. Explicit destinations are checked at
+  Operator/Call mailboxes, state, commands, timed joins, lifetimes and bounded
+  Closing recover from retained prefixes without replaying producers or
+  starting old effects. Exact deadlines are retained at their accepting
+  commits; recovery uses the generation state at each record, not the final
+  journal state. Explicit destinations are checked at
   source and independently through retained nested boundary routing. Retired
   Graph-handler states and their dead proof/projection branches are removed;
   raw plans cannot attach DSL handlers to Connectors. R7's first journal gate
@@ -245,10 +248,10 @@ takes semantic priority; no public date overrides its R0–R9 exit gates.
   [`rework-r7-manager-recovery.md`](docs/architecture/rework-r7-manager-recovery.md).
   Graph Loops, complete recovery, stronger productibility proofs and the fixture
   migration remain open. No golden is blessed;
-  R4's review preserves the 128 KiB embedded heap gate (24,828 B headroom
-  after the measured storage reduction) and allocates exact retained timer
-  schedules under key 56 before blessing. Other temporal producers and their
-  recovery readers remain R7 work, not a second format allocation;
+  R4's review preserves the 128 KiB embedded heap gate (19,620 B headroom
+  after retaining the live delivery schedules) and allocates exact retained
+  timer schedules under key 56 before blessing. R7 now uses that allocation;
+  Graph contexts and Event/inbound-Call/Session recovery remain gated;
   the full workspace is not green. See the current §10 of
   [`rework-r4-plan.md`](docs/architecture/rework-r4-plan.md).
   The following records the **pre-cutover R3/R4 checkpoints**, not today's

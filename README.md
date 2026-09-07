@@ -27,8 +27,9 @@ journal-owned manager; `Saga` remains a future Extension. A manager is neither
 a Node nor an edge, so temporal recurrence never creates a spatial cycle.
 The `rework/v16` branch is migrating to categorical v16. Recursive Dispatch,
 case routing, multi-emission and command-based Operator and outbound Call Loops
-cross the new package reader. Operator measures and persistent-Operator recovery
-are tested. Nested boundary routing is retained and re-derived at decode;
+cross the new package reader. Operator measures and recovery of Operator/Call
+mailboxes, joins, lifetimes, Closing and command Loops are tested. Nested
+boundary routing is retained and re-derived at decode;
 Graph Loop orchestration and full obligation recovery remain gated.
 This is an unqualified cutover, not a finished release: the old Loop
 fixtures and categorical goldens still need migration. The

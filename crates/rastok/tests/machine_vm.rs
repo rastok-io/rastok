@@ -2239,8 +2239,9 @@ fn external_arrival_waits_for_the_clean_successor_generation() {
             (node::Trigger::Lifecycle(node::Lifecycle::Closing), 0),
             (node::Trigger::Lifecycle(node::Lifecycle::Stop), 0),
             (node::Trigger::Lifecycle(node::Lifecycle::Start), 1),
+            (node::Trigger::Lifecycle(node::Lifecycle::Closing), 1),
         ],
-        "the old stop is durable before the clean successor starts"
+        "the old stop precedes the successor start; its fixed deadline still dates from admission while waiting"
     );
     assert!(
         journal.records().iter().any(|record| matches!(
@@ -3432,6 +3433,8 @@ struct FlakyJournal {
     refuse_commits: bool,
     refuse_opens: bool,
     refuse_closes: bool,
+    refuse_close_requests: bool,
+    recovery_records: Option<Vec<Record>>,
 }
 
 impl FlakyJournal {
@@ -3441,12 +3444,20 @@ impl FlakyJournal {
             refuse_commits: false,
             refuse_opens: false,
             refuse_closes: false,
+            refuse_close_requests: false,
+            recovery_records: None,
         }
     }
 }
 
 impl Journal for FlakyJournal {
     fn visit_records(&self, visit: &mut dyn FnMut(&Record)) -> Result<(), rastok::journal::Error> {
+        if let Some(records) = &self.recovery_records {
+            for record in records {
+                visit(record);
+            }
+            return Ok(());
+        }
         self.inner.visit_records(visit)
     }
 
@@ -3513,7 +3524,8 @@ impl Journal for FlakyJournal {
         &mut self,
         transaction: rastok::journal::TransactionRecord,
     ) -> Result<(), rastok::journal::Error> {
-        if self.refuse_commits {
+        if self.refuse_commits || (self.refuse_close_requests && transaction.close_scope.is_some())
+        {
             return Err(rastok::journal::Error::Storage(String::from("scripted")));
         }
         self.inner.commit(transaction)
@@ -3614,6 +3626,164 @@ fn a_refused_commit_leaves_the_delivery_replayable() {
         journal.inner.records().last().unwrap(),
         Record::Transaction(_)
     ));
+}
+
+#[test]
+fn single_pass_recovery_retains_a_close_request_after_a_committed_start() {
+    let compilation = compile(
+        &[r#"
+graph app : App {
+  input in: text
+  output out: int
+  operator count {
+    input in: text
+    output out: int
+    lifetime = { kind = single_pass }
+    var count: int = 0
+    on in { count = count + 1 }
+    on stop { out = count }
+  }
+  in -> count -> out
+}
+"#],
+        &ContractCatalog::try_m0().unwrap(),
+    )
+    .unwrap();
+    let mut journal = FlakyJournal::healthy(GraphVersion(1));
+    journal.refuse_close_requests = true;
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    vm.inject(&mut journal, text_submission("first")).unwrap();
+    vm.step(&mut journal).unwrap();
+    assert!(matches!(vm.step(&mut journal), Err(VmError::Journal(_))));
+    let count_starts = |records: &[Record]| {
+        records.iter().filter(|record| matches!(record,
+        Record::Transaction(record) if record.owner_path.to_string() == "count" && record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Start))).count()
+    };
+    assert_eq!(count_starts(journal.inner.records()), 1);
+    journal.refuse_close_requests = false;
+    let prefix = journal.inner.records().to_vec();
+    let mut recovered = Vm::boot(&compilation.plan, GraphVersion(1));
+    recovered.recover_from_journal(&journal).unwrap();
+    assert_eq!(journal.inner.records(), prefix);
+    assert!(recovered.has_ready_transaction());
+    recovered.drain(&mut journal).unwrap();
+    assert_eq!(
+        count_starts(journal.inner.records()),
+        1,
+        "the accepted start is never repeated"
+    );
+    assert_eq!(recovered.outputs().len(), 1);
+    assert_eq!(
+        recovered.outputs()[0].envelope.data(),
+        &Data::materialized(Value::Int(1))
+    );
+    recovered
+        .inject(&mut journal, text_submission("second"))
+        .unwrap();
+    recovered.drain(&mut journal).unwrap();
+    assert_eq!(count_starts(journal.inner.records()), 2);
+    assert_eq!(
+        recovered.outputs()[1].envelope.data(),
+        &Data::materialized(Value::Int(1))
+    );
+}
+
+#[test]
+fn recovery_rejects_missing_deadlines_and_changed_call_facts_atomically() {
+    let compilation = compile(
+        &[r#"
+graph app : App {
+  input in: text
+  connector call : Process {
+    command = "cat"; codec = lines
+    effect = idempotent; behavior = deterministic
+    timeout = duration("5s")
+  }
+  in -> call
+  call.out -> nothing
+  call.err -> nothing
+  call.exit -> nothing
+}
+"#],
+        &ContractCatalog::try_m0().unwrap(),
+    )
+    .unwrap();
+    let mut journal = FlakyJournal::healthy(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = ClosingWorld::default();
+    vm.inject(&mut journal, text_submission("x")).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    let call = journal.inner.open_calls()[0].call_ref;
+    journal
+        .inner
+        .close_outbound(
+            &call,
+            rastok::journal::Closure::Response(Completion::process(
+                vec![],
+                vec![],
+                ProcessExit::Exited {
+                    exit_code: 0,
+                    signal: None,
+                },
+            )),
+        )
+        .unwrap();
+    let original = journal.inner.records().to_vec();
+    for sabotage in 0..5 {
+        let mut records = original.clone();
+        match sabotage {
+            0 | 1 => {
+                let Record::Inbound(inbound) = &mut records[0] else {
+                    panic!("ingress");
+                };
+                if sabotage == 0 {
+                    inbound.timer_schedule = None;
+                } else {
+                    let schedule = inbound.timer_schedule.as_ref().unwrap();
+                    let mut arms = schedule.arms().to_vec();
+                    arms[0].due_at += 1;
+                    inbound.timer_schedule = Some(Box::new(
+                        rastok::journal::timing::TimerSchedule::try_new(schedule.armed_at(), arms)
+                            .unwrap(),
+                    ));
+                }
+            }
+            2 => {
+                let Record::Outbound(OutboundRecord::Call(closed)) = records.last_mut().unwrap()
+                else {
+                    panic!("closure");
+                };
+                closed.intent.logical_time += 1;
+            }
+            3 => {
+                let opening = records
+                    .iter()
+                    .position(|record| matches!(record, Record::Outbound(_)))
+                    .unwrap();
+                let opening = records.remove(opening);
+                records.insert(1, opening);
+            }
+            _ => {
+                records.pop();
+                let Record::Outbound(OutboundRecord::Call(opening)) = records.last_mut().unwrap()
+                else {
+                    panic!("opening");
+                };
+                opening.intent.logical_time = -1;
+            }
+        }
+        journal.recovery_records = Some(records);
+        let mut recovered = Vm::boot(&compilation.plan, GraphVersion(1));
+        let before = recovered.inspection();
+        assert!(
+            recovered
+                .recover_with_bindings(&journal, &mut world)
+                .is_err(),
+            "sabotage {sabotage}"
+        );
+        assert_eq!(recovered.inspection(), before);
+        assert_eq!(journal.inner.records(), original);
+    }
 }
 
 const TIMED_PROBE: &str = r#"

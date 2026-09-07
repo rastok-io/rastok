@@ -489,6 +489,23 @@ rodata 64,688 B = **802,964 B**, an increase of **6,056 B**. The parent index
 is lazy for r2 journals and absent on this witness. No gate, package bytes or
 causal identity moved; Graph Loop execution remains a separate qualification.
 
+### R7 retained temporal obligations (2026-09-07)
+
+The next checkpoint retains real delivery-budget schedules and restores
+Operator/Call mailboxes, joins, lifetimes and Closing from their exact
+accepting prefix. The same package, 67 records and 6,440 B after opening now
+measure **111,452 B** peak, **19,620 B (14.97%)** under the unchanged heap
+gate. The increase is **5,208 B**; the complete journal, including original
+Call deadlines, remains retained. No truncation or gate increase is used.
+
+Decode is 21,268 ticks. Relay average/minimum/maximum is
+**1,871 / 1,820 / 2,046** ticks, with the unchanged 39,999 ticks per
+2,000,000 instructions calibration: about **102.3 k** worst-case instructions,
+under 150 k. Text 771,436 B + rodata 66,020 B = **837,456 B**, under 1 MiB.
+`SPIKE_OK`, semantic hash, package bytes and the separate echo/JSONL/gauge
+causal ledger hold. This workload still does not qualify Graph Loop or its
+not-yet-executable complete recovery path.
+
 From the repository root (the crate must be built from its own
 directory — its `.cargo/config.toml` sets the target and linker
 script, and Cargo only reads that file from the working directory):

@@ -166,6 +166,14 @@ pub(crate) fn require_timers(
 
 pub(crate) fn validate_transaction(record: &super::TransactionRecord) -> Result<(), DecodeError> {
     if let Some(schedule) = record.timer_schedule.as_deref() {
+        if record
+            .logical_time
+            .is_some_and(|at| at != schedule.armed_at())
+        {
+            return Err(DecodeError::Malformed(
+                "observable firing time disagrees with its retained schedule",
+            ));
+        }
         require_timers(schedule, &record.timers)?;
     }
     let facts = record

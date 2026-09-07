@@ -28,6 +28,7 @@ use crate::boundary::{
 use crate::connector::ConnectorExchange;
 use crate::envelope::{Data, Envelope, Id, Meta, MetaSys};
 use crate::identity::{InstanceAddress, InstanceFrame, InstanceRef};
+use crate::journal::admission::InstanceAdmissions;
 use crate::journal::{Emission, Journal, LoopRunRef, RouteTarget, RoutedDelivery, ids};
 use crate::node;
 use crate::plan::{
@@ -48,6 +49,7 @@ use alloc::vec::Vec;
 mod call_completion;
 mod loop_manager;
 mod recovery;
+mod timing;
 use core::fmt;
 
 /// A machine fault; the step that raised it committed nothing, and
@@ -514,7 +516,6 @@ struct WaitingInstance {
     candidate: InstanceCandidate,
     created_by: Envelope,
     last_activity: Envelope,
-    last_activity_at: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -925,10 +926,14 @@ impl Scheduler {
     /// The next dated event due at or before `target`, WITHOUT
     /// removing it — the reservation: an expiry that fails to commit
     /// stays armed and replays.
-    fn peek_due(&self, target: i64) -> Option<((i64, u64), DatedPayload)> {
+    fn peek_due(
+        &self,
+        target: i64,
+        eligible: impl Fn(&DatedPayload) -> bool,
+    ) -> Option<((i64, u64), DatedPayload)> {
         self.dated
-            .first_key_value()
-            .filter(|((at, _), _)| *at <= target)
+            .range(..=(target, u64::MAX))
+            .find(|(_, payload)| eligible(payload))
             .map(|(key, payload)| (*key, payload.clone()))
     }
 
@@ -967,6 +972,10 @@ pub struct Vm<'plan> {
     /// Whether command-based Loop work can exist. Non-Loop plans do not
     /// build or scan a manager fold.
     has_loops: bool,
+    /// Persistent-only plans do not inspect owner lifetimes on each route.
+    has_lifetime_deadlines: bool,
+    /// A committed single-pass start creates a recoverable close obligation.
+    has_single_pass: bool,
     graph_version: GraphVersion,
     scheduler: Scheduler,
     state: InstanceState,
@@ -1350,6 +1359,18 @@ impl<'plan> Vm<'plan> {
                     .iter()
                     .any(|aspect| aspect.extension() == node::Extension::Loop)
             }),
+            has_lifetime_deadlines: plan.owners.iter().any(|owner| {
+                matches!(
+                    owner.instance.lifetime,
+                    InstanceLifetime::Idle(_)
+                        | InstanceLifetime::Fixed(_)
+                        | InstanceLifetime::Tumbling(_)
+                )
+            }),
+            has_single_pass: plan
+                .owners
+                .iter()
+                .any(|owner| matches!(owner.instance.lifetime, InstanceLifetime::SinglePass)),
             graph_version,
             scheduler: Scheduler::new(WORKER_MAILBOX_CAPACITY),
             state: InstanceState::new(),
@@ -1914,6 +1935,41 @@ impl<'plan> Vm<'plan> {
         };
         self.check_room_for_routes(core::iter::once(prepared.as_slice()))?;
         let recorded_routes = self.inbound_route_targets(&prepared);
+        let mut activity = BTreeMap::new();
+        let mut arms = Vec::new();
+        for target in source_target
+            .as_ref()
+            .map(|(_, target, _)| target)
+            .into_iter()
+            .chain(
+                session_target
+                    .as_ref()
+                    .filter(|(_, _, opening)| *opening)
+                    .map(|(_, target, _)| target),
+            )
+        {
+            arms.extend(
+                self.admission_deadlines(target, &candidates, inbound.envelope(), &mut activity)
+                    .into_iter()
+                    .map(|(arm, _)| arm),
+            );
+        }
+        if let Some((_, _, Some(timeout))) = &source_target {
+            arms.push(crate::journal::timing::TimerArm {
+                kind: crate::journal::timer_kind::INBOUND_CALL_TIMEOUT,
+                reference: InboundCallRef::from_root(inbound.envelope().meta().sys().id()).id(),
+                due_at: self.now.saturating_add(*timeout),
+            });
+        }
+        arms.extend(self.route_timer_arms_with_activity(
+            &prepared,
+            &candidates,
+            inbound.envelope(),
+            &mut activity,
+        ));
+        if !arms.is_empty() {
+            inbound = inbound.with_timer_schedule(Self::timer_schedule(self.now, arms)?);
+        }
         let committed = journal
             .commit_inbound(inbound, recorded_routes)
             .map_err(VmError::Journal)?;
@@ -2016,6 +2072,13 @@ impl<'plan> Vm<'plan> {
         bindings: &mut B,
     ) -> Result<bool, VmError> {
         self.preflight(journal)?;
+        if let Some((instance, cause)) = self
+            .single_pass_close()
+            .map(|(reference, cause)| (reference.clone(), cause.clone()))
+        {
+            self.request_close(journal, &instance, cause)?;
+            return Ok(true);
+        }
         self.progress_closures();
         if !self.lifecycle.is_empty() {
             self.fire_lifecycle_next(journal)?;
@@ -2567,8 +2630,8 @@ impl<'plan> Vm<'plan> {
         // expiry. In particular, a just-created instance commits `l:start`
         // before its first idle deadline can close it.
         self.drain_with_bindings(journal, bindings)?;
-        while let Some((key, payload)) = self.scheduler.peek_due(target) {
-            self.now = key.0;
+        while let Some((key, payload)) = self.peek_due(target) {
+            self.now = self.now.max(key.0);
             let mut polled_at_settlement = false;
             if matches!(
                 &payload,
@@ -2596,7 +2659,7 @@ impl<'plan> Vm<'plan> {
             // A failed expiry stays armed: reserve, resolve, ack.
             self.expire(journal, bindings, payload)?;
             self.scheduler.ack(key);
-            while let Some((sibling_key, sibling)) = self.scheduler.peek_due(key.0) {
+            while let Some((sibling_key, sibling)) = self.peek_due(key.0) {
                 if !polled_at_settlement
                     && matches!(
                         &sibling,
@@ -2629,6 +2692,12 @@ impl<'plan> Vm<'plan> {
         }
         self.now = self.now.max(target);
         Ok(())
+    }
+
+    fn peek_due(&self, target: i64) -> Option<((i64, u64), DatedPayload)> {
+        self.scheduler.peek_due(target, |payload| {
+            !matches!(payload, DatedPayload::InstanceLifetime { instance, .. } if self.waiting.contains_key(instance))
+        })
     }
 
     /// Resolves one expired budget wherever the obligation lives.
@@ -2846,7 +2915,7 @@ impl<'plan> Vm<'plan> {
                 };
                 let prepared =
                     self.validate_and_prepare_emissions(journal, slot, &instance, &outcome.record)?;
-                outcome.record.routes = self.routed_deliveries(&prepared);
+                self.retain_emission_routes(&mut outcome.record, &prepared)?;
                 journal
                     .commit(outcome.record.clone())
                     .map_err(VmError::Journal)?;
@@ -3284,6 +3353,7 @@ impl<'plan> Vm<'plan> {
     #[must_use]
     pub fn is_stable(&self) -> bool {
         if !self.lifecycle.is_empty()
+            || self.single_pass_close().is_some()
             || self.loop_manager_ready()
             || !self.settled.is_empty()
             || !self.pending.is_empty()
@@ -3349,6 +3419,7 @@ impl<'plan> Vm<'plan> {
     #[must_use]
     pub fn has_ready_transaction(&self) -> bool {
         if !self.lifecycle.is_empty()
+            || self.single_pass_close().is_some()
             || self.loop_manager_ready()
             || self.settled_inbound_calls.iter().any(|event| {
                 self.inbound_calls
@@ -3478,6 +3549,23 @@ impl<'plan> Vm<'plan> {
                 .any(|work| work.instance == *reference)
     }
 
+    fn single_pass_close(&self) -> Option<(&InstanceRef, &Envelope)> {
+        if !self.has_single_pass {
+            return None;
+        }
+        self.instances.iter().find_map(|(reference, instance)| {
+            (matches!(instance.phase, InstancePhase::Open)
+                && matches!(
+                    self.plan.owners[instance.owner.index()].instance.lifetime,
+                    InstanceLifetime::SinglePass
+                )
+                && !self.lifecycle.iter().any(|work| {
+                    work.instance == *reference && work.lifecycle == node::Lifecycle::Start
+                }))
+            .then_some((reference, &instance.created_by))
+        })
+    }
+
     fn is_descendant_instance(&self, child: &InstanceRef, ancestor: &InstanceRef) -> bool {
         let mut cursor = self
             .instances
@@ -3570,7 +3658,7 @@ impl<'plan> Vm<'plan> {
             return Ok(());
         }
         let owner = self.instances[reference].owner;
-        let record = crate::journal::TransactionRecord {
+        let mut record = crate::journal::TransactionRecord {
             owner_path: self.plan.owners[owner.index()].path.clone(),
             instance: reference.clone(),
             parent_instance: None,
@@ -3588,6 +3676,7 @@ impl<'plan> Vm<'plan> {
             routes: vec![],
             timers: self.closing_timers(reference),
         };
+        self.retain_timer_arms(&mut record, self.closing_timer_arms(reference))?;
         journal.commit(record).map_err(VmError::Journal)?;
         self.activate_close(reference, cause.clone());
         self.arm_closing_deadlines(reference, cause.meta().sys().id());
@@ -3704,6 +3793,23 @@ impl<'plan> Vm<'plan> {
         }
     }
 
+    fn begin_settlement(&mut self, scope: &InstanceRef) {
+        self.residualize_scope(scope);
+        let targets: Vec<_> = self
+            .instances
+            .keys()
+            .filter(|candidate| self.is_within_instance(candidate, scope))
+            .cloned()
+            .collect();
+        for target in targets {
+            if let Some(instance) = self.instances.get_mut(&target)
+                && let InstancePhase::Closing { stage, .. } = &mut instance.phase
+            {
+                *stage = ClosingStage::Settling;
+            }
+        }
+    }
+
     fn expire_closing<B: OutboundConnectorBindings + ?Sized>(
         &mut self,
         journal: &mut dyn Journal,
@@ -3730,20 +3836,7 @@ impl<'plan> Vm<'plan> {
         };
         match deadline {
             ClosingDeadline::Drain if stage == ClosingStage::Draining => {
-                self.residualize_scope(reference);
-                let targets: Vec<InstanceRef> = self
-                    .instances
-                    .keys()
-                    .filter(|candidate| self.is_within_instance(candidate, reference))
-                    .cloned()
-                    .collect();
-                for target in targets {
-                    if let Some(instance) = self.instances.get_mut(&target)
-                        && let InstancePhase::Closing { stage, .. } = &mut instance.phase
-                    {
-                        *stage = ClosingStage::Settling;
-                    }
-                }
+                self.begin_settlement(reference);
                 let calls: Vec<CallRef> = self
                     .pending
                     .iter()
@@ -3975,7 +4068,7 @@ impl<'plan> Vm<'plan> {
             }
         };
         if let Some(prepared) = &prepared {
-            record.routes = self.routed_deliveries(prepared);
+            self.retain_emission_routes(&mut record, prepared)?;
         }
         if work.lifecycle == node::Lifecycle::Stop
             && let Some(bundle) = self.instances.get(&work.instance)
@@ -3992,19 +4085,6 @@ impl<'plan> Vm<'plan> {
                             seq: delivery.seq,
                         }),
                 );
-        }
-        if work.lifecycle == node::Lifecycle::Start
-            && matches!(
-                owner.instance.lifetime,
-                InstanceLifetime::Idle(_)
-                    | InstanceLifetime::Fixed(_)
-                    | InstanceLifetime::Tumbling(_)
-            )
-        {
-            record.timers.push((
-                crate::journal::timer_kind::INSTANCE_LIFETIME,
-                ids::instance_lifetime_ref(&work.instance),
-            ));
         }
         if work.lifecycle == node::Lifecycle::Stop {
             self.close_instance_loops(&work.instance, &mut record)?;
@@ -4023,7 +4103,6 @@ impl<'plan> Vm<'plan> {
                     &record.state_delta,
                 );
             }
-            self.arm_start_deadline(&work);
             if matches!(owner.instance.lifetime, InstanceLifetime::SinglePass) {
                 self.request_close(journal, &work.instance, work.cause.clone())?;
             }
@@ -4043,7 +4122,10 @@ impl<'plan> Vm<'plan> {
         Ok(())
     }
 
-    fn promote_waiting(&mut self, journal: &dyn Journal) -> Result<(), VmError> {
+    fn promote_waiting(
+        &mut self,
+        journal: &(impl InstanceAdmissions + ?Sized),
+    ) -> Result<(), VmError> {
         loop {
             let mut ready = Vec::new();
             for (reference, waiting) in &self.waiting {
@@ -4101,53 +4183,7 @@ impl<'plan> Vm<'plan> {
                 lifecycle: node::Lifecycle::Start,
                 cause: waiting.created_by,
             });
-            if let InstanceLifetime::Idle(ttl) = self.plan.owners[owner.index()].instance.lifetime {
-                self.scheduler.arm(
-                    waiting.last_activity_at.saturating_add(ttl),
-                    DatedPayload::InstanceLifetime {
-                        owner,
-                        instance: reference,
-                        cause: waiting.last_activity.meta().sys().id(),
-                        deadline: InstanceDeadline::Idle,
-                    },
-                );
-            }
         }
-    }
-
-    fn arm_start_deadline(&mut self, work: &LifecycleWork) {
-        let owner = &self.plan.owners[work.owner.index()];
-        let (at, deadline) = match owner.instance.lifetime {
-            InstanceLifetime::Fixed(after) => {
-                (self.now.saturating_add(after), InstanceDeadline::Fixed)
-            }
-            InstanceLifetime::Tumbling(every) => {
-                let Some(start) = self.instances.get(&work.instance).and_then(|instance| {
-                    instance.frames.iter().rev().find_map(|frame| match frame {
-                        InstanceFrame::ProcessingTimeBox {
-                            owner: framed,
-                            start_ns,
-                        } if framed == &owner.path => Some(*start_ns),
-                        _ => None,
-                    })
-                }) else {
-                    return;
-                };
-                (start.saturating_add(every), InstanceDeadline::Tumbling)
-            }
-            InstanceLifetime::Persistent
-            | InstanceLifetime::Idle(_)
-            | InstanceLifetime::SinglePass => return,
-        };
-        self.scheduler.arm(
-            at,
-            DatedPayload::InstanceLifetime {
-                owner: work.owner,
-                instance: work.instance.clone(),
-                cause: work.cause.meta().sys().id(),
-                deadline,
-            },
-        );
     }
 
     /// One won closure becomes the connector's completion transaction.
@@ -4196,7 +4232,7 @@ impl<'plan> Vm<'plan> {
         )?;
         let prepared =
             self.validate_and_prepare_emissions(journal, slot, &request.instance, &outcome.record)?;
-        outcome.record.routes = self.routed_deliveries(&prepared);
+        self.retain_emission_routes(&mut outcome.record, &prepared)?;
         journal
             .commit(outcome.record.clone())
             .map_err(VmError::Journal)?;
@@ -4253,7 +4289,7 @@ impl<'plan> Vm<'plan> {
             &pending.instance,
             &outcome.record,
         )?;
-        outcome.record.routes = self.routed_deliveries(&prepared);
+        self.retain_emission_routes(&mut outcome.record, &prepared)?;
         journal.commit(outcome.record).map_err(VmError::Journal)?;
         self.settled_inbound_calls.remove(index);
         self.inbound_calls.remove(&event.call_ref);
@@ -4311,7 +4347,7 @@ impl<'plan> Vm<'plan> {
             &session.instance,
             &outcome.record,
         )?;
-        outcome.record.routes = self.routed_deliveries(&prepared);
+        self.retain_emission_routes(&mut outcome.record, &prepared)?;
         journal.commit(outcome.record).map_err(VmError::Journal)?;
         self.settled_sessions.remove(index);
         self.sessions.remove(&settled.session);
@@ -4530,7 +4566,7 @@ impl<'plan> Vm<'plan> {
         }
         let prepared =
             self.validate_and_prepare_emissions(journal, slot, instance, &outcome.record)?;
-        outcome.record.routes = self.routed_deliveries(&prepared);
+        self.retain_emission_routes(&mut outcome.record, &prepared)?;
         // The journal owns the full transaction after commit. Retain only the
         // small delta the in-memory state fold still needs; cloning the whole
         // record would duplicate every emitted envelope on the relay hot path.
@@ -4624,7 +4660,7 @@ impl<'plan> Vm<'plan> {
         }
         let prepared =
             self.validate_and_prepare_emissions(journal, slot, instance, &outcome.record)?;
-        outcome.record.routes = self.routed_deliveries(&prepared);
+        self.retain_emission_routes(&mut outcome.record, &prepared)?;
         journal
             .commit(outcome.record.clone())
             .map_err(VmError::Journal)?;
@@ -4674,7 +4710,7 @@ impl<'plan> Vm<'plan> {
             .map_err(VmError::Fault)?;
         let prepared =
             self.validate_and_prepare_emissions(journal, slot, instance, &outcome.record)?;
-        outcome.record.routes = self.routed_deliveries(&prepared);
+        self.retain_emission_routes(&mut outcome.record, &prepared)?;
         journal
             .commit(outcome.record.clone())
             .map_err(VmError::Journal)?;
@@ -5149,7 +5185,7 @@ impl<'plan> Vm<'plan> {
             .map_err(VmError::Fault)?;
         let prepared =
             self.validate_and_prepare_emissions(journal, slot, instance, &outcome.record)?;
-        outcome.record.routes = self.routed_deliveries(&prepared);
+        self.retain_emission_routes(&mut outcome.record, &prepared)?;
         journal.commit(outcome.record).map_err(VmError::Journal)?;
         self.scheduler.mailboxes.pop(slot, instance);
         self.route_emissions(slot, instance, prepared);
@@ -5180,6 +5216,18 @@ impl<'plan> Vm<'plan> {
         instance: &InstanceRef,
         delivery: &Delivery,
     ) -> Result<(), VmError> {
+        // A recovered mailbox can be ready after its retained budget is
+        // already due. Settle that exact delivery before handing any intent
+        // to the Driver, even when the caller drains before `advance`.
+        let overdue = self.scheduler.dated.range(..=(self.now, u64::MAX)).find(|(_, payload)| {
+            matches!(payload, DatedPayload::DeliveryBudget { edge, delivery: id, instance: target, .. }
+                if edge == &delivery.edge && *id == delivery.envelope.meta().sys().id() && target == instance)
+        }).map(|(key, payload)| (*key, payload.clone()));
+        if let Some((key, payload)) = overdue {
+            self.expire(journal, bindings, payload)?;
+            self.scheduler.ack(key);
+            return Ok(());
+        }
         let planned = &self.plan.nodes[slot.index()];
         let NodeExecution::Connector(spec) = &planned.execution else {
             unreachable!("routed here by kind");
@@ -5215,7 +5263,7 @@ impl<'plan> Vm<'plan> {
                 self.prepare_call_completion(slot, instance, delivery, &mut outcome.record)?;
                 let prepared =
                     self.validate_and_prepare_emissions(journal, slot, instance, &outcome.record)?;
-                outcome.record.routes = self.routed_deliveries(&prepared);
+                self.retain_emission_routes(&mut outcome.record, &prepared)?;
                 journal
                     .commit(outcome.record.clone())
                     .map_err(VmError::Journal)?;
@@ -5291,7 +5339,7 @@ impl<'plan> Vm<'plan> {
     /// another emission on the same bad wiring, so NOTHING commits.
     fn validate_and_prepare_emissions(
         &self,
-        journal: &dyn Journal,
+        journal: &(impl InstanceAdmissions + ?Sized),
         slot: Slot,
         source_instance: &InstanceRef,
         record: &crate::runtime::TransactionRecord,
@@ -5341,7 +5389,7 @@ impl<'plan> Vm<'plan> {
     /// remains a pure candidate until the producer record commits.
     fn prepare_routes(
         &self,
-        journal: &dyn Journal,
+        journal: &(impl InstanceAdmissions + ?Sized),
         from: &EndpointRef,
         source_instance: Option<&InstanceRef>,
         envelope: &Envelope,
@@ -5585,7 +5633,7 @@ impl<'plan> Vm<'plan> {
 
     fn prepare_target(
         &self,
-        journal: &dyn Journal,
+        journal: &(impl InstanceAdmissions + ?Sized),
         scope: OwnerSlot,
         source_instance: Option<&InstanceRef>,
         target: Slot,
@@ -5700,7 +5748,7 @@ impl<'plan> Vm<'plan> {
 
     fn candidate_owner(
         &self,
-        journal: &dyn Journal,
+        journal: &(impl InstanceAdmissions + ?Sized),
         owner_slot: OwnerSlot,
         parent: Option<&InstanceRef>,
         source: Option<&InstanceRef>,
@@ -6325,81 +6373,16 @@ impl<'plan> Vm<'plan> {
                             .unwrap_or_else(|_| {
                                 unreachable!("capacity was reserved before the commit")
                             });
-                        let join_within = self.plan.handlers.iter().find_map(|handler| {
-                            (handler.owner == target)
-                                .then_some(&handler.activation)
-                                .and_then(|activation| match activation {
-                                    node::HandlerActivation::Join {
-                                        ports, within_ns, ..
-                                    } if ports.contains(&to.port) => *within_ns,
-                                    _ => None,
-                                })
-                        });
-                        if let Some(within) = join_within {
-                            self.scheduler.arm(
-                                self.now.saturating_add(within),
-                                DatedPayload::JoinWithin {
-                                    operator: self.plan.nodes[target.index()].path.clone(),
-                                    edge: self.plan.edge_text(&edge),
-                                    delivery: envelope.meta().sys().id(),
-                                    instance: prepared.reference.clone(),
-                                },
-                            );
+                        for (arm, payload) in
+                            self.delivery_deadlines(&edge, prepared, candidates, envelope)
+                        {
+                            self.scheduler.arm(arm.due_at, payload);
                         }
                         self.observed.push(Observed {
                             node: Some(self.plan.nodes[target.index()].path.clone()),
                             port: to.port.clone(),
                             envelope: envelope.clone(),
                         });
-                        // The budget runs from THIS moment — queue
-                        // time counts (execution-model §8). What is
-                        // armed here is exactly what the committed
-                        // record sealed as its timers.
-                        let dynamic_budget = prepared
-                            .chain
-                            .last()
-                            .and_then(|reference| {
-                                self.instances
-                                    .get(reference)
-                                    .map(|instance| &instance.settings)
-                                    .or_else(|| {
-                                        self.waiting
-                                            .get(reference)
-                                            .map(|waiting| &waiting.candidate.settings)
-                                    })
-                            })
-                            .and_then(|settings| {
-                                settings
-                                    .get("timeout")
-                                    .or_else(|| settings.get("handshake_timeout"))
-                            })
-                            .and_then(|value| match value {
-                                crate::value::Value::Duration(budget) => Some(*budget),
-                                _ => None,
-                            });
-                        let static_budget = self.plan.nodes[target.index()]
-                            .connector()
-                            .and_then(|spec| {
-                                spec.attribute("timeout")
-                                    .or_else(|| spec.attribute("handshake_timeout"))
-                            })
-                            .and_then(|setting| match setting {
-                                crate::plan::AttrSetting::Value(crate::value::Value::Duration(
-                                    budget,
-                                )) => Some(*budget),
-                                _ => None,
-                            });
-                        if let Some(budget) = dynamic_budget.or(static_budget) {
-                            self.scheduler.arm(
-                                self.now.saturating_add(budget),
-                                DatedPayload::DeliveryBudget {
-                                    connector: self.plan.nodes[target.index()].path.clone(),
-                                    edge: self.plan.edge_text(&edge),
-                                    delivery: envelope.meta().sys().id(),
-                                    instance: prepared.reference.clone(),
-                                },
-                            );
-                        }
                     }
                 },
             }
@@ -6413,18 +6396,17 @@ impl<'plan> Vm<'plan> {
         candidates: &BTreeMap<InstanceRef, InstanceCandidate>,
         envelope: &Envelope,
     ) {
+        let deadlines =
+            self.admission_deadlines(target, candidates, envelope, &mut BTreeMap::new());
         for reference in &target.chain {
             let admitted = target.admitted.contains(reference);
-            let mut arm_idle = false;
-            let owner_slot = match self.instances.get_mut(reference) {
+            match self.instances.get_mut(reference) {
                 Some(instance) => {
                     if admitted
                         && instance.last_activity.meta().sys().id() != envelope.meta().sys().id()
                     {
                         instance.last_activity = envelope.clone();
-                        arm_idle = true;
                     }
-                    instance.owner
                 }
                 None => {
                     if let Some(waiting) = self.waiting.get_mut(reference) {
@@ -6432,7 +6414,6 @@ impl<'plan> Vm<'plan> {
                             && waiting.last_activity.meta().sys().id() != envelope.meta().sys().id()
                         {
                             waiting.last_activity = envelope.clone();
-                            waiting.last_activity_at = self.now;
                         }
                         continue;
                     }
@@ -6454,7 +6435,6 @@ impl<'plan> Vm<'plan> {
                                 candidate: candidate.clone(),
                                 created_by: envelope.clone(),
                                 last_activity: envelope.clone(),
-                                last_activity_at: self.now,
                             },
                         );
                         continue;
@@ -6507,24 +6487,11 @@ impl<'plan> Vm<'plan> {
                         lifecycle: node::Lifecycle::Start,
                         cause: envelope.clone(),
                     });
-                    arm_idle = admitted;
-                    candidate.owner
                 }
             };
-            if arm_idle
-                && let InstanceLifetime::Idle(ttl) =
-                    self.plan.owners[owner_slot.index()].instance.lifetime
-            {
-                self.scheduler.arm(
-                    self.now.saturating_add(ttl),
-                    DatedPayload::InstanceLifetime {
-                        owner: owner_slot,
-                        instance: reference.clone(),
-                        cause: envelope.meta().sys().id(),
-                        deadline: InstanceDeadline::Idle,
-                    },
-                );
-            }
+        }
+        for (arm, payload) in deadlines {
+            self.scheduler.arm(arm.due_at, payload);
         }
     }
 
