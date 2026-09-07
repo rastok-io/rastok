@@ -5,6 +5,31 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-09-07-1 — Preserve the embedded heap gate through the v16 cutover
+
+The R4 review measured 130,772 B against the unchanged 131,072 B heap gate.
+Before widening R5–R8, the same Cortex-M33 workload now stores each retained
+journal packet indirectly: the record vector reserves 8 B handles rather than
+216 B inline packets. Its measured peak falls to 105,988 B, recovering 24,784 B
+and leaving 25,084 B (19.14%) of headroom. Record kinds, queries, payloads,
+causal order, canonical bytes and history length are unchanged. The echo,
+JSONL and gauge candidate ledger proves identity neutrality. The
+[spike report](../architecture/spike-rp2350-emulated.md) owns the full numbers.
+
+The heap gate remains **128 KiB**, flash **1 MiB**, and worst-case measured
+relay **150 k instructions**. Embedded-path changes remeasure heap first.
+Full Graph Loop and recovery qualification remain separate gates; unused
+headroom is not evidence for unimplemented paths.
+
+The reviewed unqualified cutover is checkpointed on `rework/v16`, leaving
+`main` at its pre-cutover commit. Its red migration tests remain visible until
+R9 gives each a named replacement or retirement; no ignore or blanket golden
+blessing substitutes for qualification.
+
+**Rejected:** raising the gate to absorb an accidental layout cost; deleting
+retained history; claiming savings from the already-absent boundary inventory
+or lazy r2 index; treating a candidate format commit as release qualification.
+
 ## D-2026-09-05-1 — Graph is structure; Executors transition; Loop uses durable manager commands
 
 The pre-public Node model is revised before plan v16. A `Node` is either a

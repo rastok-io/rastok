@@ -957,7 +957,7 @@ mod tests {
             Data::materialized(crate::value::Value::Int(7)),
         );
         let run = crate::journal::ids::loop_run_ref(&instance, root);
-        let record = Record::Transaction(crate::journal::TransactionRecord {
+        let record = Record::Transaction(Box::new(crate::journal::TransactionRecord {
             owner_path: owner,
             instance: instance.clone(),
             parent_instance: None,
@@ -981,7 +981,7 @@ mod tests {
             emissions: Vec::new(),
             routes: Vec::new(),
             timers: Vec::new(),
-        });
+        }));
 
         let Cbor::Map(tree) = record_tree(&record) else {
             panic!("a transaction projects as a canonical map")
@@ -1032,7 +1032,7 @@ mod tests {
     fn a_connector_root_seals_its_structural_source_path_under_key_27() {
         let source = crate::node::Path::new(["api", "listener"]).unwrap();
         let id = crate::envelope::Id::from_bytes([7; 16]);
-        let record = Record::Inbound(crate::journal::InboundRecord {
+        let record = Record::Inbound(Box::new(crate::journal::InboundRecord {
             provenance: crate::boundary::InboundEnvelopeProvenance::single(source.clone()),
             port: crate::node::Port::new("out").unwrap(),
             connector_path: Some(source),
@@ -1043,7 +1043,7 @@ mod tests {
             ),
             routes: Vec::new(),
             exchange: None,
-        });
+        }));
 
         let Cbor::Map(tree) = record_tree(&record) else {
             panic!("an inbound record projects as a canonical map")

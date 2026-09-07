@@ -157,6 +157,13 @@ fn main() -> ! {
     hprintln!("pkg_decode: {} ticks", open_ticks);
     hprintln!("semantic_hash: {}", hash);
     hprintln!("heap_after_open: {} bytes", HEAP.inner.used());
+    hprintln!(
+        "record_layout: record {} / inbound {} / transaction {} / outbound {} bytes",
+        core::mem::size_of::<Record>(),
+        core::mem::size_of::<journal::InboundRecord>(),
+        core::mem::size_of::<journal::TransactionRecord>(),
+        core::mem::size_of::<journal::OutboundRecord>()
+    );
 
     // 2. Boot and run: each round injects one envelope and measures exactly
     //    the relay's port transaction. R4 makes every selected owner emit a

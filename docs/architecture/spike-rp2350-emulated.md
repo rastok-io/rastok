@@ -427,6 +427,31 @@ recovery, both still gated.
 
 ## Reproduction
 
+### R4 review: recover heap headroom without changing the gate (2026-09-07)
+
+The reviewed candidate was rerun first: **130,772 B** peak, only 300 B free.
+On Cortex-M33, `Record` occupied 216 B (`InboundRecord` 208 B,
+`TransactionRecord` 216 B, `OutboundRecord` 160 B). Its growing vector reserved
+the largest packet in every unused slot and temporarily held both allocations
+when growing. Neither the sparse boundary inventory nor the lazy Loop index
+was allocated on this witness; removing them could not recover this headroom.
+
+Owned record packets are now boxed at their variant boundary. `Record` is
+8 B and reserves handles instead of empty full-sized packets. The same 67
+records, inputs, candidate package and allocator instrumentation measure:
+
+- **105,988 B** peak: **24,784 B recovered**, **25,084 B (19.14%)** below 128 KiB;
+- 6,440 B after package opening, unchanged;
+- relay 1,464 / 1,417 / 1,698 ticks (average / minimum / maximum), about
+  84.9 k worst-case instructions against 150 k;
+- `.text` 754,548 B plus `.rodata` 66,380 B = **820,928 B**, against 1 MiB.
+
+This is a physical storage change, not journal truncation or an identity move.
+The echo, JSONL and gauge candidate package bytes and causal seals are
+unchanged by it. The **128 KiB gate stays fixed**; R5–R8 must remeasure the
+same workload before accepting further embedded-path growth. These numbers
+do not qualify the not-yet-executable full recovery or Graph Loop paths.
+
 From the repository root (the crate must be built from its own
 directory — its `.cargo/config.toml` sets the target and linker
 script, and Cargo only reads that file from the working directory):

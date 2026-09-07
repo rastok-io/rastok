@@ -298,13 +298,15 @@ pub mod timer_kind {
     pub const SESSION_HANDSHAKE: u8 = 9;
 }
 
-/// One causal record.
+/// One causal record. Each owned packet is indirect so journal growth reserves
+/// handles, not the largest packet in every unused slot. This physical layout
+/// changes neither the three record kinds nor their canonical projection.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Record {
     /// The world entered: an envelope was born at ingress.
-    Inbound(InboundRecord),
+    Inbound(Box<InboundRecord>),
     /// One node fired: the atomic commit packet.
-    Transaction(TransactionRecord),
+    Transaction(Box<TransactionRecord>),
     /// The graph acted on the world: one fact of a call's WAL — the
     /// open, then separately its closure. The past never rewrites.
     Outbound(OutboundRecord),
@@ -1168,9 +1170,9 @@ pub struct RoutedDelivery {
 #[derive(Debug, Clone, PartialEq)]
 pub enum OutboundRecord {
     /// One fact of a Call's open/close WAL.
-    Call(CallRecord),
+    Call(Box<CallRecord>),
     /// One fact of a Session opening or message-write WAL.
-    Session(SessionRecord),
+    Session(Box<SessionRecord>),
 }
 
 /// One fact of a Call's WAL (`delivery-semantics.md` §4): the open fact, or
@@ -2569,7 +2571,7 @@ impl Journal for MemJournal {
         }
         self.next_seq
             .insert(prepared.submission.provenance, following);
-        self.records.push(Record::Inbound(record.clone()));
+        self.records.push(Record::Inbound(Box::new(record.clone())));
         Ok(CommittedInbound {
             seq: prepared.seq,
             envelope: prepared.envelope,
@@ -2824,7 +2826,8 @@ impl Journal for MemJournal {
         }
         let address = transaction.instance.address().clone();
         let exchange_exit = transaction.exchange_exit.as_deref().copied();
-        self.records.push(Record::Transaction(transaction));
+        self.records
+            .push(Record::Transaction(Box::new(transaction)));
         if let Some(fold) = command_loops {
             self.command_loops = Some(fold);
         }
@@ -2890,10 +2893,12 @@ impl Journal for MemJournal {
             return Err(Error::DuplicateOpen);
         }
         self.records
-            .push(Record::Outbound(OutboundRecord::Call(CallRecord {
-                intent,
-                status: OutboundStatus::Open,
-            })));
+            .push(Record::Outbound(OutboundRecord::Call(Box::new(
+                CallRecord {
+                    intent,
+                    status: OutboundStatus::Open,
+                },
+            ))));
         Ok(())
     }
 
@@ -2912,11 +2917,13 @@ impl Journal for MemJournal {
         let reference = intent.session_ref;
         let connector_path = intent.connector_path.clone();
         self.records
-            .push(Record::Outbound(OutboundRecord::Session(SessionRecord {
-                connector_path: connector_path.clone(),
-                session_ref: reference,
-                status: SessionStatus::Opening(intent),
-            })));
+            .push(Record::Outbound(OutboundRecord::Session(Box::new(
+                SessionRecord {
+                    connector_path: connector_path.clone(),
+                    session_ref: reference,
+                    status: SessionStatus::Opening(intent),
+                },
+            ))));
         self.sessions.insert(
             reference,
             SessionLifecycle {
@@ -2939,11 +2946,13 @@ impl Journal for MemJournal {
         }
         let connector_path = session.connector_path.clone();
         self.records
-            .push(Record::Outbound(OutboundRecord::Session(SessionRecord {
-                connector_path,
-                session_ref: *session_ref,
-                status: SessionStatus::Opened,
-            })));
+            .push(Record::Outbound(OutboundRecord::Session(Box::new(
+                SessionRecord {
+                    connector_path,
+                    session_ref: *session_ref,
+                    status: SessionStatus::Opened,
+                },
+            ))));
         Ok(CloseVerdict::Won)
     }
 
@@ -2967,11 +2976,13 @@ impl Journal for MemJournal {
         }
         session.writes.insert(intent.write_ref, false);
         self.records
-            .push(Record::Outbound(OutboundRecord::Session(SessionRecord {
-                connector_path: intent.connector_path.clone(),
-                session_ref: intent.session_ref,
-                status: SessionStatus::WriteOpen(intent),
-            })));
+            .push(Record::Outbound(OutboundRecord::Session(Box::new(
+                SessionRecord {
+                    connector_path: intent.connector_path.clone(),
+                    session_ref: intent.session_ref,
+                    status: SessionStatus::WriteOpen(intent),
+                },
+            ))));
         Ok(())
     }
 
@@ -3000,11 +3011,13 @@ impl Journal for MemJournal {
             SessionStatus::WriteSettled(*write_ref)
         };
         self.records
-            .push(Record::Outbound(OutboundRecord::Session(SessionRecord {
-                connector_path: session.connector_path.clone(),
-                session_ref: *session_ref,
-                status,
-            })));
+            .push(Record::Outbound(OutboundRecord::Session(Box::new(
+                SessionRecord {
+                    connector_path: session.connector_path.clone(),
+                    session_ref: *session_ref,
+                    status,
+                },
+            ))));
         Ok(CloseVerdict::Won)
     }
 
@@ -3034,10 +3047,12 @@ impl Journal for MemJournal {
         // Append the closure as a new fact; the open fact stays
         // byte-identical — the attempt trace survives.
         self.records
-            .push(Record::Outbound(OutboundRecord::Call(CallRecord {
-                intent,
-                status: OutboundStatus::Closed(closure),
-            })));
+            .push(Record::Outbound(OutboundRecord::Call(Box::new(
+                CallRecord {
+                    intent,
+                    status: OutboundStatus::Closed(closure),
+                },
+            ))));
         Ok(CloseVerdict::Won)
     }
 
@@ -3061,10 +3076,12 @@ impl Journal for MemJournal {
             return Err(Error::UnknownCall);
         };
         self.records
-            .push(Record::Outbound(OutboundRecord::Call(CallRecord {
-                intent,
-                status: OutboundStatus::Abandoned,
-            })));
+            .push(Record::Outbound(OutboundRecord::Call(Box::new(
+                CallRecord {
+                    intent,
+                    status: OutboundStatus::Abandoned,
+                },
+            ))));
         Ok(CloseVerdict::Won)
     }
 
@@ -3134,10 +3151,12 @@ impl Journal for MemJournal {
         self.records
             .iter()
             .filter_map(|record| match record {
-                Record::Outbound(OutboundRecord::Session(SessionRecord {
-                    status: SessionStatus::WriteOpen(intent),
-                    ..
-                })) if open.contains(&intent.write_ref) => Some(intent.clone()),
+                Record::Outbound(OutboundRecord::Session(session)) => match &session.status {
+                    SessionStatus::WriteOpen(intent) if open.contains(&intent.write_ref) => {
+                        Some(intent.clone())
+                    }
+                    _ => None,
+                },
                 _ => None,
             })
             .collect()
@@ -4028,10 +4047,8 @@ mod tests {
         );
         assert!(matches!(
             journal.records().last(),
-            Some(Record::Outbound(OutboundRecord::Call(CallRecord {
-                status: OutboundStatus::Abandoned,
-                ..
-            })))
+            Some(Record::Outbound(OutboundRecord::Call(call)))
+                if call.status == OutboundStatus::Abandoned
         ));
     }
 

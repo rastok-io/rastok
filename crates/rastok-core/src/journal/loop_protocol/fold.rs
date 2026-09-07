@@ -484,7 +484,7 @@ mod tests {
     }
 
     fn record(instance: &InstanceRef, packet: Packet) -> Record {
-        Record::Transaction(TransactionRecord {
+        Record::Transaction(Box::new(TransactionRecord {
             owner_path: instance.address().owner().clone(),
             instance: instance.clone(),
             parent_instance: None,
@@ -500,7 +500,7 @@ mod tests {
             emissions: vec![],
             routes: vec![],
             timers: vec![],
-        })
+        }))
     }
 
     #[test]

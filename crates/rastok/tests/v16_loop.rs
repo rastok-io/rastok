@@ -201,7 +201,7 @@ fn a_rejected_transaction_does_not_update_the_journal_loop_projection() {
     let before = journal.records().to_vec();
     let fold = journal.loop_protocol().unwrap();
     assert!(matches!(
-        journal.commit(transaction),
+        journal.commit(*transaction),
         Err(rastok::journal::Error::InstanceOwnerMismatch { .. })
     ));
     assert_eq!(journal.records(), before);
@@ -498,7 +498,7 @@ graph app : App {
             _ => None,
         })
         .unwrap();
-    journal.commit(transaction).unwrap();
+    journal.commit(*transaction).unwrap();
     let before = vm.inspection();
     let error = vm.recover_from_journal(&journal).unwrap_err();
     assert!(matches!(
