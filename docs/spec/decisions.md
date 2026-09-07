@@ -216,6 +216,53 @@ membership as a delivery context; consuming manager admissions in hash order;
 advancing while a sibling still owns work; resetting deadlines on recovery;
 admitting unqualified classified/effectful graphs; adding another format bump.
 
+## D-2026-09-07-6 — Qualify Graph Calls as complete causal obligations
+
+The Graph profile of D-2026-09-07-5 now admits the existing finite outbound
+Call Contracts: Process job, File read/replace and HttpClient. Every Call needs
+a positive plan-constant timeout. The other profile limits remain: one Loop
+owner, authored fuel, no Graph joins, nested Loops, classified recurrence,
+descendant-local lifecycle or direct descendant command statements.
+
+The independent spatial proof composes complete Call applications. It retains
+each terminal case while selecting that case's routes and its correlated
+frames. Never, exactly-one-on-Completed and zero-or-more are Contract facts,
+not conclusions drawn from a mock. Arbitrary frame counts are checked through
+the finite verdict algebra. Only terminal crossings of the same atomic
+Connector transaction coalesce; downstream transactions remain distinct.
+Recurrence and unsafe visibility are tracked together across the entire
+application, including sibling Calls. An unsafe combination refuses as
+`UnsafeLoopEffect` / `E-LOOP-EFFECT`. The source gate on compensable and
+irreversible execution remains; raw-plan safety tests do not claim its removal.
+
+A child Call's terminal settles that obligation, not the enclosing Graph run.
+Only its selected output routes may produce the Graph verdict. The held
+request, retained completion and downstream deliveries keep their exact run
+context until consumed. A pending verdict blocked by such work is not ready
+scheduler work. Another run's Call does not block it. Recovery re-derives both
+the verdict and outgoing delivery contexts from the retained completion,
+without starting an old effect or executing a producer again.
+
+Two boundary distinctions were exposed by executable probes. Delivery timers
+must use the same retained Graph-boundary edge identity as the delivery they
+expire, not the executable edge projection alone. A keyed Loop Graph derives
+its key from the manager's typed opening entry, not a descendant Call's wider
+request type. Neither correction changes the meaning of a non-Graph-Loop plan.
+Recovery retains a due cancellation as work; reconstruction itself does not
+perform that Driver action.
+
+No package version, wire key, Contract id, causal domain or golden changes.
+R7 is still open; [the checkpoint](../architecture/rework-r7-manager-recovery.md#9-graph-calls-and-correlated-quiescence--2026-09-07)
+records tests and the remaining gates. Nested Lab mock declarations remain
+deferred: the Lab qualification uses an App Loop, and VM tests qualify nested
+Call bodies through the same boundary Contract. UI work remains paused.
+
+**Rejected:** independent response/exit choices which invent impossible
+applications; one verdict per streamed frame; treating a child Call exit as
+the Graph's Done; checking effects only at the command source; global rather
+than run-scoped quiescence; rebuilding a timeout from restart time; recovering
+by recalling an old Call; silently opening unrelated Graph profiles.
+
 ## D-2026-09-05-1 — Graph is structure; Executors transition; Loop uses durable manager commands
 
 The pre-public Node model is revised before plan v16. A `Node` is either a

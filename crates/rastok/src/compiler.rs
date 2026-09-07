@@ -192,6 +192,7 @@ pub fn compile_with_assets(
             | PlanValidationError::AmbiguousInboundCallCorrelation { .. }
             | PlanValidationError::InvalidAnnotationPropagation { .. }
             | PlanValidationError::InvalidLoopControl { .. }
+            | PlanValidationError::UnsafeLoopEffect { .. }
             | PlanValidationError::WiringCycle { .. }),
         ) => {
             bag.push(type_resolution_diagnostic(&error));
@@ -457,6 +458,13 @@ fn type_resolution_diagnostic(error: &PlanValidationError) -> Diagnostic {
             .with_field("path", location)
             .with_field("detail", reason.to_string())
         }
+        PlanValidationError::UnsafeLoopEffect { owner } => Diagnostic::new(
+            check::E_LOOP_EFFECT,
+            Phase::Check,
+            format!("Loop `{owner}` can repeat a visible or ambiguous effect; use effect = none or idempotent"),
+        )
+        .with_field("owner", owner)
+        .with_field("path", "application"),
         PlanValidationError::InvalidLoopControl {
             owner,
             path,

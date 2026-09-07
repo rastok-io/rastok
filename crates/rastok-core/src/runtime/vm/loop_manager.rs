@@ -91,7 +91,7 @@ impl Vm<'_> {
         self.graph_admission_ready()
             || self.loop_manager.as_deref().is_some_and(|fold| {
                 fold.runs().any(|(run, state)| {
-                    state.pending.is_some()
+                    (state.pending.is_some() && !self.graph_run_has_work(*run))
                         || (state.phase == Phase::AwaitingAdmission
                             && self.graph_admission_is_head(*run)
                             && state.due_at.is_none_or(|due| due <= self.now))
@@ -327,6 +327,16 @@ impl Vm<'_> {
         let Some((run, application)) = self.loop_application(instance, delivery) else {
             return Ok(());
         };
+        if !self.graph_context(delivery).is_empty() {
+            record.loop_record = Some(Box::new(crate::journal::LoopRecord::R2(Packet {
+                context: vec![run],
+                ..Packet::default()
+            })));
+            // Closing this Call settles one obligation of the containing
+            // Graph, not the whole application. Only its selected routes can
+            // produce that Graph's verdict.
+            return self.retain_graph_verdicts(slot, record);
+        }
         let node = &self.plan.nodes[slot.index()];
         let terminal = terminal
             .ok_or_else(|| loop_error(instance, "the Call Loop lost its Contract profile"))?;

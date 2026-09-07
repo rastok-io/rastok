@@ -92,6 +92,12 @@ pub enum PlanValidationError {
         /// Closed proof obligation that failed.
         detail: &'static str,
     },
+    /// One recurrent application can repeat an unsafe visible effect,
+    /// including work on a sibling route which did not issue the command.
+    UnsafeLoopEffect {
+        /// Static path of the Loop whose application would repeat the effect.
+        owner: String,
+    },
     /// An edge's lexical scope is absent or is not a Graph owner.
     InvalidEdgeScope {
         /// The claimed Graph owner.
@@ -658,6 +664,10 @@ impl core::fmt::Display for PlanValidationError {
                 f,
                 "invalid plan: cannot prove that Loop `{owner}` always terminates at `{path}`: {detail}"
             ),
+            Self::UnsafeLoopEffect { owner } => write!(
+                f,
+                "invalid plan: Loop `{owner}` can repeat a visible or ambiguous effect; use effect = none or idempotent"
+            ),
             Self::InvalidEdgeScope { owner } => write!(
                 f,
                 "invalid plan: edge scope {} is not a Graph owner shared by both endpoints",
@@ -1211,6 +1221,22 @@ fn verify_instance_key_types(
                     .filter(|port| port.direction() == node::Direction::Input)
                     .map(|port| port.ty().clone())
                     .collect(),
+                OwnerKind::Graph if plan.owners[index].loop_spec().is_some() => {
+                    // The manager admits the typed Graph entry before any
+                    // fan-out. A descendant Call may accept variant without
+                    // weakening that opening's type or reselecting its key.
+                    let owner = &plan.owners[index];
+                    owner
+                        .ports
+                        .iter()
+                        .filter(|port| {
+                            owner
+                                .loop_spec()
+                                .is_some_and(|spec| spec.entry == port.port)
+                        })
+                        .filter_map(|port| port.ty.clone())
+                        .collect()
+                }
                 // Nested Graph admission types are closed by the compiler from
                 // the scoped crossing routes before transport. The owner tree
                 // preserves the boundary even though the spatial DAG is flat.

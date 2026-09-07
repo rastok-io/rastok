@@ -153,6 +153,7 @@ impl Vm<'_> {
 
     pub(super) fn restore_call_consumption(
         &mut self,
+        admissions: &impl InstanceAdmissions,
         index: usize,
         slot: Slot,
         record: &TransactionRecord,
@@ -203,6 +204,15 @@ impl Vm<'_> {
             &pending.delivery,
             &mut expected.record,
         )?;
+        if self.graph_loops.is_some() {
+            let prepared = self.validate_and_prepare_emissions(
+                admissions,
+                slot,
+                &pending.instance,
+                &expected.record,
+            )?;
+            self.retain_emission_routes(&mut expected.record, &prepared)?;
+        }
         if record.loop_record != expected.record.loop_record {
             return Err(invalid(
                 index,

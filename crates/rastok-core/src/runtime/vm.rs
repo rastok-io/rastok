@@ -6434,7 +6434,7 @@ impl<'plan> Vm<'plan> {
                 edge,
                 target: selected,
                 ..
-            } = route;
+            } = &route;
             match &edge.to {
                 None => {} // `-> nothing`: the explicit, written discard
                 Some(to) => match to.node {
@@ -6464,7 +6464,7 @@ impl<'plan> Vm<'plan> {
                                 unreachable!("capacity was reserved before the commit")
                             });
                         for (arm, payload) in
-                            self.delivery_deadlines(&edge, prepared, candidates, envelope)
+                            self.delivery_deadlines(&route, prepared, candidates, envelope)
                         {
                             self.scheduler.arm(arm.due_at, payload);
                         }

@@ -1,7 +1,8 @@
-//! Conservative control proof for spatial Operator applications. Counts are
+//! Conservative control proof for spatial Executor applications. Counts are
 //! saturated at two: the proof distinguishes silence, one verdict and conflict.
 
 use super::*;
+use crate::connector::{CallSemantics, FrameProduction};
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::ToString;
 use alloc::{format, vec};
@@ -10,6 +11,8 @@ use alloc::{format, vec};
 struct Outcome {
     terminal: bool,
     other: u8,
+    recurs: bool,
+    unsafe_effect: bool,
 }
 
 type Outcomes = BTreeSet<Outcome>;
@@ -18,6 +21,8 @@ fn empty() -> Outcomes {
     BTreeSet::from([Outcome {
         terminal: false,
         other: 0,
+        recurs: false,
+        unsafe_effect: false,
     }])
 }
 fn combine(left: &Outcomes, right: &Outcomes) -> Outcomes {
@@ -26,6 +31,8 @@ fn combine(left: &Outcomes, right: &Outcomes) -> Outcomes {
             right.iter().map(move |right| Outcome {
                 terminal: left.terminal || right.terminal,
                 other: left.other.saturating_add(right.other).min(2),
+                recurs: left.recurs || right.recurs,
+                unsafe_effect: left.unsafe_effect || right.unsafe_effect,
             })
         })
         .collect()
@@ -33,7 +40,7 @@ fn combine(left: &Outcomes, right: &Outcomes) -> Outcomes {
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum Work {
-    Source(Endpoint),
+    Source(Endpoint, Option<String>),
     Input(Endpoint),
 }
 
@@ -94,18 +101,31 @@ pub(super) fn validate(plan: &ExecutionPlan, owner: &Owner) -> Result<(), PlanVa
         ));
     }
     if plan
-        .nodes
+        .handlers
         .iter()
-        .any(|node| !matches!(node.execution, NodeExecution::Operator))
-        || plan
-            .handlers
-            .iter()
-            .any(|handler| !matches!(handler.activation, node::HandlerActivation::Port(_)))
+        .any(|handler| !matches!(handler.activation, node::HandlerActivation::Port(_)))
     {
         return Err(error(
             "application".into(),
-            "Graph Loop Calls, joins and lifecycle handlers require obligation qualification",
+            "Graph Loop joins and lifecycle handlers require obligation qualification",
         ));
+    }
+    for node in &plan.nodes {
+        if let Some(connector) = node.connector() {
+            if connector.call_semantics().is_none() {
+                return Err(error(
+                    node.path.to_string(),
+                    "a Graph Loop application requires a finite outbound Call profile",
+                ));
+            }
+            if !matches!(connector.attribute("timeout"), Some(AttrSetting::Value(Value::Duration(ns))) if *ns > 0)
+            {
+                return Err(error(
+                    format!("{}.timeout", node.path),
+                    "an outbound Call in Loop needs a positive plan-constant timeout",
+                ));
+            }
+        }
     }
     let entry = Endpoint {
         owner: EndpointOwner::Graph(owner.path.clone()),
@@ -144,10 +164,10 @@ pub(super) fn validate(plan: &ExecutionPlan, owner: &Owner) -> Result<(), PlanVa
             "Graph Loop descendant-local stopping requires obligation qualification",
         ));
     }
-    let root = Work::Source(entry);
+    let root = Work::Source(entry, None);
     let mut immediate = vec![root.clone()];
     let mut inspected = BTreeSet::new();
-    while let Some(Work::Source(source)) = immediate.pop() {
+    while let Some(Work::Source(source, _)) = immediate.pop() {
         if !inspected.insert(source.clone()) {
             continue;
         }
@@ -165,8 +185,8 @@ pub(super) fn validate(plan: &ExecutionPlan, owner: &Owner) -> Result<(), PlanVa
                         "a Graph Loop boundary-only verdict requires manager-entry qualification",
                     ));
                 }
-                if let Some(Work::Source(source)) = dependency(destination, &owner.path) {
-                    immediate.push(Work::Source(source));
+                if let Some(Work::Source(source, _)) = dependency(destination, &owner.path, None) {
+                    immediate.push(Work::Source(source, None));
                 }
             }
         }
@@ -180,33 +200,65 @@ pub(super) fn validate(plan: &ExecutionPlan, owner: &Owner) -> Result<(), PlanVa
         }
         let mut dependencies = BTreeSet::new();
         match &work {
-            Work::Source(source) => {
+            Work::Source(source, case) => {
                 for rule in plan
                     .boundary_routes
                     .iter()
                     .filter(|rule| rule.source == *source)
                 {
                     for destination in sets(&rule.selection).into_iter().flatten() {
-                        if let Some(next) = dependency(destination, &owner.path) {
+                        if let Some(next) = dependency(destination, &owner.path, case.as_deref()) {
                             dependencies.insert(next);
                         }
                     }
                 }
             }
             Work::Input(input) => {
-                let handler = input_handler(plan, input).ok_or_else(|| {
-                    error(
-                        format!("{:?}", input),
-                        "an internal Loop input has no finite application handler",
-                    )
-                })?;
-                for (port, expression) in handler.dispatch.steps().flat_map(DispatchStep::emissions)
-                {
-                    if !matches!(expression, Emission::Nothing) {
-                        dependencies.insert(Work::Source(Endpoint {
-                            owner: input.owner.clone(),
-                            port: port.clone(),
-                        }));
+                if let Some((node, call)) = input_call(plan, input) {
+                    for port in &node.ports {
+                        if call
+                            .frame_production(port.port.name())
+                            .is_some_and(|production| production != FrameProduction::Never)
+                        {
+                            dependencies.insert(Work::Source(
+                                Endpoint {
+                                    owner: input.owner.clone(),
+                                    port: port.port.clone(),
+                                },
+                                None,
+                            ));
+                        }
+                    }
+                    for (case, _) in call.terminal_cases() {
+                        dependencies.insert(Work::Source(
+                            Endpoint {
+                                owner: input.owner.clone(),
+                                port: node::Port::new(call.terminal()).map_err(|_| {
+                                    error("terminal".into(), "a Call terminal must be a port")
+                                })?,
+                            },
+                            Some((*case).into()),
+                        ));
+                    }
+                } else {
+                    let handler = input_handler(plan, input).ok_or_else(|| {
+                        error(
+                            format!("{:?}", input),
+                            "an internal Loop input has no finite application handler",
+                        )
+                    })?;
+                    for (port, expression) in
+                        handler.dispatch.steps().flat_map(DispatchStep::emissions)
+                    {
+                        if !matches!(expression, Emission::Nothing) {
+                            dependencies.insert(Work::Source(
+                                Endpoint {
+                                    owner: input.owner.clone(),
+                                    port: port.clone(),
+                                },
+                                None,
+                            ));
+                        }
                     }
                 }
             }
@@ -228,7 +280,7 @@ pub(super) fn validate(plan: &ExecutionPlan, owner: &Owner) -> Result<(), PlanVa
             continue;
         }
         let outcomes = match &work {
-            Work::Source(source) => {
+            Work::Source(source, case) => {
                 let mut total = empty();
                 for rule in plan
                     .boundary_routes
@@ -236,7 +288,15 @@ pub(super) fn validate(plan: &ExecutionPlan, owner: &Owner) -> Result<(), PlanVa
                     .filter(|rule| rule.source == *source)
                 {
                     let mut alternatives = Outcomes::new();
-                    for destinations in sets(&rule.selection) {
+                    let selections = match (&rule.selection, case) {
+                        (RouteSelection::Cases(arms), Some(case)) => arms
+                            .iter()
+                            .filter(|arm| arm.cases.contains(case))
+                            .map(|arm| arm.destinations.as_slice())
+                            .collect(),
+                        _ => sets(&rule.selection),
+                    };
+                    for destinations in selections {
                         let mut arm = empty();
                         for destination in destinations {
                             let next = match destination {
@@ -244,7 +304,11 @@ pub(super) fn validate(plan: &ExecutionPlan, owner: &Owner) -> Result<(), PlanVa
                                 RouteDestination::LoopCommand(command)
                                     if command.owner == EndpointOwner::Graph(owner.path.clone()) =>
                                 {
-                                    BTreeSet::from([Outcome { terminal: false, other: 1 }])
+                                    BTreeSet::from([Outcome {
+                                        terminal: false, other: 1,
+                                        recurs: command.kind != LoopCommandKind::Done,
+                                        unsafe_effect: false,
+                                    }])
                                 }
                                 RouteDestination::LoopCommand(_) => {
                                     return Err(error(
@@ -264,9 +328,11 @@ pub(super) fn validate(plan: &ExecutionPlan, owner: &Owner) -> Result<(), PlanVa
                                     BTreeSet::from([Outcome {
                                         terminal: spec.terminals.contains(&target.port),
                                         other: 0,
+                                        recurs: false,
+                                        unsafe_effect: false,
                                     }])
                                 }
-                                RouteDestination::Port(_) => dependency(destination, &owner.path)
+                                RouteDestination::Port(_) => dependency(destination, &owner.path, case.as_deref())
                                     .and_then(|work| cache.get(&work))
                                     .cloned()
                                     .ok_or_else(|| {
@@ -285,48 +351,70 @@ pub(super) fn validate(plan: &ExecutionPlan, owner: &Owner) -> Result<(), PlanVa
                 total
             }
             Work::Input(input) => {
-                let handler = input_handler(plan, input).ok_or_else(|| {
-                    error("input".into(), "an internal Loop input lost its handler")
-                })?;
-                let mut alternatives = Outcomes::new();
-                for leaf in handler.dispatch.decisions() {
-                    let Dispatch::Linear(steps) = leaf else {
-                        continue;
-                    };
-                    let mut total = empty();
-                    for step in steps {
-                        if matches!(step, DispatchStep::LoopCommand(_)) {
-                            return Err(error(
-                                "command".into(),
-                                "descendant direct commands require their context qualification; route an output to Loop.next/again/done",
-                            ));
+                if let Some((node, call)) = input_call(plan, input) {
+                    call_outcomes(node, input, call, &cache).ok_or_else(|| {
+                        error(
+                            node.path.to_string(),
+                            "a Call output lost its derived routes",
+                        )
+                    })?
+                } else {
+                    let handler = input_handler(plan, input).ok_or_else(|| {
+                        error("input".into(), "an internal Loop input lost its handler")
+                    })?;
+                    let mut alternatives = Outcomes::new();
+                    for leaf in handler.dispatch.decisions() {
+                        let Dispatch::Linear(steps) = leaf else {
+                            continue;
+                        };
+                        let mut total = empty();
+                        for step in steps {
+                            if matches!(step, DispatchStep::LoopCommand(_)) {
+                                return Err(error(
+                                    "command".into(),
+                                    "descendant direct commands require their context qualification; route an output to Loop.next/again/done",
+                                ));
+                            }
+                            for (port, _) in step
+                                .emissions()
+                                .filter(|(_, expression)| !matches!(expression, Emission::Nothing))
+                            {
+                                let source = Work::Source(
+                                    Endpoint {
+                                        owner: input.owner.clone(),
+                                        port: port.clone(),
+                                    },
+                                    None,
+                                );
+                                let next = cache.get(&source).ok_or_else(|| {
+                                    error("output".into(), "a produced output has no derived route")
+                                })?;
+                                total = combine(&total, next);
+                            }
                         }
-                        for (port, _) in step
-                            .emissions()
-                            .filter(|(_, expression)| !matches!(expression, Emission::Nothing))
-                        {
-                            let source = Work::Source(Endpoint {
-                                owner: input.owner.clone(),
-                                port: port.clone(),
-                            });
-                            let next = cache.get(&source).ok_or_else(|| {
-                                error("output".into(), "a produced output has no derived route")
-                            })?;
-                            total = combine(&total, next);
-                        }
+                        // A child transaction coalesces its own terminal crossings;
+                        // two different child transactions never coalesce verdicts.
+                        alternatives.extend(total.into_iter().map(|outcome| Outcome {
+                            terminal: false,
+                            other: (outcome.other + u8::from(outcome.terminal)).min(2),
+                            ..outcome
+                        }));
                     }
-                    // A child transaction coalesces its own terminal crossings;
-                    // two different child transactions never coalesce verdicts.
-                    alternatives.extend(total.into_iter().map(|outcome| Outcome {
-                        terminal: false,
-                        other: (outcome.other + u8::from(outcome.terminal)).min(2),
-                    }));
+                    alternatives
                 }
-                alternatives
             }
         };
         visiting.remove(&work);
         cache.insert(work, outcomes);
+    }
+    if cache.get(&root).is_some_and(|outcomes| {
+        outcomes
+            .iter()
+            .any(|outcome| outcome.recurs && outcome.unsafe_effect)
+    }) {
+        return Err(PlanValidationError::UnsafeLoopEffect {
+            owner: owner.path.to_string(),
+        });
     }
     if cache.get(&root).is_none_or(|outcomes| {
         outcomes.is_empty()
@@ -349,7 +437,11 @@ fn sets(selection: &RouteSelection) -> Vec<&[RouteDestination]> {
     }
 }
 
-fn dependency(destination: &RouteDestination, scope: &OwnerPath) -> Option<Work> {
+fn dependency(
+    destination: &RouteDestination,
+    scope: &OwnerPath,
+    case: Option<&str>,
+) -> Option<Work> {
     let RouteDestination::Port(target) = destination else {
         return None;
     };
@@ -360,10 +452,79 @@ fn dependency(destination: &RouteDestination, scope: &OwnerPath) -> Option<Work>
         EndpointOwner::Graph(path)
             if path != scope && path.segments().starts_with(scope.segments()) =>
         {
-            Some(Work::Source(target.clone()))
+            Some(Work::Source(target.clone(), case.map(String::from)))
         }
         _ => None,
     }
+}
+
+fn input_call<'a>(plan: &'a ExecutionPlan, input: &Endpoint) -> Option<(&'a Node, CallSemantics)> {
+    let EndpointOwner::Node(path) = &input.owner else {
+        return None;
+    };
+    let node = plan.nodes.iter().find(|node| node.path == *path)?;
+    let call = node.connector()?.call_semantics()?;
+    (input.port.name() == call.request()).then_some((node, call))
+}
+
+fn call_outcomes(
+    node: &Node,
+    input: &Endpoint,
+    call: CallSemantics,
+    cache: &BTreeMap<Work, Outcomes>,
+) -> Option<Outcomes> {
+    let connector = node.connector()?;
+    let mut alternatives = Outcomes::new();
+    for (case, visibility) in call.terminal_cases() {
+        let terminal = Work::Source(
+            Endpoint {
+                owner: input.owner.clone(),
+                port: node::Port::new(call.terminal()).ok()?,
+            },
+            Some((*case).into()),
+        );
+        let mut total = cache.get(&terminal)?.clone();
+        for port in &node.ports {
+            let source = Work::Source(
+                Endpoint {
+                    owner: input.owner.clone(),
+                    port: port.port.clone(),
+                },
+                None,
+            );
+            let frames = match call.frame_production(port.port.name()) {
+                Some(FrameProduction::ExactlyOneOnExit(on)) if on == *case => {
+                    cache.get(&source)?.clone()
+                }
+                Some(FrameProduction::ZeroOrMore) => {
+                    // The finite saturated algebra reaches a fixed point for
+                    // any stream length, including zero. Frames never imply
+                    // an at-most-one verdict merely because a mock sent one.
+                    let one = cache.get(&source)?;
+                    let mut repeated = empty();
+                    loop {
+                        let mut next = combine(&repeated, one);
+                        next.extend(repeated.iter().copied());
+                        if next == repeated {
+                            break repeated;
+                        }
+                        repeated = next;
+                    }
+                }
+                _ => continue,
+            };
+            total = combine(&total, &frames);
+        }
+        // These Contracts publish the frames and terminal in one atomic
+        // Connector transaction. Only its own boundary crossings coalesce.
+        alternatives.extend(total.into_iter().map(|outcome| Outcome {
+            terminal: false,
+            other: (outcome.other + u8::from(outcome.terminal)).min(2),
+            unsafe_effect: outcome.unsafe_effect || !visibility.allows_recurrence(connector.effect),
+            ..outcome
+        }));
+    }
+    Some(alternatives)
 }
 
 fn input_handler<'a>(plan: &'a ExecutionPlan, input: &Endpoint) -> Option<&'a Handler> {

@@ -534,6 +534,21 @@ gate. `SPIKE_OK`, candidate package bytes/hash and all three witness causal
 ledgers hold. This measures linked-code cost and the existing relay workload,
 not peak memory of a Graph Loop or a recovery operation.
 
+### R7 Graph Calls and exact deadline identities (2026-09-07)
+
+The same non-Loop control is re-measured after qualifying Graph Call bodies,
+correlated response/terminal proof and exact boundary-delivery timers. Peak
+heap stays **111,452 B**, with **19,620 B (14.97%)** headroom, 6,440 B after
+opening and 67 records. Relay average/minimum/maximum is
+**1,885 / 1,829 / 2,071** ticks (about **103.6 k** worst-case instructions);
+decode is 21,278 ticks, calibration unchanged.
+
+Text **832,244 B** plus rodata **68,432 B** totals **900,676 B**, an increase
+of **1,872 B** over the pure Graph checkpoint, under 1 MiB. `SPIKE_OK`, exact
+candidate package bytes and the three-witness hash/causal ledger hold. These
+numbers qualify the linked-code cost and existing relay, not peak memory of
+an executing Graph Call body or its recovery. No gate was raised.
+
 From the repository root (the crate must be built from its own
 directory — its `.cargo/config.toml` sets the target and linker
 script, and Cargo only reads that file from the working directory):

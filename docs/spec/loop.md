@@ -3,9 +3,9 @@
 > **Status (2026-09-07): normative target for categorical plan v16.**
 > The v15 Graph-handler implementation is historical and is superseded by
 > D-2026-09-05-1. Operator and outbound Call hosts execute through v16;
-> Fuel-bounded Graph Loops with pure Operator bodies also execute and recover.
-> Graph Calls, joins, nested Loops, annotated recurrence and complete spatial
-> recovery remain fail-closed. [R7 §8](../architecture/rework-r7-manager-recovery.md#8-pure-graph-loop-admission-and-quiescence--2026-09-07)
+> Fuel-bounded Graph Loops with Operator and finite outbound Call bodies also
+> execute and recover. Graph joins, nested Loops, annotated recurrence and
+> complete spatial recovery remain fail-closed. [R7 §9](../architecture/rework-r7-manager-recovery.md#9-graph-calls-and-correlated-quiescence--2026-09-07)
 > lists the exact profile and evidence; this is not full Loop qualification.
 
 `Loop` is a temporal Extension which applies one finite host application,
@@ -326,6 +326,13 @@ Executors retain it; a terminal boundary crossing or routed command produces
 the verdict in the child transaction. The manager waits for run-scoped
 quiescence. A route leaving the Graph pops the context, so downstream parent
 work does not delay the application.
+
+A child Call's terminal settles that Call only. Unlike a Connector which
+itself hosts Loop, it supplies no implicit Done to its containing Graph.
+Its output routes participate in the Graph's verdict proof together with
+every other child path. The proof preserves Contract response/terminal
+correlation and checks the safety of all effects a recurrence could repeat,
+including sibling Calls which did not select the command.
 
 A Graph has no `on in`, `on start`, or `on stop`. Window state and
 lifecycle emissions belong in an Operator child. The generic lifecycle

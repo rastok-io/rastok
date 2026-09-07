@@ -3826,6 +3826,164 @@ graph app : App {
 }
 "#;
 
+const GRAPH_CALL_PROBE: &str = r#"
+graph app : App {
+  input in: text
+  output expired: union { LoopExpired { last_state: text } }
+  graph cycle : Loop {
+    input in: text
+    Loop.fuel = 2
+    operator decide { input in: text; output out: text; on in { out = data } }
+    connector worker : Process {
+      command = "cat"; codec = lines
+      effect = idempotent; behavior = deterministic
+      timeout = duration("5s")
+    }
+    operator audit { input in: text; on in { nothing } }
+    in -> { decide; worker }
+    decide.out -> Loop.again
+    worker.out -> audit
+    worker.err -> nothing
+    worker.exit -> nothing
+  }
+  in -> cycle
+  cycle.Loop.expired -> expired
+}
+"#;
+
+#[test]
+fn graph_call_commits_and_openings_are_atomic_under_storage_refusal() {
+    let compilation = compile(&[GRAPH_CALL_PROBE], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let mut histories = Vec::new();
+    for refuse in [false, true] {
+        let mut journal = FlakyJournal::healthy(GraphVersion(1));
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        let mut world = ClosingWorld::default();
+        vm.inject(&mut journal, text_submission("same")).unwrap();
+        let mut answered = 0;
+        for _ in 0..64 {
+            if vm.has_ready_transaction() {
+                if refuse {
+                    let before = vm.inspection();
+                    let records = journal.inner.records().to_vec();
+                    journal.refuse_commits = true;
+                    journal.refuse_opens = true;
+                    assert!(matches!(
+                        vm.step_with_bindings(&mut journal, &mut world),
+                        Err(VmError::Journal(rastok::journal::Error::Storage(_)))
+                    ));
+                    assert_eq!(vm.inspection(), before);
+                    assert_eq!(journal.inner.records(), records);
+                    journal.refuse_commits = false;
+                    journal.refuse_opens = false;
+                }
+                assert!(vm.step_with_bindings(&mut journal, &mut world).unwrap());
+            }
+            vm.pump(&mut journal, &mut world).unwrap();
+            if world.started.len() > answered {
+                world.answers.push(Response {
+                    call_ref: world.started[answered],
+                    completion: Completion::process(
+                        vec![Data::materialized(Value::Text("frame".into()))],
+                        vec![],
+                        ProcessExit::Exited {
+                            exit_code: 0,
+                            signal: None,
+                        },
+                    ),
+                });
+                answered += 1;
+                vm.pump(&mut journal, &mut world).unwrap();
+            }
+            if vm.is_stable() {
+                break;
+            }
+        }
+        assert!(vm.is_stable());
+        assert_eq!(vm.outputs().len(), 1);
+        assert_eq!(world.started.len(), 2);
+        histories.push(journal.inner.records().to_vec());
+    }
+    assert_eq!(histories[0], histories[1]);
+}
+
+#[test]
+fn graph_call_recovery_refuses_missing_contexts_and_unsettled_obligations() {
+    use rastok::journal::loop_protocol::{Fact, Fold};
+    let compilation = compile(&[GRAPH_CALL_PROBE], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let mut journal = FlakyJournal::healthy(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = ClosingWorld::default();
+    vm.inject(&mut journal, text_submission("same")).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.pump(&mut journal, &mut world).unwrap();
+    world.answers.push(Response {
+        call_ref: world.started[0],
+        completion: Completion::process(
+            vec![Data::materialized(Value::Text("frame".into()))],
+            vec![],
+            ProcessExit::Exited {
+                exit_code: 0,
+                signal: None,
+            },
+        ),
+    });
+    vm.pump(&mut journal, &mut world).unwrap();
+    while !journal.inner.records().iter().any(|record| matches!(record, Record::Transaction(record)
+        if record.loop_protocol().is_some_and(|packet| packet.facts.iter().any(|fact| matches!(fact, Fact::Advance { .. }))))) {
+        assert!(vm.step_with_bindings(&mut journal, &mut world).unwrap());
+    }
+    let original = journal.inner.records().to_vec();
+    let completed = original.iter().position(|record| matches!(record, Record::Transaction(record)
+        if record.owner_path.to_string() == "cycle.worker" && matches!(record.trigger, node::Trigger::Port(_)))).unwrap();
+    for cut in 1..=original.len() {
+        journal.recovery_records = Some(original[..cut].to_vec());
+        let mut restored = Vm::boot(&compilation.plan, GraphVersion(1));
+        restored
+            .recover_with_bindings(&journal, &mut world)
+            .unwrap_or_else(|error| panic!("prefix {cut}: {error}"));
+        assert_eq!(world.started.len(), 1);
+    }
+    for sabotage in 0..3 {
+        let mut prefix = if sabotage == 2 {
+            original.clone()
+        } else {
+            original[..=completed].to_vec()
+        };
+        if sabotage == 2 {
+            prefix.retain(|record| !matches!(record, Record::Transaction(record)
+                if (record.owner_path.to_string() == "cycle.worker" || record.owner_path.to_string() == "cycle.audit") && matches!(record.trigger, node::Trigger::Port(_))));
+        } else {
+            let Record::Transaction(record) = prefix.last_mut().unwrap() else {
+                panic!("completion");
+            };
+            let rastok::journal::LoopRecord::R2(packet) =
+                record.loop_record.as_deref_mut().unwrap()
+            else {
+                panic!("r2");
+            };
+            packet.routes.clear();
+            if sabotage == 1 {
+                record.loop_record = None;
+            }
+        }
+        Fold::from_records(&prefix)
+            .unwrap_or_else(|error| panic!("sabotage {sabotage}: {error:?}"));
+        journal.recovery_records = Some(prefix);
+        let before = vm.inspection();
+        assert!(
+            matches!(
+                vm.recover_with_bindings(&journal, &mut world),
+                Err(VmError::InvalidRecovery { .. })
+            ),
+            "sabotage {sabotage}"
+        );
+        assert_eq!(vm.inspection(), before);
+        assert_eq!(journal.inner.records(), original);
+        assert_eq!(world.started.len(), 1);
+    }
+}
+
 #[test]
 fn graph_manager_commit_failures_preserve_the_next_boundary() {
     let compilation = compile(&[GRAPH_MANAGER_PROBE], &ContractCatalog::try_m0().unwrap()).unwrap();

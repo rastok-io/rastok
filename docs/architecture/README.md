@@ -6,10 +6,10 @@ language or runtime behavior.
 
 The active cutover is recorded in
 [`rework-r4-plan.md`](rework-r4-plan.md) and the latest
-[`R7 manager/recovery checkpoint`](rework-r7-manager-recovery.md#8-pure-graph-loop-admission-and-quiescence--2026-09-07).
+[`R7 manager/recovery checkpoint`](rework-r7-manager-recovery.md#9-graph-calls-and-correlated-quiescence--2026-09-07).
 Core/HIR share Dispatch and routing with independent expression, scope,
 composition and Contract validation. Categorical v16 executes Operator and
-outbound Call Loops and a fuel-bounded pure-Operator Graph profile. Exact
+outbound Call Loops and a fuel-bounded Operator/Call Graph profile. Exact
 admissions, delivery contexts, deadlines and journal recovery are qualified
 there; wider Graph/exchange profiles and fixture migration remain open.
 The earlier source/HIR evidence is

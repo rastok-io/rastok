@@ -371,7 +371,7 @@ impl Vm<'_> {
             .iter()
             .filter(|_| record.trigger != node::Trigger::Lifecycle(node::Lifecycle::Stop))
         {
-            if self.restore_call_consumption(index, slot, record, consumed)? {
+            if self.restore_call_consumption(admissions, index, slot, record, consumed)? {
                 continue;
             }
             let delivery = self

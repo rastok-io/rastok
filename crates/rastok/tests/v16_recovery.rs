@@ -205,6 +205,262 @@ graph app : App {
 }
 "#;
 
+const GRAPH_CALLS: &str = r#"
+graph app : App {
+  input in: int
+  output out: int
+  output expired: union { LoopExpired { last_state: int } }
+  graph cycle : Loop {
+    input in: int
+    output out: int
+    Loop.fuel = 2
+    operator a_decide {
+      input in: int
+      output revised: int
+      output accepted: int
+      on in match { data > 0 => revised = data - 1; _ => accepted = data }
+    }
+    connector call : Process {
+      command = "cat"
+      codec = jsonl
+      effect = idempotent
+      behavior = deterministic
+      timeout = duration("3s")
+    }
+    operator z_audit {
+      input in: variant
+      on in { nothing }
+    }
+    in -> { a_decide; call }
+    a_decide.revised -> Loop.next
+    a_decide.accepted -> out
+    call.out -> z_audit
+    call.err -> nothing
+    call.exit -> nothing
+  }
+  in -> cycle
+  cycle.out -> out
+  cycle.Loop.expired -> expired
+}
+"#;
+
+#[test]
+fn graph_commands_wait_for_calls_and_recovery_never_restarts_them() {
+    use rastok::journal::loop_protocol::{Fold, Phase};
+
+    let plan = compile(GRAPH_CALLS);
+    let mut vm = Vm::boot(&plan, GraphVersion(1));
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut world = World::default();
+    inject(&mut vm, &mut journal, "in", 1);
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.pump(&mut journal, &mut world).unwrap();
+    assert_eq!(world.starts, 1);
+    let fold = Fold::from_records(journal.records()).unwrap();
+    let (_, state) = fold.runs().next().unwrap();
+    assert_eq!((state.iteration, state.phase), (0, Phase::Active));
+    assert!(
+        state.pending.is_some(),
+        "the sibling has already proposed Next"
+    );
+    assert!(
+        !vm.has_ready_transaction(),
+        "a verdict blocked by a Call is not ready work"
+    );
+    assert!(
+        !vm.is_stable(),
+        "the unfinished application still owns its Call"
+    );
+
+    let retained = journal.records().to_vec();
+    let mut restored = Vm::boot(&plan, GraphVersion(1));
+    restored
+        .recover_with_bindings(&journal, &mut world)
+        .unwrap();
+    assert_eq!(restored.inspection(), vm.inspection());
+    restored.pump(&mut journal, &mut world).unwrap();
+    assert_eq!(world.starts, 1, "recovery does not recall the open Call");
+    assert_eq!(journal.records(), retained);
+
+    for iteration in 0..2 {
+        let call = journal.open_calls()[0].call_ref;
+        world.answers.push(rastok::boundary::Response {
+            call_ref: call,
+            completion: rastok::boundary::Completion::process(
+                vec![Data::materialized(Value::Int(42))],
+                vec![],
+                rastok::boundary::ProcessExit::Exited {
+                    exit_code: 0,
+                    signal: None,
+                },
+            ),
+        });
+        restored.pump(&mut journal, &mut world).unwrap();
+        // The retained closure is not yet the consuming transaction. From
+        // here, restore before every commit, including the frame's audit.
+        while !journal.open_calls().is_empty() || restored.has_ready_transaction() {
+            let before = journal.records().to_vec();
+            let mut next = Vm::boot(&plan, GraphVersion(1));
+            next.recover_with_bindings(&journal, &mut world)
+                .unwrap_or_else(|error| {
+                    panic!("iteration {iteration}, prefix {}: {error}", before.len())
+                });
+            assert_eq!(next.inspection(), restored.inspection());
+            assert_eq!(journal.records(), before);
+            let progressed = next.step_with_bindings(&mut journal, &mut world).unwrap();
+            restored = next;
+            if !progressed || !journal.open_calls().is_empty() {
+                break;
+            }
+        }
+        restored.pump(&mut journal, &mut world).unwrap();
+        assert_eq!(
+            world.starts, 2,
+            "only a new application can start another Call"
+        );
+    }
+    assert_eq!(restored.outputs().len(), 1);
+    let fold = Fold::from_records(journal.records()).unwrap();
+    assert!(fold.runs().all(|(_, state)| state.phase == Phase::Closed));
+    assert_eq!(fold.runs().count(), 1);
+}
+
+#[test]
+fn graph_call_deadlines_survive_recovery_without_extending_the_application() {
+    use rastok::journal::loop_protocol::{Fold, Phase};
+    let plan = compile(GRAPH_CALLS);
+    let mut vm = Vm::boot_at(&plan, GraphVersion(1), 7_000_000_000);
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut world = World::default();
+    inject(&mut vm, &mut journal, "in", 1);
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.pump(&mut journal, &mut world).unwrap();
+    for (at, iteration, phase) in [
+        (9_999_999_999, 0, Phase::Active),
+        (10_000_000_000, 1, Phase::Active),
+        (13_000_000_000, 1, Phase::Closed),
+    ] {
+        let mut restored = Vm::boot_at(&plan, GraphVersion(1), at);
+        let starts = world.starts;
+        restored
+            .recover_with_bindings(&journal, &mut world)
+            .unwrap();
+        assert_eq!(world.starts, starts);
+        restored.advance(&mut journal, &mut world, at).unwrap();
+        let fold = Fold::from_records(journal.records()).unwrap();
+        let (_, run) = fold.runs().next().unwrap();
+        assert_eq!((run.iteration, run.phase), (iteration, phase), "at {at}");
+        let retained = journal.records().to_vec();
+        let mut checked = Vm::boot_at(&plan, GraphVersion(1), at);
+        checked.recover_with_bindings(&journal, &mut world).unwrap();
+        assert_eq!(checked.inspection(), restored.inspection());
+        assert_eq!(journal.records(), retained);
+    }
+    assert_eq!(journal.records().iter().filter(|record| matches!(record,
+        Record::Outbound(rastok::journal::OutboundRecord::Call(call))
+        if call.status == rastok::journal::OutboundStatus::Closed(rastok::journal::Closure::Timeout))).count(), 2);
+}
+
+#[test]
+fn a_graph_call_from_another_instance_does_not_delay_run_quiescence() {
+    use rastok::journal::loop_protocol::{Fold, Phase};
+    let source = GRAPH_CALLS.replace(
+        "graph cycle : Loop {",
+        "graph cycle : Loop {\n    instance = { key = data }",
+    );
+    let plan = compile(&source);
+    let mut vm = Vm::boot(&plan, GraphVersion(1));
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut world = World::default();
+    inject(&mut vm, &mut journal, "in", 1);
+    inject(&mut vm, &mut journal, "in", 0);
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.pump(&mut journal, &mut world).unwrap();
+    assert_eq!(world.starts, 2);
+    let fold = Fold::from_records(journal.records()).unwrap();
+    let (finished_run, state) = fold
+        .runs()
+        .find(|(_, run)| run.state.data() == &Data::materialized(Value::Int(0)))
+        .unwrap();
+    let call = journal
+        .open_calls()
+        .iter()
+        .find(|call| call.emitting_id == state.state.meta().sys().id())
+        .unwrap()
+        .call_ref;
+    world.answers.push(rastok::boundary::Response {
+        call_ref: call,
+        completion: rastok::boundary::Completion::process(
+            vec![],
+            vec![],
+            rastok::boundary::ProcessExit::Exited {
+                exit_code: 0,
+                signal: None,
+            },
+        ),
+    });
+    vm.pump(&mut journal, &mut world).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    let fold = Fold::from_records(journal.records()).unwrap();
+    assert_eq!(fold.run(*finished_run).unwrap().phase, Phase::Closed);
+    assert_eq!(
+        fold.runs()
+            .filter(|(_, run)| run.phase == Phase::Active && run.pending.is_some())
+            .count(),
+        1
+    );
+    assert_eq!(journal.open_calls().len(), 1);
+    let retained = journal.records().to_vec();
+    let mut restored = Vm::boot(&plan, GraphVersion(1));
+    restored
+        .recover_with_bindings(&journal, &mut world)
+        .unwrap();
+    restored.pump(&mut journal, &mut world).unwrap();
+    assert_eq!(world.starts, 2);
+    assert_eq!(restored.inspection(), vm.inspection());
+    assert_eq!(journal.records(), retained);
+}
+
+#[test]
+fn closing_a_graph_call_run_cancels_recurrence_and_recovers_settlement() {
+    use rastok::journal::loop_protocol::{Fold, Phase};
+    let source = GRAPH_CALLS
+        .replacen("graph app : App {", "graph app : App {\n  lifetime = { kind = fixed; after = duration(\"2s\") }\n  closing = { drain_for = duration(\"1s\"); settle_for = duration(\"1s\") }", 1)
+        .replace("duration(\"3s\")", "duration(\"10s\")");
+    let plan = compile(&source);
+    let mut vm = Vm::boot(&plan, GraphVersion(1));
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut world = World::default();
+    inject(&mut vm, &mut journal, "in", 1);
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.pump(&mut journal, &mut world).unwrap();
+    for at in [2_000_000_000, 3_000_000_000, 4_000_000_000, 20_000_000_000] {
+        vm.advance(&mut journal, &mut world, at).unwrap();
+        let mut restored = Vm::boot_at(&plan, GraphVersion(1), at);
+        restored
+            .recover_with_bindings(&journal, &mut world)
+            .unwrap_or_else(|error| panic!("at {at}: {error}"));
+        // Recovery reconstructs due cancellation work; it performs no Driver
+        // action. Processing that same instant reaches the settling phase.
+        let retained = journal.records().to_vec();
+        restored.advance(&mut journal, &mut world, at).unwrap();
+        assert_eq!(journal.records(), retained);
+        assert_eq!(restored.inspection(), vm.inspection(), "at {at}");
+        vm = restored;
+    }
+    assert_eq!(
+        world.starts, 1,
+        "Closing never admits the proposed recurrence"
+    );
+    assert!(vm.outputs().is_empty());
+    assert!(vm.is_stable());
+    let fold = Fold::from_records(journal.records()).unwrap();
+    assert!(
+        fold.runs()
+            .all(|(_, run)| run.phase == Phase::Closed && run.iteration == 0)
+    );
+}
+
 #[test]
 fn call_recovery_restores_the_held_delivery_without_restarting_the_driver() {
     let plan = compile(CALL_LOOP);

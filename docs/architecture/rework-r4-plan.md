@@ -4,8 +4,9 @@
 > `rework/v16` branch encodes and independently reads categorical **v16**, with recursive
 > Dispatch, route selections, Extension specifications and six `@2` Contracts.
 > Sections 2–8 record the earlier field-only checkpoints; §10 records the first
-> executable cutover. The latest [R7 checkpoint](rework-r7-manager-recovery.md#8-pure-graph-loop-admission-and-quiescence--2026-09-07)
-> additionally qualifies temporal recovery and pure-Operator Graph Loops.
+> executable cutover. The latest [R7 checkpoint](rework-r7-manager-recovery.md#9-graph-calls-and-correlated-quiescence--2026-09-07)
+> additionally qualifies temporal recovery and Graph Loops containing Operators
+> and finite outbound Calls.
 > No package or trace golden has been re-blessed.
 > R4–R9 are not closed and the complete workspace test suite is not green.
 

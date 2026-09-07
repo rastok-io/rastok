@@ -250,10 +250,12 @@ takes semantic priority; no public date overrides its R0–R9 exit gates.
   Call verdicts. R8's pure fixed/tumbling window path preserves recipient state
   through upstream stop products and supports lazily entered intermediate
   Graph scopes; it has no Graph application handler.
-  R7 also executes fuel-bounded Graph Loops with pure Operator bodies, including
-  an App Loop: one boundary admission precedes fan-out, exact contexts carry
-  `Loop.state`, and commands wait for sibling work before recurrence. Every
-  committed prefix of the reference run recovers identically. Graph Calls,
+  R7 also executes fuel-bounded Graph Loops with Operator and finite outbound
+  Call bodies, including an App Loop: one boundary admission precedes fan-out,
+  exact contexts carry `Loop.state`, and commands wait for sibling work before
+  recurrence. Call response/terminal correlation, exact boundary timer identities
+  and complete-application effect safety are independently checked. Every
+  committed prefix of the reference run recovers identically. Graph
   joins, nested Loops, annotated recurrence, complete recovery, stronger
   productibility proofs and the fixture migration remain open. No golden is blessed;
   R4's review preserves the 128 KiB embedded heap gate (19,620 B headroom

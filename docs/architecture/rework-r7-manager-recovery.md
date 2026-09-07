@@ -1,13 +1,13 @@
 # R7 — manager contexts and spatial recovery
 
-> Work in progress, 2026-09-07. The latest checkpoint (§8) opens fuel-bounded
-> pure-Operator Graph Loops, including the App, with exact boundary admission,
-> delivery contexts, quiescence and recovery. Wider Graph obligation profiles
+> Work in progress, 2026-09-07. The latest checkpoint (§9) opens fuel-bounded
+> Graph Loops containing Operators and finite outbound Calls, with exact boundary
+> admission, delivery contexts, quiescence and recovery. Wider Graph obligation profiles
 > and complete Worker recovery remain gated.
 
 The second checkpoint (§5) qualifies outbound Call, join, lifetime and Closing
 recovery. Earlier checkpoint counts and gates below are retained as history,
-not substituted for the current matrix in §8.
+not substituted for the current matrix in §9.
 
 ## 1. Invariant and repository contact
 
@@ -383,3 +383,79 @@ because concurrent default-feature builds replaced the all-feature CLI under
 test. The final workspace run used one consistent all-feature binary; those
 four tests passed without changing their source or timeout. The evidence above
 uses that completed run, not the transient mixed-artifact result.
+
+## 9. Graph Calls and correlated quiescence — 2026-09-07
+
+D-2026-09-07-6 extends §8 to finite outbound Calls with positive plan-constant
+timeouts. The proof derives terminal cases and frame production from the exact
+Contract, preserving the dependency between Completed and its one response.
+The finite saturated algebra also covers arbitrary Process stream lengths,
+including zero; a streamed child cannot acquire a one-verdict guarantee from
+one example response. Recurrence and unsafe visibility remain correlated over
+all paths, so a sibling's unsafe Call cannot hide behind another child's Next.
+
+In execution, a Call completion inherits the exact context of its held request.
+It produces only the Graph verdicts selected by output routing, not a natural
+Done for the child. Completion, route contexts and verdict commit atomically.
+The manager waits for held Calls and their downstream deliveries, while an
+unrelated run remains independent. A blocked command is not reported as ready
+work. Recovery checks the complete expected r2 packet from the retained Call
+completion, including its re-derived outgoing contexts.
+
+The first deadline probe exposed a real opening defect: the timer used the
+flattened edge text while the held request retained its Graph-boundary path.
+The deadline was retained but could not find its Call. Timer preparation and
+installation now use `PreparedEdge`'s same exact identity as delivery. A second
+probe exposed key inference from a wider descendant Call pin; a keyed Loop
+Graph now derives its key type from its actual manager entry. Both corrections
+have regressions across source, package validation and recovery.
+
+Fourteen new integration tests cover:
+
+- HTTP response/exit correlation, successful termination and Next to expiry;
+- File read's exactly-one response and replace's Never response;
+- duplicate verdicts, streamed verdicts, unbounded Call timeout and a Driver
+  omitting its promised response;
+- independent effect verification, including unsafe sibling effects and the
+  BeforeEffect exception, without claiming execution of deferred effect classes;
+- a sibling command waiting for a Call, its retained closure and a frame's audit;
+- keyed concurrent runs, exact timeout after recovery and Closing settlement;
+- every reference prefix through the first manager consumption, refused
+  producer/opening commits with byte-identical retry, and hostile missing
+  contexts or Call-consumption facts. Forgeries accepted by the protocol-only
+  fold still refuse full recovery atomically. No old Driver start is repeated.
+
+**Limits retained:** Graph joins, nested/adjacent Loops, measure-only Graphs,
+annotated recurrence, descendant-local lifecycle, direct descendant command
+statements and boundary-only verdicts. Every Connector in a plan using this
+Graph profile must currently have the qualified finite outbound Call shape and
+timeout; Event/inbound-Call/Session recovery is still gated. The Lab still
+refuses composed mock paths, so its new scenarios use an App Loop; nested
+Call bodies are qualified by VM tests with typed boundary events. The general
+source gate on compensable/irreversible execution is unchanged. R8/R9 and the
+UI remain open/paused respectively.
+
+**Identity:** no additional v16 allocation or golden re-bless. Graph Call
+programs newly produce their specified facts; their deadlines identify those
+deliveries exactly. The nonaffected echo/JSONL/gauge ledger is checked against
+§8 as the control, not substituted for a Graph workload memory measurement.
+
+| Check executed on §9 | Result |
+|---|---|
+| fmt, `git diff --check` | pass |
+| workspace/all-targets/all-features clippy, warnings denied | pass |
+| `cargo doc --workspace --no-deps` | pass |
+| workspace/all-features, no-fail-fast | **1,206 passed, 32 failed**, 33 suite reports, zero ignored |
+| core / v16 Loop / Graph Calls / v16 recovery | **313 / 37 / 8 / 13 passed** |
+| no-std, the same three ISA targets as §3 | pass |
+| candidate echo/JSONL/gauge ledger | package files compared byte-for-byte; every semantic hash and causal seal unchanged from §8 |
+| Cortex-M33 | `SPIKE_OK`; **111,452 B** peak, **19,620 B** below 128 KiB |
+
+The failing test-name multiset is identical to §8: 25 old Graph/Loop/UI forms
+and seven categorical expectations. None was ignored or re-blessed. The
+non-Loop embedded control retains 67 records and opens at 6,440 B. Relay
+average/minimum/maximum is **1,885 / 1,829 / 2,071** ticks, decode 21,278 ticks,
+against the unchanged 39,999-tick calibration per 2,000,000 instructions.
+Text 832,244 B plus rodata 68,432 B = **900,676 B**, 1,872 B above §8 and below
+1 MiB. No memory gate was raised; Graph Call workload peak memory remains a
+separate qualification.

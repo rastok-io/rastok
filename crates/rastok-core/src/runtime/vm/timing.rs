@@ -75,19 +75,21 @@ impl Vm<'_> {
 
     pub(super) fn delivery_deadlines(
         &self,
-        edge: &Edge,
+        route: &PreparedEdge,
         target: &PreparedTarget,
         candidates: &BTreeMap<InstanceRef, InstanceCandidate>,
         envelope: &Envelope,
     ) -> Vec<(TimerArm, DatedPayload)> {
-        let Some(to) = &edge.to else {
+        let Some(to) = &route.edge.to else {
             return Vec::new();
         };
         let Some(slot) = to.node else {
             return Vec::new();
         };
         let node = &self.plan.nodes[slot.index()];
-        let edge = self.plan.edge_text(edge);
+        // A Graph-boundary admission retains its own source path; its
+        // executable projection alone cannot identify the delivery timer.
+        let edge = self.prepared_edge_text(route);
         let delivery = envelope.meta().sys().id();
         let reference = ids::delivery_ref(&edge, delivery);
         let mut deadlines = Vec::new();
@@ -200,7 +202,7 @@ impl Vm<'_> {
                         .map(|(arm, _)| arm),
                 );
                 arms.extend(
-                    self.delivery_deadlines(&route.edge, target, candidates, envelope)
+                    self.delivery_deadlines(route, target, candidates, envelope)
                         .into_iter()
                         .map(|(arm, _)| arm),
                 );
