@@ -204,3 +204,31 @@ retaining real Call schedules on this witness; no history is dropped.
 Event/inbound-Call/Session recovery, the three-host R8 matrix and R9 migration.
 Passing temporal recovery does not make Graph Loop executable. All those
 admission gates remain explicit.
+
+## 6. Exact consumed contexts and Call verdicts — 2026-09-07
+
+Recovery now derives an application context from its exact consumed delivery,
+including the request held across an OUTBOUND Call. Merely belonging to the
+same owner instance is insufficient: two active runs in that instance cannot
+exchange contexts. A Loop entry cannot be consumed, or its Call opened, before
+the retained run admission. Missing consumption, omitted context and a context
+transplanted from the other admitted run all refuse as `InvalidRecovery`, with
+the live VM and journal unchanged.
+
+Call recovery additionally re-derives the verdict from the retained completion
+and resolved route selection. This uses the existing pure Contract completion
+path, not a Driver operation. A forged `Again` cannot replace the natural Done
+of a successfully completed Call whose source routes request no recurrence.
+Reconstructing the held request neither starts nor cancels a physical effect.
+
+Two machine regressions exercise the real compiler and public recovery API.
+They first demonstrated accepted missing consumption and accepted Call opening
+without run admission, then passed with the checks wired. Their other hostile
+prefixes remain valid to the protocol-only fold, proving why exact spatial
+consumption and Contract projection are necessary in addition to packet
+algebra. The valid interleaved two-run prefix and both Call opening/completion
+prefixes recover successfully before the corresponding mutations are tested.
+
+No package, semantic or causal identity changes. This qualifies existing
+Operator/Call consumption; it does not implement Graph boundary push/pop,
+cross-context joins or Graph quiescence from §4.

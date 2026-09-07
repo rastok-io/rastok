@@ -334,6 +334,7 @@ impl Vm<'_> {
             }
             OwnerKind::Node(slot) => slot,
         };
+        self.check_consumed_loop_context(index, slot, record)?;
         let mut consumed_cause = None;
         for consumed in record
             .consumed
@@ -509,6 +510,77 @@ impl Vm<'_> {
             self.state
                 .take_unchecked(self.plan.plan(), slot, &record.instance);
             self.instances.remove(&record.instance);
+        }
+        Ok(())
+    }
+
+    fn check_consumed_loop_context(
+        &self,
+        index: usize,
+        slot: Slot,
+        record: &TransactionRecord,
+    ) -> Result<(), VmError> {
+        if !self.has_loops {
+            return Ok(());
+        }
+        let mut context = Vec::new();
+        for (position, consumed) in record
+            .consumed
+            .iter()
+            .filter(|_| record.trigger != node::Trigger::Lifecycle(node::Lifecycle::Stop))
+            .enumerate()
+        {
+            let matches = |delivery: &&Delivery| {
+                delivery.edge == consumed.edge
+                    && delivery.source_instance == consumed.source
+                    && delivery.seq == consumed.seq
+            };
+            // A Call keeps its delivery claimed until its completion
+            // transaction; opening it does not detach the causal context.
+            let delivery = self
+                .scheduler
+                .mailboxes
+                .queued(slot, &record.instance)
+                .into_iter()
+                .flatten()
+                .chain(
+                    self.pending
+                        .values()
+                        .filter(|pending| {
+                            pending.slot == slot && pending.instance == record.instance
+                        })
+                        .map(|pending| &pending.delivery),
+                )
+                .find(matches)
+                .ok_or_else(|| invalid(index, "a consumed Loop cursor has no retained delivery"))?;
+            let application = self.loop_application(&record.instance, delivery);
+            let entry = self.plan.owners[self.plan.nodes[slot.index()].owner.index()]
+                .loop_spec()
+                .is_some_and(|spec| spec.entry == delivery.port);
+            if entry && application.is_none() {
+                return Err(invalid(
+                    index,
+                    "a Loop entry is consumed before its retained run admission",
+                ));
+            }
+            let run = application.map(|(run, _)| run);
+            if position == 0 {
+                context.extend(run);
+            } else if context.as_slice() != run.as_slice() {
+                return Err(invalid(
+                    index,
+                    "consumed deliveries belong to different Loop contexts",
+                ));
+            }
+        }
+        let retained = record
+            .loop_protocol()
+            .map_or(&[][..], |packet| packet.context.as_slice());
+        if context != retained {
+            return Err(invalid(
+                index,
+                "the Loop context differs from the exact consumed admission",
+            ));
         }
         Ok(())
     }

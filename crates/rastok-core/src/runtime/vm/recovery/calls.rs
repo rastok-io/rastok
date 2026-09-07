@@ -53,6 +53,16 @@ impl Vm<'_> {
             {
                 return Err(invalid(index, "a Call opens before its owner starts"));
             }
+            if self.plan.owners[self.plan.nodes[slot.index()].owner.index()]
+                .loop_spec()
+                .is_some_and(|spec| spec.entry == delivery.port)
+                && self.loop_application(&instance, &delivery).is_none()
+            {
+                return Err(invalid(
+                    index,
+                    "a Call opens before its retained Loop admission",
+                ));
+            }
             let settings = self.resolve_invocation_settings(
                 &instance,
                 spec,
@@ -168,7 +178,7 @@ impl Vm<'_> {
             .position(|entry| entry.event.call_ref == call)
             .ok_or_else(|| invalid(index, "a Call transaction consumes an unsettled request"))?;
         let entry = &self.settled[settled];
-        let expected = HandlerExecutor::at(self.plan, self.graph_version, self.now)
+        let mut expected = HandlerExecutor::at(self.plan, self.graph_version, self.now)
             .connector_completion(
                 slot,
                 &pending.instance,
@@ -185,6 +195,18 @@ impl Vm<'_> {
             return Err(invalid(
                 index,
                 "a Call transaction contradicts its retained completion",
+            ));
+        }
+        self.prepare_call_completion(
+            slot,
+            &pending.instance,
+            &pending.delivery,
+            &mut expected.record,
+        )?;
+        if record.loop_record != expected.record.loop_record {
+            return Err(invalid(
+                index,
+                "a Call transaction contradicts its retained Loop verdict",
             ));
         }
         self.settled.remove(settled);

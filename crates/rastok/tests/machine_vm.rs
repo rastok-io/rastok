@@ -3689,6 +3689,231 @@ graph app : App {
 }
 
 #[test]
+fn recovery_binds_loop_context_to_the_consumed_delivery_not_just_its_owner() {
+    use rastok::journal::loop_protocol::{CommandProduced, Fact, Fold};
+
+    let compilation = compile(
+        &[r#"
+graph app : App {
+  input in: text
+  output out: text
+  operator work : Loop {
+    input in: text
+    output out: text
+    Loop.fuel = 1
+    on in { out = data }
+  }
+  in -> work -> out
+  work.Loop.expired -> nothing
+}
+"#],
+        &ContractCatalog::try_m0().unwrap(),
+    )
+    .unwrap();
+    let mut journal = FlakyJournal::healthy(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    vm.inject(&mut journal, text_submission("alice")).unwrap();
+    vm.inject(&mut journal, text_submission("bob")).unwrap();
+    vm.drain(&mut journal).unwrap();
+
+    // Both exact admissions may exist before either application consumes its
+    // input. The following prefix differs only in manager scheduling, not in
+    // the two ordinary deliveries or their per-edge cursor order.
+    let original = journal.inner.records().to_vec();
+    let mut prefix: Vec<_> = original
+        .iter()
+        .filter(|record| match record {
+            Record::Inbound(_) => true,
+            Record::Transaction(record) => {
+                record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Start)
+                    || record.loop_protocol().is_some_and(|packet| {
+                        packet.facts.iter().any(|fact| {
+                            matches!(fact, Fact::Open { .. } | Fact::Admit { iteration: 0, .. })
+                        })
+                    })
+            }
+            Record::Outbound(_) => false,
+        })
+        .cloned()
+        .collect();
+    let producer = original
+        .iter()
+        .find(|record| {
+            matches!(record, Record::Transaction(record)
+            if record.loop_protocol().is_some_and(|packet| !packet.produced.is_empty()))
+        })
+        .unwrap()
+        .clone();
+    let Record::Transaction(transaction) = &producer else {
+        panic!("application");
+    };
+    let first_run = transaction.loop_protocol().unwrap().context[0];
+    let fold = Fold::from_records(&prefix).unwrap();
+    let other = *fold.runs().find(|(run, _)| **run != first_run).unwrap().0;
+    prefix.push(producer);
+    journal.recovery_records = Some(prefix.clone());
+    let mut valid = Vm::boot(&compilation.plan, GraphVersion(1));
+    valid.recover_from_journal(&journal).unwrap();
+
+    for sabotage in 0..4 {
+        let mut forged = prefix.clone();
+        if sabotage == 3 {
+            forged.retain(|record| {
+                !matches!(record, Record::Transaction(record)
+                if record.loop_protocol().is_some_and(|packet| !packet.facts.is_empty()))
+            });
+        }
+        let Record::Transaction(record) = forged.last_mut().unwrap() else {
+            panic!("application");
+        };
+        if sabotage == 0 {
+            record.consumed.clear();
+        } else if sabotage == 1 {
+            let rastok::journal::LoopRecord::R2(packet) =
+                record.loop_record.as_deref_mut().unwrap()
+            else {
+                panic!("r2");
+            };
+            packet.context = vec![other];
+            let command = &packet.produced[0];
+            packet.produced[0] =
+                CommandProduced::new(other, command.iteration, command.value.clone());
+        } else {
+            record.loop_record = None;
+        }
+        // Protocol algebra and owner membership are necessary but do not
+        // establish which queued input the producer actually consumed.
+        Fold::from_records(&forged).unwrap();
+        journal.recovery_records = Some(forged);
+        let mut rejected = Vm::boot(&compilation.plan, GraphVersion(1));
+        let before = rejected.inspection();
+        let Err(VmError::InvalidRecovery { reason, .. }) = rejected.recover_from_journal(&journal)
+        else {
+            panic!("sabotage {sabotage} did not refuse as invalid recovery");
+        };
+        assert_eq!(
+            reason,
+            if sabotage == 3 {
+                "a Loop entry is consumed before its retained run admission"
+            } else {
+                "the Loop context differs from the exact consumed admission"
+            },
+            "sabotage {sabotage}"
+        );
+        assert_eq!(rejected.inspection(), before);
+        assert_eq!(journal.inner.records(), original);
+    }
+}
+
+#[test]
+fn call_recovery_requires_run_admission_and_the_retained_terminal_verdict() {
+    use rastok::journal::loop_protocol::{CommandProduced, CommandValue, Fold};
+
+    let compilation = compile(
+        &[r#"
+graph app : App {
+  input in: text
+  connector call : Process + Loop {
+    command = "cat"; codec = lines
+    effect = idempotent; behavior = deterministic
+    timeout = duration("5s")
+    Loop.fuel = 2
+  }
+  in -> call
+  call.out -> nothing
+  call.err -> nothing
+  call.exit -> nothing
+  call.Loop.expired -> nothing
+}
+"#],
+        &ContractCatalog::try_m0().unwrap(),
+    )
+    .unwrap();
+    let mut journal = FlakyJournal::healthy(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = ClosingWorld::default();
+    vm.inject(&mut journal, text_submission("request")).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.pump(&mut journal, &mut world).unwrap();
+    assert_eq!(world.started.len(), 1);
+    let opening = journal.inner.records().to_vec();
+    world.answers.push(Response {
+        call_ref: world.started[0],
+        completion: Completion::process(
+            vec![],
+            vec![],
+            ProcessExit::Exited {
+                exit_code: 0,
+                signal: None,
+            },
+        ),
+    });
+    vm.pump(&mut journal, &mut world).unwrap();
+    vm.step_with_bindings(&mut journal, &mut world).unwrap();
+    let completed = journal.inner.records().to_vec();
+    for prefix in [&opening, &completed] {
+        journal.recovery_records = Some(prefix.clone());
+        Vm::boot(&compilation.plan, GraphVersion(1))
+            .recover_with_bindings(&journal, &mut world)
+            .unwrap();
+    }
+
+    for sabotage in 0..2 {
+        let mut forged = if sabotage == 0 {
+            opening.clone()
+        } else {
+            completed.clone()
+        };
+        if sabotage == 0 {
+            forged.retain(|record| {
+                !matches!(record, Record::Transaction(record)
+                if record.loop_protocol().is_some())
+            });
+        } else {
+            let Record::Transaction(record) = forged.last_mut().unwrap() else {
+                panic!("Call completion");
+            };
+            let rastok::journal::LoopRecord::R2(packet) =
+                record.loop_record.as_deref_mut().unwrap()
+            else {
+                panic!("r2 completion");
+            };
+            let command = &packet.produced[0];
+            packet.produced[0] = CommandProduced::new(
+                command.run,
+                command.iteration,
+                CommandValue::Again(command.value.cause()),
+            );
+            assert!(matches!(
+                record.emissions.last().unwrap().envelope.data(),
+                Data::Materialized(Value::TaggedUnion(value)) if value.case == "Exited"
+            ));
+        }
+        Fold::from_records(&forged).unwrap();
+        journal.recovery_records = Some(forged);
+        let mut recovered = Vm::boot(&compilation.plan, GraphVersion(1));
+        let before = recovered.inspection();
+        let Err(VmError::InvalidRecovery { reason, .. }) =
+            recovered.recover_with_bindings(&journal, &mut world)
+        else {
+            panic!("sabotage {sabotage} did not refuse as invalid recovery");
+        };
+        assert_eq!(
+            reason,
+            if sabotage == 0 {
+                "a Call opens before its retained Loop admission"
+            } else {
+                "a Call transaction contradicts its retained Loop verdict"
+            }
+        );
+        assert_eq!(recovered.inspection(), before);
+        assert_eq!(journal.inner.records(), completed);
+        assert_eq!(world.started.len(), 1);
+        assert!(world.cancelled.is_empty());
+    }
+}
+
+#[test]
 fn recovery_rejects_missing_deadlines_and_changed_call_facts_atomically() {
     let compilation = compile(
         &[r#"
