@@ -80,7 +80,7 @@ const GUARD_POSITION: TerminatorSet = TerminatorSet {
     newline: true,
     arrow: true,
     fat_arrow: false,
-    keywords: &["where", "having", "by", "within", "last", "when"],
+    keywords: &["where", "having", "by", "within", "last", "when", "match"],
 };
 
 /// An open-match predicate ends at the host-owned `=>`, not at comparison
@@ -3977,6 +3977,69 @@ graph m0_probe : App {
             &edge.endpoints[2],
             EdgeEndpoint::Ref(port) if !port.boundary && port.segments[0].text == "echo"
         ));
+    }
+
+    #[test]
+    fn where_match_keeps_the_guard_and_dispatch_separate() {
+        for trigger in ["in", "(left, right)"] {
+            for predicate in [
+                "data > 0",
+                "data.match == \"match\"",
+                "data . /* match */ match == \"match\"",
+                "data.matcher && (data.match || false)",
+                "size([\"match\", \"within\"]) > 0 /* match */",
+            ] {
+                for (bounds, decision) in [
+                    ("", "match { true => nothing; _ => nothing }"),
+                    ("", "match data { true => nothing; false => nothing }"),
+                    (
+                        " within duration(\"1s\")",
+                        "match { true => nothing; _ => nothing }",
+                    ),
+                    (
+                        " within duration(\"1s\") last 2",
+                        "match { true => nothing; _ => nothing }",
+                    ),
+                ] {
+                    let source = format!(
+                        "graph g : App {{ operator o {{ on {trigger} where {predicate}{bounds} {decision} }} }}"
+                    );
+                    let tree = parse_clean(&source);
+                    let TopDecl::Graph(graph) = &tree.decls[0] else {
+                        panic!("expected the Graph");
+                    };
+                    let GraphItem::Operator(operator) = &graph.body[0] else {
+                        panic!("expected the Operator");
+                    };
+                    let OperatorItem::Handler(handler) = &operator.body[0] else {
+                        panic!("expected the handler");
+                    };
+                    let Guard::Where(guard) = &handler.guards[0] else {
+                        panic!("expected the filter");
+                    };
+                    assert_eq!(guard.text, predicate);
+                    assert_eq!(&source[guard.span.range()], predicate);
+                    assert!(matches!(
+                        &handler.dispatch,
+                        Some(Dispatch::Match { arms, .. }) if arms.len() == 2
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn where_match_reports_a_missing_arm_arrow_at_its_actual_position() {
+        let source = "graph g : App { operator o { on in where data > 0 match data > 1 { true nothing; false => nothing } } }";
+        let mut bag = Bag::new();
+        parse(SourceId::new(0), source, &mut bag);
+        let diagnostic = bag
+            .diagnostics()
+            .first()
+            .expect("the missing arrow refuses");
+        assert_eq!(diagnostic.code(), E_PARSE_EXPECTED);
+        assert!(diagnostic.message().contains("`=>`"), "{bag:?}");
+        assert_eq!(&source[diagnostic.spans()[0].range()], "nothing");
     }
 
     #[test]

@@ -5,6 +5,11 @@
 > package tag, journal key, exit case or release milestone. M1.8 delivers the
 > annotation, secret, measurement and cost foundations only.
 
+> **Historical pre-v16 syntax.** The Graph handlers in the sketches below
+> are design history, not executable examples. v16 Graphs have no handlers;
+> a future Budget design must express these decisions through case routing
+> and child Operators under the current [Extension model](../spec/extensions.md).
+
 ## Why this is separate
 
 Metering answers what a flow consumed and cost. Governance must decide before

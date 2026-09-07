@@ -147,9 +147,13 @@ One-port `where P body` is lowered to the same OpenMatch as
 `.foo` wiring sugar is also neutral: an accepted migration twin must produce
 the same v16 plan body and semantic hash after desugaring.
 
-## 6. Witness ledger before R4
+## 6. Historical witness ledger before R4
 
-Current v15 witnesses, to be measured again before and after the single bump:
+The table below records the v15 baseline, not the current package. The blessed
+v16 sizes, hashes and checksums are in
+[R9 §1](rework-r9-qualification.md#1-identity-inventory-before-blessing).
+
+v15 witnesses recorded before the single bump:
 
 | Witness | Semantic hash | v15 package (body + header) | v15 categorical checksum | Expected v16 semantic result |
 |---|---|---:|---|---|

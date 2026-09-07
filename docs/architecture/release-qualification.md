@@ -36,3 +36,14 @@ redaction and SVG geometry tests remain separate executable evidence.
 Public Internet probes remain scheduled canaries, never replacements for these
 blocking local qualifications. The gallery, website and demonstration are M1
 deliverables tracked by the roadmap rather than protocol-conformance evidence.
+
+## Embedded code-size watch before Saga
+
+The [R9 Cortex-M33 measurement](spike-rp2350-emulated.md) retains **927,060 B**
+of `.text` plus `.rodata` against the unchanged **1,048,576 B (1 MiB)** gate:
+**121,516 B (118.7 KiB, 11.59%)** remain. This is the existing non-Loop relay's
+linked image, not peak-memory qualification of a Graph Loop or recovery workload.
+Before Saga or another core expansion, remeasure code size and heap first,
+record the delta against R9 and identify the growing sections. A gate increase
+requires an explicit decision; a green heap measurement does not substitute
+for the code-size gate.

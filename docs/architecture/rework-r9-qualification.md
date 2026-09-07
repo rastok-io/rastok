@@ -87,6 +87,9 @@ forward playback, and absence of those mutation commands.
 
 ## 4. Final gates
 
+This is the closure matrix at `4dbb7a6`. The post-review parser correction and
+its rerun checks are recorded separately in §7.
+
 | Check | Executed result |
 |---|---|
 | `cargo test --workspace --all-features` | **1,256 passed, zero failed, zero ignored** |
@@ -187,3 +190,33 @@ cards; R9 does not claim the prospective Teams/service/guest integrations.
   data. Real-I/O experiments, authoring, branches and the proposed terminal
   debugger are not reopened by R9. Neither OTLP export nor public-release
   qualification is implied by the v16 rework closure.
+
+## 7. Final-review correction — filtered Dispatch
+
+The review of `4dbb7a6` found that `where P match ...`, already specified by
+the grammar and R0 §6.1, was swallowed as one guard expression. The hosted
+expression framer now leaves the top-level `match` keyword to the handler
+parser, without treating members such as `data.match` as delimiters.
+No runtime, core, package-format or identity recipe changes are needed.
+
+Parser regressions cover open/closed Dispatch after a guard, join bounds,
+member names, strings, comments, exact guard spans and a missing arm arrow.
+The `where_dispatch` integration suite verifies narrowing, identical plan
+bytes/hash/journal against explicit nested Dispatch, false one-port filters
+consuming once, and false join guards retaining both candidates before later
+matches. Unbounded content joins still refuse with their retention diagnostic;
+a malformed guard remains an expression error rather than a bare-statement error.
+
+The Budget design memory is explicitly pre-v16 syntax, the R0 witness table
+links to the blessed §1 ledger, and the release inventory tracks the exact
+remaining embedded code-size margin before Saga. The R9 spike figures remain
+the prior measurement, not a new embedded workload claim from this hosted-only
+parser correction.
+
+Post-review verification: **1,261 tests passed, zero failed, zero ignored,
+37 suite results** with `cargo test --workspace --all-features --no-fail-fast`.
+Formatting, diff checks, all-target/all-feature clippy with warnings denied,
+workspace documentation and all three no-std target checks pass. Two public
+CLI scenarios also pass: one-port filter/dispatch and retained join candidates.
+No golden changed. The default-feature, independent interop and embedded-spike
+measurements in §4 were not rerun for this correction.

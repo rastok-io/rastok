@@ -861,8 +861,12 @@ impl<'a> Lexer<'a> {
         let bytes = self.source.as_bytes();
         let mut pos = start;
         let mut recovery_end = None;
+        let mut after_member_dot = false;
         while let Some(&byte) = bytes.get(pos) {
-            if expected.is_empty() && self.terminates_at(pos, byte, terminators) {
+            // A member such as `data.match` is not a host keyword, even when
+            // whitespace or comments separate its name from the dot.
+            let member_name = after_member_dot && is_ident_continue(byte);
+            if expected.is_empty() && !member_name && self.terminates_at(pos, byte, terminators) {
                 return ExprExtent::Complete { end: pos };
             }
             if byte == b'/'
@@ -887,6 +891,9 @@ impl<'a> Lexer<'a> {
                 }
                 pos = comment.end;
                 continue;
+            }
+            if !byte.is_ascii_whitespace() {
+                after_member_dot = byte == b'.';
             }
             match byte {
                 b'(' => expected.push(b')'),
