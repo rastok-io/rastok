@@ -214,9 +214,12 @@ pub const E_GRAPH_CYCLE: Code = Code::new("E-GRAPH-CYCLE");
 /// Diagnostic for a static literal with two keys canonicalizing equal.
 pub const E_DUP_KEY: Code = Code::new("E-DUP-KEY");
 
-/// A node output port no edge consumes; `err` is exempt — it bubbles
-/// to the root error sink.
-pub const W_UNWIRED_OUTPUT: Code = Code::new("W-UNWIRED-OUTPUT");
+/// A Node output port with no written disposition.
+pub const E_UNWIRED_OUTPUT: Code = Code::new("E-UNWIRED-OUTPUT");
+/// An output with no possible producer needs no artificial discard.
+pub const W_DEAD_OUTPUT: Code = Code::new("W-DEAD-OUTPUT");
+/// A whole Graph has no possible external admission.
+pub const W_DEAD_GRAPH: Code = Code::new("W-DEAD-GRAPH");
 
 /// A lab whose name binds to no `: App` graph in the unit.
 pub const E_LAB_NO_APP: Code = Code::new("E-LAB-NO-APP");
@@ -372,6 +375,8 @@ pub fn check(
     checker.seal_app_schema();
     checker.resolve_pending_instances(&mut checked_app);
     checker.resolve_pending_connector_attributes(&mut checked_app);
+    checker.verify_output_dispositions(&checked_app);
+    checker.verify_composed_routing(&checked_app, app.span);
     checker.in_lab = true;
     // A lab is a logical corpus: fragments sharing a name merge into
     // one; a duplicate simulation name inside the merged corpus
@@ -1262,69 +1267,25 @@ impl Checker<'_, '_> {
                         .collect();
                     let (target, observed_type) = match segments.as_slice() {
                         ["app", port] => {
-                            let mut root_types = app
-                                .nodes
-                                .iter()
-                                .filter_map(|node| {
-                                    node.ports
-                                        .iter()
-                                        .find(|decl| {
-                                            decl.port.name() == *port
-                                                && decl.direction == Direction::Output
-                                                && decl.unwired
-                                                    == crate::plan::UnwiredPolicy::RootSink
-                                        })
-                                        .map(|decl| decl.ty.clone().unwrap_or(DataType::Variant))
-                                })
-                                .collect::<Vec<_>>();
-                            if !root_types.is_empty() {
-                                // Root-sink and App-boundary observations share
-                                // the same `app.<port>` window in the Lab. If
-                                // both can speak the name, type the predicate
-                                // against their common type or `variant` —
-                                // never pretend one producer is invisible.
-                                if let Some(boundary_type) = app
+                            // A boundary observation watches what
+                            // LEAVES the App: `out` plus the declared
+                            // boundary OUTPUTS. An input is an
+                            // ingress, never a destination — the
+                            // machine logs nothing there, so an
+                            // expectation on one (like a typo) would
+                            // be a false green by construction.
+                            let direction = match *port {
+                                "out" => Some(Direction::Output),
+                                "in" => Some(Direction::Input),
+                                _ => app
                                     .boundary
                                     .iter()
-                                    .find(|decl| {
-                                        decl.port.name() == *port
-                                            && decl.direction == Direction::Output
-                                    })
-                                    .map(|decl| decl.ty.clone().unwrap_or(DataType::Variant))
-                                {
-                                    root_types.push(boundary_type);
-                                }
-                                let observed_type = root_types
-                                    .first()
-                                    .cloned()
-                                    .filter(|first| {
-                                        root_types.iter().all(|candidate| candidate == first)
-                                    })
-                                    .unwrap_or(DataType::Variant);
-                                let Ok(port) = node::Port::new((*port).to_string()) else {
-                                    continue;
-                                };
-                                (ExpectTarget::RootSink(port), observed_type)
-                            } else {
-                                // A boundary observation watches what
-                                // LEAVES the App: `out` plus the declared
-                                // boundary OUTPUTS. An input is an
-                                // ingress, never a destination — the
-                                // machine logs nothing there, so an
-                                // expectation on one (like a typo) would
-                                // be a false green by construction.
-                                let direction = match *port {
-                                    "out" => Some(Direction::Output),
-                                    "in" => Some(Direction::Input),
-                                    _ => app
-                                        .boundary
-                                        .iter()
-                                        .find(|decl| decl.port.name() == *port)
-                                        .map(|decl| decl.direction),
-                                };
-                                match direction {
-                                    None => {
-                                        self.bag.push(
+                                    .find(|decl| decl.port.name() == *port)
+                                    .map(|decl| decl.direction),
+                            };
+                            match direction {
+                                None => {
+                                    self.bag.push(
                                         Diagnostic::new(
                                             E_PORT_UNKNOWN,
                                             Phase::Check,
@@ -1335,29 +1296,28 @@ impl Checker<'_, '_> {
                                         .with_span(expect.target.span)
                                         .with_field("port", (*port).to_string()),
                                     );
-                                        continue;
-                                    }
-                                    Some(Direction::Input) => {
-                                        self.wrong_direction(
-                                            expect.target.span,
-                                            port,
-                                            Direction::Input,
-                                            "an expectation watches what leaves the App",
-                                        );
-                                        continue;
-                                    }
-                                    Some(Direction::Output) => {}
+                                    continue;
                                 }
-                                let observed_type = app
-                                    .boundary
-                                    .iter()
-                                    .find(|decl| decl.port.name() == *port)
-                                    .and_then(|decl| decl.ty.clone())
-                                    .unwrap_or(DataType::Variant);
-                                match node::Port::new((*port).to_string()) {
-                                    Ok(port) => (ExpectTarget::Boundary(port), observed_type),
-                                    Err(_) => continue,
+                                Some(Direction::Input) => {
+                                    self.wrong_direction(
+                                        expect.target.span,
+                                        port,
+                                        Direction::Input,
+                                        "an expectation watches what leaves the App",
+                                    );
+                                    continue;
                                 }
+                                Some(Direction::Output) => {}
+                            }
+                            let observed_type = app
+                                .boundary
+                                .iter()
+                                .find(|decl| decl.port.name() == *port)
+                                .and_then(|decl| decl.ty.clone())
+                                .unwrap_or(DataType::Variant);
+                            match node::Port::new((*port).to_string()) {
+                                Ok(port) => (ExpectTarget::Boundary(port), observed_type),
+                                Err(_) => continue,
                             }
                         }
                         [name, port] => {
@@ -1532,7 +1492,6 @@ impl Checker<'_, '_> {
             path: path.clone(),
             boundary: Vec::new(),
             vals: Vec::new(),
-            handlers: Vec::new(),
             nodes: Vec::new(),
             graphs: Vec::new(),
             edges: Vec::new(),
@@ -1643,7 +1602,7 @@ impl Checker<'_, '_> {
                                     graph.boundary.push(crate::plan::PortDecl {
                                         port: declared,
                                         direction,
-                                        unwired: crate::plan::UnwiredPolicy::RequireWire,
+
                                         ty: pinned,
                                         annotations,
                                     });
@@ -1684,7 +1643,7 @@ impl Checker<'_, '_> {
                             graph.boundary.push(crate::plan::PortDecl {
                                 port: declared,
                                 direction,
-                                unwired: crate::plan::UnwiredPolicy::RequireWire,
+
                                 ty: pinned,
                                 annotations,
                             });
@@ -1743,12 +1702,20 @@ impl Checker<'_, '_> {
                 GraphItem::Error(_) => {}
             }
         }
-        let owns_loop = graph.extensions.contains(&node::Extension::Loop);
-        let legacy_graph_handlers = !handlers.is_empty();
-        graph.loop_spec =
-            self.loop_declaration(decl, &graph, &signature, &consts, legacy_graph_handlers);
+        for handler in handlers {
+            self.bag.push(
+                Diagnostic::new(
+                    E_GRAPH_HANDLER,
+                    Phase::Check,
+                    "a Graph cannot own application handlers; move the handler into an Operator child and wire its ports",
+                )
+                .with_span(handler.span)
+                .with_field("owner", path.to_string()),
+            );
+        }
+        graph.loop_spec = self.loop_declaration(decl, &graph, &signature, &consts);
         for (item, mut child_signature, child_consts) in children {
-            if !legacy_graph_handlers && let Some(spec) = &graph.loop_spec {
+            if let Some(spec) = &graph.loop_spec {
                 let state_type = graph
                     .boundary
                     .iter()
@@ -1795,47 +1762,6 @@ impl Checker<'_, '_> {
                 _ => {}
             }
         }
-        if owns_loop {
-            if legacy_graph_handlers
-                && graph.loop_spec.is_some()
-                && self.contribute_loop_boundary(&mut graph, decl.span)
-            {
-                let state_type = graph
-                    .boundary
-                    .iter()
-                    .find(|port| port.port.name() == "in" && port.direction == Direction::Input)
-                    .and_then(|port| port.ty.clone())
-                    .unwrap_or(DataType::Variant);
-                let loop_signature = loop_state_signature(&signature, state_type);
-                for handler in handlers {
-                    if let Some(checked) =
-                        self.graph_handler(handler, &graph, &loop_signature, &consts)
-                    {
-                        graph.handlers.push(checked);
-                    }
-                }
-                if graph
-                    .loop_spec
-                    .as_ref()
-                    .is_some_and(|spec| spec.proof.is_some())
-                    && !self.complete_loop_proof(&mut graph, decl.span)
-                {
-                    graph.loop_spec = None;
-                }
-            }
-        } else {
-            for handler in handlers {
-                self.bag.push(
-                    Diagnostic::new(
-                        E_GRAPH_HANDLER,
-                        Phase::Check,
-                        "a Graph cannot own application handlers; move the handler into an Operator child and wire its ports",
-                    )
-                    .with_span(handler.span)
-                    .with_field("owner", path.to_string()),
-                );
-            }
-        }
         for edge in edges {
             let Some(resolved) = self.edge(edge, &graph) else {
                 continue;
@@ -1872,7 +1798,6 @@ impl Checker<'_, '_> {
         self.materialize_node_edge_ports(&mut graph);
         self.verify_routing(&graph, decl.span);
         self.reject_cycles(&graph, decl.span);
-        self.warn_unwired_outputs(&graph);
         graph
     }
 
@@ -2927,6 +2852,25 @@ impl Checker<'_, '_> {
         self.contract(&mut node, decl);
         node.loop_spec =
             self.node_loop_declaration(&decl.body, &node, graph_signature, graph_consts, decl.span);
+        if let Some(spec) = &node.loop_spec {
+            let state = node
+                .ports
+                .iter()
+                .find(|port| port.port == spec.entry)
+                .and_then(|port| port.ty.clone())
+                .unwrap_or(DataType::Variant);
+            if let (Ok(port), Ok(ty)) = (
+                node::Port::new("Loop.expired"),
+                node::loop_expired_type(state),
+            ) {
+                node.ports.push(crate::plan::PortDecl {
+                    port,
+                    direction: Direction::Output,
+                    ty: Some(ty),
+                    annotations: Default::default(),
+                });
+            }
+        }
         self.queue_instance_attributes(
             InstanceOwner::Node(node.path.clone()),
             decl.body.iter().filter_map(|item| match item {
@@ -2988,7 +2932,7 @@ impl Checker<'_, '_> {
             recovery_ports.push(crate::plan::PortDecl {
                 port,
                 direction: declared.direction,
-                unwired: declared.unwired,
+
                 ty: None,
                 annotations: AnnotationTable::empty(),
             });
@@ -3671,7 +3615,18 @@ impl Checker<'_, '_> {
                     .find(|port| port.port == spec.entry)
                     .and_then(|port| port.ty.clone())
                     .unwrap_or(DataType::Variant);
-                signature = loop_state_signature(&signature, state_type);
+                signature = loop_state_signature(&signature, state_type.clone());
+                if let (Ok(port), Ok(ty)) = (
+                    node::Port::new("Loop.expired"),
+                    node::loop_expired_type(state_type),
+                ) {
+                    node.ports.push(crate::plan::PortDecl {
+                        port,
+                        direction: Direction::Output,
+                        ty: Some(ty),
+                        annotations: Default::default(),
+                    });
+                }
             }
         }
         // Pass three: handlers, checked against the complete table.
@@ -3707,6 +3662,9 @@ impl Checker<'_, '_> {
                 }
             }
         }
+        if !is_connector {
+            self.complete_operator_loop_proof(node, owner_span);
+        }
     }
 
     /// Adds one port to a node's semantic table, refusing conflicting roles.
@@ -3736,11 +3694,6 @@ impl Checker<'_, '_> {
                 node.ports.push(crate::plan::PortDecl {
                     port,
                     direction: actual_direction,
-                    unwired: if actual_direction == Direction::Output && name.text == "err" {
-                        crate::plan::UnwiredPolicy::RootSink
-                    } else {
-                        crate::plan::UnwiredPolicy::RequireWire
-                    },
                     ty,
                     annotations: AnnotationTable::empty(),
                 });
@@ -7444,9 +7397,6 @@ fn remap_graph_assets(graph: &mut Graph, remap: &[u32]) {
                 expr(&mut invariant.root, remap);
             }
         }
-    }
-    for handler in &mut graph.handlers {
-        remap_handler(handler, remap);
     }
     for node in &mut graph.nodes {
         if let Some(policy) = &mut node.instance {

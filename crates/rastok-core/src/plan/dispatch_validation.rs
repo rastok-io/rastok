@@ -9,7 +9,7 @@ use super::{
     CasePartitionError, Dispatch, DispatchStep, Emission, LoopCommand, MAX_DISPATCH_DEPTH,
     MultiEmitValues, validate_case_partition,
 };
-use crate::datatype::{DataType, TaggedUnionType};
+use crate::datatype::DataType;
 use crate::expr::{self, Expr, Signature, Tree};
 use crate::schema_annotation::AnnotatedSchema;
 
@@ -136,22 +136,13 @@ fn validate_at(
             for (index, arm) in arms.iter().enumerate() {
                 let branch_path = format!("{path}.arms[{index}]");
                 let mut branch = scope.clone();
-                // The current source subset narrows `match data`, preserving
-                // the tagged union (never implicitly unwrapping its payload).
+                // Selection narrows the closed value without unwrapping it.
                 if matches!(&scrutinee.root, Expr::Path(segments)
                     if segments.len() == 1 && segments[0] == "data")
-                    && let DataType::TaggedUnion(union) = &scrutinee.ty
+                    && let Some(narrowed) =
+                        super::routing::selected_case_type(&scrutinee.ty, &arm.cases)
                 {
-                    let selected = union
-                        .cases()
-                        .iter()
-                        .filter(|case| arm.cases.iter().any(|name| name == case.name()))
-                        .cloned()
-                        .collect();
-                    let narrowed = TaggedUnionType::new(selected).map_err(|_| {
-                        DispatchValidationError::at(&branch_path, DispatchErrorKind::Expression)
-                    })?;
-                    branch = branch.with("data", DataType::TaggedUnion(narrowed));
+                    branch = branch.with("data", narrowed);
                 }
                 validate_at(&arm.dispatch, &branch, depth + 1, &branch_path)?;
             }

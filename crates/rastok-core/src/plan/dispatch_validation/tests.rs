@@ -1,4 +1,5 @@
 use super::*;
+use crate::datatype::TaggedUnionType;
 use crate::datatype::{StructType, TaggedCase, TypeField};
 use crate::node::Port;
 use crate::plan::{ClosedArm, FieldWrite, OpenArm};

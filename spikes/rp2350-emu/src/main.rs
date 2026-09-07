@@ -67,7 +67,7 @@ static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP
 
 /// The sealed plan of examples/echo.rkg, produced by the compiler on
 /// the host — the embedded entry point is the package, never source.
-static ECHO_PACKAGE: &[u8] = include_bytes!("../echo.rkp");
+static ECHO_PACKAGE: &[u8] = include_bytes!(env!("RASTOK_SPIKE_PACKAGE"));
 
 struct Ticks {
     syst: cortex_m::peripheral::SYST,

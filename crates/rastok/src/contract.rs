@@ -87,8 +87,6 @@ pub struct PortContract {
     pub name: &'static str,
     /// Input or output direction.
     pub direction: crate::node::Direction,
-    /// What an unclaimed output does. Inputs must be `RequireWire`.
-    pub unwired: crate::plan::UnwiredPolicy,
     /// Rule producing the effective logical type for this instantiation.
     pub ty: PortTypeRule,
 }
@@ -232,7 +230,7 @@ pub struct ConnectorContract {
     pub roles: crate::connector::ConnectorRoles,
     /// Cardinality and terminal lifecycle of one interaction.
     pub exchange: crate::connector::ConnectorExchange,
-    /// Ports, their directions, effective type rules and unwired policy.
+    /// Ports, their directions and effective type rules.
     pub ports: &'static [PortContract],
     /// The attributes common to every profile.
     pub common: &'static [AttributeSpec],
@@ -346,7 +344,7 @@ impl ConnectorContract {
             ports.push(crate::plan::PortDecl {
                 port,
                 direction: contract.direction,
-                unwired: contract.unwired,
+
                 ty: Some(ty),
                 annotations: crate::schema_annotation::AnnotationTable::empty(),
             });
@@ -624,8 +622,6 @@ pub enum SheetDefect {
     ConflictingPort(&'static str),
     /// A default port listed against its implicit direction.
     MisdirectedDefault(&'static str),
-    /// An input tried to carry an output-only unwired policy.
-    InputHasSinkPolicy(&'static str),
     /// The conventional terminal row contradicts the exchange lifecycle:
     /// Event has none; Call and Session have exactly one output `exit`.
     ExchangeTerminalMismatch {
@@ -732,12 +728,6 @@ impl core::fmt::Display for SheetDefect {
             }
             Self::MisdirectedDefault(name) => {
                 write!(f, "`{name}` is a default port listed against its direction")
-            }
-            Self::InputHasSinkPolicy(name) => {
-                write!(
-                    f,
-                    "input port `{name}` cannot carry an unwired output policy"
-                )
             }
             Self::ExchangeTerminalMismatch { exchange, exits } => write!(
                 f,
@@ -954,11 +944,6 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
             && expected != direction
         {
             return Err(SheetDefect::MisdirectedDefault(name));
-        }
-        if direction == crate::node::Direction::Input
-            && port.unwired != crate::plan::UnwiredPolicy::RequireWire
-        {
-            return Err(SheetDefect::InputHasSinkPolicy(name));
         }
     }
     let mut names = std::collections::BTreeSet::new();

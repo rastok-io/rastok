@@ -879,7 +879,10 @@ fn the_validator_matches_the_decoder_on_decimals_and_digests() {
     // This test is about the declared initializer carrier. Remove the source
     // program's integer state update so it does not add an unrelated int32
     // constraint after the raw state type is changed below.
-    plan.handlers[0].body.remove(0);
+    let rastok::plan::Dispatch::Linear(steps) = &mut plan.handlers[0].dispatch else {
+        panic!("linear state update")
+    };
+    steps.remove(0);
     let relay = plan
         .nodes
         .iter_mut()
@@ -978,13 +981,12 @@ fn asset_order_is_digest_canonical() {
 }
 
 #[test]
-fn graph_handlers_follow_the_canonical_asset_remap() {
+fn nested_dispatch_arms_follow_the_canonical_asset_remap() {
     use rastok::compiler::compile_with_assets;
-    use rastok::plan::{DispatchStep, Emission, HandlerOwner};
+    use rastok::plan::{DispatchStep, Emission};
     use std::io::Write;
 
-    let root =
-        std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("graph-handler-asset-order");
+    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("dispatch-asset-order");
     std::fs::create_dir_all(&root).unwrap();
     let candidates = [
         ("alpha.bin", b"alpha".as_slice()),
@@ -1010,14 +1012,20 @@ fn graph_handlers_follow_the_canonical_asset_remap() {
     let source = format!(
         r#"
 graph app : App {{
-  graph g : Loop {{
+  input in: bool
+  output out: bytes
+  operator choose {{
     input in: bool
     output out: bytes
-    Loop.fuel = 1
-
-    on in where data  {{ out = asset("{first_name}") }}
-    on in where !data {{ out = asset("{second_name}") }}
+    on in match data {{
+      true => match {{
+        data => out = asset("{first_name}")
+        _ => nothing
+      }}
+      false => out = asset("{second_name}")
+    }}
   }}
+  in -> choose -> out
 }}
 "#
     );
@@ -1026,25 +1034,25 @@ graph app : App {{
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         Some(&root),
     )
-    .expect("Graph-owned asset expressions compile");
+    .expect("nested Dispatch asset expressions compile");
 
     let mut referenced: Vec<_> = compilation
         .plan
         .handlers
         .iter()
-        .filter(|handler| matches!(handler.owner, HandlerOwner::Graph(_)))
-        .map(|handler| {
+        .flat_map(|handler| handler.dispatch.steps())
+        .filter_map(|step| {
             let DispatchStep::Emit {
                 value: Emission::Data(tree),
                 ..
-            } = &handler.body[0]
+            } = step
             else {
-                panic!("the Graph handler emits one asset");
+                return None;
             };
             let rastok::expr::Expr::Asset(index) = &tree.root else {
                 panic!("the asset call lowers to its table index");
             };
-            compilation.plan.assets[*index as usize].bytes.as_slice()
+            Some(compilation.plan.assets[*index as usize].bytes.as_slice())
         })
         .collect();
     referenced.sort_unstable();

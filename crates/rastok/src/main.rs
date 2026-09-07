@@ -484,7 +484,6 @@ fn run(
         let _ = lines.send(None);
     });
     let mut printed_outputs = 0;
-    let mut printed_errors = 0;
     #[cfg(feature = "hosted-ui")]
     if ui.enabled {
         return run_with_ui(
@@ -500,7 +499,6 @@ fn run(
             polls_inbound,
             &input,
             &mut printed_outputs,
-            &mut printed_errors,
         );
     }
     #[cfg(not(feature = "hosted-ui"))]
@@ -545,7 +543,7 @@ fn run(
         if let Some(projector) = &mut log_projector {
             let _ = projector.project_journal(&journal);
         }
-        print_new_outputs(&vm, &mut printed_outputs, &mut printed_errors);
+        print_new_outputs(&vm, &mut printed_outputs);
 
         if !stdin_open && !polls_inbound && !vm.has_open_obligations() {
             break;
@@ -614,7 +612,6 @@ fn run_with_ui<'plan>(
     polls_inbound: bool,
     input: &std::sync::mpsc::Receiver<Option<std::io::Result<String>>>,
     printed_outputs: &mut usize,
-    printed_errors: &mut usize,
 ) -> ExitCode {
     use rastok::ui::{ActivityView, ExecutionState, FaultView, UiCommand, UiServer};
 
@@ -827,9 +824,8 @@ fn run_with_ui<'plan>(
             dirty |= batch.queued > 0 || batch.dropped > 0;
         }
         let before_outputs = *printed_outputs;
-        let before_errors = *printed_errors;
-        print_new_outputs(vm, printed_outputs, printed_errors);
-        dirty |= before_outputs != *printed_outputs || before_errors != *printed_errors;
+        print_new_outputs(vm, printed_outputs);
+        dirty |= before_outputs != *printed_outputs;
         dirty |= records_before != journal.records().len()
             || observations_before != vm.observations().len();
         if records_before != journal.records().len() {
@@ -969,7 +965,7 @@ fn cli_submission(inbound_path: &node::Path, line: String) -> InboundSubmission 
     }
 }
 
-fn print_new_outputs(vm: &Vm<'_>, printed_outputs: &mut usize, printed_errors: &mut usize) {
+fn print_new_outputs(vm: &Vm<'_>, printed_outputs: &mut usize) {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     for output in &vm.outputs()[*printed_outputs..] {
@@ -984,13 +980,6 @@ fn print_new_outputs(vm: &Vm<'_>, printed_outputs: &mut usize, printed_errors: &
         );
     }
     *printed_outputs = vm.outputs().len();
-    let err_annotations = node::Port::new("err")
-        .ok()
-        .and_then(|port| vm.boundary_annotations(&port));
-    for envelope in &vm.errors()[*printed_errors..] {
-        eprintln!("err: {}", render_data(envelope.data(), err_annotations));
-    }
-    *printed_errors = vm.errors().len();
 }
 
 /// Runs every lab of the unit; one line per scenario, non-zero exit

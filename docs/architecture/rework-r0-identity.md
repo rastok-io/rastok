@@ -25,7 +25,9 @@ wave.
 3. `HandlerOwner::Graph` and activation `ChildPort = 4` are retired. Their tags
    remain reserved.
 4. `RouteRule` is added beside `PhysicalEdge`; closed case sets select canonical
-   disposition sets.
+   disposition sets. Nested Graphs retain the unflattened inventory at sparse
+   body key 11; decode re-derives the flat selections and crossed boundary
+   obligations. Plans without nested boundaries omit the key.
 5. manager commands become a destination category but never an endpoint or
    PhysicalEdge.
 6. destination/source sets become canonical expansion material.
@@ -131,7 +133,7 @@ the same v16 plan body and semantic hash after desugaring.
 
 Current v15 witnesses, to be measured again before and after the single bump:
 
-| Witness | Semantic hash | v15 body | v15 categorical checksum | Expected v16 semantic result |
+| Witness | Semantic hash | v15 package (body + header) | v15 categorical checksum | Expected v16 semantic result |
 |---|---|---:|---|---|
 | `examples/echo.rkg` / embedded spike | `e50026eeb0b8dc77fe2f5e52de6dfaa33b50cc351211cd87c21081d28aa43709` | 988 B | `73ea33a7…4847a` | moves: Process Contract `@2` and explicit dispositions |
 | JSONL Process golden | `036f7ea5346fac883a3bad155fbdf41b303f6e54bef93f8c850ff5f138f769de` | 1,032 B | recorded in M1.8 ledger | moves: Process Contract `@2` and explicit dispositions |
@@ -141,6 +143,11 @@ Package containers for all three move categorically to v16 even when semantic
 hash does not. The gauge is the negative semantic-scope witness. Its source
 currently uses boundary sugar, so the R9 migration must prove old-sugar and
 explicit-boundary twins before the old spelling begins to refuse.
+
+**Measurement correction, 2026-09-06.** The original heading called these
+988/1,032/323-byte sizes “body”. They include the package header. Independent
+header decoding finds body sizes **907/951/243 bytes**, respectively. This
+corrects the ledger's unit, not any stored fixture or semantic identity.
 
 Additional R4/R9 witnesses required:
 

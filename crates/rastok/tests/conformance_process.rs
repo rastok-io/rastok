@@ -40,6 +40,8 @@ graph happy : App {
   }
 
   . -> shout -> echo -> .
+  echo.err -> nothing
+  echo.exit -> nothing
 }
 "#;
 
@@ -58,6 +60,8 @@ graph failing : App {
   }
 
   . -> shout -> boom -> .
+  boom.err -> nothing
+  boom.exit -> nothing
 }
 "#;
 
@@ -75,6 +79,8 @@ graph missing : App {
   }
 
   . -> shout -> ghost -> .
+  ghost.err -> nothing
+  ghost.exit -> nothing
 }
 "#;
 
@@ -93,6 +99,8 @@ graph garbling : App {
   }
 
   . -> shout -> garble -> .
+  garble.err -> nothing
+  garble.exit -> nothing
 }
 "#;
 
@@ -113,6 +121,8 @@ graph flooding : App {
   }
 
   . -> shout -> leaky -> .
+  leaky.err -> nothing
+  leaky.exit -> nothing
 }
 "#;
 
@@ -132,6 +142,8 @@ graph mute : App {
   }
 
   . -> shout -> hang -> .
+  hang.err -> nothing
+  hang.exit -> nothing
 }
 "#;
 
@@ -161,6 +173,10 @@ graph pair : App {
 
   . -> ra -> left -> .
   . -> rb -> right -> .
+  left.err -> nothing
+  left.exit -> nothing
+  right.err -> nothing
+  right.exit -> nothing
 }
 "#;
 

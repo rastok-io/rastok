@@ -61,9 +61,10 @@ fn drive(
     }
     assert!(vm.is_stable(), "the run must settle");
     let errors = vm
-        .errors()
+        .observations()
         .iter()
-        .map(|error| match error.data() {
+        .filter(|observed| observed.node.is_some() && observed.port.name() == "err")
+        .map(|observed| match observed.envelope.data() {
             Data::Materialized(value) => value.clone(),
             Data::Encoded { bytes, .. } => Value::Text(String::from_utf8_lossy(bytes).into_owned()),
         })
@@ -71,7 +72,7 @@ fn drive(
     let exits = vm
         .observations()
         .iter()
-        .filter(|observed| observed.node.is_none() && observed.port.name() == "exit")
+        .filter(|observed| observed.node.is_some() && observed.port.name() == "exit")
         .map(|observed| match observed.envelope.data() {
             Data::Materialized(value) => value.clone(),
             Data::Encoded { .. } => panic!("Process.exit is materialized"),
@@ -89,7 +90,7 @@ fn assert_exit<'a>(exits: &'a [Value], expected: &str) -> &'a [(String, Value)] 
     &tagged.payload
 }
 
-const CAT_JSONL: &str = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"cat\"\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n}\n";
+const CAT_JSONL: &str = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"cat\"\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n  shell.err -> nothing\n  shell.exit -> nothing\n}\n";
 
 #[test]
 fn a_structured_value_round_trips_through_a_real_process() {
@@ -127,7 +128,7 @@ fn a_structured_value_round_trips_through_a_real_process() {
 fn multiple_lines_decode_to_multiple_variants() {
     // A process emitting several JSON lines: each is one ordinary `out`
     // emission, in order.
-    let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"printf\"\n    args = [\"1\\n{\\\"a\\\":2}\\n[3]\\n\"]\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n}\n";
+    let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"printf\"\n    args = [\"1\\n{\\\"a\\\":2}\\n[3]\\n\"]\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n  shell.err -> nothing\n  shell.exit -> nothing\n}\n";
     let (outputs, errors, exits) = drive(source, Value::Int(1));
     assert_eq!(errors, Vec::<Value>::new(), "no fault");
     let items: Vec<&Value> = outputs
@@ -148,7 +149,7 @@ fn multiple_lines_decode_to_multiple_variants() {
 fn an_unparseable_line_is_a_typed_decode_error() {
     // `echo not-json` answers garbage: the terminal fact is DecodeFailed
     // carrying the offending line — never a silent skip.
-    let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"echo\"\n    args = [\"not json\"]\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n}\n";
+    let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"echo\"\n    args = [\"not json\"]\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n  shell.err -> nothing\n  shell.exit -> nothing\n}\n";
     let (outputs, errors, exits) = drive(source, Value::Int(1));
     assert_eq!(outputs.len(), 0, "nothing crosses on out");
     assert!(errors.is_empty(), "stderr is independent of decoding");
@@ -185,7 +186,7 @@ fn an_unserializable_request_refuses_before_any_spawn() {
 
 #[test]
 fn empty_stdout_emits_no_out_frame() {
-    let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"true\"\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n}\n";
+    let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"true\"\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n  shell.err -> nothing\n  shell.exit -> nothing\n}\n";
     let (outputs, errors, exits) = drive(source, Value::Int(1));
     assert_eq!(errors, Vec::<Value>::new());
     assert!(outputs.is_empty(), "no line means no out envelope");
@@ -233,6 +234,8 @@ graph g : App {
   . -> shell
   shell.out -> sift
   sift -> .
+  shell.err -> nothing
+  shell.exit -> nothing
 }
 "#;
 
@@ -336,7 +339,7 @@ fn a_null_line_is_the_null_value() {
     // `null` is a JSON value like any other (D-2026-08-11-1): a
     // line carrying it decodes to the null element, never a
     // DecodeFailed.
-    let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"printf\"\n    args = [\"null\\n\"]\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n}\n";
+    let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"printf\"\n    args = [\"null\\n\"]\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n  shell.err -> nothing\n  shell.exit -> nothing\n}\n";
     let (outputs, errors, exits) = drive(source, Value::Int(1));
     assert_eq!(errors, Vec::<Value>::new(), "no fault");
     assert_eq!(
@@ -388,6 +391,8 @@ graph g : App {
   . -> stamp -> shell
   shell.out -> probe
   probe -> .
+  shell.err -> nothing
+  shell.exit -> nothing
 }
 "#;
     let (outputs, errors, exits) = drive(source, Value::Int(1));
@@ -425,6 +430,8 @@ graph g : App {
   . -> stamp -> shell
   shell.out -> probe
   probe -> .
+  shell.err -> nothing
+  shell.exit -> nothing
 }
 
 lab g {
@@ -569,14 +576,14 @@ fn another_contracts_codec_vocabulary_is_untouched() {
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("in").expect("a conventional port"),
                     direction: rastok::node::Direction::Input,
-                    unwired: rastok::plan::UnwiredPolicy::RequireWire,
+
                     ty: Some(rastok::datatype::DataType::Variant),
                     annotations: Default::default(),
                 },
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("out").expect("a conventional port"),
                     direction: rastok::node::Direction::Output,
-                    unwired: rastok::plan::UnwiredPolicy::RequireWire,
+
                     ty: Some(rastok::datatype::DataType::array(
                         rastok::datatype::DataType::Variant,
                     )),
@@ -585,7 +592,7 @@ fn another_contracts_codec_vocabulary_is_untouched() {
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::conventional_exit(),
                     direction: rastok::node::Direction::Output,
-                    unwired: rastok::plan::UnwiredPolicy::RootSink,
+
                     ty: Some(
                         rastok::boundary::process_exit_type()
                             .expect("the standard terminal type is valid"),
@@ -597,6 +604,7 @@ fn another_contracts_codec_vocabulary_is_untouched() {
                 .sort_by(|left, right| left.key().cmp(&right.key()));
         }
     }
+    plan.edges.retain(|edge| edge.from.port.name() != "err");
     let validated = rastok::plan::ValidatedExecutionPlan::try_from(plan);
     assert!(
         validated.is_ok(),

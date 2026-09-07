@@ -14,7 +14,9 @@ use crate::datatype::{DataType, StructType, TypeField};
 use crate::envelope::WriteTarget;
 use crate::expr;
 use crate::node;
-use crate::plan::{DispatchStep, Emission, EndpointRef, ExecutionPlan, PlanValidationError, Slot};
+use crate::plan::{
+    Dispatch, DispatchStep, Emission, EndpointRef, ExecutionPlan, PlanValidationError, Slot,
+};
 use crate::schema_annotation::AnnotationTable;
 
 /// Why one effective port type holds.
@@ -145,22 +147,25 @@ struct PortState {
     required: Option<TypeRequirement>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Flow {
     source: usize,
     target: usize,
+    cases: Option<Vec<String>>,
 }
 
 struct EmissionRule<'plan> {
     input: usize,
     output: usize,
     emission: &'plan Emission,
+    cases: Option<Vec<String>>,
 }
 
 struct ExpressionRule<'plan> {
     input: usize,
     expression: &'plan expr::Tree,
     expected: DataType,
+    cases: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -255,7 +260,11 @@ impl<'plan> Solver<'plan> {
             let source = self.endpoint(&edge.from, node::Direction::Output);
             if let Some(target) = &edge.to {
                 let target = self.endpoint(target, node::Direction::Input);
-                self.flows.push(Flow { source, target });
+                self.flows.push(Flow {
+                    source,
+                    target,
+                    cases: self.plan.edge_cases(edge),
+                });
             }
         }
         for handler in &self.plan.handlers {
@@ -285,45 +294,95 @@ impl<'plan> Solver<'plan> {
                         input,
                         expression: guard,
                         expected: DataType::Bool,
+                        cases: None,
                     });
                 }
-                for step in &handler.body {
-                    match step {
-                        DispatchStep::Emit { .. } | DispatchStep::MultiEmit { .. } => {
-                            for (port, value) in step.emissions() {
-                                let output =
-                                    self.ensure(Some(node_index), port, node::Direction::Output);
-                                if emission_preserves_payload(value) {
-                                    self.flows.push(Flow {
-                                        source: input,
-                                        target: output,
-                                    });
-                                } else if !matches!(value, Emission::Nothing) {
-                                    self.emissions.push(EmissionRule {
+                let mut pending = alloc::vec![(&handler.dispatch, None)];
+                while let Some((dispatch, cases)) = pending.pop() {
+                    let steps = match dispatch {
+                        Dispatch::Linear(steps) => steps,
+                        Dispatch::ClosedMatch {
+                            prefix,
+                            scrutinee,
+                            arms,
+                        } => {
+                            let is_data = matches!(&scrutinee.root, expr::Expr::Path(path) if path.as_slice() == ["data"]);
+                            for arm in arms {
+                                let narrowed = if is_data {
+                                    intersect_cases(cases.as_ref(), Some(&arm.cases))
+                                } else {
+                                    cases.clone()
+                                };
+                                pending.push((&arm.dispatch, narrowed));
+                            }
+                            prefix
+                        }
+                        Dispatch::OpenMatch {
+                            prefix,
+                            arms,
+                            fallback,
+                        } => {
+                            for arm in arms {
+                                self.expressions.push(ExpressionRule {
+                                    input,
+                                    expression: &arm.predicate,
+                                    expected: DataType::Bool,
+                                    cases: cases.clone(),
+                                });
+                                let narrowed = intersect_cases(
+                                    cases.as_ref(),
+                                    positive_data_cases(&arm.predicate.root).as_ref(),
+                                );
+                                pending.push((&arm.dispatch, narrowed));
+                            }
+                            pending.push((fallback, cases.clone()));
+                            prefix
+                        }
+                    };
+                    for step in steps {
+                        match step {
+                            DispatchStep::Emit { .. } | DispatchStep::MultiEmit { .. } => {
+                                for (port, value) in step.emissions() {
+                                    let output = self.ensure(
+                                        Some(node_index),
+                                        port,
+                                        node::Direction::Output,
+                                    );
+                                    if emission_preserves_payload(value) {
+                                        self.flows.push(Flow {
+                                            source: input,
+                                            target: output,
+                                            cases: cases.clone(),
+                                        });
+                                    } else if !matches!(value, Emission::Nothing) {
+                                        self.emissions.push(EmissionRule {
+                                            input,
+                                            output,
+                                            emission: value,
+                                            cases: cases.clone(),
+                                        });
+                                    }
+                                }
+                            }
+                            DispatchStep::SetVar { name, value: expr } => {
+                                if let Some(expected) = self.plan.nodes[node_index]
+                                    .vars
+                                    .iter()
+                                    .find(|cell| cell.name == *name)
+                                    .map(|cell| cell.ty.clone())
+                                {
+                                    self.expressions.push(ExpressionRule {
                                         input,
-                                        output,
-                                        emission: value,
+                                        expression: expr,
+                                        expected,
+                                        cases: cases.clone(),
                                     });
                                 }
                             }
+                            DispatchStep::Let { .. }
+                            | DispatchStep::Stop
+                            | DispatchStep::LoopCommand(_) => {}
                         }
-                        DispatchStep::SetVar { name, value: expr } => {
-                            if let Some(expected) = self.plan.nodes[node_index]
-                                .vars
-                                .iter()
-                                .find(|cell| cell.name == *name)
-                                .map(|cell| cell.ty.clone())
-                            {
-                                self.expressions.push(ExpressionRule {
-                                    input,
-                                    expression: expr,
-                                    expected,
-                                });
-                            }
-                        }
-                        DispatchStep::Let { .. }
-                        | DispatchStep::Stop
-                        | DispatchStep::LoopCommand(_) => {}
                     }
                 }
             }
@@ -354,33 +413,55 @@ impl<'plan> Solver<'plan> {
             // must see that `variant` fact instead of fabricating a precise
             // structural requirement from the path spelling.
             for index in 0..self.flows.len() {
-                let flow = self.flows[index];
+                let flow = self.flows[index].clone();
                 if let Some(source) = self.producer_hint(flow.source) {
+                    let source = match &flow.cases {
+                        None => source,
+                        Some(cases) => super::routing::selected_case_type(&source, cases)
+                            .ok_or_else(|| self.unresolved(&self.states[flow.source]))?,
+                    };
                     changed |= self.produce(flow.target, source)?;
                 }
-                if let Some(required) = self.consumer_requirement(flow.target)? {
+                if flow.cases.is_none()
+                    && let Some(required) = self.consumer_requirement(flow.target)?
+                {
                     changed |= self.require(flow.source, required)?;
                 }
             }
             for index in 0..self.expressions.len() {
-                let (input, expression, expected) = {
+                let (input, expression, expected, cases) = {
                     let rule = &self.expressions[index];
-                    (rule.input, rule.expression, rule.expected.clone())
+                    (
+                        rule.input,
+                        rule.expression,
+                        rule.expected.clone(),
+                        rule.cases.clone(),
+                    )
                 };
-                changed |= self.constrain_expression(input, expression, &expected)?;
+                changed |=
+                    self.constrain_expression(input, expression, &expected, cases.as_ref())?;
             }
             for index in 0..self.emissions.len() {
-                let (input, output, emission) = {
+                let (input, output, emission, cases) = {
                     let rule = &self.emissions[index];
-                    (rule.input, rule.output, rule.emission)
+                    (rule.input, rule.output, rule.emission, rule.cases.clone())
                 };
-                let input_type = self.effective_hint(input)?;
+                let input_type = self
+                    .effective_hint(input)?
+                    .map(|ty| self.project_cases(input, &ty, cases.as_ref()))
+                    .transpose()?;
                 let output_type = self.effective_hint(output)?;
                 if let Some(ty) = emission_type(
                     emission,
                     input_type.as_ref(),
                     output_type.as_ref(),
-                    |required| self.require(input, required),
+                    |required| {
+                        if cases.is_none() {
+                            self.require(input, required)
+                        } else {
+                            Ok(false)
+                        }
+                    },
                 )? {
                     changed |= self.produce(output, ty)?;
                 }
@@ -420,8 +501,10 @@ impl<'plan> Solver<'plan> {
             effective.push(ty);
         }
         for rule in &self.expressions {
+            let input =
+                self.project_cases(rule.input, &effective[rule.input], rule.cases.as_ref())?;
             if expression_reads_data(&rule.expression.root) {
-                if resolved_expression_type(&rule.expression.root, &effective[rule.input])
+                if resolved_expression_type(&rule.expression.root, &input)
                     .is_some_and(|actual| actual.is_assignable_to(&rule.expected))
                 {
                     continue;
@@ -431,12 +514,8 @@ impl<'plan> Solver<'plan> {
                 else {
                     return Err(self.unresolved(&self.states[rule.input]));
                 };
-                if !satisfies(&effective[rule.input], &requirement) {
-                    return Err(self.conflict(
-                        rule.input,
-                        close_requirement(&requirement)?,
-                        effective[rule.input].clone(),
-                    ));
+                if !satisfies(&input, &requirement) {
+                    return Err(self.conflict(rule.input, close_requirement(&requirement)?, input));
                 }
             } else if !rule.expression.ty.is_assignable_to(&rule.expected) {
                 return Err(self.conflict(
@@ -447,7 +526,9 @@ impl<'plan> Solver<'plan> {
             }
         }
         for rule in &self.emissions {
-            let input = &effective[rule.input];
+            let projected =
+                self.project_cases(rule.input, &effective[rule.input], rule.cases.as_ref())?;
+            let input = &projected;
             let output = &effective[rule.output];
             let inferred =
                 emission_type(rule.emission, Some(input), Some(output), |requirement| {
@@ -474,7 +555,15 @@ impl<'plan> Solver<'plan> {
         }
         // One final directional audit after every bound has settled.
         for flow in &self.flows {
-            let source = &effective[flow.source];
+            let narrowed;
+            let source = match &flow.cases {
+                None => &effective[flow.source],
+                Some(cases) => {
+                    narrowed = super::routing::selected_case_type(&effective[flow.source], cases)
+                        .ok_or_else(|| self.unresolved(&self.states[flow.source]))?;
+                    &narrowed
+                }
+            };
             let target = &effective[flow.target];
             if !source.is_assignable_to(target) {
                 return Err(self.conflict(flow.target, target.clone(), source.clone()));
@@ -616,6 +705,7 @@ impl<'plan> Solver<'plan> {
         input: usize,
         expression: &expr::Tree,
         expected: &DataType,
+        cases: Option<&Vec<String>>,
     ) -> Result<bool, PlanValidationError> {
         if !expression_reads_data(&expression.root) {
             if !expression.ty.is_assignable_to(expected) {
@@ -624,7 +714,10 @@ impl<'plan> Solver<'plan> {
             return Ok(false);
         }
         if let Some(input_type) = self.effective_hint(input)?
-            && let Some(actual) = resolved_expression_type(&expression.root, &input_type)
+            && let Some(actual) = resolved_expression_type(
+                &expression.root,
+                &self.project_cases(input, &input_type, cases)?,
+            )
         {
             if actual.is_assignable_to(expected) {
                 return Ok(false);
@@ -634,7 +727,24 @@ impl<'plan> Solver<'plan> {
         let Some(required) = expression_requirement(&expression.root, expected) else {
             return Ok(false);
         };
-        self.require(input, required)
+        if cases.is_none() {
+            self.require(input, required)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn project_cases(
+        &self,
+        input: usize,
+        ty: &DataType,
+        cases: Option<&Vec<String>>,
+    ) -> Result<DataType, PlanValidationError> {
+        match cases {
+            None => Ok(ty.clone()),
+            Some(cases) => super::routing::selected_case_type(ty, cases)
+                .ok_or_else(|| self.unresolved(&self.states[input])),
+        }
     }
 
     fn location(&self, index: usize) -> String {
@@ -671,6 +781,41 @@ impl<'plan> Solver<'plan> {
 
 pub(super) fn resolve(plan: &ExecutionPlan) -> Result<ResolvedPortTable, PlanValidationError> {
     Solver::new(plan).collect()?.solve()
+}
+
+// A branch constrains its own `data`, never the source port shared by its
+// siblings. Sets come from closed arms or positive tag tests, not annotations.
+fn intersect_cases(left: Option<&Vec<String>>, right: Option<&Vec<String>>) -> Option<Vec<String>> {
+    match (left, right) {
+        (None, None) => None,
+        (Some(cases), None) | (None, Some(cases)) => Some(cases.clone()),
+        (Some(left), Some(right)) => Some(
+            left.iter()
+                .filter(|case| right.contains(case))
+                .cloned()
+                .collect(),
+        ),
+    }
+}
+
+fn positive_data_cases(expression: &expr::Expr) -> Option<Vec<String>> {
+    match expression {
+        expr::Expr::Is { expr, target } if matches!(expr.as_ref(), expr::Expr::Path(path) if path.as_slice() == ["data"]) => {
+            match target.as_ref() {
+                expr::NarrowTarget::Case { name, .. } => Some(alloc::vec![name.clone()]),
+                expr::NarrowTarget::Type(_) => None,
+            }
+        }
+        expr::Expr::Binary {
+            op: expr::BinaryOp::And,
+            left,
+            right,
+        } => intersect_cases(
+            positive_data_cases(left).as_ref(),
+            positive_data_cases(right).as_ref(),
+        ),
+        _ => None,
+    }
 }
 
 fn emission_type(
@@ -1313,7 +1458,7 @@ pub(super) fn expression_reads_data(expr: &expr::Expr) -> bool {
 /// Whether one checked expression reads a contextual root. This is derived
 /// once during plan validation for runtime context such as `now`; it is also
 /// the authority used by the data-dependent type solver.
-pub(super) fn expression_reads_root(expr: &expr::Expr, expected: &str) -> bool {
+pub(crate) fn expression_reads_root(expr: &expr::Expr, expected: &str) -> bool {
     let mut stack = alloc::vec![expr];
     while let Some(expr) = stack.pop() {
         match expr {

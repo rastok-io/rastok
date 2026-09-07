@@ -143,6 +143,8 @@ graph priced_call : App {
   }
 
   . -> model -> typed_usage -> .
+  model.err -> nothing
+  model.exit -> nothing
 }
 "#;
     let compilation = compile(

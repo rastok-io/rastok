@@ -620,7 +620,11 @@ impl Checker<'_, '_> {
                             && !self.port_conforms(
                                 &expected,
                                 &emit,
-                                BuildOrigin::Handler(declared_data_type),
+                                BuildOrigin::Handler(
+                                    signature
+                                        .get("data")
+                                        .filter(|_| declared_data_type.is_some()),
+                                ),
                                 consts,
                                 port.name(),
                                 name.span,
@@ -1170,7 +1174,11 @@ impl Checker<'_, '_> {
                     && !self.port_conforms(
                         expected,
                         &emit,
-                        BuildOrigin::Handler(declared_data_type),
+                        BuildOrigin::Handler(
+                            signature
+                                .get("data")
+                                .filter(|_| declared_data_type.is_some()),
+                        ),
                         consts,
                         port.name(),
                         *span,
@@ -1188,7 +1196,11 @@ impl Checker<'_, '_> {
                     && !self.port_conforms(
                         expected,
                         &emit,
-                        BuildOrigin::Handler(declared_data_type),
+                        BuildOrigin::Handler(
+                            signature
+                                .get("data")
+                                .filter(|_| declared_data_type.is_some()),
+                        ),
                         consts,
                         port.name(),
                         *span,
@@ -1338,22 +1350,13 @@ pub(super) fn closed_arm_signature(
 ) -> expr::Signature {
     let is_data =
         matches!(&scrutinee.root, expr::Expr::Path(path) if path.len() == 1 && path[0] == "data");
-    let DataType::TaggedUnion(union) = &scrutinee.ty else {
-        return signature.clone();
-    };
     if !is_data {
         return signature.clone();
     }
-    let selected: Vec<_> = union
-        .cases()
-        .iter()
-        .filter(|case| cases.iter().any(|name| name == case.name()))
-        .cloned()
-        .collect();
-    let Ok(union) = TaggedUnionType::new(selected) else {
+    let Ok(narrowed) = super::routing::narrowed_route_type(&scrutinee.ty, cases) else {
         return signature.clone();
     };
-    signature.clone().with("data", DataType::TaggedUnion(union))
+    signature.clone().with("data", narrowed)
 }
 
 pub(super) fn dispatch_depth(dispatch: &Dispatch) -> usize {

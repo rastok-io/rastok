@@ -149,7 +149,7 @@ fn steps_tree(steps: &[DispatchStep]) -> Cbor {
     Cbor::Array(steps.iter().map(step_tree).collect())
 }
 
-fn dispatch_tree(dispatch: &Dispatch) -> Cbor {
+pub(super) fn dispatch_tree(dispatch: &Dispatch) -> Cbor {
     match dispatch {
         Dispatch::Linear(steps) => Cbor::Array(vec![Cbor::Uint(1), steps_tree(steps)]),
         Dispatch::ClosedMatch {
@@ -190,7 +190,7 @@ fn dispatch_tree(dispatch: &Dispatch) -> Cbor {
     }
 }
 
-fn dispatch_from(tree: &Cbor, depth: usize) -> Result<Dispatch, DecodeError> {
+pub(super) fn dispatch_from(tree: &Cbor, depth: usize) -> Result<Dispatch, DecodeError> {
     // Check before allocating children, even when called on an in-memory tree
     // which did not pass through the byte reader's independent nesting limit.
     if depth > MAX_DISPATCH_DEPTH {
@@ -311,11 +311,11 @@ fn routing_order_holds(rules: &[RouteRule]) -> Result<(), FieldError> {
     Ok(())
 }
 
-fn routing_tree(rules: &[RouteRule]) -> Cbor {
+pub(super) fn routing_tree(rules: &[RouteRule]) -> Cbor {
     Cbor::Array(rules.iter().map(route_tree).collect())
 }
 
-fn route_tree(rule: &RouteRule) -> Cbor {
+pub(super) fn route_tree(rule: &RouteRule) -> Cbor {
     Cbor::Array(vec![
         endpoint_tree(&rule.source),
         match &rule.selection {
@@ -405,7 +405,7 @@ fn endpoint_from(tree: &Cbor) -> Result<Endpoint, DecodeError> {
     }
 }
 
-fn route_from(tree: &Cbor) -> Result<RouteRule, DecodeError> {
+pub(super) fn route_from(tree: &Cbor) -> Result<RouteRule, DecodeError> {
     let [source, selection] = array_of(tree, "route")? else {
         return Err(err("route"));
     };

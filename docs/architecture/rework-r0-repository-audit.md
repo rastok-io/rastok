@@ -103,3 +103,21 @@ M1.7 backlog and exit reports accurately describe what landed in v13/v14 and
 remain historical evidence. They are not rewritten to pretend the old design
 never existed. R2 supersedes their live claims through `decisions.md`, the
 current spec documents, and the architecture map.
+
+## R7 implementation contact — temporal recovery evidence (2026-09-06)
+
+The requested complete RecoveryFold cannot reconstruct every deadline from
+the existing records alone. `TransactionRecord::timers` retains `(kind, ref)`,
+not the due instant; `logical_time` is sparse and exists only when a firing
+observes `now()`. `Vm::route_prepared` arms join-within deadlines from its
+explicit current time; `fire_lifecycle_next` arms lifetime budgets. Replaying
+those operations at restart time would silently lengthen or shorten them.
+
+Loop r2's `Advance.due_at` already retains the needed evidence for its own
+delay. The initial spatial recovery gate therefore admits persistent Operators
+and those Loop delays, and refuses timed joins, other lifetimes, Closing and
+Connector obligations. The full R7 gate must retain the corresponding exact
+timing facts before promising recovery for those profiles. They belong to the
+journal's retained recovery metadata, not a lossy observation/export stream;
+their causal-seal treatment must be enumerated in the identity ledger. No
+restart clock may stand in for missing history.

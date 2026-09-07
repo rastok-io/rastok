@@ -65,7 +65,7 @@ fn compilation() -> rastok::compiler::Compilation {
 // DELIBERATE MOVE 2026-08-21 (M1.4 R5): bounded Closing may have to settle an
 // unconfirmed cancellation, so ProcessExit gains the empty OutcomeUnknown
 // case. The closed port type is source identity; existing traces do not move.
-// DELIBERATE MOVE 2026-08-22 (M1.5 C1): `rastok/process@1` and its required
+// DELIBERATE MOVE 2026-08-22 (M1.5 C1): `rastok/process@2` and its required
 // outbound role replace the source-level `Process` symbol in canonical HIR;
 // categorical v10 carries both. The causal trace is unchanged.
 // DELIBERATE MOVE 2026-08-25 (M1.6 H1): the Call exchange lifecycle becomes

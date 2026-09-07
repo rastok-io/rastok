@@ -109,7 +109,7 @@ impl fmt::Display for HttpServerConfigError {
 
 impl std::error::Error for HttpServerConfigError {}
 
-/// Statically linked hosted implementation of `rastok/http-server@1`.
+/// Statically linked hosted implementation of `rastok/http-server@2`.
 #[derive(Debug)]
 pub struct HttpServerFactory {
     id: crate::connector::ContractId,
@@ -1776,6 +1776,7 @@ graph api : App {{
   }}
   operator relay {{ input in: {input_type} ; on in {{ out = data }} }}
   server -> relay -> .
+  server.exit -> nothing
 }}
 "#,
             input_type = if codec == "json" { "variant" } else { codec },
@@ -1805,6 +1806,7 @@ graph api : App {
   }
   operator relay { input in: text ; on in { out = "response" } }
   server -> relay -> server
+  server.exit -> nothing
 }
 "#;
         compile(

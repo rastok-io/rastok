@@ -1571,6 +1571,7 @@ graph inbound : App {
   operator relay { input in: text ; on in { out = data } }
   . -> nothing
   source.out -> relay -> . ; source.err -> nothing
+  source.exit -> nothing
 }
 "#;
         let compilation = compile(
@@ -1591,6 +1592,7 @@ graph inbound : App {
         spec.roles = ConnectorRoles::Inbound;
         spec.exchange = ConnectorExchange::Event;
         source.ports.retain(|port| port.port.name() != "exit");
+        raw.edges.retain(|edge| edge.from.port.name() != "exit");
         ValidatedExecutionPlan::try_new(raw).expect("the foreign Event contract is structural")
     }
 
@@ -2229,6 +2231,7 @@ graph api : App {
   }
   operator relay { input in: text ; on in { out = "response" } }
   server -> relay -> .
+  server.exit -> nothing
 }
 "#;
         let compilation = compile(
@@ -2289,6 +2292,7 @@ graph api : App {
   }
   operator relay { input in: text ; on in { out = data } }
   server -> relay -> .
+  server.exit -> nothing
 }
 "#;
         let plan = compile(

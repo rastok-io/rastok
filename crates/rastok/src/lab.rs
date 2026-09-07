@@ -139,6 +139,7 @@ pub struct ScenarioSession<'plan, 'scenario> {
     faults: MockFaults,
     failures: Vec<String>,
     window_start: usize,
+    output_window_start: usize,
     next_action: usize,
     quiescent: bool,
     last_action: Option<ScenarioActionKind>,
@@ -188,6 +189,7 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
             faults,
             failures: Vec::new(),
             window_start: 0,
+            output_window_start: 0,
             next_action: 0,
             quiescent: true,
             last_action: None,
@@ -386,6 +388,7 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
         let kind = match step {
             ScenarioStep::Inject { port, value, seq } => {
                 self.window_start = self.vm.observations().len();
+                self.output_window_start = self.vm.outputs().len();
                 let candidate = self
                     .next_injection_override
                     .take()
@@ -416,6 +419,7 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
             }
             ScenarioStep::Advance { nanos } => {
                 self.window_start = self.vm.observations().len();
+                self.output_window_start = self.vm.outputs().len();
                 let target = self.vm.now().saturating_add(*nanos);
                 if let Err(error) = self.vm.advance(&mut self.journal, &mut self.driver, target) {
                     self.failures.push(format!("the advance faulted: {error}"));
@@ -425,9 +429,11 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
                 ScenarioActionKind::Advance
             }
             ScenarioStep::Expect(expectation) => {
-                if let Some(message) =
-                    check_expectation(expectation, &self.vm.observations()[self.window_start..])
-                {
+                if let Some(message) = check_expectation(
+                    expectation,
+                    &self.vm.observations()[self.window_start..],
+                    &self.vm.outputs()[self.output_window_start..],
+                ) {
                     self.failures.push(message);
                 }
                 self.quiescent = true;
@@ -652,17 +658,23 @@ fn settle(
     }
 }
 
-fn check_expectation(expectation: &Expectation, window: &[Observed]) -> Option<String> {
-    let deliveries: Vec<&Observed> = window
-        .iter()
-        .filter(|observed| match &expectation.target {
-            ExpectTarget::RootSink(port) => observed.node.is_none() && observed.port == *port,
-            ExpectTarget::Boundary(port) => observed.node.is_none() && observed.port == *port,
-            ExpectTarget::Node { path, port } => {
-                observed.node.as_ref() == Some(path) && observed.port == *port
-            }
-        })
-        .collect();
+fn check_expectation(
+    expectation: &Expectation,
+    window: &[Observed],
+    boundary: &[crate::runtime::vm::BoundaryOutput],
+) -> Option<String> {
+    let deliveries: Vec<&crate::envelope::Envelope> = match &expectation.target {
+        ExpectTarget::Boundary(port) => boundary
+            .iter()
+            .filter(|output| output.port == *port)
+            .map(|output| &output.envelope)
+            .collect(),
+        ExpectTarget::Node { path, port } => window
+            .iter()
+            .filter(|observed| observed.node.as_ref() == Some(path) && observed.port == *port)
+            .map(|observed| &observed.envelope)
+            .collect(),
+    };
     let name = expectation
         .label
         .clone()
@@ -673,7 +685,7 @@ fn check_expectation(expectation: &Expectation, window: &[Observed]) -> Option<S
             None => matches += 1,
             Some(tree) => {
                 let mut env = BTreeMap::new();
-                match runtime::data_value(observed.envelope.data()) {
+                match runtime::data_value(observed.data()) {
                     Ok(data) => {
                         env.insert(String::from("data"), expr::EvalValue::from(data));
                     }
@@ -685,7 +697,7 @@ fn check_expectation(expectation: &Expectation, window: &[Observed]) -> Option<S
                 }
                 env.insert(
                     String::from("meta"),
-                    expr::EvalValue::from(runtime::meta_value(observed.envelope.meta())),
+                    expr::EvalValue::from(runtime::meta_value(observed.meta())),
                 );
                 // A faulting or non-boolean predicate fails the
                 // expectation itself — "did not match" would be a
@@ -1198,7 +1210,7 @@ mod tests {
     /// pre-scan of every handler would fail both cases below.
     fn opaque_answer(mock_body: &str) -> (Option<Completion>, Vec<String>) {
         let source = format!(
-            "graph g : App {{\n  connector echo : Process {{\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }}\n  . -> echo -> .\n}}\n\nlab g {{\n  simulation probing on app {{\n    mock echo {{\n{mock_body}\n    }}\n    scenario s \"unused\" {{\n      app.in = {{v = 1}}\n    }}\n  }}\n}}\n"
+            "graph g : App {{\n  connector echo : Process {{\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }}\n  . -> echo -> .\n  echo.err -> nothing\n  echo.exit -> nothing\n}}\n\nlab g {{\n  simulation probing on app {{\n    mock echo {{\n{mock_body}\n    }}\n    scenario s \"unused\" {{\n      app.in = {{v = 1}}\n    }}\n  }}\n}}\n"
         );
         let compilation = compile(
             &[source.as_str()],
@@ -1382,6 +1394,8 @@ graph m0_probe : App {
   }
 
   . -> shout -> echo -> .
+  echo.err -> nothing
+  echo.exit -> nothing
 }
 
 lab m0_probe {
@@ -1400,7 +1414,7 @@ lab m0_probe {
     scenario roundtrip "one message through a scripted world" {
       app.in = { text = "salut" }
       expect "the echo came back" app.out count == 1 where data == "salut"
-      expect nothing app.err
+      expect nothing echo.err
     }
 
     scenario silence_expires "a silent driver times out" {
@@ -1410,7 +1424,7 @@ lab m0_probe {
       app.in = { text = "salut" }
       expect nothing app.out
       advance duration("5s")
-      expect "the budget expired" app.exit where data is TimeoutExpired
+      expect "the budget expired" echo.exit where data is TimeoutExpired
     }
 
     scenario filtered "an empty text never reaches the world" {
@@ -1602,6 +1616,7 @@ graph network_call : App {
     effect = idempotent ; behavior = deterministic
   }
   . -> network -> .
+  network.exit -> nothing
 }
 "#,
             r#"
@@ -1611,6 +1626,7 @@ graph http_source : App {
     codec = json
   }
   network -> .
+  network.exit -> nothing
 }
 "#,
             r#"
@@ -1622,6 +1638,7 @@ graph websocket_client_source : App {
     effect = idempotent ; behavior = deterministic
   }
   network -> .
+  network.exit -> nothing
 }
 "#,
             r#"
@@ -1632,6 +1649,7 @@ graph websocket_server_source : App {
     codec = json
   }
   network -> .
+  network.exit -> nothing
 }
 "#,
         ];
@@ -1662,6 +1680,7 @@ graph h2_http : App {
     effect = idempotent ; behavior = deterministic
   }
   . -> client -> .
+  client.exit -> nothing
 }
 
 lab h2_http {
@@ -1675,7 +1694,7 @@ lab h2_http {
     scenario call "the network is replaced, not the contract" {
       app.in = { request = true }
       expect "the response is ordinary data" app.out count == 1
-      expect "one HTTP terminal closes the call" app.exit where data is Completed
+      expect "one HTTP terminal closes the call" client.exit where data is Completed
     }
   }
 }
@@ -1815,6 +1834,8 @@ graph m0_probe : App {
   }
 
   . -> shout -> echo -> .
+  echo.err -> nothing
+  echo.exit -> nothing
 }
 
 lab m0_probe {

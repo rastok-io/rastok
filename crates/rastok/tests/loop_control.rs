@@ -237,7 +237,7 @@ fn public_lab_runs_independent_roots_in_one_singleton_loop_instance() {
                 record,
                 Record::Transaction(transaction)
                     if matches!(
-                        transaction.loop_fact.as_deref(),
+                        transaction.loop_fact(),
                         Some(rastok::journal::LoopFact::Open { .. })
                     )
             )
@@ -434,7 +434,7 @@ graph finite : App + Loop {
 }
 "#;
     let compilation = compile_one(source).expect("the affine countdown is proved finite");
-    let rastok::plan::AspectSpec::Loop(spec) = &compilation.plan.owners[0].aspects[0];
+    let spec = compilation.plan.owners[0].loop_spec().unwrap();
     assert!(spec.fuel.is_none());
     let proof = spec.proof.as_ref().expect("the proof travels");
     assert_eq!(proof.decreases, [1]);
@@ -458,7 +458,7 @@ graph finite : App + Loop {
 }
 "#;
     let compilation = compile_one(structured).expect("a struct field can be the ranking measure");
-    let rastok::plan::AspectSpec::Loop(spec) = &compilation.plan.owners[0].aspects[0];
+    let spec = compilation.plan.owners[0].loop_spec().unwrap();
     assert_eq!(
         spec.proof.as_ref().expect("the proof travels").decreases,
         [1]

@@ -400,6 +400,31 @@ Notes the numbers carry:
   dies around round 60 — linear history growth, as designed; a
   deployment bounds it (durable journal, a later slice).
 
+## Candidate v16 remeasurement — 2026-09-06
+
+This is cutover evidence, not a reissue of the M1.8 closure below. The tracked
+package is still v15 until the single categorical fixture blessing. The spike
+accepts an explicit `RASTOK_SPIKE_PACKAGE` path to a separately encoded and
+decoded v16 echo candidate; this does not modify the tracked fixture.
+
+| Measurement | Candidate v16 |
+|---|---:|
+| calibration, 2,000,000 exact instructions | 39,999 ticks |
+| relay, 32 rounds (average / minimum / maximum) | 1,470 / 1,409 / 1,714 ticks |
+| slowest relay, calibration-adjusted | about 85.7 k instructions, below 150 k |
+| heap after opening | 6,440 B |
+| allocator high-water mark | 130,772 B |
+| margin to the 128 KiB gate | **300 B (0.23%)** |
+| text + read-only data | 820,768 B, below 1 MiB |
+| retained records | 67, `SPIKE_OK` |
+
+The time improvement follows the measured removal of unnecessary expression
+context materialization; it does not widen the heap gate. Non-Loop journals
+allocate no manager-fold index, and plans without nested Graph boundaries omit
+the new routing inventory. Further embedded-path changes must remeasure heap
+first. This candidate does not qualify Graph Loop orchestration or complete
+recovery, both still gated.
+
 ## Reproduction
 
 From the repository root (the crate must be built from its own

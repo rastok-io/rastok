@@ -232,7 +232,18 @@ takes semantic priority; no public date overrides its R0–R9 exit gates.
   [`rework-r1-host-contracts.md`](docs/architecture/rework-r1-host-contracts.md),
   with the review stop recorded in
   [`rework-r2-supersession.md`](docs/architecture/rework-r2-supersession.md).
-  R3 now has the source/HIR checkpoint: recursive typed Dispatch, canonical
+  **Current checkpoint, 2026-09-06:** the working tree reads and writes v16;
+  Dispatch, case routing, multi-emission and command Operator/Call Loops execute
+  through that reader. Operator measure certificates are re-derived, and
+  persistent Operator mailboxes/state/commands recover from each committed
+  prefix without replaying producers. Explicit destinations are checked at
+  source and independently through retained nested boundary routing. Graph
+  Loops, complete recovery, stronger productibility proofs and the fixture
+  migration remain open. No golden is blessed;
+  the full workspace is not green. See the current §10 of
+  [`rework-r4-plan.md`](docs/architecture/rework-r4-plan.md).
+  The following records the **pre-cutover R3/R4 checkpoints**, not today's
+  package capability. R3 has the source/HIR checkpoint: recursive typed Dispatch, canonical
   case routing and sets, ordered multi-emission, named ownership refusals,
   Loop entry/terminal/state/command resolution and complete conditional HIR
   identity. New forms remain behind the categorical v16 packaging gate. See

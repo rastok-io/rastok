@@ -1,201 +1,16 @@
-//! Loop host policies, state bindings and the retained v15 proof bridge.
+//! Loop host policies, state bindings and re-derived termination evidence.
 
 use super::*;
 
 impl Checker<'_, '_> {
-    /// Materializes the Loop-owned half of a Graph boundary after the source
-    /// declarations are known. `in` remains the user-owned state pin;
-    /// `next` and `expired` have exactly one historical Extension authority. Ordinary
-    /// outputs keep their domain names and all terminate a Loop run.
-    pub(super) fn contribute_loop_boundary(&mut self, graph: &mut Graph, span: Span) -> bool {
-        let input = graph.boundary.iter().find(|port| port.port.name() == "in");
-        let Some(state_type) = input.and_then(|port| {
-            (port.direction == Direction::Input)
-                .then(|| port.ty.clone())
-                .flatten()
-        }) else {
-            self.loop_refusal(
-                span,
-                "a `: Loop` Graph declares typed `input in` as its iteration-state carrier",
-            );
-            return false;
-        };
-        if let Some(extra) = graph
-            .boundary
-            .iter()
-            .find(|port| port.direction == Direction::Input && port.port.name() != "in")
-        {
-            self.loop_refusal(
-                span,
-                &format!(
-                    "a `: Loop` Graph has one iteration input `in`; `{}` cannot be a second input",
-                    extra.port
-                ),
-            );
-            return false;
-        }
-        if let Some(collision) = graph
-            .boundary
-            .iter()
-            .find(|port| matches!(port.port.name(), "next" | "expired"))
-        {
-            self.loop_refusal(
-                span,
-                &format!(
-                    "`{}` is owned by the Loop Extension and cannot be declared explicitly",
-                    collision.port
-                ),
-            );
-            return false;
-        }
-        let Ok(next) = node::Port::new("next") else {
-            return false;
-        };
-        let Ok(expired) = node::Port::new("expired") else {
-            return false;
-        };
-        let Ok(expired_type) = node::loop_expired_type(state_type.clone()) else {
-            self.loop_refusal(span, "the LoopExpired carrier could not be represented");
-            return false;
-        };
-        graph.boundary.push(crate::plan::PortDecl {
-            port: next,
-            direction: Direction::Output,
-            unwired: crate::plan::UnwiredPolicy::RequireWire,
-            ty: Some(state_type),
-            annotations: AnnotationTable::empty(),
-        });
-        graph.boundary.push(crate::plan::PortDecl {
-            port: expired,
-            direction: Direction::Output,
-            unwired: crate::plan::UnwiredPolicy::RequireWire,
-            ty: Some(expired_type),
-            annotations: AnnotationTable::empty(),
-        });
-        true
-    }
-
-    /// Checks a Graph-owned body through the ordinary handler checker. The
-    /// temporary context only supplies the Graph's boundary table; it creates
-    /// neither a hidden Operator nor a second statement algebra.
-    pub(super) fn graph_handler(
-        &mut self,
-        decl: &crate::compiler::syntax::HandlerDecl,
-        graph: &Graph,
-        signature: &expr::Signature,
-        consts: &BTreeMap<String, crate::value::Value>,
-    ) -> Option<Handler> {
-        let context = Node {
-            path: node::Path::new(["__graph_handler"]).ok()?,
-            extensions: Vec::new(),
-            loop_spec: None,
-            semantics: NodeSemantics::Operator,
-            vals: graph.vals.clone(),
-            vars: Vec::new(),
-            ports: graph.boundary.clone(),
-            handlers: Vec::new(),
-            instance: None,
-        };
-        let SynTrigger::ChildPort { child, port } = &decl.trigger else {
-            if matches!(
-                decl.trigger,
-                SynTrigger::Port(_) | SynTrigger::Start(_) | SynTrigger::Stop(_)
-            ) {
-                return self.handler(decl, signature, &context, consts);
-            }
-            self.deferred("this Graph handler trigger", decl.span);
-            return None;
-        };
-
-        let child_name = child.text.as_str();
-        let child_node = graph.nodes.iter().find(|candidate| {
-            candidate.path.segments().last().map(String::as_str) == Some(child_name)
-        });
-        let child_graph = graph.graphs.iter().find(|candidate| {
-            candidate.path.segments().last().map(String::as_str) == Some(child_name)
-        });
-        let (child_path, ports) = match (child_node, child_graph) {
-            (Some(child), None) => (child.path.clone(), &child.ports),
-            (None, Some(child)) => {
-                let Some(path) = node::Path::new(child.path.segments().iter().cloned()).ok() else {
-                    self.loop_refusal(decl.span, "the child Graph path is not representable");
-                    return None;
-                };
-                (path, &child.boundary)
-            }
-            _ => {
-                self.bag.push(
-                    Diagnostic::new(
-                        E_PORT_UNKNOWN,
-                        Phase::Check,
-                        format!("this Graph has no direct child named `{child_name}`"),
-                    )
-                    .with_span(child.span)
-                    .with_field("node", child.text.clone()),
-                );
-                return None;
-            }
-        };
-        let Some(decl_port) = ports
-            .iter()
-            .find(|candidate| candidate.port.name() == port.text)
-        else {
-            self.bag.push(
-                Diagnostic::new(
-                    E_PORT_UNKNOWN,
-                    Phase::Check,
-                    format!("child `{child_name}` exposes no port named `{}`", port.text),
-                )
-                .with_span(port.span)
-                .with_field("port", port.text.clone()),
-            );
-            return None;
-        };
-        if decl_port.direction != Direction::Output {
-            self.wrong_direction(
-                port.span,
-                &port.text,
-                decl_port.direction,
-                "a Graph handler observes a child output port",
-            );
-            return None;
-        }
-        let Some(data_type) = decl_port.ty.clone() else {
-            self.loop_refusal(
-                port.span,
-                "a child output observed by Loop must have one resolved type",
-            );
-            return None;
-        };
-        let Ok(port) = node::Port::new(port.text.clone()) else {
-            return None;
-        };
-        self.handler_with_activation(
-            decl,
-            signature,
-            &context,
-            consts,
-            Some((
-                node::HandlerActivation::ChildPort {
-                    child: child_path,
-                    port,
-                },
-                data_type,
-            )),
-        )
-    }
-
-    /// Checks the source half of the first Loop gate while lowering remains
-    /// fail-closed. Keeping this here, beside instance attributes, gives every
-    /// qualified spelling one owner and prevents generic graph-attribute
-    /// deferrals from becoming a second interpretation.
+    /// Resolve the Graph's Loop policy before descendant handlers so their
+    /// `Loop.state` bindings refer to its exact entry type.
     pub(super) fn loop_declaration(
         &mut self,
         decl: &GraphDecl,
         graph: &Graph,
         signature: &expr::Signature,
         consts: &BTreeMap<String, crate::value::Value>,
-        legacy_graph_handlers: bool,
     ) -> Option<LoopSpec> {
         let attributes: Vec<_> = decl
             .body
@@ -354,41 +169,12 @@ impl Checker<'_, '_> {
             return None;
         }
 
-        if legacy_graph_handlers
-            && (selected.contains_key("entry") || selected.contains_key("terminal"))
-        {
-            self.bag.push(
-                Diagnostic::new(
-                    E_GRAPH_HANDLER,
-                    Phase::Check,
-                    "`Loop.entry` and `Loop.terminal` belong to the Graph-scope Loop model; move Graph handlers into an Operator",
-                )
-                .with_span(decl.span)
-                .with_field("owner", graph.path.to_string()),
-            );
-            return None;
-        }
-
         let input_ports: Vec<_> = graph
             .boundary
             .iter()
             .filter(|port| port.direction == Direction::Input)
             .collect();
-        let entry = if legacy_graph_handlers {
-            let Some(input) = input_ports.iter().find(|port| port.port.name() == "in") else {
-                self.bag.push(
-                    Diagnostic::new(
-                        E_LOOP_ENTRY,
-                        Phase::Check,
-                        "the historical Loop Graph compatibility path requires `input in`",
-                    )
-                    .with_span(decl.span)
-                    .with_field("owner", graph.path.to_string()),
-                );
-                return None;
-            };
-            input.port.clone()
-        } else if let Some(attribute) = selected.get("entry") {
+        let entry = if let Some(attribute) = selected.get("entry") {
             self.loop_port_selection(attribute, &input_ports, false)?
                 .into_iter()
                 .next()?
@@ -414,9 +200,7 @@ impl Checker<'_, '_> {
             .iter()
             .filter(|port| port.direction == Direction::Output)
             .collect();
-        let mut terminals = if legacy_graph_handlers {
-            output_ports.iter().map(|port| port.port.clone()).collect()
-        } else if let Some(attribute) = selected.get("terminal") {
+        let mut terminals = if let Some(attribute) = selected.get("terminal") {
             self.loop_port_selection(attribute, &output_ports, true)?
         } else {
             match output_ports.as_slice() {
@@ -457,11 +241,7 @@ impl Checker<'_, '_> {
                     );
                     return None;
                 };
-                let theorem_signature = if legacy_graph_handlers {
-                    signature.clone().with("data", state_type)
-                } else {
-                    loop_state_signature(signature, state_type)
-                };
+                let theorem_signature = loop_state_signature(signature, state_type);
                 let measure = self.typed_value_tree(
                     &attribute.value,
                     &theorem_signature,
@@ -517,10 +297,8 @@ impl Checker<'_, '_> {
         })
     }
 
-    /// Checks the same Loop source contract on an executable Node. The v15
-    /// runtime cannot transport it, but retaining the complete resolved shape
-    /// in HIR lets R4 perform one categorical bump instead of teaching the old
-    /// plan a temporary partial meaning.
+    /// Resolve entry, terminal outputs and finite application policy from the
+    /// executable Node's ports and, for a Connector, its Contract profile.
     pub(super) fn node_loop_declaration(
         &mut self,
         body: &[OperatorItem],
@@ -967,38 +745,26 @@ impl Checker<'_, '_> {
         Some(ports)
     }
 
-    /// Produces the hosted proof evidence only after the ordinary Graph
-    /// handlers have been checked. The `no_std` validator derives the same
-    /// evidence again from the transported plan, so this step cannot grant
-    /// authority to a compiler-only claim.
-    pub(super) fn complete_loop_proof(&mut self, graph: &mut Graph, span: Span) -> bool {
-        let handlers = loop_proof_handlers(graph);
-        let Some(spec) = graph.loop_spec.as_mut() else {
-            return false;
+    pub(super) fn complete_operator_loop_proof(&mut self, node: &mut Node, span: Span) {
+        let Some(spec) = node.loop_spec.as_mut() else {
+            return;
         };
-        let Some(proof) = spec.proof.take() else {
-            return true;
+        let Some(proof) = spec.proof.as_ref() else {
+            return;
         };
-        let Some(handlers) = handlers else {
-            self.loop_refusal(
-                span,
-                "a Loop proof over recursive `match` Dispatch requires the v16 proof checker",
-            );
-            return false;
+        let Some(handler) = node.handlers.iter().find(|handler| {
+            handler.activation == node::HandlerActivation::Port(spec.entry.clone())
+        }) else {
+            return;
         };
-        match crate::loop_proof::derive(
-            crate::plan::OwnerSlot::new(0),
-            proof.measure,
-            proof.invariant,
-            &handlers,
+        match crate::loop_proof::derive_dispatch(
+            proof.measure.clone(),
+            proof.invariant.clone(),
+            &handler.dispatch,
         ) {
-            Ok(proof) => {
-                spec.proof = Some(proof);
-                true
-            }
+            Ok(derived) => spec.proof = Some(derived),
             Err(error) => {
-                self.loop_refusal(span, &format!("this Loop cannot be proved finite: {error}"));
-                false
+                self.loop_refusal(span, &format!("this Loop cannot be proved finite: {error}"))
             }
         }
     }
@@ -1290,32 +1056,6 @@ pub(super) fn is_loop_attribute(attribute: &SynAttribute) -> bool {
                     | "max_steps"
                     | "decreases"
             ))
-}
-
-/// Checks source handlers with the independent core proof before packaging,
-/// so a rejected theorem is diagnosed at its source location.
-pub(super) fn loop_proof_handlers(graph: &Graph) -> Option<Vec<crate::plan::Handler>> {
-    graph
-        .handlers
-        .iter()
-        .map(|handler| {
-            let (guard, body) = handler.v15_linear_parts()?;
-            if body.iter().any(|step| {
-                matches!(
-                    step,
-                    Statement::MultiEmit { .. } | Statement::LoopCommand(_)
-                )
-            }) {
-                return None;
-            }
-            Some(crate::plan::Handler {
-                owner: crate::plan::HandlerOwner::Graph(crate::plan::OwnerSlot::new(0)),
-                activation: handler.activation.clone(),
-                guard: guard.cloned(),
-                body: body.to_vec(),
-            })
-        })
-        .collect()
 }
 
 pub(super) fn resolved_loop_entry_type(node: &Node) -> Option<DataType> {

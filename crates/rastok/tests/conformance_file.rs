@@ -62,6 +62,8 @@ graph {name} : App {{
   }}
 
   . -> file
+  file.out -> out
+  file.exit -> nothing
 }}
 "#
     )
@@ -85,6 +87,10 @@ graph pair : App {
 
   . -> left
   . -> right
+  left.out -> out
+  right.out -> out
+  left.exit -> nothing
+  right.exit -> nothing
 }
 "#,
     )

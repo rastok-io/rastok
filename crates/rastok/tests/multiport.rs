@@ -581,11 +581,11 @@ fn a_resolved_contract_port_table_enters_the_validated_plan_complete() {
         Presence, ValueDomain,
     };
     use rastok::node::Direction;
-    use rastok::plan::UnwiredPolicy;
 
     // B5 closes the old hole: a contract name and direction are not enough
     // to make a usable port. The resolved sheet ships every row with its
-    // effective type; no named port becomes an implicit variant.
+    // effective type; no named port becomes an implicit variant. Extra inputs
+    // can travel unused; every producible output below is disposed explicitly.
     const PROBE_SHEET: ConnectorContract = ConnectorContract {
         id: "test/probe@1",
         name: "Probe",
@@ -595,37 +595,37 @@ fn a_resolved_contract_port_table_enters_the_validated_plan_complete() {
             PortContract {
                 name: "in",
                 direction: Direction::Input,
-                unwired: UnwiredPolicy::RequireWire,
+
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
             PortContract {
                 name: "request",
                 direction: Direction::Input,
-                unwired: UnwiredPolicy::RequireWire,
+
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
             PortContract {
                 name: "out",
                 direction: Direction::Output,
-                unwired: UnwiredPolicy::RequireWire,
+
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
             PortContract {
                 name: "err",
                 direction: Direction::Output,
-                unwired: UnwiredPolicy::RootSink,
+
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
             PortContract {
                 name: "response",
-                direction: Direction::Output,
-                unwired: UnwiredPolicy::RequireWire,
+                direction: Direction::Input,
+
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
             PortContract {
                 name: "exit",
                 direction: Direction::Output,
-                unwired: UnwiredPolicy::RootSink,
+
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
         ],
@@ -649,7 +649,7 @@ fn a_resolved_contract_port_table_enters_the_validated_plan_complete() {
         .expect("the standard catalogue holds")
         .try_with(PROBE_SHEET)
         .expect("a valid sheet enters");
-    let source = "graph g : App {\n  connector probe : Probe {\n    effect = idempotent ; behavior = deterministic\n  }\n\n  operator relay {\n    on in { out = data }\n  }\n\n  . -> relay -> probe -> .\n}\n";
+    let source = "graph g : App {\n  connector probe : Probe {\n    effect = idempotent ; behavior = deterministic\n  }\n\n  operator relay {\n    on in { out = data }\n  }\n\n  . -> relay -> probe -> .\n  probe.err -> nothing\n  probe.exit -> nothing\n}\n";
     let compilation = compile(&[source], &registry).expect("the sheet resolves every port type");
     let probe = compilation
         .plan
@@ -668,7 +668,6 @@ fn a_named_connector_edge_defers_by_name() {
         Presence, ValueDomain,
     };
     use rastok::node::Direction;
-    use rastok::plan::UnwiredPolicy;
     const PROBE_SHEET: ConnectorContract = ConnectorContract {
         id: "test/probe@1",
         name: "Probe",
@@ -678,37 +677,37 @@ fn a_named_connector_edge_defers_by_name() {
             PortContract {
                 name: "in",
                 direction: Direction::Input,
-                unwired: UnwiredPolicy::RequireWire,
+
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
             PortContract {
                 name: "request",
                 direction: Direction::Input,
-                unwired: UnwiredPolicy::RequireWire,
+
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
             PortContract {
                 name: "out",
                 direction: Direction::Output,
-                unwired: UnwiredPolicy::RequireWire,
+
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
             PortContract {
                 name: "err",
                 direction: Direction::Output,
-                unwired: UnwiredPolicy::RootSink,
+
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
             PortContract {
                 name: "response",
                 direction: Direction::Output,
-                unwired: UnwiredPolicy::RequireWire,
+
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
             PortContract {
                 name: "exit",
                 direction: Direction::Output,
-                unwired: UnwiredPolicy::RootSink,
+
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
         ],
@@ -1284,7 +1283,6 @@ fn a_defective_sheet_is_held_at_the_door() {
         ConnectorContract, PortContract, PortDataType, PortTypeRule, SheetDefect,
     };
     use rastok::node::Direction;
-    use rastok::plan::UnwiredPolicy;
     const MISDIRECTED: ConnectorContract = ConnectorContract {
         id: "test/bad@1",
         name: "Bad",
@@ -1293,7 +1291,7 @@ fn a_defective_sheet_is_held_at_the_door() {
         ports: &[PortContract {
             name: "out",
             direction: Direction::Input,
-            unwired: UnwiredPolicy::RequireWire,
+
             ty: PortTypeRule::Fixed(PortDataType::Variant),
         }],
         common: &[],
@@ -1308,13 +1306,13 @@ fn a_defective_sheet_is_held_at_the_door() {
             PortContract {
                 name: "request",
                 direction: Direction::Input,
-                unwired: UnwiredPolicy::RequireWire,
+
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
             PortContract {
                 name: "request",
                 direction: Direction::Output,
-                unwired: UnwiredPolicy::RequireWire,
+
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
         ],
@@ -1958,6 +1956,8 @@ graph g : App {
   }
 
   . -> relay -> shell -> .
+  shell.err -> nothing
+  shell.exit -> nothing
 }
 
 lab g {
@@ -2024,7 +2024,7 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
     use rastok::datatype::DataType;
     use rastok::node::Direction;
     use rastok::plan::{Edge, EndpointRef, PortDecl, Slot, ValidatedExecutionPlan};
-    let source = "graph g : App {\n  input in: text\n  output out: text\n  connector probe : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  . -> probe -> .\n}\n";
+    let source = "graph g : App {\n  input in: text\n  output out: text\n  connector probe : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  . -> probe -> .\n  probe.err -> nothing\n  probe.exit -> nothing\n}\n";
     let mut plan = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -2041,7 +2041,7 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
     probe.ports.push(PortDecl {
         port: rastok::node::Port::new("request").unwrap(),
         direction: Direction::Input,
-        unwired: rastok::plan::UnwiredPolicy::RequireWire,
+
         ty: Some(DataType::Text),
         annotations: Default::default(),
     });
@@ -2180,6 +2180,8 @@ graph g : App {
   }
 
   . -> relay -> shell -> .
+  shell.err -> nothing
+  shell.exit -> nothing
 }
 
 lab g {
@@ -2402,7 +2404,14 @@ fn data_materializes_only_on_demand() {
         )
         .expect("the injection lands");
         let result = vm.drain(&mut journal);
-        (result, vm.outputs().to_vec(), vm.errors().len())
+        (
+            result,
+            vm.outputs().to_vec(),
+            vm.observations()
+                .iter()
+                .filter(|event| event.node.is_some() && event.port.name() == "err")
+                .count(),
+        )
     };
     // A guard reading nothing + identity: bytes, encoding, and MIME
     // survive whole.
@@ -2483,7 +2492,14 @@ fn short_circuits_never_demand_the_data() {
         )
         .expect("the injection lands");
         let result = vm.drain(&mut journal);
-        (result, vm.outputs().to_vec(), vm.errors().len())
+        (
+            result,
+            vm.outputs().to_vec(),
+            vm.observations()
+                .iter()
+                .filter(|event| event.node.is_some() && event.port.name() == "err")
+                .count(),
+        )
     };
     // `false && (data as bool)`: the right side never evaluates —
     // filtered, no decode, no fault.
@@ -2578,7 +2594,14 @@ fn the_carry_is_as_lazy_as_the_name() {
         )
         .expect("the injection lands");
         vm.drain(&mut journal).expect("no forced materialization");
-        assert_eq!(vm.errors().len(), 0, "no decode was demanded");
+        assert_eq!(
+            vm.observations()
+                .iter()
+                .filter(|event| event.node.is_some() && event.port.name() == "err")
+                .count(),
+            0,
+            "no decode was demanded"
+        );
         vm.outputs()[0].envelope.clone()
     };
     let holds = |body: &str| {

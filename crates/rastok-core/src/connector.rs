@@ -15,22 +15,22 @@ pub use call::{
 };
 
 /// The standard Process contract's stable major-version identity.
-pub const PROCESS_CONNECTOR_ID: &str = "rastok/process@1";
+pub const PROCESS_CONNECTOR_ID: &str = "rastok/process@2";
 
 /// The standard single-file contract's stable major-version identity.
-pub const FILE_CONNECTOR_ID: &str = "rastok/file@1";
+pub const FILE_CONNECTOR_ID: &str = "rastok/file@2";
 
 /// The standard outbound HTTP call contract's stable identity.
-pub const HTTP_CLIENT_CONNECTOR_ID: &str = "rastok/http-client@1";
+pub const HTTP_CLIENT_CONNECTOR_ID: &str = "rastok/http-client@2";
 
 /// The standard inbound HTTP request contract's stable identity.
-pub const HTTP_SERVER_CONNECTOR_ID: &str = "rastok/http-server@1";
+pub const HTTP_SERVER_CONNECTOR_ID: &str = "rastok/http-server@2";
 
 /// The standard outbound WebSocket session contract's stable identity.
-pub const WEBSOCKET_CLIENT_CONNECTOR_ID: &str = "rastok/websocket-client@1";
+pub const WEBSOCKET_CLIENT_CONNECTOR_ID: &str = "rastok/websocket-client@2";
 
 /// The standard accepted WebSocket session contract's stable identity.
-pub const WEBSOCKET_SERVER_CONNECTOR_ID: &str = "rastok/websocket-server@1";
+pub const WEBSOCKET_SERVER_CONNECTOR_ID: &str = "rastok/websocket-server@2";
 
 /// Portable upper bound of one declared byte budget: 4 GiB inclusive.
 pub const MAX_BYTE_SIZE: u64 = 4 * 1024 * 1024 * 1024;
@@ -288,7 +288,7 @@ mod tests {
     #[test]
     fn connector_ids_accept_one_canonical_spelling_only() {
         for valid in [
-            "rastok/process@1",
+            "rastok/process@2",
             "org.example/http-client@12",
             "a/x1@4294967295",
         ] {
@@ -297,7 +297,7 @@ mod tests {
         for (invalid, reason) in [
             ("Process", ConnectorIdError::Shape),
             ("rastok/process", ConnectorIdError::Shape),
-            ("rastok/process@1@2", ConnectorIdError::Shape),
+            ("rastok/process@2@2", ConnectorIdError::Shape),
             ("rastok/more/process@1", ConnectorIdError::Shape),
             ("Rastok/process@1", ConnectorIdError::Namespace),
             ("rastok./process@1", ConnectorIdError::Namespace),

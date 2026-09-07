@@ -5,6 +5,47 @@ use alloc::vec::Vec;
 
 use crate::node;
 
+/// Restrict a closed source type without unwrapping its values. A bool keeps
+/// its logical type: the type algebra has no singleton-boolean family.
+pub(crate) fn selected_case_type(
+    ty: &crate::datatype::DataType,
+    cases: &[String],
+) -> Option<crate::datatype::DataType> {
+    use crate::datatype::{DataType, EnumType, TaggedUnionType};
+    if cases.is_empty() {
+        return None;
+    }
+    match ty {
+        DataType::Bool
+            if cases
+                .iter()
+                .all(|case| matches!(case.as_str(), "true" | "false")) =>
+        {
+            Some(DataType::Bool)
+        }
+        DataType::Enum(domain) if cases.iter().all(|case| domain.symbols().contains(case)) => {
+            EnumType::new(cases.to_vec()).ok().map(DataType::Enum)
+        }
+        DataType::TaggedUnion(domain)
+            if cases
+                .iter()
+                .all(|case| domain.cases().iter().any(|member| member.name() == case)) =>
+        {
+            TaggedUnionType::new(
+                domain
+                    .cases()
+                    .iter()
+                    .filter(|member| cases.iter().any(|case| case == member.name()))
+                    .cloned()
+                    .collect(),
+            )
+            .ok()
+            .map(DataType::TaggedUnion)
+        }
+        _ => None,
+    }
+}
+
 /// One checked routing decision owned by a single source port.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteRule {
@@ -14,6 +55,15 @@ pub struct RouteRule {
     pub selection: RouteSelection,
 }
 
+impl RouteRule {
+    /// Canonical transport order; unlike open Dispatch arms, route declaration
+    /// order never influences selection.
+    #[must_use]
+    pub fn canonical_order_key(&self) -> Vec<u8> {
+        super::serialization::route_order_key(self)
+    }
+}
+
 /// Static route selection. Closed cases are stored canonically.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RouteSelection {
@@ -21,6 +71,27 @@ pub enum RouteSelection {
     All(Vec<RouteDestination>),
     /// Exactly one exhaustive case arm applies.
     Cases(Vec<RouteArm>),
+}
+
+impl RouteSelection {
+    pub(crate) fn selected(&self, value: &crate::value::Value) -> Option<&[RouteDestination]> {
+        use crate::value::Value;
+        match self {
+            Self::All(destinations) => Some(destinations),
+            Self::Cases(arms) => {
+                let case = match value {
+                    Value::Bool(true) => "true",
+                    Value::Bool(false) => "false",
+                    Value::Enum(case) => case.as_str(),
+                    Value::TaggedUnion(tagged) => tagged.case.as_str(),
+                    _ => return None,
+                };
+                arms.iter()
+                    .find(|arm| arm.cases.iter().any(|member| member == case))
+                    .map(|arm| arm.destinations.as_slice())
+            }
+        }
+    }
 }
 
 /// One canonical route arm.

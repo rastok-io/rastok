@@ -651,7 +651,7 @@ enum Chunk {
     ReadFailed,
 }
 
-/// Statically linked factory for `rastok/process@1`.
+/// Statically linked factory for `rastok/process@2`.
 #[derive(Debug)]
 pub struct ProcessFactory {
     id: crate::connector::ContractId,
@@ -1169,6 +1169,8 @@ graph real : App {
   }
 
   . -> shout -> echo -> .
+  echo.err -> nothing
+  echo.exit -> nothing
 }
 "#;
 
@@ -1232,7 +1234,11 @@ graph real : App {
                 .iter()
                 .map(|output| output.envelope.clone())
                 .collect(),
-            vm.errors().to_vec(),
+            vm.observations()
+                .iter()
+                .filter(|item| item.node.is_some() && item.port.name() == "err")
+                .map(|item| item.envelope.clone())
+                .collect(),
             vm.observations().to_vec(),
         )
     }
@@ -1241,10 +1247,10 @@ graph real : App {
         run_submission(source, submission(text))
     }
 
-    fn root_values<'a>(observed: &'a [Observed], port: &str) -> Vec<&'a Value> {
+    fn source_values<'a>(observed: &'a [Observed], port: &str) -> Vec<&'a Value> {
         observed
             .iter()
-            .filter(|item| item.node.is_none() && item.port.name() == port)
+            .filter(|item| item.node.is_some() && item.port.name() == port)
             .map(|item| match item.envelope.data() {
                 Data::Materialized(value) => value,
                 Data::Encoded { .. } => panic!("a Process test root value is materialized"),
@@ -1253,7 +1259,7 @@ graph real : App {
     }
 
     fn one_exit<'a>(observed: &'a [Observed], case: &str) -> &'a [(String, Value)] {
-        let values = root_values(observed, "exit");
+        let values = source_values(observed, "exit");
         assert_eq!(values.len(), 1, "one terminal fact per invocation");
         let Value::TaggedUnion(tagged) = values[0] else {
             panic!("Process.exit carries ProcessExit");
@@ -1296,6 +1302,8 @@ graph binary : App {
     effect = idempotent ; behavior = deterministic
   }
   . -> echo -> .
+  echo.err -> nothing
+  echo.exit -> nothing
 }
 "#;
         let bytes = vec![0, 0xff, b'\n'];
@@ -1320,6 +1328,8 @@ graph lines : App {
     effect = idempotent ; behavior = deterministic
   }
   . -> child -> .
+  child.err -> nothing
+  child.exit -> nothing
 }
 "#;
         let (_, outputs, errors, observed) = run_submission(
@@ -1352,6 +1362,8 @@ graph configured : App {
     effect = idempotent ; behavior = deterministic
   }
   . -> child -> .
+  child.err -> nothing
+  child.exit -> nothing
 }
 "#;
         let (_, outputs, errors, observed) = run_submission(
@@ -1379,6 +1391,8 @@ graph binary_err : App {
   }
   . -> child
   child.out -> nothing
+  child.err -> nothing
+  child.exit -> nothing
 }
 "#;
         let (_, outputs, errors, observed) = run_submission(
@@ -1419,6 +1433,8 @@ graph failing : App {
   }
 
   . -> shout -> boom -> .
+  boom.err -> nothing
+  boom.exit -> nothing
 }
 "#;
         let (_, outputs, errors, observed) = run(source, "salut");
@@ -1448,6 +1464,8 @@ graph missing : App {
   }
 
   . -> shout -> ghost -> .
+  ghost.err -> nothing
+  ghost.exit -> nothing
 }
 "#;
         let (_, outputs, errors, observed) = run(source, "salut");
@@ -1477,6 +1495,8 @@ graph mute : App {
   }
 
   . -> shout -> hang -> .
+  hang.err -> nothing
+  hang.exit -> nothing
 }
 "#;
         let started = std::time::Instant::now();
@@ -1517,6 +1537,8 @@ graph closing : App {
   }
 
   . -> shout -> hang -> .
+  hang.err -> nothing
+  hang.exit -> nothing
 }
 "#;
         let started = std::time::Instant::now();
@@ -1563,6 +1585,8 @@ graph orphaning : App {
   }
 
   . -> shout -> fork -> .
+  fork.err -> nothing
+  fork.exit -> nothing
 }
 "#;
         let started = std::time::Instant::now();
@@ -1601,6 +1625,8 @@ graph wedge : App {
   }
 
   . -> shout -> leaky -> .
+  leaky.err -> nothing
+  leaky.exit -> nothing
 }
 "#;
         let started = std::time::Instant::now();
@@ -1634,6 +1660,8 @@ graph flood : App {
   }
 
   . -> shout -> noisy -> .
+  noisy.err -> nothing
+  noisy.exit -> nothing
 }
 "#;
         let (_, outputs, errors, observed) = run(source, "salut");
@@ -1663,6 +1691,8 @@ graph capped : App {
   }
 
   . -> shout -> wide -> .
+  wide.err -> nothing
+  wide.exit -> nothing
 }
 "#;
         let (_, outputs, errors, observed) = run(source, "salut");
@@ -1694,6 +1724,8 @@ graph hoarse : App {
   }
 
   . -> shout -> noisy -> .
+  noisy.err -> nothing
+  noisy.exit -> nothing
 }
 "#;
         let (_, outputs, errors, observed) = run(source, "salut");
@@ -1733,6 +1765,8 @@ graph unframeable : App {
   }
 
   . -> shout -> echo -> .
+  echo.err -> nothing
+  echo.exit -> nothing
 }
 "#;
         let compilation = compile(

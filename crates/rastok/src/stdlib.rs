@@ -21,7 +21,6 @@ use crate::contract::{
     PortTypeRule, Presence, Profile, ProfileSelector, ProfileSupport, ValueDomain,
 };
 use crate::node::Direction;
-use crate::plan::UnwiredPolicy;
 
 /// One completion candidate for the open `media_type` logical scalar.
 ///
@@ -115,7 +114,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
         PortContract {
             name: "in",
             direction: Direction::Input,
-            unwired: UnwiredPolicy::RequireWire,
+
             ty: PortTypeRule::AttributeSelected {
                 attribute: "codec",
                 choices: &[
@@ -137,7 +136,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
         PortContract {
             name: "out",
             direction: Direction::Output,
-            unwired: UnwiredPolicy::RequireWire,
+
             ty: PortTypeRule::AttributeSelected {
                 attribute: "codec",
                 choices: &[
@@ -159,7 +158,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
         PortContract {
             name: "err",
             direction: Direction::Output,
-            unwired: UnwiredPolicy::RootSink,
+
             ty: PortTypeRule::AttributeSelected {
                 attribute: "err_codec",
                 choices: &[
@@ -177,7 +176,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
         PortContract {
             name: "exit",
             direction: Direction::Output,
-            unwired: UnwiredPolicy::RootSink,
+
             // One exact union is shared by the contract, v7 port table,
             // completion gate and Process Driver.
             ty: PortTypeRule::Fixed(PortDataType::ProcessExit),
@@ -314,7 +313,7 @@ pub const FILE: ConnectorContract = ConnectorContract {
         PortContract {
             name: "in",
             direction: Direction::Input,
-            unwired: UnwiredPolicy::RequireWire,
+
             ty: PortTypeRule::AttributeSelected {
                 attribute: "mode",
                 choices: &[
@@ -339,13 +338,13 @@ pub const FILE: ConnectorContract = ConnectorContract {
         PortContract {
             name: "out",
             direction: Direction::Output,
-            unwired: UnwiredPolicy::RootSink,
+
             ty: PortTypeRule::Fixed(PortDataType::Bytes),
         },
         PortContract {
             name: "exit",
             direction: Direction::Output,
-            unwired: UnwiredPolicy::RootSink,
+
             ty: PortTypeRule::Fixed(PortDataType::FileExit),
         },
     ],
@@ -436,7 +435,7 @@ pub const HTTP_CLIENT: ConnectorContract = ConnectorContract {
         PortContract {
             name: "in",
             direction: Direction::Input,
-            unwired: UnwiredPolicy::RequireWire,
+
             ty: PortTypeRule::AttributeSelected {
                 attribute: "codec",
                 choices: NETWORK_BODY_TYPES,
@@ -445,13 +444,13 @@ pub const HTTP_CLIENT: ConnectorContract = ConnectorContract {
         PortContract {
             name: "out",
             direction: Direction::Output,
-            unwired: UnwiredPolicy::RequireWire,
+
             ty: PortTypeRule::SameAs("in"),
         },
         PortContract {
             name: "exit",
             direction: Direction::Output,
-            unwired: UnwiredPolicy::RootSink,
+
             ty: PortTypeRule::Fixed(PortDataType::HttpClientExit),
         },
     ],
@@ -568,7 +567,7 @@ pub const HTTP_SERVER: ConnectorContract = ConnectorContract {
         PortContract {
             name: "in",
             direction: Direction::Input,
-            unwired: UnwiredPolicy::RequireWire,
+
             ty: PortTypeRule::AttributeSelected {
                 attribute: "codec",
                 choices: NETWORK_BODY_TYPES,
@@ -577,13 +576,13 @@ pub const HTTP_SERVER: ConnectorContract = ConnectorContract {
         PortContract {
             name: "out",
             direction: Direction::Output,
-            unwired: UnwiredPolicy::RequireWire,
+
             ty: PortTypeRule::SameAs("in"),
         },
         PortContract {
             name: "exit",
             direction: Direction::Output,
-            unwired: UnwiredPolicy::RootSink,
+
             ty: PortTypeRule::Fixed(PortDataType::HttpServerExit),
         },
     ],
@@ -709,7 +708,7 @@ pub const WEBSOCKET_CLIENT: ConnectorContract = ConnectorContract {
         PortContract {
             name: "in",
             direction: Direction::Input,
-            unwired: UnwiredPolicy::RequireWire,
+
             ty: PortTypeRule::AttributeSelected {
                 attribute: "codec",
                 choices: NETWORK_BODY_TYPES,
@@ -718,13 +717,13 @@ pub const WEBSOCKET_CLIENT: ConnectorContract = ConnectorContract {
         PortContract {
             name: "out",
             direction: Direction::Output,
-            unwired: UnwiredPolicy::RequireWire,
+
             ty: PortTypeRule::SameAs("in"),
         },
         PortContract {
             name: "exit",
             direction: Direction::Output,
-            unwired: UnwiredPolicy::RootSink,
+
             ty: PortTypeRule::Fixed(PortDataType::WebSocketExit),
         },
     ],
@@ -835,7 +834,7 @@ pub const WEBSOCKET_SERVER: ConnectorContract = ConnectorContract {
         PortContract {
             name: "in",
             direction: Direction::Input,
-            unwired: UnwiredPolicy::RequireWire,
+
             ty: PortTypeRule::AttributeSelected {
                 attribute: "codec",
                 choices: NETWORK_BODY_TYPES,
@@ -844,13 +843,13 @@ pub const WEBSOCKET_SERVER: ConnectorContract = ConnectorContract {
         PortContract {
             name: "out",
             direction: Direction::Output,
-            unwired: UnwiredPolicy::RequireWire,
+
             ty: PortTypeRule::SameAs("in"),
         },
         PortContract {
             name: "exit",
             direction: Direction::Output,
-            unwired: UnwiredPolicy::RootSink,
+
             ty: PortTypeRule::Fixed(PortDataType::WebSocketExit),
         },
     ],

@@ -37,6 +37,8 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
 
+pub mod loop_protocol;
+
 /// Deterministic identity recipes — the injective blake3 framing of
 /// `envelope.md` §2, with its domain tags.
 pub mod ids {
@@ -318,7 +320,14 @@ pub(crate) fn recorded_envelope(records: &[Record], id: Id) -> Option<&Envelope>
             .iter()
             .map(|emission| &emission.envelope)
             .find(|envelope| envelope.meta().sys().id() == id)
-            .or_else(|| match transaction.loop_fact.as_deref() {
+            .or_else(|| {
+                transaction.loop_protocol().and_then(|packet| {
+                    packet
+                        .envelopes()
+                        .find(|envelope| envelope.meta().sys().id() == id)
+                })
+            })
+            .or_else(|| match transaction.loop_fact() {
                 Some(LoopFact::Open { state, .. } | LoopFact::Next { state, .. })
                     if state.meta().sys().id() == id =>
                 {
@@ -416,16 +425,13 @@ fn transaction_origin(records: &[Record], transaction: &TransactionRecord) -> Op
         .first()
         .map(|emission| emission.envelope.meta().sys().origin_id())
         .or_else(|| {
-            transaction
-                .loop_fact
-                .as_deref()
-                .and_then(|fact| match fact {
-                    LoopFact::Open { state, .. } | LoopFact::Next { state, .. } => {
-                        Some(state.meta().sys().origin_id())
-                    }
-                    LoopFact::Expired { output, .. } => Some(output.meta().sys().origin_id()),
-                    LoopFact::Admit { .. } | LoopFact::Close { .. } => None,
-                })
+            transaction.loop_fact().and_then(|fact| match fact {
+                LoopFact::Open { state, .. } | LoopFact::Next { state, .. } => {
+                    Some(state.meta().sys().origin_id())
+                }
+                LoopFact::Expired { output, .. } => Some(output.meta().sys().origin_id()),
+                LoopFact::Admit { .. } | LoopFact::Close { .. } => None,
+            })
         })
         .or_else(|| {
             transaction
@@ -589,8 +595,7 @@ pub fn fold_loop_run(records: &[Record], run: LoopRunRef) -> Result<Option<LoopR
     for transaction in records.iter().filter_map(|record| match record {
         Record::Transaction(transaction)
             if transaction
-                .loop_fact
-                .as_deref()
+                .loop_fact()
                 .is_some_and(|fact| fact.run() == run) =>
         {
             Some(transaction)
@@ -598,8 +603,7 @@ pub fn fold_loop_run(records: &[Record], run: LoopRunRef) -> Result<Option<LoopR
         _ => None,
     }) {
         let fact = transaction
-            .loop_fact
-            .as_deref()
+            .loop_fact()
             .ok_or(Error::UnknownLoopRun { run })?;
         match fact {
             LoopFact::Open {
@@ -1053,8 +1057,18 @@ pub struct LoopRunState {
     pub phase: LoopRunPhase,
 }
 
+/// Mutually exclusive Loop record domains. Historical key 53 and command
+/// protocol key 55 retain their own meaning; a transaction cannot carry both.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LoopRecord {
+    /// Retained `rastok.loop.r1` transition (key 53).
+    R1(LoopFact),
+    /// `rastok.loop.r2` context, commands and transitions (key 55).
+    R2(loop_protocol::Packet),
+}
+
 /// The atomic commit packet of one node firing (`identity.md` §3,
-/// keys 30–39 and 48–54): consumed input, state delta, and emissions commit
+/// keys 30–39 and 48–55): consumed input, state delta, and emissions commit
 /// together or not at all. [`Journal::commit`] canonicalizes the
 /// sorted collections; emission order is text order and stays as
 /// given.
@@ -1086,9 +1100,9 @@ pub struct TransactionRecord {
     /// transaction. The transaction's last emission must be the sole
     /// conventional `exit`.
     pub exchange_exit: Option<Box<InboundExchangeExitRecord>>,
-    /// Rare Loop-manager transition committed atomically with the traversal
-    /// transaction. Absence keeps non-Loop records semantically unchanged.
-    pub loop_fact: Option<Box<LoopFact>>,
+    /// One sparse, versioned Loop domain. Boxing keeps its absence to one
+    /// pointer in every retained non-Loop transaction.
+    pub loop_record: Option<Box<LoopRecord>>,
     /// The transaction's fixed logical instant when one of its checked
     /// expressions can observe `now()`. Omitted for handlers that do not read
     /// time, so old causal facts and time-insensitive programs keep their
@@ -1115,6 +1129,26 @@ pub struct TransactionRecord {
     /// (erratum E-2026-08-04-2). Sorted at commit; the due instant
     /// is never sealed.
     pub timers: Vec<(u8, crate::envelope::Id)>,
+}
+
+impl TransactionRecord {
+    /// Historical Loop transition, never interpreted as an r2 command.
+    #[must_use]
+    pub fn loop_fact(&self) -> Option<&LoopFact> {
+        match self.loop_record.as_deref() {
+            Some(LoopRecord::R1(fact)) => Some(fact),
+            Some(LoopRecord::R2(_)) | None => None,
+        }
+    }
+
+    /// Command-based Loop packet, absent on all other transactions.
+    #[must_use]
+    pub fn loop_protocol(&self) -> Option<&loop_protocol::Packet> {
+        match self.loop_record.as_deref() {
+            Some(LoopRecord::R2(packet)) => Some(packet),
+            Some(LoopRecord::R1(_)) | None => None,
+        }
+    }
 }
 
 /// One routed delivery whose target instance was selected atomically with
@@ -1356,6 +1390,8 @@ pub enum Error {
     },
     /// An opening does not derive from its root, owner generation and fuel.
     CorruptLoopOpen,
+    /// An r2 command packet contradicts the replay-derived protocol.
+    InvalidLoopProtocol(loop_protocol::Error),
     /// The same root attempted to open one Loop run twice.
     DuplicateLoopRun {
         /// Derived run identity.
@@ -1477,6 +1513,7 @@ impl fmt::Display for Error {
             Self::CorruptLoopOpen => {
                 f.write_str("the Loop open fact does not derive from its root and owner generation")
             }
+            Self::InvalidLoopProtocol(error) => error.fmt(f),
             Self::DuplicateLoopRun { run } => {
                 write!(f, "Loop run {run} is already open or terminal")
             }
@@ -1531,6 +1568,14 @@ impl core::error::Error for Error {}
 /// no exposure of a physical record layout: a durable implementation
 /// may hold anything on disk as long as it answers these questions.
 pub trait Journal {
+    /// Visits one consistent committed prefix in causal order. These are
+    /// semantic records, not the store's physical encoding. Recovery never
+    /// executes a producer while reading this stream.
+    ///
+    /// # Errors
+    /// Failure to read the complete committed prefix from the store.
+    fn visit_records(&self, visit: &mut dyn FnMut(&Record)) -> Result<(), Error>;
+
     /// Deployment facts fixed before the first causal append. A durable
     /// journal stores this in its immutable run header; it is not a fourth
     /// causal record stream.
@@ -1663,6 +1708,12 @@ pub trait Journal {
     /// A corrupt or non-contiguous Loop history.
     fn open_loop_runs(&self) -> Result<Vec<(LoopRunRef, LoopRunState)>, Error>;
 
+    /// Reconstructs the command-based Loop protocol from committed facts.
+    ///
+    /// # Errors
+    /// A contradictory r2 history. No Worker state contributes to this fold.
+    fn loop_protocol(&self) -> Result<loop_protocol::Fold, Error>;
+
     /// Commits one atomic transaction record, canonicalizing its
     /// sorted collections. Durable-before-delivered: a failed commit
     /// must be an error, never a silence.
@@ -1781,6 +1832,10 @@ pub struct MemJournal {
     /// immediate recurrence; transaction key 53 remains the sole authority
     /// and [`fold_loop_run`] independently reconstructs the same projection.
     loop_runs: BTreeMap<LoopRunRef, LoopRunState>,
+    /// Disposable r2 projection, replaced only with the committed record.
+    /// The independent Fold reader reconstructs it from `records`; ordinary
+    /// non-Loop journals allocate nothing for this index.
+    command_loops: Option<Box<loop_protocol::Fold>>,
 }
 
 #[derive(Debug, Clone)]
@@ -1829,6 +1884,7 @@ impl MemJournal {
             sessions: BTreeMap::new(),
             inbound_calls: BTreeMap::new(),
             loop_runs: BTreeMap::new(),
+            command_loops: None,
         }
     }
 
@@ -1902,7 +1958,7 @@ impl MemJournal {
         &self,
         transaction: &TransactionRecord,
     ) -> Result<Option<(LoopRunRef, LoopRunState)>, Error> {
-        let Some(fact) = transaction.loop_fact.as_deref() else {
+        let Some(fact) = transaction.loop_fact() else {
             return Ok(None);
         };
         let invalid = |run, detail| Error::InvalidLoopTransition { run, detail };
@@ -2362,6 +2418,16 @@ impl MemJournal {
 }
 
 impl Journal for MemJournal {
+    fn visit_records(&self, visit: &mut dyn FnMut(&Record)) -> Result<(), Error> {
+        for record in &self.records {
+            visit(record);
+        }
+        Ok(())
+    }
+
+    fn loop_protocol(&self) -> Result<loop_protocol::Fold, Error> {
+        Ok(self.command_loops.as_deref().cloned().unwrap_or_default())
+    }
     fn deployment_attestation(&self) -> Option<&crate::deployment::DeploymentAttestation> {
         self.deployment_attestation.as_ref()
     }
@@ -2512,6 +2578,13 @@ impl Journal for MemJournal {
     }
 
     fn commit(&mut self, mut transaction: TransactionRecord) -> Result<(), Error> {
+        let command_loops = if let Some(packet) = transaction.loop_protocol() {
+            let mut fold = self.command_loops.as_deref().cloned().unwrap_or_default();
+            fold.apply(packet).map_err(Error::InvalidLoopProtocol)?;
+            Some(Box::new(fold))
+        } else {
+            None
+        };
         let expected_owner = transaction.instance.address().owner();
         if &transaction.owner_path != expected_owner {
             return Err(Error::InstanceOwnerMismatch {
@@ -2752,6 +2825,9 @@ impl Journal for MemJournal {
         let address = transaction.instance.address().clone();
         let exchange_exit = transaction.exchange_exit.as_deref().copied();
         self.records.push(Record::Transaction(transaction));
+        if let Some(fold) = command_loops {
+            self.command_loops = Some(fold);
+        }
         self.instance_lifecycles.insert(address, lifecycle);
         if let Some((run, state)) = loop_projection {
             self.loop_runs.insert(run, state);
@@ -3182,7 +3258,7 @@ mod tests {
             parent_instance,
             close_scope: None,
             exchange_exit: None,
-            loop_fact: None,
+            loop_record: None,
             logical_time: None,
             trigger: node::Trigger::Lifecycle(lifecycle),
             cause: None,
@@ -3487,13 +3563,13 @@ mod tests {
         let mut open = lifecycle_transaction(instance.clone(), node::Lifecycle::Start);
         open.trigger = node::Trigger::Port(node::Port::new("in").unwrap());
         open.cause = Some(root.meta().sys().id());
-        open.loop_fact = Some(Box::new(LoopFact::Open {
+        open.loop_record = Some(Box::new(crate::journal::LoopRecord::R1(LoopFact::Open {
             run,
             instance: instance.clone(),
             root: root.meta().sys().id(),
             fuel: 3,
             state: root.clone(),
-        }));
+        })));
         journal.commit(open.clone()).expect("the run opens once");
         assert_eq!(
             journal.commit(open).unwrap_err(),
@@ -3533,14 +3609,14 @@ mod tests {
             index: 0,
             envelope: selected,
         });
-        progress.loop_fact = Some(Box::new(LoopFact::Next {
+        progress.loop_record = Some(Box::new(crate::journal::LoopRecord::R1(LoopFact::Next {
             run,
             iteration: 1,
             remaining: 2,
             selected: selected_id,
             state: reentry.clone(),
             due_at: None,
-        }));
+        })));
         let mut wrong_parent = progress.clone();
         let wrong_state = Envelope::new(
             Meta::new(MetaSys::emission(
@@ -3550,14 +3626,14 @@ mod tests {
             )),
             reentry.data().clone(),
         );
-        wrong_parent.loop_fact = Some(Box::new(LoopFact::Next {
+        wrong_parent.loop_record = Some(Box::new(crate::journal::LoopRecord::R1(LoopFact::Next {
             run,
             iteration: 1,
             remaining: 2,
             selected: selected_id,
             state: wrong_state,
             due_at: None,
-        }));
+        })));
         assert!(matches!(
             journal.commit(wrong_parent).unwrap_err(),
             Error::InvalidLoopTransition {
@@ -3566,7 +3642,9 @@ mod tests {
             } if found == run
         ));
         let mut missing_timer = progress.clone();
-        let Some(LoopFact::Next { due_at, .. }) = missing_timer.loop_fact.as_deref_mut() else {
+        let Some(LoopRecord::R1(LoopFact::Next { due_at, .. })) =
+            missing_timer.loop_record.as_deref_mut()
+        else {
             panic!("the fixture is one Loop progress fact");
         };
         *due_at = Some(1_000);
@@ -3590,7 +3668,10 @@ mod tests {
 
         let mut admit = lifecycle_transaction(instance.clone(), node::Lifecycle::Next);
         admit.cause = Some(reentry.meta().sys().id());
-        admit.loop_fact = Some(Box::new(LoopFact::Admit { run, iteration: 1 }));
+        admit.loop_record = Some(Box::new(crate::journal::LoopRecord::R1(LoopFact::Admit {
+            run,
+            iteration: 1,
+        })));
         journal
             .commit(admit.clone())
             .expect("the selected state is admitted exactly once");
@@ -3605,7 +3686,10 @@ mod tests {
         let mut close = lifecycle_transaction(instance, node::Lifecycle::Start);
         close.trigger = node::Trigger::Port(node::Port::new("in").unwrap());
         close.cause = Some(reentry.meta().sys().id());
-        close.loop_fact = Some(Box::new(LoopFact::Close { run, iteration: 1 }));
+        close.loop_record = Some(Box::new(crate::journal::LoopRecord::R1(LoopFact::Close {
+            run,
+            iteration: 1,
+        })));
         journal.commit(close).expect("the run closes once");
         let folded = journal
             .loop_run(&run)
@@ -3622,14 +3706,14 @@ mod tests {
         let mut after_close = lifecycle_transaction(folded.instance, node::Lifecycle::Start);
         after_close.trigger = node::Trigger::Port(node::Port::new("in").unwrap());
         after_close.cause = Some(reentry.meta().sys().id());
-        after_close.loop_fact = Some(Box::new(LoopFact::Next {
+        after_close.loop_record = Some(Box::new(crate::journal::LoopRecord::R1(LoopFact::Next {
             run,
             iteration: 2,
             remaining: 1,
             selected: selected_id,
             state: reentry,
             due_at: None,
-        }));
+        })));
         assert!(matches!(
             journal.commit(after_close).unwrap_err(),
             Error::InvalidLoopTransition {
@@ -3976,7 +4060,7 @@ mod tests {
                 parent_instance: None,
                 close_scope: None,
                 exchange_exit: None,
-                loop_fact: None,
+                loop_record: None,
                 logical_time: None,
                 trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
                 cause: None,
@@ -4028,7 +4112,7 @@ mod tests {
                 parent_instance: None,
                 close_scope: None,
                 exchange_exit: None,
-                loop_fact: None,
+                loop_record: None,
                 logical_time: None,
                 trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
                 cause: None,

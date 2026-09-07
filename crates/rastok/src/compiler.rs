@@ -13,6 +13,7 @@ pub mod hir;
 pub mod lexer;
 pub mod lower;
 pub mod parser;
+mod routing;
 pub mod syntax;
 
 pub use check::Unit;
@@ -180,6 +181,7 @@ pub fn compile_with_assets(
         }
         Err(
             error @ (PlanValidationError::UnresolvedPortType { .. }
+            | PlanValidationError::UnwiredOutput { .. }
             | PlanValidationError::ConflictingPortTypes { .. }
             | PlanValidationError::MismatchedEdgePins { .. }
             | PlanValidationError::InvalidInstanceKey { .. }
@@ -323,6 +325,13 @@ fn push_source_definition(
 
 fn type_resolution_diagnostic(error: &PlanValidationError) -> Diagnostic {
     match error {
+        PlanValidationError::UnwiredOutput { node, port } => Diagnostic::new(
+            check::E_UNWIRED_OUTPUT,
+            Phase::Check,
+            format!("`{node}.{port}` can be produced but has no destination; route it or write `{node}.{port} -> nothing`"),
+        )
+        .with_field("node", node.to_string())
+        .with_field("port", port.name()),
         PlanValidationError::UnresolvedPortType { node, port } => Diagnostic::new(
             check::E_PORT_TYPE,
             Phase::Check,
@@ -606,6 +615,8 @@ graph g : App {
     behavior = deterministic
   }
   . -> shell -> nothing
+  shell.err -> nothing
+  shell.exit -> nothing
 }
 "#;
         let bag = compile(
@@ -752,20 +763,28 @@ graph conflicting_instance : App {
             Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
         };
         use crate::envelope::{Data, Namespace};
-        use crate::journal::{LoopFact, MemJournal, Record};
+        use crate::journal::{MemJournal, Record, loop_protocol::Fact};
         use crate::runtime::vm::Vm;
         use crate::value::Value;
 
         fn run(witness: &str) -> (Vm<'static>, MemJournal) {
             let source = format!(
                 r#"
-graph countdown : App + Loop {{
+graph app : App {{
   input in: int
   output out: int
-  {witness}
-
-  on in where data <= 0 {{ out = Loop.state.data }}
-  on in where data > 0  {{ next = data - 1 }}
+  output expired: union {{ LoopExpired {{ last_state: int }} }}
+  operator countdown : Loop {{
+    input in: int
+    output out: int
+    {witness}
+    on in match {{
+      data <= 0 => out = Loop.state.data
+      _ => Loop.next = data - 1
+    }}
+  }}
+  in -> countdown -> out
+  countdown.Loop.expired -> expired
 }}
 "#
             );
@@ -810,33 +829,28 @@ graph countdown : App + Loop {{
             .records()
             .iter()
             .filter_map(|record| match record {
-                Record::Transaction(transaction) => transaction.loop_fact.as_deref(),
+                Record::Transaction(transaction) => transaction.loop_protocol(),
                 _ => None,
             })
+            .flat_map(|packet| &packet.facts)
             .collect();
         assert_eq!(
             completed_facts
                 .iter()
-                .filter(|fact| matches!(fact, LoopFact::Next { .. }))
+                .filter(|fact| matches!(fact, Fact::Advance { .. }))
                 .count(),
             3
         );
         assert_eq!(
             completed_facts
                 .iter()
-                .filter(|fact| matches!(fact, LoopFact::Admit { .. }))
+                .filter(|fact| matches!(fact, Fact::Admit { iteration: 1.., .. }))
                 .count(),
             3,
             "every selected state crosses the temporal boundary exactly once"
         );
-        assert!(matches!(
-            completed_facts.first(),
-            Some(LoopFact::Open { .. })
-        ));
-        assert!(matches!(
-            completed_facts.last(),
-            Some(LoopFact::Close { .. })
-        ));
+        assert!(matches!(completed_facts.first(), Some(Fact::Open { .. })));
+        assert!(matches!(completed_facts.last(), Some(Fact::Close { .. })));
 
         let (expired, expired_journal) = run("Loop.fuel = 2");
         assert_eq!(expired.outputs().len(), 1);
@@ -855,10 +869,11 @@ graph countdown : App + Loop {{
         assert!(expired_journal.records().iter().any(|record| matches!(
             record,
             Record::Transaction(transaction)
-                if matches!(transaction.loop_fact.as_deref(), Some(LoopFact::Expired { .. }))
+                if transaction.loop_protocol().is_some_and(|packet|
+                    packet.facts.iter().any(|fact| matches!(fact, Fact::Expired { .. })))
         )));
 
-        let (proved, proved_journal) = run("Loop.measure = data");
+        let (proved, proved_journal) = run("Loop.measure = Loop.state.data");
         assert_eq!(proved.outputs().len(), 1);
         assert_eq!(proved.outputs()[0].port.name(), "out");
         assert_eq!(
@@ -870,17 +885,18 @@ graph countdown : App + Loop {{
             proved_journal
                 .records()
                 .iter()
-                .filter(|record| matches!(
-                    record,
-                    Record::Transaction(transaction)
-                        if matches!(transaction.loop_fact.as_deref(), Some(LoopFact::Admit { .. }))
-                ))
+                .filter_map(|record| match record {
+                    Record::Transaction(transaction) => transaction.loop_protocol(),
+                    _ => None,
+                })
+                .flat_map(|packet| &packet.facts)
+                .filter(|fact| matches!(fact, Fact::Admit { iteration: 1.., .. }))
                 .count(),
             3,
             "measure 3 derives exactly four body applications, three of them recurrent"
         );
 
-        let (capped, capped_journal) = run("Loop.fuel = 2\n  Loop.measure = data");
+        let (capped, capped_journal) = run("Loop.fuel = 2\n  Loop.measure = Loop.state.data");
         assert_eq!(
             capped.outputs()[0].port.name(),
             "expired",
@@ -889,7 +905,8 @@ graph countdown : App + Loop {{
         assert!(capped_journal.records().iter().any(|record| matches!(
             record,
             Record::Transaction(transaction)
-                if matches!(transaction.loop_fact.as_deref(), Some(LoopFact::Expired { .. }))
+                if transaction.loop_protocol().is_some_and(|packet|
+                    packet.facts.iter().any(|fact| matches!(fact, Fact::Expired { .. })))
         )));
     }
 
@@ -899,20 +916,27 @@ graph countdown : App + Loop {{
             Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
         };
         use crate::envelope::{Data, Namespace};
-        use crate::journal::{LoopFact, MemJournal, Record};
+        use crate::journal::{MemJournal, Record, loop_protocol::Fact};
         use crate::runtime::vm::Vm;
         use crate::value::Value;
 
         let compilation = compile(
             &[r#"
-graph countdown : App + Loop {
+graph app : App {
   input in: int
   output out: int
-  instance = { key = data }
-  Loop.fuel = 4
-
-  on in where data <= 0 { out = Loop.state.data }
-  on in where data > 0  { next = data - 1 }
+  operator countdown : Loop {
+    input in: int
+    output out: int
+    instance = { key = data }
+    Loop.fuel = 4
+    on in match {
+      data <= 0 => out = Loop.state.data
+      _ => Loop.next = data - 1
+    }
+  }
+  in -> countdown -> out
+  countdown.Loop.expired -> nothing
 }
 "#],
             &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -938,18 +962,22 @@ graph countdown : App + Loop {
                 },
             )
             .expect("the root is admitted");
-        assert!(before_crash.step(&mut journal).expect("l:start commits"));
-        assert!(before_crash.step(&mut journal).expect("the run opens"));
-        assert!(
-            before_crash
-                .step(&mut journal)
-                .expect("the first next commits before the crash")
-        );
+        while !journal.records().iter().any(|record| {
+            matches!(record,
+            Record::Transaction(transaction) if transaction.loop_protocol()
+                .is_some_and(|packet| !packet.produced.is_empty()))
+        }) {
+            assert!(
+                before_crash
+                    .step(&mut journal)
+                    .expect("the first command commits")
+            );
+        }
         drop(before_crash);
 
         let mut recovered = Vm::boot(plan, crate::plan::GraphVersion(1));
         recovered
-            .recover_loop_runs(&journal)
+            .recover_from_journal(&journal)
             .expect("the open run is reconstructed from journal facts");
         recovered
             .drain(&mut journal)
@@ -964,28 +992,29 @@ graph countdown : App + Loop {
             .records()
             .iter()
             .filter_map(|record| match record {
-                Record::Transaction(transaction) => transaction.loop_fact.as_deref(),
+                Record::Transaction(transaction) => transaction.loop_protocol(),
                 _ => None,
             })
+            .flat_map(|packet| &packet.facts)
             .collect();
         assert_eq!(
             facts
                 .iter()
-                .filter(|fact| matches!(fact, LoopFact::Open { .. }))
+                .filter(|fact| matches!(fact, Fact::Open { .. }))
                 .count(),
             1
         );
         let ordinals: Vec<_> = facts
             .iter()
             .filter_map(|fact| match fact {
-                LoopFact::Next { iteration, .. } => Some(*iteration),
+                Fact::Advance { to_iteration, .. } => Some(*to_iteration),
                 _ => None,
             })
             .collect();
         assert_eq!(ordinals, [1, 2, 3]);
         assert!(matches!(
             facts.last(),
-            Some(LoopFact::Close { iteration: 3, .. })
+            Some(Fact::Close { iteration: 3, .. })
         ));
     }
 
@@ -995,19 +1024,29 @@ graph countdown : App + Loop {
             Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
         };
         use crate::envelope::{Data, Namespace};
-        use crate::journal::{Journal, LoopFact, MemJournal, Record};
+        use crate::journal::{
+            MemJournal, Record,
+            loop_protocol::{Fact, Fold, Phase},
+        };
         use crate::runtime::vm::Vm;
         use crate::value::Value;
 
         let compilation = compile(
             &[r#"
-graph countdown : App + Loop {
+graph app : App {
   input in: int
   output out: int
-  Loop.fuel = 3
-
-  on in where data <= 0 { out = Loop.state.data }
-  on in where data > 0  { next = data - 1 }
+  operator countdown : Loop {
+    input in: int
+    output out: int
+    Loop.fuel = 3
+    on in match {
+      data <= 0 => out = Loop.state.data
+      _ => Loop.next = data - 1
+    }
+  }
+  in -> countdown -> out
+  countdown.Loop.expired -> nothing
 }
 "#],
             &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1032,7 +1071,7 @@ graph countdown : App + Loop {
                     sequence: SubmissionSequence::Next,
                 },
             )
-            .expect("both roots fit the bounded Loop queue");
+            .expect("both roots fit the host mailbox");
         }
         vm.drain(&mut journal)
             .expect("both runs terminate independently");
@@ -1044,29 +1083,25 @@ graph countdown : App + Loop {
             .records()
             .iter()
             .filter_map(|record| match record {
-                Record::Transaction(transaction) => match transaction.loop_fact.as_deref() {
-                    Some(LoopFact::Open { run, .. }) => Some(*run),
-                    _ => None,
-                },
+                Record::Transaction(transaction) => transaction.loop_protocol(),
+                _ => None,
+            })
+            .flat_map(|packet| &packet.facts)
+            .filter_map(|fact| match fact {
+                Fact::Open { run, .. } => Some(*run),
                 _ => None,
             })
             .collect();
         assert_eq!(opens.len(), 2);
         assert_ne!(opens[0], opens[1]);
-        assert!(
-            journal
-                .open_loop_runs()
-                .expect("both folds are valid")
-                .is_empty()
-        );
+        let fold = Fold::from_records(journal.records()).expect("both folds are valid");
+        assert_eq!(fold.runs().count(), 2);
         for run in opens {
             assert_eq!(
-                journal
-                    .loop_run(&run)
-                    .expect("the committed Loop history is valid")
+                fold.run(run)
                     .expect("the terminal fold remains queryable")
                     .phase,
-                crate::journal::LoopRunPhase::Closed
+                Phase::Closed
             );
         }
     }

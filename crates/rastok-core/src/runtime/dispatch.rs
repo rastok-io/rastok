@@ -16,6 +16,8 @@ pub struct DispatchSelection<'a> {
     /// Locals visible only along the selected decision path. Payload witnesses
     /// remain lazy and retain the supplied environment's provenance.
     pub locals: BTreeMap<String, EvalValue>,
+    /// Logical time can affect a prefix or decision evaluated on this path.
+    pub observes_logical_time: bool,
 }
 
 /// Selects exactly one branch against explicit bindings. The caller supplies
@@ -33,13 +35,29 @@ pub fn select_dispatch<'a>(
     dispatch: &'a Dispatch,
     bindings: &dyn Bindings,
 ) -> Result<DispatchSelection<'a>, expr::Error> {
+    select(dispatch, bindings, true)
+}
+
+// The plan's derived time-demand cache can prove no expression reads `now`.
+// In that case selection still evaluates every chosen expression, but does
+// no time-observability AST walk on the transaction hot path.
+pub(super) fn select<'a>(
+    dispatch: &'a Dispatch,
+    bindings: &dyn Bindings,
+    track_logical_time: bool,
+) -> Result<DispatchSelection<'a>, expr::Error> {
     let mut current = dispatch;
     let mut locals = BTreeMap::new();
     let mut depth = 0;
+    let mut observes_logical_time = false;
     loop {
         let prefix = match current {
             Dispatch::Linear(statements) => {
-                return Ok(DispatchSelection { statements, locals });
+                return Ok(DispatchSelection {
+                    statements,
+                    locals,
+                    observes_logical_time,
+                });
             }
             Dispatch::ClosedMatch { prefix, .. } | Dispatch::OpenMatch { prefix, .. } => prefix,
         };
@@ -54,6 +72,8 @@ pub fn select_dispatch<'a>(
             if locals.contains_key(name) || bindings.get(name).is_some() {
                 return Err(fault("a Dispatch prefix shadows a visible binding"));
             }
+            observes_logical_time |=
+                track_logical_time && crate::plan::expression_reads_root(&value.root, "now");
             let value = expr::eval(
                 value,
                 &LocalBindings {
@@ -63,15 +83,24 @@ pub fn select_dispatch<'a>(
             )?;
             locals.insert(name.clone(), value);
         }
-        let scope = LocalBindings {
+        let local_scope = LocalBindings {
             bindings,
             locals: &locals,
+        };
+        // A decision without prefixes needs no extra lookup layer. Single-port
+        // filters desugar to this case on the measured relay hot path.
+        let scope: &dyn Bindings = if locals.is_empty() {
+            bindings
+        } else {
+            &local_scope
         };
         current = match current {
             Dispatch::ClosedMatch {
                 scrutinee, arms, ..
             } => {
-                let value = decision_value(scrutinee, &scope)?;
+                observes_logical_time |= track_logical_time
+                    && crate::plan::expression_reads_root(&scrutinee.root, "now");
+                let value = decision_value(scrutinee, scope)?;
                 let case = match (&scrutinee.ty, &value) {
                     (DataType::Bool, EvalValue::Bool(true)) => "true",
                     (DataType::Bool, EvalValue::Bool(false)) => "false",
@@ -93,7 +122,9 @@ pub fn select_dispatch<'a>(
             Dispatch::OpenMatch { arms, fallback, .. } => {
                 let mut selected = fallback.as_ref();
                 for arm in arms {
-                    match decision_value(&arm.predicate, &scope)? {
+                    observes_logical_time |= track_logical_time
+                        && crate::plan::expression_reads_root(&arm.predicate.root, "now");
+                    match decision_value(&arm.predicate, scope)? {
                         EvalValue::Bool(true) => {
                             selected = &arm.dispatch;
                             break;

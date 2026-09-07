@@ -157,9 +157,10 @@ fn probe(name: &str, url: &str, codec: &str, timeout: &str, max_body: &str) -> S
     on in { out = data.text }
   }
   . -> body -> client -> .
+  client.exit -> nothing
 "#
     } else {
-        "\n  . -> client -> .\n"
+        "\n  . -> client -> .\n  client.exit -> nothing\n"
     };
     format!(
         r#"
@@ -202,6 +203,8 @@ graph pair : App {{
   }}
   . -> a -> left -> .
   . -> b -> right -> .
+  left.exit -> nothing
+  right.exit -> nothing
 }}
 "#,
         server.url("/first"),
@@ -287,6 +290,7 @@ graph authenticated : App {
     effect = idempotent ; behavior = deterministic
   }
   . -> client -> .
+  client.exit -> nothing
 }
 
 lab authenticated {

@@ -1,9 +1,11 @@
 # R4 — categorical plan and independent validation
 
-> **Status (2026-09-05): open, decision/routing field transport.** R3 is
-> committed separately from the paused M1.9 UI. The encoded package remains
-> **v15**; no v16 package, journal key, Contract major or golden is published
-> by this checkpoint. R4–R9 are not closed.
+> **Status (2026-09-06): v16 cutover in progress, not qualified.** The working
+> tree encodes and independently reads categorical **v16**, with recursive
+> Dispatch, route selections, Extension specifications and six `@2` Contracts.
+> Sections 2–8 record the earlier field-only checkpoints; §10 states the current
+> executable boundary. No package or trace golden has been re-blessed.
+> R4–R9 are not closed and the complete workspace test suite is not green.
 
 ## 1. Invariant protected
 
@@ -438,3 +440,162 @@ Only when those shapes are complete does R4 allocate the **single** categorical
 v16 move and enumerate witness changes under
 [`rework-r0-identity.md`](rework-r0-identity.md). No partial v16 format ships to
 make these validation checkpoints look complete.
+
+## 9. Candidate v16 allocation (2026-09-06)
+
+The working tree has one categorical reader/writer, version 16; version 15
+refuses. The candidate body carries mandatory key 10 for sparse route rules.
+Ordinary unconditional edges remain their sole physical authority. Handler
+Dispatch tags are Linear=1, ClosedMatch=2, OpenMatch=3; statement tags 5 and 6
+carry ordered multi-emission and manager commands. Extension tags are App=2
+and Loop-r2=3: historical Loop tag 1, Graph handler owner tag 2 and ChildPort
+activation tag 4 are retired, not reinterpreted. Port direction values are
+Input=1 and Output=2; old unwired-policy modes are rejected.
+
+Loop specifications transport resolved entry and terminal ports at keys 4/5,
+beside fuel/delay/proof. The six standard Contract ids move to `@2`. No new
+logical DataType, dependency, role or exchange tag is introduced.
+
+Body key 11 retains canonical unflattened `RouteRule` rows for plans with
+nested Graph boundaries. The reader re-composes them and compares the result
+to the physical edges and sparse case/manager selections; they are not an
+unchecked display-only table. Erasing a nested output disposition together
+with its flattened edge still refuses, as does violating a crossed type pin.
+Boundary cycles, including unreachable ones, refuse. Composition uses explicit
+work stacks so package-controlled boundary depth does not consume call-stack
+frames. Root-only non-Graph-Loop plans omit this field; the three candidate
+witnesses above are unchanged by its addition.
+
+Ordinary transactions omit the new journal key 55. Its sparse map carries
+context=1, routed contexts=2, produced commands=3, consumed commands=4 and
+manager facts=5. Open/Advance/Admit/Close/Expired have tags 1–5. Admit retains
+the complete admitted envelope; Advance's due instant is retained but remains
+outside the causal seal. Done retains Natural/Explicit provenance (tags 1/2);
+this is not another DSL command. Domain bytes are run-r2 `0x14`, command
+`0x15` and recurrence admission `0x06`; historical domains are untouched.
+
+`package_ledger` compiles and independently decodes each candidate before
+reporting it. Current measurements, **not blessed fixtures**:
+
+| Witness | v15 body → v16 body | Candidate semantic hash | Candidate checksum |
+|---|---:|---|---|
+| echo | 907 → 939 B | `5ffba3ea18c52a98a538a63ed0a7bf23cd3b4be0fa1b7d7acc51ba85dd73cfa3` | `f20579985db83680dfb5f27fe3d0e166600a43e9bf389cdf2e350886e2d68071` |
+| JSONL | 951 → 983 B | `2f89c8b5fa22f7fbe489d6aa770d517c3c9db8f92e850028c1e2bb1280efb2fc` | `98ea0ce81a78671ff9c39e474018f5a92f2c923aa5bd9ad350724158b444e72f` |
+| gauge | 243 → 249 B | `0d3ad43d9fb09c8626146342f6a50d1f4c387a8de52a47a3134a408cf74cb22e` | `36007746ece8b12cef5d4a9bd4f5aefb7b58acbf81f39158c675be7d6d02c2cd` |
+
+Echo/JSONL move because their exact Process Contract and explicit dispositions
+move. Gauge's semantic hash and four-record trace seal
+`6f463270fbc011a8f355c93505ea426c5697149ca69c692033fc2f88d2d9346c`
+remain unchanged. The R0 table's original “body” heading included package
+headers; that measurement error is corrected in its ledger.
+
+## 10. Executable boundary and outstanding work
+
+The source → validated plan → encode → decode → VM tests now execute closed
+and ordered matches, typed case routing with additive fan-out, ordered
+multi-emission and atomic refusal when a later value faults. Losing branches
+neither materialize opaque DATA nor acquire an observable `now()` fact.
+
+A fuel-bounded Operator Loop now uses journaled Open/Admit, separately produced
+and consumed Next/Again/Done, fresh causal re-admission, typed exhaustion,
+logical fixed delay, shared instance state and independent runs. Natural Done
+is produced with the terminal emission and consumed by the manager. Closing
+records retire pending runs before a stale wake can affect a successor.
+The ordinary and join-aware mailbox dispatchers both use this admission gate.
+
+Outbound Call Loops now execute on the Process job, File and HttpClient
+contracts. Their exact terminal chooses a routed command or natural Done;
+frames do not vote. Retrying a queued timeout retains its opening admission,
+and each recurrence arms its own Call timeout. The independent Contract table
+checks frame cardinality and terminal effect class. A Driver contradicting
+promised cardinality faults with `ContractViolation` even without Loop.
+
+The manager uses the Worker's existing 1,024-slot bound. Active and delayed
+runs, plus admitted entries not yet opened, retain their slot until the run
+ends. A regression fills all slots with delayed runs, proves that another
+ingress refuses without appending a record, then releases the slots and admits
+again. The journal's disposable r2 index avoids repeatedly folding the whole
+history; every prefix is checked against independent replay, and a later
+commit refusal cannot publish a prepared index.
+
+The independent fold refuses duplicate/misidentified commands, repeated
+consumption, wrong ordinals/fuel, altered Again state, reused re-admission
+identity and fabricated expiry payloads.
+
+The direct integer measure now operates on command Dispatch: facts from open
+arms and their false fallthroughs, or a closed bool match, must establish
+positivity and a literal strict decrement. `Again` never counts as a decrease.
+The compiler derives the sorted certificate and the package validator derives
+it independently. Measure-only runs derive `max(n, 0) + 1`; an explicit fuel
+still caps execution even when a measure is proved. Forged witness lists and
+erased terminal selections refuse.
+
+`Vm::recover_from_journal` now reconstructs persistent Operator instances,
+mailboxes, exact consumed cursors, private state, pending commands and Loop
+delays. It reads one committed prefix without invoking a handler or appending
+anything. A test interrupts after every commit and requires the same restored
+inspection and complete subsequent record sequence. Corrupt consumption leaves
+the original VM untouched; delayed recovery uses the retained due instant,
+not a new interval from restart. Connector obligations, instance closure,
+non-persistent lifetimes and timed joins refuse explicitly at this recovery
+gate. **This is not complete Worker recovery.** The deadline-retention gap is
+recorded in the repository audit.
+
+The first explicit-destination gate is active at source and in core:
+possible Operator/Contract outputs must have written dispositions; unproduced
+outputs and entirely unreachable Graphs are exempt. An explicit fuel cap can
+still exhaust even beside a proved measure. Nested boundary dispositions and
+type pins survive flattening and receive hostile-package tests. Finer
+case-productibility deductions remain conservative rather than trusting a
+serialized impossibility claim.
+
+The Graph application path has been removed from HIR and the VM:
+`__graph_handler`, `fire_graph`, `LoopWork`, and the child-observation activation
+queue are gone. Retired raw handler-owner/activation variants and their unused
+validator/projection branches still need removal; no supported package can
+admit them. Graph lifecycle facts remain controller-owned, as required by R0.
+
+Still open, without a claim of closure:
+
+- whole-Graph Loop context/quiescence/command execution and routed commands
+  from descendant Executors;
+- complete spatial RecoveryFold, including retained temporal obligations;
+- finer closed-case productibility proofs and full boundary-context recovery;
+- removal of retired raw Graph-handler variants and their dead branches;
+- migration of the old Loop/UI fixtures, then the single golden blessing;
+- the complete post-cutover qualification matrix.
+
+Latest Cortex-M33 candidate measurement: 130,772 B heap against 131,072 B,
+only 300 B margin; worst relay 1,714 ticks at 39,999 calibration ticks per
+2,000,000 instructions, approximately 85.7 k instructions against 150 k.
+The heap-first gate remains mandatory for subsequent embedded-path changes.
+
+The all-feature workspace suite currently fails on old Loop/UI forms and
+unmigrated categorical expectations. Focused passing tests are not presented
+as a green workspace or a completed R4–R9.
+
+## 11. Verification checkpoint — 2026-09-06
+
+| Check actually executed | Result |
+|---|---|
+| `cargo fmt --all -- --check`, `git diff --check` | pass |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | pass |
+| `cargo doc --workspace --no-deps` | pass |
+| `cargo test --workspace --all-features --no-fail-fast` | **1,145 passed, 33 failed**, 31 suite reports |
+| core-only tests | 300 passed |
+| v16 Loop / destination / plan-field suites | 21 / 8 / 11 passed |
+| no-std checks: `thumbv8m.main-none-eabihf`, `thumbv7m-none-eabi`, `riscv32imac-unknown-none-elf` | pass |
+| emulated Cortex-M33 candidate | `SPIKE_OK`; heap and relay within the bounds above |
+
+The 33 workspace failures are 26 tests still exercising the removed Graph
+handler/old Loop and UI-tour forms, plus seven categorical hash/package
+expectations. Those tests have not been ignored or weakened to claim closure.
+The CLI network-test mutex contains no shared data and now recovers poison,
+so one failed tour no longer turns unrelated probes into order-dependent
+`PoisonError` failures.
+
+`cargo run -p rastok -- simulate examples/countdown.rkg` executes two passing
+scenarios through the public CLI. Its Operator Loop terminates by a re-derived
+measure; `Loop.expired` is reported as impossible and needs no artificial
+discard. A separate regression encodes and decodes that example before running
+the same Lab scenarios. No package or causal golden has been blessed.

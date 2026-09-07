@@ -8,7 +8,9 @@
 use crate::envelope::WriteTarget;
 use crate::expr::{self, BinaryOp, Expr};
 use crate::node;
-use crate::plan::{DispatchStep, Emission, Handler, HandlerOwner, OwnerSlot};
+use crate::plan::{
+    Dispatch, DispatchStep, Emission, Handler, HandlerOwner, LoopCommand, OwnerSlot,
+};
 use crate::value::Value;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -161,6 +163,101 @@ pub fn derive(
     })
 }
 
+/// Derives the direct integer-path certificate from a command Dispatch.
+/// Branch facts include the false predicates skipped by an ordered match;
+/// the fallback of `measure <= 0` can therefore establish positivity.
+///
+/// # Errors
+/// A recurrent leaf without a positive, strictly decreasing measure, or a
+/// decision outside the bounded certificate fragment.
+pub fn derive_dispatch(
+    measure: expr::Tree,
+    invariant: Option<expr::Tree>,
+    dispatch: &Dispatch,
+) -> Result<Certificate, Error> {
+    let path = measure_path(&measure)?;
+    if invariant.as_ref().is_some_and(|tree| !is_true(tree)) {
+        return Err(Error::UnsupportedInvariant);
+    }
+    let mut decreases = Vec::new();
+    derive_decision(dispatch, path, &mut Vec::new(), &mut decreases, 0)?;
+    decreases.sort_unstable();
+    Ok(Certificate {
+        measure,
+        invariant,
+        decreases,
+    })
+}
+
+fn derive_decision<'a>(
+    dispatch: &'a Dispatch,
+    measure: &[String],
+    facts: &mut Vec<(&'a Expr, bool)>,
+    decreases: &mut Vec<u64>,
+    depth: usize,
+) -> Result<(), Error> {
+    if depth > crate::plan::MAX_DISPATCH_DEPTH {
+        return Err(Error::UnsupportedActivation);
+    }
+    match dispatch {
+        Dispatch::Linear(steps) => {
+            let mut recurrent = false;
+            for step in steps {
+                let DispatchStep::LoopCommand(command) = step else {
+                    continue;
+                };
+                let update = match command {
+                    LoopCommand::Next(update) => update,
+                    LoopCommand::Again => return Err(Error::MeasureDoesNotDecrease),
+                    LoopCommand::Done => continue,
+                };
+                if recurrent {
+                    return Err(Error::AmbiguousRecurrence);
+                }
+                recurrent = true;
+                if !facts
+                    .iter()
+                    .any(|(guard, truth)| guard_fact_proves_positive(guard, *truth, measure))
+                {
+                    return Err(Error::MeasureNotPositive);
+                }
+                let update =
+                    measured_update(update, measure).ok_or(Error::MeasureDoesNotDecrease)?;
+                decreases
+                    .push(strict_decrease(update, measure).ok_or(Error::MeasureDoesNotDecrease)?);
+            }
+        }
+        Dispatch::OpenMatch { arms, fallback, .. } => {
+            let original = facts.len();
+            for arm in arms {
+                facts.push((&arm.predicate.root, true));
+                derive_decision(&arm.dispatch, measure, facts, decreases, depth + 1)?;
+                facts.pop();
+                facts.push((&arm.predicate.root, false));
+            }
+            derive_decision(fallback, measure, facts, decreases, depth + 1)?;
+            facts.truncate(original);
+        }
+        Dispatch::ClosedMatch {
+            scrutinee, arms, ..
+        } => {
+            for arm in arms {
+                let original = facts.len();
+                if scrutinee.ty == crate::datatype::DataType::Bool && arm.cases.len() == 1 {
+                    match arm.cases[0].as_str() {
+                        "true" => facts.push((&scrutinee.root, true)),
+                        "false" => facts.push((&scrutinee.root, false)),
+                        _ => return Err(Error::UnsupportedActivation),
+                    }
+                }
+                derive_decision(&arm.dispatch, measure, facts, decreases, depth + 1)?;
+                facts.truncate(original);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn measure_path(measure: &expr::Tree) -> Result<&[String], Error> {
     if !matches!(
         measure.ty,
@@ -171,10 +268,17 @@ fn measure_path(measure: &expr::Tree) -> Result<&[String], Error> {
     let Expr::Path(path) = &measure.root else {
         return Err(Error::UnsupportedMeasure);
     };
-    if path.first().is_none_or(|root| root != "data") {
-        return Err(Error::UnsupportedMeasure);
+    data_path(path).ok_or(Error::UnsupportedMeasure)
+}
+
+fn data_path(path: &[String]) -> Option<&[String]> {
+    match path {
+        [root, ..] if root == "data" => Some(path),
+        [root, state, data, ..] if root == "Loop" && state == "state" && data == "data" => {
+            Some(&path[2..])
+        }
+        _ => None,
     }
-    Ok(path)
 }
 
 fn is_true(tree: &expr::Tree) -> bool {
@@ -184,8 +288,8 @@ fn is_true(tree: &expr::Tree) -> bool {
 
 fn next_emission(handler: &Handler) -> Result<Option<&Emission>, Error> {
     let mut next = handler
-        .body
-        .iter()
+        .dispatch
+        .steps()
         .flat_map(DispatchStep::emissions)
         .filter_map(|(port, value)| (port.name() == "next").then_some(value));
     let Some(selected) = next.next() else {
@@ -260,30 +364,67 @@ fn strict_decrease(after: &Expr, measure: &[String]) -> Option<u64> {
 }
 
 fn guard_proves_positive(guard: &Expr, measure: &[String]) -> bool {
+    guard_fact_proves_positive(guard, true, measure)
+}
+
+fn guard_fact_proves_positive(guard: &Expr, truth: bool, measure: &[String]) -> bool {
     match guard {
+        Expr::Unary {
+            op: expr::UnaryOp::Not,
+            expr,
+        } => guard_fact_proves_positive(expr, !truth, measure),
         Expr::Binary {
             op: BinaryOp::And,
             left,
             right,
-        } => guard_proves_positive(left, measure) || guard_proves_positive(right, measure),
+        } => {
+            if truth {
+                guard_fact_proves_positive(left, true, measure)
+                    || guard_fact_proves_positive(right, true, measure)
+            } else {
+                guard_fact_proves_positive(left, false, measure)
+                    && guard_fact_proves_positive(right, false, measure)
+            }
+        }
+        Expr::Binary {
+            op: BinaryOp::Or,
+            left,
+            right,
+        } => {
+            if truth {
+                guard_fact_proves_positive(left, true, measure)
+                    && guard_fact_proves_positive(right, true, measure)
+            } else {
+                guard_fact_proves_positive(left, false, measure)
+                    || guard_fact_proves_positive(right, false, measure)
+            }
+        }
         Expr::Binary { op, left, right } if is_path(left, measure) => {
             let Some(bound) = signed_literal(right) else {
                 return false;
             };
-            matches!(op, BinaryOp::Gt if bound >= 0) || matches!(op, BinaryOp::Ge if bound >= 1)
+            if truth {
+                matches!(op, BinaryOp::Gt if bound >= 0) || matches!(op, BinaryOp::Ge if bound >= 1)
+            } else {
+                matches!(op, BinaryOp::Le if bound >= 0) || matches!(op, BinaryOp::Lt if bound >= 1)
+            }
         }
         Expr::Binary { op, left, right } if is_path(right, measure) => {
             let Some(bound) = signed_literal(left) else {
                 return false;
             };
-            matches!(op, BinaryOp::Lt if bound >= 0) || matches!(op, BinaryOp::Le if bound >= 1)
+            if truth {
+                matches!(op, BinaryOp::Lt if bound >= 0) || matches!(op, BinaryOp::Le if bound >= 1)
+            } else {
+                matches!(op, BinaryOp::Ge if bound >= 0) || matches!(op, BinaryOp::Gt if bound >= 1)
+            }
         }
         _ => false,
     }
 }
 
 fn is_path(expr: &Expr, expected: &[String]) -> bool {
-    matches!(expr, Expr::Path(path) if path == expected)
+    matches!(expr, Expr::Path(path) if data_path(path) == Some(expected))
 }
 
 fn signed_literal(expr: &Expr) -> Option<i64> {
@@ -314,13 +455,13 @@ mod tests {
             owner: HandlerOwner::Graph(OwnerSlot::new(0)),
             activation: node::HandlerActivation::Port(node::Port::new("in").unwrap()),
             guard: Some(tree(guard, DataType::Bool)),
-            body: vec![DispatchStep::Emit {
+            dispatch: crate::plan::Dispatch::Linear(vec![DispatchStep::Emit {
                 port: node::Port::new("next").unwrap(),
                 value: Emission::FreshData(vec![FieldWrite {
                     target: WriteTarget::Data(vec![String::from("n")]),
                     value: tree(after, DataType::INT),
                 }]),
-            }],
+            }]),
         }
     }
 
@@ -400,10 +541,10 @@ mod tests {
             owner: HandlerOwner::Graph(OwnerSlot::new(0)),
             activation: node::HandlerActivation::Port(node::Port::new("in").unwrap()),
             guard: Some(tree(positive_guard(), DataType::Bool)),
-            body: vec![DispatchStep::Emit {
+            dispatch: crate::plan::Dispatch::Linear(vec![DispatchStep::Emit {
                 port: node::Port::new("next").unwrap(),
                 value: Emission::FreshData(writes),
-            }],
+            }]),
         };
 
         assert_eq!(

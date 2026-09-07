@@ -7,17 +7,24 @@
 //! beside the plan as [`SemanticHash`].
 
 mod annotation_resolution;
+mod call_loop;
 mod case_partition;
+mod composition;
 mod dispatch;
+mod dispatch_resolution;
 mod dispatch_validation;
 mod emission;
+mod productibility;
 mod routing;
 mod routing_validation;
 mod serialization;
 mod type_resolution;
 mod validation;
 
+use alloc::boxed::Box;
+
 pub use case_partition::{CasePartitionError, closed_case_domain, validate_case_partition};
+pub use composition::{RouteCompositionError, compose_routing};
 pub use dispatch::{
     ClosedArm, Dispatch, DispatchStep, LoopCommand, MAX_DISPATCH_DEPTH, MultiEmitValues, OpenArm,
 };
@@ -285,6 +292,7 @@ pub fn canonical_request_headers(
     let value = crate::value::Value::Map(result);
     http_headers_value_holds(&value).then_some(value)
 }
+pub(crate) use type_resolution::expression_reads_root;
 pub use type_resolution::{ResolvedPort, ResolvedPortTable, TypeOrigin};
 pub use validation::{PlanValidationError, ValidatedExecutionPlan};
 
@@ -320,20 +328,8 @@ impl Slot {
     }
 }
 
-/// What happens when an output has no outgoing edge.
-///
-/// This is plan data, not a convention inferred from the port's name.  The
-/// validated plan rejects a root-sink policy on an input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum UnwiredPolicy {
-    /// The compiler warns when the output is left unwired.
-    RequireWire,
-    /// The VM publishes an unclaimed emission at the root sink.
-    RootSink,
-}
-
 /// One entry of a port table — a node's or the boundary's: the name,
-/// direction, unwired policy, and OPTIONAL pinned type. A present type is a
+/// direction and OPTIONAL pinned type. A present type is a
 /// public contract (identity material, transported in the package);
 /// an absent one is a source-level inference variable, never an implicit
 /// `variant`. The canonical order key is
@@ -344,9 +340,6 @@ pub struct PortDecl {
     pub port: node::Port,
     /// The declared direction.
     pub direction: node::Direction,
-    /// Routing policy when no edge claims this port. Inputs must use
-    /// [`UnwiredPolicy::RequireWire`].
-    pub unwired: UnwiredPolicy,
     /// The pinned type, when annotated.
     pub ty: Option<DataType>,
     /// Sparse data-policy metadata beside the effective logical type.
@@ -360,20 +353,7 @@ impl PortDecl {
         Self {
             port,
             direction,
-            unwired: UnwiredPolicy::RequireWire,
             ty: None,
-            annotations: AnnotationTable::empty(),
-        }
-    }
-
-    /// An output which publishes unclaimed emissions at the root sink.
-    #[must_use]
-    pub fn root_sink(port: node::Port, ty: Option<DataType>) -> Self {
-        Self {
-            port,
-            direction: node::Direction::Output,
-            unwired: UnwiredPolicy::RootSink,
-            ty,
             annotations: AnnotationTable::empty(),
         }
     }
@@ -403,6 +383,14 @@ pub struct ExecutionPlan {
     /// The wiring, desugared to explicit pairs, in canonical order —
     /// the same order the semantic hash sees.
     pub edges: Vec<Edge>,
+    /// Case selections and manager destinations beside the spatial edges.
+    /// A source absent from this sparse table selects its ordinary edges.
+    pub routes: Vec<RouteRule>,
+    /// Unflattened routing when the plan contains nested Graph boundaries.
+    /// The validator derives the physical routes again from this inventory;
+    /// boundaries remain structural seams, never executable pseudo-nodes.
+    /// Empty for plans with no nested boundary or Graph Loop admission.
+    pub boundary_routes: Vec<RouteRule>,
     /// Every handler, in complete canonical transport order. Declaration
     /// order between mutually exclusive guarded handlers carries no identity;
     /// only statements INSIDE a handler are order-sensitive.
@@ -433,6 +421,92 @@ pub struct AssetBlob {
 }
 
 impl ExecutionPlan {
+    pub(crate) fn endpoint_matches(&self, endpoint: &Endpoint, physical: &EndpointRef) -> bool {
+        endpoint.port == physical.port
+            && match (&endpoint.owner, physical.node) {
+                (EndpointOwner::Node(path), Some(slot)) => self
+                    .nodes
+                    .get(slot.index())
+                    .is_some_and(|node| node.path == *path),
+                (EndpointOwner::Graph(path), None) => path.is_root(),
+                _ => false,
+            }
+    }
+
+    fn route_destination_matches(&self, destination: &RouteDestination, edge: &Edge) -> bool {
+        match (destination, &edge.to) {
+            (RouteDestination::Port(endpoint), Some(physical)) => {
+                self.endpoint_matches(endpoint, physical)
+            }
+            (RouteDestination::Discard, None) => true,
+            _ => false,
+        }
+    }
+
+    pub(crate) fn has_case_routes(&self, source: &EndpointRef) -> bool {
+        self.routes.iter().any(|route| {
+            self.endpoint_matches(&route.source, source)
+                && matches!(route.selection, RouteSelection::Cases(_))
+        })
+    }
+
+    pub(crate) fn edge_is_selected(&self, edge: &Edge, value: &Value) -> bool {
+        let mut constrained = false;
+        for route in self
+            .routes
+            .iter()
+            .filter(|route| self.endpoint_matches(&route.source, &edge.from))
+        {
+            constrained = true;
+            let selected = route.selection.selected(value);
+            if selected.is_some_and(|destinations| {
+                destinations
+                    .iter()
+                    .any(|destination| self.route_destination_matches(destination, edge))
+            }) {
+                return true;
+            }
+        }
+        !constrained
+    }
+
+    pub(crate) fn edge_cases(&self, edge: &Edge) -> Option<Vec<String>> {
+        let mut cases = None;
+        for route in self
+            .routes
+            .iter()
+            .filter(|route| self.endpoint_matches(&route.source, &edge.from))
+        {
+            match &route.selection {
+                RouteSelection::All(destinations) => {
+                    if destinations
+                        .iter()
+                        .any(|destination| self.route_destination_matches(destination, edge))
+                    {
+                        return None;
+                    }
+                }
+                RouteSelection::Cases(arms) => {
+                    let selected = cases.get_or_insert_with(Vec::new);
+                    for arm in arms {
+                        if arm
+                            .destinations
+                            .iter()
+                            .any(|destination| self.route_destination_matches(destination, edge))
+                        {
+                            selected.extend(arm.cases.iter().cloned());
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(cases) = &mut cases {
+            cases.sort();
+            cases.dedup();
+        }
+        cases
+    }
+
     /// Resolves one owner reference without trusting a freely constructed
     /// [`OwnerSlot`].
     #[must_use]
@@ -653,34 +727,48 @@ pub struct Owner {
     /// [`Node`], while the root contract has its existing single authority in
     /// [`ExecutionPlan::boundary`].
     pub ports: Vec<PortDecl>,
-    /// Closed aspect specifications in canonical aspect order. Keeping the
-    /// specification inside the enum makes an aspect-without-configuration
-    /// impossible in a categorical plan.
-    pub aspects: Vec<AspectSpec>,
+    /// Complete Extension specifications in canonical order.
+    pub extensions: Vec<ExtensionSpec>,
     /// Orthogonal logical addressing and lifetime policy.
     pub instance: InstanceSpec,
     /// Immutable bindings owned by this scope, in canonical name order.
     pub vals: Vec<OwnerValue>,
 }
 
-/// One fully configured NodeAspect carried by a categorical plan.
+/// One fully configured Extension carried by a categorical plan.
 ///
 /// The enum is deliberately closed. Recognizing a source name does not grant
-/// it a transport tag: a new aspect lands only together with its complete
+/// it a transport tag: an Extension lands only together with its complete
 /// Registry-free validation contract.
 #[derive(Debug, Clone, PartialEq)]
-pub enum AspectSpec {
-    /// Finite temporal recursion owned by a Graph boundary.
-    Loop(LoopSpec),
+pub enum ExtensionSpec {
+    /// The unique root Graph's public deployment boundary.
+    App,
+    /// Finite temporal recursion over the owner's entry interface.
+    Loop(Box<LoopSpec>),
 }
 
-impl AspectSpec {
-    /// Semantic aspect selected by this complete specification.
+impl ExtensionSpec {
+    /// Extension selected by this complete specification.
     #[must_use]
-    pub const fn aspect(&self) -> node::Extension {
+    pub const fn extension(&self) -> node::Extension {
         match self {
+            Self::App => node::Extension::App,
             Self::Loop(_) => node::Extension::Loop,
         }
+    }
+}
+
+impl Owner {
+    /// The configured temporal recursion, independent of Extension order.
+    #[must_use]
+    pub fn loop_spec(&self) -> Option<&LoopSpec> {
+        self.extensions
+            .iter()
+            .find_map(|extension| match extension {
+                ExtensionSpec::Loop(spec) => Some(spec.as_ref()),
+                ExtensionSpec::App => None,
+            })
     }
 }
 
@@ -697,6 +785,10 @@ pub struct PlanConstant {
 /// Complete first-gate Loop transport.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoopSpec {
+    /// Resolved recurrent input; every admission of this run returns here.
+    pub entry: node::Port,
+    /// Canonical terminal business outputs. Calls use their Contract exit.
+    pub terminals: Vec<node::Port>,
     /// Optional positive maximum number of body applications. A verified
     /// measure may stand alone; when both exist this remains the runtime cap.
     pub fuel: Option<PlanConstant>,
@@ -808,7 +900,7 @@ pub struct OwnerValue {
 /// A connector's planned configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConnectorSpec {
-    /// Stable semantic contract identity (`rastok/process@1`).
+    /// Stable semantic contract identity (`rastok/process@2`).
     pub contract: crate::connector::ContractId,
     /// Inbound/outbound runtime roles required by the contract.
     pub roles: crate::connector::ConnectorRoles,
@@ -825,6 +917,16 @@ pub struct ConnectorSpec {
 }
 
 impl ConnectorSpec {
+    /// Closed Call guarantees derived from the exact Contract and profile.
+    #[must_use]
+    pub(crate) fn call_semantics(&self) -> Option<crate::connector::CallSemantics> {
+        let mode = match self.attribute("mode") {
+            Some(AttrSetting::Word(mode)) => Some(mode.as_str()),
+            _ => None,
+        };
+        crate::connector::outbound_call_semantics(&self.contract, self.roles, self.exchange, mode)
+    }
+
     /// The setting of one attribute, if declared.
     #[must_use]
     pub fn attribute(&self, name: &str) -> Option<&AttrSetting> {
@@ -866,7 +968,7 @@ pub struct VarCell {
     pub annotations: AnnotationTable,
 }
 
-/// One planned handler: a triggered, ordered statement body.
+/// One Operator transition, with join admission separate from consumption.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Handler {
     /// Lexical declaration that owns the handler.
@@ -874,16 +976,17 @@ pub struct Handler {
     /// The declared activation pattern — not the causal trigger a
     /// transaction records; see [`node::HandlerActivation`].
     pub activation: node::HandlerActivation,
-    /// The compiled guard, when present.
+    /// Pre-consumption join admission predicate. A port filter belongs in
+    /// `dispatch`, where its false branch still consumes the delivery.
     pub guard: Option<expr::Tree>,
-    /// The steps, in text order — the order fixing emission indices.
-    pub body: Vec<DispatchStep>,
+    /// Typed decision and ordered atomic emissions.
+    pub dispatch: Dispatch,
 }
 
 impl Handler {
     /// Complete canonical ordering key for the shipped handler table.
     ///
-    /// Graph aspects may own several mutually exclusive guarded handlers for
+    /// Graph extensions may own several mutually exclusive guarded handlers for
     /// one activation. The activation alone is therefore no longer a total
     /// order; the exact transported handler supplies the deterministic
     /// tie-break without making declaration order semantic.

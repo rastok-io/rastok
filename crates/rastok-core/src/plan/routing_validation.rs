@@ -38,6 +38,16 @@ pub struct RouteConflict {
 /// A malformed selection or conflict in the complete routing inventory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RouteErrorKind {
+    /// Transparent boundary composition contains a spatial cycle.
+    BoundaryCycle,
+    /// A flattened delivery violates a crossed Graph boundary's type pin.
+    BoundaryTypeMismatch,
+    /// A selection names an endpoint outside the flattened executable table.
+    UnknownEndpoint,
+    /// Selected deliveries and the physical edge inventory disagree.
+    PhysicalEdgeMismatch,
+    /// The manager protocol has not passed its execution gate.
+    UnsupportedManagerCommand,
     /// There is no independently resolved type for a case-routed source.
     UnresolvedCaseSource,
     /// A case table contradicts the resolved source type or canonical order.
@@ -76,8 +86,21 @@ impl fmt::Display for RouteValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}: ", self.path)?;
         match &self.kind {
+            RouteErrorKind::BoundaryCycle => f.write_str("Graph boundary routing contains a cycle"),
+            RouteErrorKind::BoundaryTypeMismatch => {
+                f.write_str("routed value does not conform to a crossed Graph boundary")
+            }
             RouteErrorKind::UnresolvedCaseSource => {
                 f.write_str("case-routed source has no resolved type")
+            }
+            RouteErrorKind::UnknownEndpoint => {
+                f.write_str("route endpoint is not a declared executable endpoint")
+            }
+            RouteErrorKind::PhysicalEdgeMismatch => {
+                f.write_str("selected destinations and physical edges disagree")
+            }
+            RouteErrorKind::UnsupportedManagerCommand => {
+                f.write_str("Loop manager commands require the R7 execution protocol")
             }
             RouteErrorKind::CasePartition(error) => fmt::Display::fmt(error, f),
             RouteErrorKind::EmptyDestinations => {
@@ -111,6 +134,110 @@ impl fmt::Display for RouteValidationError {
             }
         }
     }
+}
+
+pub(super) fn validate_plan_routing(
+    plan: &super::ExecutionPlan,
+    ports: &super::ResolvedPortTable,
+) -> Result<(), super::PlanValidationError> {
+    let physical = |endpoint: &Endpoint| -> Option<super::EndpointRef> {
+        let node = match &endpoint.owner {
+            super::EndpointOwner::Graph(path) if path.is_root() => None,
+            super::EndpointOwner::Node(path) => Some(super::Slot::new(
+                u32::try_from(plan.nodes.iter().position(|node| node.path == *path)?).ok()?,
+            )),
+            _ => return None,
+        };
+        let endpoint = super::EndpointRef {
+            node,
+            port: endpoint.port.clone(),
+        };
+        ports.endpoint_type(&endpoint)?;
+        Some(endpoint)
+    };
+    for pair in plan.routes.windows(2) {
+        if pair[0].canonical_order_key() >= pair[1].canonical_order_key() {
+            return Err(super::PlanValidationError::NonCanonicalOrder {
+                collection: "routes",
+            });
+        }
+    }
+    for (index, rule) in plan.routes.iter().enumerate() {
+        let path = format!("routes[{index}]");
+        let source = physical(&rule.source)
+            .ok_or_else(|| RouteValidationError::at(&path, RouteErrorKind::UnknownEndpoint))?;
+        let sets: Vec<&[RouteDestination]> = match &rule.selection {
+            RouteSelection::All(destinations) => alloc::vec![destinations],
+            RouteSelection::Cases(arms) => {
+                arms.iter().map(|arm| arm.destinations.as_slice()).collect()
+            }
+        };
+        for destination in sets.into_iter().flatten() {
+            if let RouteDestination::LoopCommand(command) = destination {
+                let admitted = command.owner == rule.source.owner
+                    && source.node.is_some_and(|slot| {
+                        let node = &plan.nodes[slot.index()];
+                        plan.owners[node.owner.index()].loop_spec().is_some()
+                            && node
+                                .connector()
+                                .and_then(super::ConnectorSpec::call_semantics)
+                                .is_some()
+                    });
+                if !admitted {
+                    return Err(RouteValidationError::at(
+                        &path,
+                        RouteErrorKind::UnsupportedManagerCommand,
+                    )
+                    .into());
+                }
+                continue;
+            }
+            if matches!(destination, RouteDestination::Port(endpoint) if physical(endpoint).is_none())
+            {
+                return Err(
+                    RouteValidationError::at(&path, RouteErrorKind::UnknownEndpoint).into(),
+                );
+            }
+            if !plan.edges.iter().any(|edge| {
+                edge.from == source && plan.route_destination_matches(destination, edge)
+            }) {
+                return Err(
+                    RouteValidationError::at(&path, RouteErrorKind::PhysicalEdgeMismatch).into(),
+                );
+            }
+        }
+        for edge in plan.edges.iter().filter(|edge| edge.from == source) {
+            if !plan
+                .routes
+                .iter()
+                .filter(|candidate| candidate.source == rule.source)
+                .any(|candidate| match &candidate.selection {
+                    RouteSelection::All(destinations) => destinations
+                        .iter()
+                        .any(|destination| plan.route_destination_matches(destination, edge)),
+                    RouteSelection::Cases(arms) => arms
+                        .iter()
+                        .flat_map(|arm| &arm.destinations)
+                        .any(|destination| plan.route_destination_matches(destination, edge)),
+                })
+            {
+                return Err(
+                    RouteValidationError::at(&path, RouteErrorKind::PhysicalEdgeMismatch).into(),
+                );
+            }
+        }
+    }
+    validate_routing(&plan.routes, |endpoint| {
+        physical(endpoint).and_then(|endpoint| ports.endpoint_type(&endpoint).cloned())
+    })?;
+    for (index, _) in plan.nodes.iter().enumerate() {
+        super::call_loop::validate(
+            plan,
+            super::Slot::new(u32::try_from(index).unwrap_or(u32::MAX)),
+            ports,
+        )?;
+    }
+    Ok(())
 }
 
 impl core::error::Error for RouteValidationError {}

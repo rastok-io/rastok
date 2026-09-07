@@ -67,6 +67,8 @@ graph file_probe : App {{
   }}
 
   . -> file
+  file.out -> out
+  file.exit -> nothing
 }}
 "#
     )
@@ -116,11 +118,11 @@ fn drive(vm: &mut Vm<'_>, journal: &mut MemJournal, bindings: &mut RuntimeBindin
     panic!("the File invocation did not become stable");
 }
 
-fn root_exit_cases(vm: &Vm<'_>) -> Vec<String> {
+fn source_exit_cases(vm: &Vm<'_>) -> Vec<String> {
     vm.observations()
         .iter()
         .filter_map(|observed| {
-            if observed.node.is_some() || observed.port.name() != "exit" {
+            if observed.node.is_none() || observed.port.name() != "exit" {
                 return None;
             }
             let Data::Materialized(Value::TaggedUnion(tagged)) = observed.envelope.data() else {
@@ -131,11 +133,11 @@ fn root_exit_cases(vm: &Vm<'_>) -> Vec<String> {
         .collect()
 }
 
-fn root_bytes(vm: &Vm<'_>) -> Vec<Vec<u8>> {
+fn source_bytes(vm: &Vm<'_>) -> Vec<Vec<u8>> {
     vm.observations()
         .iter()
         .filter_map(|observed| {
-            if observed.node.is_some() || observed.port.name() != "out" {
+            if observed.node.is_none() || observed.port.name() != "out" {
                 return None;
             }
             match observed.envelope.data() {
@@ -157,8 +159,8 @@ fn run_observed(root: &Path, source: &str, data: Data) -> (MemJournal, Vec<Strin
     vm.inject(&mut journal, submission(data))
         .expect("the input is admitted");
     drive(&mut vm, &mut journal, &mut bindings);
-    let exits = root_exit_cases(&vm);
-    let bytes = root_bytes(&vm);
+    let exits = source_exit_cases(&vm);
+    let bytes = source_bytes(&vm);
     (journal, exits, bytes)
 }
 
@@ -193,6 +195,8 @@ graph dynamic_file : App {
   }
 
   . -> file
+  file.out -> out
+  file.exit -> nothing
 }
 "#;
 
@@ -314,8 +318,8 @@ fn filesystem_observation_begins_only_after_the_outbound_open() {
     std::fs::write(&target, b"visible-after-open").expect("the external file appears");
 
     drive(&mut vm, &mut journal, &mut bindings);
-    assert_eq!(root_bytes(&vm), [b"visible-after-open".to_vec()]);
-    assert_eq!(root_exit_cases(&vm), ["Completed"]);
+    assert_eq!(source_bytes(&vm), [b"visible-after-open".to_vec()]);
+    assert_eq!(source_exit_cases(&vm), ["Completed"]);
 }
 
 #[test]

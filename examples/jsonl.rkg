@@ -14,6 +14,8 @@ graph relay : App {
 
   . -> shell
   shell.out -> sift
+  shell.err -> nothing
+  shell.exit -> nothing
   sift -> .
 }
 

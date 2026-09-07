@@ -117,7 +117,7 @@ impl fmt::Display for WebSocketConfigError {
 
 impl std::error::Error for WebSocketConfigError {}
 
-/// Statically linked hosted implementation of `rastok/websocket-client@1`.
+/// Statically linked hosted implementation of `rastok/websocket-client@2`.
 #[derive(Debug)]
 pub struct WebSocketClientFactory {
     id: crate::connector::ContractId,
@@ -136,7 +136,7 @@ impl WebSocketClientFactory {
     }
 }
 
-/// Statically linked hosted implementation of `rastok/websocket-server@1`.
+/// Statically linked hosted implementation of `rastok/websocket-server@2`.
 #[derive(Debug)]
 pub struct WebSocketServerFactory {
     id: crate::connector::ContractId,
@@ -3214,6 +3214,7 @@ graph websocket : App {{
     versions = ["{version}"]
   }}
   . -> socket -> .
+  socket.exit -> nothing
 }}
 "#
         );
@@ -3238,6 +3239,7 @@ graph websocket : App {{
     versions = ["{version}"]
   }}
   . -> socket -> .
+  socket.exit -> nothing
 }}
 "#
         );
@@ -3817,6 +3819,7 @@ graph websocket : App {
     versions = ["http/3"]
   }
   . -> socket -> .
+  socket.exit -> nothing
 }
 "#;
         let mut plan = compile(
@@ -3976,6 +3979,7 @@ graph websocket : App {
     versions = ["http/2", "http/1.1"]
   }
   . -> socket -> .
+  socket.exit -> nothing
 }
 "#;
         let plan = compile(

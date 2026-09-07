@@ -507,10 +507,10 @@ fn topology(
                 .get(&node.path.to_string())
                 .copied()
                 .filter(|definition| definition.kind == node.kind());
-            let aspects = plan.owners[node.owner.index()]
-                .aspects
+            let extensions = plan.owners[node.owner.index()]
+                .extensions
                 .iter()
-                .map(|aspect| aspect.aspect().source_name())
+                .map(|aspect| aspect.extension().source_name())
                 .collect::<Vec<_>>();
             let containing_owner = plan.owners[node.owner.index()]
                 .parent
@@ -531,7 +531,7 @@ fn topology(
                 "owner": containing_owner,
                 "kind": kind,
                 "type": ty,
-                "aspects": aspects,
+                "extensions": extensions,
                 "ports": ports,
                 "definition": definition.map(source_definition_json),
                 "firing_count": firing.count.to_string(),
@@ -586,7 +586,7 @@ fn topology(
                 },
                 "parent": owner.parent.map(|parent| format!("owner:{}", parent.index())),
                 "type": if owner.path.is_root() { "App" } else { "Graph" },
-                "aspects": owner.aspects.iter().map(|aspect| aspect.aspect().source_name()).collect::<Vec<_>>(),
+                "extensions": owner.extensions.iter().map(|aspect| aspect.extension().source_name()).collect::<Vec<_>>(),
                 "ports": ports,
                 "definition": definition.map(source_definition_json),
                 "transaction_count": activity.count.to_string(),
@@ -776,7 +776,7 @@ fn graph_handler_relations(plan: &ExecutionPlan) -> (Vec<JsonValue>, Vec<JsonVal
             }
         };
 
-        for (port, _) in handler.body.iter().flat_map(DispatchStep::emissions) {
+        for (port, _) in handler.dispatch.steps().flat_map(DispatchStep::emissions) {
             let relation_kind = if port.name() == "next" {
                 "temporal"
             } else {
@@ -806,9 +806,9 @@ fn graph_handler_relations(plan: &ExecutionPlan) -> (Vec<JsonValue>, Vec<JsonVal
     for (owner_index, owner) in plan.owners.iter().enumerate() {
         if owner.kind != crate::plan::OwnerKind::Graph
             || !owner
-                .aspects
+                .extensions
                 .iter()
-                .any(|aspect| matches!(aspect, crate::plan::AspectSpec::Loop(_)))
+                .any(|aspect| matches!(aspect, crate::plan::ExtensionSpec::Loop(_)))
         {
             continue;
         }
@@ -948,7 +948,7 @@ fn control_node_json(id: &str, owner: &str, label: &str, port: &str) -> JsonValu
         "label": label,
         "path": JsonValue::Null,
         "type": "control",
-        "aspects": [],
+        "extensions": [],
         "ports": [{ "name": port, "direction": "output" }],
         "inspect_owner": owner,
     })

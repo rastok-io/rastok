@@ -1,0 +1,32 @@
+// A passive App wires one finite Operator application. The measure proves
+// termination; Loop.next is a manager command, not a spatial back-edge.
+graph countdown : App {
+  input in: int
+  output out: text
+
+  operator count : Loop {
+    input in: int
+    output out: text
+    Loop.measure = Loop.state.data
+
+    on in match {
+      data > 0 => Loop.next = data - 1
+      _        => out = "liftoff"
+    }
+  }
+
+  in -> count -> out
+}
+
+lab countdown {
+  simulation proof on app {
+    scenario positive "three recurrences, then one result" {
+      app.in = 3
+      expect app.out count == 1 where data == "liftoff"
+    }
+    scenario already_finished "a nonpositive input needs no recurrence" {
+      app.in = 0
+      expect app.out count == 1 where data == "liftoff"
+    }
+  }
+}

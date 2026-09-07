@@ -42,6 +42,8 @@ graph m0_probe : App {
   }
 
   . -> shout -> echo -> .
+  echo.err -> nothing
+  echo.exit -> nothing
 }
 "#;
 

@@ -1,17 +1,20 @@
 # The plan package — the transportable, verifiable ExecutionPlan
 
-> **V16 target (2026-09-05).** This file remains the exact landed v15 byte
-> ledger until R4. D-2026-09-05-1 freezes the categorical movements and
+> **V16 cutover (2026-09-06), not yet qualified.** The current reader accepts
+> only v16. The historical paragraphs below remain the v15 byte ledger;
+> current v16 keys, tags, candidate checksums and outstanding execution gates
+> are recorded in [R4 §§9–10](rework-r4-plan.md#9-candidate-v16-allocation-2026-09-06).
+> D-2026-09-05-1 freezes the categorical movements and
 > non-movements in
 > [rework-r0-identity.md](rework-r0-identity.md): `ExtensionSpec`, recursive
 > `Dispatch`, `RouteRule`, canonical destination sets, manager commands,
 > Loop r2 and the new opening-admission-derived `LoopRunRef`, together with
 > removal of Graph handlers, `ChildPort`, `unwired`, RootSink and Loop's old
-> port-shaped control. Numeric keys and tags are intentionally not assigned
-> before the R4 representation is stable. The historical v13–v15 paragraphs
-> below document bytes that remain decodable only under their original
-> version; they are not current Node/Extension semantics and are never
-> reinterpreted as v16.
+> port-shaped control. Body key 10 holds flattened case/manager selections;
+> sparse key 11 retains the complete unflattened routing inventory for nested
+> Graph boundaries. Validation re-composes it, checks physical-edge agreement
+> and independently verifies crossed boundary types and dispositions.
+> No retired field or tag is reinterpreted; v15 packages refuse by version.
 
 > Format note — the bytes follow this document, never precede it.
 > Specified 2026-08-06 (M0.5 item 4), after the delivery-reference

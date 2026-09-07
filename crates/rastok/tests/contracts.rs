@@ -13,7 +13,6 @@ use rastok::contract::{
     PortTypeRule, Presence, Profile, ProfileSelector, ProfileSupport, SheetDefect, ValueDomain,
 };
 use rastok::node::Direction;
-use rastok::plan::UnwiredPolicy;
 
 fn compile_one(source: &str) -> Result<rastok::compiler::Compilation, rastok::diagnostics::Bag> {
     compile(
@@ -24,7 +23,7 @@ fn compile_one(source: &str) -> Result<rastok::compiler::Compilation, rastok::di
 
 fn process_graph(body: &str) -> String {
     format!(
-        "graph g : App {{\n  connector shell : Process {{\n{body}\n  }}\n  . -> shell -> .\n}}\n"
+        "graph g : App {{\n  connector shell : Process {{\n{body}\n  }}\n  . -> shell -> .\n  shell.err -> nothing\n  shell.exit -> nothing\n}}\n"
     )
 }
 
@@ -35,7 +34,9 @@ fn file_graph(body: &str) -> String {
 }
 
 fn network_graph(kind: &str, body: &str, wiring: &str) -> String {
-    format!("graph g : App {{\n  connector network : {kind} {{\n{body}\n  }}\n{wiring}\n}}\n")
+    format!(
+        "graph g : App {{\n  connector network : {kind} {{\n{body}\n  }}\n{wiring}\n  network.exit -> nothing\n}}\n"
+    )
 }
 
 const FULL: &str =
@@ -229,6 +230,7 @@ graph direct : App {
   }
   operator relay { input in: text ; on in { out = data } }
   server -> relay -> server
+  server.exit -> nothing
 }
 "#;
     compile_one(direct).expect("direct lineage identifies the retained Call without a correlator");
@@ -272,6 +274,7 @@ graph mixed : App {
   server -> pair.request
   .other -> pair.other
   pair -> server
+  server.exit -> nothing
 }
 "#;
     refusal_with(mixed, "E-CONTRACT-ATTR", "root-mixing join");
@@ -378,25 +381,25 @@ fn sheet(common: &'static [AttributeSpec], selector: Option<ProfileSelector>) ->
         PortContract {
             name: "in",
             direction: Direction::Input,
-            unwired: UnwiredPolicy::RequireWire,
+
             ty: PortTypeRule::Fixed(PortDataType::Variant),
         },
         PortContract {
             name: "out",
             direction: Direction::Output,
-            unwired: UnwiredPolicy::RequireWire,
+
             ty: PortTypeRule::Fixed(PortDataType::Variant),
         },
         PortContract {
             name: "err",
             direction: Direction::Output,
-            unwired: UnwiredPolicy::RootSink,
+
             ty: PortTypeRule::Fixed(PortDataType::Variant),
         },
         PortContract {
             name: "exit",
             direction: Direction::Output,
-            unwired: UnwiredPolicy::RootSink,
+
             ty: PortTypeRule::Fixed(PortDataType::Variant),
         },
     ];
@@ -456,7 +459,7 @@ fn the_exchange_shape_owns_the_terminal_row_cardinality() {
     const EVENT_PORTS: &[PortContract] = &[PortContract {
         name: "out",
         direction: Direction::Output,
-        unwired: UnwiredPolicy::RequireWire,
+
         ty: PortTypeRule::Fixed(PortDataType::Variant),
     }];
     let event = ConnectorContract {
@@ -504,7 +507,7 @@ fn an_event_is_the_one_way_inbound_exchange() {
     const EVENT_PORTS: &[PortContract] = &[PortContract {
         name: "out",
         direction: Direction::Output,
-        unwired: UnwiredPolicy::RequireWire,
+
         ty: PortTypeRule::Fixed(PortDataType::Variant),
     }];
     let error = ContractCatalog::default()
@@ -613,19 +616,19 @@ fn port_type_cycles_are_rejected_even_when_reached_through_a_tail() {
             PortContract {
                 name: "first",
                 direction: Direction::Output,
-                unwired: UnwiredPolicy::RequireWire,
+
                 ty: PortTypeRule::SameAs("second"),
             },
             PortContract {
                 name: "second",
                 direction: Direction::Output,
-                unwired: UnwiredPolicy::RequireWire,
+
                 ty: PortTypeRule::SameAs("third"),
             },
             PortContract {
                 name: "third",
                 direction: Direction::Output,
-                unwired: UnwiredPolicy::RequireWire,
+
                 ty: PortTypeRule::SameAs("second"),
             },
         ],
@@ -663,7 +666,7 @@ fn same_as_and_profile_selected_ports_resolve_without_a_second_type_authority() 
             PortContract {
                 name: "in",
                 direction: Direction::Input,
-                unwired: UnwiredPolicy::RequireWire,
+
                 ty: PortTypeRule::AttributeSelected {
                     attribute: "mode",
                     choices: &[
@@ -681,13 +684,13 @@ fn same_as_and_profile_selected_ports_resolve_without_a_second_type_authority() 
             PortContract {
                 name: "out",
                 direction: Direction::Output,
-                unwired: UnwiredPolicy::RequireWire,
+
                 ty: PortTypeRule::SameAs("in"),
             },
             PortContract {
                 name: "exit",
                 direction: Direction::Output,
-                unwired: UnwiredPolicy::RootSink,
+
                 ty: PortTypeRule::SameAs("in"),
             },
         ],
@@ -741,7 +744,7 @@ fn a_profile_local_attribute_cannot_ambiguously_select_a_port_type() {
         ports: &[PortContract {
             name: "out",
             direction: Direction::Output,
-            unwired: UnwiredPolicy::RequireWire,
+
             ty: PortTypeRule::AttributeSelected {
                 attribute: "shape",
                 choices: &[PortTypeChoice {
@@ -796,7 +799,7 @@ fn a_port_type_selector_is_structurally_plan_bound() {
         ports: &[PortContract {
             name: "out",
             direction: Direction::Output,
-            unwired: UnwiredPolicy::RequireWire,
+
             ty: PortTypeRule::AttributeSelected {
                 attribute: "shape",
                 choices: &[PortTypeChoice {
@@ -821,7 +824,7 @@ fn a_port_type_selector_is_structurally_plan_bound() {
 }
 
 #[test]
-fn an_input_cannot_own_an_unwired_output_policy() {
+fn a_call_contract_requires_its_explicit_terminal() {
     const INVALID: ConnectorContract = ConnectorContract {
         id: "test/invalid-sink@1",
         name: "InvalidSink",
@@ -830,7 +833,7 @@ fn an_input_cannot_own_an_unwired_output_policy() {
         ports: &[PortContract {
             name: "in",
             direction: Direction::Input,
-            unwired: UnwiredPolicy::RootSink,
+
             ty: PortTypeRule::Fixed(PortDataType::Variant),
         }],
         common: &[],
@@ -841,7 +844,10 @@ fn an_input_cannot_own_an_unwired_output_policy() {
             .expect("the standard catalogue holds")
             .try_with(INVALID)
             .unwrap_err(),
-        SheetDefect::InputHasSinkPolicy("in")
+        SheetDefect::ExchangeTerminalMismatch {
+            exchange: rastok::connector::ConnectorExchange::Call,
+            exits: 0
+        }
     );
 }
 
@@ -1549,28 +1555,28 @@ fn the_global_binder_requires_callable_connectors_but_skips_pure_outbound_source
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("in").expect("a conventional port"),
                     direction: rastok::node::Direction::Input,
-                    unwired: UnwiredPolicy::RequireWire,
+
                     ty: Some(rastok::datatype::DataType::Text),
                     annotations: Default::default(),
                 },
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("out").expect("a conventional port"),
                     direction: rastok::node::Direction::Output,
-                    unwired: UnwiredPolicy::RequireWire,
+
                     ty: Some(rastok::datatype::DataType::Text),
                     annotations: Default::default(),
                 },
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("err").expect("a conventional port"),
                     direction: rastok::node::Direction::Output,
-                    unwired: UnwiredPolicy::RootSink,
+
                     ty: Some(rastok::datatype::DataType::Variant),
                     annotations: Default::default(),
                 },
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("exit").expect("a conventional port"),
                     direction: rastok::node::Direction::Output,
-                    unwired: UnwiredPolicy::RootSink,
+
                     ty: Some(rastok::datatype::DataType::Variant),
                     annotations: Default::default(),
                 },
@@ -1845,7 +1851,7 @@ fn tag_words_serve_as_choice_words_on_another_sheet() {
         .expect("a valid sheet");
     for word in ["text", "json", "unbounded"] {
         let source = format!(
-            "graph g : App {{\n  input in: variant\n  output out: variant\n  connector p : Probe {{\n    framing = {word}\n    effect = idempotent ; behavior = deterministic\n  }}\n  . -> p -> .\n}}\n"
+            "graph g : App {{\n  input in: variant\n  output out: variant\n  connector p : Probe {{\n    framing = {word}\n    effect = idempotent ; behavior = deterministic\n  }}\n  . -> p -> .\n  p.err -> nothing\n  p.exit -> nothing\n}}\n"
         );
         let result = compile(&[source.as_str()], &registry);
         assert!(result.is_ok(), "`framing = {word}` compiles: {result:?}");
@@ -2051,7 +2057,7 @@ fn an_inexpressible_sheet_name_is_a_sheet_defect() {
         ports: &[PortContract {
             name: "bad port",
             direction: Direction::Input,
-            unwired: UnwiredPolicy::RequireWire,
+
             ty: PortTypeRule::Fixed(PortDataType::Variant),
         }],
         common: &[],
@@ -2352,8 +2358,8 @@ fn a_json_recovery_follows_the_position_terminators() {
     let compilation = compile_one(healed).expect("valid");
     let handler = &compilation.plan.plan().handlers[0];
     let emissions = handler
-        .body
-        .iter()
+        .dispatch
+        .steps()
         .filter(|step| matches!(step, rastok::plan::DispatchStep::Emit { .. }))
         .count();
     assert_eq!(emissions, 2, "both emissions live in the tree");

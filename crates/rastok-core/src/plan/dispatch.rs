@@ -41,6 +41,61 @@ pub enum Dispatch {
 }
 
 impl Dispatch {
+    /// Every decision in preorder. This is an analysis walk, not selection:
+    /// execution must evaluate only the selected path.
+    pub fn decisions(&self) -> impl Iterator<Item = &Self> {
+        let mut first = Some(self);
+        let mut pending = Vec::new();
+        core::iter::from_fn(move || {
+            let decision = first.take().or_else(|| pending.pop())?;
+            match decision {
+                Self::Linear(_) => {}
+                Self::ClosedMatch { arms, .. } => {
+                    pending.extend(arms.iter().rev().map(|arm| arm.dispatch.as_ref()));
+                }
+                Self::OpenMatch { arms, fallback, .. } => {
+                    pending.push(fallback);
+                    pending.extend(arms.iter().rev().map(|arm| arm.dispatch.as_ref()));
+                }
+            }
+            Some(decision)
+        })
+    }
+
+    /// Statements in every branch, for conservative whole-plan analyses.
+    /// A linear handler incurs no traversal allocation.
+    pub fn steps(&self) -> impl Iterator<Item = &DispatchStep> {
+        self.decisions().flat_map(|decision| match decision {
+            Self::Linear(steps)
+            | Self::ClosedMatch { prefix: steps, .. }
+            | Self::OpenMatch { prefix: steps, .. } => steps,
+        })
+    }
+
+    /// Conservative syntactic production proof. An unknown predicate never
+    /// makes a branch impossible; an absent emission or `nothing` does.
+    #[must_use]
+    pub fn may_emit(&self, port: &node::Port) -> bool {
+        self.steps().any(|step| {
+            step.emissions()
+                .any(|(target, value)| target == port && !matches!(value, Emission::Nothing))
+        })
+    }
+
+    /// Expressions evaluated by decisions, excluding statement expressions.
+    pub fn predicates(&self) -> impl Iterator<Item = &expr::Tree> {
+        self.decisions().flat_map(|decision| {
+            let (scrutinee, arms) = match decision {
+                Self::Linear(_) => (None, &[][..]),
+                Self::ClosedMatch { scrutinee, .. } => (Some(scrutinee), &[][..]),
+                Self::OpenMatch { arms, .. } => (None, arms.as_slice()),
+            };
+            scrutinee
+                .into_iter()
+                .chain(arms.iter().map(|arm| &arm.predicate))
+        })
+    }
+
     /// A consuming filter in its canonical decision form: one predicate,
     /// no prefix, and an empty fallback. The accepted branch may be recursive.
     #[must_use]

@@ -3,6 +3,36 @@
 use super::*;
 
 impl Checker<'_, '_> {
+    pub(super) fn verify_composed_routing(&mut self, graph: &Graph, span: Span) {
+        use crate::plan::RouteErrorKind;
+
+        if self.bag.has_errors() {
+            return;
+        }
+        let Err(error) = crate::compiler::routing::flatten(graph) else {
+            return;
+        };
+        let (code, detail) = match &error.kind {
+            RouteErrorKind::DuplicateDestination(destination) => (
+                E_ROUTE_DUPLICATE,
+                format!("destination `{}` is selected twice through Graph boundaries for the same source case", route_destination_display(destination)),
+            ),
+            RouteErrorKind::MixedDiscard => (
+                E_ROUTE_MIXED,
+                "Graph boundary composition selects both `nothing` and a real destination for the same source case".to_owned(),
+            ),
+            RouteErrorKind::BoundaryCycle => (E_GRAPH_CYCLE, "Graph boundary composition contains a routing cycle".to_owned()),
+            RouteErrorKind::EmptyDestinations => (E_UNWIRED_OUTPUT, "a case loses its written destination at a Graph boundary".to_owned()),
+            _ => (crate::compiler::E_INTERNAL_PLAN, error.to_string()),
+        };
+        self.bag.push(
+            Diagnostic::new(code, Phase::Check, detail)
+                .with_span(span)
+                .with_field("source", endpoint_display(&error.source))
+                .with_field("case", error.case.unwrap_or_else(|| "all".to_owned())),
+        );
+    }
+
     pub(super) fn verify_routing(&mut self, graph: &Graph, span: Span) {
         if let Err(error) = crate::plan::validate_routing(&graph.routes, |endpoint| {
             endpoint_pinned_type(endpoint, graph)
@@ -100,71 +130,80 @@ impl Checker<'_, '_> {
         rejected
     }
 
-    /// Every output requiring a wire either reaches an edge or is discarded
-    /// in writing (`-> nothing`); a port that just leaks gets flagged.
-    /// Outputs whose resolved policy is `RootSink` are exempt. The source
-    /// convention commonly gives that policy to `err`, but the warning
-    /// decision itself never inspects the spelling.
-    pub(super) fn warn_unwired_outputs(&mut self, graph: &Graph) {
+    pub(super) fn verify_output_dispositions(&mut self, graph: &Graph) {
+        if self.bag.has_errors() {
+            return;
+        }
         for node in &graph.nodes {
-            // Emission inference normally materializes the row already; sweep
-            // the bodies as a defensive union so diagnostics never depend on
-            // that construction order.
-            let mut outputs: Vec<node::Port> = node
+            let mut outputs: Vec<_> = node
                 .ports
                 .iter()
                 .filter(|decl| decl.direction == Direction::Output)
                 .map(|decl| decl.port.clone())
                 .collect();
             for handler in &node.handlers {
-                let mut statements = Vec::new();
-                collect_hir_statements(&handler.dispatch, &mut statements);
-                for statement in statements {
-                    if let Statement::Emit { port, .. } = statement
-                        && !outputs.contains(port)
-                    {
+                for (port, _) in handler.dispatch.steps().flat_map(Statement::emissions) {
+                    if !outputs.contains(port) {
                         outputs.push(port.clone());
                     }
                 }
             }
-            for port in &outputs {
-                if node
-                    .ports
-                    .iter()
-                    .find(|decl| decl.port == *port)
-                    .is_some_and(|decl| decl.unwired == crate::plan::UnwiredPolicy::RootSink)
-                {
-                    continue;
-                }
-                let wired = graph.edges.iter().any(|edge| {
-                    matches!(&edge.from.owner, EndpointOwner::Node(path) if path == &node.path)
-                        && edge.from.port == *port
-                }) || graph.routes.iter().any(|route| {
-                    matches!(&route.source.owner, EndpointOwner::Node(path) if path == &node.path)
-                        && route.source.port == *port
-                }) || graph.handlers.iter().any(|handler| {
-                    matches!(
-                        &handler.activation,
-                        node::HandlerActivation::ChildPort { child, port: observed }
-                            if child == &node.path && observed == port
-                    )
-                });
-                if !wired {
-                    self.bag.push(
-                        Diagnostic::new(
-                            W_UNWIRED_OUTPUT,
-                            Phase::Check,
-                            format!(
-                                "`{}.{port}` is emitted but wired nowhere; \
-                                 route it or discard it with `-> nothing`",
-                                node.path
-                            ),
-                        )
-                        .with_field("node", node.path.to_string())
-                        .with_field("port", port.name().to_string()),
-                    );
-                }
+            outputs.sort();
+            for port in outputs {
+                let endpoint = Endpoint {
+                    owner: EndpointOwner::Node(node.path.clone()),
+                    port: port.clone(),
+                };
+                self.output_disposition(graph, &endpoint, node_output_possible(node, &port));
             }
+        }
+        for child in &graph.graphs {
+            let admitted = graph.edges.iter().any(|edge| {
+                matches!(&edge.to, EdgeTarget::Port(target)
+                    if matches!(&target.owner, EndpointOwner::Graph(path) if path == &child.path))
+            }) || has_inbound_connector(child);
+            if !admitted {
+                self.bag.push(Diagnostic::new(
+                    W_DEAD_GRAPH,
+                    Phase::Check,
+                    format!("Graph `{}` has no external admission; output obligations are suspended", child.path),
+                ).with_field("owner", child.path.to_string()));
+                continue;
+            }
+            for decl in child
+                .boundary
+                .iter()
+                .filter(|decl| decl.direction == Direction::Output)
+            {
+                let endpoint = Endpoint {
+                    owner: EndpointOwner::Graph(child.path.clone()),
+                    port: decl.port.clone(),
+                };
+                self.output_disposition(graph, &endpoint, graph_output_possible(child, &decl.port));
+            }
+            self.verify_output_dispositions(child);
+        }
+    }
+
+    fn output_disposition(&mut self, graph: &Graph, endpoint: &Endpoint, possible: bool) {
+        let name = endpoint_display(endpoint);
+        if !possible {
+            self.bag.push(
+                Diagnostic::new(
+                    W_DEAD_OUTPUT,
+                    Phase::Check,
+                    format!("`{name}` has no possible producer; no destination is required"),
+                )
+                .with_field("source", name),
+            );
+        } else if !graph.edges.iter().any(|edge| edge.from == *endpoint)
+            && !graph.routes.iter().any(|rule| rule.source == *endpoint)
+        {
+            self.bag.push(Diagnostic::new(
+                E_UNWIRED_OUTPUT,
+                Phase::Check,
+                format!("`{name}` can be produced but has no destination; route it or write `{name} -> nothing`"),
+            ).with_field("source", name));
         }
     }
 
@@ -190,7 +229,7 @@ impl Checker<'_, '_> {
             graph.boundary.push(crate::plan::PortDecl {
                 port,
                 direction,
-                unwired: crate::plan::UnwiredPolicy::RequireWire,
+
                 ty: None,
                 annotations: AnnotationTable::empty(),
             });
@@ -221,11 +260,6 @@ impl Checker<'_, '_> {
                 continue;
             }
             node.ports.push(crate::plan::PortDecl {
-                unwired: if port.name() == "err" {
-                    crate::plan::UnwiredPolicy::RootSink
-                } else {
-                    crate::plan::UnwiredPolicy::RequireWire
-                },
                 port,
                 direction,
                 ty: None,
@@ -1239,4 +1273,74 @@ pub(super) fn edge_display(edge: &Edge) -> String {
         EdgeTarget::Discard => String::from("!discard"),
     };
     format!("{}>{to}", endpoint_display(&edge.from))
+}
+
+fn node_output_possible(node: &Node, port: &node::Port) -> bool {
+    if port.name() == "Loop.expired" {
+        return node
+            .loop_spec
+            .as_ref()
+            .is_none_or(|spec| spec.proof.is_none() || spec.fuel.is_some());
+    }
+    match &node.semantics {
+        NodeSemantics::Operator => node
+            .handlers
+            .iter()
+            .any(|handler| handler.dispatch.may_emit(port)),
+        NodeSemantics::Connector {
+            contract,
+            roles,
+            exchange,
+            attributes,
+            ..
+        } => {
+            let mode = attributes
+                .iter()
+                .find(|attribute| attribute.name == "mode")
+                .and_then(|attribute| match &attribute.value {
+                    AttrValue::Word(word) => Some(word.as_str()),
+                    _ => None,
+                });
+            !crate::connector::outbound_call_semantics(contract, *roles, *exchange, mode)
+                .is_some_and(|call| {
+                    call.frame_production(port.name())
+                        == Some(crate::connector::FrameProduction::Never)
+                })
+        }
+    }
+}
+
+fn has_inbound_connector(graph: &Graph) -> bool {
+    graph.nodes.iter().any(|node| {
+        matches!(&node.semantics, NodeSemantics::Connector { roles, .. } if roles.has_inbound())
+    }) || graph.graphs.iter().any(has_inbound_connector)
+}
+
+fn graph_output_possible(graph: &Graph, port: &node::Port) -> bool {
+    if port.name() == "Loop.expired" {
+        return graph
+            .loop_spec
+            .as_ref()
+            .is_none_or(|spec| spec.proof.is_none() || spec.fuel.is_some());
+    }
+    graph.edges.iter().any(|edge| {
+        if !matches!(&edge.to, EdgeTarget::Port(target)
+            if target.owner == EndpointOwner::Graph(graph.path.clone()) && target.port == *port)
+        {
+            return false;
+        }
+        match &edge.from.owner {
+            EndpointOwner::Node(path) => graph
+                .nodes
+                .iter()
+                .find(|node| node.path == *path)
+                .is_none_or(|node| node_output_possible(node, &edge.from.port)),
+            EndpointOwner::Graph(path) if path == &graph.path => true,
+            EndpointOwner::Graph(path) => graph
+                .graphs
+                .iter()
+                .find(|child| child.path == *path)
+                .is_none_or(|child| graph_output_possible(child, &edge.from.port)),
+        }
+    })
 }

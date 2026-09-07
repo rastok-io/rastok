@@ -16,7 +16,7 @@ use crate::schema_annotation::{AnnotationTable, SchemaPathSegment};
 
 use super::type_resolution::ResolvedPortTable;
 use super::{
-    AspectSpec, DispatchStep, Emission, EndpointRef, ExecutionPlan, Handler, HandlerOwner,
+    DispatchStep, Emission, EndpointRef, ExecutionPlan, ExtensionSpec, Handler, HandlerOwner,
     OwnerKind, OwnerSlot, Slot,
 };
 
@@ -275,7 +275,15 @@ impl<'a> Solver<'a> {
             let Some(target) = edge.to.as_ref().map(endpoint_key) else {
                 continue;
             };
-            let table = self.port(&source)?.current.clone();
+            let mut table = self.port(&source)?.current.clone();
+            if let Some(cases) = self.plan.edge_cases(edge) {
+                table = AnnotationTable::new(table.entries().iter().filter(|(path, _)| {
+                    !matches!(path.segments().first(), Some(SchemaPathSegment::TaggedUnionCase(case)) if !cases.contains(case))
+                }).map(|(path, set)| (path.clone(), set.clone())).collect()).map_err(|reason| ResolutionError {
+                    location: port_location(self.plan, &source),
+                    reason: PropagationError::InvalidDerivedTable(reason),
+                })?;
+            }
             ports.entry(target).or_default().push(table);
         }
 
@@ -283,9 +291,9 @@ impl<'a> Solver<'a> {
         // spatial edge. It nevertheless carries the exact same policy.
         for (index, owner) in self.plan.owners.iter().enumerate() {
             if !owner
-                .aspects
+                .extensions
                 .iter()
-                .any(|aspect| matches!(aspect, AspectSpec::Loop(_)))
+                .any(|aspect| matches!(aspect, ExtensionSpec::Loop(_)))
             {
                 continue;
             }
@@ -315,7 +323,7 @@ impl<'a> Solver<'a> {
         self.derive_owner_values(&mut values)?;
 
         for (handler_index, handler) in self.plan.handlers.iter().enumerate() {
-            let (mut environment, input) = self.handler_environment(handler)?;
+            let (environment, input) = self.handler_environment(handler)?;
             let guard_taint = match &handler.guard {
                 None => AnnotationTable::empty(),
                 Some(guard) => security_taint([data_policy::expression(guard, &environment)
@@ -328,75 +336,130 @@ impl<'a> Solver<'a> {
                     reason,
                 })?,
             };
-            for step in &handler.body {
-                match step {
-                    DispatchStep::Let {
-                        name,
-                        value: expr,
-                        annotations,
-                    } => {
-                        let derived =
-                            data_policy::expression(expr, &environment).map_err(|reason| {
+            let mut pending = alloc::vec![(&handler.dispatch, environment, guard_taint)];
+            while let Some((dispatch, mut environment, guard_taint)) = pending.pop() {
+                let steps = match dispatch {
+                    super::Dispatch::Linear(steps)
+                    | super::Dispatch::ClosedMatch { prefix: steps, .. }
+                    | super::Dispatch::OpenMatch { prefix: steps, .. } => steps,
+                };
+                for step in steps {
+                    match step {
+                        DispatchStep::Let {
+                            name,
+                            value: expr,
+                            annotations,
+                        } => {
+                            let derived =
+                                data_policy::expression(expr, &environment).map_err(|reason| {
+                                    ResolutionError {
+                                        location: format!("handler {handler_index} let `{name}`"),
+                                        reason,
+                                    }
+                                })?;
+                            let derived = overlay(&derived, &guard_taint).map_err(|reason| {
                                 ResolutionError {
                                     location: format!("handler {handler_index} let `{name}`"),
                                     reason,
                                 }
                             })?;
-                        let derived =
-                            overlay(&derived, &guard_taint).map_err(|reason| ResolutionError {
-                                location: format!("handler {handler_index} let `{name}`"),
-                                reason,
+                            let expected = overlay(&derived, annotations).map_err(|reason| {
+                                ResolutionError {
+                                    location: format!("handler {handler_index} let `{name}`"),
+                                    reason,
+                                }
                             })?;
-                        let expected =
-                            overlay(&derived, annotations).map_err(|reason| ResolutionError {
-                                location: format!("handler {handler_index} let `{name}`"),
-                                reason,
-                            })?;
-                        environment.insert(name.clone(), expr.ty.clone(), expected.clone());
-                    }
-                    DispatchStep::SetVar { name, value: expr } => {
-                        let key = VarKey {
-                            node: handler.owner.node().ok_or_else(|| ResolutionError {
-                                location: format!("handler {handler_index} var `{name}`"),
-                                reason: PropagationError::UnknownBinding(name.clone()),
-                            })?,
-                            name: name.clone(),
-                        };
-                        let derived =
-                            data_policy::expression(expr, &environment).map_err(|reason| {
+                            environment.insert(name.clone(), expr.ty.clone(), expected.clone());
+                        }
+                        DispatchStep::SetVar { name, value: expr } => {
+                            let key = VarKey {
+                                node: handler.owner.node().ok_or_else(|| ResolutionError {
+                                    location: format!("handler {handler_index} var `{name}`"),
+                                    reason: PropagationError::UnknownBinding(name.clone()),
+                                })?,
+                                name: name.clone(),
+                            };
+                            let derived =
+                                data_policy::expression(expr, &environment).map_err(|reason| {
+                                    ResolutionError {
+                                        location: var_location(self.plan, &key),
+                                        reason,
+                                    }
+                                })?;
+                            let derived = overlay(&derived, &guard_taint).map_err(|reason| {
                                 ResolutionError {
                                     location: var_location(self.plan, &key),
                                     reason,
                                 }
                             })?;
-                        let derived =
-                            overlay(&derived, &guard_taint).map_err(|reason| ResolutionError {
-                                location: var_location(self.plan, &key),
-                                reason,
-                            })?;
-                        vars.entry(key).or_default().push(derived);
-                    }
-                    DispatchStep::Emit { .. } | DispatchStep::MultiEmit { .. } => {
-                        for (port, value) in step.emissions() {
-                            let key = self.handler_output(handler.owner, port)?;
-                            if let Some(mut derived) = self.emission(
-                                value,
-                                input.as_ref(),
-                                &environment,
-                                self.port(&key)?.ty.clone(),
-                                handler_index,
-                            )? {
-                                derived = overlay(&derived, &guard_taint).map_err(|reason| {
-                                    ResolutionError {
-                                        location: port_location(self.plan, &key),
-                                        reason,
-                                    }
-                                })?;
-                                ports.entry(key).or_default().push(derived);
+                            vars.entry(key).or_default().push(derived);
+                        }
+                        DispatchStep::Emit { .. } | DispatchStep::MultiEmit { .. } => {
+                            for (port, value) in step.emissions() {
+                                let key = self.handler_output(handler.owner, port)?;
+                                if let Some(mut derived) = self.emission(
+                                    value,
+                                    input.as_ref(),
+                                    &environment,
+                                    self.port(&key)?.ty.clone(),
+                                    handler_index,
+                                )? {
+                                    derived =
+                                        overlay(&derived, &guard_taint).map_err(|reason| {
+                                            ResolutionError {
+                                                location: port_location(self.plan, &key),
+                                                reason,
+                                            }
+                                        })?;
+                                    ports.entry(key).or_default().push(derived);
+                                }
                             }
                         }
+                        DispatchStep::Stop | DispatchStep::LoopCommand(_) => {}
                     }
-                    DispatchStep::Stop | DispatchStep::LoopCommand(_) => {}
+                }
+                let error = |reason| ResolutionError {
+                    location: format!("handler {handler_index} dispatch"),
+                    reason,
+                };
+                let taint = |predicate: &crate::expr::Tree, previous: &AnnotationTable| {
+                    let decision =
+                        security_taint([
+                            data_policy::expression(predicate, &environment).map_err(&error)?
+                        ])
+                        .map_err(&error)?;
+                    overlay(previous, &decision).map_err(&error)
+                };
+                match dispatch {
+                    super::Dispatch::Linear(_) => {}
+                    super::Dispatch::ClosedMatch {
+                        scrutinee, arms, ..
+                    } => {
+                        let decision = taint(scrutinee, &guard_taint)?;
+                        for arm in arms.iter().rev() {
+                            pending.push((
+                                &arm.dispatch,
+                                environment
+                                    .selected_cases(scrutinee, &arm.cases)
+                                    .map_err(&error)?,
+                                decision.clone(),
+                            ));
+                        }
+                    }
+                    super::Dispatch::OpenMatch { arms, fallback, .. } => {
+                        let mut decision = guard_taint;
+                        for arm in arms {
+                            decision = taint(&arm.predicate, &decision)?;
+                            pending.push((
+                                &arm.dispatch,
+                                environment
+                                    .narrowed_by(&arm.predicate.root)
+                                    .map_err(&error)?,
+                                decision.clone(),
+                            ));
+                        }
+                        pending.push((fallback, environment, decision));
+                    }
                 }
             }
         }
@@ -648,9 +711,9 @@ impl<'a> Solver<'a> {
         }
         if let HandlerOwner::Graph(owner) = handler.owner
             && self.plan.owners[owner.index()]
-                .aspects
+                .extensions
                 .iter()
-                .any(|aspect| matches!(aspect, AspectSpec::Loop(_)))
+                .any(|aspect| matches!(aspect, ExtensionSpec::Loop(_)))
         {
             let key = self.graph_port_key(owner, "in")?;
             let state = self.port(&key)?;
@@ -856,7 +919,7 @@ fn has_policy_declaration(plan: &ExecutionPlan, resolved: &ResolvedPortTable) ->
                 || owner.vals.iter().any(|value| !value.annotations.is_empty())
         })
         || plan.handlers.iter().any(|handler| {
-            handler.body.iter().any(
+            handler.dispatch.steps().any(
             |step| matches!(step, DispatchStep::Let { annotations, .. } if !annotations.is_empty()),
         )
         })

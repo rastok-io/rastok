@@ -1,9 +1,11 @@
 # Loop — finite temporal recursion
 
-> **Status (2026-09-05): normative target for categorical plan v16.**
+> **Status (2026-09-06): normative target for categorical plan v16.**
 > The v15 Graph-handler implementation is historical and is superseded by
-> D-2026-09-05-1. R0–R2 specify this contract; source and runtime support begin
-> at R3. Until then, unsupported v16 forms must fail closed.
+> D-2026-09-05-1. Operator and outbound Call hosts execute through v16;
+> Graph orchestration and complete spatial recovery remain fail-closed.
+> [R4 §10](../architecture/rework-r4-plan.md#10-executable-boundary-and-outstanding-work)
+> lists the executable evidence; it is not a claim of full Loop qualification.
 
 `Loop` is a temporal Extension which applies one finite host application,
 then either terminates or re-enters the same host input. Recurrence is a
@@ -101,6 +103,14 @@ observes normal deterministic instance serialization.
 
 `Loop.state` is the complete envelope admitted at the beginning of the
 current application. It is immutable and bound to one `LoopRunRef`.
+
+Advance selects the proposed state (Next) or retains the current state
+(Again). Admit then creates the next application envelope: DATA and the
+travelling `meta.app`/`meta.ext` zones are preserved, `origin_id` remains the
+business lineage, and the system spine receives the recurrence admission id
+and the command's causal parent. The admitted envelope is retained in the
+Admit fact. “Again retains state” never means reusing an application's
+causal id: that would repeat emission and Call identities on identical retries.
 
 It is visible:
 

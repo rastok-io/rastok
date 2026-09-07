@@ -18,6 +18,13 @@ use rastok::plan::{
     ValidatedExecutionPlan,
 };
 
+fn linear_statements(handler: &mut plan::Handler) -> &mut Vec<DispatchStep> {
+    let plan::Dispatch::Linear(steps) = &mut handler.dispatch else {
+        panic!("linear adversarial fixture")
+    };
+    steps
+}
+
 const PROBE: &str = r#"
 graph probe : App {
   connector shell : Process {
@@ -35,6 +42,8 @@ graph probe : App {
   }
 
   . -> relay -> shell -> .
+  shell.err -> nothing
+  shell.exit -> nothing
 }
 "#;
 
@@ -49,31 +58,24 @@ fn raw_probe() -> ExecutionPlan {
 }
 
 #[test]
-fn raw_plans_cannot_smuggle_new_statements_past_the_package_gate() {
+fn raw_commands_require_an_owning_loop_application() {
     let variants = [
         (
-            DispatchStep::MultiEmit {
-                ports: vec![Port::new("out").unwrap(), Port::new("audit").unwrap()],
-                values: plan::MultiEmitValues::Broadcast(plan::Emission::Identity),
-            },
-            "multi-emission",
-        ),
-        (
             DispatchStep::LoopCommand(plan::LoopCommand::Next(plan::Emission::Identity)),
-            "a Loop manager command",
+            "a Loop command without an owning Loop application",
         ),
         (
             DispatchStep::LoopCommand(plan::LoopCommand::Again),
-            "a Loop manager command",
+            "a Loop command without an owning Loop application",
         ),
         (
             DispatchStep::LoopCommand(plan::LoopCommand::Done),
-            "a Loop manager command",
+            "a Loop command without an owning Loop application",
         ),
     ];
     for (step, statement) in variants {
         let mut raw = raw_probe();
-        raw.handlers[0].body.push(step);
+        linear_statements(&mut raw.handlers[0]).push(step);
         assert_eq!(
             ValidatedExecutionPlan::try_new(raw).unwrap_err(),
             PlanValidationError::UnsupportedStatement {
@@ -129,17 +131,17 @@ fn raw_join(bounded: bool) -> ExecutionPlan {
 
 fn raw_loop() -> ExecutionPlan {
     let source = r#"
-graph countdown : App + Loop {
+graph countdown : App {
   input in: text
   output out: text
-  Loop.fuel = 3
-  operator relay {
+  operator relay : Loop {
     input in: text
     output out: text
-    on in { out = data }
+    Loop.fuel = 3
+    on in { out = Loop.state.data }
   }
-  . -> relay
-  on relay.out { out = Loop.state.data }
+  in -> relay -> out
+  relay.Loop.expired -> nothing
 }
 "#;
     compile(
@@ -155,14 +157,18 @@ graph countdown : App + Loop {
 fn an_app_val_is_substituted_into_a_nested_loop_constant() {
     let source = r#"
 graph app : App {
+  input in: text
+  output out: text
   val attempts = 3
 
-  graph countdown : Loop {
+  operator countdown : Loop {
     input in: text
     output out: text
     Loop.fuel = attempts
     on in { out = Loop.state.data }
   }
+  in -> countdown -> out
+  countdown.Loop.expired -> nothing
 }
 "#;
     let compilation = compile(
@@ -175,9 +181,9 @@ graph app : App {
         .owners
         .iter()
         .find(|owner| owner.path.to_string() == "countdown")
-        .expect("the nested Graph owner travels");
-    let [plan::AspectSpec::Loop(spec)] = countdown.aspects.as_slice() else {
-        panic!("the nested Graph carries Loop");
+        .expect("the Operator owner travels");
+    let [plan::ExtensionSpec::Loop(spec)] = countdown.extensions.as_slice() else {
+        panic!("the Operator carries Loop");
     };
     assert_eq!(
         spec.fuel.as_ref().expect("fuel").expr.root,
@@ -185,7 +191,7 @@ graph app : App {
         "lexical App constants are substituted before categorical transport"
     );
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
-    let (decoded, declared) = plan::decode(&bytes).expect("v15 re-derives inherited val types");
+    let (decoded, declared) = plan::decode(&bytes).expect("v16 re-derives inherited val types");
     assert_eq!(decoded, compilation.plan);
     assert_eq!(declared, compilation.hash);
 
@@ -194,9 +200,9 @@ graph app : App {
         .owners
         .iter_mut()
         .find(|owner| owner.path.to_string() == "countdown")
-        .expect("the nested Graph owner");
-    let [plan::AspectSpec::Loop(spec)] = countdown.aspects.as_mut_slice() else {
-        panic!("the nested Graph carries Loop");
+        .expect("the Operator owner");
+    let [plan::ExtensionSpec::Loop(spec)] = countdown.extensions.as_mut_slice() else {
+        panic!("the Operator carries Loop");
     };
     spec.fuel.as_mut().expect("fuel").expr.root = expr::Expr::Path(vec![String::from("attempts")]);
     assert!(matches!(
@@ -209,9 +215,9 @@ graph app : App {
 }
 
 #[test]
-fn loop_claims_are_rederived_from_the_graph_contract() {
+fn loop_claims_are_rederived_from_the_host_interface_and_dispatch() {
     let mut zero_fuel = raw_loop();
-    let [plan::AspectSpec::Loop(spec)] = zero_fuel.owners[0].aspects.as_mut_slice() else {
+    let [plan::ExtensionSpec::Loop(spec)] = zero_fuel.owners[1].extensions.as_mut_slice() else {
         panic!("the fixture has one Loop");
     };
     spec.fuel.as_mut().expect("fuel").resolved = rastok::value::Value::Int(0);
@@ -222,48 +228,37 @@ fn loop_claims_are_rederived_from_the_graph_contract() {
     ));
 
     let mut wrong_next = raw_loop();
-    wrong_next
-        .boundary
-        .iter_mut()
-        .find(|port| port.port.name() == "next")
-        .expect("Loop.next")
-        .ty = Some(DataType::INT);
+    wrong_next.handlers[0].dispatch = plan::Dispatch::Linear(vec![DispatchStep::LoopCommand(
+        plan::LoopCommand::Next(plan::Emission::Data(expr::Tree {
+            root: expr::Expr::Literal(rastok::value::Value::Int(3)),
+            ty: DataType::INT,
+        })),
+    )]);
     assert!(matches!(
         ValidatedExecutionPlan::try_new(wrong_next),
-        Err(PlanValidationError::InvalidGraphContract { detail, .. })
+        Err(PlanValidationError::InvalidLoopControl { detail, .. })
             if detail.contains("Loop.next")
     ));
 
-    let mut second_input = raw_loop();
-    let mut input = second_input
-        .boundary
-        .iter()
-        .find(|port| port.port.name() == "in" && port.direction == Direction::Input)
-        .expect("Loop.in")
-        .clone();
-    input.port = Port::new("interrupt").unwrap();
-    second_input.boundary.push(input);
-    second_input
-        .boundary
-        .sort_by(|left, right| left.key().cmp(&right.key()));
+    let mut wrong_entry = raw_loop();
+    let [plan::ExtensionSpec::Loop(spec)] = wrong_entry.owners[1].extensions.as_mut_slice() else {
+        panic!("the Operator carries Loop");
+    };
+    spec.entry = Port::new("interrupt").unwrap();
     assert!(matches!(
-        ValidatedExecutionPlan::try_new(second_input),
+        ValidatedExecutionPlan::try_new(wrong_entry),
         Err(PlanValidationError::InvalidGraphContract { detail, .. })
-            if detail.contains("exactly one Graph input")
+            if detail == "Loop.entry must name a typed input"
     ));
 
     let mut unbound_asset = raw_loop();
-    let graph_handler = unbound_asset
-        .handlers
-        .iter_mut()
-        .find(|handler| handler.owner.graph().is_some())
-        .expect("the fixture has one Graph handler");
+    let handler = &mut unbound_asset.handlers[0];
     let DispatchStep::Emit {
         value: plan::Emission::Data(tree),
         ..
-    } = &mut graph_handler.body[0]
+    } = &mut linear_statements(handler)[0]
     else {
-        panic!("the Graph handler emits its result");
+        panic!("the Operator emits its result");
     };
     tree.root = expr::Expr::Asset(0);
     assert_eq!(
@@ -275,64 +270,50 @@ fn loop_claims_are_rederived_from_the_graph_contract() {
 #[test]
 fn loop_progress_is_reproved_registry_free_from_the_transported_body() {
     let mut silent = raw_loop();
-    let handler = silent
-        .handlers
-        .iter_mut()
-        .find(|handler| handler.owner.graph().is_some())
-        .expect("the fixture has one Graph handler");
-    let DispatchStep::Emit { value, .. } = &mut handler.body[0] else {
-        panic!("the Graph handler emits its result")
+    let handler = &mut silent.handlers[0];
+    let DispatchStep::Emit { value, .. } = &mut linear_statements(handler)[0] else {
+        panic!("the Operator emits its result")
     };
     *value = plan::Emission::Nothing;
     assert!(matches!(
         ValidatedExecutionPlan::try_new(silent),
         Err(PlanValidationError::InvalidLoopControl { detail, .. })
-            if detail.contains("finish silently")
+            if detail == "each Loop application must select exactly one of Next, Again, Done, or stop"
     ));
 
     let mut mixed = raw_loop();
-    let handler = mixed
-        .handlers
-        .iter_mut()
-        .find(|handler| handler.owner.graph().is_some())
-        .expect("the fixture has one Graph handler");
-    handler.body.push(DispatchStep::Emit {
-        port: Port::new("next").unwrap(),
-        value: plan::Emission::Identity,
-    });
+    let handler = &mut mixed.handlers[0];
+    linear_statements(handler).push(DispatchStep::LoopCommand(plan::LoopCommand::Again));
     assert!(matches!(
         ValidatedExecutionPlan::try_new(mixed),
         Err(PlanValidationError::InvalidLoopControl { detail, .. })
-            if detail.contains("mixes `next`")
+            if detail == "each Loop application must select exactly one of Next, Again, Done, or stop"
     ));
 }
 
 #[test]
-fn a_loop_spec_cannot_be_moved_onto_an_operator_owner() {
+fn a_loop_spec_cannot_be_detached_from_its_host_contributions() {
     let mut plan = raw_loop();
-    let aspects = core::mem::take(&mut plan.owners[0].aspects);
-    let node_owner = plan
-        .owners
-        .iter_mut()
-        .find(|owner| matches!(owner.kind, plan::OwnerKind::Node(_)))
-        .expect("the fixture contains the relay owner");
-    node_owner.aspects = aspects;
+    let extensions = core::mem::take(&mut plan.owners[1].extensions);
+    plan.owners[0].extensions.extend(extensions);
     assert!(matches!(
         ValidatedExecutionPlan::try_new(plan),
         Err(PlanValidationError::InvalidGraphContract { detail, .. })
-            if detail == "Node owners cannot carry Graph ports or aspects"
+            if detail == "Loop.expired must carry canonical LoopExpired<In>"
     ));
 }
 
 fn bare_operator_plan() -> ExecutionPlan {
     ExecutionPlan {
+        boundary_routes: Vec::new(),
+        routes: vec![],
         owners: vec![
             plan::Owner {
                 path: plan::OwnerPath::root(),
                 parent: None,
                 kind: plan::OwnerKind::Graph,
                 ports: vec![],
-                aspects: vec![],
+                extensions: vec![plan::ExtensionSpec::App],
                 instance: plan::InstanceSpec {
                     key: None,
                     lifetime: plan::InstanceLifetime::Persistent,
@@ -345,7 +326,7 @@ fn bare_operator_plan() -> ExecutionPlan {
                 parent: Some(plan::OwnerSlot::new(0)),
                 kind: plan::OwnerKind::Node(Slot::new(0)),
                 ports: vec![],
-                aspects: vec![],
+                extensions: vec![],
                 instance: plan::InstanceSpec {
                     key: None,
                     lifetime: plan::InstanceLifetime::Persistent,
@@ -752,7 +733,7 @@ fn closing_budgets_and_stop_recursion_are_registry_free_invariants() {
     recursive.nodes[0].ports.push(plan::PortDecl {
         port: port("in"),
         direction: Direction::Input,
-        unwired: plan::UnwiredPolicy::RequireWire,
+
         ty: Some(DataType::INT),
         annotations: Default::default(),
     });
@@ -760,7 +741,7 @@ fn closing_budgets_and_stop_recursion_are_registry_free_invariants() {
         owner: plan::HandlerOwner::Node(Slot::new(0)),
         activation: rastok::node::HandlerActivation::Lifecycle(rastok::node::Lifecycle::Stop),
         guard: None,
-        body: vec![DispatchStep::Stop],
+        dispatch: rastok_core::plan::Dispatch::Linear(vec![DispatchStep::Stop]),
     });
     assert_eq!(
         ValidatedExecutionPlan::try_new(recursive).unwrap_err(),
@@ -1253,44 +1234,6 @@ fn a_process_plan_cannot_omit_the_effective_err_codec() {
 }
 
 #[test]
-fn a_boundary_port_cannot_carry_a_node_root_sink_policy() {
-    let mut plan = raw_probe();
-    let input = plan
-        .boundary
-        .iter_mut()
-        .find(|decl| decl.port.name() == "in")
-        .expect("the used conventional input is materialized");
-    input.unwired = plan::UnwiredPolicy::RootSink;
-    assert_eq!(
-        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
-        PlanValidationError::BoundaryHasRootSink { port: port("in") }
-    );
-}
-
-#[test]
-fn a_node_input_cannot_publish_to_a_root_sink() {
-    let mut plan = raw_probe();
-    let shell = plan
-        .nodes
-        .iter_mut()
-        .find(|node| node.path.to_string() == "shell")
-        .expect("the Process node");
-    shell
-        .ports
-        .iter_mut()
-        .find(|decl| decl.port.name() == "in")
-        .expect("the resolved input")
-        .unwired = plan::UnwiredPolicy::RootSink;
-    assert_eq!(
-        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
-        PlanValidationError::InputHasRootSink {
-            node: rastok::node::Path::new(["shell"]).unwrap(),
-            port: port("in"),
-        }
-    );
-}
-
-#[test]
 fn a_boundary_input_cannot_be_an_edge_target() {
     // `operator.out -> .request` with `request` declared as a graph
     // INPUT: the boundary convention inverts the node one, and the
@@ -1610,7 +1553,7 @@ fn a_duplicated_var_refuses() {
 #[test]
 fn a_write_to_an_undeclared_var_refuses() {
     let mut plan = raw_probe();
-    for step in &mut plan.handlers[0].body {
+    for step in linear_statements(&mut plan.handlers[0]) {
         if let DispatchStep::SetVar { name, .. } = step {
             "ghost".clone_into(name);
         }
@@ -1912,7 +1855,8 @@ fn a_bounded_join_never_invents_an_untyped_or_missing_expiry_channel() {
     ));
 
     let mut identity = raw_join(false);
-    let DispatchStep::Emit { value, .. } = &mut identity.handlers[0].body[0] else {
+    let DispatchStep::Emit { value, .. } = &mut linear_statements(&mut identity.handlers[0])[0]
+    else {
         panic!("the fixture emits")
     };
     *value = plan::Emission::Identity;
@@ -1997,7 +1941,7 @@ graph attributed : App {
     let DispatchStep::Emit {
         value: plan::Emission::FreshData(writes),
         ..
-    } = &mut pair.body[0]
+    } = &mut linear_statements(pair)[0]
     else {
         panic!("the explicit record builder lowers as Replace")
     };
@@ -2071,7 +2015,7 @@ fn an_extra_process_port_refuses_without_a_registry() {
     shell.ports.push(plan::PortDecl {
         port: port("ghost"),
         direction: Direction::Output,
-        unwired: plan::UnwiredPolicy::RequireWire,
+
         ty: Some(DataType::Variant),
         annotations: Default::default(),
     });
@@ -2091,7 +2035,7 @@ fn an_extra_process_port_refuses_without_a_registry() {
 /// map-literal canonicity provocations.
 fn with_setvar_root(root: expr::Expr) -> ExecutionPlan {
     let mut plan = raw_probe();
-    for step in &mut plan.handlers[0].body {
+    for step in linear_statements(&mut plan.handlers[0]) {
         if let DispatchStep::SetVar { value: expr, .. } = step {
             expr.root = root.clone();
         }
@@ -2174,7 +2118,7 @@ fn what_the_type_accepts_the_format_reads_back() {
     let mut last_accepted = None;
     let mut refused = false;
     for _ in 0..(MAX_NESTING + 16) {
-        let relay_steps = &mut plan.handlers[0].body;
+        let relay_steps = linear_statements(&mut plan.handlers[0]);
         for step in relay_steps {
             if let DispatchStep::SetVar { value: expr, .. } = step {
                 let previous = core::mem::replace(
@@ -2221,6 +2165,11 @@ fn complete_m13_types_round_trip_through_v7() {
         .find(|node| node.path.to_string() == "relay")
         .expect("the operator");
     relay.vars[0].ty = DataType::LONG;
+    let DispatchStep::SetVar { value, .. } = &mut linear_statements(&mut plan.handlers[0])[0]
+    else {
+        panic!("the probe increments its state cell")
+    };
+    value.ty = DataType::LONG;
     let validated = ValidatedExecutionPlan::try_new(plan).expect("int64 is a v7 type");
     let bytes = plan::encode(&validated, &plan::SemanticHash::from_bytes([1; 32]));
     let (decoded, _) = plan::decode(&bytes).expect("the complete type reads back");
@@ -2230,7 +2179,7 @@ fn complete_m13_types_round_trip_through_v7() {
 #[test]
 fn complete_expression_result_types_round_trip_through_v7() {
     let mut plan = raw_probe();
-    plan.handlers[0].body[0] = DispatchStep::Let {
+    linear_statements(&mut plan.handlers[0])[0] = DispatchStep::Let {
         name: String::from("wide"),
         value: expr::Tree {
             root: expr::Expr::Literal(rastok::value::Value::Int(i64::MAX)),
@@ -2260,7 +2209,7 @@ fn narrowing_expressions_round_trip_through_v7() {
                 target: Box::new(target),
             }
         };
-        plan.handlers[0].body[0] = DispatchStep::Let {
+        linear_statements(&mut plan.handlers[0])[0] = DispatchStep::Let {
             name: String::from("narrowed"),
             value: expr::Tree {
                 root,
@@ -2299,7 +2248,7 @@ fn constructed_values_round_trip_through_v7() {
         ),
     ] {
         let mut plan = raw_probe();
-        plan.handlers[0].body[0] = DispatchStep::Let {
+        linear_statements(&mut plan.handlers[0])[0] = DispatchStep::Let {
             name: String::from("constructed"),
             value: expr::Tree { root, ty },
             annotations: Default::default(),

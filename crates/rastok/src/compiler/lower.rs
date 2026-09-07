@@ -10,6 +10,8 @@
 //! spans never enter the bytes. The plan then ships the reduced
 //! values.
 
+use super::routing;
+
 use crate::compiler::hir::{
     AttrValue, Direction, Dispatch as HirDispatch, EdgeTarget, EmitValue, Endpoint, EndpointOwner,
     Graph as HirGraph, Hir, InstanceLifetime, InstancePolicy, LoopSpec, Node as HirNode,
@@ -22,8 +24,8 @@ use crate::datatype::{
 use crate::expr;
 use crate::node;
 use crate::plan::{
-    AspectSpec, AttrSetting, ClosingPolicy as PlanClosingPolicy, ConnectorSpec, DispatchStep, Edge,
-    Emission, EndpointRef, EvaluationSite, ExecutionPlan, FieldWrite, Handler, HandlerOwner,
+    AttrSetting, ClosingPolicy as PlanClosingPolicy, ConnectorSpec, DispatchStep, Edge, Emission,
+    EndpointRef, EvaluationSite, ExecutionPlan, ExtensionSpec, FieldWrite, Handler, HandlerOwner,
     InstanceLifetime as PlanInstanceLifetime, InstanceSpec, LoopDelay as PlanLoopDelay,
     LoopSpec as PlanLoopSpec, Node, NodeExecution, Owner, OwnerKind, OwnerPath, OwnerSlot,
     OwnerValue, PlanConstant, SemanticHash, Slot, SymbolTable, VarCell,
@@ -112,123 +114,8 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
             }
         }
     }
-    let extension_graphs: Vec<_> = sorted_graphs(hir)
-        .into_iter()
-        .filter(|graph| {
-            !graph.handlers.is_empty()
-                && graph
-                    .extensions
-                    .iter()
-                    .any(|extension| *extension != node::Extension::App)
-        })
-        .collect();
-    if !extension_graphs.is_empty() {
-        // Legacy v15 domain. R4 allocates the new Extension representation;
-        // the nominal R3 refactor must not move an existing identity.
-        writer.str("rastok.aspects.r1");
-        writer.count(extension_graphs.len());
-        for graph in extension_graphs {
-            writer.str(&graph.path.to_string());
-            let extensions: Vec<_> = graph
-                .extensions
-                .iter()
-                .filter(|extension| **extension != node::Extension::App)
-                .collect();
-            writer.count(extensions.len());
-            for extension in extensions {
-                match extension {
-                    node::Extension::App => {}
-                    node::Extension::Loop => {
-                        writer.tag(1);
-                        match &graph.loop_spec {
-                            None => writer.tag(0),
-                            Some(spec) => match &spec.fuel {
-                                None => writer.tag(0),
-                                Some(fuel) => {
-                                    writer.tag(1);
-                                    writer.tree(&fuel.tree);
-                                    match &spec.delay {
-                                        None => writer.tag(0),
-                                        Some(crate::compiler::hir::LoopDelay::Fixed { after }) => {
-                                            writer.tag(1);
-                                            writer.tree(&after.tree);
-                                        }
-                                        Some(crate::compiler::hir::LoopDelay::Exponential {
-                                            first,
-                                            ceiling,
-                                        }) => {
-                                            writer.tag(2);
-                                            writer.tree(&first.tree);
-                                            writer.tree(&ceiling.tree);
-                                        }
-                                    }
-                                }
-                            },
-                        }
-                    }
-                    node::Extension::Saga => writer.tag(2),
-                }
-            }
-            let mut handlers: Vec<_> = graph.handlers.iter().collect();
-            handlers.sort_by(|left, right| {
-                left.activation
-                    .canonical_key()
-                    .cmp(&right.activation.canonical_key())
-                    .then_with(|| {
-                        semantic_handler_order_key(left, hir.assets.as_slice())
-                            .cmp(&semantic_handler_order_key(right, hir.assets.as_slice()))
-                    })
-            });
-            writer.count(handlers.len());
-            for handler in handlers {
-                writer.handler(handler);
-            }
-        }
-    }
-    let proved_graphs: Vec<_> = sorted_graphs(hir)
-        .into_iter()
-        .filter_map(|graph| {
-            if graph.handlers.is_empty() {
-                return None;
-            }
-            graph
-                .loop_spec
-                .as_ref()
-                .and_then(|spec| spec.proof.as_ref().map(|proof| (graph, spec, proof)))
-        })
-        .collect();
-    if !proved_graphs.is_empty() {
-        writer.str("rastok.loop-proof.r1");
-        writer.count(proved_graphs.len());
-        for (graph, spec, proof) in proved_graphs {
-            writer.str(&graph.path.to_string());
-            writer.tree(&proof.measure);
-            match &proof.invariant {
-                None => writer.tag(0),
-                Some(invariant) => {
-                    writer.tag(1);
-                    writer.tree(invariant);
-                }
-            }
-            if spec.fuel.is_none() {
-                match &spec.delay {
-                    None => writer.tag(0),
-                    Some(crate::compiler::hir::LoopDelay::Fixed { after }) => {
-                        writer.tag(1);
-                        writer.tree(&after.tree);
-                    }
-                    Some(crate::compiler::hir::LoopDelay::Exponential { first, ceiling }) => {
-                        writer.tag(2);
-                        writer.tree(&first.tree);
-                        writer.tree(&ceiling.tree);
-                    }
-                }
-            }
-        }
-    }
     let mut loop_owners: Vec<_> = sorted_graphs(hir)
         .into_iter()
-        .filter(|graph| graph.handlers.is_empty())
         .filter_map(|graph| {
             graph
                 .loop_spec
@@ -242,8 +129,6 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
         }))
         .collect();
     if !loop_owners.is_empty() {
-        // Command-based Loop identity never extends or reinterprets the
-        // historical Graph-handler stream above.
         loop_owners.sort_by(|left, right| left.0.cmp(&right.0));
         writer.str("rastok.loop.r2");
         writer.count(loop_owners.len());
@@ -337,19 +222,6 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
     let mut bytes = [0u8; 32];
     writer.hasher.finalize_xof().fill(&mut bytes);
     SemanticHash::from_bytes(bytes)
-}
-
-fn semantic_handler_order_key(
-    handler: &crate::compiler::hir::Handler,
-    assets: &[crate::plan::AssetBlob],
-) -> [u8; 32] {
-    let mut writer = Writer {
-        hasher: blake3::Hasher::new(),
-        assets,
-    };
-    writer.str("rastok.handler.order.r1");
-    writer.handler(handler);
-    *writer.hasher.finalize().as_bytes()
 }
 
 /// Boundary ports in canonical order — by (port, direction); the
@@ -502,30 +374,46 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                 detail: "a Graph Extension reached lowering without its complete categorical specification",
             });
         }
-        if graph.routes.iter().any(|route| {
-            !matches!(
-                &route.selection,
-                RouteSelection::All(destinations)
-                    if matches!(destinations.as_slice(), [RouteDestination::Port(_) | RouteDestination::Discard])
-            )
+        let unsupported_command =
+            |route: &crate::plan::RouteRule, destination: &RouteDestination| {
+                let RouteDestination::LoopCommand(command) = destination else {
+                    return false;
+                };
+                command.owner != route.source.owner || !nodes.iter().any(|node|
+                matches!(&route.source.owner, crate::plan::EndpointOwner::Node(path) if *path == node.path)
+                && matches!(node.semantics, NodeSemantics::Connector { .. })
+                && node.loop_spec.is_some())
+            };
+        if graph.routes.iter().any(|route| match &route.selection {
+            RouteSelection::All(destinations) => destinations
+                .iter()
+                .any(|destination| unsupported_command(route, destination)),
+            RouteSelection::Cases(arms) => arms
+                .iter()
+                .flat_map(|arm| &arm.destinations)
+                .any(|destination| unsupported_command(route, destination)),
         }) {
             return Err(LowerError {
                 owner: graph.path.to_string(),
-                detail: "route sets, case routing, and Loop manager commands require the categorical v16 plan",
+                detail: "Loop manager commands require the R7 execution protocol",
             });
         }
-        if graph.loop_spec.is_some() && graph.handlers.is_empty() {
+        if graph.loop_spec.is_some() {
             return Err(LowerError {
                 owner: graph.path.to_string(),
-                detail: "a command-based Loop Graph requires the categorical v16 plan",
+                detail: "Loop on Graph requires retained boundary admissions, causal quiescence and spatial recovery",
             });
         }
     }
-    if let Some(node) = nodes.iter().find(|node| !node.extensions.is_empty()) {
-        return Err(LowerError {
-            owner: node.path.to_string(),
-            detail: "an Executor Extension requires the categorical v16 plan",
-        });
+    for node in &nodes {
+        if !node.extensions.is_empty()
+            && (node.extensions.as_slice() != [node::Extension::Loop] || node.loop_spec.is_none())
+        {
+            return Err(LowerError {
+                owner: node.path.to_string(),
+                detail: "this Loop host requires the R7 execution protocol",
+            });
+        }
     }
     let slot_of = |path: &node::Path| {
         Slot::new(
@@ -539,10 +427,12 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         )
     };
     let mut plan = ExecutionPlan {
+        boundary_routes: Vec::new(),
         owners: Vec::new(),
         nodes: Vec::new(),
         boundary: sorted_boundary(hir),
         edges: Vec::new(),
+        routes: Vec::new(),
         handlers: Vec::new(),
         // DERIVED from the writes the hash already seals — carried
         // for the ContractCatalog-less validator (D-2026-08-10-1), never
@@ -594,7 +484,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
             }
         };
         let mut constants = graph_constant_environment(hir, &graph_path);
-        let (kind, ports, aspects, instance, vals) = match checked {
+        let (kind, ports, extensions, instance, vals) = match checked {
             CheckedOwner::Graph(graph) => {
                 let mut ports = if graph.path.is_root() {
                     Vec::new()
@@ -602,15 +492,22 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                     graph.boundary.clone()
                 };
                 ports.sort_by(|left, right| left.key().cmp(&right.key()));
-                let aspects = graph
+                let mut extensions = graph
                     .loop_spec
                     .as_ref()
-                    .map(|spec| vec![AspectSpec::Loop(lower_loop_spec(spec, &constants))])
+                    .map(|spec| {
+                        vec![ExtensionSpec::Loop(Box::new(lower_loop_spec(
+                            spec, &constants,
+                        )))]
+                    })
                     .unwrap_or_default();
+                if graph.path.is_root() {
+                    extensions.insert(0, ExtensionSpec::App);
+                }
                 (
                     OwnerKind::Graph,
                     ports,
-                    aspects,
+                    extensions,
                     lower_instance(graph.instance.as_ref(), &constants, &graph.path.to_string())?,
                     lower_owner_values(&graph.vals),
                 )
@@ -626,7 +523,14 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                 (
                     OwnerKind::Node(slot),
                     Vec::new(),
-                    Vec::new(),
+                    node.loop_spec
+                        .as_ref()
+                        .map(|spec| {
+                            vec![ExtensionSpec::Loop(Box::new(lower_loop_spec(
+                                spec, &constants,
+                            )))]
+                        })
+                        .unwrap_or_default(),
                     lower_instance(node.instance.as_ref(), &constants, &node.path.to_string())?,
                     lower_owner_values(&node.vals),
                 )
@@ -637,7 +541,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
             parent,
             kind,
             ports,
-            aspects,
+            extensions,
             instance,
             vals,
         });
@@ -747,68 +651,13 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         let mut handlers: Vec<_> = hir_node.handlers.iter().collect();
         handlers.sort_by_key(|handler| handler.activation.canonical_key());
         for handler in handlers {
-            let Some((guard, body)) = v15_handler_parts(handler) else {
-                return Err(LowerError {
-                    owner: hir_node.path.to_string(),
-                    detail: "recursive Dispatch requires the categorical v16 plan",
-                });
-            };
-            if body.iter().any(|statement| !is_v15_statement(statement)) {
-                return Err(LowerError {
-                    owner: hir_node.path.to_string(),
-                    detail: "multi-emission and Loop manager commands require the categorical v16 plan",
-                });
-            }
             plan.handlers.push(Handler {
                 owner: HandlerOwner::Node(slot),
                 activation: handler.activation.clone(),
-                guard: guard.map(&subst),
-                body: body
-                    .iter()
-                    .map(|statement| lower_statement(statement, &subst))
-                    .collect(),
+                guard: handler.admission_guard.as_ref().map(&subst),
+                dispatch: lower_dispatch(&handler.dispatch, &subst),
             });
         }
-    }
-    for graph in sorted_graphs(hir) {
-        let owner = *owner_slots.get(&graph.path).ok_or_else(|| LowerError {
-            owner: graph.path.to_string(),
-            detail: "the canonical owner table omitted a Graph handler owner",
-        })?;
-        let constants = graph_runtime_constant_environment(hir, &graph.path);
-        let subst = |tree: &expr::Tree| substitute_tree(tree, &constants);
-        let mut handlers: Vec<_> = graph
-            .handlers
-            .iter()
-            .map(|handler| {
-                let (guard, body) = v15_handler_parts(handler).ok_or_else(|| LowerError {
-                    owner: graph.path.to_string(),
-                    detail: "recursive Graph Dispatch requires the categorical v16 plan",
-                })?;
-                if body.iter().any(|statement| !is_v15_statement(statement)) {
-                    return Err(LowerError {
-                        owner: graph.path.to_string(),
-                        detail: "Graph multi-emission and Loop commands require the categorical v16 plan",
-                    });
-                }
-                Ok(Handler {
-                    owner: HandlerOwner::Graph(owner),
-                    activation: handler.activation.clone(),
-                    guard: guard.map(&subst),
-                    body: body
-                        .iter()
-                        .map(|statement| lower_statement(statement, &subst))
-                        .collect(),
-                })
-            })
-            .collect::<Result<Vec<_>, LowerError>>()?;
-        handlers.sort_by(|left, right| {
-            left.activation
-                .canonical_key()
-                .cmp(&right.activation.canonical_key())
-                .then_with(|| left.canonical_order_key().cmp(&right.canonical_order_key()))
-        });
-        plan.handlers.extend(handlers);
     }
     plan.handlers.sort_by(|left, right| {
         left.owner
@@ -820,7 +669,24 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
             })
             .then_with(|| left.canonical_order_key().cmp(&right.canonical_order_key()))
     });
+    plan.routes = routing::flatten(&hir.app).map_err(|error| LowerError {
+        owner: endpoint_text(&error.source),
+        detail: "Graph boundary composition contradicts checked routing dispositions",
+    })?;
+    if plan
+        .owners
+        .iter()
+        .any(|owner| owner.kind == OwnerKind::Graph && !owner.path.is_root())
+        || hir.app.loop_spec.is_some()
+    {
+        plan.boundary_routes = routing::inventory(&hir.app);
+    }
     for (_, edge) in sorted_edges(hir) {
+        if let Some(rule) = plan.routes.iter().find(|rule| rule.source == edge.from)
+            && !routing::selects(rule, &edge.to)
+        {
+            continue;
+        }
         let endpoint = |end: &crate::compiler::hir::Endpoint| -> Result<EndpointRef, LowerError> {
             let node = match &end.owner {
                 EndpointOwner::Node(path) => Some(slot_of(path)),
@@ -877,6 +743,8 @@ fn lower_loop_spec(
         resolved: value.value.clone(),
     };
     PlanLoopSpec {
+        entry: spec.entry.clone(),
+        terminals: spec.terminals.clone(),
         fuel: spec.fuel.as_ref().map(constant),
         delay: spec.delay.as_ref().map(|delay| match delay {
             crate::compiler::hir::LoopDelay::Fixed { after } => PlanLoopDelay::Fixed {
@@ -940,19 +808,6 @@ fn lower_statement(
     }
 }
 
-fn is_v15_statement(statement: &HirStatement) -> bool {
-    matches!(
-        statement,
-        HirStatement::Let { .. }
-            | HirStatement::Emit { .. }
-            | HirStatement::SetVar { .. }
-            | HirStatement::Stop
-    )
-}
-
-/// Projects the one subset which has an exact v15 spelling. In particular,
-/// one-port `where` and its explicit open-match spelling normalize to the
-/// same guard/body pair and therefore preserve their pre-v16 identity.
 fn v15_handler_parts(
     handler: &crate::compiler::hir::Handler,
 ) -> Option<(Option<&expr::Tree>, &[HirStatement])> {
@@ -1009,6 +864,52 @@ pub struct LowerError {
     pub owner: String,
     /// Named missing transport/runtime gate.
     pub detail: &'static str,
+}
+
+fn lower_dispatch(
+    dispatch: &rastok_core::plan::Dispatch,
+    subst: &impl Fn(&expr::Tree) -> expr::Tree,
+) -> rastok_core::plan::Dispatch {
+    use rastok_core::plan::{ClosedArm, Dispatch, OpenArm};
+    let steps = |steps: &[HirStatement]| {
+        steps
+            .iter()
+            .map(|step| lower_statement(step, subst))
+            .collect()
+    };
+    match dispatch {
+        Dispatch::Linear(body) => Dispatch::Linear(steps(body)),
+        Dispatch::ClosedMatch {
+            prefix,
+            scrutinee,
+            arms,
+        } => Dispatch::ClosedMatch {
+            prefix: steps(prefix),
+            scrutinee: subst(scrutinee),
+            arms: arms
+                .iter()
+                .map(|arm| ClosedArm {
+                    cases: arm.cases.clone(),
+                    dispatch: Box::new(lower_dispatch(&arm.dispatch, subst)),
+                })
+                .collect(),
+        },
+        Dispatch::OpenMatch {
+            prefix,
+            arms,
+            fallback,
+        } => Dispatch::OpenMatch {
+            prefix: steps(prefix),
+            arms: arms
+                .iter()
+                .map(|arm| OpenArm {
+                    predicate: subst(&arm.predicate),
+                    dispatch: Box::new(lower_dispatch(&arm.dispatch, subst)),
+                })
+                .collect(),
+            fallback: Box::new(lower_dispatch(fallback, subst)),
+        },
+    }
 }
 
 fn substitute_emission(value: &Emission, subst: &impl Fn(&expr::Tree) -> expr::Tree) -> Emission {
@@ -1791,11 +1692,9 @@ impl Writer<'_> {
         self.count(ports.len());
         for decl in ports {
             self.str(decl.port.name());
-            self.tag(match (decl.direction, decl.unwired) {
-                (Direction::Input, crate::plan::UnwiredPolicy::RequireWire) => 1,
-                (Direction::Output, crate::plan::UnwiredPolicy::RequireWire) => 2,
-                (Direction::Output, crate::plan::UnwiredPolicy::RootSink) => 3,
-                (Direction::Input, crate::plan::UnwiredPolicy::RootSink) => 4,
+            self.tag(match decl.direction {
+                Direction::Input => 1,
+                Direction::Output => 2,
             });
             // The pinned type, present-or-absent — same idiom as the
             // boundary and the var initializers.
@@ -2361,6 +2260,8 @@ graph m0_probe : App {
   }
 
   . -> shout -> echo -> .
+  echo.err -> nothing
+  echo.exit -> nothing
 }
 "#;
 
@@ -2397,13 +2298,13 @@ graph m0_probe : App {
             node::HandlerActivation::Port(node::Port::new("in").unwrap())
         );
         assert!(matches!(
-            &handler.body[0],
+            handler.dispatch.steps().next().unwrap(),
             DispatchStep::Emit {
                 value: Emission::Data(_),
                 ..
             }
         ));
-        assert_eq!(plan.edges.len(), 3);
+        assert_eq!(plan.edges.len(), 5);
         assert_eq!(compilation.symbols.nodes, ["shout", "echo"]);
         let resolved = plan.resolved_ports();
         let boundary_in = resolved
@@ -2523,7 +2424,7 @@ graph app : App {
                 .is_empty()
         );
         assert!(matches!(
-            &compilation.plan.plan().handlers[0].body[0],
+            compilation.plan.plan().handlers[0].dispatch.steps().next().unwrap(),
             DispatchStep::Let { annotations, .. } if !annotations.is_empty()
         ));
 
@@ -3065,6 +2966,7 @@ graph app : App {
     behavior = deterministic
   }
   . -> model -> .
+  model.exit -> nothing
 }
 "#],
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -3129,6 +3031,8 @@ graph app : App {
     effect = idempotent
     behavior = deterministic
   }
+  client.out -> nothing
+  client.exit -> nothing
 }
 "#;
         let compilation = compile(
@@ -3185,11 +3089,11 @@ graph app : App {
         let source = |fuel: u32, spaced: bool| {
             if spaced {
                 format!(
-                    "graph app : App + Loop {{\n  input in : int\n  output out : int\n  Loop.fuel = {fuel}\n  on in {{ out = data }}\n}}\n"
+                    "graph app : App {{\n  input in : int\n  output out : int\n  operator looped : Loop {{ input in : int; output out : int; Loop.fuel = {fuel}; on in {{ out = data }} }}\n  in -> looped -> out\n  looped.Loop.expired -> nothing\n}}\n"
                 )
             } else {
                 format!(
-                    "graph app:App+Loop{{input in:int;output out:int;Loop.fuel={fuel};on in{{out=data}}}}"
+                    "graph app:App{{input in:int;output out:int;operator looped:Loop{{input in:int;output out:int;Loop.fuel={fuel};on in{{out=data}}}};in->looped->out;looped.Loop.expired->nothing}}"
                 )
             }
         };
@@ -3262,6 +3166,8 @@ graph m0_probe : App {
   }
 
   . -> shout -> echo -> .
+  echo.exit -> nothing
+  echo.err -> nothing
 }
 "#;
         assert_eq!(
@@ -3344,7 +3250,7 @@ graph m0_probe : App {
         // structural inspection now names the operator's closed input type;
         // `variant` can no longer be inspected without `is`/`as` narrowing.
         // DELIBERATE MOVE 2026-08-22 (M1.5 C1): the source symbol
-        // `Process` resolves to `rastok/process@1`, and the stable id plus
+        // `Process` resolves to `rastok/process@2`, and the stable id plus
         // required outbound role are now canonical HIR identity.
         // DELIBERATE MOVE 2026-08-25 (M1.6 H1): the contract's Call exchange
         // lifecycle becomes explicit canonical HIR and categorical v11 plan
@@ -3414,7 +3320,7 @@ graph m0_probe : App {
     fn unordered_collections_ship_canonically() {
         let with_attrs = |attrs: &str| {
             format!(
-                "graph g : App {{\n  connector c : Process {{\n{attrs}  }}\n  . -> c -> .\n}}\n"
+                "graph g : App {{\n  connector c : Process {{\n{attrs}  }}\n  . -> c -> .\n  c.err -> nothing\n  c.exit -> nothing\n}}\n"
             )
         };
         let one = compile(
@@ -3491,7 +3397,7 @@ graph m0_probe : App {
         assert_ne!(five.hash, six.hash);
         // ...and the shipped guard carries its value: no free
         // `threshold` binding survives in the plan.
-        let guard = five.plan.handlers[0].guard.as_ref().unwrap();
+        let (guard, _) = five.plan.handlers[0].dispatch.filter_parts().unwrap();
         let rendered = format!("{guard:?}");
         assert!(
             !rendered.contains("threshold"),

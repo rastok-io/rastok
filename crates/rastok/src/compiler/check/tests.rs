@@ -137,6 +137,8 @@ on in where data.text != "" {
   }
 
   . -> shout -> echo -> .
+  echo.err -> nothing
+  echo.exit -> nothing
 }
 "#;
 
@@ -402,6 +404,10 @@ codec = lines
 effect = idempotent
 behavior = deterministic
   }
+  c.out -> nothing
+  c.err -> nothing
+  c.exit -> nothing
+  c.Loop.expired -> nothing
 }
 "#;
     let (hir, bag) = check_source(source);
@@ -416,7 +422,7 @@ behavior = deterministic
 fn edges_desugar_to_explicit_pairs() {
     let hir = check_clean(M0_PROBE);
     let edges = &hir.app.edges;
-    assert_eq!(edges.len(), 3);
+    assert_eq!(edges.len(), 5);
     assert!(matches!(
         &edges[0].from.owner,
         EndpointOwner::Graph(path) if path.is_root()
@@ -435,7 +441,7 @@ fn edges_desugar_to_explicit_pairs() {
 }
 
 #[test]
-fn case_routes_are_canonical_and_cannot_leak_into_v15() {
+fn case_routes_are_canonical_and_cross_the_plan() {
     let source = r#"
 type Outcome = union {
   Good { value: int }
@@ -474,9 +480,9 @@ Good -> good
         3,
         "one input edge plus two physical routes"
     );
-    let error = crate::compiler::lower::lower(&hir)
-        .expect_err("R3 case routing must not be approximated by v15 edges");
-    assert!(error.detail.contains("categorical v16"));
+    let (plan, _) = crate::compiler::lower::lower(&hir).unwrap();
+    assert_eq!(plan.routes.len(), 1);
+    crate::plan::ValidatedExecutionPlan::try_from_lowered(plan).unwrap();
 }
 
 #[test]
@@ -651,10 +657,9 @@ graph g : App {
         route_destination_display(&destinations[0]) < route_destination_display(&destinations[1]),
         "destination order is canonical, not source order"
     );
-    assert!(
-        crate::compiler::lower::lower(&hir).is_err(),
-        "a destination set must not be approximated by a single edge"
-    );
+    let (plan, _) = crate::compiler::lower::lower(&hir).unwrap();
+    assert_eq!(plan.edges.len(), 3);
+    crate::plan::ValidatedExecutionPlan::try_from_lowered(plan).unwrap();
 }
 
 #[test]
@@ -668,10 +673,12 @@ codec = lines
 effect = idempotent
 behavior = deterministic
 Loop.fuel = 3
+timeout = duration("1s")
   }
   call.out -> nothing
   call.err -> nothing
   call.exit -> call.Loop.again
+  call.Loop.expired -> nothing
 }
 "#;
     let hir = check_clean(source);
@@ -694,9 +701,20 @@ Loop.fuel = 3
             .all(|edge| edge.from.port.name() != "exit"),
         "a manager command must not become a PhysicalEdge"
     );
-    let error = crate::compiler::lower::lower(&hir)
-        .expect_err("a manager command requires categorical transport");
-    assert!(error.detail.contains("Loop manager commands"));
+    let (plan, _) =
+        crate::compiler::lower::lower(&hir).expect("the manager command is transported");
+    let plan = crate::plan::ValidatedExecutionPlan::try_from_lowered(plan)
+        .expect("the Call protocol validates independently");
+    assert!(
+        plan.edges
+            .iter()
+            .all(|edge| edge.from.port.name() != "exit")
+    );
+    assert!(
+        plan.routes
+            .iter()
+            .any(|route| route.source.port.name() == "exit")
+    );
     let done = check_clean(&source.replace("call.Loop.again", "call.Loop.done"));
     assert_eq!(hir.app.edges, done.app.edges);
     assert_ne!(
@@ -944,6 +962,7 @@ on in {
   exit = Exited { exit_code = 0, signal = null }
 }
   }
+  o.exit -> nothing
 }
 "#;
     let hir = check_clean(source);
@@ -980,6 +999,7 @@ input in: int
 output out: int | text
 on in { out = 5 }
   }
+  o.out -> nothing
 }
 "#;
     let hir = check_clean(source);
@@ -1005,6 +1025,7 @@ input in: Small
 output out: Wide
 on in { out = data }
   }
+  o.out -> nothing
 }
 "#;
     let (_, bag) = check_source(implicit);
@@ -1033,6 +1054,7 @@ graph g : App {
   operator o {
 on in { err = Broken { message = "no" } }
   }
+  o.err -> nothing
 }
 "#;
     let hir = check_clean(source);
@@ -1042,7 +1064,6 @@ on in { err = Broken { message = "no" } }
         .find(|port| port.port.name() == "err")
         .expect("err is materialized like every other emitted port");
     assert_eq!(err.direction, Direction::Output);
-    assert_eq!(err.unwired, crate::plan::UnwiredPolicy::RootSink);
     assert!(matches!(
         &handler_body(&hir.app.nodes[0].handlers[0])[0],
         Statement::Emit { port, value: EmitValue::Data(expr::Tree { root: expr::Expr::Tagged { .. }, .. }) }
@@ -1288,12 +1309,12 @@ fn non_idempotent_effects_are_deferred_until_their_invariants_run() {
 }
 
 #[test]
-fn an_unwired_output_warns_without_refusing() {
+fn an_unwired_output_refuses_until_discarded_explicitly() {
     let source = "graph g : App {\n  operator o {\n    on in {\n      out = .\n      side = .\n    }\n  }\n  . -> o -> .\n}\n";
-    let (hir, bag) = check_source(source);
-    assert!(hir.is_some(), "a leak is a warning, not a refusal");
+    let (_, bag) = check_source(source);
+    assert!(bag.has_errors(), "a possible emission needs a disposition");
     assert!(bag.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code() == W_UNWIRED_OUTPUT && diagnostic.fields()[1].1 == "side"
+        diagnostic.code() == E_UNWIRED_OUTPUT && diagnostic.to_string().contains("o.side")
     }));
     // Discarding in writing silences it.
     let discarded = "graph g : App {\n  operator o {\n    on in {\n      out = .\n      side = .\n    }\n  }\n  . -> o -> .\n  o.side -> nothing\n}\n";
@@ -1301,7 +1322,7 @@ fn an_unwired_output_warns_without_refusing() {
     assert!(
         !bag.diagnostics()
             .iter()
-            .any(|diagnostic| diagnostic.code() == W_UNWIRED_OUTPUT)
+            .any(|diagnostic| diagnostic.code() == E_UNWIRED_OUTPUT)
     );
 }
 
@@ -1425,6 +1446,7 @@ on request match {
   in -> retry.request
   retry.done -> out
   retry.failed -> nothing
+  retry.Loop.expired -> nothing
 }
 "#;
     let hir = check_clean(source);
@@ -1446,9 +1468,11 @@ on request match {
         Dispatch::Linear(statements)
             if matches!(statements.as_slice(), [Statement::Emit { port, .. }] if port.name() == "done")
     ));
-    let error =
-        crate::compiler::lower::lower(&hir).expect_err("a Loop Executor requires v16 transport");
-    assert!(error.detail.contains("v16"));
+    let (raw, _) = crate::compiler::lower::lower(&hir).expect("the Operator manager is executable");
+    let validated = crate::plan::ValidatedExecutionPlan::try_from_lowered(raw).unwrap();
+    let hash = crate::compiler::lower::semantic_hash(&hir);
+    let bytes = crate::plan::encode(&validated, &hash);
+    assert_eq!(crate::plan::decode(&bytes).unwrap().0, validated);
 }
 
 #[test]
@@ -1470,6 +1494,7 @@ on alternate {{ Loop.done }}
   in -> retry.request
   retry.accepted -> nothing
   retry.failed -> nothing
+  retry.Loop.expired -> nothing
 }}
 "#
         )
@@ -1493,7 +1518,7 @@ on alternate {{ Loop.done }}
 }
 
 #[test]
-fn handlerless_loop_graph_cannot_ship_as_a_v15_loop() {
+fn graph_loop_requires_boundary_orchestration_before_shipping() {
     let hir = check_clean(
         r#"
 graph g : App {
@@ -1511,8 +1536,8 @@ in -> pass -> out
 }
 "#,
     );
-    let error = crate::compiler::lower::lower(&hir).expect_err("new Loop needs v16");
-    assert!(error.detail.contains("v16"), "{error:?}");
+    let error = crate::compiler::lower::lower(&hir).expect_err("Graph Loop needs orchestration");
+    assert!(error.detail.contains("causal quiescence"), "{error:?}");
 }
 
 #[test]
@@ -1597,9 +1622,15 @@ on in match {
         .unwrap();
     assert!(matches!(&proof.measure.root, expr::Expr::Path(path)
         if path.join(".") == "Loop.state.data.n"));
-    assert!(
-        crate::compiler::lower::lower(&hir).is_err(),
-        "R3 does not claim R8 proof validation"
+    assert_eq!(proof.decreases, [1]);
+    let (raw, _) = crate::compiler::lower::lower(&hir).unwrap();
+    let plan = crate::plan::ValidatedExecutionPlan::try_from_lowered(raw).unwrap();
+    let hash = crate::compiler::lower::semantic_hash(&hir);
+    assert_eq!(
+        crate::plan::decode(&crate::plan::encode(&plan, &hash))
+            .unwrap()
+            .0,
+        plan
     );
 }
 
@@ -1759,6 +1790,7 @@ Loop.fuel = 3
   call.out -> nothing
   call.err -> nothing
   call.exit -> nothing
+  call.Loop.expired -> nothing
 }
 "#;
     let hir = check_clean(source);
@@ -1878,11 +1910,14 @@ graph g : App {
   in -> call
   call.out -> call.Loop.again
   call.exit -> nothing
+  call.Loop.expired -> nothing
 }
 "#;
     let hir = check_clean(source);
-    let error = crate::compiler::lower::lower(&hir).expect_err("v16 transport is still required");
-    assert!(error.detail.contains("categorical v16"));
+    let (plan, _) =
+        crate::compiler::lower::lower(&hir).expect("single-response commands are transported");
+    crate::plan::ValidatedExecutionPlan::try_from_lowered(plan)
+        .expect("the independent proof derives one possible frame verdict");
 }
 
 #[test]
@@ -1913,7 +1948,8 @@ on in { (left, right) = data }
         ["left", "right"]
     );
     assert!(matches!(values, MultiEmitValues::Broadcast(_)));
-    assert!(crate::compiler::lower::lower(&hir).is_err());
+    let (plan, _) = crate::compiler::lower::lower(&hir).unwrap();
+    crate::plan::ValidatedExecutionPlan::try_from_lowered(plan).unwrap();
 }
 
 #[test]
@@ -2089,14 +2125,12 @@ fn lab_fragments_merge_and_homonym_simulations_refuse() {
 }
 
 #[test]
-fn an_implicit_unwired_output_still_warns() {
-    // `out` never enters the declared port table; the leak must
-    // surface anyway — the errata's interim floor is visibility.
+fn an_inferred_output_also_requires_a_destination() {
     let source = "graph g : App {\n  operator o {\n    on in { out = . }\n  }\n  . -> o\n}\n";
     let (_, bag) = check_source(source);
     assert!(
         bag.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code() == W_UNWIRED_OUTPUT && diagnostic.fields()[1].1 == "out"
+            diagnostic.code() == E_UNWIRED_OUTPUT && diagnostic.to_string().contains("o.out")
         }),
         "{:#?}",
         bag.diagnostics()
@@ -2416,6 +2450,8 @@ codec = json
 effect = idempotent
 behavior = deterministic
   }
+  client.out -> nothing
+  client.exit -> nothing
 }
 "#;
     let (hir, bag) = check_source(source);
@@ -2949,6 +2985,8 @@ effect = idempotent
 behavior = deterministic
   }
   . -> shell -> .
+  shell.err -> nothing
+  shell.exit -> nothing
 }
 "#;
     let hir = check_clean(source);

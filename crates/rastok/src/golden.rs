@@ -315,12 +315,185 @@ fn key_name(key: u64) -> String {
         50 => "session_exit_ref",
         51 => "session_fact",
         52 => "inbound_call_exit_ref",
+        53 => "loop_fact",
+        54 => "logical_time",
+        55 => "loop_protocol",
         _ => return format!("key {key}"),
     };
     format!("{name}({key})")
 }
 
 // ----- projection: the per-species tables -----
+
+fn loop_packet_tree(packet: &crate::journal::loop_protocol::Packet) -> Cbor {
+    use crate::journal::loop_protocol::{CloseReason, CommandValue, Fact, OpeningAdmissionRef};
+    let id = |id: crate::envelope::Id| Cbor::Bytes(id.as_bytes().to_vec());
+    let mut fields = BTreeMap::new();
+    if !packet.context.is_empty() {
+        fields.insert(
+            1,
+            Cbor::Array(packet.context.iter().map(|run| id(run.id())).collect()),
+        );
+    }
+    if !packet.routes.is_empty() {
+        fields.insert(
+            2,
+            Cbor::Array(
+                packet
+                    .routes
+                    .iter()
+                    .map(|route| {
+                        Cbor::Array(vec![
+                            id(route.delivery),
+                            Cbor::Array(route.runs.iter().map(|run| id(run.id())).collect()),
+                        ])
+                    })
+                    .collect(),
+            ),
+        );
+    }
+    if !packet.produced.is_empty() {
+        fields.insert(
+            3,
+            Cbor::Array(
+                packet
+                    .produced
+                    .iter()
+                    .map(|command| {
+                        let value = match &command.value {
+                            CommandValue::Next(state) => spine(state),
+                            CommandValue::Again(cause) => id(*cause),
+                            CommandValue::Done { cause, kind } => {
+                                Cbor::Array(vec![id(*cause), Cbor::Uint(u64::from(kind.tag()))])
+                            }
+                        };
+                        Cbor::Array(vec![
+                            id(command.reference.id()),
+                            id(command.run.id()),
+                            Cbor::Uint(command.iteration),
+                            Cbor::Array(vec![Cbor::Uint(u64::from(command.value.tag())), value]),
+                        ])
+                    })
+                    .collect(),
+            ),
+        );
+    }
+    if !packet.consumed.is_empty() {
+        fields.insert(
+            4,
+            Cbor::Array(
+                packet
+                    .consumed
+                    .iter()
+                    .map(|command| id(command.id()))
+                    .collect(),
+            ),
+        );
+    }
+    if !packet.facts.is_empty() {
+        fields.insert(
+            5,
+            Cbor::Array(
+                packet
+                    .facts
+                    .iter()
+                    .map(|fact| {
+                        Cbor::Array(match fact {
+                            Fact::Open {
+                                run,
+                                instance,
+                                opening,
+                                entry,
+                                fuel,
+                                state,
+                            } => {
+                                let opening = match opening {
+                                    OpeningAdmissionRef::Ingress { inbound, port } => {
+                                        Cbor::Array(vec![
+                                            Cbor::Uint(1),
+                                            id(*inbound),
+                                            Cbor::Text(port.name().into()),
+                                        ])
+                                    }
+                                    OpeningAdmissionRef::Delivery(delivery) => {
+                                        Cbor::Array(vec![Cbor::Uint(2), id(*delivery)])
+                                    }
+                                };
+                                vec![
+                                    Cbor::Uint(1),
+                                    id(run.id()),
+                                    instance.tree(),
+                                    opening,
+                                    Cbor::Text(entry.name().into()),
+                                    Cbor::Uint(*fuel),
+                                    spine(state),
+                                ]
+                            }
+                            Fact::Advance {
+                                run,
+                                from_iteration,
+                                to_iteration,
+                                remaining,
+                                command,
+                                state,
+                                due_at: _,
+                            } => vec![
+                                Cbor::Uint(2),
+                                id(run.id()),
+                                Cbor::Uint(*from_iteration),
+                                Cbor::Uint(*to_iteration),
+                                Cbor::Uint(*remaining),
+                                id(command.id()),
+                                spine(state),
+                            ],
+                            Fact::Admit {
+                                run,
+                                iteration,
+                                admission,
+                                envelope,
+                            } => vec![
+                                Cbor::Uint(3),
+                                id(run.id()),
+                                Cbor::Uint(*iteration),
+                                id(*admission),
+                                spine(envelope),
+                            ],
+                            Fact::Close {
+                                run,
+                                iteration,
+                                reason,
+                            } => vec![
+                                Cbor::Uint(4),
+                                id(run.id()),
+                                Cbor::Uint(*iteration),
+                                Cbor::Uint(match reason {
+                                    CloseReason::Natural => 1,
+                                    CloseReason::ExplicitDone => 2,
+                                    CloseReason::Stopped => 3,
+                                }),
+                            ],
+                            Fact::Expired {
+                                run,
+                                iteration,
+                                command,
+                                last_state,
+                                output,
+                            } => vec![
+                                Cbor::Uint(5),
+                                id(run.id()),
+                                Cbor::Uint(*iteration),
+                                id(command.id()),
+                                spine(last_state),
+                                spine(output),
+                            ],
+                        })
+                    })
+                    .collect(),
+            ),
+        );
+    }
+    Cbor::Map(fields)
+}
 
 fn record_tree(record: &Record) -> Cbor {
     match record {
@@ -430,7 +603,7 @@ fn record_tree(record: &Record) -> Cbor {
                 }
                 None => {}
             }
-            if let Some(fact) = transaction.loop_fact.as_deref() {
+            if let Some(fact) = transaction.loop_fact() {
                 let tree = match fact {
                     crate::journal::LoopFact::Open {
                         run,
@@ -495,6 +668,9 @@ fn record_tree(record: &Record) -> Cbor {
                         Cbor::Negative(logical_time.unsigned_abs() - 1)
                     },
                 );
+            }
+            if let Some(packet) = transaction.loop_protocol() {
+                pairs.insert(55, loop_packet_tree(packet));
             }
             if let Some(cause) = transaction.cause {
                 pairs.insert(39, Cbor::Bytes(cause.as_bytes().to_vec()));
@@ -789,13 +965,15 @@ mod tests {
             trigger: crate::node::Trigger::Port(crate::node::Port::new("in").unwrap()),
             cause: Some(root),
             exchange_exit: None,
-            loop_fact: Some(Box::new(crate::journal::LoopFact::Open {
-                run,
-                instance: instance.clone(),
-                root,
-                fuel: 9,
-                state: state.clone(),
-            })),
+            loop_record: Some(Box::new(crate::journal::LoopRecord::R1(
+                crate::journal::LoopFact::Open {
+                    run,
+                    instance: instance.clone(),
+                    root,
+                    fuel: 9,
+                    state: state.clone(),
+                },
+            ))),
             logical_time: None,
             consumed: Vec::new(),
             join_inputs: Vec::new(),
@@ -834,10 +1012,9 @@ mod tests {
             unreachable!("the fixture is a transaction")
         };
         admit.trigger = crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Next);
-        admit.loop_fact = Some(Box::new(crate::journal::LoopFact::Admit {
-            run,
-            iteration: 4,
-        }));
+        admit.loop_record = Some(Box::new(crate::journal::LoopRecord::R1(
+            crate::journal::LoopFact::Admit { run, iteration: 4 },
+        )));
         let Cbor::Map(admit_tree) = record_tree(&Record::Transaction(admit)) else {
             panic!("an admission projects as a canonical map")
         };

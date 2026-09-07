@@ -1,7 +1,7 @@
 // The Driver layer IS the OS boundary: filesystem observations, threads, and
 // cancellation races are its business — the semantic core stays pure.
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
-//! The real one-file Driver behind `rastok/file@1`.
+//! The real one-file Driver behind `rastok/file@2`.
 //!
 //! Request preparation is pure: it validates the logical path and seals one
 //! complete operation descriptor. Only [`OutboundConnectorDriver::start`],
@@ -269,7 +269,7 @@ impl core::fmt::Display for FileBindError {
 
 impl std::error::Error for FileBindError {}
 
-/// Statically linked factory for `rastok/file@1`.
+/// Statically linked factory for `rastok/file@2`.
 ///
 /// `root` is physical host configuration. It never enters the plan, request
 /// digest, or causal identity, and construction does not inspect it.

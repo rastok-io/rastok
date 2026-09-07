@@ -253,7 +253,7 @@ graph websocket_only : App {
         panic!("a Process-only image cannot create bindings for WebSocketClient")
     };
     assert!(
-        error.to_string().contains("rastok/websocket-client@1"),
+        error.to_string().contains("rastok/websocket-client@2"),
         "the omitted semantic capability is named before any VM exists: {error}"
     );
 }

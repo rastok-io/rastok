@@ -80,6 +80,71 @@ impl Environment {
         self.bindings.iter()
     }
 
+    /// Keep only facts proved by the selected predicate, projecting policy
+    /// through the same case/type narrowing as the expression checker.
+    pub(crate) fn narrowed_by(&self, predicate: &Expr) -> Result<Self, PropagationError> {
+        let mut branch = self.clone();
+        match predicate {
+            Expr::Is { expr, target } => {
+                if let Expr::Path(path) = expr.as_ref() {
+                    let source = derive(expr, self, &self.signature())?;
+                    let annotations = narrow(&source, target)?;
+                    let ty = match target.as_ref() {
+                        NarrowTarget::Type(target) => target.ty().clone(),
+                        NarrowTarget::Case { payload, .. } => (**payload).clone(),
+                    };
+                    branch.insert(path.join("."), ty, annotations);
+                }
+            }
+            Expr::Binary {
+                op: expr::BinaryOp::And,
+                left,
+                right,
+            } => {
+                branch = branch.narrowed_by(left)?.narrowed_by(right)?;
+            }
+            _ => {}
+        }
+        Ok(branch)
+    }
+
+    pub(crate) fn selected_cases(
+        &self,
+        scrutinee: &expr::Tree,
+        cases: &[String],
+    ) -> Result<Self, PropagationError> {
+        let mut branch = self.clone();
+        if matches!(&scrutinee.root, Expr::Path(path) if path == &[String::from("data")])
+            && let Some(binding) = branch.bindings.get_mut("data")
+            && let DataType::TaggedUnion(union) = &binding.ty
+        {
+            let selected = union
+                .cases()
+                .iter()
+                .filter(|case| cases.iter().any(|name| name == case.name()))
+                .cloned()
+                .collect();
+            binding.ty = DataType::TaggedUnion(
+                crate::datatype::TaggedUnionType::new(selected)
+                    .map_err(|_| PropagationError::UnresolvedExpression)?,
+            );
+            binding.annotations = AnnotationTable::new(
+                binding
+                    .annotations
+                    .entries()
+                    .iter()
+                    .filter(|(path, _)| {
+                        !matches!(path.segments().first(),
+                    Some(SchemaPathSegment::TaggedUnionCase(name)) if !cases.contains(name))
+                    })
+                    .map(|(path, set)| (path.clone(), set.clone()))
+                    .collect(),
+            )
+            .map_err(PropagationError::InvalidDerivedTable)?;
+        }
+        Ok(branch)
+    }
+
     fn signature(&self) -> Signature {
         self.bindings
             .iter()

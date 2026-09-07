@@ -225,27 +225,20 @@ pub fn verify(profile: &Profile, registry: &ContractCatalog, drivers: &DriverReg
             Err(violation) => report.violations.push(violation),
             Ok(()) => {
                 audit_journal(&journal, &mut report);
-                if !vm.errors().is_empty() {
-                    report.violations.push(format!(
-                        "the happy path ended with {} error(s) at the root sink",
-                        vm.errors().len()
-                    ));
-                } else {
-                    match root_exit_case(&vm).as_deref() {
-                        Some(case)
-                            if case == profile.happy_exit_case
-                                && exit_cases.iter().any(|known| known == case) =>
-                        {
-                            report.proven_cases.push(profile.happy_exit_case);
-                        }
-                        Some(case) => report.violations.push(format!(
-                            "the happy path terminated as `{case}`, expected `{}`",
-                            profile.happy_exit_case
-                        )),
-                        None => report
-                            .violations
-                            .push("the happy path produced no root `exit` fact".into()),
+                match source_exit_case(&vm).as_deref() {
+                    Some(case)
+                        if case == profile.happy_exit_case
+                            && exit_cases.iter().any(|known| known == case) =>
+                    {
+                        report.proven_cases.push(profile.happy_exit_case);
                     }
+                    Some(case) => report.violations.push(format!(
+                        "the happy path terminated as `{case}`, expected `{}`",
+                        profile.happy_exit_case
+                    )),
+                    None => report
+                        .violations
+                        .push("the happy path produced no root `exit` fact".into()),
                 }
             }
         }
@@ -1026,7 +1019,7 @@ fn run_provocation(
     let mut bindings = bind(&compilation.plan, drivers)?;
     drive(&mut vm, &mut journal, &mut bindings, provocation.input)
         .map_err(|violation| format!("the `{}` provocation: {violation}", provocation.exit_case))?;
-    match root_exit_case(&vm) {
+    match source_exit_case(&vm) {
         Some(case) if case == provocation.exit_case => Ok(()),
         Some(case) => Err(format!(
             "the `{}` provocation terminated as `{case}`",
@@ -1039,9 +1032,9 @@ fn run_provocation(
     }
 }
 
-fn root_exit_case(vm: &Vm<'_>) -> Option<String> {
+fn source_exit_case(vm: &Vm<'_>) -> Option<String> {
     let mut cases = vm.observations().iter().filter_map(|observed| {
-        if observed.node.is_some() || observed.port.name() != "exit" {
+        if observed.node.is_none() || observed.port.name() != "exit" {
             return None;
         }
         let Data::Materialized(Value::TaggedUnion(tagged)) = observed.envelope.data() else {
@@ -1082,7 +1075,7 @@ fn mute_battery(
     if !timed_out {
         return Err("the mute call never closed with the machine's Timeout fact".into());
     }
-    if root_exit_case(&vm).as_deref() != Some("TimeoutExpired") {
+    if source_exit_case(&vm).as_deref() != Some("TimeoutExpired") {
         return Err("the scheduler did not publish `TimeoutExpired` on `exit`".into());
     }
     // The driver was cancelled at the closure; later rounds must

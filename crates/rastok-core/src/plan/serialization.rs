@@ -1,7 +1,7 @@
 //! The plan package — the transportable, verifiable serialization
 //! of an [`ExecutionPlan`], per `docs/architecture/plan-package.md`.
 //!
-//! Format v15: the 4-byte magic `RKPB`, then one canonical CBOR map —
+//! Format v16: the 4-byte magic `RKPB`, then one canonical CBOR map —
 //! format version, the plan's semantic hash, the body as an embedded
 //! byte string, and a blake3 checksum over the domain-framed
 //! association `domain ‖ version ‖ semantic_hash ‖ body`, so a
@@ -13,6 +13,7 @@
 //! Every refusal is typed; an unknown version is a refusal by name,
 //! never a silent migration.
 
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -29,8 +30,8 @@ use crate::expr;
 use crate::identity::encoding::value_tagged;
 use crate::node;
 use crate::plan::{
-    AspectSpec, AttrSetting, ClosingPolicy, ConnectorSpec, DispatchStep, Edge, Emission,
-    EndpointRef, EvaluationSite, ExecutionPlan, FieldWrite, Handler, HandlerOwner,
+    AttrSetting, ClosingPolicy, ConnectorSpec, DispatchStep, Edge, Emission, EndpointRef,
+    EvaluationSite, ExecutionPlan, ExtensionSpec, FieldWrite, Handler, HandlerOwner,
     InstanceLifetime, InstanceSpec, LoopDelay, LoopSpec, Node, NodeExecution, Owner, OwnerKind,
     OwnerPath, OwnerSlot, OwnerValue, PlanConstant, PlanValidationError, PortDecl, SemanticHash,
     Slot, ValidatedExecutionPlan, VarCell,
@@ -43,15 +44,17 @@ use crate::value::Value;
 
 pub mod fields;
 
+pub(super) fn route_order_key(route: &super::RouteRule) -> Vec<u8> {
+    canonical_cbor::encode(&fields::route_tree(route))
+}
+
 /// The package's leading magic.
 pub const MAGIC: [u8; 4] = *b"RKPB";
 
-/// The format version this module writes and reads. V15 retains v14's complete
-/// type, Connector, Graph, and Loop transport, then carries canonical sparse
-/// annotation tables beside every annotated resolved schema.
-/// A new format is a new version, and an old decoder refuses it by name,
-/// exactly as the format note promises.
-pub const FORMAT_VERSION: u32 = 15;
+/// The categorical package format: recursive Dispatch, independent route
+/// selections, explicit Extensions and dispositions, and Connector Contracts
+/// `@2`. Earlier packages refuse; their fields are never silently reinterpreted.
+pub const FORMAT_VERSION: u32 = 16;
 
 /// The checksum domain — fixed-width framing, so the covered fields
 /// cannot slide into one another.
@@ -251,7 +254,11 @@ fn plan_tree_with_resolved(
             Cbor::Array(plan.handlers.iter().map(handler_tree).collect()),
         ),
         (9, Cbor::Array(plan.owners.iter().map(owner_tree).collect())),
+        (10, fields::routing_tree(&plan.routes)),
     ]);
+    if !plan.boundary_routes.is_empty() {
+        pairs.insert(11, fields::routing_tree(&plan.boundary_routes));
+    }
     // The travelling zone schemas (v5, D-2026-08-10-1): the
     // validator answers without a Registry. Absent = omitted key.
     if !plan.app_schema.is_empty() {
@@ -431,19 +438,31 @@ fn owner_tree(owner: &Owner) -> Cbor {
         ),
         (
             7,
-            Cbor::Array(owner.aspects.iter().map(aspect_spec_tree).collect()),
+            Cbor::Array(owner.extensions.iter().map(extension_spec_tree).collect()),
         ),
     ]))
 }
 
-fn aspect_spec_tree(aspect: &AspectSpec) -> Cbor {
-    match aspect {
-        AspectSpec::Loop(spec) => Cbor::Array(vec![Cbor::Uint(1), loop_spec_tree(spec)]),
+fn extension_spec_tree(extension: &ExtensionSpec) -> Cbor {
+    match extension {
+        ExtensionSpec::App => Cbor::Array(vec![Cbor::Uint(2)]),
+        ExtensionSpec::Loop(spec) => Cbor::Array(vec![Cbor::Uint(3), loop_spec_tree(spec)]),
     }
 }
 
 fn loop_spec_tree(spec: &LoopSpec) -> Cbor {
-    let mut fields = BTreeMap::new();
+    let mut fields = BTreeMap::from([
+        (4, Cbor::Text(spec.entry.name().into())),
+        (
+            5,
+            Cbor::Array(
+                spec.terminals
+                    .iter()
+                    .map(|port| Cbor::Text(port.name().into()))
+                    .collect(),
+            ),
+        ),
+    ]);
     if let Some(fuel) = &spec.fuel {
         fields.insert(1, plan_constant_tree(fuel));
     }
@@ -588,11 +607,9 @@ fn attr_tree(setting: &AttrSetting) -> Cbor {
 fn port_decl_tree(decl: &PortDecl) -> Cbor {
     let mut parts = vec![
         Cbor::Text(decl.port.name().to_string()),
-        Cbor::Uint(match (decl.direction, decl.unwired) {
-            (node::Direction::Input, super::UnwiredPolicy::RequireWire) => 1,
-            (node::Direction::Output, super::UnwiredPolicy::RequireWire) => 2,
-            (node::Direction::Output, super::UnwiredPolicy::RootSink) => 3,
-            (node::Direction::Input, super::UnwiredPolicy::RootSink) => 4,
+        Cbor::Uint(match decl.direction {
+            node::Direction::Input => 1,
+            node::Direction::Output => 2,
         }),
     ];
     // The optional third element is the pinned type — ABSENT when
@@ -684,7 +701,7 @@ fn handler_tree(handler: &Handler) -> Cbor {
     if let Some(guard) = &handler.guard {
         pairs.insert(3, tree_tree(guard));
     }
-    pairs.insert(4, Cbor::Array(handler.body.iter().map(step_tree).collect()));
+    pairs.insert(4, fields::dispatch_tree(&handler.dispatch));
     Cbor::Map(pairs)
 }
 
@@ -1171,6 +1188,8 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
         Expr(&'a expr::Expr, usize),
         Val(&'a Value, usize),
         Ty(&'a DataType, usize),
+        Dispatch(&'a super::Dispatch, usize),
+        Step(&'a DispatchStep, usize),
     }
     /// A `tree_tree`: its type and expression roots sit at `level`.
     fn tree<'a>(tree: &'a expr::Tree, level: usize, stack: &mut Vec<Item<'a>>) {
@@ -1212,6 +1231,37 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
     // The root map's table arrays sit at level 1.
     let mut max = 1usize;
     let mut stack: Vec<Item<'_>> = Vec::new();
+    for route in plan.routes.iter().chain(&plan.boundary_routes) {
+        // root table 1, rule 2, endpoint 3, owner 4, scalar 5.
+        max = max.max(5);
+        let (sets, level): (Vec<&[super::RouteDestination]>, usize) = match &route.selection {
+            super::RouteSelection::All(destinations) => (vec![destinations], 4),
+            super::RouteSelection::Cases(arms) => {
+                if !arms.is_empty() {
+                    max = max.max(6);
+                }
+                for arm in arms {
+                    if !arm.cases.is_empty() {
+                        max = max.max(7);
+                    }
+                }
+                (
+                    arms.iter().map(|arm| arm.destinations.as_slice()).collect(),
+                    6,
+                )
+            }
+        };
+        for destination in sets.into_iter().flatten() {
+            max = max.max(
+                level
+                    + match destination {
+                        super::RouteDestination::Port(_) => 4,
+                        super::RouteDestination::Discard => 2,
+                        super::RouteDestination::LoopCommand(_) => 3,
+                    },
+            );
+        }
+    }
     for node in &plan.nodes {
         // node map at 2: path, kind, and the two table arrays at 3.
         max = max.max(3);
@@ -1275,9 +1325,13 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
             }
             annotations(&decl.annotations, 5, &mut max);
         }
-        for aspect in &owner.aspects {
-            let AspectSpec::Loop(spec) = aspect;
-            // aspects array at 3, tagged aspect at 4, Loop map at 5.
+        for aspect in &owner.extensions {
+            let ExtensionSpec::Loop(spec) = aspect else {
+                max = max.max(5);
+                continue;
+            };
+            max = max.max(if spec.terminals.is_empty() { 6 } else { 7 });
+            // extensions array at 3, tagged Extension at 4, Loop map at 5.
             // An optional fuel constant starts at 6; a delay's tagged policy
             // starts at 6 and nests each constant one level further at 7.
             if let Some(fuel) = &spec.fuel {
@@ -1323,45 +1377,79 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
             // tree_tree at 3, type and expression roots at 4.
             tree(guard, 4, &mut stack);
         }
-        for step in &handler.body {
-            // step array at 4, tag and name at 5.
-            max = max.max(5);
-            match step {
-                DispatchStep::Let {
-                    value: expr,
-                    annotations: table,
-                    ..
-                } => {
-                    tree(expr, 6, &mut stack);
-                    annotations(table, 5, &mut max);
-                }
-                DispatchStep::SetVar { value: expr, .. } => tree(expr, 6, &mut stack),
-                DispatchStep::Stop => {}
-                DispatchStep::Emit { value, .. } => emission(value, 5, &mut max, &mut stack),
-                DispatchStep::MultiEmit { values, .. } => {
-                    max = max.max(6);
-                    match values {
-                        super::MultiEmitValues::Broadcast(value) => {
-                            emission(value, 6, &mut max, &mut stack)
-                        }
-                        super::MultiEmitValues::Tuple(values) => {
-                            for value in values {
-                                emission(value, 7, &mut max, &mut stack);
-                            }
-                        }
-                    }
-                }
-                DispatchStep::LoopCommand(command) => {
-                    max = max.max(6);
-                    if let super::LoopCommand::Next(value) = command {
-                        emission(value, 6, &mut max, &mut stack);
-                    }
-                }
-            }
-        }
+        stack.push(Item::Dispatch(&handler.dispatch, 3));
     }
     while let Some(item) = stack.pop() {
         match item {
+            Item::Dispatch(dispatch, level) => {
+                use super::Dispatch;
+                max = max.max(level + 1);
+                let steps = match dispatch {
+                    Dispatch::Linear(steps) => steps,
+                    Dispatch::ClosedMatch {
+                        prefix,
+                        scrutinee,
+                        arms,
+                    } => {
+                        tree(scrutinee, level + 2, &mut stack);
+                        for arm in arms {
+                            max = max.max(level + 4);
+                            stack.push(Item::Dispatch(&arm.dispatch, level + 3));
+                        }
+                        prefix
+                    }
+                    Dispatch::OpenMatch {
+                        prefix,
+                        arms,
+                        fallback,
+                    } => {
+                        for arm in arms {
+                            tree(&arm.predicate, level + 4, &mut stack);
+                            stack.push(Item::Dispatch(&arm.dispatch, level + 3));
+                        }
+                        stack.push(Item::Dispatch(fallback, level + 1));
+                        prefix
+                    }
+                };
+                stack.extend(steps.iter().map(|step| Item::Step(step, level + 2)));
+            }
+            Item::Step(step, level) => {
+                max = max.max(level + 1);
+                match step {
+                    DispatchStep::Let {
+                        value: expr,
+                        annotations: table,
+                        ..
+                    } => {
+                        tree(expr, level + 2, &mut stack);
+                        annotations(table, level + 1, &mut max);
+                    }
+                    DispatchStep::SetVar { value: expr, .. } => tree(expr, level + 2, &mut stack),
+                    DispatchStep::Stop => {}
+                    DispatchStep::Emit { value, .. } => {
+                        emission(value, level + 1, &mut max, &mut stack)
+                    }
+                    DispatchStep::MultiEmit { values, .. } => {
+                        max = max.max(level + 2);
+                        match values {
+                            super::MultiEmitValues::Broadcast(value) => {
+                                emission(value, level + 2, &mut max, &mut stack)
+                            }
+                            super::MultiEmitValues::Tuple(values) => {
+                                for value in values {
+                                    emission(value, level + 3, &mut max, &mut stack);
+                                }
+                            }
+                        }
+                    }
+                    DispatchStep::LoopCommand(command) => {
+                        max = max.max(level + 2);
+                        if let super::LoopCommand::Next(value) = command {
+                            emission(value, level + 2, &mut max, &mut stack);
+                        }
+                    }
+                }
+            }
             Item::Expr(expr, level) => {
                 // Every variant is an array whose tag sits one down.
                 max = max.max(level + 1);
@@ -1699,6 +1787,17 @@ fn plan_from(tree: &Cbor) -> Result<ExecutionPlan, DecodeError> {
         .iter()
         .map(handler_from)
         .collect::<Result<Vec<_>, _>>()?;
+    let routes = array_of(get(pairs, 10, "plan routing")?, "plan routing")?
+        .iter()
+        .map(fields::route_from)
+        .collect::<Result<Vec<_>, _>>()?;
+    let boundary_routes = match pairs.get(&11) {
+        Some(tree) => array_of(tree, "boundary routing")?
+            .iter()
+            .map(fields::route_from)
+            .collect::<Result<Vec<_>, _>>()?,
+        None => Vec::new(),
+    };
     let app_schema = match pairs.get(&5) {
         Some(tree) => schema_from(tree)?,
         None => Vec::new(),
@@ -1725,6 +1824,8 @@ fn plan_from(tree: &Cbor) -> Result<ExecutionPlan, DecodeError> {
         nodes,
         boundary,
         edges,
+        routes,
+        boundary_routes,
         handlers,
         app_schema,
         ext_schema,
@@ -1804,31 +1905,40 @@ fn owner_from(tree: &Cbor) -> Result<Owner, DecodeError> {
         .iter()
         .map(port_decl_from)
         .collect::<Result<Vec<_>, _>>()?;
-    let aspects = array_of(get(fields, 7, "owner aspects")?, "owner aspects")?
+    let extensions = array_of(get(fields, 7, "owner extensions")?, "owner extensions")?
         .iter()
-        .map(aspect_spec_from)
+        .map(extension_spec_from)
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Owner {
         path,
         parent,
         kind,
         ports,
-        aspects,
+        extensions,
         instance,
         vals,
     })
 }
 
-fn aspect_spec_from(tree: &Cbor) -> Result<AspectSpec, DecodeError> {
-    match array_of(tree, "aspect specification")? {
-        [Cbor::Uint(1), spec] => Ok(AspectSpec::Loop(loop_spec_from(spec)?)),
-        _ => Err(err("aspect specification")),
+fn extension_spec_from(tree: &Cbor) -> Result<ExtensionSpec, DecodeError> {
+    match array_of(tree, "Extension specification")? {
+        [Cbor::Uint(2)] => Ok(ExtensionSpec::App),
+        [Cbor::Uint(3), spec] => Ok(ExtensionSpec::Loop(Box::new(loop_spec_from(spec)?))),
+        _ => Err(err("Extension specification")),
     }
 }
 
 fn loop_spec_from(tree: &Cbor) -> Result<LoopSpec, DecodeError> {
     let fields = map_of(tree, "Loop specification")?;
     Ok(LoopSpec {
+        entry: node::Port::new(text_of(get(fields, 4, "Loop entry")?, "Loop entry")?)
+            .map_err(|_| err("Loop entry"))?,
+        terminals: array_of(get(fields, 5, "Loop terminals")?, "Loop terminals")?
+            .iter()
+            .map(|port| {
+                node::Port::new(text_of(port, "Loop terminal")?).map_err(|_| err("Loop terminal"))
+            })
+            .collect::<Result<_, _>>()?,
         fuel: find(fields, 1).map(plan_constant_from).transpose()?,
         delay: find(fields, 2).map(loop_delay_from).transpose()?,
         proof: find(fields, 3).map(loop_proof_from).transpose()?,
@@ -2103,17 +2213,14 @@ fn port_decl_from(tree: &Cbor) -> Result<PortDecl, DecodeError> {
         ),
         _ => return Err(err("port declaration")),
     };
-    let (direction, unwired) = match direction {
-        1 => (node::Direction::Input, super::UnwiredPolicy::RequireWire),
-        2 => (node::Direction::Output, super::UnwiredPolicy::RequireWire),
-        3 => (node::Direction::Output, super::UnwiredPolicy::RootSink),
-        4 => (node::Direction::Input, super::UnwiredPolicy::RootSink),
-        _ => return Err(err("port direction/policy")),
+    let direction = match direction {
+        1 => node::Direction::Input,
+        2 => node::Direction::Output,
+        _ => return Err(err("port direction")),
     };
     Ok(PortDecl {
         port: node::Port::new(name.clone()).map_err(|_| err("port name"))?,
         direction,
-        unwired,
         ty,
         annotations,
     })
@@ -2182,9 +2289,7 @@ fn handler_from(tree: &Cbor) -> Result<Handler, DecodeError> {
     let pairs = map_of(tree, "handler")?;
     let owner = match array_of(get(pairs, 1, "handler owner")?, "handler owner")? {
         [Cbor::Uint(1), index] => HandlerOwner::Node(Slot::new(u32_from(index, "handler node")?)),
-        [Cbor::Uint(2), index] => {
-            HandlerOwner::Graph(OwnerSlot::new(u32_from(index, "handler Graph")?))
-        }
+        [Cbor::Uint(2), ..] => return Err(err("retired Graph handler owner")),
         _ => return Err(err("handler owner")),
     };
     let activation = match array_of(get(pairs, 2, "activation")?, "activation")? {
@@ -2224,33 +2329,19 @@ fn handler_from(tree: &Cbor) -> Result<Handler, DecodeError> {
                 _ => return Err(err("join last")),
             },
         },
-        [Cbor::Uint(4), Cbor::Text(child), Cbor::Text(port)] => {
-            node::HandlerActivation::ChildPort {
-                child: node::Path::new(
-                    child
-                        .split('.')
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>(),
-                )
-                .map_err(|_| err("handler child path"))?,
-                port: node::Port::new(port.clone()).map_err(|_| err("handler child port"))?,
-            }
-        }
+        [Cbor::Uint(4), ..] => return Err(err("retired child-output activation")),
         _ => return Err(err("activation")),
     };
     let guard = match find(pairs, 3) {
         Some(tree) => Some(tree_from(tree)?),
         None => None,
     };
-    let body = array_of(get(pairs, 4, "handler body")?, "handler body")?
-        .iter()
-        .map(step_from)
-        .collect::<Result<Vec<_>, _>>()?;
+    let dispatch = fields::dispatch_from(get(pairs, 4, "handler dispatch")?, 0)?;
     Ok(Handler {
         owner,
         activation,
         guard,
-        body,
+        dispatch,
     })
 }
 
@@ -2896,7 +2987,7 @@ mod tests {
             parent: None,
             kind: OwnerKind::Graph,
             ports: vec![],
-            aspects: vec![],
+            extensions: vec![ExtensionSpec::App],
             instance: InstanceSpec {
                 key: None,
                 lifetime: InstanceLifetime::Persistent,
@@ -2912,7 +3003,7 @@ mod tests {
             parent: Some(OwnerSlot::new(0)),
             kind: OwnerKind::Node(Slot::new(slot)),
             ports: vec![],
-            aspects: vec![],
+            extensions: vec![],
             instance: InstanceSpec {
                 key: None,
                 lifetime: InstanceLifetime::Persistent,
@@ -2933,6 +3024,8 @@ mod tests {
             closing: None,
         };
         let validated = ValidatedExecutionPlan::try_new(ExecutionPlan {
+            boundary_routes: Vec::new(),
+            routes: vec![],
             owners: vec![root_owner(), instance_owner],
             nodes: vec![Node {
                 path: node::Path::new(["worker"]).unwrap(),
@@ -2986,12 +3079,14 @@ mod tests {
         annotations: AnnotationTable,
     ) -> ValidatedExecutionPlan {
         ValidatedExecutionPlan::try_new(ExecutionPlan {
+            boundary_routes: Vec::new(),
+            routes: vec![],
             owners: vec![root_owner()],
             nodes: vec![],
             boundary: vec![PortDecl {
                 port: port("in"),
                 direction: node::Direction::Input,
-                unwired: crate::plan::UnwiredPolicy::RequireWire,
+
                 ty: Some(ty),
                 annotations,
             }],
@@ -3247,13 +3342,14 @@ mod tests {
     #[test]
     fn v15_sabotage_cannot_detach_graph_policy_from_its_type() {
         let mut nested = root_owner();
+        nested.extensions.clear();
         nested.path =
             OwnerPath::new(["nested"]).unwrap_or_else(|error| panic!("nested owner path: {error}"));
         nested.parent = Some(OwnerSlot::new(0));
         nested.ports = vec![PortDecl {
             port: port("in"),
             direction: node::Direction::Input,
-            unwired: crate::plan::UnwiredPolicy::RequireWire,
+
             ty: Some(DataType::Text),
             annotations: AnnotationTable::new(vec![(
                 SchemaPath::root(),
@@ -3262,6 +3358,8 @@ mod tests {
             .unwrap_or_else(|error| panic!("one policy row: {error}")),
         }];
         let plan = ValidatedExecutionPlan::try_new(ExecutionPlan {
+            boundary_routes: Vec::new(),
+            routes: vec![],
             owners: vec![root_owner(), nested],
             nodes: vec![],
             boundary: vec![],
@@ -3391,7 +3489,7 @@ mod tests {
     }
 
     #[test]
-    fn v15_categorically_refuses_a_v14_envelope() {
+    fn v16_categorically_refuses_a_v15_envelope() {
         let package = encode(
             &annotated_boundary_plan(DataAnnotation::Sensitive(SensitivityLevel::Internal)),
             &SemanticHash::from_bytes([0; 32]),
@@ -3401,10 +3499,82 @@ mod tests {
         else {
             panic!("map envelope");
         };
-        envelope.insert(1, Cbor::Uint(14));
-        let mut v14 = MAGIC.to_vec();
-        v14.extend_from_slice(&canonical_cbor::encode(&Cbor::Map(envelope)));
-        assert_eq!(decode(&v14), Err(DecodeError::UnsupportedVersion(14)));
+        envelope.insert(1, Cbor::Uint(15));
+        let mut previous = MAGIC.to_vec();
+        previous.extend_from_slice(&canonical_cbor::encode(&Cbor::Map(envelope)));
+        assert_eq!(decode(&previous), Err(DecodeError::UnsupportedVersion(15)));
+    }
+
+    #[test]
+    fn both_removed_sink_direction_tags_are_unreadable() {
+        for retired in [3, 4] {
+            let declaration = Cbor::Array(vec![Cbor::Text(text("out")), Cbor::Uint(retired)]);
+            assert!(
+                port_decl_from(&declaration).is_err(),
+                "a retired sink policy cannot become a direction"
+            );
+        }
+    }
+
+    #[test]
+    fn v16_routes_are_mandatory_and_unknown_body_fields_are_not_ignored() {
+        let package = instance_package();
+        let absent = mutate_package_body(&package, |body| {
+            body.remove(&10);
+        });
+        assert!(matches!(decode(&absent), Err(DecodeError::Malformed(_))));
+        let extra = mutate_package_body(&package, |body| {
+            body.insert(11, Cbor::Array(vec![]));
+        });
+        assert_eq!(
+            decode(&extra),
+            Err(DecodeError::NonCanonical(
+                "the body is not the canonical encoding of its plan"
+            ))
+        );
+    }
+
+    #[test]
+    fn a_valid_checksum_cannot_restore_a_graph_handler_or_child_activation() {
+        let package = instance_package();
+        for (owner, activation, detail) in [
+            (
+                Cbor::Array(vec![Cbor::Uint(2), Cbor::Uint(0)]),
+                Cbor::Array(vec![Cbor::Uint(1), Cbor::Text(text("in"))]),
+                "retired Graph handler owner",
+            ),
+            (
+                Cbor::Array(vec![Cbor::Uint(1), Cbor::Uint(0)]),
+                Cbor::Array(vec![
+                    Cbor::Uint(4),
+                    Cbor::Text(text("child")),
+                    Cbor::Text(text("out")),
+                ]),
+                "retired child-output activation",
+            ),
+        ] {
+            let forged = mutate_package_body(&package, |body| {
+                body.insert(
+                    4,
+                    Cbor::Array(vec![Cbor::Map(BTreeMap::from([
+                        (1, owner),
+                        (2, activation),
+                        (
+                            4,
+                            fields::dispatch_tree(&super::super::Dispatch::Linear(vec![])),
+                        ),
+                    ]))]),
+                );
+            });
+            assert_eq!(decode(&forged), Err(err(detail)));
+        }
+        assert!(
+            extension_spec_from(&Cbor::Array(vec![
+                Cbor::Uint(1),
+                Cbor::Map(BTreeMap::new())
+            ]))
+            .is_err()
+        );
     }
 
     fn instance_mut(body: &mut BTreeMap<u64, Cbor>) -> &mut BTreeMap<u64, Cbor> {
@@ -3468,7 +3638,7 @@ mod tests {
             parent: Some(OwnerSlot::new(0)),
             kind: OwnerKind::Graph,
             ports: vec![],
-            aspects: vec![],
+            extensions: vec![],
             instance: InstanceSpec {
                 key: Some(expr::Tree {
                     root: expr::Expr::Path(vec![text("meta"), text("app"), text("workspace")]),
@@ -3587,6 +3757,8 @@ mod tests {
             }),
         };
         ExecutionPlan {
+            boundary_routes: Vec::new(),
+            routes: vec![],
             owners: vec![root_owner(), node_owner("relay", 0), node_owner("shell", 1)],
             nodes: vec![
                 Node {
@@ -3597,7 +3769,7 @@ mod tests {
                         PortDecl {
                             port: port("typed"),
                             direction: node::Direction::Input,
-                            unwired: crate::plan::UnwiredPolicy::RequireWire,
+
                             ty: Some(DataType::text_map(DataType::array(DataType::Text))),
                             annotations: AnnotationTable::empty(),
                         },
@@ -3635,7 +3807,7 @@ mod tests {
                 PortDecl {
                     port: port("entry"),
                     direction: node::Direction::Input,
-                    unwired: crate::plan::UnwiredPolicy::RequireWire,
+
                     ty: Some(DataType::array(DataType::INT)),
                     annotations: AnnotationTable::empty(),
                 },
@@ -3666,7 +3838,7 @@ mod tests {
                 owner: HandlerOwner::Node(Slot::new(0)),
                 activation: node::HandlerActivation::Port(port("in")),
                 guard: Some(tree(expr.clone())),
-                body: vec![
+                dispatch: crate::plan::Dispatch::Linear(vec![
                     DispatchStep::Let {
                         name: text("x"),
                         value: tree(expr.clone()),
@@ -3713,7 +3885,7 @@ mod tests {
                         }]),
                     },
                     DispatchStep::Stop,
-                ],
+                ]),
             }],
             app_schema: vec![(text("m.dotted"), DataType::Variant)],
             ext_schema: vec![(text("content_type"), DataType::Text)],
@@ -3725,6 +3897,8 @@ mod tests {
     /// nested chains.
     fn one_step_plan(root: expr::Expr) -> ExecutionPlan {
         ExecutionPlan {
+            boundary_routes: Vec::new(),
+            routes: vec![],
             owners: vec![root_owner(), node_owner("o", 0)],
             nodes: vec![Node {
                 path: node::Path::new(["o"]).unwrap(),
@@ -3739,11 +3913,11 @@ mod tests {
                 owner: HandlerOwner::Node(Slot::new(0)),
                 activation: node::HandlerActivation::Port(port("in")),
                 guard: None,
-                body: vec![DispatchStep::Let {
+                dispatch: crate::plan::Dispatch::Linear(vec![DispatchStep::Let {
                     name: text("x"),
                     value: tree(root),
                     annotations: AnnotationTable::empty(),
-                }],
+                }]),
             }],
             app_schema: vec![],
             ext_schema: vec![],
@@ -4082,6 +4256,8 @@ mod tests {
     #[test]
     fn the_resolved_table_is_mandatory_and_cannot_lie() {
         let validated = ValidatedExecutionPlan::try_new(ExecutionPlan {
+            boundary_routes: Vec::new(),
+            routes: vec![],
             owners: vec![root_owner()],
             nodes: vec![],
             boundary: vec![],
@@ -4237,14 +4413,15 @@ mod tests {
             nested_type = DataType::text_map(nested_type);
         }
         let mut deep_type_plan = one_step_plan(expr::Expr::Literal(Value::Null));
-        deep_type_plan.handlers[0].body = vec![DispatchStep::Let {
-            name: text("x"),
-            value: expr::Tree {
-                ty: nested_type.clone(),
-                root: expr::Expr::Literal(Value::Null),
-            },
-            annotations: AnnotationTable::empty(),
-        }];
+        deep_type_plan.handlers[0].dispatch =
+            super::super::Dispatch::Linear(vec![DispatchStep::Let {
+                name: text("x"),
+                value: expr::Tree {
+                    ty: nested_type.clone(),
+                    root: expr::Expr::Literal(Value::Null),
+                },
+                annotations: AnnotationTable::empty(),
+            }]);
         let payload = StructType::new(vec![TypeField::new("message", DataType::Text)]).unwrap();
         let union = TaggedUnionType::new(vec![TaggedCase::new("Failed", payload.clone()).unwrap()])
             .unwrap();
@@ -4307,11 +4484,13 @@ mod tests {
         categorical.boundary.push(PortDecl {
             port: port("deep"),
             direction: node::Direction::Input,
-            unwired: crate::plan::UnwiredPolicy::RequireWire,
+
             ty: Some(nested_type.clone()),
             annotations: policy.clone(),
         });
-        categorical.owners[0].aspects = vec![AspectSpec::Loop(LoopSpec {
+        categorical.owners[0].extensions = vec![ExtensionSpec::Loop(Box::new(LoopSpec {
+            entry: port("in"),
+            terminals: vec![port("out")],
             fuel: Some(PlanConstant {
                 expr: tree(nested_maplit.clone()),
                 resolved: nested_value.clone(),
@@ -4327,10 +4506,12 @@ mod tests {
                 },
             }),
             proof: None,
-        })];
+        }))];
 
         let plans = [
             ExecutionPlan {
+                boundary_routes: Vec::new(),
+                routes: vec![],
                 owners: vec![root_owner()],
                 nodes: vec![],
                 boundary: vec![],
@@ -4386,25 +4567,28 @@ mod tests {
                 DispatchStep::LoopCommand(super::super::LoopCommand::Done),
             ] {
                 let mut raw = one_step_plan(expr::Expr::Literal(Value::Null));
-                raw.handlers[0].body = vec![statement];
+                raw.handlers[0].dispatch = super::super::Dispatch::Linear(vec![statement]);
                 assert_eq!(deepest_level(&raw), levels(&plan_tree(&raw)));
                 assert!(
                     matches!(
                         ValidatedExecutionPlan::try_new(raw),
-                        Err(PlanValidationError::UnsupportedStatement { .. })
+                        Err(PlanValidationError::UnsupportedStatement { .. }
+                            | PlanValidationError::WrongPortDirection { .. })
                     ),
-                    "a raw ordering key must not open the v15 package gate"
+                    "transport does not prove output targets or manager support"
                 );
             }
         }
 
         let resolved_plan = ExecutionPlan {
+            boundary_routes: Vec::new(),
+            routes: vec![],
             owners: vec![root_owner()],
             nodes: vec![],
             boundary: vec![PortDecl {
                 port: port("deep"),
                 direction: node::Direction::Input,
-                unwired: crate::plan::UnwiredPolicy::RequireWire,
+
                 ty: Some(nested_type),
                 annotations: policy,
             }],

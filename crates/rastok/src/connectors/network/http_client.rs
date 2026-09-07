@@ -110,7 +110,7 @@ impl fmt::Display for HttpClientConfigError {
 
 impl std::error::Error for HttpClientConfigError {}
 
-/// Statically linked hosted implementation of `rastok/http-client@1`.
+/// Statically linked hosted implementation of `rastok/http-client@2`.
 #[derive(Debug)]
 pub struct HttpClientFactory {
     id: crate::connector::ContractId,
@@ -1751,6 +1751,7 @@ graph bounded_request : App {
     effect = idempotent ; behavior = deterministic
   }
   . -> client -> .
+  client.exit -> nothing
 }
 "#
         .replace("VERSION", version);

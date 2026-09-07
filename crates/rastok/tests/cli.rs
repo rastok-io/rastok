@@ -13,6 +13,8 @@ use std::process::{Command, Stdio};
 /// A concurrently starting UI listener can claim that port, so all test-owned
 /// loopback listeners share this guard. Pure and subprocess-only CLI tests
 /// remain parallel; this does not claim a port lease against unrelated hosts.
+/// The mutex contains no shared data. A failed probe must not poison the
+/// remaining probes into reporting its assertion as their own failure.
 #[cfg(any(
     feature = "hosted-http12",
     feature = "hosted-websocket",
@@ -119,7 +121,7 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
 
     let _network_guard = LIVE_NETWORK_CLI_TEST
         .lock()
-        .expect("a prior live-network CLI test did not panic");
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut child = rastok()
         .arg("simulate")
         .arg(example())
@@ -440,7 +442,7 @@ fn simulation_step_keeps_a_silent_call_paused_and_reaches_the_next_lab_action() 
 
     let _network_guard = LIVE_NETWORK_CLI_TEST
         .lock()
-        .expect("a prior live-network CLI test did not panic");
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut child = rastok()
         .arg("simulate")
         .arg(keyed_retry_example())
@@ -549,7 +551,7 @@ fn run_ui_admits_no_stdin_before_resume_and_preserves_normal_output() {
 
     let _network_guard = LIVE_NETWORK_CLI_TEST
         .lock()
-        .expect("a prior live-network CLI test did not panic");
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut child = rastok()
         .arg("run")
         .arg(example())
@@ -794,7 +796,7 @@ fn run_polls_an_inbound_http_server_without_a_stdin_submission() {
 
     let _network_guard = LIVE_NETWORK_CLI_TEST
         .lock()
-        .expect("a prior live-network CLI test did not panic");
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let reserved = std::net::TcpListener::bind("127.0.0.1:0").expect("a local port is available");
     let address = reserved
         .local_addr()
@@ -814,6 +816,7 @@ fn run_polls_an_inbound_http_server_without_a_stdin_submission() {
     versions = ["http/1.1"]
   }}
   server -> .
+  server.exit -> nothing
 }}
 "#,
         ),
@@ -864,7 +867,7 @@ fn run_polls_an_inbound_http_server_without_a_stdin_submission() {
 fn run_composes_a_live_websocket_gateway_with_process() {
     let _network_guard = LIVE_NETWORK_CLI_TEST
         .lock()
-        .expect("a prior live-network CLI test did not panic");
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let reserved =
         std::net::TcpListener::bind("127.0.0.1:0").expect("a local WebSocket port is available");
     let address = reserved
@@ -1005,6 +1008,7 @@ fn simulate_resolves_boot_refs_from_a_profile_without_cli_secret_values() {
     effect = idempotent ; behavior = deterministic
   }
   . -> client -> .
+  client.exit -> nothing
 }
 lab deployed {
   simulation boot on app {

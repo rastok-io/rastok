@@ -38,6 +38,8 @@ on in where data.text != "" {
   }
 
   . -> shout -> echo -> .
+  echo.err -> nothing
+  echo.exit -> nothing
 }
 "#;
 

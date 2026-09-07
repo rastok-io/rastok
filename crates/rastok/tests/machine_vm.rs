@@ -62,6 +62,8 @@ on in where data.text != "" {
   }
 
   . -> shout -> echo -> .
+  echo.err -> nothing
+  echo.exit -> nothing
 }
 "#;
 
@@ -409,11 +411,11 @@ fn tenant_submission(tenant: &str, user: i64) -> InboundSubmission {
     }
 }
 
-fn root_exit_cases<'a>(vm: &'a Vm<'_>) -> Vec<&'a str> {
+fn source_exit_cases<'a>(vm: &'a Vm<'_>) -> Vec<&'a str> {
     vm.observations()
         .iter()
         .filter_map(|observed| {
-            if observed.node.is_some() || observed.port.name() != "exit" {
+            if observed.node.is_none() || observed.port.name() != "exit" {
                 return None;
             }
             let Data::Materialized(Value::TaggedUnion(tagged)) = observed.envelope.data() else {
@@ -1382,6 +1384,8 @@ graph dynamic_binding : App {
 
   . -> shell
   shell.out -> .out
+  shell.err -> nothing
+  shell.exit -> nothing
 }
 "#;
     let compilation = compile(
@@ -1829,6 +1833,7 @@ graph nested_lifetimes : App {
 
   . -> shell
   shell.out -> .out
+  shell.err -> nothing
   shell.exit -> .exit
 }
 "#;
@@ -1915,6 +1920,7 @@ graph draining : App {
   . -> seed -> collect -> .
   . -> shell
   shell.out -> collect
+  shell.err -> nothing
   shell.exit -> nothing
 }
 "#;
@@ -1978,7 +1984,7 @@ fn a_confirmed_cancel_keeps_the_observed_exit_and_never_invents_unknown() {
     vm.advance(&mut journal, &mut world, 2_000_000_000).unwrap();
 
     assert_eq!(world.cancelled, world.started);
-    assert_eq!(root_exit_cases(&vm), ["Exited"]);
+    assert_eq!(source_exit_cases(&vm), ["Exited"]);
     assert!(journal.records().iter().any(|record| matches!(
         record,
         Record::Outbound(OutboundRecord::Call(outbound))
@@ -2007,14 +2013,14 @@ fn silent_cancel_becomes_one_unknown_only_after_settlement() {
     vm.pump(&mut journal, &mut world).unwrap();
     vm.advance(&mut journal, &mut world, 2_000_000_000).unwrap();
     assert_eq!(world.cancelled.len(), 1);
-    assert!(root_exit_cases(&vm).is_empty());
+    assert!(source_exit_cases(&vm).is_empty());
     assert!(
         vm.has_open_obligations(),
         "settlement is a real grace interval"
     );
 
     vm.advance(&mut journal, &mut world, 3_000_000_000).unwrap();
-    assert_eq!(root_exit_cases(&vm), ["OutcomeUnknown"]);
+    assert_eq!(source_exit_cases(&vm), ["OutcomeUnknown"]);
     assert_eq!(
         journal
             .records()
@@ -2054,7 +2060,7 @@ fn silent_cancel_becomes_one_unknown_only_after_settlement() {
         1,
         "a late reply is observable but non-causal"
     );
-    assert_eq!(root_exit_cases(&vm), ["OutcomeUnknown"]);
+    assert_eq!(source_exit_cases(&vm), ["OutcomeUnknown"]);
 }
 
 #[test]
@@ -2133,7 +2139,7 @@ fn bounded_closing_interleavings_are_model_checked() {
         } else {
             "OutcomeUnknown"
         };
-        assert_eq!(root_exit_cases(&vm), [expected], "schedule {reply_at:?}");
+        assert_eq!(source_exit_cases(&vm), [expected], "schedule {reply_at:?}");
         assert_eq!(
             journal
                 .records()
@@ -2311,7 +2317,11 @@ graph two_calls : App {
         residual_count, 2,
         "the second ingress left one admitted-but-unconsumed delivery per connector"
     );
-    assert!(root_exit_cases(&vm).is_empty());
+    assert_eq!(source_exit_cases(&vm), ["OutcomeUnknown", "OutcomeUnknown"]);
+    assert!(
+        vm.outputs().is_empty(),
+        "explicit discards are not App outputs"
+    );
 }
 
 #[test]
@@ -2870,12 +2880,17 @@ fn stderr_and_terminal_status_leave_on_independent_ports() {
     };
     assert_eq!(transaction.emissions[0].port.name(), "err");
     assert_eq!(transaction.emissions[1].port.name(), "exit");
-    assert_eq!(vm.errors().len(), 1);
+    let stderr: Vec<_> = vm
+        .observations()
+        .iter()
+        .filter(|observed| observed.node.is_some() && observed.port.name() == "err")
+        .collect();
+    assert_eq!(stderr.len(), 1);
     assert_eq!(
-        vm.errors()[0].data(),
+        stderr[0].envelope.data(),
         &Data::materialized(Value::Text(String::from("exit 1")))
     );
-    assert_eq!(root_exit_cases(&vm), ["Exited"]);
+    assert_eq!(source_exit_cases(&vm), ["Exited"]);
 }
 
 #[test]
@@ -3126,6 +3141,7 @@ graph websocket : App {
     effect = idempotent ; behavior = deterministic
   }
   . -> socket -> .
+  socket.exit -> nothing
 }
 "#;
     let compilation = compile(
@@ -3159,7 +3175,7 @@ graph websocket : App {
     vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     assert!(journal.live_sessions().is_empty());
     assert!(vm.is_stable());
-    assert_eq!(root_exit_cases(&vm), ["Closed"]);
+    assert_eq!(source_exit_cases(&vm), ["Closed"]);
     let exits = journal
         .records()
         .iter()
@@ -3187,6 +3203,7 @@ graph websocket : App {
     effect = idempotent ; behavior = deterministic
   }
   . -> socket -> .
+  socket.exit -> nothing
 }
 "#;
     let compilation = compile(
@@ -3238,6 +3255,7 @@ graph websocket : App {
     effect = idempotent ; behavior = deterministic
   }
   . -> socket -> .
+  socket.exit -> nothing
 }
 "#;
     let compilation = compile(
@@ -3262,7 +3280,7 @@ graph websocket : App {
     vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
     assert!(journal.live_sessions().is_empty());
     assert!(vm.is_stable());
-    assert_eq!(root_exit_cases(&vm), ["TimeoutExpired"]);
+    assert_eq!(source_exit_cases(&vm), ["TimeoutExpired"]);
 }
 
 #[test]
@@ -3277,6 +3295,7 @@ graph websocket : App {
     codec = text
   }
   . -> socket -> .
+  socket.exit -> nothing
 }
 "#;
     let compilation = compile(
@@ -3339,11 +3358,11 @@ graph websocket : App {
     vm.pump(&mut journal, &mut world).unwrap();
     vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     assert!(vm.is_stable());
-    assert_eq!(root_exit_cases(&vm), ["Closed", "Closed"]);
+    assert_eq!(source_exit_cases(&vm), ["Closed", "Closed"]);
     let exit_sessions = vm
         .observations()
         .iter()
-        .filter(|observed| observed.node.is_none() && observed.port.name() == "exit")
+        .filter(|observed| observed.node.is_some() && observed.port.name() == "exit")
         .filter_map(
             |observed| match observed.envelope.meta().ext().get("session_id") {
                 Some(rastok::envelope::MetaValue::Scalar(rastok::envelope::Scalar::Text(
@@ -3394,7 +3413,12 @@ on in {
         )),
         "the faulted transaction must not consume or emit"
     );
-    assert!(vm.errors().is_empty(), "no implicit err output exists");
+    assert!(
+        vm.observations()
+            .iter()
+            .all(|event| event.port.name() != "err"),
+        "no implicit err output exists"
+    );
     assert!(
         !vm.is_stable(),
         "the triggering delivery stays reserved for supervision/recovery"
@@ -3422,6 +3446,15 @@ impl FlakyJournal {
 }
 
 impl Journal for FlakyJournal {
+    fn visit_records(&self, visit: &mut dyn FnMut(&Record)) -> Result<(), rastok::journal::Error> {
+        self.inner.visit_records(visit)
+    }
+
+    fn loop_protocol(
+        &self,
+    ) -> Result<rastok::journal::loop_protocol::Fold, rastok::journal::Error> {
+        self.inner.loop_protocol()
+    }
     fn retained_observations_from(
         &self,
         start: usize,
@@ -3602,6 +3635,8 @@ on in where data.text != "" {
   }
 
   . -> shout -> echo -> .
+  echo.err -> nothing
+  echo.exit -> nothing
 }
 "#;
 
@@ -3731,8 +3766,12 @@ fn a_silent_driver_expires_into_a_typed_timeout() {
         node::Trigger::Lifecycle(node::Lifecycle::Timeout)
     );
     assert_eq!(transaction.emissions[0].port.name(), "exit");
-    assert!(vm.errors().is_empty());
-    assert_eq!(root_exit_cases(&vm), ["TimeoutExpired"]);
+    assert!(
+        vm.observations()
+            .iter()
+            .all(|event| event.port.name() != "err")
+    );
+    assert_eq!(source_exit_cases(&vm), ["TimeoutExpired"]);
     // The claim lifted: a second submission opens a second call.
     vm.inject(&mut journal, submission("encore")).unwrap();
     vm.drain_with_bindings(&mut journal, &mut world).unwrap();
@@ -3771,7 +3810,7 @@ fn a_scheduler_projection_refusal_precedes_the_timeout_close() {
     bindings.refuse_scheduler_completion = false;
     vm.advance(&mut journal, &mut bindings, 5_000_000_000)
         .unwrap();
-    assert_eq!(root_exit_cases(&vm), ["TimeoutExpired"]);
+    assert_eq!(source_exit_cases(&vm), ["TimeoutExpired"]);
 }
 
 #[test]
@@ -3806,7 +3845,7 @@ fn a_cancel_refusal_cannot_strand_an_expiring_call() {
     bindings.refuse_cancel = false;
     vm.advance(&mut journal, &mut bindings, 5_000_000_000)
         .unwrap();
-    assert_eq!(root_exit_cases(&vm), ["TimeoutExpired"]);
+    assert_eq!(source_exit_cases(&vm), ["TimeoutExpired"]);
     assert!(
         vm.is_stable(),
         "the claimed mailbox was eventually released"
@@ -3837,7 +3876,7 @@ fn a_budget_runs_from_delivery_and_covers_queue_time() {
     vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
     assert!(vm.is_stable());
     assert_eq!(
-        root_exit_cases(&vm),
+        source_exit_cases(&vm),
         ["TimeoutExpired", "TimeoutExpired"],
         "both requests expired exactly once"
     );
@@ -3925,6 +3964,10 @@ on in { out = data.text }
   . -> shout
   shout -> alpha -> nothing
   shout -> beta -> nothing
+  alpha.err -> nothing
+  alpha.exit -> nothing
+  beta.err -> nothing
+  beta.exit -> nothing
 }
 "#;
     let compilation = compile(
@@ -3980,7 +4023,12 @@ fn an_answer_and_an_expiry_race_to_a_single_closure() {
         .count();
     assert_eq!(closures, 1, "close-once");
     assert_eq!(vm.outputs().len(), 1);
-    assert!(vm.errors().is_empty(), "no phantom timeout");
+    assert!(
+        vm.observations()
+            .iter()
+            .all(|event| event.port.name() != "err"),
+        "no phantom timeout"
+    );
 }
 
 #[test]
@@ -4045,7 +4093,7 @@ fn a_refused_expiry_stays_armed_and_replays() {
     journal.refuse_closes = false;
     vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
     assert!(vm.is_stable());
-    assert_eq!(root_exit_cases(&vm), ["TimeoutExpired"]);
+    assert_eq!(source_exit_cases(&vm), ["TimeoutExpired"]);
 }
 
 #[test]
@@ -4069,7 +4117,7 @@ fn a_refused_open_on_a_queued_expiry_replays_without_duplicates() {
     vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
     assert!(vm.is_stable());
     assert_eq!(
-        root_exit_cases(&vm),
+        source_exit_cases(&vm),
         ["TimeoutExpired", "TimeoutExpired"],
         "both expired exactly once"
     );
@@ -4080,7 +4128,7 @@ fn a_refused_commit_on_a_queued_expiry_loses_nothing() {
     // Case: the queued delivery expires and the timeout
     // transaction's commit is refused — the delivery must stay.
     let compilation = compile(
-        &["graph g : App {\n  connector echo : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  operator wrap {\n    on in { out = . }\n  }\n  . -> wrap -> echo -> nothing\n}\n"],
+        &["graph g : App {\n  connector echo : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  operator wrap {\n    on in { out = . }\n  }\n  . -> wrap -> echo -> nothing\n  echo.err -> nothing\n  echo.exit -> nothing\n}\n"],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
@@ -4116,8 +4164,12 @@ fn a_refused_commit_on_a_queued_expiry_loses_nothing() {
     vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
     vm.drain(&mut journal).unwrap();
     assert!(vm.is_stable());
-    assert!(vm.errors().is_empty());
-    assert_eq!(root_exit_cases(&vm), ["TimeoutExpired"]);
+    assert!(
+        vm.observations()
+            .iter()
+            .all(|event| event.port.name() != "err")
+    );
+    assert_eq!(source_exit_cases(&vm), ["TimeoutExpired"]);
     let terminal_transactions: Vec<_> = journal
         .inner
         .records()
@@ -4224,10 +4276,10 @@ graph countdown : App + Loop {
 
     let mut recovered = Vm::boot_at(&compilation.plan, GraphVersion(1), 1_000_000_000);
     recovered
-        .recover_loop_runs(&journal)
+        .recover_from_journal(&journal)
         .expect("the persisted due-date annotation re-arms the same wakeup");
     recovered
-        .recover_loop_runs(&journal)
+        .recover_from_journal(&journal)
         .expect("a duplicate recovery observation may re-arm but cannot re-enter twice");
     let mut world = EchoWorld::default();
     recovered
@@ -4258,7 +4310,7 @@ graph countdown : App + Loop {
         .filter_map(|record| match record {
             Record::Transaction(transaction)
                 if matches!(
-                    transaction.loop_fact.as_deref(),
+                    transaction.loop_fact(),
                     Some(rastok::journal::LoopFact::Next { .. })
                 ) =>
             {
@@ -4386,7 +4438,7 @@ graph countdown : App + Loop {
         .records()
         .iter()
         .filter_map(|record| match record {
-            Record::Transaction(transaction) => match transaction.loop_fact.as_deref() {
+            Record::Transaction(transaction) => match transaction.loop_fact() {
                 Some(rastok::journal::LoopFact::Open { run, .. }) => Some(*run),
                 _ => None,
             },
@@ -4400,7 +4452,7 @@ graph countdown : App + Loop {
     let transitions: Vec<_> = journal.records()[before..]
         .iter()
         .filter_map(|record| match record {
-            Record::Transaction(transaction) => transaction.loop_fact.as_deref().filter(|fact| {
+            Record::Transaction(transaction) => transaction.loop_fact().filter(|fact| {
                 matches!(
                     fact,
                     rastok::journal::LoopFact::Next { .. }
@@ -4554,7 +4606,7 @@ graph retry : App + Loop {
 
     let mut recovered = Vm::boot_at(&compilation.plan, GraphVersion(1), 2_000_000_000);
     let error = recovered
-        .recover_loop_runs(&journal)
+        .recover_from_journal(&journal)
         .expect_err("spatial recovery must fail closed until owner bundles are replayed");
     assert!(
         error.to_string().contains(

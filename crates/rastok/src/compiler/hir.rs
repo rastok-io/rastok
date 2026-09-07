@@ -50,10 +50,7 @@ pub struct Graph {
     /// Canonically sorted Extensions. The root owns `App`; `Loop` and future
     /// temporal Extensions remain orthogonal to the Graph category.
     pub extensions: Vec<node::Extension>,
-    /// Checked Loop source contract. The new command-based interface stays
-    /// behind the categorical v16 lowering gate.
-    /// `None` for every Graph without `: Loop`, and for a malformed recovery
-    /// declaration.
+    /// Resolved Loop policy, absent on a Graph without Loop.
     pub loop_spec: Option<LoopSpec>,
     /// Root-relative lexical owner path. The App owns the empty path; nested
     /// Graphs append their declared name to their parent's path.
@@ -63,9 +60,6 @@ pub struct Graph {
     pub boundary: Vec<crate::plan::PortDecl>,
     /// Graph-level constant bindings, in declaration order.
     pub vals: Vec<Val>,
-    /// Historical v15 Loop Graph handlers retained until the coordinated
-    /// runtime/source migration. A v16 Graph has no application handlers.
-    pub handlers: Vec<Handler>,
     /// The graph's nodes, in declaration order.
     pub nodes: Vec<Node>,
     /// Lexically nested Graph owners, in declaration order.
@@ -74,7 +68,6 @@ pub struct Graph {
     pub edges: Vec<Edge>,
     /// Source-level routing groups and case selection. Every declaration is
     /// retained here; `edges` is only its deduplicated physical projection.
-    /// R4 moves this algebra into the categorical plan in one version bump.
     pub routes: Vec<RouteRule>,
     /// Graph-owned instance addressing and lifetime. Absence means the
     /// persistent singleton and is canonically identical to an explicitly
@@ -82,9 +75,8 @@ pub struct Graph {
     pub instance: Option<InstancePolicy>,
 }
 
-/// The first checked Loop contract. The categorical plan remains the next
-/// gate; keeping reduced constants here prevents parser strings from becoming
-/// a second semantic authority.
+/// Checked Loop policy. Reduced constants remain beside their expression
+/// trees; neither parser strings nor a runtime default become an authority.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoopSpec {
     /// Resolved recurrent admission port. The manager always re-enters this
@@ -471,9 +463,6 @@ pub enum Cmp {
 /// Where an expectation looks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExpectTarget {
-    /// `app.<port>` — an ordinary output whose resolved unwired policy is
-    /// `RootSink`.
-    RootSink(node::Port),
     /// `app.<port>` — envelopes leaving the App boundary.
     Boundary(node::Port),
     /// `<node>.<port>` — deliveries reaching a node port.

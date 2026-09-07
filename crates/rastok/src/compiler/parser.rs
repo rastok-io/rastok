@@ -1037,7 +1037,9 @@ impl<'src> Parser<'src, '_> {
         } else {
             None
         };
-        let config = if self.peek().kind == TokenKind::LBrace {
+        // A brace on the following line starts a new source set, not this
+        // edge's configuration. Newlines separate Graph declarations.
+        let config = if self.peek().kind == TokenKind::LBrace && !self.peek().newline_before {
             self.struct_body()
         } else {
             None
@@ -4240,6 +4242,25 @@ graph m0_probe : App {
             &route_match.arms[1].cases,
             EdgeCaseSet::Fallback(_)
         ));
+    }
+
+    #[test]
+    fn a_source_set_after_an_edge_is_not_its_configuration() {
+        let tree = parse_clean("graph g : App {\n in -> a\n { a.out; b.out } -> out\n}\n");
+        let TopDecl::Graph(graph) = &tree.decls[0] else {
+            panic!("Graph")
+        };
+        assert_eq!(graph.body.len(), 2);
+        let GraphItem::Edge(first) = &graph.body[0] else {
+            panic!("first edge")
+        };
+        assert!(first.config.is_none());
+        let GraphItem::Edge(second) = &graph.body[1] else {
+            panic!("second edge")
+        };
+        assert!(
+            matches!(&second.endpoints[0], EdgeEndpoint::SourceSet(sources) if sources.len() == 2)
+        );
     }
 
     #[test]

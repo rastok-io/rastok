@@ -41,26 +41,26 @@ fn packaged_loop() -> (
     Vec<u8>,
 ) {
     let source = r#"
-graph countdown : App + Loop {
+graph countdown : App {
   input in: text
   output out: text
-  Loop.fuel = 3
 
-  operator relay {
+  operator relay : Loop {
     input in: text
     output out: text
-    on in { out = data }
+    Loop.fuel = 3
+    on in { out = Loop.state.data }
   }
 
-  . -> relay
-  on relay.out { out = Loop.state.data }
+  in -> relay -> out
+  relay.Loop.expired -> nothing
 }
 "#;
     let compilation = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
-    .expect("the first categorical Loop crosses source lowering");
+    .expect("the command-based Operator Loop crosses source lowering");
     assert!(compilation.warnings.is_empty());
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
     (compilation.plan, compilation.hash, bytes)
@@ -72,12 +72,20 @@ fn packaged_measure_loop() -> (
     Vec<u8>,
 ) {
     let source = r#"
-graph countdown : App + Loop {
+graph countdown : App {
   input in: int
   output out: int
-  Loop.measure = data
-  on in where data <= 0 { out = data }
-  on in where data > 0 { next = data - 1 }
+  operator relay : Loop {
+    input in: int
+    output out: int
+    Loop.measure = Loop.state.data
+    on in match {
+      data <= 0 => out = data
+      _ => Loop.next = data - 1
+    }
+  }
+  in -> relay -> out
+  relay.Loop.expired -> nothing
 }
 "#;
     let compilation = compile(
@@ -146,8 +154,8 @@ lab builders {
     assert_eq!(plan::encode(&decoded, &hash), bytes);
 
     let emissions: Vec<_> = decoded.handlers[0]
-        .body
-        .iter()
+        .dispatch
+        .steps()
         .filter_map(|step| match step {
             plan::DispatchStep::Emit { value, .. } => Some(value),
             _ => None,
@@ -186,38 +194,40 @@ lab builders {
 }
 
 #[test]
-fn v15_retains_one_closed_loop_and_its_spatial_graph_semantics() {
+fn v16_retains_one_operator_loop_without_a_graph_handler_or_command_port() {
     let (compiled, hash, bytes) = packaged_loop();
     let root = compiled.owners.first().expect("the root owner");
-    let [rastok::plan::AspectSpec::Loop(spec)] = root.aspects.as_slice() else {
-        panic!("the root carries exactly one closed Loop specification");
+    assert_eq!(root.extensions, [rastok::plan::ExtensionSpec::App]);
+    let owner = &compiled.owners[compiled.nodes[0].owner.index()];
+    let [rastok::plan::ExtensionSpec::Loop(spec)] = owner.extensions.as_slice() else {
+        panic!("the Operator carries exactly one Loop specification");
     };
     assert_eq!(
         spec.fuel.as_ref().expect("fuel").resolved,
         rastok::value::Value::Int(3)
     );
     assert!(spec.delay.is_none());
-    assert!(compiled.boundary.iter().any(|port| {
-        port.port.name() == "next"
+    assert_eq!(spec.entry.name(), "in");
+    assert_eq!(spec.terminals, [rastok::node::Port::new("out").unwrap()]);
+    assert!(compiled.nodes[0].ports.iter().any(|port| {
+        port.port.name() == "Loop.expired"
             && port.direction == rastok::node::Direction::Output
-            && port.ty.as_ref() == Some(&rastok::datatype::DataType::Text)
+            && port.ty.as_ref()
+                == Some(&rastok::node::loop_expired_type(rastok::datatype::DataType::Text).unwrap())
     }));
+    assert!(compiled.nodes[0].ports.iter().all(|port| !matches!(
+        port.port.name(),
+        "next" | "Loop.next" | "Loop.again" | "Loop.done"
+    )));
     assert!(matches!(
         compiled.handlers.as_slice(),
-        [
-            rastok::plan::Handler {
-                owner: rastok::plan::HandlerOwner::Node(_),
-                ..
-            },
-            rastok::plan::Handler {
-                owner: rastok::plan::HandlerOwner::Graph(_),
-                activation: rastok::node::HandlerActivation::ChildPort { .. },
-                ..
-            }
-        ]
+        [rastok::plan::Handler {
+            owner: rastok::plan::HandlerOwner::Node(_),
+            ..
+        }]
     ));
 
-    let (decoded, declared) = plan::decode(&bytes).expect("v15 revalidates Loop Registry-free");
+    let (decoded, declared) = plan::decode(&bytes).expect("v16 revalidates Loop Registry-free");
     assert_eq!(decoded, compiled);
     assert_eq!(declared, hash);
 
@@ -244,9 +254,9 @@ fn v15_retains_one_closed_loop_and_its_spatial_graph_semantics() {
             sequence: SubmissionSequence::Next,
         },
     )
-    .expect("the spatial Loop root is admitted");
+    .expect("the App routes the opening input to the Loop Operator");
     vm.drain(&mut journal)
-        .expect("the relayed child output reaches its Graph handler");
+        .expect("the terminal output reaches the public App boundary");
     assert_eq!(vm.outputs().len(), 1);
     assert_eq!(
         rastok::runtime::data_value(vm.outputs()[0].envelope.data()).unwrap(),
@@ -261,15 +271,15 @@ fn v15_retains_one_closed_loop_and_its_spatial_graph_semantics() {
 }
 
 #[test]
-fn v15_round_trips_the_checked_loop_proof() {
+fn v16_round_trips_the_checked_loop_proof() {
     let (compiled, hash, bytes) = packaged_measure_loop();
     let (decoded, declared) = plan::decode(&bytes).expect("the proof-bearing package opens");
     assert_eq!(decoded, compiled, "the certificate survives categorically");
     assert_eq!(declared, hash, "the proof-bearing identity travels intact");
 
-    let root = decoded.owners.first().expect("the Loop owner");
-    let [rastok::plan::AspectSpec::Loop(spec)] = root.aspects.as_slice() else {
-        panic!("the root carries the Loop aspect");
+    let owner = &decoded.owners[decoded.nodes[0].owner.index()];
+    let [rastok::plan::ExtensionSpec::Loop(spec)] = owner.extensions.as_slice() else {
+        panic!("the Operator carries the Loop Extension");
     };
     assert!(spec.fuel.is_none());
     assert_eq!(
@@ -279,28 +289,28 @@ fn v15_round_trips_the_checked_loop_proof() {
 }
 
 #[test]
-fn a_partial_foreign_or_false_loop_spec_never_enters_a_v15_plan() {
+fn a_partial_foreign_or_false_loop_spec_never_enters_a_v16_plan() {
     let (_, _, bytes) = packaged_loop();
-    let mutate_aspect = |body: &mut std::collections::BTreeMap<u64, Cbor>,
-                         edit: &dyn Fn(&mut Vec<Cbor>)| {
+    let mutate_extension = |body: &mut std::collections::BTreeMap<u64, Cbor>,
+                            edit: &dyn Fn(&mut Vec<Cbor>)| {
         let Cbor::Array(owners) = body.get_mut(&9).expect("the owner table") else {
             panic!("owners are an array");
         };
-        let Cbor::Map(root) = &mut owners[0] else {
-            panic!("the root owner is a map");
+        let Cbor::Map(owner) = &mut owners[1] else {
+            panic!("the Operator owner is a map");
         };
-        let Cbor::Array(aspects) = root.get_mut(&7).expect("the aspect table") else {
-            panic!("aspects are an array");
+        let Cbor::Array(extensions) = owner.get_mut(&7).expect("the Extension table") else {
+            panic!("extensions are an array");
         };
-        let Cbor::Array(aspect) = &mut aspects[0] else {
-            panic!("the Loop aspect is tagged");
+        let Cbor::Array(extension) = &mut extensions[0] else {
+            panic!("the Loop Extension is tagged");
         };
-        edit(aspect);
+        edit(extension);
     };
 
     let partial = reframe_body(&bytes, |body| {
-        mutate_aspect(body, &|aspect| {
-            let Cbor::Map(spec) = &mut aspect[1] else {
+        mutate_extension(body, &|extension| {
+            let Cbor::Map(spec) = &mut extension[1] else {
                 panic!("the Loop specification is a map");
             };
             spec.remove(&1);
@@ -315,17 +325,17 @@ fn a_partial_foreign_or_false_loop_spec_never_enters_a_v15_plan() {
     ));
 
     let foreign = reframe_body(&bytes, |body| {
-        mutate_aspect(body, &|aspect| aspect[0] = Cbor::Uint(99));
+        mutate_extension(body, &|extension| extension[0] = Cbor::Uint(99));
     });
     assert_eq!(
         plan::decode(&foreign).unwrap_err(),
-        DecodeError::Malformed(String::from("aspect specification"))
+        DecodeError::Malformed(String::from("Extension specification"))
     );
 
     let (_, _, measured) = packaged_measure_loop();
     let lying = reframe_body(&measured, |body| {
-        mutate_aspect(body, &|aspect| {
-            let Cbor::Map(spec) = &mut aspect[1] else {
+        mutate_extension(body, &|extension| {
+            let Cbor::Map(spec) = &mut extension[1] else {
                 panic!("the Loop specification is a map");
             };
             let Cbor::Map(proof) = spec.get_mut(&3).expect("the proof") else {
@@ -344,7 +354,7 @@ fn a_partial_foreign_or_false_loop_spec_never_enters_a_v15_plan() {
 }
 
 #[test]
-fn v15_round_trips_tagged_structural_and_narrowing_expressions() {
+fn v16_round_trips_tagged_structural_and_narrowing_expressions() {
     let sources = [
         r#"
 type Failure = union { Broken { message: text } }
@@ -355,6 +365,7 @@ graph g : App {
     on in { failure = Broken { message = "no" } }
   }
   . -> o
+  o.failure -> nothing
 }
 "#,
         r#"
@@ -384,16 +395,16 @@ graph g : App {
             &[source],
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
-        .expect("a valid v15 program");
+        .expect("a valid v16 program");
         let bytes = plan::encode(&compilation.plan, &compilation.hash);
-        let (decoded, hash) = plan::decode(&bytes).expect("the v15 package opens");
+        let (decoded, hash) = plan::decode(&bytes).expect("the v16 package opens");
         assert_eq!(decoded, compilation.plan);
         assert_eq!(hash, compilation.hash);
     }
 }
 
 #[test]
-fn v15_round_trips_the_categorical_instance_contract() {
+fn v16_round_trips_the_categorical_instance_contract() {
     let source = r#"
 graph g : App {
   input in: text
@@ -495,7 +506,7 @@ graph g : App {
 }
 
 #[test]
-fn v15_round_trips_a_bounded_join_activation_without_a_second_key_authority() {
+fn v16_round_trips_a_bounded_join_activation_without_a_second_key_authority() {
     let source = r#"
 type JoinExpiry = union { JoinExpired {} }
 graph g : App {
@@ -547,7 +558,7 @@ fn the_example_package_matches_its_golden() {
     // edges are derived plan structure, not a semantic change to this graph.
     // M1.4 R5 deliberately moves both hash and package because the exact
     // ProcessExit union gains the empty OutcomeUnknown settlement case.
-    // M1.5 C1 deliberately moves both again: stable `rastok/process@1` and
+    // M1.5 C1 deliberately moves both again: stable `rastok/process@2` and
     // its outbound role replace the source symbol in identity, while v10
     // carries those categorical facts. The causal trace remains unchanged.
     // M1.6 H1 adds the explicit Call exchange tag and categorically moves the
@@ -841,7 +852,13 @@ fn run_boundary_probe(plan: &rastok::plan::ValidatedExecutionPlan) -> (Vec<Strin
         .iter()
         .map(|output| format!("{}: {:?}", output.port, output.envelope.data()))
         .collect();
-    (outputs, vm.errors().len())
+    (
+        outputs,
+        vm.observations()
+            .iter()
+            .filter(|event| event.node.is_some() && event.port.name() == "err")
+            .count(),
+    )
 }
 
 #[test]
@@ -870,11 +887,11 @@ fn a_non_canonical_envelope_refuses() {
     // Reordered header keys: same fields, same checksum coverage,
     // different bytes — not the canonical encoding. Raw splice,
     // because the canonical encoder itself refuses to write an
-    // unsorted map: entry (1, uint 15) is bytes 5..7, entry
+    // unsorted map: entry (1, uint 16) is bytes 5..7, entry
     // (2, bytes32) is the 35 bytes after it; swap them.
     assert_eq!(
         &bytes[4..7],
-        &[0xa4, 0x01, 0x0f],
+        &[0xa4, 0x01, 0x10],
         "the envelope head is stable"
     );
     assert_eq!(&bytes[7..10], &[0x02, 0x58, 0x20], "the hash entry follows");
@@ -889,16 +906,16 @@ fn a_non_canonical_envelope_refuses() {
         DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))
     ));
 
-    // A non-minimal integer in the header: uint 15 written on two
-    // bytes (0x18 0x0f) instead of one. The checksum still holds —
+    // A non-minimal integer in the header: uint 16 written on two
+    // bytes (0x18 0x10) instead of one. The checksum still holds —
     // the VALUE is unchanged — so only the canonicity check refuses.
     assert_eq!(
         &bytes[4..7],
-        &[0xa4, 0x01, 0x0f],
+        &[0xa4, 0x01, 0x10],
         "the envelope head is stable"
     );
     let mut widened = bytes.clone();
-    widened.splice(6..7, [0x18, 0x0f]);
+    widened.splice(6..7, [0x18, 0x10]);
     assert!(matches!(
         plan::decode(&widened).unwrap_err(),
         DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))
@@ -1144,22 +1161,22 @@ fn the_depth_boundaries_are_exact() {
         depth.fields()
     );
 
-    // An addition chain builds real serialized depth: 119 additions
-    // reach level 127 and ride the round trip; the 120th reaches the
+    // The v16 Dispatch tag adds one enclosing level. 118 additions
+    // reach level 127 and ride the round trip; the 119th reaches the
     // reader's exact budget and refuses at PLAN, same payload.
-    let deep_ok = nested_additions(119);
+    let deep_ok = nested_additions(118);
     let compilation = compile(
         &[deep_ok.as_str()],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
-    .expect("119 additions fit");
+    .expect("118 additions fit");
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
     plan::decode(&bytes).expect("the deepest accepted program reads back");
     let bag = compile(
-        &[nested_additions(120).as_str()],
+        &[nested_additions(119).as_str()],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
-    .expect_err("the 120th refuses");
+    .expect_err("the 119th refuses");
     let depth = bag
         .diagnostics()
         .iter()

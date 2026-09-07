@@ -17,6 +17,8 @@ graph echo : App {
   }
 
   . -> relay -> shell -> .
+  shell.err -> nothing
+  shell.exit -> nothing
 }
 
 lab echo {
@@ -31,7 +33,7 @@ lab echo {
     scenario roundtrip "a line echoes back" {
       app.in = "salut"
       expect "the echo" app.out count == 1 where data == "salut"
-      expect nothing app.err
+      expect nothing shell.err
     }
 
     scenario filtered "an empty line never reaches the shell" {
@@ -46,7 +48,7 @@ lab echo {
       }
       app.in = "salut"
       advance duration("5s")
-      expect "the typed timeout" app.exit where data is TimeoutExpired
+      expect "the typed timeout" shell.exit where data is TimeoutExpired
     }
   }
 }
