@@ -121,3 +121,14 @@ timing facts before promising recovery for those profiles. They belong to the
 journal's retained recovery metadata, not a lossy observation/export stream;
 their causal-seal treatment must be enumerated in the identity ledger. No
 restart clock may stand in for missing history.
+
+**R4 review follow-up, 2026-09-07 (D-2026-09-07-2).** The representation is
+now allocated before the v16 blessing: retained key 56 carries the explicit
+arm instant and ordered `(kind, reference, due_at)` schedule. Its strict
+core codec is executable, and Loop delay captures the field before commit;
+missing or inconsistent Loop dates refuse atomically. Key 56 stays outside
+the causal projection and must be integrity-protected by storage. The full
+R7 work still needs to capture every join/lifetime/idle/Closing/Call/handshake
+arm at acceptance and reconstruct its target, payload and stale fence from
+the causal record. Those profiles remain refused; no new field allocation is
+postponed to R7. This does not claim a shipped durable journal backend.

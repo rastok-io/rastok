@@ -634,11 +634,24 @@ impl Vm<'_> {
         }
         let mut record = manager_record(&current.instance, command.value.cause(), packet);
         record.emissions.extend(emission);
-        if due.is_some() {
-            record.timers.push((
+        if let Some(due_at) = due {
+            let timer = (
                 crate::journal::timer_kind::LOOP_DELAY,
                 protocol::admission_ref(run, current.iteration + 1, command.reference),
-            ));
+            );
+            record.timers.push(timer);
+            let schedule = crate::journal::timing::TimerSchedule::try_new(
+                self.now,
+                vec![crate::journal::timing::TimerArm {
+                    kind: timer.0,
+                    reference: timer.1,
+                    due_at,
+                }],
+            )
+            .map_err(|error| {
+                VmError::Journal(crate::journal::Error::InvalidTimerSchedule(error))
+            })?;
+            record.timer_schedule = Some(Box::new(schedule));
         }
         let prepared =
             self.validate_and_prepare_emissions(journal, slot, &current.instance, &record)?;
@@ -725,6 +738,7 @@ fn manager_record(
         exchange_exit: None,
         loop_record: Some(Box::new(crate::journal::LoopRecord::R2(packet))),
         logical_time: None,
+        timer_schedule: None,
         trigger: node::Trigger::Lifecycle(node::Lifecycle::Next),
         cause: Some(cause),
         consumed: vec![],

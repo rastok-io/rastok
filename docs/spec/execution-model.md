@@ -376,6 +376,13 @@ sealed under canonical key 54 because it may change control flow. It remains
 absent from time-insensitive firings (the `created_at` lesson,
 envelope.md §8).
 
+D-2026-09-07-2 allocates retained key 56 for exact timer schedules alongside
+their accepting records, outside the causal projection. This retention is
+atomic and integrity-protected, not best-effort observability. Its ordered
+arms preserve the original due instants and tie order; a restart cannot turn
+a missing instant into `now + duration`. R4 wires Loop delay retention; the
+remaining temporal recovery profiles stay gated until R7 wires their arm facts.
+
 
 ## 6. Per-call supervision — `timeout` on Connectors
 

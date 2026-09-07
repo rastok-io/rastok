@@ -38,6 +38,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 pub mod loop_protocol;
+pub mod timing;
 
 /// Deterministic identity recipes — the injective blake3 framing of
 /// `envelope.md` §2, with its domain tags.
@@ -310,6 +311,20 @@ pub enum Record {
     /// The graph acted on the world: one fact of a call's WAL — the
     /// open, then separately its closure. The past never rewrites.
     Outbound(OutboundRecord),
+}
+
+impl Record {
+    /// Required scheduler retention when present. This is not a lossy
+    /// observation and never enters the causal seal. Outbound effects inherit
+    /// budgets armed by their accepting delivery, not their Driver start.
+    #[must_use]
+    pub fn timer_schedule(&self) -> Option<&timing::TimerSchedule> {
+        match self {
+            Self::Inbound(record) => record.timer_schedule.as_deref(),
+            Self::Transaction(record) => record.timer_schedule.as_deref(),
+            Self::Outbound(_) => None,
+        }
+    }
 }
 
 pub(crate) fn recorded_envelope(records: &[Record], id: Id) -> Option<&Envelope> {
@@ -821,6 +836,9 @@ pub fn fold_loop_run(records: &[Record], run: LoopRunRef) -> Result<Option<LoopR
 /// `(connector_path, replica, seq)`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InboundRecord {
+    /// Retained arm instants and deadlines (key 56), atomically accepted with
+    /// this ingress. Omitted when this record arms no retained schedule.
+    pub timer_schedule: Option<Box<timing::TimerSchedule>>,
     /// Stable provenance of the external root stream.
     pub provenance: InboundEnvelopeProvenance,
     /// Source port of the root: an App input when [`Self::connector_path`] is
@@ -1076,6 +1094,9 @@ pub enum LoopRecord {
 /// given.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TransactionRecord {
+    /// Retained arm instants and deadlines (key 56), outside causal identity.
+    /// Absence is not evidence from which recovery may invent a deadline.
+    pub timer_schedule: Option<Box<timing::TimerSchedule>>,
     /// The firing lifecycle/transaction owner. Ordinary Node transactions
     /// carry the same segments as their node path; Graph lifecycle records
     /// use the preserved lexical Graph owner, including the empty root path.
@@ -1271,9 +1292,17 @@ pub struct PreparedInbound {
     seq: u64,
     envelope: Envelope,
     exchange: Option<InboundExchangeRecord>,
+    timer_schedule: Option<Box<timing::TimerSchedule>>,
 }
 
 impl PreparedInbound {
+    /// Attach validated timing evidence before committing the accepting fact.
+    /// A durable Journal stores it atomically with the root and its routes.
+    #[must_use]
+    pub fn with_timer_schedule(mut self, schedule: timing::TimerSchedule) -> Self {
+        self.timer_schedule = Some(Box::new(schedule));
+        self
+    }
     /// The sequence reserved by the current journal view.
     #[must_use]
     pub const fn seq(&self) -> u64 {
@@ -1394,6 +1423,8 @@ pub enum Error {
     CorruptLoopOpen,
     /// An r2 command packet contradicts the replay-derived protocol.
     InvalidLoopProtocol(loop_protocol::Error),
+    /// Retained scheduler evidence contradicts the accepted obligations.
+    InvalidTimerSchedule(crate::canonical_cbor::DecodeError),
     /// The same root attempted to open one Loop run twice.
     DuplicateLoopRun {
         /// Derived run identity.
@@ -1516,6 +1547,7 @@ impl fmt::Display for Error {
                 f.write_str("the Loop open fact does not derive from its root and owner generation")
             }
             Self::InvalidLoopProtocol(error) => error.fmt(f),
+            Self::InvalidTimerSchedule(error) => write!(f, "invalid timer schedule: {error}"),
             Self::DuplicateLoopRun { run } => {
                 write!(f, "Loop run {run} is already open or terminal")
             }
@@ -2415,6 +2447,7 @@ impl MemJournal {
             seq,
             envelope,
             exchange: resolved_exchange,
+            timer_schedule: None,
         })
     }
 }
@@ -2468,6 +2501,12 @@ impl Journal for MemJournal {
         prepared: PreparedInbound,
         mut routes: Vec<RouteTarget>,
     ) -> Result<CommittedInbound, Error> {
+        if let (Some(schedule), Some(InboundExchangeRecord::Call(call))) = (
+            prepared.timer_schedule.as_deref(),
+            prepared.exchange.as_ref(),
+        ) {
+            timing::require_timers(schedule, &call.timers).map_err(Error::InvalidTimerSchedule)?;
+        }
         let expected = self
             .next_seq
             .get(&prepared.submission.provenance)
@@ -2534,6 +2573,7 @@ impl Journal for MemJournal {
         }
         routes.sort();
         let record = InboundRecord {
+            timer_schedule: prepared.timer_schedule,
             provenance: prepared.submission.provenance.clone(),
             port: prepared.submission.port,
             connector_path: prepared.connector_path,
@@ -2580,6 +2620,7 @@ impl Journal for MemJournal {
     }
 
     fn commit(&mut self, mut transaction: TransactionRecord) -> Result<(), Error> {
+        timing::validate_transaction(&transaction).map_err(Error::InvalidTimerSchedule)?;
         let command_loops = if let Some(packet) = transaction.loop_protocol() {
             let mut fold = self.command_loops.as_deref().cloned().unwrap_or_default();
             fold.apply(packet).map_err(Error::InvalidLoopProtocol)?;
@@ -3279,6 +3320,7 @@ mod tests {
             exchange_exit: None,
             loop_record: None,
             logical_time: None,
+            timer_schedule: None,
             trigger: node::Trigger::Lifecycle(lifecycle),
             cause: None,
             consumed: vec![],
@@ -4079,6 +4121,7 @@ mod tests {
                 exchange_exit: None,
                 loop_record: None,
                 logical_time: None,
+                timer_schedule: None,
                 trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
                 cause: None,
                 consumed: vec![
@@ -4131,6 +4174,7 @@ mod tests {
                 exchange_exit: None,
                 loop_record: None,
                 logical_time: None,
+                timer_schedule: None,
                 trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
                 cause: None,
                 consumed: vec![ConsumedPosition {
@@ -4246,6 +4290,55 @@ mod tests {
             ),
             Err(Error::UnknownSession),
             "a terminal session can never speak again"
+        );
+    }
+
+    #[test]
+    fn an_ingress_schedule_commits_atomically_with_its_exact_obligations() {
+        use timing::{TimerArm, TimerSchedule};
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let prepared = journal
+            .prepare_connector_inbound(submission("server", SubmissionSequence::Next), None)
+            .unwrap();
+        let root = prepared.envelope().meta().sys().id();
+        let timer = (timer_kind::INBOUND_CALL_TIMEOUT, root);
+        let prepared = prepared
+            .into_call(instance("server", 0), vec![timer])
+            .unwrap();
+        let mut arm = TimerArm {
+            kind: timer.0,
+            reference: root,
+            due_at: 12,
+        };
+        let schedule = TimerSchedule::try_new(7, vec![arm]).unwrap();
+        arm.reference = Id::from_bytes([255; 16]);
+        let forged = prepared
+            .clone()
+            .with_timer_schedule(TimerSchedule::try_new(7, vec![arm]).unwrap());
+        assert!(matches!(
+            journal.commit_inbound(forged, vec![]),
+            Err(Error::InvalidTimerSchedule(_))
+        ));
+        assert!(journal.records().is_empty());
+        assert!(journal.open_inbound_calls().is_empty());
+        let accepted = prepared.with_timer_schedule(schedule.clone());
+        let stale = accepted.clone();
+        let committed = journal.commit_inbound(accepted, vec![]).unwrap();
+        assert_eq!(
+            committed.seq, 0,
+            "failed timing validation spends no sequence"
+        );
+        assert_eq!(committed.record.timer_schedule.as_deref(), Some(&schedule));
+        assert_eq!(journal.records()[0].timer_schedule(), Some(&schedule));
+        let before = journal.records().to_vec();
+        assert!(matches!(
+            journal.commit_inbound(stale, vec![]),
+            Err(Error::SequenceMismatch { .. })
+        ));
+        assert_eq!(
+            journal.records(),
+            before,
+            "failed acceptance cannot append timing alone"
         );
     }
 

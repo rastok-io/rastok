@@ -452,6 +452,16 @@ unchanged by it. The **128 KiB gate stays fixed**; R5–R8 must remeasure the
 same workload before accepting further embedded-path growth. These numbers
 do not qualify the not-yet-executable full recovery or Graph Loop paths.
 
+After adding the key-56 retained timing carrier, the final reviewed tree
+measures **106,244 B** peak (24,828 B / 18.94% margin), 6,440 B after open,
+and relay **1,464 / 1,416 / 1,657** ticks. Text 756,036 B + rodata 66,664 B =
+**822,700 B**. The 67-record witness and its identities remain unchanged.
+The spike now explicitly exits with failure and withholds `SPIKE_OK` if the
+measured peak exceeds 128 KiB; a 256 KiB allocator arena is not a higher gate.
+The negative check temporarily lowered the bound to 100 KiB: the same workload
+exited with status 1 and `SPIKE_HEAP_LIMIT`, without `SPIKE_OK`. The bound was
+restored to 128 KiB, rebuilt and rerun successfully before committing.
+
 From the repository root (the crate must be built from its own
 directory — its `.cargo/config.toml` sets the target and linker
 script, and Cargo only reads that file from the working directory):

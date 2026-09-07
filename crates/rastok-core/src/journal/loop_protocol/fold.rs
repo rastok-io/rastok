@@ -494,6 +494,7 @@ mod tests {
             exchange_exit: None,
             loop_record: Some(Box::new(crate::journal::LoopRecord::R2(packet))),
             logical_time: None,
+            timer_schedule: None,
             consumed: vec![],
             join_inputs: vec![],
             state_delta: vec![],

@@ -469,6 +469,85 @@ fn recovery_rearms_the_retained_deadline_not_a_fresh_delay() {
 }
 
 #[test]
+fn retained_timer_bytes_are_required_for_delays_but_not_part_of_the_causal_seal() {
+    use rastok::journal::timing::TimerSchedule;
+    let plan = compile(
+        r#"
+      Loop.fuel = 2
+      Loop.delay = { kind = fixed; after = duration("1s") }
+      on in { Loop.next = data }
+    "#,
+    );
+    let mut vm = Vm::boot_at(&plan, GraphVersion(1), 7_000_000_000);
+    let mut journal = MemJournal::new(GraphVersion(1));
+    inject(&mut vm, &mut journal, 1);
+    vm.drain(&mut journal).unwrap();
+    let index = journal
+        .records()
+        .iter()
+        .position(|record| record.timer_schedule().is_some())
+        .unwrap();
+    let schedule = journal.records()[index].timer_schedule().unwrap();
+    assert_eq!(schedule.armed_at(), 7_000_000_000);
+    assert_eq!(schedule.arms()[0].due_at, 8_000_000_000);
+    assert_eq!(
+        &TimerSchedule::decode(&schedule.encode()).unwrap(),
+        schedule
+    );
+
+    let before = journal.records().to_vec();
+    let seal = rastok::golden::project(&before).seal();
+    for corrupt in 0..4 {
+        let mut records = before.clone();
+        let Record::Transaction(transaction) = &mut records[index] else {
+            unreachable!()
+        };
+        match corrupt {
+            0 => transaction.timer_schedule = None,
+            1 => {
+                let schedule = transaction.timer_schedule.as_deref().unwrap();
+                let mut arms = schedule.arms().to_vec();
+                arms[0].due_at += 1;
+                transaction.timer_schedule = Some(Box::new(
+                    TimerSchedule::try_new(schedule.armed_at(), arms).unwrap(),
+                ));
+            }
+            2 => {
+                let packet = transaction.loop_record.as_deref_mut().unwrap();
+                let rastok::journal::LoopRecord::R2(packet) = packet else {
+                    unreachable!()
+                };
+                let Fact::Advance { due_at, .. } = &mut packet.facts[0] else {
+                    unreachable!()
+                };
+                *due_at = Some(8_000_000_001);
+            }
+            _ => {
+                let schedule = transaction.timer_schedule.as_deref().unwrap();
+                let arm = schedule.arms()[0];
+                transaction.timer_schedule = Some(Box::new(
+                    TimerSchedule::try_new(schedule.armed_at(), vec![arm, arm]).unwrap(),
+                ));
+            }
+        }
+        assert!(matches!(
+            journal.commit(transaction.as_ref().clone()),
+            Err(rastok::journal::Error::InvalidTimerSchedule(_))
+        ));
+        assert_eq!(
+            rastok::golden::project(&records).seal(),
+            seal,
+            "retention needs storage integrity, not the causal seal"
+        );
+        assert_eq!(
+            journal.records(),
+            before,
+            "a rejected schedule commits nothing"
+        );
+    }
+}
+
+#[test]
 fn a_corrupt_consumption_cannot_partially_replace_a_running_vm() {
     let source = r#"
 graph app : App {

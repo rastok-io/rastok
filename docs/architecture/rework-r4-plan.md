@@ -1,7 +1,7 @@
 # R4 — categorical plan and independent validation
 
-> **Status (2026-09-06): v16 cutover in progress, not qualified.** The working
-> tree encodes and independently reads categorical **v16**, with recursive
+> **Status (2026-09-07): v16 cutover in progress, not qualified.** The
+> `rework/v16` branch encodes and independently reads categorical **v16**, with recursive
 > Dispatch, route selections, Extension specifications and six `@2` Contracts.
 > Sections 2–8 record the earlier field-only checkpoints; §10 states the current
 > executable boundary. No package or trace golden has been re-blessed.
@@ -443,7 +443,7 @@ make these validation checkpoints look complete.
 
 ## 9. Candidate v16 allocation (2026-09-06)
 
-The working tree has one categorical reader/writer, version 16; version 15
+The candidate branch has one categorical reader/writer, version 16; version 15
 refuses. The candidate body carries mandatory key 10 for sparse route rules.
 Ordinary unconditional edges remain their sole physical authority. Handler
 Dispatch tags are Linear=1, ClosedMatch=2, OpenMatch=3; statement tags 5 and 6
@@ -473,6 +473,17 @@ the complete admitted envelope; Advance's due instant is retained but remains
 outside the causal seal. Done retains Natural/Explicit provenance (tags 1/2);
 this is not another DSL command. Domain bytes are run-r2 `0x14`, command
 `0x15` and recurrence admission `0x06`; historical domains are untouched.
+
+The R4 review adds **retention key 56**, `timer_schedule`, before blessing:
+`[armed_at_ns, [[kind, reference_bytes16, due_at_ns], ...]]`. This is an
+atomically retained INBOUND/TRANSACTION field, **not part of the causal
+projection**. Its strict `no_std` codec covers the existing timer registry,
+signed instants and actual arm order. The Loop-delay producer populates it
+before commit and the journal rejects absent or contradictory delay evidence.
+R7 still must wire all other temporal producers and restore their complete
+obligations; allocation does not lift those recovery gates. D-2026-09-07-2
+specifies storage integrity independently of the causal seal. Key 37, key 54
+and the candidate package/trace ledger below remain unchanged.
 
 `package_ledger` compiles and independently decodes each candidate before
 reporting it. Current measurements, **not blessed fixtures**:
@@ -538,8 +549,9 @@ inspection and complete subsequent record sequence. Corrupt consumption leaves
 the original VM untouched; delayed recovery uses the retained due instant,
 not a new interval from restart. Connector obligations, instance closure,
 non-persistent lifetimes and timed joins refuse explicitly at this recovery
-gate. **This is not complete Worker recovery.** The deadline-retention gap is
-recorded in the repository audit.
+gate. **This is not complete Worker recovery.** The repository audit now
+distinguishes the allocated key-56 representation from the remaining R7
+producer/reader integration.
 
 The first explicit-destination gate is active at source and in core:
 possible Operator/Contract outputs must have written dispositions; unproduced
@@ -565,9 +577,14 @@ Still open, without a claim of closure:
 - migration of the old Loop/UI fixtures, then the single golden blessing;
 - the complete post-cutover qualification matrix.
 
-Latest Cortex-M33 candidate measurement: 130,772 B heap against 131,072 B,
-only 300 B margin; worst relay 1,714 ticks at 39,999 calibration ticks per
-2,000,000 instructions, approximately 85.7 k instructions against 150 k.
+Latest Cortex-M33 candidate measurement after the R4 review: **106,244 B**
+heap against 131,072 B, **24,828 B (18.94%)** margin; worst relay 1,657 ticks
+at 39,999 calibration ticks per 2,000,000 instructions, approximately 82.9 k
+instructions against 150 k. Text + rodata: **822,700 B**, below 1 MiB.
+Indirect record packets recovered the reserve/reallocation cost without
+dropping history; retained timing adds 256 B to that measurement. The spike
+now refuses `SPIKE_OK` and exits unsuccessfully above the 128 KiB heap gate,
+independently of its larger allocator arena.
 The heap-first gate remains mandatory for subsequent embedded-path changes.
 
 The all-feature workspace suite currently fails on old Loop/UI forms and
@@ -585,7 +602,7 @@ as a green workspace or a completed R4–R9.
 | core-only tests | 300 passed |
 | v16 Loop / destination / plan-field suites | 21 / 8 / 11 passed |
 | no-std checks: `thumbv8m.main-none-eabihf`, `thumbv7m-none-eabi`, `riscv32imac-unknown-none-elf` | pass |
-| emulated Cortex-M33 candidate | `SPIKE_OK`; heap and relay within the bounds above |
+| emulated Cortex-M33 candidate | `SPIKE_OK`; 130,772 B heap before the subsequent review fixes |
 
 The 33 workspace failures are 26 tests still exercising the removed Graph
 handler/old Loop and UI-tour forms, plus seven categorical hash/package
@@ -596,6 +613,54 @@ so one failed tour no longer turns unrelated probes into order-dependent
 
 `cargo run -p rastok -- simulate examples/countdown.rkg` executes two passing
 scenarios through the public CLI. Its Operator Loop terminates by a re-derived
-measure; `Loop.expired` is reported as impossible and needs no artificial
+measure; `Loop.expired` is proven impossible and needs no artificial
 discard. A separate regression encodes and decodes that example before running
 the same Lab scenarios. No package or causal golden has been blessed.
+
+## 12. R4 review corrections and verification — 2026-09-07
+
+The reviewed candidate is committed on **`rework/v16`** (`6c3187b`); `main`
+remains at `789f052`. Committing the candidate protects the work without
+claiming qualification or blessing the pending categorical expectations.
+
+The embedded gate stays **128 KiB**, not the larger allocator arena. Indirect
+record packets (`4d61c45`) remove unused inline-vector slots and their growth
+peak; they do not discard records or erase metadata. The key-11 boundary
+inventory and r2 index were already absent from the witness, so neither is
+claimed as a saving. The final measured peak is **106,244 B**, leaving
+**24,828 B**, versus 300 B at review. The hard gate itself was exercised with
+a temporary 100 KiB limit: status 1, `SPIKE_HEAP_LIMIT`, no `SPIKE_OK`; the
+128 KiB build was then restored and rerun successfully.
+
+Retained key **56** is allocated before the v16 blessing. Four core codec
+tests cover exact independently constructed bytes, the complete kind registry,
+signed limits, ordered renewals, noncanonical input, wrong keys/types/arities
+and invalid dates. An ingress test proves timing commits atomically with its
+accepting Call root, with no sequence or obligation spent on refusal. The
+Loop integration test proves exact arm/due instants and rejects missing,
+contradictory and duplicated delay evidence before commit. Altering retained
+dates does not alter the causal seal: storage integrity must cover retention
+separately, as D-2026-09-07-2 requires. Other temporal producers and complete
+recovery remain named R7 work; no second field allocation is needed for them.
+
+`W-DEAD-OUTPUT` now applies only to authored declarations (`7cce933`). The
+regression failed on the old warning and now passes; an explicit fuel cap
+still makes unwired expiry an error. `nothing` is explicitly confirmed
+exclusive across declarations, with audit destinations written in each arm.
+
+| Check actually executed on the corrected candidate | Result |
+|---|---|
+| fmt, `git diff --check` | pass |
+| workspace/all-targets/all-features clippy, warnings denied | pass |
+| `cargo doc --workspace --no-deps` | pass |
+| `cargo test --workspace --all-features --no-fail-fast` | **1,151 passed, 33 failed**, 31 suite reports, zero ignored |
+| core / v16 Loop / destinations / plan fields | **305 / 22 / 8 / 11 passed** |
+| all three no-std targets listed in §11 | pass |
+| public countdown CLI | two scenarios passed; no warning on contributed expiry |
+| Cortex-M33 | `SPIKE_OK`; 106,244 B peak; 1,657 worst relay ticks; 822,700 B text + rodata |
+| echo, JSONL, gauge candidate package and causal ledgers | byte-identical to the reviewed candidate; gauge remains immobile |
+
+The failing test-name multiset is unchanged: 26 old Loop/Graph/UI-form tests
+and seven categorical expectations. None was ignored, deleted or weakened;
+R9 must migrate each former form or name its removal. No package or trace
+golden was re-blessed. **R4–R9 and the whole workspace are still not qualified.**

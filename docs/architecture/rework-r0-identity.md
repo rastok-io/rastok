@@ -110,6 +110,17 @@ rastok.loop-admission.r1
 Domain byte constants are allocated only with independent collision and
 round-trip tests. A retired byte is never reused.
 
+### Retained timing allocation at R4 (2026-09-07)
+
+D-2026-09-07-2 allocates key **56**, `timer_schedule`, in the retained INBOUND /
+TRANSACTION view: `[armed_at_ns, [[kind, reference_bytes16, due_at_ns], ...]]`.
+The field uses exact signed instants and actual arm order. It is deliberately
+absent from the causal seal; storage must retain and integrity-protect it
+atomically with the accepting record. Key 37 and observable `now()` key 54
+keep their existing meanings. No package bytes or witness identities change.
+The strict field codec and Loop-delay producer land before v16 is blessed;
+R7 captures the remaining temporal profiles without needing another allocation.
+
 ## 5. Ordering and semantic identity
 
 | Construct | Order semantic? | Canonical treatment |

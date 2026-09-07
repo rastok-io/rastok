@@ -63,6 +63,8 @@ static HEAP: WatermarkHeap = WatermarkHeap {
 };
 
 const HEAP_SIZE: usize = 256 * 1024;
+/// Qualification bounds the measured peak, not the allocator's larger arena.
+const HEAP_GATE_BYTES: usize = 128 * 1024;
 static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
 
 /// The sealed plan of examples/echo.rkg, produced by the compiler on
@@ -218,12 +220,18 @@ fn main() -> ! {
     hprintln!("blake3_id x1000: {} ticks total (last: {})", id_ticks, last);
     let _ = journal::ids::delivery_ref("bench.out>echo.in", last);
 
+    let peak = HEAP.peak.load(core::sync::atomic::Ordering::Relaxed);
     hprintln!(
         "heap_watermark: {} bytes of {} (allocator-tracked peak)",
-        HEAP.peak.load(core::sync::atomic::Ordering::Relaxed),
+        peak,
         HEAP_SIZE
     );
     hprintln!("records: {}", journal.records().len());
+    if peak > HEAP_GATE_BYTES {
+        hprintln!("SPIKE_HEAP_LIMIT: {} > {} bytes", peak, HEAP_GATE_BYTES);
+        debug::exit(debug::EXIT_FAILURE);
+        loop {}
+    }
     hprintln!("SPIKE_OK");
     debug::exit(debug::EXIT_SUCCESS);
     loop {}

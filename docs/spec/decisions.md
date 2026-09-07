@@ -30,6 +30,56 @@ blessing substitutes for qualification.
 retained history; claiming savings from the already-absent boundary inventory
 or lazy r2 index; treating a candidate format commit as release qualification.
 
+## D-2026-09-07-2 — Allocate retained timer schedules before blessing v16
+
+R4 allocates journal **retention key 56**, `timer_schedule`, now, not when the
+full R7 recovery reader lands. It is beside the accepting INBOUND or
+TRANSACTION record, committed atomically with it, never an observation-stream
+event or a mutable scheduler checkpoint. Its fixed shape is
+`[armed_at_ns, [[kind, reference_bytes16, due_at_ns], ...]]`: signed logical
+nanoseconds, existing timer kinds 1–9 (4 still reserved for Saga), and actual
+arm order. Equal deadlines retain `(record ordinal, arm ordinal)` ordering;
+renewing a reference does not sort away an arm. Empty schedules are omitted.
+Negative logical instants are valid; an instant due before its arm refuses.
+The payload, target generation and stale-wake fence remain derivable from the
+accepting record's routes, instance, cause, Contract and Loop facts. This field
+adds the missing time evidence, not an alternative authority for those facts.
+
+This explicitly preserves D-2026-08-28-5/6: **key 56 is not in the causal
+projection**. Key 37 continues to seal the existing `(kind, reference)`
+obligations; key 54 alone seals observable `now()`. Storage must retain and
+integrity-protect key 56 with its record even though the two-mode causal seal
+excludes it. Neither package bytes nor program identity depends on these
+per-execution dates. Physical record retention and causal projection are
+different views; an export of causal bytes alone is not a recovery backup.
+
+R4's typed carrier and strict canonical field codec cover the complete timer
+registry. The executing r2 delay producer retains its schedule before commit;
+the journal verifies agreement with the already-retained `Advance.due_at`.
+Each Loop admission has exactly one matching arm: its run/iteration reference
+cannot be renewed like an idle lifetime. Missing, contradictory or duplicated
+Loop arms refuse before acceptance.
+It is the first wired producer, not a claim of complete temporal recovery.
+R7 must capture every join, lifetime/idle renewal, Closing, Call and handshake
+arm at its accepting commit, and independently reconstruct the ordered queue.
+Those profiles remain refused by recovery until their entire evidence path is
+wired and tested. Missing retention is an explicit refusal, never
+`restart_now + duration`. R7 needs no new field, timer tag or package bump to
+use this representation.
+
+**Rejected:** sealing raw scheduler dates and moving unrelated causal traces;
+using sparse `now()` as a universal arm instant; reconstructing a deadline
+from restart time; putting required recovery data in lossy telemetry; treating
+field allocation as qualification of every producer or of a durable backend.
+
+### R4 review confirmations
+
+`nothing` is exclusive for a source case **across declarations**, as recorded
+in D-2026-09-05-1; the audit fan-out belongs explicitly in each selected arm.
+An impossible contributed output such as `Loop.expired` has no destination
+obligation **and no dead-declaration warning**. `W-DEAD-OUTPUT` is reserved for
+outputs actually declared by the author. This changes diagnostics only.
+
 ## D-2026-09-05-1 — Graph is structure; Executors transition; Loop uses durable manager commands
 
 The pre-public Node model is revised before plan v16. A `Node` is either a

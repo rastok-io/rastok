@@ -3578,6 +3578,7 @@ impl<'plan> Vm<'plan> {
             exchange_exit: None,
             loop_record: None,
             logical_time: None,
+            timer_schedule: None,
             trigger: node::Trigger::Lifecycle(node::Lifecycle::Closing),
             cause: Some(cause.meta().sys().id()),
             consumed: vec![],
@@ -3926,6 +3927,7 @@ impl<'plan> Vm<'plan> {
                     exchange_exit: None,
                     loop_record: None,
                     logical_time: None,
+                    timer_schedule: None,
                     trigger: node::Trigger::Lifecycle(work.lifecycle),
                     cause: Some(work.cause.meta().sys().id()),
                     consumed: vec![],
@@ -4784,6 +4786,7 @@ impl<'plan> Vm<'plan> {
             exchange_exit: None,
             loop_record: None,
             logical_time: None,
+            timer_schedule: None,
             consumed: vec![crate::journal::ConsumedPosition {
                 edge: delivery.edge.clone(),
                 source: delivery.source_instance.clone(),

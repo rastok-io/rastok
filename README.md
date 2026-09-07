@@ -25,7 +25,7 @@ bindings, commands, constraints and, only when necessary, ports. `App` marks
 the one public root Graph; `Loop` adds finite temporal recurrence through a
 journal-owned manager; `Saga` remains a future Extension. A manager is neither
 a Node nor an edge, so temporal recurrence never creates a spatial cycle.
-The working tree is migrating to categorical v16. Recursive Dispatch,
+The `rework/v16` branch is migrating to categorical v16. Recursive Dispatch,
 case routing, multi-emission and command-based Operator and outbound Call Loops
 cross the new package reader. Operator measures and persistent-Operator recovery
 are tested. Nested boundary routing is retained and re-derived at decode;

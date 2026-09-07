@@ -436,6 +436,8 @@ algebra. The movement set is:
   `PhysicalEdge`;
 - manager-command destinations and Loop r2 Produced/Consumed facts;
 - exact `OpeningAdmissionRef`, `LoopRunRef`, and routed LoopContext;
+- retained timer schedules, key 56, outside the causal projection as decided
+  in D-2026-09-07-2; allocation is part of this cutover, not a second R7 bump;
 - productibility evidence re-derived by the validator;
 - executable ordered multi-emission;
 - removal of Graph handlers, `ChildPort`, old Loop `next` port,
@@ -666,6 +668,21 @@ execution-model §1) — keys `30–39` and `48–54`:
 | 52 | inbound_call_exit_ref | bytes(16) | present exactly on the Connector `l:reply` transaction that terminates the inbound Call opened by INBOUND key 28. Its cause is the root request; fixed ack consumes zero positions, while a graph response consumes exactly its one real delivery position. Owner/instance equal the opening source and exactly one conventional `exit` is last. The fold refuses an unmatched trigger or any second terminal. |
 | 53 | loop_fact | array | present only on one `: Loop` run transition. Extend-only tags: `open = [1, run_ref, instance_ref, root_id, fuel, state_spine]`; `next = [2, run_ref, iteration, remaining, selected_next_id, state_spine]`; `close = [3, run_ref, iteration]`; `expired = [4, run_ref, iteration, selected_next_id, output_spine]`; `admit = [5, run_ref, iteration]`. Open is unique; next advances the ordinal and decrements fuel exactly; admit crosses the recorded state into one body application exactly once; close/expired are terminal. A delayed next may retain its due instant as a non-canonical journal annotation; that instant is never an additional array field. Omitted for every non-Loop transaction. |
 | 54 | logical_time | int | the signed nanosecond logical instant since the Unix epoch, present exactly when a checked firing handler can observe `now()`; fixed across guard selection and body evaluation, omitted otherwise. This is an explicit transaction input, not a scheduler due date or host `committed_at`. |
+
+**Retained scheduler metadata — not part of the causal seal**
+(D-2026-09-07-2):
+
+| Key | Field | CBOR type | Notes |
+|---|---|---|---|
+| 56 | timer_schedule | array | `[armed_at_ns, [[kind, reference_bytes16, due_at_ns], ...]]`, retained atomically beside the accepting INBOUND or TRANSACTION. Instants are signed i64 logical nanoseconds; due ≥ armed-at. Kinds use the existing 1–9 registry (4 remains reserved). Arms retain actual order, including ordered renewals, never sort by reference. Empty schedules are omitted. |
+
+Storage integrity must cover this required recovery evidence independently of
+the causal seal. Key 37 keeps its existing sealed timer references; key 54
+keeps its observable `now()` meaning. Key 56 changes neither graph identity,
+package bytes nor causal projection. A causal trace alone is not a complete
+recovery backup. The R4 field codec and r2 delay producer are executable;
+complete R7 recovery remains refused for the profiles whose accepting arm
+facts are not yet retained. Missing dates never default to restart time.
 
 **OUTBOUND / Call** (kind 3 — one external call's WAL record ;
 delivery-semantics §4) — keys `40–47` :

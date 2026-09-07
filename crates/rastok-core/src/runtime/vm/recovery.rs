@@ -156,6 +156,8 @@ impl Vm<'_> {
         index: usize,
         record: &TransactionRecord,
     ) -> Result<(), VmError> {
+        crate::journal::timing::validate_transaction(record)
+            .map_err(|_| invalid(index, "retained deadlines contradict the accepting record"))?;
         if record.close_scope.is_some()
             || matches!(
                 record.trigger,

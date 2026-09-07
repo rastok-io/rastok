@@ -975,6 +975,7 @@ mod tests {
                 },
             ))),
             logical_time: None,
+            timer_schedule: None,
             consumed: Vec::new(),
             join_inputs: Vec::new(),
             state_delta: Vec::new(),
@@ -1033,6 +1034,7 @@ mod tests {
         let source = crate::node::Path::new(["api", "listener"]).unwrap();
         let id = crate::envelope::Id::from_bytes([7; 16]);
         let record = Record::Inbound(Box::new(crate::journal::InboundRecord {
+            timer_schedule: None,
             provenance: crate::boundary::InboundEnvelopeProvenance::single(source.clone()),
             port: crate::node::Port::new("out").unwrap(),
             connector_path: Some(source),
