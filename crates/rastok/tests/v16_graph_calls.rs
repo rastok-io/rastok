@@ -11,6 +11,7 @@ use rastok::plan::{self, GraphVersion};
 const HTTP_GRAPH: &str = r#"
 graph app : App + Loop {
   input in: text
+  output err: union { LoopExpired { last_state: text } }
   output out: text
   Loop.fuel = 2
   connector request : HttpClient {
@@ -47,7 +48,7 @@ graph app : App {{
   output out: text
   {nested}
   in -> worker -> out
-  worker.Loop.expired -> nothing
+  worker.err -> nothing
 }}
 lab app {{
   simulation nested on app {{
@@ -151,6 +152,7 @@ fn graph_file_profiles_rederive_never_and_exactly_one_frame_production() {
             r#"
 graph app : App + Loop {{
   input in: bytes
+  output err: union {{ LoopExpired {{ last_state: bytes }} }}
   Loop.fuel = 2
   connector file : File {{ mode = {mode}; path = "unused.bin"; timeout = duration("1s") }}
   in -> file
@@ -229,6 +231,7 @@ fn graph_effect_safety_includes_sibling_calls_not_only_the_command_source() {
     let source = r#"
 graph app : App + Loop {
   input in: text
+  output err: union { LoopExpired { last_state: text } }
   Loop.fuel = 2
   operator decide {
     input in: text
@@ -274,6 +277,7 @@ fn graph_effect_safety_keeps_terminal_case_correlation() {
     let source = r#"
 graph app : App + Loop {
   input in: text
+  output err: union { LoopExpired { last_state: text } }
   Loop.fuel = 2
   connector call : Process {
     command = "cat"; codec = lines

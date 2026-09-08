@@ -1,6 +1,6 @@
 # Rastok DSL — Grammar notes
 
-> **Status (2026-09-07): normative v16 under D-2026-09-05-1.**
+> **Status (2026-09-08): normative v17 under D-2026-09-05-1 and D-2026-09-08-1.**
 > The implemented subset and migration evidence are recorded in
 > [R9](../architecture/rework-r9-qualification.md). Unsupported forms refuse
 > by name at check. V16 preserves Node-owned `instance`, `lifetime`, `closing`,
@@ -229,8 +229,8 @@ is a destination and child output a source. An unambiguous child name selects
 `in` as a destination or `out` as a source.
 
 Extension contributions are always qualified: `Loop.fuel`,
-`Loop.expired`, and `pay.Loop.again`. No business-port spelling is
-reserved.
+`Loop.expired = failed` (a target attribute), and `pay.Loop.again` (a command).
+Loop contributes no port. No business-port spelling is reserved.
 
 Connector external configuration remains flat attributes plus typed ports.
 Composite values such as `env = { ... }` and `tls = { ... }` are replaced
@@ -762,8 +762,8 @@ Every possibly productible output or closed output case requires a
 disposition. Leaving one unwired is `E-UNWIRED-OUTPUT`, including at a nested
 Graph boundary. Resolve it by wiring a consumer or writing `-> nothing`.
 Only an output whose impossibility is re-derived from the validated program is
-exempt. `W-DEAD-OUTPUT` applies only to outputs declared by the author, not
-impossible contributed ports such as `Loop.expired`. There is no implicit sink.
+exempt. `W-DEAD-OUTPUT` applies only to outputs declared by the author.
+Proved-impossible Loop exhaustion requires no output declaration. There is no implicit sink.
 
 ### Bidirectional wiring
 
@@ -1522,7 +1522,7 @@ type_decl         ::= "type" IDENT "=" type_ref                   // TOP-LEVEL o
 // `Loop.measure` admits the L6 direct signed-integer ranking fragment;
 // Every richer theorem spelling fails closed. `Loop.entry` and
 // `Loop.terminal` disambiguate host interfaces. Loop.next / again / done are
-// manager commands, not ports; Loop.expired is the sole contributed output.
+// manager commands, not ports; Loop.expired selects an existing host terminal.
 
 port_decl         ::= ( "input" | "output" ) IDENT ( ":" type_ref )?  // source annotation OPTIONAL; every validated port has an effective type
                     // in / out / err are conventional spellings and use this same model; only used/declared rows materialize in the resolved plan.

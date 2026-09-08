@@ -21,6 +21,7 @@ graph app : App {
   output exhausted: union { LoopExpired { last_state: State } }
   graph cycle : Loop {
     input in: State
+    output err: union { LoopExpired { last_state: State } }
     output out: State
     Loop.fuel = 2
     operator choose {
@@ -37,7 +38,7 @@ graph app : App {
     choose.revised -> Loop.next
   }
   in -> cycle -> out
-  cycle.Loop.expired -> exhausted
+  cycle.err -> exhausted
 }
 "#;
     let compiled = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
@@ -113,6 +114,7 @@ graph app : App {
   output exhausted: union { LoopExpired { last_state: State } }
   operator cycle : Loop {
     input in: State
+    output err: union { LoopExpired { last_state: State } }
     output out: text
     Loop.fuel = 2
     on in match {
@@ -122,7 +124,7 @@ graph app : App {
   }
   in -> cycle
   cycle.out -> out
-  cycle.Loop.expired -> exhausted
+  cycle.err -> exhausted
 }
 "#;
     assert_classified_outputs(source, &["out", "exhausted"]);
@@ -138,6 +140,7 @@ graph app : App {
   output exhausted: union { LoopExpired { last_state: State } }
   graph cycle : Loop {
     input in: State
+    output err: union { LoopExpired { last_state: State } }
     output out: text
     Loop.fuel = 2
     operator decide {
@@ -155,7 +158,7 @@ graph app : App {
   }
   in -> cycle
   cycle.out -> out
-  cycle.Loop.expired -> exhausted
+  cycle.err -> exhausted
 }
 "#;
     assert_classified_outputs(source, &["out", "exhausted"]);
@@ -170,6 +173,7 @@ graph app : App {
   output exhausted: union { LoopExpired { last_state: int } }
   operator cycle : Loop {
     input in: int
+    output err: union { LoopExpired { last_state: int } }
     output out: int
     Loop.fuel = 2
     on in match {
@@ -182,7 +186,7 @@ graph app : App {
   }
   in -> cycle
   cycle.out -> out
-  cycle.Loop.expired -> exhausted
+  cycle.err -> exhausted
 }
 "#;
     assert_classified_outputs(source, &["out", "exhausted"]);
@@ -193,6 +197,7 @@ fn a_classified_again_cause_taints_retained_state_without_replacing_it() {
     let source = r#"
 graph app : App + Loop {
   input in: int
+  output err: union { LoopExpired { last_state: int } }
   Loop.fuel = 2
   operator decide {
     input in: int
@@ -206,7 +211,7 @@ graph app : App + Loop {
   decide.out -> Loop.again
 }
 "#;
-    assert_classified_outputs(source, &["Loop.expired"]);
+    assert_classified_outputs(source, &["err"]);
 }
 
 #[test]
@@ -239,11 +244,12 @@ graph app : App {{
   output exhausted: union {{ LoopExpired {{ last_state: uint }} }}
   operator cycle : Loop {{
     input in: uint
+    output err: union {{ LoopExpired {{ last_state: uint }} }}
     Loop.fuel = 2
     on in {{ Loop.next = {next} }}
   }}
   in -> cycle
-  cycle.Loop.expired -> exhausted
+  cycle.err -> exhausted
 }}
 "#
         );

@@ -49,6 +49,7 @@ Source:
 operator countdown : Loop {
   input in: struct { n: int }
   output out: text
+  output err: union { LoopExpired { last_state: struct { n: int } } }
   Loop.fuel = 2
   on in match {
     data.n <= 0 => out = "liftoff"
@@ -76,7 +77,7 @@ reference `DR(d0)` and opens `LR(r0)`.
 Fuel counts exactly records 3 and 6, the two Operator applications. No spatial
 edge points backward to `in`.
 
-## 2. Graph — quiescence, final recurrence, and `Loop.expired`
+## 2. Graph — quiescence, final recurrence, and host-terminal exhaustion
 
 Source shape:
 
@@ -84,6 +85,7 @@ Source shape:
 graph refinement : Loop {
   input in: Draft
   output out: Answer
+  output err: union { LoopExpired { last_state: Draft } }
   Loop.fuel = 1
 
   operator audit {
@@ -98,7 +100,7 @@ graph refinement : Loop {
 }
 
 refinement.out -> publish
-refinement.Loop.expired -> failed
+refinement.err -> failed
 ```
 
 The model produces a revised Draft. Fuel permits the current application but no
@@ -121,7 +123,7 @@ second application.
 | — | `Q?(r0) = true` | manager may consume c0 |
 | 9 | `T manager Consumed(c0); Expired { r0, iteration=0, last_state=e4, output=e5 }`; route `e5 -> failed` | no `Advance`, no `l:next`, no re-admission; output capacity proved before commit |
 
-The Graph's terminal `out` was not selected. `Loop.expired` is productible
+The Graph's terminal `out` was not selected. `LoopExpired` on `err` is productible
 because explicit fuel can be exhausted and therefore requires the parent route.
 The output is produced by the manager, not by the Graph.
 
@@ -140,10 +142,10 @@ connector pay : HttpClient + Loop {
 
 pay.exit -> match {
   TimeoutExpired -> pay.Loop.again
+  LoopExpired    -> failed
   _              -> nothing
 }
 pay.out -> done
-pay.Loop.expired -> failed
 ```
 
 | # | record / fold | semantic result |
@@ -168,7 +170,7 @@ pay.Loop.expired -> failed
 | 13 | `T manager Consumed(c1); Close { r0, iteration=1, Natural }` | run closes |
 
 If application 1 had selected `Again`, record 13 would instead be `Expired`
-and emit `Loop.expired`; it would never open call2. If `effect` were
+and emit `LoopExpired` on `pay.exit`; it would never open call2. If `effect` were
 `compensable` or `irreversible`, the route from the `TimeoutExpired`
 `outcome_unknown` class to Again would fail at check with `E-LOOP-EFFECT`.
 
@@ -180,6 +182,6 @@ and emit `Loop.expired`; it would never open call2. If `effect` were
 - Fuel counts applications, not records or output frames.
 - Quiescence is per `LoopRunRef`; work from another run cannot block these
   traces.
-- `Loop.expired` is reserved and routed before its producing manager record
+- The resolved exhaustion terminal is reserved and routed before its producing manager record
   commits.
 - Recovery replays no producer transaction and starts no effect speculatively.

@@ -99,7 +99,7 @@ graph app : App {
     let (decoded, decoded_hash) = plan::decode(&package).unwrap();
     assert_eq!(decoded, validated);
     assert_eq!(decoded_hash, hash);
-    assert_eq!(plan::FORMAT_VERSION, 16);
+    assert_eq!(plan::FORMAT_VERSION, 17);
 }
 
 #[test]
@@ -375,6 +375,7 @@ graph app : App {
   output out: int
   operator countdown : Loop {
     input in: int
+    output err: union { LoopExpired { last_state: int } }
     output out: int
     Loop.fuel = 4
     on in match {
@@ -383,7 +384,7 @@ graph app : App {
     }
   }
   in -> countdown -> out
-  countdown.Loop.expired -> nothing
+  countdown.err -> nothing
 }
 "#;
     let compilation = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();

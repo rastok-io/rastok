@@ -79,7 +79,7 @@ impl Checker<'_, '_> {
                 }
             };
             match name {
-                "fuel" | "delay" | "invariant" | "measure" | "entry" | "terminal" => {
+                "fuel" | "delay" | "invariant" | "measure" | "entry" | "terminal" | "expired" => {
                     if selected.insert(name.to_string(), attribute).is_some() {
                         self.loop_refusal(
                             attribute.span,
@@ -203,22 +203,11 @@ impl Checker<'_, '_> {
         let mut terminals = if let Some(attribute) = selected.get("terminal") {
             self.loop_port_selection(attribute, &output_ports, true)?
         } else {
-            match output_ports.as_slice() {
-                [] => Vec::new(),
-                [only] => vec![only.port.clone()],
-                _ => {
-                    self.bag.push(
-                        Diagnostic::new(
-                            E_LOOP_TERMINAL,
-                            Phase::Check,
-                            "a Loop Graph with several outputs declares the terminal set explicitly with `Loop.terminal = [...]`",
-                        )
-                        .with_span(decl.span)
-                        .with_field("owner", graph.path.to_string()),
-                    );
-                    return None;
-                }
-            }
+            output_ports
+                .iter()
+                .filter(|port| matches!(port.port.name(), "out" | "err"))
+                .map(|port| port.port.clone())
+                .collect()
         };
         terminals.sort();
         terminals.dedup();
@@ -288,13 +277,22 @@ impl Checker<'_, '_> {
             Some(attribute) => Some(self.loop_delay(attribute, signature, consts)?),
             None => None,
         };
-        Some(LoopSpec {
+        let mut spec = LoopSpec {
             entry,
             terminals,
+            expired: None,
             fuel,
             delay,
             proof,
-        })
+        };
+        self.resolve_loop_expiry(
+            &mut spec,
+            &graph.boundary,
+            selected.get("expired").copied(),
+            None,
+            decl.span,
+        )
+        .then_some(spec)
     }
 
     /// Resolve entry, terminal outputs and finite application policy from the
@@ -383,7 +381,7 @@ impl Checker<'_, '_> {
                 }
             };
             match name {
-                "fuel" | "delay" | "invariant" | "measure" | "entry" | "terminal" => {
+                "fuel" | "delay" | "invariant" | "measure" | "entry" | "terminal" | "expired" => {
                     if selected.insert(name.to_string(), attribute).is_some() {
                         self.loop_refusal(
                             attribute.span,
@@ -507,22 +505,11 @@ impl Checker<'_, '_> {
         } else if let Some(attribute) = selected.get("terminal") {
             self.loop_port_selection(attribute, &output_ports, true)?
         } else {
-            match output_ports.as_slice() {
-                [] => Vec::new(),
-                [only] => vec![only.port.clone()],
-                _ => {
-                    self.bag.push(
-                        Diagnostic::new(
-                            E_LOOP_TERMINAL,
-                            Phase::Check,
-                            "a Loop Operator with several outputs declares the terminal set explicitly with `Loop.terminal = [...]`",
-                        )
-                        .with_span(owner_span)
-                        .with_field("node", node.path.to_string()),
-                    );
-                    return None;
-                }
-            }
+            output_ports
+                .iter()
+                .filter(|port| matches!(port.port.name(), "out" | "err"))
+                .map(|port| port.port.clone())
+                .collect()
         };
         terminals.sort();
         terminals.dedup();
@@ -608,13 +595,115 @@ impl Checker<'_, '_> {
             Some(attribute) => Some(self.loop_delay(attribute, signature, consts)?),
             None => None,
         };
-        Some(LoopSpec {
+        let mut spec = LoopSpec {
             entry,
             terminals,
+            expired: None,
             fuel,
             delay,
             proof,
-        })
+        };
+        self.resolve_loop_expiry(
+            &mut spec,
+            &node.ports,
+            selected.get("expired").copied(),
+            call_semantics.map(|call| call.terminal()),
+            owner_span,
+        )
+        .then_some(spec)
+    }
+
+    fn resolve_loop_expiry(
+        &mut self,
+        spec: &mut LoopSpec,
+        ports: &[crate::plan::PortDecl],
+        selection: Option<&SynAttribute>,
+        call_terminal: Option<&str>,
+        span: Span,
+    ) -> bool {
+        if selection.is_some() && call_terminal.is_some() {
+            self.bag.push(
+                Diagnostic::new(
+                    E_LOOP_TERMINAL,
+                    Phase::Check,
+                    "a Call uses its Contract terminal; `Loop.expired` cannot override it",
+                )
+                .with_span(span),
+            );
+            return false;
+        }
+        let expiry_is_impossible = spec.fuel.is_none() && spec.proof.is_some();
+        if expiry_is_impossible && selection.is_none() {
+            return true;
+        }
+        let outputs: Vec<_> = ports
+            .iter()
+            .filter(|port| port.direction == Direction::Output)
+            .collect();
+        let target = if let Some(attribute) = selection {
+            let Some(selected) = self.loop_port_selection(attribute, &outputs, false) else {
+                return false;
+            };
+            selected.into_iter().next()
+        } else {
+            ports
+                .iter()
+                .find(|port| {
+                    port.direction == Direction::Output
+                        && port.port.name() == call_terminal.unwrap_or("err")
+                })
+                .map(|port| port.port.clone())
+        };
+        if let Some(target) = &target
+            && call_terminal.is_none()
+            && !spec.terminals.contains(target)
+        {
+            self.bag.push(
+                Diagnostic::new(
+                    E_LOOP_TERMINAL,
+                    Phase::Check,
+                    "`Loop.expired` must select a terminal output of this host",
+                )
+                .with_span(span)
+                .with_field("port", target.to_string()),
+            );
+            return false;
+        }
+        if expiry_is_impossible {
+            return true;
+        }
+        let state = ports
+            .iter()
+            .find(|port| port.port == spec.entry)
+            .and_then(|port| port.ty.clone());
+        let expiry = target.and_then(|target| {
+            let ty = ports.iter().find(|port| port.port == target)?.ty.as_ref()?;
+            let DataType::TaggedUnion(union) = ty else {
+                return None;
+            };
+            let state = state?;
+            let effective = if call_terminal.is_some() {
+                node::loop_call_exit_type(union, state).ok()?
+            } else {
+                let expected = node::loop_expired_type(state).ok()?;
+                if !expected.is_assignable_to(ty) {
+                    return None;
+                }
+                ty.clone()
+            };
+            Some(crate::plan::LoopExpiry {
+                port: target,
+                ty: effective,
+            })
+        });
+        if expiry.is_none() {
+            self.bag.push(Diagnostic::new(E_UNWIRED_OUTPUT, Phase::Check,
+                "Loop exhaustion needs a terminal union: declare `output err` accepting `LoopExpired`, set `Loop.expired = <port>`, or prove finiteness")
+                .with_span(span));
+            return false;
+        }
+        spec.expired = expiry;
+        true
     }
 
     /// Resolves port names carried by Loop's source attributes without
@@ -627,17 +716,51 @@ impl Checker<'_, '_> {
         candidates: &[&crate::plan::PortDecl],
         list: bool,
     ) -> Option<Vec<node::Port>> {
+        let expiry = attribute
+            .target
+            .segments
+            .last()
+            .is_some_and(|name| name.text == "expired");
+        let label = if list {
+            "Loop.terminal"
+        } else if expiry {
+            "Loop.expired"
+        } else {
+            "Loop.entry"
+        };
         let mut signature = expr::Signature::new();
         for candidate in candidates {
             signature = signature.with(candidate.port.name(), DataType::Text);
         }
-        let tree = self.typed_value_tree(
-            &attribute.value,
-            &signature,
-            None,
-            attribute.span,
-            if list { "Loop.terminal" } else { "Loop.entry" },
-        )?;
+        let tree = if expiry {
+            let SynValue::Expr(source) = &attribute.value else {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_LOOP_TERMINAL,
+                        Phase::Check,
+                        "`Loop.expired` must name one terminal output of this host",
+                    )
+                    .with_span(attribute.span),
+                );
+                return None;
+            };
+            match expr::compile(&source.text, &signature) {
+                Ok(tree) => tree,
+                Err(_) => {
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_LOOP_TERMINAL,
+                            Phase::Check,
+                            "`Loop.expired` must name one terminal output of this host",
+                        )
+                        .with_span(attribute.span),
+                    );
+                    return None;
+                }
+            }
+        } else {
+            self.typed_value_tree(&attribute.value, &signature, None, attribute.span, label)?
+        };
         let paths: Vec<Vec<String>> = if list {
             let expr::Expr::List(items) = tree.root else {
                 self.bag.push(
@@ -670,9 +793,17 @@ impl Checker<'_, '_> {
             let expr::Expr::Path(path) = tree.root else {
                 self.bag.push(
                     Diagnostic::new(
-                        E_LOOP_ENTRY,
+                        if expiry {
+                            E_LOOP_TERMINAL
+                        } else {
+                            E_LOOP_ENTRY
+                        },
                         Phase::Check,
-                        "`Loop.entry` is one input port name",
+                        if expiry {
+                            "`Loop.expired` is one terminal output port name"
+                        } else {
+                            "`Loop.entry` is one input port name"
+                        },
                     )
                     .with_span(attribute.span),
                 );
@@ -694,7 +825,11 @@ impl Checker<'_, '_> {
         let mut ports = Vec::with_capacity(paths.len());
         for path in paths {
             let [name] = path.as_slice() else {
-                let code = if list { E_LOOP_TERMINAL } else { E_LOOP_ENTRY };
+                let code = if list || expiry {
+                    E_LOOP_TERMINAL
+                } else {
+                    E_LOOP_ENTRY
+                };
                 self.bag.push(
                     Diagnostic::new(
                         code,
@@ -709,14 +844,18 @@ impl Checker<'_, '_> {
                 .iter()
                 .find(|candidate| candidate.port.name() == name)
             else {
-                let code = if list { E_LOOP_TERMINAL } else { E_LOOP_ENTRY };
+                let code = if list || expiry {
+                    E_LOOP_TERMINAL
+                } else {
+                    E_LOOP_ENTRY
+                };
                 self.bag.push(
                     Diagnostic::new(
                         code,
                         Phase::Check,
                         format!(
                             "`{name}` is not a Loop {} port",
-                            if list {
+                            if list || expiry {
                                 "terminal output"
                             } else {
                                 "entry input"

@@ -1,6 +1,7 @@
 # Node, Graph, Executor, Connector, and Extension
 
-> **Status (2026-09-07): normative categorical v16.** Implementation and
+> **Status (2026-09-08): normative categorical v17.** Loop's host-terminal
+> amendment is D-2026-09-08-1. The underlying execution model and
 > independent validation are qualified in [R9](../architecture/rework-r9-qualification.md).
 > Unsupported Extension profiles refuse by name before effects.
 
@@ -82,7 +83,7 @@ Extension whose complete execution gate has not landed is
 | Extension | Owner | Runtime meaning | Contributions |
 |---|---|---|---|
 | `App` | root Graph, exactly once | deployed public boundary | deployment-root identity; no manager |
-| `Loop` | admissible Operator, Graph, or outbound Call Connector | finite temporal recurrence | qualified attributes, `Loop.state`, three commands, `Loop.expired` |
+| `Loop` | admissible Operator, Graph, or outbound Call Connector | finite temporal recurrence | qualified attributes, `Loop.state`, three commands, host terminal roles/types; no port |
 | `Saga` | Graph, future gate | journal-folded compensation | future `Saga.compensate` protocol |
 
 One source list is a set. Compatible Extension order is non-semantic:
@@ -104,12 +105,17 @@ An Extension may contribute any of these, but need not contribute all:
 | read-only bindings | `Loop.state` |
 | admission constraints | finite host, unique recurrent input |
 | manager commands | `Loop.next`, `Loop.again`, `Loop.done` |
-| typed ports | `Loop.expired` |
+| host port roles/types | Loop extends existing `in`, `out`, `err`, or the Call terminal `exit` |
+| typed ports | future `Saga.compensate` |
 | journal fold | Loop run/application state |
 
 Every contribution is gated by the Extension. A qualified Loop name without
 `: Loop` is an error. Duck typing from a coincidental port or attribute name is
 forbidden.
+
+Loop contributes no port. `Loop.expired = failed` selects an existing terminal;
+it is an attribute, not a port. Productible exhaustion requires an authored
+Operator/Graph union or the extended Call terminal pin accepting `LoopExpired`.
 
 Commands are not ports. A temporal manager is addressed by its Extension owner
 instance and receives journaled bounded commands. It is absent from the spatial
@@ -200,7 +206,7 @@ redefine an Extension contribution. The diagnostic names both contributors.
 
 ## 9. Transport and validation
 
-Plan v16 transports one closed `ExtensionSpec` list on every owner for which it
+Plan v17 transports one closed `ExtensionSpec` list on every owner for which it
 is non-empty. Registry-free validation re-derives:
 
 - structural owner compatibility;
@@ -222,7 +228,7 @@ slot before a handler can execute. This does not remove controller-owned
 Graph lifecycle facts from the journal.
 
 The historical `AspectSpec` tag and `rastok.aspects.r1` domain are never
-reinterpreted. V15 refuses categorically by package version.
+reinterpreted. V15 and v16 refuse categorically by package version.
 
 ## 10. Migration
 

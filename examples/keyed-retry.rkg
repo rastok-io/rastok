@@ -14,6 +14,11 @@ type Answer = struct {
   attempts: int
 }
 
+type RetryFailure = union {
+  Failed { reason: text }
+  LoopExpired { last_state: Attempt }
+}
+
 type ModelExit = union {
   CaptureFailed {}
   DecodeFailed { line: text?, message: text }
@@ -27,11 +32,12 @@ type ModelExit = union {
 graph agent_retry : App + Loop {
   input in: Attempt
   output done: Answer
-  output failed: text
+  output failed: RetryFailure
 
   instance = { key = data.tenant }
   Loop.fuel = 2
   Loop.terminal = [done, failed]
+  Loop.expired = failed
   Loop.delay = { kind = fixed; after = duration("1s") }
 
   graph audit {
@@ -62,7 +68,7 @@ graph agent_retry : App + Loop {
     input in: ModelExit
     output retry: Attempt
     output done: Answer
-    output failed: text
+    output failed: RetryFailure
 
     on in match data {
       TimeoutExpired => retry = {
@@ -75,11 +81,11 @@ graph agent_retry : App + Loop {
         prompt = Loop.state.data.prompt
         attempts = Loop.state.data.attempt + 1
       }
-      CaptureFailed  => failed = "capture"
-      DecodeFailed   => failed = "decode"
-      OutcomeUnknown => failed = "unknown"
-      OutputOverflow => failed = "overflow"
-      SpawnFailed    => failed = "spawn"
+      CaptureFailed  => failed = Failed { reason = "capture" }
+      DecodeFailed   => failed = Failed { reason = "decode" }
+      OutcomeUnknown => failed = Failed { reason = "unknown" }
+      OutputOverflow => failed = Failed { reason = "overflow" }
+      SpawnFailed    => failed = Failed { reason = "spawn" }
     }
   }
 

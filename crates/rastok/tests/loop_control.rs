@@ -20,18 +20,20 @@ fn loop_source(boundary: &str, handlers: &str) -> String {
         .filter_map(|line| line.trim().strip_prefix("output "))
         .filter_map(|line| line.split_once(':').map(|(port, _)| port.trim()))
         .collect();
-    let terminals = if outputs.len() > 1 {
-        format!("Loop.terminal = [{}]", outputs.join(", "))
-    } else {
-        String::new()
-    };
+    let terminals = format!(
+        "Loop.terminal = [{}err]",
+        outputs
+            .iter()
+            .map(|name| format!("{name}, "))
+            .collect::<String>()
+    );
     let dispositions = outputs
         .iter()
         .map(|port| format!("finite.{port} -> nothing"))
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "graph app : App {{ input in: int\noperator finite : Loop {{\n  input in: int\n{boundary}\n  Loop.fuel = 5\n{terminals}\n{handlers}\n}}\nin -> finite\n{dispositions}\nfinite.Loop.expired -> nothing\n}}\n"
+        "graph app : App {{ input in: int\noperator finite : Loop {{\n  input in: int\noutput err: union {{ LoopExpired {{ last_state: int }} }}\n{boundary}\n  Loop.fuel = 5\n{terminals}\n{handlers}\n}}\nin -> finite\n{dispositions}\nfinite.err -> nothing\n}}\n"
     )
 }
 
@@ -78,6 +80,8 @@ fn run_lab(source: &str) -> Vec<rastok::lab::ScenarioRun> {
 
 const SINGLETON_LOOP_LAB: &str = r#"
 graph singleton : App + Loop {
+  Loop.terminal = [done]
+
   input in: struct {
     label: text
     n: int
@@ -133,11 +137,12 @@ type ProcessExit = union {
 
 graph keyed_retry : App + Loop {
   input in: Attempt
+  output err: union { LoopExpired { last_state: Attempt } }
   output done: text
   output failed: text
   instance = { key = data.tenant }
   Loop.fuel = 2
-  Loop.terminal = [done, failed]
+  Loop.terminal = [done, failed, err]
   Loop.delay = { kind = fixed; after = duration("1s") }
 
   graph audit {
@@ -217,6 +222,13 @@ lab keyed_retry {
 
 const LOOP_CLOSING_LAB: &str = r#"
 graph closing : App + Loop {
+  output err: union { LoopExpired { last_state: struct {
+    label: text
+    n: int
+  } } }
+
+  Loop.terminal = [done, err]
+
   input in: struct {
     label: text
     n: int
@@ -251,7 +263,7 @@ lab closing {
       expect app.done count == 1 where data == "new"
       advance duration("1s")
       expect nothing app.done
-      expect nothing app.Loop.expired
+      expect nothing app.err
     }
   }
 }
@@ -260,6 +272,7 @@ lab closing {
 const LOOP_EXHAUSTION_LAB: &str = r#"
 graph exhaustion : App + Loop {
   input in: int
+  output err: union { LoopExpired { last_state: int } }
   Loop.fuel = 1
   operator revise {
     input in: int
@@ -274,7 +287,7 @@ lab exhaustion {
   simulation bounded on app {
     scenario the_last_proposed_state_is_observable {
       app.in = 7
-      expect app.Loop.expired count == 1 where data is LoopExpired
+      expect app.err count == 1 where data is LoopExpired
     }
   }
 }
@@ -378,10 +391,11 @@ fn terminal_outputs_keep_domain_names_and_stop_is_explicit_termination() {
 }
 
 #[test]
-fn a_wired_loop_requires_explicit_terminals_and_round_trips_v16() {
+fn a_wired_loop_resolves_custom_terminals_and_round_trips() {
     let relayed = r#"
 graph finite : App + Loop {
   input in: int
+  output err: union { LoopExpired { last_state: int } }
   output result: int
   output audit: int
   Loop.fuel = 5
@@ -398,11 +412,11 @@ graph finite : App + Loop {
 "#;
     let bag = compile_one(relayed).expect_err("a wired Loop declares its terminal set");
     assert_eq!(bag.diagnostics().len(), 1, "{bag:#?}");
-    assert_eq!(bag.diagnostics()[0].code().as_str(), "E-LOOP-TERMINAL");
+    assert_eq!(bag.diagnostics()[0].code().as_str(), "E-LOOP-CONTROL");
 
     let explicit = relayed.replace(
         "Loop.fuel = 5",
-        "Loop.fuel = 5\n  Loop.terminal = [result, audit]",
+        "Loop.fuel = 5\n  Loop.terminal = [result, audit, err]",
     );
     let compilation = compile_one(&explicit).expect("the wired Loop has one terminal transaction");
     let (decoded, hash) =
@@ -416,6 +430,7 @@ fn a_loop_with_ambiguous_inputs_requires_an_explicit_entry() {
     let source = r#"
 graph finite : App + Loop {
   input request: int
+  output err: union { LoopExpired { last_state: int } }
   input other: int
   output out: int
   Loop.fuel = 5
@@ -435,10 +450,11 @@ fn several_outputs_must_belong_to_one_terminal_transaction() {
     let source = r#"
 graph finite : App + Loop {
   input in: int
+  output err: union { LoopExpired { last_state: int } }
   output early: int
   output late: int
   Loop.fuel = 5
-  Loop.terminal = [early, late]
+  Loop.terminal = [early, late, err]
 
   operator relay {
     input in: int
@@ -494,6 +510,8 @@ fn a_checked_integer_measure_can_replace_the_operational_fuel_cap() {
 
     let structured = r#"
 graph finite : App + Loop {
+  Loop.terminal = [done]
+
   input in: struct {
     n: int
     label: text
@@ -554,7 +572,7 @@ fn a_measure_uses_a_signed_well_founded_carrier_and_a_checked_invariant() {
     let unsigned = loop_source("output done: number", "on in { done = data }")
         .replace("input in: int", "input in: number")
         .replace("Loop.fuel = 5", "Loop.measure = Loop.state.data")
-        .replace("finite.Loop.expired -> nothing", "");
+        .replace("finite.err -> nothing", "");
     let bag = compile_one(&unsigned).expect_err("the first proof carrier is signed integer");
     assert_eq!(bag.diagnostics().len(), 1, "{bag:#?}");
     assert_eq!(bag.diagnostics()[0].code().as_str(), "E-LOOP");
@@ -646,6 +664,7 @@ fn a_call_decides_on_exactly_once_exit_not_on_a_zero_or_more_stream() {
     let bounded = r#"
 graph finite : App + Loop {
   input in: text
+  output err: union { LoopExpired { last_state: text } }
   Loop.fuel = 3
   closing = { drain_for = duration("1s"); settle_for = duration("1s") }
 
@@ -676,7 +695,7 @@ graph finite : App + Loop {
 
     let repeated = bounded.replace(
         "  shell.out -> nothing\n",
-        "  output result: text\n  shell.out -> result\n",
+        "  output result: text\n  Loop.terminal = [result, err]\n  shell.out -> result\n",
     );
     refusal(&repeated, "exactly one verdict");
 
@@ -700,6 +719,7 @@ fn every_case_of_a_typed_exit_union_is_a_finite_guard_domain() {
         r#"
 graph finite : App + Loop {{
   input in: text
+  output err: union {{ LoopExpired {{ last_state: text }} }}
   Loop.fuel = 3
   closing = {{ drain_for = duration("1s"); settle_for = duration("1s") }}
   connector shell : Process {{

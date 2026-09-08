@@ -28,7 +28,7 @@ fn unhex(text: &str) -> Result<Vec<u8>, String> {
         .collect()
 }
 
-fn describe(name: &str, side: &str, bytes: &[u8]) -> Result<(), String> {
+fn describe(name: &str, side: &str, bytes: &[u8]) -> Result<Vec<u8>, String> {
     let body = bytes.strip_prefix(&plan::MAGIC).ok_or("bad magic")?;
     let (Cbor::Map(fields), used) =
         canonical_cbor::decode(body).map_err(|error| error.to_string())?
@@ -56,7 +56,7 @@ fn describe(name: &str, side: &str, bytes: &[u8]) -> Result<(), String> {
         hex(hash),
         hex(checksum)
     );
-    Ok(())
+    Ok(body.clone())
 }
 
 fn main() -> Result<(), String> {
@@ -80,8 +80,12 @@ fn main() -> Result<(), String> {
         }
         let stored = std::fs::read_to_string(manifest.join(format!("tests/golden/{name}.rkp")))
             .map_err(|error| error.to_string())?;
-        describe(name, "stored", &unhex(&stored)?)?;
-        describe(name, "candidate", &candidate)?;
+        let stored_body = describe(name, "stored", &unhex(&stored)?)?;
+        let candidate_body = describe(name, "candidate", &candidate)?;
+        println!(
+            "{name} body byte-identical: {}",
+            stored_body == candidate_body
+        );
         for lab in &compiled.labs {
             for run in rastok::lab::run(&compiled.plan, plan::GraphVersion(1), lab) {
                 if !run.report.passed() {

@@ -25,7 +25,9 @@ bindings, commands, constraints and, only when necessary, ports. `App` marks
 the one public root Graph; `Loop` adds finite temporal recurrence through a
 journal-owned manager; `Saga` remains a future Extension. A manager is neither
 a Node nor an edge, so temporal recurrence never creates a spatial cycle.
-The categorical v16 package carries recursive Dispatch, case routing,
+Loop contributes no port: exhaustion is a `LoopExpired` case on the host's
+resolved failure terminal (`err`, a custom terminal, or a Call's `exit`).
+The categorical v17 package carries recursive Dispatch, case routing,
 ordered multi-emission and command-based Operator, Graph and outbound Call
 Loops. Independent core validation re-derives their contracts, routes and
 proofs. Recovery reconstructs retained deliveries, state, commands, exchanges

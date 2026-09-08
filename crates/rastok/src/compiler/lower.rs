@@ -741,6 +741,7 @@ fn lower_loop_spec(
     PlanLoopSpec {
         entry: spec.entry.clone(),
         terminals: spec.terminals.clone(),
+        expired: spec.expired.clone(),
         fuel: spec.fuel.as_ref().map(constant),
         delay: spec.delay.as_ref().map(|delay| match delay {
             crate::compiler::hir::LoopDelay::Fixed { after } => PlanLoopDelay::Fixed {
@@ -1290,6 +1291,14 @@ impl Writer<'_> {
         self.count(spec.terminals.len());
         for terminal in &spec.terminals {
             self.str(terminal.name());
+        }
+        match &spec.expired {
+            Some(expired) => {
+                self.tag(1);
+                self.str(expired.port.name());
+                self.ty(&expired.ty);
+            }
+            None => self.tag(0),
         }
         match &spec.fuel {
             None => self.tag(0),
@@ -3085,11 +3094,11 @@ graph app : App {
         let source = |fuel: u32, spaced: bool| {
             if spaced {
                 format!(
-                    "graph app : App {{\n  input in : int\n  output out : int\n  operator looped : Loop {{ input in : int; output out : int; Loop.fuel = {fuel}; on in {{ out = data }} }}\n  in -> looped -> out\n  looped.Loop.expired -> nothing\n}}\n"
+                    "graph app : App {{\n  input in : int\n  output out : int\n  operator looped : Loop {{ input in : int; output out : int; output err : union {{ LoopExpired {{ last_state : int }} }}; Loop.fuel = {fuel}; on in {{ out = data }} }}\n  in -> looped -> out\n  looped.err -> nothing\n}}\n"
                 )
             } else {
                 format!(
-                    "graph app:App{{input in:int;output out:int;operator looped:Loop{{input in:int;output out:int;Loop.fuel={fuel};on in{{out=data}}}};in->looped->out;looped.Loop.expired->nothing}}"
+                    "graph app:App{{input in:int;output out:int;operator looped:Loop{{input in:int;output out:int;output err:union{{LoopExpired{{last_state:int}}}};Loop.fuel={fuel};on in{{out=data}}}};in->looped->out;looped.err->nothing}}"
                 )
             }
         };

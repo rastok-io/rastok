@@ -245,13 +245,14 @@ fn loop_graph_resolves_its_existing_interface_before_lowering() {
 graph app : App {
   graph retry : Loop {
 input in: text
+output err: union { LoopExpired { last_state: text } }
 output out: text
 Loop.fuel = 3
 operator relay { on in { out = . } }
 in -> relay -> out
   }
   in -> retry -> out
-  retry.Loop.expired -> nothing
+  retry.err -> nothing
 }
 "#;
     let (hir, bag) = check_source(source);
@@ -268,7 +269,13 @@ in -> relay -> out
     assert!(spec.delay.is_none());
     let retry = &hir.app.graphs[0];
     assert_eq!(spec.entry.name(), "in");
-    assert_eq!(spec.terminals, vec![node::Port::new("out").unwrap()]);
+    assert_eq!(
+        spec.terminals,
+        vec![
+            node::Port::new("err").unwrap(),
+            node::Port::new("out").unwrap()
+        ]
+    );
     assert!(
         retry
             .boundary
@@ -284,6 +291,7 @@ fn loop_source_contract_reduces_every_plan_constant() {
 graph app : App {
   graph retry : Loop {
 input in: text
+output err: union { LoopExpired { last_state: text } }
 output out: text
 val attempts = 4
 Loop.fuel = attempts
@@ -296,7 +304,7 @@ operator relay { on in { out = . } }
 in -> relay -> out
   }
   in -> retry -> out
-  retry.Loop.expired -> nothing
+  retry.err -> nothing
 }
 "#;
     let (hir, bag) = check_source(source);
@@ -409,8 +417,7 @@ behavior = deterministic
   c.out -> nothing
   c.err -> nothing
   c.exit -> nothing
-  c.Loop.expired -> nothing
-}
+  }
 "#;
     let (hir, bag) = check_source(source);
     assert!(!bag.has_errors(), "{bag:#?}");
@@ -679,9 +686,8 @@ timeout = duration("1s")
   }
   call.out -> nothing
   call.err -> nothing
-  call.exit -> call.Loop.again
-  call.Loop.expired -> nothing
-}
+  call.exit -> match { LoopExpired -> nothing; _ -> call.Loop.again }
+  }
 "#;
     let hir = check_clean(source);
     let route = hir
@@ -692,15 +698,16 @@ timeout = duration("1s")
         .expect("the terminal route");
     assert!(matches!(
         &route.selection,
-        RouteSelection::All(destinations)
-            if matches!(destinations.as_slice(), [RouteDestination::LoopCommand(target)]
-                if target.kind == LoopCommandKind::Again)
+        RouteSelection::Cases(arms)
+            if arms.iter().any(|arm| matches!(arm.destinations.as_slice(), [RouteDestination::LoopCommand(target)]
+                if target.kind == LoopCommandKind::Again))
     ));
     assert!(
         hir.app
             .edges
             .iter()
-            .all(|edge| edge.from.port.name() != "exit"),
+            .filter(|edge| edge.from.port.name() == "exit")
+            .all(|edge| matches!(edge.to, EdgeTarget::Discard)),
         "a manager command must not become a PhysicalEdge"
     );
     let (plan, _) =
@@ -710,7 +717,8 @@ timeout = duration("1s")
     assert!(
         plan.edges
             .iter()
-            .all(|edge| edge.from.port.name() != "exit")
+            .filter(|edge| edge.from.port.name() == "exit")
+            .all(|edge| edge.to.is_none())
     );
     assert!(
         plan.routes
@@ -1435,10 +1443,11 @@ graph g : App {
   output out: int
   operator retry : Loop {
 input request: int
+output err: union { LoopExpired { last_state: int } }
 output done: int
 output failed: int
 Loop.entry = request
-Loop.terminal = [failed, done]
+Loop.terminal = [failed, done, err]
 Loop.fuel = 3
 on request match {
   data <= 0 => done = data
@@ -1448,7 +1457,7 @@ on request match {
   in -> retry.request
   retry.done -> out
   retry.failed -> nothing
-  retry.Loop.expired -> nothing
+  retry.err -> nothing
 }
 "#;
     let hir = check_clean(source);
@@ -1460,7 +1469,7 @@ on request match {
             .iter()
             .map(node::Port::name)
             .collect::<Vec<_>>(),
-        ["done", "failed"]
+        ["done", "err", "failed"]
     );
     let Dispatch::OpenMatch { arms, .. } = &retry.handlers[0].dispatch else {
         panic!("expected the open predicate dispatch");
@@ -1487,6 +1496,7 @@ graph g : App {{
   operator retry : Loop {{
 input request: int
 input alternate: int
+output err: union {{ LoopExpired {{ last_state: int }} }}
 output accepted: int
 output failed: int
 {attributes}
@@ -1496,26 +1506,26 @@ on alternate {{ Loop.done }}
   in -> retry.request
   retry.accepted -> nothing
   retry.failed -> nothing
-  retry.Loop.expired -> nothing
+  retry.err -> nothing
 }}
 "#
         )
     };
-    let policy = "Loop.entry = request\nLoop.terminal = [accepted, failed]\nLoop.fuel = 3";
+    let policy = "Loop.entry = request\nLoop.terminal = [accepted, failed, err]\nLoop.fuel = 3";
     let hash =
         |attributes: &str| crate::compiler::lower::semantic_hash(&check_clean(&source(attributes)));
     let baseline = hash(policy);
     for changed in [
         policy.replace("fuel = 3", "fuel = 4"),
         policy.replace("entry = request", "entry = alternate"),
-        policy.replace("[accepted, failed]", "[accepted]"),
+        policy.replace("[accepted, failed, err]", "[accepted, err]"),
         format!("{policy}\nLoop.delay = {{ kind = fixed ; after = duration(\"1s\") }}"),
     ] {
         assert_ne!(baseline, hash(&changed), "Loop policy: {changed}");
     }
     assert_eq!(
         baseline,
-        hash(&policy.replace("[accepted, failed]", "[failed, accepted]"))
+        hash(&policy.replace("[accepted, failed, err]", "[failed, err, accepted]"))
     );
 }
 
@@ -1527,6 +1537,7 @@ graph g : App {
   input in: int
   graph repeat : Loop {
 input in: int
+output err: union { LoopExpired { last_state: int } }
 output out: int
 Loop.fuel = 3
 operator pass { input in: int ; output out: int ; on in { out = data } }
@@ -1534,7 +1545,7 @@ in -> pass -> out
   }
   in -> repeat
   repeat.out -> nothing
-  repeat.Loop.expired -> nothing
+  repeat.err -> nothing
 }
 "#,
     );
@@ -1557,6 +1568,7 @@ graph g : App {{
   input in: struct {{ n: int }}
   graph outer : Loop {{
 input in: struct {{ n: int }}
+output err: union {{ LoopExpired {{ last_state: struct {{ n: int }} }} }}
 output out: int
 Loop.fuel = 3
 graph nested {extension} {{
@@ -1579,14 +1591,18 @@ in -> project -> nested -> out
   }}
   in -> outer
   outer.out -> nothing
-  outer.Loop.expired -> nothing
+  outer.err -> nothing
 }}
 "#
         )
     };
     for (extension, attributes, state) in [
         ("", "", "Loop.state.data.n"),
-        (": Loop", "Loop.fuel = 2", "Loop.state.data"),
+        (
+            ": Loop",
+            "Loop.fuel = 2; output err: union { LoopExpired { last_state: int } }",
+            "Loop.state.data",
+        ),
     ] {
         let source = source(extension, attributes, state);
         let source = if extension.is_empty() {
@@ -1594,7 +1610,7 @@ in -> project -> nested -> out
         } else {
             source.replace(
                 "in -> project -> nested -> out",
-                "in -> project -> nested -> out\nnested.Loop.expired -> nothing",
+                "in -> project -> nested -> out\nnested.err -> nothing",
             )
         };
         let hir = check_clean(&source);
@@ -1659,6 +1675,7 @@ graph g : App {
   input in: int
   operator retry : Loop {
 input in: text
+output err: union { LoopExpired { last_state: int } }
 input request: int
 Loop.entry = request
 Loop.fuel = 3
@@ -1691,10 +1708,11 @@ graph g : App {
   output out: int
   graph refine : Loop {
 input request: int
+output err: union { LoopExpired { last_state: int } }
 output accepted: int
 output failed: int
 Loop.entry = request
-Loop.terminal = [failed, accepted]
+Loop.terminal = [failed, accepted, err]
 Loop.fuel = 3
 
 operator judge {
@@ -1715,7 +1733,7 @@ judge.retry -> Loop.next
   in -> refine.request
   refine.accepted -> out
   refine.failed -> nothing
-  refine.Loop.expired -> nothing
+  refine.err -> nothing
 }
 "#;
     let hir = check_clean(source);
@@ -1727,14 +1745,14 @@ judge.retry -> Loop.next
             .iter()
             .map(node::Port::name)
             .collect::<Vec<_>>(),
-        ["accepted", "failed"]
+        ["accepted", "err", "failed"]
     );
     assert!(
         refine
             .boundary
             .iter()
             .all(|port| !matches!(port.port.name(), "next" | "expired")),
-        "commands and Loop.expired are not synthetic ordinary boundary ports"
+        "Loop contributes no synthetic ordinary boundary port"
     );
     assert!(refine.routes.iter().any(|route| {
         matches!(
@@ -1744,9 +1762,11 @@ judge.retry -> Loop.next
                     if target.kind == LoopCommandKind::Next)
         )
     }));
-    assert!(hir.app.edges.iter().any(|edge| {
-        edge.from.port.name() == "Loop.expired" && matches!(edge.to, EdgeTarget::Discard)
-    }));
+    assert!(
+        hir.app.edges.iter().any(|edge| {
+            edge.from.port.name() == "err" && matches!(edge.to, EdgeTarget::Discard)
+        })
+    );
 }
 
 #[test]
@@ -1755,6 +1775,7 @@ fn new_loop_graph_interface_cannot_mix_with_historical_graph_handlers() {
 graph g : App {
   graph refine : Loop {
 input request: int
+output err: union { LoopExpired { last_state: int } }
 output out: int
 Loop.entry = request
 Loop.fuel = 3
@@ -1776,9 +1797,10 @@ fn loop_port_selectors_never_fail_silently() {
 graph g : App {
   operator retry : Loop {
 input in: int
+output err: union { LoopExpired { last_state: int } }
 output done: int
 output failed: int
-Loop.terminal = [done, 7]
+Loop.terminal = [done, 7, err]
 Loop.fuel = 3
 on in { Loop.done }
   }
@@ -1808,8 +1830,7 @@ Loop.fuel = 3
   call.out -> nothing
   call.err -> nothing
   call.exit -> nothing
-  call.Loop.expired -> nothing
-}
+  }
 "#;
     let hir = check_clean(source);
     let call = &hir.app.nodes[0];
@@ -1928,8 +1949,7 @@ graph g : App {
   in -> call
   call.out -> call.Loop.again
   call.exit -> nothing
-  call.Loop.expired -> nothing
-}
+  }
 "#;
     let hir = check_clean(source);
     let (plan, _) =

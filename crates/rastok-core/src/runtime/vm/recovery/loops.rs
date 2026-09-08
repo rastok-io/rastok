@@ -33,6 +33,15 @@ impl Vm<'_> {
             ));
         }
         let fact = &packet.facts[0];
+        if matches!(fact, Fact::Expired { .. })
+            && !matches!(record.emissions.as_slice(), [emission]
+            if spec.expired.as_ref().is_some_and(|target| target.port == emission.port))
+        {
+            return Err(invalid(
+                index,
+                "Loop exhaustion changed its resolved host terminal",
+            ));
+        }
         let expected_context = match fact {
             Fact::Open {
                 run,

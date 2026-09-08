@@ -6,7 +6,7 @@
 > journal records.
 >
 > The registry below retains the executable v7 value registry inside
-> categorical plan-package v16. V12 introduced the
+> categorical plan-package v17. V12 introduced the
 > open `media_type` scalar and its constructor, and specifies the M1.4 instance-address
 > extension under D-2026-08-18-1. V9 refuses the old unpublished v8
 > named-partition draft and carries the parent-linked owner tree, scoped edges,
@@ -470,8 +470,8 @@ keeps the existing edge stream: writing a destination set or its separate
 arrows has the same identity. Universal destinations are merged into each
 case row, and case/destination order is canonical. Changing a case's target
 or a command kind changes the hash even when physical edges are identical.
-Old Loop domains remain historical. The current compiler and reader use only
-v16; no active r1 fold or compatibility execution path remains.
+Old Loop domains remain historical. This v16 checkpoint has no active r1 fold
+or compatibility execution path; v17 extends its ledger below.
 
 The re-bless set is determined before R4. All package containers move
 categorically. Semantic hashes move only for programs affected by the new
@@ -488,6 +488,23 @@ The two Process semantic witnesses move with Contract `@2`; the gauge hash
 stays identical. Body sizes become 939 / 983 / 249 B. The complete hashes,
 checksums and unchanged causal seals are in the
 [R9 ledger](../architecture/rework-r9-qualification.md), recorded before blessing.
+
+### 1.2 Plan v17 — Loop host terminals
+
+D-2026-09-08-1 removes Loop's contributed expiry port. LoopSpec keys 1–5
+retain their meaning; key 6 optionally carries the resolved exhaustion
+`[port, complete_type]`. It is absent only for proved-impossible exhaustion.
+The Loop-specific semantic stream also seals that target and type. Operators
+and Graphs declare ordinary terminal unions; a Call's effective terminal pin
+extends its unchanged `@2` Driver Contract with a manager-only case.
+
+No r2 fact, command, run/admission domain, timer or causal record shape changes.
+An Expired emission uses its actual host port in the ordinary emission-id
+recipe. Recovery verifies that port against the plan. Non-Loop semantic
+streams, package bodies and causal seals stay exact; only their categorical
+version/checksum changes. V16 packages refuse by version, never reinterpretation.
+The [v17 ledger](../architecture/loop-host-terminal-v17.md) lists evidence and
+the single fixture blessing separately from the historical v16 checkpoint.
 
 The complete pre-allocation register and re-bless protocol are in
 [rework-r0-identity.md](../architecture/rework-r0-identity.md).

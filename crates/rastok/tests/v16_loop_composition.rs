@@ -29,13 +29,14 @@ graph app : App {{
   output exhausted: variant
   graph work : Loop {{
     input in: int
+    output err: union {{ LoopExpired {{ last_state: int }} }}
     output out: int
     Loop.fuel = 2
     {body}
   }}
   in -> work
   work.out -> out
-  work.Loop.expired -> exhausted
+  work.err -> exhausted
 }}
 "#
         );
@@ -86,6 +87,7 @@ fn countdown(name: &str) -> String {
         r#"
   graph {name} : Loop {{
     input in: int
+    output err: union {{ LoopExpired {{ last_state: int }} }}
     output out: int
     Loop.fuel = 3
     operator choose {{
@@ -110,6 +112,7 @@ graph app : App {
   output out: int
   graph cycle : Loop {
     input in: int
+    output err: union { LoopExpired { last_state: int } }
     output out: int
     Loop.fuel = 2
     operator pair {
@@ -122,7 +125,7 @@ graph app : App {
     pair.out -> out
   }
   in -> cycle -> out
-  cycle.Loop.expired -> nothing
+  cycle.err -> nothing
 }
 
 "#;
@@ -187,6 +190,7 @@ fn nested_graph_runs_keep_the_parent_until_child_completion_or_expiry() {
             r#"
 operator inner : Loop {
   input in: int
+  output err: union { LoopExpired { last_state: int } }
   output out: int
   Loop.fuel = 3
   on in match { data <= 0 => out = data; _ => Loop.next = data - 1 }
@@ -211,17 +215,18 @@ graph app : App {{
   output exhausted: union {{ LoopExpired {{ last_state: int }} }}
   graph outer : Loop {{
     input in: int
+    output err: union {{ LoopExpired {{ last_state: int }} }}
     output out: int
     output exhausted: union {{ LoopExpired {{ last_state: int }} }}
     Loop.fuel = 2
-    Loop.terminal = [out, exhausted]
+    Loop.terminal = [out, exhausted, err]
     {}
     in -> inner -> out
-    inner.Loop.expired -> exhausted
+    inner.err -> exhausted
   }}
   in -> outer -> out
   outer.exhausted -> exhausted
-  outer.Loop.expired -> nothing
+  outer.err -> nothing
 }}
 "#,
                 inner
@@ -364,7 +369,7 @@ graph app : App {{
   output exhausted: union {{ LoopExpired {{ last_state: int }} }}
   {} {}
   {wiring}
-  {{ first.Loop.expired; second.Loop.expired }} -> exhausted
+  {{ first.err; second.err }} -> exhausted
 }}
 "#,
             countdown("first"),

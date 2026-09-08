@@ -3916,12 +3916,13 @@ graph app : App {
   output out: text
   operator work : Loop {
     input in: text
+    output err: union { LoopExpired { last_state: text } }
     output out: text
     Loop.fuel = 1
     on in { out = data }
   }
   in -> work -> out
-  work.Loop.expired -> nothing
+  work.err -> nothing
 }
 "#],
         &ContractCatalog::try_m0().unwrap(),
@@ -4024,6 +4025,7 @@ graph app : App {
   output expired: union { LoopExpired { last_state: text } }
   graph cycle : Loop {
     input in: text
+    output err: union { LoopExpired { last_state: text } }
     Loop.fuel = 2
     operator worker {
       input in: text
@@ -4035,7 +4037,7 @@ graph app : App {
     worker.out -> Loop.again
   }
   in -> cycle
-  cycle.Loop.expired -> expired
+  cycle.err -> expired
 }
 "#;
 
@@ -4045,6 +4047,7 @@ graph app : App {
   output expired: union { LoopExpired { last_state: text } }
   graph cycle : Loop {
     input in: text
+    output err: union { LoopExpired { last_state: text } }
     Loop.fuel = 2
     operator decide { input in: text; output out: text; on in { out = data } }
     connector worker : Process {
@@ -4060,7 +4063,7 @@ graph app : App {
     worker.exit -> nothing
   }
   in -> cycle
-  cycle.Loop.expired -> expired
+  cycle.err -> expired
 }
 "#;
 
@@ -4301,7 +4304,6 @@ graph app : App {
   call.out -> nothing
   call.err -> nothing
   call.exit -> nothing
-  call.Loop.expired -> nothing
 }
 "#],
         &ContractCatalog::try_m0().unwrap(),
@@ -5113,6 +5115,7 @@ fn loop_delay_dates_reentry_and_recovers_the_same_wakeup() {
         &[r#"
 graph countdown : App + Loop {
   input in: int
+  output err: union { LoopExpired { last_state: int } }
   output out: int
   Loop.fuel = 3
   Loop.delay = { kind = fixed ; after = duration("2s") }
@@ -5206,6 +5209,7 @@ fn exponential_loop_delay_saturates_without_extending_fuel() {
         &[r#"
 graph countdown : App + Loop {
   input in: int
+  output err: union { LoopExpired { last_state: int } }
   output out: int
   Loop.fuel = 4
   Loop.delay = {
@@ -5253,6 +5257,7 @@ fn instance_closing_fences_a_delayed_loop_from_the_successor_generation() {
         &[r#"
 graph countdown : App + Loop {
   input in: int
+  output err: union { LoopExpired { last_state: int } }
   output out: int
   lifetime = { kind = fixed ; after = duration("1s") }
   Loop.fuel = 3
@@ -5303,6 +5308,7 @@ fn equal_date_loop_wakeups_keep_their_causal_arm_order() {
         &[r#"
 graph countdown : App + Loop {
   input in: int
+  output err: union { LoopExpired { last_state: int } }
   output out: int
   Loop.fuel = 3
   Loop.delay = { kind = fixed ; after = duration("1s") }
@@ -5369,6 +5375,10 @@ fn loop_delay_starts_only_after_the_call_timeout_exit_decides_next() {
     let compilation = compile(
         &[r#"
 graph retry : App + Loop {
+  output err: union { LoopExpired { last_state: text } }
+
+  Loop.terminal = [done, err]
+
   input in: text
   output done: text
   Loop.fuel = 2
@@ -5459,6 +5469,10 @@ fn spatial_loop_recovery_preserves_the_retained_call_and_delay() {
     let compilation = compile(
         &[r#"
 graph retry : App + Loop {
+  output err: union { LoopExpired { last_state: text } }
+
+  Loop.terminal = [done, err]
+
   input in: text
   output done: text
   Loop.fuel = 2

@@ -5,6 +5,46 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-09-08-1 — Loop extends the host terminal without contributing ports
+
+Loop contributes no port. Operator and Graph use their declared `out` and
+`err` as conventional Done terminals; other outputs are frames unless an
+explicit `Loop.terminal` list replaces that convention. Productible exhaustion
+requires a declared terminal union accepting `LoopExpired { last_state: Entry }`:
+`err` by default, or the single output selected by `Loop.expired = <port>`.
+An outbound Call instead extends its Contract terminal union; its frames and
+Driver production guarantees stay unchanged. Neither terminal attribute can
+override a Call's Contract. A proof-only Loop requires no exhaustion output.
+An explicit fuel remains the cap when a measure coexists.
+
+The compiler and independent validator resolve the output and its complete
+type. The manager never chooses a port by its spelling. `LoopExpired` closes
+the run; it cannot command that same run again. Driver completion still uses
+the unextended Contract cases. Entry annotations propagate into `last_state`
+before any observer formats it. Old `child.Loop.expired` wiring refuses by
+name with the resolved host-output replacement; the attribute spelling is
+not a port alias.
+
+This amends D-2026-09-05-1 and the live Loop specification. The implementation
+and qualification are tracked in
+[the v17 ledger](../architecture/loop-host-terminal-v17.md). V16 is already
+blessed: its reader is not silently reinterpreted. V17 adds the optional
+resolved exhaustion output/type to LoopSpec, removes the contributed port,
+and preserves all non-Loop semantic hashes and causal traces. Loop's r2
+fact shapes, command identities and fold transitions remain unchanged; the
+carrying emission supplies its ordinary port and recovery checks that port
+against the deployed plan. No journal key or causal domain is repurposed.
+
+The debugger derives admitted-application dials from the displayed journal
+prefix, not a UI counter. Closed runs display zero. Pending re-admission does
+not count as admission. Command dispositions remain text, not spatial edges;
+r2 fact labels are presentation and never change sealed lifecycle triggers.
+
+**Rejected:** another synthetic error port; implicit output declarations for
+Operators or Graphs; accepting Driver-generated manager outcomes; a runtime
+port-name convention; reusing blessed v16 with changed decoding rules;
+counting an Advance as an Admit; inventing spatial routes for commands.
+
 ## D-2026-09-07-8 — Finish v16 migration and align the simulation debugger
 
 R9 removes the active r1 Loop carrier/fold, completes explicit-boundary source

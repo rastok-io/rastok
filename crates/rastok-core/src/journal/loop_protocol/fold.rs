@@ -203,9 +203,18 @@ impl Fold {
                         emission.envelope.meta().sys().id() == output.meta().sys().id()
                     });
                     if !emissions.next().is_some_and(|emission| {
-                        emission.port.name() == "Loop.expired"
-                            && emission.index == 0
+                        emission.index == 0
                             && emission.envelope == *output
+                            && record.cause.is_some_and(|cause| {
+                                output.meta().sys().id()
+                                    == crate::journal::ids::graph_emission_id(
+                                        record.instance.address().owner(),
+                                        &Trigger::Lifecycle(Lifecycle::Next),
+                                        cause,
+                                        &emission.port,
+                                        0,
+                                    )
+                            })
                     }) || emissions.next().is_some()
                     {
                         return Err(Error::ExpiryEmission);
@@ -438,12 +447,7 @@ impl Fold {
                         || produced.run != *run
                         || produced.iteration != *iteration
                         || next_state(&produced.value, &state.state)? != last_state
-                        || !expiry_matches(
-                            &state.instance,
-                            produced.value.cause(),
-                            last_state,
-                            output,
-                        )
+                        || !expiry_matches(produced.value.cause(), last_state, output)
                     {
                         return Err(Error::Transition);
                     }
@@ -509,20 +513,9 @@ fn next_state<'a>(
     }
 }
 
-fn expiry_matches(instance: &InstanceRef, cause: Id, state: &Envelope, output: &Envelope) -> bool {
-    let Ok(port) = Port::new("Loop.expired") else {
-        return false;
-    };
-    let id = crate::journal::ids::graph_emission_id(
-        instance.address().owner(),
-        &crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Next),
-        cause,
-        &port,
-        0,
-    );
+fn expiry_matches(cause: Id, state: &Envelope, output: &Envelope) -> bool {
     let sys = output.meta().sys();
-    if sys.id() != id
-        || sys.parent_id() != Some(cause)
+    if sys.parent_id() != Some(cause)
         || sys.origin_id() != state.meta().sys().origin_id()
         || sys.graph_version() != state.meta().sys().graph_version()
         || sys.role() != crate::envelope::Role::Default

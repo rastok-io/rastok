@@ -6,7 +6,7 @@
 //! owe (D-2026-08-08-2/-3): one graph carrying a TYPED named
 //! boundary input, typed operator ports, and a typed named output,
 //! with its Lab scenario. Pinned here: the exact semantic hash (the
-//! identity move of the port-table presence tag), the current v16 package
+//! identity move of the port-table presence tag), the current v17 package
 //! bytes, and the full golden trace whose INBOUND record seals the
 //! ingress port as key 24.
 
@@ -27,8 +27,8 @@ fn compilation() -> rastok::compiler::Compilation {
     .expect("a valid unit")
 }
 
-// Gauge witnesses semantic and causal neutrality. Only the v16 container moves;
-// see docs/architecture/rework-r9-qualification.md for exact body/checksum sizes.
+// Gauge witnesses semantic and causal neutrality. Only the container moves;
+// see docs/architecture/loop-host-terminal-v17.md for body/checksum evidence.
 const GAUGE_HASH: &str = "0d3ad43d9fb09c8626146342f6a50d1f4c387a8de52a47a3134a408cf74cb22e";
 
 #[test]

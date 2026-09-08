@@ -120,10 +120,7 @@ pub(super) fn validate(
                     }
                     _ => false,
                 };
-                if !valid
-                    || (rule.source.owner == command.owner
-                        && rule.source.port.name() == "Loop.expired")
-                {
+                if !valid {
                     return Err(failure(&path, RouteErrorKind::InvalidManagerCommand).into());
                 }
                 continue;

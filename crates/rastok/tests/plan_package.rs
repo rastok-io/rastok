@@ -47,13 +47,14 @@ graph countdown : App {
 
   operator relay : Loop {
     input in: text
+    output err: union { LoopExpired { last_state: text } }
     output out: text
     Loop.fuel = 3
     on in { out = Loop.state.data }
   }
 
   in -> relay -> out
-  relay.Loop.expired -> nothing
+  relay.err -> nothing
 }
 "#;
     let compilation = compile(
@@ -85,8 +86,7 @@ graph countdown : App {
     }
   }
   in -> relay -> out
-  relay.Loop.expired -> nothing
-}
+  }
 "#;
     let compilation = compile(
         &[source],
@@ -208,9 +208,15 @@ fn v16_retains_one_operator_loop_without_a_graph_handler_or_command_port() {
     );
     assert!(spec.delay.is_none());
     assert_eq!(spec.entry.name(), "in");
-    assert_eq!(spec.terminals, [rastok::node::Port::new("out").unwrap()]);
+    assert_eq!(
+        spec.terminals,
+        [
+            rastok::node::Port::new("err").unwrap(),
+            rastok::node::Port::new("out").unwrap()
+        ]
+    );
     assert!(compiled.nodes[0].ports.iter().any(|port| {
-        port.port.name() == "Loop.expired"
+        port.port.name() == "err"
             && port.direction == rastok::node::Direction::Output
             && port.ty.as_ref()
                 == Some(&rastok::node::loop_expired_type(rastok::datatype::DataType::Text).unwrap())
@@ -392,7 +398,7 @@ graph g : App {
         )
         .expect("a valid v16 program");
         let bytes = plan::encode(&compilation.plan, &compilation.hash);
-        let (decoded, hash) = plan::decode(&bytes).expect("the v16 package opens");
+        let (decoded, hash) = plan::decode(&bytes).expect("the current package opens");
         assert_eq!(decoded, compilation.plan);
         assert_eq!(hash, compilation.hash);
     }
@@ -546,8 +552,8 @@ graph g : App {
 
 #[test]
 fn the_example_package_matches_its_golden() {
-    // The v16 package move is enumerated before blessing in
-    // docs/architecture/rework-r9-qualification.md. Its trace is unchanged.
+    // The v17 package move is enumerated before blessing in
+    // docs/architecture/loop-host-terminal-v17.md. Its trace is unchanged.
     let (_, _, bytes) = packaged_example();
     let rendered: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/echo.rkp");
@@ -866,11 +872,11 @@ fn a_non_canonical_envelope_refuses() {
     // Reordered header keys: same fields, same checksum coverage,
     // different bytes — not the canonical encoding. Raw splice,
     // because the canonical encoder itself refuses to write an
-    // unsorted map: entry (1, uint 16) is bytes 5..7, entry
+    // unsorted map: entry (1, uint 17) is bytes 5..7, entry
     // (2, bytes32) is the 35 bytes after it; swap them.
     assert_eq!(
         &bytes[4..7],
-        &[0xa4, 0x01, 0x10],
+        &[0xa4, 0x01, 0x11],
         "the envelope head is stable"
     );
     assert_eq!(&bytes[7..10], &[0x02, 0x58, 0x20], "the hash entry follows");
@@ -885,16 +891,16 @@ fn a_non_canonical_envelope_refuses() {
         DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))
     ));
 
-    // A non-minimal integer in the header: uint 16 written on two
-    // bytes (0x18 0x10) instead of one. The checksum still holds —
+    // A non-minimal integer in the header: uint 17 written on two
+    // bytes (0x18 0x11) instead of one. The checksum still holds —
     // the VALUE is unchanged — so only the canonicity check refuses.
     assert_eq!(
         &bytes[4..7],
-        &[0xa4, 0x01, 0x10],
+        &[0xa4, 0x01, 0x11],
         "the envelope head is stable"
     );
     let mut widened = bytes.clone();
-    widened.splice(6..7, [0x18, 0x10]);
+    widened.splice(6..7, [0x18, 0x11]);
     assert!(matches!(
         plan::decode(&widened).unwrap_err(),
         DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))

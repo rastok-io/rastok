@@ -356,7 +356,7 @@ Composed cases :
   `CommandConsumed` fact and any logical delay, `l:next` re-admits the state at
   the remembered entry. The v16 run reference derives from the exact opening
   admission reference, not merely `origin_id`; a last permitted Next instead
-  parents `Loop.expired` and creates no re-admission. Again retains
+  parents `LoopExpired` on the resolved host terminal and creates no re-admission. Again retains
   `Loop.state` but uses its routed envelope as the command cause.
 
 ### 3.1 Transactions without a port arrival — trigger and parent

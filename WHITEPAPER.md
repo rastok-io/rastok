@@ -1,6 +1,7 @@
 # Rastok — White Paper
 
-> **Model revision (2026-09-07).** The v16 Node/Executor/Extension model is
+> **Model revision (2026-09-08).** The Node/Executor/Extension model, with v17
+> Loop exhaustion through host terminals, is
 > executable. [R9 qualification](docs/architecture/rework-r9-qualification.md)
 > distinguishes tested capabilities, proof-subset limits and external release
 > qualifications; this white paper is not a production-readiness claim.
@@ -1455,9 +1456,11 @@ journaled:
   A run derives from the exact opening admission, not merely the business
   `origin_id`; two deliveries fanned from one root can therefore open distinct
   runs in the same keyed instance. If the final permitted application asks for
-  Next or Again, the manager emits `LoopExpired { last_state }` on the sole
-  contributed port `Loop.expired` instead of re-admitting. That port follows
-  the universal disposition rule: its parent routes it or writes `-> nothing`.
+  Next or Again, the manager emits `LoopExpired { last_state }` on the host's
+  existing failure terminal instead of re-admitting: `err` for an Operator or
+  Graph, `exit` for an outbound Call, or a resolved `Loop.expired = failed`
+  override. Loop contributes no port. The terminal follows the universal
+  disposition rule: its parent routes it or writes `-> nothing`.
 
   `Loop.fuel` is the structural termination witness and remains an explicit
   cap: fuel N permits at most N applications, first included. The proof tier
@@ -2863,7 +2866,7 @@ Contracts through one exact-id/role registry and one VM boundary; the Lab
 composes both through the same binding and protocol. Static Driver selection is
 implemented. A data-only capability manifest proves the future discovery seam,
 but no plugin loader or native ABI is claimed. Four exact HTTP/WebSocket
-  contracts now cross source, checked v16 plan, Registry-free validation and
+  contracts now cross source, checked v17 plan, Registry-free validation and
 Contract-owned Lab binding with codec-selected ports, lossless protocol metadata
 and typed terminal unions. H3 pins one bounded private hosted
 pump, Hyper/Rustls for HTTP/1.1-2, quiche/BoringSSL for HTTP/3 and Tungstenite
@@ -2907,7 +2910,7 @@ unwired policy. R9 records the full migration and qualification. Stronger Loop b
 real-I/O experiment debugging and durable storage remain named future gates.
 
 Closed M1.8 executes the `@sensitive`, `@secret`, `@personal`,
-`@measure` and `@cost` family through source, checked HIR and categorical v16 as canonical
+`@measure` and `@cost` family through source, checked HIR and categorical v17 as canonical
 side-tables beside logical schemas. Independent package validation re-derives
 every local structural path, legal target, registered measure carrier,
 currency authority and effective resolved-port policy through canonical

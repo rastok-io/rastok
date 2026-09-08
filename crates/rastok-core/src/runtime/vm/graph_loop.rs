@@ -1154,6 +1154,15 @@ impl Vm<'_> {
                 self.route_prepared(routes, &candidates, envelope, Some(&record.instance));
             }
             fact => {
+                if matches!(fact, Fact::Expired { .. })
+                    && !matches!(record.emissions.as_slice(), [emission]
+                    if self.plan.owners[owner.index()].loop_spec().and_then(|spec| spec.expired.as_ref())
+                        .is_some_and(|target| target.port == emission.port))
+                {
+                    return Err(invalid(
+                        "Loop exhaustion changed its resolved host terminal",
+                    ));
+                }
                 let run = fact.run();
                 let current = self
                     .loop_manager

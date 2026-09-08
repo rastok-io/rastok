@@ -884,7 +884,7 @@ impl Checker<'_, '_> {
             .iter()
             .any(|segment| segment.text == "Loop")
         {
-            return self.loop_expired_source(reference, graph);
+            return self.removed_loop_port(reference, graph);
         }
         let node_name = &reference.segments[0];
         let target_node = graph.nodes.iter().find(|candidate| {
@@ -1047,7 +1047,7 @@ impl Checker<'_, '_> {
             .map(|port| Endpoint { owner, port })
     }
 
-    pub(super) fn loop_expired_source(
+    pub(super) fn removed_loop_port(
         &mut self,
         reference: &PortRef,
         graph: &Graph,
@@ -1055,41 +1055,41 @@ impl Checker<'_, '_> {
         let [owner_name, extension, endpoint] = reference.segments.as_slice() else {
             self.loop_refusal(
                 reference.span,
-                "only a child Loop's `child.Loop.expired` output is a spatial edge source",
+                "Loop commands are destinations, not spatial ports",
             );
             return None;
         };
         if extension.text != "Loop" || endpoint.text != "expired" {
             self.loop_refusal(
                 reference.span,
-                "Loop.next, Loop.again, and Loop.done are manager destinations; the only Loop edge source is `child.Loop.expired`",
+                "Loop.next, Loop.again, and Loop.done are manager destinations, never edge sources",
             );
             return None;
         }
-        let owner = if let Some(target) = graph.nodes.iter().find(|candidate| {
+        let replacement = if let Some(target) = graph.nodes.iter().find(|candidate| {
             candidate.path.segments().last().map(String::as_str) == Some(owner_name.text.as_str())
         }) {
-            if target.loop_spec.is_none() {
-                self.loop_refusal(
-                    reference.span,
-                    "`Loop.expired` requires that exact child to own a valid `+ Loop` Extension",
-                );
-                return None;
-            }
-            EndpointOwner::Node(target.path.clone())
+            target
+                .loop_spec
+                .as_ref()
+                .and_then(|spec| spec.expired.as_ref())
+                .map(|expired| expired.port.name())
+                .unwrap_or(if target.connector_contract_id().is_some() {
+                    "exit"
+                } else {
+                    "err"
+                })
         } else if let Some(target) = graph
             .graphs
             .iter()
             .find(|candidate| candidate.name == owner_name.text)
         {
-            if target.loop_spec.is_none() {
-                self.loop_refusal(
-                    reference.span,
-                    "`Loop.expired` requires that exact child to own a valid `+ Loop` Extension",
-                );
-                return None;
-            }
-            EndpointOwner::Graph(target.path.clone())
+            target
+                .loop_spec
+                .as_ref()
+                .and_then(|spec| spec.expired.as_ref())
+                .map(|expired| expired.port.name())
+                .unwrap_or("err")
         } else {
             self.bag.push(
                 Diagnostic::new(
@@ -1102,10 +1102,20 @@ impl Checker<'_, '_> {
             );
             return None;
         };
-        Some(Endpoint {
-            owner,
-            port: node::Port::new("Loop.expired").ok()?,
-        })
+        let replacement = format!("{}.{replacement}", owner_name.text);
+        self.bag.push(
+            Diagnostic::new(
+                E_WIRING_MIGRATION,
+                Phase::Check,
+                format!(
+                    "Loop contributes no port; replace `{}.Loop.expired` with `{replacement}`",
+                    owner_name.text
+                ),
+            )
+            .with_span(reference.span)
+            .with_field("replacement", replacement),
+        );
+        None
     }
 }
 
@@ -1114,10 +1124,6 @@ impl Checker<'_, '_> {
 /// included), or a declared boundary port. An unannotated conventional or
 /// named port answers `None` here and is closed by validated-plan inference.
 pub(super) fn endpoint_pinned_type(endpoint: &Endpoint, graph: &Graph) -> Option<DataType> {
-    if endpoint.port.name() == "Loop.expired" {
-        let entry = loop_owner_entry_type(&endpoint.owner, graph)?;
-        return node::loop_expired_type(entry).ok();
-    }
     match &endpoint.owner {
         EndpointOwner::Graph(path) => graph_at_path(graph, path)?
             .boundary
@@ -1248,11 +1254,13 @@ pub(super) fn edge_display(edge: &Edge) -> String {
 }
 
 fn node_output_possible(node: &Node, port: &node::Port) -> bool {
-    if port.name() == "Loop.expired" {
-        return node
-            .loop_spec
-            .as_ref()
-            .is_none_or(|spec| spec.proof.is_none() || spec.fuel.is_some());
+    if node
+        .loop_spec
+        .as_ref()
+        .and_then(|spec| spec.expired.as_ref())
+        .is_some_and(|expired| expired.port == *port)
+    {
+        return true;
     }
     match &node.semantics {
         NodeSemantics::Operator => node
@@ -1289,11 +1297,13 @@ fn has_inbound_connector(graph: &Graph) -> bool {
 }
 
 fn graph_output_possible(graph: &Graph, port: &node::Port) -> bool {
-    if port.name() == "Loop.expired" {
-        return graph
-            .loop_spec
-            .as_ref()
-            .is_none_or(|spec| spec.proof.is_none() || spec.fuel.is_some());
+    if graph
+        .loop_spec
+        .as_ref()
+        .and_then(|spec| spec.expired.as_ref())
+        .is_some_and(|expired| expired.port == *port)
+    {
+        return true;
     }
     graph.edges.iter().any(|edge| {
         if !matches!(&edge.to, EdgeTarget::Port(target)

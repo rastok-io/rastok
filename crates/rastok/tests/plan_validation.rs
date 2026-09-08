@@ -171,12 +171,13 @@ graph countdown : App {
   output out: text
   operator relay : Loop {
     input in: text
+    output err: union { LoopExpired { last_state: text } }
     output out: text
     Loop.fuel = 3
     on in { out = Loop.state.data }
   }
   in -> relay -> out
-  relay.Loop.expired -> nothing
+  relay.err -> nothing
 }
 "#;
     compile(
@@ -198,12 +199,13 @@ graph app : App {
 
   operator countdown : Loop {
     input in: text
+    output err: union { LoopExpired { last_state: text } }
     output out: text
     Loop.fuel = attempts
     on in { out = Loop.state.data }
   }
   in -> countdown -> out
-  countdown.Loop.expired -> nothing
+  countdown.err -> nothing
 }
 "#;
     let compilation = compile(
@@ -331,11 +333,11 @@ fn a_loop_spec_cannot_be_detached_from_its_host_contributions() {
     let mut plan = raw_loop();
     let extensions = core::mem::take(&mut plan.owners[1].extensions);
     plan.owners[0].extensions.extend(extensions);
-    assert!(matches!(
-        ValidatedExecutionPlan::try_new(plan),
-        Err(PlanValidationError::InvalidGraphContract { detail, .. })
-            if detail == "Loop.expired must carry canonical LoopExpired<In>"
-    ));
+    let error = ValidatedExecutionPlan::try_new(plan).unwrap_err();
+    assert!(
+        matches!(&error, PlanValidationError::InvalidGraphContract { .. }),
+        "{error:?}"
+    );
 }
 
 fn bare_operator_plan() -> ExecutionPlan {

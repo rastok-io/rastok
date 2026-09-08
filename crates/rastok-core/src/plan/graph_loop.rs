@@ -638,8 +638,11 @@ fn nested_host<'a>(plan: &'a ExecutionPlan, scope: &Owner, work: &Work) -> Optio
 }
 
 fn expiry_work(owner: &Owner) -> Result<Work, PlanValidationError> {
-    let port =
-        node::Port::new("Loop.expired").map_err(|_| PlanValidationError::InvalidLoopControl {
+    let port = owner
+        .loop_spec()
+        .and_then(|spec| spec.expired.as_ref())
+        .map(|expired| expired.port.clone())
+        .ok_or_else(|| PlanValidationError::InvalidLoopControl {
             owner: owner.path.to_string(),
             path: "Loop.expired".into(),
             detail: "invalid expiry port",
@@ -661,7 +664,7 @@ fn expiry_work(owner: &Owner) -> Result<Work, PlanValidationError> {
             owner: endpoint,
             port,
         },
-        None,
+        Some(String::from("LoopExpired")),
     ))
 }
 

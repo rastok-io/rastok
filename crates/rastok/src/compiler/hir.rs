@@ -86,6 +86,8 @@ pub struct LoopSpec {
     /// `Done` verdict. Connector Calls use their Contract terminal instead and
     /// therefore keep this empty.
     pub terminals: Vec<node::Port>,
+    /// Existing host terminal selected for productible exhaustion.
+    pub expired: Option<crate::plan::LoopExpiry>,
     /// Optional positive body-application budget. A checked measure can stand
     /// alone; when both are present, fuel remains the operational cap.
     pub fuel: Option<Const>,

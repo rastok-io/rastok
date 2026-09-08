@@ -63,6 +63,17 @@ pub(super) fn validate(
                     continue;
                 };
                 let path = format!("{} -> {:?}", rule.source.port, command.kind);
+                if spec
+                    .expired
+                    .as_ref()
+                    .is_some_and(|expiry| expiry.port == rule.source.port)
+                    && cases.is_none_or(|cases| cases.iter().any(|case| case == "LoopExpired"))
+                {
+                    return Err(error(
+                        &path,
+                        "LoopExpired closes the run and cannot command it again",
+                    ));
+                }
                 if command.owner != owner {
                     return Err(error(
                         &path,

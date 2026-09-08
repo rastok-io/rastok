@@ -21,6 +21,7 @@ graph app : App {
   output expired: union { LoopExpired { last_state: int } }
   graph cycle : Loop {
     input in: int
+    output err: union { LoopExpired { last_state: int } }
     output out: int
     Loop.fuel = 3
     operator choose {
@@ -42,7 +43,7 @@ graph app : App {
   }
   in -> cycle
   cycle.out -> out
-  cycle.Loop.expired -> expired
+  cycle.err -> expired
 }
 "#;
 
@@ -51,6 +52,7 @@ fn the_app_graph_can_loop_and_publish_its_own_expiry() {
     let source = r#"
 graph app : App + Loop {
   input in: int
+  output err: union { LoopExpired { last_state: int } }
   output out: int
   Loop.fuel = 2
   operator choose {
@@ -66,7 +68,7 @@ graph app : App + Loop {
 "#;
     let compilation = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let (plan, _) = plan::decode(&plan::encode(&compilation.plan, &compilation.hash)).unwrap();
-    for (input, port) in [(1, "out"), (2, "Loop.expired")] {
+    for (input, port) in [(1, "out"), (2, "err")] {
         let mut vm = Vm::boot(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         inject(&mut vm, &mut journal, input);
@@ -497,10 +499,10 @@ graph app : App {
   worker.out -> nothing
   worker.err -> nothing
   worker.exit -> match {
+    LoopExpired -> expired
     TimeoutExpired -> worker.Loop.again
     _ -> nothing
   }
-  worker.Loop.expired -> expired
 }
 lab app {
   simulation calls on app {
@@ -909,7 +911,6 @@ graph app : App {{
   worker.out -> out
   {extra_routes}
   worker.exit -> nothing
-  worker.Loop.expired -> nothing
 }}
 lab app {{
   simulation completed on app {{
@@ -967,7 +968,6 @@ graph app : App {
   in -> worker
   worker.out -> worker.Loop.next
   worker.exit -> nothing
-  worker.Loop.expired -> nothing
 }
 lab app {
   simulation repeated on app {
@@ -1010,7 +1010,9 @@ lab app {
         .sort_by_key(plan::RouteRule::canonical_order_key);
     let error = plan::ValidatedExecutionPlan::try_new(forged).unwrap_err();
     assert!(
-        error.to_string().contains("more than one Loop command"),
+        error
+            .to_string()
+            .contains("LoopExpired closes the run and cannot command it again"),
         "{error}"
     );
 
@@ -1272,7 +1274,7 @@ fn a_package_cannot_erase_its_terminal_selection() {
     assert!(matches!(
         plan::ValidatedExecutionPlan::try_new(raw),
         Err(plan::PlanValidationError::InvalidGraphContract {
-            detail: "a Loop host with ordinary outputs needs a non-empty terminal set",
+            detail: "Loop exhaustion must name the resolved compatible host terminal",
             ..
         })
     ));
@@ -1286,7 +1288,7 @@ fn a_measure_refuses_an_unproved_fallback_or_an_unchanged_again() {
         "on in match { data <= 0 => out = data; _ => Loop.next = data + 1 }",
     ] {
         let source = format!(
-            "graph app : App {{ input in: int; output out: int; operator work : Loop {{ input in: int; output out: int; Loop.measure = Loop.state.data; {dispatch} }} in -> work -> out; work.Loop.expired -> nothing }}"
+            "graph app : App {{ input in: int; output out: int; operator work : Loop {{ input in: int; output out: int; Loop.measure = Loop.state.data; {dispatch} }} in -> work -> out }}"
         );
         let errors =
             compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap_err();
@@ -1324,10 +1326,11 @@ graph app : App {{
   operator work : Loop {{
     input in: int
     output out: int
+    output err: union {{ LoopExpired {{ last_state: int }} }}
     {body}
   }}
   in -> work -> out
-  work.Loop.expired -> expired
+  work.err -> expired
 }}
 "#
     );
@@ -1468,9 +1471,15 @@ fn competing_or_absent_verdicts_are_rejected_before_execution() {
 graph app : App {{
   input in: int
   output out: int
-  operator work : Loop {{ input in: int; output out: int; Loop.fuel = 3; {dispatch} }}
+  operator work : Loop {{
+    input in: int
+    output out: int
+    output err: union {{ LoopExpired {{ last_state: int }} }}
+    Loop.fuel = 3
+    {dispatch}
+  }}
   in -> work -> out
-  work.Loop.expired -> nothing
+  work.err -> nothing
 }}
 "#
         );
@@ -1489,6 +1498,7 @@ graph app : App {
   operator right { on in { out = data + 1 } }
   operator work : Loop {
     input in: int
+    output err: union { LoopExpired { last_state: int } }
     output out: int
     Loop.fuel = 3
     on in match { data <= 0 => out = Loop.state.data; _ => Loop.next = data - 1 }
@@ -1496,7 +1506,7 @@ graph app : App {
   in -> { left; right }
   { left.out; right.out } -> work
   work.out -> out
-  work.Loop.expired -> nothing
+  work.err -> nothing
 }
 "#;
     let compilation = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
@@ -1533,6 +1543,7 @@ graph app : App {
   output out: int
   operator work : Loop {
     input in: int; output out: int; Loop.fuel = 2
+    output err: union { LoopExpired { last_state: int } }
     on in match { data <= 0 => out = data; _ => Loop.next = data - 1 }
   }
   operator joiner {
@@ -1541,7 +1552,7 @@ graph app : App {
   }
   in -> { work; joiner.a; joiner.b }
   work.out -> out
-  work.Loop.expired -> nothing
+  work.err -> nothing
   joiner.out -> nothing
 }
 "#;

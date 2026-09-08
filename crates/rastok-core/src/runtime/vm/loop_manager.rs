@@ -648,7 +648,16 @@ impl Vm<'_> {
                         due_at: due,
                     });
                 } else {
-                    let port = Self::loop_port(current.instance.address().owner(), "Loop.expired")?;
+                    let port = self.plan.owners[owner.index()]
+                        .loop_spec()
+                        .and_then(|spec| spec.expired.as_ref())
+                        .map(|expired| expired.port.clone())
+                        .ok_or_else(|| {
+                            loop_error(
+                                &current.instance,
+                                "a proved-impossible exhaustion was reached",
+                            )
+                        })?;
                     let source = journal
                         .find_envelope(command.value.cause())
                         .ok_or_else(|| {

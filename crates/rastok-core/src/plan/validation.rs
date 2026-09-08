@@ -1902,6 +1902,31 @@ fn network_setting_holds(name: &str, setting: &crate::plan::AttrSetting) -> bool
     }
 }
 
+fn effective_contract_port(
+    node: &Node,
+    loop_spec: Option<&crate::plan::LoopSpec>,
+    name: &str,
+    base: Option<DataType>,
+) -> Option<DataType> {
+    let Some(spec) = loop_spec.filter(|spec| {
+        spec.expired
+            .as_ref()
+            .is_some_and(|expiry| expiry.port.name() == name)
+    }) else {
+        return base;
+    };
+    let DataType::TaggedUnion(union) = base? else {
+        return None;
+    };
+    let state = node
+        .ports
+        .iter()
+        .find(|port| port.port == spec.entry)?
+        .ty
+        .clone()?;
+    node::loop_call_exit_type(&union, state).ok()
+}
+
 fn validate_network_connector(
     node: &Node,
     spec: &crate::plan::ConnectorSpec,
@@ -2145,7 +2170,13 @@ fn validate_network_connector(
             });
         };
         if port.direction != *direction
-            || port.ty != crate::boundary::network_port_type(&spec.contract, name, codec)
+            || port.ty
+                != effective_contract_port(
+                    node,
+                    loop_spec,
+                    name,
+                    crate::boundary::network_port_type(&spec.contract, name, codec),
+                )
         {
             return Err(PlanValidationError::ContractPortMismatch {
                 node: node.path.clone(),
@@ -2154,11 +2185,10 @@ fn validate_network_connector(
         }
     }
     if let Some(port) = node.ports.iter().find(|port| {
-        !(loop_spec.is_some() && port.port.name() == "Loop.expired")
-            && !shape
-                .ports
-                .iter()
-                .any(|(name, _)| *name == port.port.name())
+        !shape
+            .ports
+            .iter()
+            .any(|(name, _)| *name == port.port.name())
     }) {
         return Err(PlanValidationError::UnexpectedContractPort {
             node: node.path.clone(),
@@ -2169,7 +2199,7 @@ fn validate_network_connector(
 }
 
 /// Every type-bearing plan position passes this audit before the infallible
-/// v15 encoder can observe the plan.
+/// encoder can observe the plan.
 fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     for (field, ty) in &plan.app_schema {
         data_type_at(ty, format!("meta.app.{field}"))?;
@@ -2201,6 +2231,9 @@ fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
             let crate::plan::ExtensionSpec::Loop(spec) = aspect else {
                 continue;
             };
+            if let Some(expired) = &spec.expired {
+                data_type_at(&expired.ty, format!("Loop exhaustion on `{}`", owner.path))?;
+            }
             if let Some(fuel) = &spec.fuel {
                 tree_type_at(&fuel.expr, format!("Loop fuel on `{}`", owner.path))?;
             }
@@ -2652,22 +2685,10 @@ fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
         }
         let connector = matches!(owner.kind, OwnerKind::Node(slot)
             if matches!(plan.nodes[slot.index()].execution, NodeExecution::Connector(_)));
-        if !connector
-            && spec.terminals.is_empty()
-            && ports.iter().any(|port| {
-                port.direction == node::Direction::Output && port.port.name() != "Loop.expired"
-            })
-        {
-            return Err(PlanValidationError::InvalidGraphContract {
-                owner: owner_name.clone(),
-                detail: "a Loop host with ordinary outputs needs a non-empty terminal set",
-            });
-        }
         for terminal in &spec.terminals {
-            if terminal.name() == "Loop.expired"
-                || !ports
-                    .iter()
-                    .any(|port| port.port == *terminal && port.direction == node::Direction::Output)
+            if !ports
+                .iter()
+                .any(|port| port.port == *terminal && port.direction == node::Direction::Output)
             {
                 return Err(PlanValidationError::InvalidGraphContract {
                     owner: owner_name.clone(),
@@ -2681,23 +2702,53 @@ fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
                 detail: "LoopExpired cannot be represented",
             }
         })?;
-        if !ports.iter().any(|port| {
-            port.port.name() == "Loop.expired"
-                && port.direction == node::Direction::Output
-                && port.ty.as_ref() == Some(&expired)
+        match &spec.expired {
+            Some(target) => {
+                let terminal = if let OwnerKind::Node(slot) = owner.kind {
+                    plan.nodes[slot.index()]
+                        .connector()
+                        .and_then(crate::plan::ConnectorSpec::call_semantics)
+                        .map(|call| call.terminal())
+                } else {
+                    None
+                };
+                if !matches!(target.ty, DataType::TaggedUnion(_))
+                    || !expired.is_assignable_to(&target.ty)
+                    || !ports.iter().any(|port| {
+                        port.port == target.port
+                            && port.direction == node::Direction::Output
+                            && port.ty.as_ref() == Some(&target.ty)
+                    })
+                    || if connector {
+                        terminal != Some(target.port.name())
+                    } else {
+                        !spec.terminals.contains(&target.port)
+                    }
+                    || (spec.proof.is_some() && spec.fuel.is_none())
+                {
+                    return Err(PlanValidationError::InvalidGraphContract {
+                        owner: owner_name.clone(),
+                        detail: "Loop exhaustion must name the resolved compatible host terminal",
+                    });
+                }
+            }
+            None if spec.proof.is_some() && spec.fuel.is_none() => {}
+            None => {
+                return Err(PlanValidationError::InvalidGraphContract {
+                    owner: owner_name.clone(),
+                    detail: "productible Loop exhaustion needs a resolved host terminal",
+                });
+            }
+        }
+        if ports.iter().any(|port| {
+            matches!(
+                port.port.name(),
+                "Loop.next" | "Loop.again" | "Loop.done" | "Loop.expired"
+            )
         }) {
             return Err(PlanValidationError::InvalidGraphContract {
                 owner: owner_name.clone(),
-                detail: "Loop.expired must carry canonical LoopExpired<In>",
-            });
-        }
-        if ports
-            .iter()
-            .any(|port| matches!(port.port.name(), "Loop.next" | "Loop.again" | "Loop.done"))
-        {
-            return Err(PlanValidationError::InvalidGraphContract {
-                owner: owner_name.clone(),
-                detail: "a Loop command is not a port",
+                detail: "Loop contributes no port",
             });
         }
 
@@ -3693,11 +3744,16 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                             port: name,
                         });
                     };
-                    let expected_ty = crate::boundary::process_port_type(
-                        &spec.contract,
+                    let expected_ty = effective_contract_port(
+                        node,
+                        plan.owners[node.owner.index()].loop_spec(),
                         name,
-                        Some(codec),
-                        Some(err_codec),
+                        crate::boundary::process_port_type(
+                            &spec.contract,
+                            name,
+                            Some(codec),
+                            Some(err_codec),
+                        ),
                     );
                     if port.direction != direction || port.ty != expected_ty {
                         return Err(PlanValidationError::ContractPortMismatch {
@@ -3706,11 +3762,11 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                         });
                     }
                 }
-                if let Some(port) = node.ports.iter().find(|port| {
-                    !matches!(port.port.name(), "in" | "out" | "err" | "exit")
-                        && !(plan.owners[node.owner.index()].loop_spec().is_some()
-                            && port.port.name() == "Loop.expired")
-                }) {
+                if let Some(port) = node
+                    .ports
+                    .iter()
+                    .find(|port| !matches!(port.port.name(), "in" | "out" | "err" | "exit"))
+                {
                     return Err(PlanValidationError::UnexpectedContractPort {
                         node: node.path.clone(),
                         port: port.port.clone(),
@@ -3833,7 +3889,12 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     };
                     if port.direction != direction
                         || port.ty
-                            != crate::boundary::file_port_type(&spec.contract, name, Some(mode))
+                            != effective_contract_port(
+                                node,
+                                plan.owners[node.owner.index()].loop_spec(),
+                                name,
+                                crate::boundary::file_port_type(&spec.contract, name, Some(mode)),
+                            )
                     {
                         return Err(PlanValidationError::ContractPortMismatch {
                             node: node.path.clone(),
@@ -3841,11 +3902,11 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                         });
                     }
                 }
-                if let Some(port) = node.ports.iter().find(|port| {
-                    !matches!(port.port.name(), "in" | "out" | "exit")
-                        && !(plan.owners[node.owner.index()].loop_spec().is_some()
-                            && port.port.name() == "Loop.expired")
-                }) {
+                if let Some(port) = node
+                    .ports
+                    .iter()
+                    .find(|port| !matches!(port.port.name(), "in" | "out" | "exit"))
+                {
                     return Err(PlanValidationError::UnexpectedContractPort {
                         node: node.path.clone(),
                         port: port.port.clone(),
@@ -3944,8 +4005,6 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     // capability, distinctly from ignorance.
                     if matches!(node.execution, NodeExecution::Connector(_))
                         && !matches!(endpoint.port.name(), "in" | "out" | "err" | "exit")
-                        && !(plan.owners[node.owner.index()].loop_spec().is_some()
-                            && endpoint.port.name() == "Loop.expired")
                     {
                         return Err(PlanValidationError::UnsupportedConnectorPort {
                             node: node.path.clone(),
@@ -4367,16 +4426,6 @@ fn operator_loop_control(
             return Err(refusal(
                 path,
                 "each Loop application must select exactly one of Next, Again, Done, or stop",
-            ));
-        }
-        if steps
-            .iter()
-            .flat_map(DispatchStep::emissions)
-            .any(|(port, _)| port.name() == "Loop.expired")
-        {
-            return Err(refusal(
-                path,
-                "Loop.expired is produced only by the manager",
             ));
         }
         for step in steps {

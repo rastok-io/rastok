@@ -43,10 +43,12 @@ pub(super) fn validate(
 
 pub(super) fn may_produce(plan: &ExecutionPlan, slot: Slot, port: &node::Port) -> bool {
     let node = &plan.nodes[slot.index()];
-    if port.name() == "Loop.expired" {
-        return plan.owners[node.owner.index()]
-            .loop_spec()
-            .is_none_or(|spec| spec.proof.is_none() || spec.fuel.is_some());
+    if plan.owners[node.owner.index()]
+        .loop_spec()
+        .and_then(|spec| spec.expired.as_ref())
+        .is_some_and(|expired| expired.port == *port)
+    {
+        return true;
     }
     match &node.execution {
         NodeExecution::Operator => plan

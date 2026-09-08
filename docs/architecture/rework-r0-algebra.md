@@ -4,6 +4,10 @@
 > implementation algebra behind D-2026-09-05-1. The live normative homes are
 > the documents under `docs/spec/`; this file records the model that R1 and R2
 > were checked against. It does not claim that plan v16 or its runtime exists.
+> **2026-09-08 amendment:** D-2026-09-08-1 supersedes the contributed expiry
+> port and default-terminal rules below. Loop now extends ordinary host
+> terminals; [loop.md](../spec/loop.md) and the
+> [v17 ledger](loop-host-terminal-v17.md) are current. The r2 protocol is unchanged.
 
 ## 1. Result protected
 

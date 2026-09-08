@@ -480,11 +480,10 @@ pub fn join_expired_type() -> Result<DataType, TypeError> {
     ])?))
 }
 
-/// Canonical logical type of a Loop's conventional `expired` output.
+/// Canonical manager outcome carried by a Loop host's terminal union.
 ///
 /// The payload keeps the last proposed iteration state under the exact input
-/// carrier. It is an ordinary one-case tagged union; `expired` is a Loop
-/// convention, not a privileged runtime error channel.
+/// carrier. It is an ordinary one-case tagged union, not a contributed port.
 ///
 /// # Errors
 ///
@@ -498,6 +497,25 @@ pub fn loop_expired_type(state: DataType) -> Result<DataType, TypeError> {
     Ok(DataType::TaggedUnion(TaggedUnionType::new(alloc::vec![
         case,
     ])?))
+}
+
+/// Extends a Call terminal without changing the Driver's production contract.
+///
+/// # Errors
+/// A conflicting case or the canonical union member budget refuses.
+pub fn loop_call_exit_type(
+    terminal: &TaggedUnionType,
+    state: DataType,
+) -> Result<DataType, TypeError> {
+    let mut cases = terminal.cases().to_vec();
+    cases.push(TaggedCase::new(
+        "LoopExpired",
+        StructType::new(alloc::vec![crate::datatype::TypeField::new(
+            "last_state",
+            state
+        ),])?,
+    )?);
+    TaggedUnionType::new(cases).map(DataType::TaggedUnion)
 }
 
 #[cfg(test)]

@@ -371,12 +371,12 @@ impl<'a> Solver<'a> {
         }
 
         for (index, owner) in self.plan.owners.iter().enumerate() {
-            if owner.loop_spec().is_none() {
+            let Some(expiry) = owner.loop_spec().and_then(|spec| spec.expired.as_ref()) else {
                 continue;
-            }
+            };
             let owner_slot = OwnerSlot::new(u32::try_from(index).unwrap_or(u32::MAX));
             let input = self.loop_input_key(owner_slot)?;
-            let expired = self.owner_port_key(owner_slot, "Loop.expired")?;
+            let expired = self.owner_port_key(owner_slot, expiry.port.name())?;
             let wrapped = nest(
                 &self.port(&input)?.current,
                 &[

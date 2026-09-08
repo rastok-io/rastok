@@ -1,9 +1,10 @@
 # The plan package — the transportable, verifiable ExecutionPlan
 
-> **Categorical v16 (2026-09-07).** The reader accepts only v16. The current
+> **Categorical v17 (2026-09-08).** The reader accepts only v17. The current
 > tables below replace the previous format; no retired field or tag is
-> reinterpreted. [R9 qualification](rework-r9-qualification.md) records the
-> single package blessing and independently validated identities. Historical
+> reinterpreted. [The v17 ledger](loop-host-terminal-v17.md) records the Loop
+> host-terminal amendment and its qualification. [R9](rework-r9-qualification.md)
+> retains the preceding v16 blessing and independently validated identities. Historical
 > format notes remain evidence, not alternative readable formats.
 
 > Format note — the bytes follow this document, never precede it.
@@ -236,7 +237,7 @@ module carries it.
 package := magic "RKPB"                      4 raw bytes, sniffable
            ("Rastok Plan Binary" — the pinned meaning of the magic)
         ┌ canonical CBOR map ─────────────────────────────────┐
-        │ 1 : format_version   uint      (16)                 │
+        │ 1 : format_version   uint      (17)                 │
         │ 2 : semantic_hash    bytes(32) (the plan's identity)│
         │ 3 : body             bytes     (embedded, see below)│
         │ 4 : checksum         bytes(32) (see recipe below)   │
@@ -331,7 +332,7 @@ effective claim. A3 follows the canonical operation graph and requires that
 claim to equal its independent derivation exactly. It never rewrites the raw
 row or recovers meaning from payload strings.
 
-## Body tables (format v16)
+## Body tables (format v17)
 
 The body is one canonical CBOR value encoding the `ExecutionPlan`.
 Compound values use fixed-shape arrays with a leading numeric
@@ -390,8 +391,13 @@ owner_kind := [1]                                 — graph
 extension_spec := [2]                            — App
                 | [3, loop_spec]                — Loop r2; tag 1 retired
 loop_spec   := {1: fuel?, 2: delay?, 3: proof?,
-                4: entry (text), 5: [terminal (text)*]}
+                4: entry (text), 5: [terminal (text)*],
+                6: [exhaustion_port (text), complete_type]?}
               // At least one of fuel/proof is mandatory.
+              // Key 6 resolves an existing host terminal, never a contributed
+              // port. Absence requires proof-only impossible exhaustion.
+              // Its type and port are independently re-derived/checked;
+              // the type participates in structural and wire-depth budgets.
 fuel        := plan_constant
 delay       := [1, plan_constant]                 — fixed(after)
              | [2, plan_constant, plan_constant] — exponential(first, ceiling)

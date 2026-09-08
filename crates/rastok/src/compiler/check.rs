@@ -1260,15 +1260,17 @@ impl Checker<'_, '_> {
                     steps.push(ScenarioStep::Advance { nanos });
                 }
                 ScenarioItem::Expect(expect) => {
-                    let mut segments: Vec<&str> = expect
+                    let segments: Vec<&str> = expect
                         .target
                         .segments
                         .iter()
                         .map(|segment| segment.text.as_str())
                         .collect();
                     if segments.ends_with(&["Loop", "expired"]) {
-                        segments.truncate(segments.len() - 2);
-                        segments.push("Loop.expired");
+                        self.bag.push(Diagnostic::new(E_WIRING_MIGRATION, Phase::Check,
+                            "Loop contributes no port; observe the resolved host `err`, `exit`, or `Loop.expired = <port>` target")
+                            .with_span(expect.target.span));
+                        continue;
                     }
                     let (target, observed_type) = match segments.as_slice() {
                         ["app", port] => {
@@ -1729,24 +1731,6 @@ impl Checker<'_, '_> {
             );
         }
         graph.loop_spec = self.loop_declaration(decl, &graph, &signature, &consts);
-        if let Some(spec) = &graph.loop_spec
-            && let Some(state) = graph
-                .boundary
-                .iter()
-                .find(|port| port.port == spec.entry)
-                .and_then(|port| port.ty.clone())
-            && let (Ok(port), Ok(ty)) = (
-                node::Port::new("Loop.expired"),
-                node::loop_expired_type(state),
-            )
-        {
-            graph.boundary.push(crate::plan::PortDecl {
-                port,
-                direction: Direction::Output,
-                ty: Some(ty),
-                annotations: Default::default(),
-            });
-        }
         for (item, mut child_signature, child_consts) in children {
             if let Some(spec) = &graph.loop_spec {
                 let state_type = graph
@@ -2885,24 +2869,13 @@ impl Checker<'_, '_> {
         self.contract(&mut node, decl);
         node.loop_spec =
             self.node_loop_declaration(&decl.body, &node, graph_signature, graph_consts, decl.span);
-        if let Some(spec) = &node.loop_spec {
-            let state = node
-                .ports
-                .iter()
-                .find(|port| port.port == spec.entry)
-                .and_then(|port| port.ty.clone())
-                .unwrap_or(DataType::Variant);
-            if let (Ok(port), Ok(ty)) = (
-                node::Port::new("Loop.expired"),
-                node::loop_expired_type(state),
-            ) {
-                node.ports.push(crate::plan::PortDecl {
-                    port,
-                    direction: Direction::Output,
-                    ty: Some(ty),
-                    annotations: Default::default(),
-                });
-            }
+        if let Some(expired) = node
+            .loop_spec
+            .as_ref()
+            .and_then(|spec| spec.expired.as_ref())
+            && let Some(port) = node.ports.iter_mut().find(|port| port.port == expired.port)
+        {
+            port.ty = Some(expired.ty.clone());
         }
         self.queue_instance_attributes(
             InstanceOwner::Node(node.path.clone()),
@@ -3657,17 +3630,6 @@ impl Checker<'_, '_> {
                     .and_then(|port| port.ty.clone())
                     .unwrap_or(DataType::Variant);
                 signature = loop_state_signature(&signature, state_type.clone());
-                if let (Ok(port), Ok(ty)) = (
-                    node::Port::new("Loop.expired"),
-                    node::loop_expired_type(state_type),
-                ) {
-                    node.ports.push(crate::plan::PortDecl {
-                        port,
-                        direction: Direction::Output,
-                        ty: Some(ty),
-                        annotations: Default::default(),
-                    });
-                }
             }
         }
         // Pass three: handlers, checked against the complete table.

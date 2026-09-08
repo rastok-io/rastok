@@ -824,6 +824,7 @@ graph app : App {{
   operator countdown : Loop {{
     input in: int
     output out: int
+    output err: union {{ LoopExpired {{ last_state: int }} }}
     {witness}
     on in match {{
       data <= 0 => out = Loop.state.data
@@ -831,7 +832,7 @@ graph app : App {{
     }}
   }}
   in -> countdown -> out
-  countdown.Loop.expired -> expired
+  countdown.err -> expired
 }}
 "#
             );
@@ -975,6 +976,7 @@ graph app : App {
   operator countdown : Loop {
     input in: int
     output out: int
+    output err: union { LoopExpired { last_state: int } }
     instance = { key = data }
     Loop.fuel = 4
     on in match {
@@ -983,7 +985,7 @@ graph app : App {
     }
   }
   in -> countdown -> out
-  countdown.Loop.expired -> nothing
+  countdown.err -> nothing
 }
 "#],
             &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1086,6 +1088,7 @@ graph app : App {
   operator countdown : Loop {
     input in: int
     output out: int
+    output err: union { LoopExpired { last_state: int } }
     Loop.fuel = 3
     on in match {
       data <= 0 => out = Loop.state.data
@@ -1093,7 +1096,7 @@ graph app : App {
     }
   }
   in -> countdown -> out
-  countdown.Loop.expired -> nothing
+  countdown.err -> nothing
 }
 "#],
             &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),

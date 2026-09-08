@@ -197,7 +197,7 @@ pub enum Fact {
         command: CommandRef,
         /// Proposed Next state or retained Again state.
         last_state: Envelope,
-        /// Manager-produced `Loop.expired` envelope.
+        /// Manager-produced `LoopExpired` envelope on the resolved host terminal.
         output: Envelope,
     },
 }

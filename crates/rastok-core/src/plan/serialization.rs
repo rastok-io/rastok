@@ -1,7 +1,7 @@
 //! The plan package — the transportable, verifiable serialization
 //! of an [`ExecutionPlan`], per `docs/architecture/plan-package.md`.
 //!
-//! Format v16: the 4-byte magic `RKPB`, then one canonical CBOR map —
+//! Format v17: the 4-byte magic `RKPB`, then one canonical CBOR map —
 //! format version, the plan's semantic hash, the body as an embedded
 //! byte string, and a blake3 checksum over the domain-framed
 //! association `domain ‖ version ‖ semantic_hash ‖ body`, so a
@@ -53,8 +53,9 @@ pub const MAGIC: [u8; 4] = *b"RKPB";
 
 /// The categorical package format: recursive Dispatch, independent route
 /// selections, explicit Extensions and dispositions, and Connector Contracts
-/// `@2`. Earlier packages refuse; their fields are never silently reinterpreted.
-pub const FORMAT_VERSION: u32 = 16;
+/// `@2`, with Loop exhaustion resolved onto a host terminal. Earlier packages
+/// refuse; their fields are never silently reinterpreted.
+pub const FORMAT_VERSION: u32 = 17;
 
 /// The checksum domain — fixed-width framing, so the covered fields
 /// cannot slide into one another.
@@ -471,6 +472,15 @@ fn loop_spec_tree(spec: &LoopSpec) -> Cbor {
     }
     if let Some(proof) = &spec.proof {
         fields.insert(3, loop_proof_tree(proof));
+    }
+    if let Some(expired) = &spec.expired {
+        fields.insert(
+            6,
+            Cbor::Array(vec![
+                Cbor::Text(expired.port.name().into()),
+                type_tree(&expired.ty),
+            ]),
+        );
     }
     Cbor::Map(fields)
 }
@@ -1318,6 +1328,10 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                 continue;
             };
             max = max.max(if spec.terminals.is_empty() { 6 } else { 7 });
+            if let Some(expired) = &spec.expired {
+                // Target array at 6, complete host-terminal type at 7.
+                stack.push(Item::Ty(&expired.ty, 7));
+            }
             // extensions array at 3, tagged Extension at 4, Loop map at 5.
             // An optional fuel constant starts at 6; a delay's tagged policy
             // starts at 6 and nests each constant one level further at 7.
@@ -1929,6 +1943,18 @@ fn loop_spec_from(tree: &Cbor) -> Result<LoopSpec, DecodeError> {
         fuel: find(fields, 1).map(plan_constant_from).transpose()?,
         delay: find(fields, 2).map(loop_delay_from).transpose()?,
         proof: find(fields, 3).map(loop_proof_from).transpose()?,
+        expired: find(fields, 6)
+            .map(|value| {
+                let [port, ty] = array_of(value, "Loop exhaustion target")? else {
+                    return Err(err("Loop exhaustion target"));
+                };
+                Ok(super::LoopExpiry {
+                    port: node::Port::new(text_of(port, "Loop exhaustion port")?)
+                        .map_err(|_| err("Loop exhaustion port"))?,
+                    ty: type_from(ty)?,
+                })
+            })
+            .transpose()?,
     })
 }
 
@@ -3516,20 +3542,25 @@ mod tests {
     }
 
     #[test]
-    fn v16_categorically_refuses_a_v15_envelope() {
+    fn current_format_categorically_refuses_v15_and_v16_envelopes() {
         let package = encode(
             &annotated_boundary_plan(DataAnnotation::Sensitive(SensitivityLevel::Internal)),
             &SemanticHash::from_bytes([0; 32]),
         );
         let (Cbor::Map(mut envelope), _) =
-            canonical_cbor::decode(&package[MAGIC.len()..]).expect("v15 envelope")
+            canonical_cbor::decode(&package[MAGIC.len()..]).expect("current envelope")
         else {
             panic!("map envelope");
         };
-        envelope.insert(1, Cbor::Uint(15));
-        let mut previous = MAGIC.to_vec();
-        previous.extend_from_slice(&canonical_cbor::encode(&Cbor::Map(envelope)));
-        assert_eq!(decode(&previous), Err(DecodeError::UnsupportedVersion(15)));
+        for version in [15, 16] {
+            envelope.insert(1, Cbor::Uint(version));
+            let mut previous = MAGIC.to_vec();
+            previous.extend_from_slice(&canonical_cbor::encode(&Cbor::Map(envelope.clone())));
+            assert_eq!(
+                decode(&previous),
+                Err(DecodeError::UnsupportedVersion(version))
+            );
+        }
     }
 
     #[test]
@@ -4518,6 +4549,10 @@ mod tests {
         categorical.owners[0].extensions = vec![ExtensionSpec::Loop(Box::new(LoopSpec {
             entry: port("in"),
             terminals: vec![port("out")],
+            expired: Some(crate::plan::LoopExpiry {
+                port: port("out"),
+                ty: nested_type.clone(),
+            }),
             fuel: Some(PlanConstant {
                 expr: tree(nested_maplit.clone()),
                 resolved: nested_value.clone(),

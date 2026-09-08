@@ -1199,13 +1199,6 @@ impl<'plan> Vm<'plan> {
         Ok(())
     }
 
-    fn loop_port(owner: &OwnerPath, name: &'static str) -> Result<node::Port, VmError> {
-        node::Port::new(name).map_err(|_| VmError::InvalidLoopDecision {
-            owner: owner.clone(),
-            reason: "a conventional Loop port is not representable",
-        })
-    }
-
     fn loop_delay_for(&self, owner: OwnerSlot, iteration: u64) -> Result<Option<i64>, VmError> {
         let path = self.plan.owners[owner.index()].path.clone();
         let Some(spec) = self.plan.owners[owner.index()].loop_spec() else {

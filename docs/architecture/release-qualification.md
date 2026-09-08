@@ -47,3 +47,10 @@ Before Saga or another core expansion, remeasure code size and heap first,
 record the delta against R9 and identify the growing sections. A gate increase
 requires an explicit decision; a green heap measurement does not substitute
 for the code-size gate.
+
+The [v17 host-terminal amendment](loop-host-terminal-v17.md) was remeasured on
+2026-09-08 with the same echo workload: `.text` **860,700 B** plus `.rodata`
+**68,156 B** = **928,856 B**, a **1,796 B** increase from R9. The unchanged
+1 MiB code gate retains **119,720 B**; peak heap remains **111,452 B**, with
+**19,620 B** below 128 KiB. `SPIKE_OK` retains 67 journal records. These remain
+workload-specific measurements, not worst-case Loop or recovery bounds.

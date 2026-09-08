@@ -228,6 +228,12 @@ takes semantic priority; no public date overrides its R0–R9 exit gates.
   [R9 qualification](docs/architecture/rework-r9-qualification.md) owns the
   single golden move, unchanged gauge/hash/causal witnesses, migration inventory
   and final gates. Earlier R0–R8 reports remain dated checkpoint evidence.
+- The [v17 Loop amendment](docs/architecture/loop-host-terminal-v17.md) removes
+  the contributed expiry port: exhaustion is a typed case on the existing host
+  terminal (`err`, Call `exit`, or an explicit target). The debugger's iteration
+  dial follows admitted applications in the displayed journal prefix. Non-Loop
+  semantic and causal witnesses remain unchanged; the ledger records the
+  categorical package move and qualification separately from R9.
 - R9 realigns the visual debugger with this model: `simulate --ui` only,
   initially paused, read-only retained history, source-authored inputs and no
   branch authoring. Reset opens a fresh simulation session; past sessions remain

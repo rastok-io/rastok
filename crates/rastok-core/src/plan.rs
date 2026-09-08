@@ -801,6 +801,8 @@ pub struct LoopSpec {
     pub entry: node::Port,
     /// Canonical terminal business outputs. Calls use their Contract exit.
     pub terminals: Vec<node::Port>,
+    /// Resolved host output for manager exhaustion; absent when impossible.
+    pub expired: Option<LoopExpiry>,
     /// Optional positive maximum number of body applications. A verified
     /// measure may stand alone; when both exist this remains the runtime cap.
     pub fuel: Option<PlanConstant>,
@@ -808,6 +810,15 @@ pub struct LoopSpec {
     pub delay: Option<LoopDelay>,
     /// Optional small termination certificate, re-verified after decode.
     pub proof: Option<crate::loop_proof::Certificate>,
+}
+
+/// A host-owned terminal and its complete effective union, not a new port.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoopExpiry {
+    /// Existing output selected during checking.
+    pub port: node::Port,
+    /// Complete effective pin, independently re-derived after package decode.
+    pub ty: DataType,
 }
 
 /// Closed Loop delay policy.

@@ -191,10 +191,11 @@ fn a_nested_call_run_recovers_timeouts_and_never_restarts_an_old_effect() {
         r#"
 graph app : App + Loop {
   input in: int
+  output err: union { LoopExpired { last_state: int } }
   output out: int
   output exhausted: variant
   Loop.fuel = 2
-  Loop.terminal = [out, exhausted]
+  Loop.terminal = [out, exhausted, err]
   connector call : Process + Loop {
     command = "cat"; codec = jsonl
     effect = idempotent; behavior = deterministic
@@ -206,9 +207,12 @@ graph app : App + Loop {
   in -> call
   call.out -> nothing
   call.err -> nothing
-  call.exit -> match { TimeoutExpired -> call.Loop.again; _ -> finish }
+  call.exit -> match {
+    LoopExpired -> exhausted
+    TimeoutExpired -> call.Loop.again
+    _ -> finish
+  }
   finish.out -> out
-  call.Loop.expired -> exhausted
 }
 "#,
     );
@@ -291,7 +295,6 @@ graph app : App {
   call.out -> out
   call.err -> nothing
   call.exit -> match { TimeoutExpired -> call.Loop.again; _ -> nothing }
-  call.Loop.expired -> nothing
 }
 "#;
 
@@ -302,6 +305,7 @@ graph app : App {
   output expired: union { LoopExpired { last_state: int } }
   graph cycle : Loop {
     input in: int
+    output err: union { LoopExpired { last_state: int } }
     output out: int
     Loop.fuel = 2
     operator a_decide {
@@ -330,7 +334,7 @@ graph app : App {
   }
   in -> cycle
   cycle.out -> out
-  cycle.Loop.expired -> expired
+  cycle.err -> expired
 }
 "#;
 

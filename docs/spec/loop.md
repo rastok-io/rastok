@@ -1,6 +1,8 @@
 # Loop — finite temporal recursion
 
-> **Status (2026-09-07): normative categorical plan v16.**
+> **Status (2026-09-08): normative categorical plan v17.** Loop contributes
+> no port; exhaustion extends a resolved host terminal under D-2026-09-08-1.
+> [The v17 ledger](../architecture/loop-host-terminal-v17.md) records current qualification.
 > Operator, outbound Call and Graph hosts execute and recover, including nested
 > runs, annotated recurrence, entry-preserving Graph measures, boundary-only
 > bodies and unconditional same-context joins. The control-proof limits below
@@ -18,11 +20,14 @@ A Loop Node has:
 
 - the host's existing input and outputs;
 - qualified attributes `Loop.fuel`, `Loop.delay`, `Loop.measure`,
-  `Loop.entry`, and `Loop.terminal`;
+  `Loop.entry`, `Loop.terminal`, and the optional `Loop.expired` target;
 - the immutable binding `Loop.state`;
 - three qualified manager commands: `Loop.next`, `Loop.again`, and
-  `Loop.done`;
-- one contributed output, `Loop.expired`.
+  `Loop.done`.
+
+Loop contributes no port. It extends the host input with temporal admission,
+ordinary terminal outputs with the Done role, and the resolved failure
+terminal with the manager-produced `LoopExpired` case.
 
 Commands are not ports. They have no `PhysicalEdge`, cannot be a source, and
 do not reserve the host input while a delay is pending. The manager is neither
@@ -43,10 +48,10 @@ opening delivery -> host application -> exactly one verdict
 
 ## 2. Hosts
 
-Eligibility is derived from the resolved application profile in the Connector's Contract,
-profile, not a source-facing contract name.
+Eligibility is derived from the resolved application profile in the Connector's
+Contract, not a source-facing contract name.
 
-| Host | v16 |
+| Host | v17 |
 |---|---|
 | Operator | admitted |
 | Graph | admitted |
@@ -157,15 +162,18 @@ Commands are destinations for routing and capacity accounting, but never
 `Loop.terminal` names host outputs whose emission supplies the implicit Done
 verdict:
 
-- one ordinary output: that output is the default;
-- several ordinary outputs: an explicit closed list is required;
-- no ordinary output: terminal paths must issue `Loop.done`;
+- by convention, existing `out` and `err` are terminal outputs;
+- every other output is a frame unless selected explicitly;
+- `Loop.terminal = [done, failed]` replaces the convention, rather than adding to it;
+- without terminal outputs, terminal paths must issue `Loop.done`;
 - Connector Call: the Contract terminal exit owns application completion and
   `Loop.terminal` is inapplicable.
 
 The resolved list is transported canonically. Every named item must be an
-output of the owner. An empty, duplicate, input, command, or
-`Loop.expired` entry is `E-LOOP-TERMINAL`.
+output of the owner. An empty list, duplicate, input or command is
+`E-LOOP-TERMINAL`. The optional `Loop.expired = failed` selects an existing
+terminal output as the exhaustion target; it creates no port. A Call cannot
+override either terminal selection: its Contract owns that role.
 
 Non-terminal outputs are frames. They may coexist with Next or Again.
 Several terminal outputs emitted by one atomic transaction coalesce into one
@@ -217,33 +225,39 @@ run(N + 1, state) =
 ```
 
 Next and Again each consume one unit. If the final permitted application asks
-to recur, no re-admission and no `l:next` are created. The manager emits the
-qualified output:
+to recur, no re-admission and no `l:next` are created. The manager emits:
 
 ```rastok
-Loop.expired : LoopExpired { last_state: EntryType }
+LoopExpired { last_state: EntryType }
 ```
 
-For Next, `last_state` is the proposed next envelope. For Again, it is the
-retained state. Expired is an ordinary contributed output and follows the
-common disposition rule from the parent:
+For Next, `last_state` is the proposed next DATA. For Again, it is the retained
+DATA. The emitted envelope inherits the command's causal provenance and policy.
+The target is the existing `err` of an Operator/Graph, or the Contract's
+terminal `exit` of an outbound Call. `Loop.expired = failed` overrides it only
+for an Operator/Graph and requires `failed` in the resolved terminal set.
+
+An Operator/Graph must declare that output with a tagged union accepting
+`LoopExpired { last_state: EntryType }`. No output is synthesized. A Call's
+existing terminal pin is extended by the checker; its base Driver Contract
+still cannot produce the manager-only case. The plan carries the resolved
+target and complete type, independently validated; the VM never tests a port
+spelling. Ordinary output disposition applies:
 
 ```rastok
-worker.Loop.expired -> failed
-worker.Loop.expired -> nothing
+worker.err -> failed
+// or, when deliberately unused:
+worker.err -> nothing
 ```
 
-For the root `App + Loop` Graph there is no lexical parent. Its contributed
-`Loop.expired` is therefore a public App-boundary output, and that public
-termination is its explicit disposition. The root body cannot consume or hide
-it; an application that wants a local fallback wraps the Loop in a child Graph.
-
-It is not an implicit error sink. Internal fallback requires a wrapping Graph
-in v16.
+For a root `App + Loop`, the resolved terminal is already a public App output;
+no parent disposition is needed. Exhaustion closes the run before this emission
+is routed. It cannot command the exhausted run again. Internal fallback uses
+a wrapping Graph.
 
 An explicit fuel normally makes expiry productible. A valid measure-only Loop
-proves expiry impossible, with no `W-DEAD-OUTPUT` for this contributed port.
-That warning applies only to outputs declared by the author.
+proves expiry impossible: no target or port is required and no contributed-port
+warning exists. `W-DEAD-OUTPUT` applies only to outputs declared by the author.
 If fuel and measure coexist, expiry is impossible
 only when the proof also establishes termination within the explicit fuel;
 otherwise the checker remains conservative.
@@ -263,7 +277,7 @@ Loop.delay = {
 
 The delay begins when the manager consumes Next or Again after quiescence.
 It uses logical time and timer kind 5. Arithmetic saturates before overflow.
-There is no jitter in v16.
+There is no jitter in the current subset.
 
 No destination capacity is held during the wait. At the due instant, Admit
 rechecks run and generation, proves the capacities selected from the
@@ -361,11 +375,13 @@ re-executed. RAM queues are caches over this fold, never authority.
 The r2 packet is validated with its carrying record. Instance scope follows
 exact parent-generation lifecycle links, routed contexts refer to actual
 retained deliveries, and an Expired fact must publish the same ordinary
-`Loop.expired` envelope. Packet algebra alone does not establish these links
+expiry envelope on the plan-resolved host terminal, with the emission id
+derived from that actual port. Packet algebra alone does not establish these links
 or prove run-scoped quiescence.
 
 The old `rastok.aspects.r1` and `rastok.loop.r1` domains remain historical
-and are not reinterpreted. V16 uses `rastok.loop.r2`.
+and are not reinterpreted. V17 retains `rastok.loop.r2` and every r2 fact shape;
+only the ordinary expiry emission's destination changes.
 
 ## 14. Examples
 
@@ -373,6 +389,7 @@ and are not reinterpreted. V16 uses `rastok.loop.r2`.
 operator countdown : Loop {
   input in: struct { n: int }
   output out: text
+  output err: union { LoopExpired { last_state: struct { n: int } } }
   Loop.fuel = 100
 
   on in match {
@@ -387,8 +404,10 @@ graph refinement : Loop {
   input in: Draft
   output out: Answer
   output failed: RefinementFailure
+  // RefinementFailure includes LoopExpired { last_state: Draft }.
   Loop.fuel = 5
   Loop.terminal = [out, failed]
+  Loop.expired = failed
 
   in -> model
   model.out -> judge
@@ -403,7 +422,6 @@ graph refinement : Loop {
 
 refinement.out -> publish
 refinement.failed -> alert
-refinement.Loop.expired -> alert
 ```
 
 ## 15. Named diagnostics
@@ -417,14 +435,15 @@ refinement.Loop.expired -> alert
 | `E-LOOP-CONTROL` | a reachable path has zero or competing verdicts |
 | `E-LOOP-CARDINALITY` | a Call output can issue more than one command per application |
 | `E-LOOP-EFFECT` | recurrence could repeat a non-repeat-safe effect |
-| `E-UNWIRED-OUTPUT` | productible `Loop.expired` has no disposition |
+| `E-UNWIRED-OUTPUT` | productible exhaustion lacks a compatible host terminal or output disposition |
+| `E-WIRING-MIGRATION` | removed `x.Loop.expired` wiring; use the resolved `x.err`, `x.exit`, or custom terminal |
 | `LoopNoVerdict` | dynamic quiescence found no verdict |
 | `LoopProtocolViolation` | dynamic execution attempted competing verdicts |
 
 ## 16. Deferred by name
 
 Saga execution; Loop on Event, Session, inbound Call, and Process service;
-several recurrent entry ports; internal routing of `Loop.expired`; explicit
+several recurrent entry ports; internal fallback from exhaustion; explicit
 outer-Loop state access; detachable obligations; affine, lexicographic, opaque
 Connector, or Rocq proofs; jitter.
 
