@@ -33,20 +33,20 @@
         <span id="execution-state" class="execution-state state-paused">paused</span>
       </div>
       <nav class="transport" aria-label="Execution controls">
-        <button id="back-boundary" class="transport-button" title="View the previous retained boundary"><svg><use href="#icon-back"/></svg><span>Back</span></button>
-        <button data-command="resume" class="transport-button" title="Play: replay retained boundaries at the selected speed"><svg><use href="#icon-play"/></svg><span>Play</span></button>
-        <button data-command="pause" class="transport-button" title="Pause: stop at the next safe execution boundary"><svg><use href="#icon-pause"/></svg><span>Pause</span></button>
-        <button id="step" data-command="step" class="transport-button primary" title="Step in: advance one retained atomic boundary"><svg><use href="#icon-step"/></svg><span>Step in</span></button>
+        <button id="back-boundary" class="transport-button" title="View the previous retained transition"><svg><use href="#icon-back"/></svg><span>Back</span></button>
+        <button data-command="resume" class="transport-button" title="Replay: replay retained transitions at the selected speed"><svg><use href="#icon-play"/></svg><span>Replay</span></button>
+        <button data-command="pause" class="transport-button" title="Pause: stop replay or execution at the next safe transition"><svg><use href="#icon-pause"/></svg><span>Pause</span></button>
+        <button id="step" data-command="step" class="transport-button primary" title="Next transition: advance one retained transition"><svg><use href="#icon-step"/></svg><span>Next transition</span></button>
         <button data-command="retry-step" class="transport-button" title="Retry: retry the reserved transaction"><svg><use href="#icon-retry"/></svg><span>Retry</span></button>
-        <button data-command="run-to-completion" class="transport-button" title="Continue: run immediately to completion"><svg><use href="#icon-complete"/></svg><span>Continue</span></button>
-        <label class="speed-control" title="Buffered Play speed"><span>Speed</span>
-          <select id="playback-speed" aria-label="Buffered Play speed">
+        <button data-command="run-to-completion" class="transport-button" title="Finish: run to completion"><svg><use href="#icon-complete"/></svg><span>Finish</span></button>
+        <label class="speed-control" title="Replay speed"><span>Speed</span>
+          <select id="playback-speed" aria-label="Replay speed">
             <option value="1">1 event/s</option>
             <option value="4">4 events/s</option>
           </select>
         </label>
         <span class="transport-divider simulation-only" hidden></span>
-        <button data-command="next-scenario-action" class="transport-button simulation-only" hidden title="Step over: execute one complete authored scenario action"><svg><use href="#icon-action"/></svg><span>Step over</span></button>
+        <button data-command="next-scenario-action" class="transport-button simulation-only" hidden title="Next action: run one authored action to its effect"><svg><use href="#icon-action"/></svg><span>Next action</span></button>
         <button data-command="run-until-assertion" class="transport-button simulation-only" hidden title="Run to expect: continue to the next expect action"><svg><use href="#icon-assert"/></svg><span>Run to expect</span></button>
         <button data-command="reset-scenario" class="transport-button simulation-only" hidden title="Start a clean scenario session"><svg><use href="#icon-reset"/></svg><span>Reset</span></button>
       </nav>
@@ -60,16 +60,17 @@
       </div>
     </div>
     <div class="timeline-bar" aria-label="Retained execution timeline">
-      <span id="timeline-position" class="timeline-position">LIVE · B0</span>
-      <abbr class="timeline-vocabulary" title="A: authored scenario action · B: retained atomic boundary · R: causal record" aria-label="A means scenario action; B means retained atomic boundary; R means causal record">A/B/R</abbr>
+      <span id="timeline-position" class="timeline-position">LIVE · Main · transition 0</span>
+      <abbr class="timeline-vocabulary" title="Action: authored scenario step · Transition: retained coherent state · Record: journal entry">action · transition · record</abbr>
       <label class="timeline-session simulation-only" hidden>Session
         <select id="timeline-session" aria-label="Simulation history session"></select>
       </label>
-      <input id="timeline" type="range" min="0" max="0" value="0" step="1" aria-label="Retained atomic boundary">
-      <span id="timeline-head" class="timeline-head">B0</span>
+      <input id="timeline" type="range" min="0" max="0" value="0" step="1" aria-label="Retained transition">
+      <span id="timeline-head" class="timeline-head">transition 0</span>
+      <details id="future" class="future"><summary>Pending</summary><div id="future-items"></div></details>
       <button id="return-live" class="timeline-action" title="Return to the live execution head" aria-label="Return to the live execution head" hidden><svg><use href="#icon-live"/></svg><span>Return live</span></button>
     </div>
-    <div id="command-status" class="command-status" aria-live="polite" hidden></div>
+    <div id="command-status" class="command-status" aria-live="polite">Paused before admission · Next transition advances one step</div>
   </header>
 
   <main>
@@ -81,7 +82,8 @@
     </section>
     <div class="workspace">
       <section class="graph-section" aria-labelledby="graph-title">
-        <h2 id="graph-title">Graph</h2>
+        <div class="graph-heading"><h2 id="graph-title">Graph</h2><button id="open-search" title="Search node, port or id (/)" aria-label="Search node, port or id">Search /</button></div>
+        <div id="search-panel" hidden><input id="search" type="search" placeholder="Node, port or id" aria-label="Search node, port or id"><div id="search-results"></div></div>
         <div id="scenario-panel" class="graph-scenario simulation-only" hidden>
           <button id="scenario-definition" class="scenario-definition" type="button" title="Inspect the selected scenario">Scenario</button>
           <select id="scenario-select" aria-label="Checked scenario"></select>
@@ -98,6 +100,8 @@
           <button id="tab-definition" role="tab" aria-controls="panel-definition" aria-selected="false" data-inspector-tab="definition" tabindex="-1">Definition</button>
           <button id="tab-instances" role="tab" aria-controls="panel-instances" aria-selected="false" data-inspector-tab="instances" tabindex="-1">Instances</button>
           <button id="tab-history" role="tab" aria-controls="panel-history" aria-selected="false" data-inspector-tab="history" tabindex="-1">History</button>
+          <button id="tab-assertion" role="tab" aria-controls="panel-assertion" aria-selected="false" data-inspector-tab="assertion" tabindex="-1">Assertion</button>
+          <button id="tab-compare" role="tab" aria-controls="panel-compare" aria-selected="false" data-inspector-tab="compare" tabindex="-1">Compare</button>
         </div>
         <div id="panel-envelope" class="inspector-panel" role="tabpanel" aria-labelledby="tab-envelope"><div id="envelope" class="empty">No envelope selected.</div></div>
         <div id="panel-mailbox" class="inspector-panel mailbox-panel" role="tabpanel" aria-labelledby="tab-mailbox" hidden><div id="mailbox" class="empty">Select a mailbox in the graph.</div></div>
@@ -112,6 +116,12 @@
         <div id="panel-history" class="inspector-panel history-panel" role="tabpanel" aria-labelledby="tab-history" hidden>
           <div class="history-heading"><p id="history-summary" class="section-summary">No committed records.</p><button id="show-older" class="secondary" hidden>Older</button></div>
           <div id="history" class="empty">No committed records.</div>
+        </div>
+        <div id="panel-assertion" class="inspector-panel" role="tabpanel" aria-labelledby="tab-assertion" hidden><div id="assertion" class="empty">No assertion at this transition.</div></div>
+        <div id="panel-compare" class="inspector-panel" role="tabpanel" aria-labelledby="tab-compare" hidden>
+          <label>Compare <select id="compare-mode"><option value="instances">Loop instances</option><option value="sessions">Simulation sessions</option></select></label>
+          <div class="compare-selectors"><select id="compare-left" aria-label="Left comparison"></select><select id="compare-right" aria-label="Right comparison"></select></div>
+          <div id="comparison" class="empty">Select two instances or sessions.</div>
         </div>
       </aside>
     </div>

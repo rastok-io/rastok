@@ -241,6 +241,9 @@ takes semantic priority; no public date overrides its R0–R9 exit gates.
   redacted DATA/META and CostReport are projections of existing authorities.
   Manager commands never create spatial edges. Playback, pan/zoom, inspector
   tabs and splitters remain physical UI state. See [ui.md](docs/spec/ui.md).
+  The [explanatory projection pass](docs/architecture/simulation-debugger-explanations.md)
+  adds retained decisions, causal links, pending deadlines, assertion evidence
+  and instance/session comparisons, without changing execution or plan identity.
   The external browser/keyboard pass remains in the
   [release qualification](docs/architecture/release-qualification.md) inventory.
 - A rich terminal debugger remains a later projection over the same controller

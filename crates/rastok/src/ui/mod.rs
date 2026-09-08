@@ -30,8 +30,8 @@ use tokio::sync::{RwLock, mpsc, watch};
 mod view;
 
 pub use view::{
-    ActivityView, ExecutionState, FaultView, SnapshotInput, scenario_definition_json,
-    scenario_injection_json, snapshot,
+    ActivityView, ExecutionState, FaultView, SnapshotInput, expectation_json,
+    scenario_definition_json, scenario_injection_json, snapshot,
 };
 
 const INDEX_HTML: &str = include_str!("index.html");
@@ -84,6 +84,7 @@ pub struct UiSnapshot {
     kind: String,
     summary: String,
     record_through: Option<u64>,
+    action: Option<u64>,
 }
 
 impl UiSnapshot {
@@ -115,6 +116,9 @@ impl UiSnapshot {
         let record_through = value
             .pointer("/timeline/record_through")
             .and_then(JsonValue::as_u64);
+        let action = value
+            .pointer("/scenario/current/next_action_index")
+            .and_then(JsonValue::as_u64);
         serde_json::to_vec(value).map(|json| Self {
             revision,
             json: Bytes::from(json),
@@ -123,6 +127,7 @@ impl UiSnapshot {
             kind,
             summary,
             record_through,
+            action,
         })
     }
 
@@ -176,6 +181,7 @@ impl TimelineStore {
                     "kind": snapshot.kind,
                     "summary": snapshot.summary,
                     "record_through": snapshot.record_through,
+                    "action": snapshot.action,
                 })).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
         })
@@ -402,6 +408,7 @@ async fn handle(
     } else {
         match (request.method(), request.uri().path()) {
             (&Method::GET, "/") => html_response(&context.capability),
+            (&Method::GET, "/favicon.ico") => response(StatusCode::NO_CONTENT, "image/x-icon", ""),
             (&Method::GET, "/app.css") => {
                 response(StatusCode::OK, "text/css; charset=utf-8", APP_CSS)
             }
@@ -888,6 +895,24 @@ mod tests {
             .map(|(_, body)| body)
             .unwrap_or_default();
         assert!(!body.contains(&server.capability));
+        let icon = request(
+            server.address,
+            &format!(
+                "GET /favicon.ico?token={} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                server.capability, server.address
+            ),
+        );
+        assert!(icon.starts_with("HTTP/1.1 204"), "{icon}");
+        assert!(icon.contains("default-src 'self'"));
+        assert!(!icon.contains("unsafe-inline"));
+        let unauthorized_icon = request(
+            server.address,
+            &format!(
+                "GET /favicon.ico HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                server.address
+            ),
+        );
+        assert!(unauthorized_icon.starts_with("HTTP/1.1 401"));
     }
 
     #[test]
@@ -946,17 +971,20 @@ mod tests {
         assert!(APP_CSS.contains("--bg: #0f1412"));
         assert!(INDEX_HTML.contains("class=\"transport\""));
         assert!(INDEX_HTML.contains("#icon-step"));
-        assert!(INDEX_HTML.contains("<span>Step in</span>"));
-        assert!(INDEX_HTML.contains("<span>Step over</span>"));
+        assert!(INDEX_HTML.contains("<span>Next transition</span>"));
+        assert!(INDEX_HTML.contains("<span>Next action</span>"));
         assert!(INDEX_HTML.contains("<span>Run to expect</span>"));
-        assert!(INDEX_HTML.contains("<span>Continue</span>"));
+        assert!(INDEX_HTML.contains("<span>Finish</span>"));
+        assert!(INDEX_HTML.contains("<span>Replay</span>"));
         assert!(INDEX_HTML.contains("<span>Take control</span>"));
         assert!(INDEX_HTML.contains("src=\"/graph-layout.js\""));
         assert!(!INDEX_HTML.contains("id=\"guidance\""));
         assert!(APP_JS.contains("Before admission"));
         assert!(APP_JS.contains("[\"META\", meta], [\"DATA\", data]"));
         assert!(APP_JS.contains("appendDataTree(zone, value)"));
-        assert!(APP_JS.contains("[\"record_index\", \"summary\", \"trigger\", \"origin_id\"]"));
+        assert!(APP_JS.contains(
+            "[\"record_index\", \"record_type\", \"summary\", \"trigger\", \"origin_id\"]"
+        ));
         assert!(APP_JS.contains("selectedTopologyContext(snapshot.topology)"));
         assert!(APP_JS.contains("ownerIds.has(item.owner)"));
         assert!(!APP_JS.contains("path.startsWith(`${selection.path}.`)"));

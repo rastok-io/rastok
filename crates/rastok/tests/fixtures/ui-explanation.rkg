@@ -1,0 +1,53 @@
+// Intentionally failing assertions qualify the debugger, not the runtime.
+type Signal = union {
+  Kept { value: int }
+  Rejected { value: int }
+}
+
+graph explanations : App {
+  input in: int
+  output out: struct { value: int }
+  operator classify {
+    input in: int
+    output out: Signal
+    var seen: int = 0
+    on in match {
+      data < 0 => out = Rejected { value = data }
+      seen == 0 => match data > 0 {
+        true => { seen = seen + 1; out = Kept { value = data } }
+        false => out = Rejected { value = data }
+      }
+      _ => out = Kept { value = data + 1 }
+    }
+  }
+  operator accept {
+    input in: Signal
+    output out: struct { value: int }
+    on in match data {
+      Kept => { val kept = data as Kept; out = { value = kept.value } }
+      Rejected => nothing
+    }
+  }
+  in -> classify
+  classify.out -> match { Kept -> accept; Rejected -> nothing }
+  accept -> out
+}
+
+lab explanations {
+  simulation inspect on app {
+    scenario mismatch {
+      app.in = 7
+      expect app.out where data.value == 8
+    }
+    scenario unwanted {
+      app.in = 7
+      expect nothing app.out
+    }
+    scenario prestate {
+      app.in = 7
+      expect app.out where data.value == 7
+      app.in = 7
+      expect app.out where data.value == 8
+    }
+  }
+}

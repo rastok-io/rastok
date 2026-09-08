@@ -17,6 +17,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 static EMPTY_ANNOTATIONS: AnnotationTable = AnnotationTable::empty();
 
+mod expectation;
+mod explanation;
+pub use expectation::expectation_json;
+
 /// Physical controller state, outside every semantic identity recipe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionState {
@@ -103,7 +107,7 @@ impl ActivityView {
         Self {
             ordinal: Some(ordinal),
             kind: "scenario-action",
-            detail: format!("Scenario {action} · the authored action reached its boundary"),
+            detail: format!("Scenario {action} · the authored action reached its effect"),
             node: None,
             motion: None,
             records,
@@ -197,7 +201,7 @@ impl ActivityView {
         } else {
             (
                 "connector-boundary",
-                String::from("a Connector boundary fact was retained; no Node fired"),
+                String::from("a Connector exchange fact was retained; no Node fired"),
             )
         };
         Some(Self {
@@ -299,6 +303,7 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
         "history": history(plan, vm, journal),
         "instances": instances(plan, &inspection, &active_instances),
         "loop_runs": loop_runs(plan, journal.records()),
+        "future": explanation::future(&inspection, journal.records()),
         "exchanges": exchanges(&inspection),
         "cost_report": cost_report(plan, journal, cost_profile),
         "scenario": scenario,
@@ -510,7 +515,7 @@ fn topology(
                 ))
                 .unwrap_or_default()
                 .iter()
-                .map(|port| port_json(port.port(), port.direction()))
+                .map(|port| port_json(port.port(), port.direction(), Some(port.ty())))
                 .collect::<Vec<_>>();
             json!({
                 "slot": index,
@@ -521,6 +526,11 @@ fn topology(
                 "kind": kind,
                 "type": ty,
                 "extensions": extensions,
+                "loop": loop_spec_json(&plan.owners[node.owner.index()]),
+                "profile": match &node.execution {
+                    NodeExecution::Connector(spec) => Some(format!("{:?} · {:?}", spec.exchange, spec.roles)),
+                    NodeExecution::Operator => None,
+                },
                 "ports": ports,
                 "definition": definition.map(source_definition_json),
                 "firing_count": firing.count.to_string(),
@@ -551,13 +561,13 @@ fn topology(
                 resolved_ports
                     .boundary()
                     .iter()
-                    .map(|port| port_json(port.port(), port.direction()))
+                    .map(|port| port_json(port.port(), port.direction(), Some(port.ty())))
                     .collect::<Vec<_>>()
             } else {
                 owner
                     .ports
                     .iter()
-                    .map(|port| port_json(&port.port, port.direction))
+                    .map(|port| port_json(&port.port, port.direction, port.ty.as_ref()))
                     .collect::<Vec<_>>()
             };
             json!({
@@ -576,6 +586,7 @@ fn topology(
                 "parent": owner.parent.map(|parent| format!("owner:{}", parent.index())),
                 "type": if owner.path.is_root() { "App" } else { "Graph" },
                 "extensions": owner.extensions.iter().map(|aspect| aspect.extension().source_name()).collect::<Vec<_>>(),
+                "loop": loop_spec_json(owner),
                 "ports": ports,
                 "definition": definition.map(source_definition_json),
                 "transaction_count": activity.count.to_string(),
@@ -618,6 +629,8 @@ fn topology(
                     |target| endpoint_json(target, false),
                 ),
                 "queued_count": mailbox.len().to_string(),
+                "capacity": inspection.mailbox_capacity,
+                "cases": explanation::edge_cases(plan, edge),
                 "mailbox": mailbox,
             })
         })
@@ -627,6 +640,7 @@ fn topology(
         "owners": owners,
         "edges": edges,
         "commands": manager_commands(plan),
+        "routes": explanation::routes(plan),
         "activity": activity.map(|activity| json!({
             "ordinal": activity.ordinal,
             "kind": activity.kind,
@@ -782,11 +796,23 @@ fn mailbox_contents(
 }
 
 fn source_definition_json(definition: &SourceDefinition) -> JsonValue {
+    fn arms(values: &[crate::compiler::SourceArm]) -> JsonValue {
+        json!(
+            values
+                .iter()
+                .map(
+                    |arm| json!({ "cases": arm.cases, "predicate": arm.predicate,
+            "fallback": arm.fallback, "lines": arm.lines, "children": arms(&arm.children) })
+                )
+                .collect::<Vec<_>>()
+        )
+    }
     json!({
         "source_index": definition.source.index(),
         "first_line": definition.first_line,
         "last_line": definition.last_line,
         "code": definition.code,
+        "decisions": definition.decisions.iter().map(|(trigger, values)| json!({"trigger": trigger, "arms": arms(values)})).collect::<Vec<_>>(),
     })
 }
 
@@ -849,14 +875,28 @@ fn record_traffic(traffic: &mut BTreeMap<String, Traffic>, edge: &str, record_in
     traffic.last_record = Some(record_index);
 }
 
-fn port_json(port: &crate::node::Port, direction: crate::node::Direction) -> JsonValue {
+fn port_json(
+    port: &crate::node::Port,
+    direction: crate::node::Direction,
+    ty: Option<&crate::datatype::DataType>,
+) -> JsonValue {
     json!({
         "name": port.name(),
+        "type": ty.map(ToString::to_string),
         "direction": match direction {
             crate::node::Direction::Input => "input",
             crate::node::Direction::Output => "output",
         },
     })
+}
+
+fn loop_spec_json(owner: &crate::plan::Owner) -> JsonValue {
+    owner.loop_spec().map_or(JsonValue::Null, |spec| json!({
+        "entry": spec.entry.name(),
+        "terminals": spec.terminals.iter().map(|port| port.name()).collect::<Vec<_>>(),
+        "fuel": spec.fuel.as_ref().and_then(|constant| match constant.resolved { Value::Int(value) => Some(value.to_string()), _ => None }),
+        "expired_port": spec.expired.as_ref().map(|target| target.port.name()),
+    }))
 }
 
 fn endpoint_json(endpoint: &crate::plan::EndpointRef, source: bool) -> JsonValue {
@@ -883,6 +923,7 @@ fn endpoint_json(endpoint: &crate::plan::EndpointRef, source: bool) -> JsonValue
 
 fn history(plan: &ValidatedExecutionPlan, vm: &Vm<'_>, journal: &MemJournal) -> JsonValue {
     let observations = journal.retained_observations();
+    let explanation = explanation::history(plan, journal.records());
     debug_assert_eq!(observations.len(), journal.records().len());
     let records = observations
         .iter()
@@ -891,6 +932,9 @@ fn history(plan: &ValidatedExecutionPlan, vm: &Vm<'_>, journal: &MemJournal) -> 
         .map(|(index, (observation, record))| {
             let mut value = crate::observability::observation_json(observation, None);
             if let JsonValue::Object(fields) = &mut value {
+                if let Some(JsonValue::Object(extra)) = explanation.records.get(index) {
+                    fields.extend(extra.clone());
+                }
                 fields.insert(String::from("record_index"), JsonValue::from(index));
                 let (kind, trigger, summary) = history_record_description(record);
                 fields.insert(
@@ -922,7 +966,7 @@ fn history(plan: &ValidatedExecutionPlan, vm: &Vm<'_>, journal: &MemJournal) -> 
             })
         })
         .collect::<Vec<_>>();
-    json!({ "records": records, "deliveries": deliveries })
+    json!({ "records": records, "deliveries": deliveries, "envelopes": explanation.envelopes, "commands": explanation.commands })
 }
 
 fn history_record_description(record: &Record) -> (&'static str, Option<String>, String) {
@@ -1081,6 +1125,7 @@ fn instances(
     inspection: &VmInspection,
     active_instances: &BTreeSet<InstanceRef>,
 ) -> JsonValue {
+    let classified = explanation::classified(plan);
     JsonValue::Array(
         inspection
             .instances
@@ -1108,6 +1153,7 @@ fn instances(
                 });
                 json!({
                     "reference": instance_ref_json(&instance.reference),
+                    "label": explanation::instance_label(&instance.reference, classified),
                     "owner": instance.owner.to_string(),
                     "phase": phase(instance.phase),
                     "node": instance.node.as_ref().map(|path| path.to_string()),

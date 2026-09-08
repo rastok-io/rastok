@@ -879,6 +879,8 @@ pub struct SessionInspection {
 /// borrowing the scheduler or becoming an execution authority.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VmInspection {
+    /// Capacity shared by all incoming routes of one instance mailbox.
+    pub mailbox_capacity: usize,
     /// Live logical instances in canonical reference order.
     pub instances: Vec<InstanceInspection>,
     /// Current bounded mailbox contents in canonical owner/instance order.
@@ -3329,6 +3331,7 @@ impl<'plan> Vm<'plan> {
             })
             .collect();
         VmInspection {
+            mailbox_capacity: self.scheduler.mailboxes.capacity,
             instances,
             mailboxes,
             calls,

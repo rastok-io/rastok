@@ -78,6 +78,17 @@ pub enum ScenarioActionKind {
     Expect,
 }
 
+/// Read-only evidence for the most recently evaluated assertion.
+#[derive(Debug)]
+pub struct ExpectationInspection<'a> {
+    /// Checked assertion; its source lives in the compiler side table.
+    pub expectation: &'a Expectation,
+    /// Exact envelopes in this assertion's target window.
+    pub envelopes: Vec<&'a Envelope>,
+    /// Verdict re-derived by the same pure assertion evaluator as the Lab.
+    pub failure: Option<String>,
+}
+
 /// Failure while interactively advancing one scenario transaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScenarioStepError {
@@ -244,6 +255,36 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
     #[must_use]
     pub const fn last_action_kind(&self) -> Option<ScenarioActionKind> {
         self.last_action
+    }
+
+    /// Returns the last assertion and its existing observation window without
+    /// advancing the scenario or changing any delivery or journal record.
+    #[must_use]
+    pub fn last_expectation(&self) -> Option<ExpectationInspection<'_>> {
+        let ScenarioStep::Expect(expectation) =
+            self.scenario.steps.get(self.next_action.checked_sub(1)?)?
+        else {
+            return None;
+        };
+        let window = &self.vm.observations()[self.window_start..];
+        let outputs = &self.vm.outputs()[self.output_window_start..];
+        let envelopes = match &expectation.target {
+            ExpectTarget::Boundary(port) => outputs
+                .iter()
+                .filter(|output| output.port == *port)
+                .map(|output| &output.envelope)
+                .collect(),
+            ExpectTarget::Node { path, port } => window
+                .iter()
+                .filter(|observed| observed.node.as_ref() == Some(path) && observed.port == *port)
+                .map(|observed| &observed.envelope)
+                .collect(),
+        };
+        Some(ExpectationInspection {
+            expectation,
+            envelopes,
+            failure: check_expectation(expectation, window, outputs),
+        })
     }
 
     /// Whether ready VM work from the current action has reached a boundary.

@@ -95,6 +95,23 @@ pub struct SourceDefinition {
     pub last_line: usize,
     /// Exact declaration text, including every handler and guard.
     pub code: String,
+    /// Source-only decision locations, never part of the executable plan.
+    pub decisions: Vec<(String, Vec<SourceArm>)>,
+}
+
+/// One authored decision arm for debugger source highlighting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceArm {
+    /// Closed symbolic cases; empty for a predicate or fallback.
+    pub cases: Vec<String>,
+    /// Exact predicate source, if this is an ordered arm.
+    pub predicate: Option<String>,
+    /// Whether the author wrote the fallback `_`.
+    pub fallback: bool,
+    /// Inclusive one-based source lines.
+    pub lines: (usize, usize),
+    /// Nested decision, if present.
+    pub children: Vec<Self>,
 }
 
 /// Compiles `.rkg` sources against a contract registry.
@@ -396,6 +413,64 @@ fn collect_graph_definitions(
         };
         if let Some(child) = child_owner_path(&path, name) {
             push_source_definition(definitions, child, kind, span, sources);
+            if let syntax::GraphItem::Operator(declaration) = item
+                && let Some(definition) = definitions.last_mut()
+                && let Some(source) = sources.get(span.source().index() as usize)
+            {
+                definition.decisions = declaration
+                    .body
+                    .iter()
+                    .filter_map(|item| {
+                        let syntax::OperatorItem::Handler(handler) = item else {
+                            return None;
+                        };
+                        let trigger = match &handler.trigger {
+                            syntax::Trigger::Port(port) => format!("p:{}", port.text),
+                            syntax::Trigger::Join(ports) => format!(
+                                "join:{}",
+                                ports
+                                    .iter()
+                                    .map(|port| port.text.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(",")
+                            ),
+                            syntax::Trigger::Start(_) => String::from("l:start"),
+                            syntax::Trigger::Stop(_) => String::from("l:stop"),
+                            _ => return None,
+                        };
+                        let mut arms = handler
+                            .dispatch
+                            .as_ref()
+                            .map(|dispatch| source_arms(dispatch, source))
+                            .unwrap_or_default();
+                        if matches!(handler.trigger, syntax::Trigger::Port(_))
+                            && let Some(predicate) =
+                                handler.guards.iter().find_map(|guard| match guard {
+                                    syntax::Guard::Where(expr) => Some(expr),
+                                    _ => None,
+                                })
+                        {
+                            arms = vec![
+                                SourceArm {
+                                    cases: Vec::new(),
+                                    predicate: Some(predicate.text.clone()),
+                                    fallback: false,
+                                    lines: source_lines(source, predicate.span),
+                                    children: arms,
+                                },
+                                SourceArm {
+                                    cases: Vec::new(),
+                                    predicate: None,
+                                    fallback: true,
+                                    lines: source_lines(source, predicate.span),
+                                    children: Vec::new(),
+                                },
+                            ];
+                        }
+                        Some((trigger, arms))
+                    })
+                    .collect();
+            }
         }
     }
 }
@@ -438,7 +513,45 @@ fn push_source_definition(
         first_line,
         last_line,
         code: code.to_owned(),
+        decisions: Vec::new(),
     });
+}
+
+fn source_lines(source: &str, span: crate::diagnostics::Span) -> (usize, usize) {
+    let line = |offset| {
+        source.as_bytes()[..offset]
+            .iter()
+            .filter(|byte| **byte == b'\n')
+            .count()
+            + 1
+    };
+    (
+        line(span.range().start),
+        line(span.range().end.saturating_sub(1).max(span.range().start)),
+    )
+}
+
+fn source_arms(dispatch: &syntax::Dispatch, source: &str) -> Vec<SourceArm> {
+    let syntax::Dispatch::Match { arms, .. } = dispatch else {
+        return Vec::new();
+    };
+    arms.iter()
+        .map(|arm| SourceArm {
+            cases: match &arm.selector {
+                syntax::MatchSelector::Cases(cases) => {
+                    cases.iter().map(|case| case.text.clone()).collect()
+                }
+                _ => Vec::new(),
+            },
+            predicate: match &arm.selector {
+                syntax::MatchSelector::Predicate(expr) => Some(expr.text.clone()),
+                _ => None,
+            },
+            fallback: matches!(arm.selector, syntax::MatchSelector::Fallback(_)),
+            lines: source_lines(source, arm.span),
+            children: source_arms(&arm.dispatch, source),
+        })
+        .collect()
 }
 
 fn type_resolution_diagnostic(error: &PlanValidationError) -> Diagnostic {

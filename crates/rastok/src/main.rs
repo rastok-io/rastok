@@ -833,7 +833,7 @@ fn simulate_with_ui(
                             fault = Some(FaultView {
                                 message: error,
                                 help: String::from(
-                                    "Advance one boundary until the current action reaches its next transaction boundary.",
+                                    "Use Next transition until the current action reaches its next effect.",
                                 ),
                                 commit: String::from("no scenario action was applied"),
                                 retryable: false,
@@ -956,7 +956,7 @@ fn simulate_with_ui(
                             Some(ActivityView::external(
                                 boundary_ordinal,
                                 "transaction",
-                                "The transaction boundary advanced without a causal record",
+                                "Execution advanced without a new causal record",
                             ))
                         });
                         activity_decided = true;
@@ -998,7 +998,7 @@ fn simulate_with_ui(
                             Some(ActivityView::external(
                                 boundary_ordinal,
                                 "connector-boundary",
-                                "A Connector boundary observation became ready",
+                                "A Connector exchange observation became ready",
                             ))
                         });
                         activity_decided = true;
@@ -1065,7 +1065,7 @@ fn simulate_with_ui(
                                 Some(ActivityView::external(
                                     boundary_ordinal,
                                     "transaction",
-                                    "The transaction boundary advanced without a causal record",
+                                    "Execution advanced without a new causal record",
                                 ))
                             });
                             activity_decided = true;
@@ -1213,6 +1213,7 @@ fn simulation_view(
             "next_injection": next_injection,
             "failures": session.failures(),
             "golden_failures": golden_failures,
+            "expectation": rastok::ui::expectation_json(&compilation.plan, session),
         },
     })
 }

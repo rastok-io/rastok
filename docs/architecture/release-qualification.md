@@ -37,6 +37,12 @@ real-browser tests, with keyboard checks and desktop/narrow captures. The
 but found an open `advance` stepping gap and remaining graph/inspector UX work.
 Neither the automated checks nor that review close the M1.9 row above.
 
+The [2026-09-08 explanatory projection pass](simulation-debugger-explanations.md)
+adds retained decision/causal explanations, timer and assertion evidence,
+keyboard navigation and read-only comparisons. Its browser checks include
+console errors and five examples in LIVE, HISTORY and REPLAY. The existing
+authored-`advance` stepping gap remains explicitly outside this presentation pass.
+
 Public Internet probes remain scheduled canaries, never replacements for these
 blocking local qualifications. The gallery, website and demonstration are M1
 deliverables tracked by the roadmap rather than protocol-conformance evidence.

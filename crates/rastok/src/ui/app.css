@@ -102,6 +102,15 @@ select, input, textarea { min-width: 0; padding: 3px 5px; background: var(--surf
 .timeline-bar input[type="range"] { width: 100%; height: 14px; padding: 0; border: 0; accent-color: var(--boundary); background: transparent; }
 .timeline-action { height: 27px; min-height: 27px; border-width: 0 0 0 1px; padding: 0 6px; font-size: 10px; }
 .command-status { position: fixed; z-index: 80; top: 64px; left: 50%; max-width: min(720px, calc(100vw - 24px)); transform: translateX(-50%); padding: 4px 8px; border: 1px solid var(--history); background: var(--surface); color: var(--history); font: 11px var(--mono); }
+.identifier { display: inline-flex; align-items: center; gap: 4px; font: 11px var(--mono); }
+.identifier button { padding: 0 2px; min-height: 16px; border: 0; background: transparent; font: inherit; }
+.identifier .copy-id { color: var(--muted); }
+#graph-tooltip { position: fixed; z-index: 100; max-width: 330px; max-height: min(350px, 60vh); overflow: auto; white-space: pre-wrap; padding: 8px; border: 1px solid var(--hairline-strong); background: var(--surface); color: var(--text); font: 11px var(--mono); pointer-events: none; }
+.mailbox-preview-row { margin-top: 4px; border-top: 1px solid var(--hairline); }
+[tabindex]:focus-visible, summary:focus-visible { outline: 1px solid var(--boundary); outline-offset: 2px; }
+.future { position: relative; border: 1px dashed var(--muted); padding: 2px 4px; white-space: nowrap; }
+.future > div { position: absolute; right: 0; top: 24px; z-index: 70; display: grid; max-height: 45vh; overflow: auto; min-width: 300px; padding: 4px; background: var(--surface); border: 1px dashed var(--muted); }
+.future button { text-align: left; font: 11px var(--mono); }
 body.historical-view .graph-canvas { background-color: color-mix(in srgb, var(--history) 12%, var(--surface)); }
 
 main { display: flex; height: calc(100vh - 61px); min-height: 0; flex-direction: column; gap: 8px; padding: 8px 12px 12px; }
@@ -210,12 +219,12 @@ body.historical-view .history-watermark { display: block; }
   .graph-edge-packet, .connector-boundary-packet { display: none; }
 }
 
-.inspector { min-width: 0; min-height: 0; overflow: hidden; background: var(--surface); }
-.inspector-tabs { display: grid; height: 32px; grid-template-columns: repeat(5, 1fr); border-bottom: 1px solid var(--hairline-strong); }
+.inspector { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--surface); }
+.inspector-tabs { display: flex; flex: 0 0 auto; flex-wrap: wrap; border-bottom: 1px solid var(--hairline-strong); }
 .inspector-tabs button { height: 31px; border-width: 0 1px 0 0; background: transparent; color: var(--muted); font-size: 11px; }
 .inspector-tabs button:last-child { border-right: 0; }
 .inspector-tabs button[aria-selected="true"] { border-bottom: 2px solid var(--boundary); color: var(--text); }
-.inspector-panel { height: calc(100% - 32px); overflow: auto; padding: 8px; }
+.inspector-panel { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px; }
 .runtime-panel { padding: 0; }
 .runtime-panel > section { padding: 8px; border-bottom: 1px solid var(--hairline); }
 .runtime-panel > section > h2 { margin-bottom: 4px; }
@@ -244,6 +253,22 @@ body.historical-view .history-watermark { display: block; }
 .source-line { display: block; min-height: 1.45em; }
 .source-line::before { content: attr(data-line); display: inline-block; width: 3ch; margin-right: 8px; color: var(--muted); }
 .source-line.current { background: var(--boundary-soft); outline: 1px solid var(--boundary); }
+.source-line.fired { background: var(--boundary-soft); border-left: 2px solid var(--boundary); }
+.source-line[role=button] { cursor: pointer; }
+.decision-explanation { border-left: 2px solid var(--boundary); padding-left: 8px; }
+.predicate-false { color: var(--muted); }
+.causal-history-table .causal-related { background: var(--boundary-soft); }
+.graph-node.causal-related > .graph-node-body, .graph-scope.causal-related > .graph-scope-body { stroke: var(--boundary); stroke-width: 2px; }
+.graph-edge.causal-related .graph-edge-path, .graph-edge.case-selected .graph-edge-path { stroke: var(--boundary); stroke-width: 2px; }
+.graph-heading { display: flex; align-items: center; justify-content: space-between; padding-right: 8px; }
+#search-panel { position: absolute; z-index: 10; width: 300px; max-height: 340px; overflow: auto; background: var(--surface); border: 1px solid var(--hairline); padding: 8px; }
+#search-results button { display: block; width: 100%; text-align: left; }
+.compare-selectors, .comparison-row { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 8px; }
+.comparison-row > div { min-width: 0; overflow: auto; padding: 4px; border: 1px solid var(--hairline); }
+.comparison-row .data-tree-leaf { grid-template-columns: minmax(0, 1fr); }
+.comparison-row.different > div, .assertion-difference { border-left: 2px solid var(--history); background: var(--history-soft); }
+.assertion-envelope { padding: 8px 0; border-top: 1px solid var(--hairline); }
+.graph-loop-dial { cursor: help; }
 .scenario-source-limit { margin-top: 8px; color: var(--muted); font: 10px/1.4 var(--mono); }
 .envelope-zones { display: grid; gap: 8px; }
 .envelope-zone { min-width: 0; padding: 8px; border: 1px solid var(--hairline); background: var(--surface-soft); }
@@ -281,9 +306,11 @@ tr.timeline-record:focus { outline: 1px solid var(--boundary); outline-offset: -
 .history-stack > details > summary { height: 24px; padding: 5px 8px; border-bottom: 1px solid var(--hairline); font: 10px var(--mono); }
 .history-stack table { table-layout: fixed; }
 .history-stack th, .history-stack td { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; vertical-align: middle; }
-.causal-history-table th:nth-child(1) { width: 72px; }
-.causal-history-table th:nth-child(3) { width: 64px; }
+.causal-history-table { min-width: 650px; }
+.causal-history-table th:nth-child(1) { width: 168px; }
+.causal-history-table th:nth-child(2) { width: 86px; }
 .causal-history-table th:nth-child(4) { width: 70px; }
+.causal-history-table th:nth-child(5) { width: 80px; }
 .delivery-history-table { min-width: 760px; }
 .delivery-history-table th:nth-child(1) { width: 42px; }
 .delivery-history-table th:nth-child(2), .delivery-history-table th:nth-child(3) { width: 78px; }

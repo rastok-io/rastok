@@ -25,6 +25,12 @@ let selectedMailboxRoute = null;
 let mailboxVisibleLimit = 100;
 let lastAnimatedActivity = null;
 let pendingCommandRevision = null;
+let commandOrigin = null;
+let firstContact = true;
+let selectedEnvelopeId = null;
+let selectedRecordIndex = null;
+let explainedFailure = null;
+let comparisonRequest = 0;
 let activeInspectorTab = "envelope";
 let scenarioDefinitionActive = false;
 let graphResizeObserver = null;
@@ -32,12 +38,12 @@ let graphTextSync = null;
 const graphViewport = { scale: 1, x: 0, y: 0 };
 
 const COMMAND_HINTS = Object.freeze({
-  resume: "Play: replay retained boundaries at the selected speed",
-  pause: "Pause: stop playback or execution at the next safe boundary",
-  step: "Step in: advance one retained atomic boundary",
+  resume: "Replay: replay retained transitions at the selected speed",
+  pause: "Pause: stop replay or execution at the next safe transition",
+  step: "Next transition: advance one retained transition",
   "retry-step": "Retry: retry the reserved transaction",
-  "run-to-completion": "Continue: run immediately to completion",
-  "next-scenario-action": "Step over: execute one complete authored scenario action",
+  "run-to-completion": "Finish: run to completion",
+  "next-scenario-action": "Next action: run one authored action to its effect",
   "run-until-assertion": "Run to expect: continue to the next expect action",
   "reset-scenario": "Reset: start a clean scenario session",
   close: "Close UI",
@@ -99,7 +105,14 @@ async function refreshSnapshot() {
   timelineIndex = await timelineResponse.json();
   if (pendingCommandRevision !== null && liveSnapshot.revision > pendingCommandRevision) {
     pendingCommandRevision = null;
-    setCommandStatus("");
+    const transitions = Number(liveSnapshot.timeline.boundary) - Number(commandOrigin?.boundary || 0);
+    const action = Number(liveSnapshot.scenario?.current?.next_action_index || 0);
+    const advancedAction = action > Number(commandOrigin?.action || 0);
+    setCommandStatus(commandOrigin?.command === "next-scenario-action"
+      ? `${transitions} transitions · authored action reached its effect`
+      : commandOrigin?.command === "step" && commandOrigin.quiescent && advancedAction
+        ? `no VM work ready · advanced to A${action}` : "");
+    commandOrigin = null;
   }
   if (!currentSnapshot) {
     currentSnapshot = liveSnapshot;
@@ -164,7 +177,7 @@ function renderExecutionState(snapshot) {
   const liveState = liveSnapshot?.execution?.state || state;
   const atLive = sameTimelinePoint(snapshot, liveSnapshot);
   const pill = document.querySelector("#execution-state");
-  pill.title = `Engine ${liveState}; ${atLive ? "viewing the live head" : "viewing a retained boundary"}`;
+  pill.title = `Engine ${liveState}; ${atLive ? "viewing the live head" : "viewing a retained transition"}`;
   if (!atLive && (bufferedPlayback || replayPaused)) {
     text("execution-state", replayPaused ? "replay paused" : "replaying");
     pill.className = `execution-state state-${replayPaused ? "paused" : "running"}`;
@@ -269,7 +282,7 @@ function pauseBufferedPlayback() {
   updateControls();
   const session = Number(currentSnapshot?.timeline?.session || 0);
   const boundary = Number(currentSnapshot?.timeline?.boundary || 0);
-  setCommandStatus(`Replay paused on ${sessionName(session)} · B${boundary}; the engine head was not changed.`);
+  setCommandStatus(`Replay paused on ${sessionName(session)} · transition ${boundary}; the engine head was not changed.`);
 }
 
 function renderTimeline() {
@@ -285,7 +298,7 @@ function renderTimeline() {
     const candidateFrames = candidate.frames || [];
     const lastBoundary = Number(candidateFrames.at(-1)?.boundary || 0);
     option.value = String(candidate.session);
-    option.textContent = `${sessionName(candidate.session)} · B0–B${lastBoundary}`;
+    option.textContent = `${sessionName(candidate.session)} · 0–${lastBoundary}`;
     option.selected = Number(candidate.session) === session;
     return option;
   }));
@@ -304,12 +317,14 @@ function renderTimeline() {
       : replayPaused
         ? "REPLAY PAUSED"
         : "HISTORY";
-  text("timeline-position", `${view} · ${sessionName(session)} · B${boundary}`);
-  const engine = atLive ? "" : `engine ${liveSnapshot?.execution?.state || "paused"} · `;
-  text("timeline-head", `${engine}live ${sessionName(liveSession)} · B${liveBoundary}`);
+  text("timeline-position", `${view} · ${sessionName(session)} · transition ${boundary}`);
+  const engine = bufferedPlayback
+    ? (liveSnapshot?.execution?.state === "completed" ? "engine completed · replay in progress · " : "engine finishing, then replay · ")
+    : atLive ? "" : `engine ${liveSnapshot?.execution?.state || "paused"} · `;
+  text("timeline-head", `${engine}head ${liveBoundary}`);
   const returnLive = document.querySelector("#return-live");
   returnLive.hidden = atLive;
-  const returnLabel = `Return to live ${sessionName(liveSession)} · B${liveBoundary}`;
+  const returnLabel = `Return to live ${sessionName(liveSession)} · transition ${liveBoundary}`;
   returnLive.querySelector("span").textContent = returnLabel;
   returnLive.title = returnLabel;
   returnLive.setAttribute("aria-label", returnLabel);
@@ -332,6 +347,104 @@ function renderRelatedPanels(snapshot) {
   renderLoopRuns(snapshot.loop_runs, selection);
   renderExchanges(snapshot.exchanges, selection);
   renderCost(snapshot.cost_report, selection);
+  renderFuture(snapshot);
+  renderSearchResults();
+  renderAssertion(snapshot);
+  renderComparison();
+}
+
+function identifier(value, label = "", action = null) {
+  const id = String(value);
+  const group = document.createElement("span");
+  group.className = "identifier";
+  const short = document.createElement(action ? "button" : "code");
+  if (action) {
+    short.type = "button";
+    short.addEventListener("click", event => { event.stopPropagation(); action(); });
+  }
+  short.textContent = `${label ? `${label} ` : ""}${id.slice(0, 8)}`;
+  short.title = id;
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "copy-id";
+  copy.textContent = "⧉";
+  copy.title = `Copy ${label || "identifier"}`;
+  copy.setAttribute("aria-label", copy.title);
+  copy.addEventListener("click", event => {
+    event.stopPropagation();
+    navigator.clipboard.writeText(id).then(() => setCommandStatus("Identifier copied"))
+      .catch(() => setCommandStatus("Copy unavailable; the complete identifier is in the tooltip."));
+  });
+  group.append(short, copy);
+  return group;
+}
+
+function selectEnvelope(id) {
+  selectedEnvelopeId = id;
+  selectedRecordIndex = null;
+  selectedTopologyItem = null;
+  renderTopology(currentSnapshot?.topology, false);
+  renderRelatedPanels(currentSnapshot);
+  activateInspectorTab("envelope");
+}
+
+function attachTooltip(element, content) {
+  const description = typeof content === "string" ? content : content.textContent;
+  // Keep text labels' accessible text separate from the tooltip content.
+  if (element.localName !== "text") {
+    const title = svgElement("title");
+    title.textContent = description;
+    element.append(title);
+  }
+  element.setAttribute("tabindex", "0");
+  element.setAttribute("aria-label", description);
+  const show = () => {
+    const popup = document.querySelector("#graph-tooltip") || document.body.appendChild(document.createElement("div"));
+    popup.id = "graph-tooltip";
+    popup.setAttribute("role", "tooltip");
+    popup.replaceChildren(typeof content === "string" ? document.createTextNode(content) : content.cloneNode(true));
+    const rect = element.getBoundingClientRect();
+    popup.hidden = false;
+    popup.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - 340))}px`;
+    popup.style.top = `${Math.max(8, Math.min(rect.bottom + 4, innerHeight - popup.offsetHeight - 8))}px`;
+    element.setAttribute("aria-describedby", "graph-tooltip");
+  };
+  const hide = () => { const popup = document.querySelector("#graph-tooltip"); if (popup) popup.hidden = true; element.removeAttribute("aria-describedby"); };
+  element.addEventListener("pointerenter", show);
+  element.addEventListener("pointerleave", hide);
+  element.addEventListener("focus", show);
+  element.addEventListener("blur", hide);
+}
+
+function portDescription(topology, item, port) {
+  const routes = (topology.routes || []).filter(rule => rule.owner === (item.path || "") && rule.port === port.name);
+  const destinations = routes.flatMap(rule => rule.arms.map(arm => `${arm.cases.length ? `[${arm.cases.join(" | ")}] ` : ""}${arm.destinations.join(" ; ")}`));
+  return `${item.path || "App"}.${port.name} · ${port.direction} · ${port.type || "type unavailable"}\n${destinations.length ? destinations.join("\n") : port.direction === "input" ? "Admission port" : item.parent === null ? "Public App output" : "No physical downstream route"}`;
+}
+
+function extensionDescription(item) {
+  const loop = item.loop;
+  return (item.extensions || []).map(extension => extension === "App"
+    ? "App · public deployment scope · no manager"
+    : extension === "Loop" && loop
+      ? `Loop · entry ${loop.entry} · terminals ${loop.terminals.join(", ")}\nCommands: Loop.next · Loop.again · Loop.done\nAttributes: Loop.fuel · Loop.delay · Loop.measure · Loop.entry · Loop.terminal · Loop.expired\nFuel: ${loop.fuel ?? "derived from measure"} · extended terminal: ${loop.expired_port || "exhaustion proved impossible"}`
+      : extension).join("\n");
+}
+
+function renderFuture(snapshot) {
+  const items = document.querySelector("#future-items");
+  const pending = snapshot.future || [];
+  items.replaceChildren();
+  for (const obligation of pending) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.textContent = `${obligation.kind} · ${obligation.owner || "App"}${obligation.port ? `.${obligation.port}` : ""}${obligation.due_at_ns == null ? "" : ` · due ${formatLogicalTime(obligation.due_at_ns)}`}`;
+    row.title = `${row.textContent} · retained obligation, not an execution-order prediction`;
+    if (obligation.envelope_id) row.addEventListener("click", () => selectEnvelope(obligation.envelope_id));
+    items.append(row);
+  }
+  if (!pending.length) items.textContent = "No pending obligation at this transition.";
+  document.querySelector("#future summary").textContent = `Pending · ${pending.length}`;
 }
 
 function renderMailbox(topology) {
@@ -432,13 +545,28 @@ function scenarioDefinitionPanel(scenario) {
   if (typeof definition?.code === "string") {
     const pre = document.createElement("pre");
     pre.className = "node-definition-code scenario-definition-code";
-    const currentLine = definition.action_lines?.[scenario.next_action_index || 0];
+    const actionIndex = Number(scenario.next_action_index || 0);
+    const displayedAction = actionIndex > 0 ? actionIndex - 1 : 0;
+    const currentLine = definition.action_lines?.[displayedAction];
     definition.code.split("\n").forEach((text, index) => {
       const line = document.createElement("span");
       line.className = `source-line${index + 1 === currentLine ? " current" : ""}`;
       line.dataset.line = String(Number(definition.first_line) + index);
       line.textContent = text;
       if (index + 1 === currentLine) line.setAttribute("aria-current", "step");
+      const action = definition.action_lines?.indexOf(index + 1) ?? -1;
+      if (action >= 0) {
+        const frame = timelineFrames(currentSnapshot?.timeline?.session || 0).find(frame => Number(frame.action) === action + 1);
+        line.dataset.action = String(action + 1);
+        line.title = frame ? `Action ${action + 1} · transition ${frame.boundary}` : `Action ${action + 1} · not yet executed`;
+        if (frame) {
+          line.tabIndex = 0;
+          line.setAttribute("role", "button");
+          const open = () => { pausePresentation(); showBoundary(currentSnapshot.timeline.session, frame.boundary).catch(showViewError); };
+          line.addEventListener("click", open);
+          line.addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); open(); } });
+        }
+      }
       pre.append(line);
     });
     panel.append(pre);
@@ -476,7 +604,7 @@ function updateControls() {
         reason = "available in LIVE only; select Return live";
       } else if (!legal.has(command)) {
         reason = command === "next-scenario-action" && liveSnapshot?.execution?.state === "paused"
-          ? "the current scenario action is still executing; use Step in or Play"
+          ? "the current scenario action is still executing; use Next transition or Replay"
           : "not legal at the current execution state";
       }
     }
@@ -491,8 +619,8 @@ function updateControls() {
   const back = document.querySelector("#back-boundary");
   back.disabled = frames.findIndex((frame) => Number(frame.boundary) === boundary) <= 0;
   back.title = back.disabled
-    ? "Back — no earlier retained boundary exists on this session."
-    : "Back: view the previous retained boundary";
+    ? "Back — no earlier retained transition exists on this session."
+    : "Back: view the previous retained transition";
   document.querySelector("#take-control").hidden = controls;
 }
 
@@ -666,6 +794,8 @@ function installGraphViewport(canvas, layer) {
 }
 
 function renderTopology(topology, animateBoundary = false) {
+  const tooltip = document.querySelector("#graph-tooltip");
+  if (tooltip) tooltip.hidden = true;
   const target = document.querySelector("#graph");
   const focusKey = target.contains(document.activeElement)
     ? document.activeElement.dataset.focusKey : null;
@@ -678,6 +808,9 @@ function renderTopology(topology, animateBoundary = false) {
   })) });
   topology = { ...topology, nodes: (topology.nodes || []).map(displayed), owners: (topology.owners || []).map(displayed) };
   const activity = topology.activity || null;
+  const causalIds = lineage();
+  const relatedRecords = (currentSnapshot?.history?.records || []).filter(record => lineageRecord(record, causalIds));
+  const relatedOwners = new Set(relatedRecords.map(record => record.owner ?? record.connector));
   const drainedOutputs = new Set((topology.edges || [])
     .filter((edge) => edge.target?.kind === "discard")
     .map((edge) => `${edge.source.id}\u0000${edge.source.port || ""}`));
@@ -685,7 +818,11 @@ function renderTopology(topology, animateBoundary = false) {
   activityPanel.className = `graph-activity${activity ? ` activity-${activity.kind}` : ""}${animateBoundary ? " activity-new" : ""}`;
   const activityLabel = document.createElement("span");
   activityLabel.className = "graph-activity-label";
-  const activityKind = activity?.kind === "transaction"
+  const activityKind = activity?.kind === "scenario-action"
+    ? "action"
+    : activity?.kind === "inbound"
+      ? "admission"
+      : activity?.kind === "transaction"
     ? "transaction"
     : activity?.kind === "lifecycle"
       ? "lifecycle"
@@ -693,14 +830,14 @@ function renderTopology(topology, animateBoundary = false) {
         ? "call"
         : activity?.kind === "session-boundary"
           ? "session"
-          : "boundary";
+          : "exchange";
   activityLabel.textContent = activity
     ? activity.ordinal === null
       ? `External · ${activityKind}`
-      : `B${activity.ordinal} · ${activityKind}`
-    : "B0 · initial";
+      : `transition ${activity.ordinal} · ${activityKind}`
+    : "transition 0 · initial";
   const activityText = document.createElement("strong");
-  activityText.textContent = activity?.detail || "Before admission · no execution boundary has advanced.";
+  activityText.textContent = activity?.detail || "Before admission · no transition has advanced.";
   activityPanel.append(activityLabel, activityText);
   if (activity?.kind === "lifecycle") {
     const note = document.createElement("span");
@@ -718,11 +855,11 @@ function renderTopology(topology, animateBoundary = false) {
     viewBox: `0 0 ${layout.width} ${layout.height}`,
     width: layout.width,
     height: layout.height,
-    style: `--graph-fit-width:${Math.ceil(layout.width * 1.5)}px`,
     preserveAspectRatio: "xMinYMin meet",
     role: "img",
     "aria-label": "Validated Rastok graph with current mailbox occupancy",
   });
+  svg.style.setProperty("--graph-fit-width", `${Math.ceil(layout.width * 1.5)}px`);
   svg.classList.add("graph-svg");
   const definitions = svgElement("defs");
   const marker = svgElement("marker", {
@@ -762,6 +899,7 @@ function renderTopology(topology, animateBoundary = false) {
     const group = svgElement("g", {
       class: `graph-scope${position.depth === 0 ? " root" : " nested"}${active ? " active" : ""}${active && animateBoundary ? " moving" : ""}${selectable ? " selectable" : ""}${selected ? " selected" : ""}`,
     });
+    group.classList.toggle("causal-related", relatedOwners.has(owner.path));
     if (selectable) {
       group.setAttribute("role", "button");
       group.dataset.focusKey = owner.id;
@@ -815,6 +953,7 @@ function renderTopology(topology, animateBoundary = false) {
       y: position.y + 18,
     });
     name.textContent = truncate(owner.label || "App", 28);
+    attachTooltip(name, `${owner.label || 'App'} · Kind: Graph · ${(owner.instances || []).length} open instances`);
     const type = svgElement("text", {
       class: "graph-scope-type",
       x: position.x + position.width - (owner.instances?.length ? 56 : 8),
@@ -822,6 +961,7 @@ function renderTopology(topology, animateBoundary = false) {
       "text-anchor": "end",
     });
     type.textContent = scopeDescriptor(owner);
+    attachTooltip(type, extensionDescription(owner));
     appendLoopDial(type, owner);
     group.append(title, body, header, titleHit, name, type);
     appendInstanceBadge(
@@ -847,6 +987,8 @@ function renderTopology(topology, animateBoundary = false) {
         "text-anchor": port.direction === "input" ? "start" : "end",
       });
       label.textContent = port.display_label || port.name;
+      pin.dataset.port = port.name;
+      attachTooltip(pin, portDescription(topology, owner, port));
       group.append(pin, label);
     }
     scopeLayer.append(group);
@@ -871,6 +1013,12 @@ function renderTopology(topology, animateBoundary = false) {
       "data-route": edge.route,
       "data-activity": activityPhase || "idle",
     });
+    const sourceOwner = (topology.nodes || []).find(node => node.id === edge.source.id)?.path ?? null;
+    const sourceDelivery = (currentSnapshot?.history?.deliveries || []).findLast(delivery => delivery.node === sourceOwner && delivery.port === edge.source.port && (!selectedEnvelopeId || causalIds.has(delivery.envelope_id)));
+    const selectedCase = sourceDelivery?.data?.content?.case ?? sourceDelivery?.data?.content;
+    group.classList.toggle("causal-related", Boolean(sourceDelivery && causalIds.has(sourceDelivery.envelope_id)));
+    group.classList.toggle("case-selected", Boolean(sourceDelivery && edge.cases?.includes(String(selectedCase))));
+    if (edge.cases?.length) group.dataset.selectedCase = edge.cases.includes(String(selectedCase)) ? String(selectedCase) : "";
     const route = edgeRoutes.get(edge.index);
     if (!route) continue;
     const pathData = graphLayout.curvedCorridorPath(route.presentationPoints || route.points);
@@ -883,9 +1031,11 @@ function renderTopology(topology, animateBoundary = false) {
     });
     const title = svgElement("title");
     title.textContent = mailbox
-      ? `${edge.route} · ${edge.queued_count || "0"} messages waiting`
+      ? `${edge.route} · ${edge.queued_count || "0"} messages waiting · capacity ${edge.capacity ?? "not exposed"} (shared instance mailbox)${edge.cases?.length ? ` · cases ${edge.cases.join(" | ")}` : ""}`
       : edge.route;
     path.append(title);
+    attachTooltip(path, title.textContent);
+    if (sourceDelivery) path.addEventListener("click", () => selectEnvelope(sourceDelivery.envelope_id));
     group.append(path);
 
     if (active && animateBoundary) {
@@ -927,6 +1077,19 @@ function renderTopology(topology, animateBoundary = false) {
       const queued = svgElement("text", { x: "18", y: "13", "text-anchor": "middle" });
       queued.textContent = `≡ ${edge.queued_count || "0"}`;
       badge.append(counterTitle, queued);
+      const preview = document.createElement("div");
+      const header = document.createElement("strong");
+      header.textContent = counterTitle.textContent;
+      preview.append(header);
+      for (const delivery of (edge.mailbox || []).slice(0, 5)) {
+        const row = document.createElement("div");
+        row.className = "mailbox-preview-row";
+        row.textContent = `${String(delivery.envelope_id).slice(0, 8)}${delivery.claimed ? " · claimed" : ""}`;
+        appendDataTree(row, delivery.data);
+        preview.append(row);
+      }
+      if ((edge.mailbox || []).length > 5) preview.append(document.createTextNode(`First 5 of ${edge.mailbox.length}; open the mailbox for the complete FIFO.`));
+      attachTooltip(badge, preview);
       const inspect = (event) => {
         event.stopPropagation();
         inspectMailbox(edge.route);
@@ -956,6 +1119,7 @@ function renderTopology(topology, animateBoundary = false) {
       class: `graph-node graph-node-${node.kind}${active ? " active" : ""}${active && animateBoundary ? " moving" : ""}${selectable ? " selectable" : ""}${selected ? " selected" : ""}`,
       transform: `translate(${position.x} ${position.y})`,
     });
+    group.classList.toggle("causal-related", relatedOwners.has(node.path));
     if (selectable) {
       const inspectId = node.id;
       group.setAttribute("role", "button");
@@ -975,7 +1139,7 @@ function renderTopology(topology, animateBoundary = false) {
     }
     const title = svgElement("title");
     title.textContent = node.path
-      ? `${node.path} · ${itemDescriptor(node)}`
+      ? `${node.path} · ${node.kind} · ${itemDescriptor(node)} · ${node.profile || "DSL Dispatch"} · ${(node.instances || []).length} open instances`
       : `${node.label} · ${node.kind}`;
     group.append(title);
     if (node.kind === "boundary") {
@@ -999,7 +1163,7 @@ function renderTopology(topology, animateBoundary = false) {
       });
       const boundaryLabel = node.kind === "discard"
         ? String(node.label || "Discard").replace(/^Discard · /, "")
-        : node.label || node.ports?.[0]?.name || "boundary";
+        : node.label || node.ports?.[0]?.name || "port";
       label.textContent = boundaryLabel;
       group.append(pin, label);
       nodeLayer.append(group);
@@ -1018,6 +1182,7 @@ function renderTopology(topology, animateBoundary = false) {
       "text-anchor": "start",
     });
     name.textContent = truncate(node.label || node.path || node.id, 22);
+    attachTooltip(name, title.textContent);
     group.append(body, name);
     const subtitle = [nodeSubtitle(node), ...(node.extensions || []).map((extension) => `+ ${extension}`)].filter(Boolean).join(" · ");
     if (subtitle) {
@@ -1028,6 +1193,7 @@ function renderTopology(topology, animateBoundary = false) {
         "text-anchor": "start",
       });
       type.textContent = subtitle;
+      attachTooltip(type, extensionDescription(node) || node.profile || node.type);
       appendLoopDial(type, node);
       group.append(type);
     }
@@ -1078,6 +1244,14 @@ function renderTopology(topology, animateBoundary = false) {
         ? `output port ${port.name} · drained to nothing; no downstream mailbox`
         : `${port.direction} port ${port.name}`;
       pin.append(portTitle);
+      pin.dataset.port = port.name;
+      attachTooltip(pin, portDescription(topology, node, port));
+      const inspectPort = event => {
+        const delivery = (currentSnapshot?.history?.deliveries || []).findLast(delivery => delivery.node === node.path && delivery.port === port.name);
+        if (delivery) { event.stopPropagation(); selectEnvelope(delivery.envelope_id); }
+      };
+      pin.addEventListener('click', inspectPort);
+      pin.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); inspectPort(event); } });
       const portLabel = svgElement("text", {
         class: "graph-node-port-label",
         x: port.direction === "input" ? "-8" : String(position.width + 8),
@@ -1233,10 +1407,10 @@ function rowMatchesSelection(row, selection, fields) {
 function envelopePanel(snapshot) {
   const panel = document.createElement("aside");
   panel.className = "envelope-inspector";
-  panel.setAttribute("aria-label", "Current envelope boundary");
+  panel.setAttribute("aria-label", "Selected envelope");
   const nextInjection = snapshot?.scenario?.current?.next_injection;
   const deliveries = snapshot?.history?.deliveries || [];
-  const delivery = deliveries.at(-1) || null;
+  const delivery = selectedEnvelopeId ? deliveries.find(row => row.envelope_id === selectedEnvelopeId) : deliveries.at(-1);
   const heading = document.createElement("div");
   heading.className = "envelope-heading";
   const identity = document.createElement("div");
@@ -1247,7 +1421,17 @@ function envelopePanel(snapshot) {
   heading.append(identity);
   panel.append(heading);
 
-  if (nextInjection?.position === "before-app-input") {
+  if (selectedEnvelopeId && !delivery) {
+    const spine = (snapshot.history?.envelopes || []).find(envelope => envelope.envelope_id === selectedEnvelopeId);
+    position.textContent = `Transition ${snapshot.timeline.boundary}`;
+    title.textContent = 'Retained causal envelope';
+    panel.append(identifier(selectedEnvelopeId, 'envelope'));
+    if (spine) panel.append(envelopeZones({ sys: { id: spine.envelope_id, origin_id: spine.origin_id, parent_id: spine.parent_id } }, { content: 'No DATA observation is retained for this envelope at this transition.' }));
+    else panel.append(document.createTextNode('This envelope is outside the selected journal prefix.'));
+    return panel;
+  }
+
+  if (!selectedEnvelopeId && nextInjection?.position === "before-app-input") {
     position.textContent = "Next authored input";
     title.textContent = `App.${nextInjection.port}`;
     const badges = document.createElement("div");
@@ -1261,21 +1445,37 @@ function envelopePanel(snapshot) {
   }
 
   if (delivery) {
-    position.textContent = "Latest envelope boundary";
+    position.textContent = selectedEnvelopeId ? "Selected envelope" : "Latest observed envelope";
     title.textContent = `${delivery.node || "App"}.${delivery.port || "?"}`;
     const badges = document.createElement("div");
     badges.className = "envelope-badges";
-    for (const label of [delivery.envelope_id, delivery.origin_id && `origin ${delivery.origin_id}`]) {
-      if (!label) continue;
-      const badge = document.createElement("span");
-      badge.textContent = label;
-      badges.append(badge);
+    for (const [name, id] of [["id", delivery.envelope_id], ["origin", delivery.origin_id]]) {
+      if (id) badges.append(identifier(id, name, () => selectEnvelope(id)));
     }
     panel.append(badges, envelopeZones(delivery.meta, delivery.data));
+    if (selectedEnvelopeId) {
+      const ids = lineage();
+      const commands = (snapshot.history?.commands || []).filter(command => ids.has(command.cause));
+      if (commands.length) {
+        const title = document.createElement('h3'); title.textContent = 'Causal commands'; panel.append(title);
+        for (const command of commands) {
+          const row = document.createElement('div'); row.className = 'causal-command';
+          row.append(identifier(command.reference, `${command.kind} command`));
+          for (const [field, label] of [['produced', 'CommandProduced'], ['consumed', 'CommandConsumed'], ['admitted', 'Admit']]) {
+            if (command[field] == null) continue;
+            const link = document.createElement('button');
+            link.textContent = `${label} · record ${command[field]} · transition ${boundaryForRecord(command[field])}`;
+            link.addEventListener('click', () => showRecordBoundary(command[field]).catch(showViewError));
+            row.append(link);
+          }
+          panel.append(row);
+        }
+      }
+    }
     return panel;
   }
 
-  position.textContent = `Boundary B${snapshot?.timeline?.boundary || 0}`;
+  position.textContent = `Transition ${snapshot?.timeline?.boundary || 0}`;
   title.textContent = "No envelope delivery observed yet";
   return panel;
 }
@@ -1341,10 +1541,47 @@ function definitionPanel(item) {
   location.textContent = `Source ${Number(item.definition.source_index) + 1} · ${lineLabel}`;
   const pre = document.createElement("pre");
   pre.className = "node-definition-code";
-  const code = document.createElement("code");
-  code.textContent = item.definition.code;
-  pre.append(code);
+  const record = decisionRecord(item.path);
+  const decision = record?.decision;
+  let sourceArms = item.definition.decisions?.find(handler => handler.trigger === decision?.trigger)?.arms || [];
+  const highlights = new Set();
+  const explanations = document.createElement("div");
+  explanations.className = "decision-explanation";
+  if (decision?.unavailable) explanations.textContent = decision.unavailable;
+  for (const step of decision?.steps || []) {
+    const selected = step.kind === "closed"
+      ? sourceArms.find(arm => arm.cases.includes(step.case)) || sourceArms.find(arm => arm.fallback)
+      : step.selected === null ? sourceArms.find(arm => arm.fallback) : sourceArms.filter(arm => !arm.fallback)[step.selected];
+    const summary = document.createElement("p");
+    summary.textContent = step.kind === "closed" ? `Selected case: ${step.case}` : step.selected === null ? "Selected fallback: _" : `Selected predicate ${step.selected + 1}`;
+    explanations.append(summary);
+    for (const predicate of step.predicates || []) {
+      const line = document.createElement("p");
+      line.className = predicate.value ? "predicate-true" : "predicate-false";
+      line.textContent = `${sourceArms.filter(arm => !arm.fallback)[predicate.index]?.predicate || `Predicate ${predicate.index + 1}`} = ${predicate.value}`;
+      explanations.append(line);
+    }
+    if (selected) {
+      for (let line = selected.lines[0]; line <= selected.lines[1]; line++) {
+        if (!selected.children.some(child => line >= child.lines[0] && line <= child.lines[1])) highlights.add(line);
+      }
+      sourceArms = selected.children;
+    }
+  }
+  item.definition.code.split("\n").forEach((text, index) => {
+    const line = document.createElement("span");
+    const number = Number(item.definition.first_line) + index;
+    line.className = `source-line${highlights.has(number) ? " fired" : ""}`;
+    line.dataset.line = String(number);
+    line.textContent = text;
+    pre.append(line);
+  });
   panel.append(heading, badges);
+  if (record && decision) {
+    const label = document.createElement("p");
+    label.textContent = `Transaction · record ${record.record_index} · transition ${boundaryForRecord(record.record_index)}`;
+    panel.append(label, explanations);
+  }
   panel.append(location, pre);
   const commands = (currentSnapshot?.topology?.commands || []).filter((command) =>
     command.source_owner === item.path || command.owner === item.path);
@@ -1360,6 +1597,133 @@ function definitionPanel(item) {
     }
   }
   return panel;
+}
+
+function decisionRecord(owner) {
+  const records = currentSnapshot?.history?.records || [];
+  return selectedRecordIndex === null
+    ? records.findLast(record => record.owner === owner && record.decision)
+    : records.find(record => record.record_index === selectedRecordIndex && record.owner === owner);
+}
+
+function renderAssertion(snapshot) {
+  const target = document.querySelector('#assertion');
+  const expectation = snapshot.scenario?.current?.expectation;
+  if (!expectation) { empty(target, 'No assertion at this transition. Select an expect action in the scenario.'); return; }
+  target.className = '';
+  target.replaceChildren();
+  const heading = document.createElement('h3');
+  heading.textContent = expectation.failed ? 'Assertion failed' : 'Assertion passed';
+  target.append(heading);
+  const key = `${snapshot.timeline.session}:${snapshot.timeline.boundary}`;
+  if (expectation.failed && explainedFailure !== key) { explainedFailure = key; activateInspectorTab('assertion'); }
+  if (expectation.redacted) { target.append(document.createTextNode(expectation.reason)); return; }
+  const scenario = snapshot.scenario.current;
+  const definition = scenario.definition;
+  const line = definition?.action_lines?.[Number(scenario.next_action_index) - 1];
+  const nextLine = definition?.action_lines?.[Number(scenario.next_action_index)];
+  if (line && definition.code) {
+    const source = document.createElement('pre');
+    source.textContent = definition.code.split('\n').slice(line - 1, nextLine ? nextLine - 1 : undefined).join('\n');
+    target.append(source);
+  }
+  const summary = document.createElement('p');
+  summary.textContent = `${expectation.target} · ${expectation.observed} observed · ${expectation.matched ?? 'unknown'} matching · expected ${expectation.quantifier}`;
+  target.append(summary);
+  for (const envelope of expectation.envelopes) {
+    const row = document.createElement('div');
+    row.className = 'assertion-envelope';
+    row.append(identifier(envelope.envelope_id, 'envelope', () => selectEnvelope(envelope.envelope_id)));
+    for (const comparison of envelope.comparisons) {
+      const difference = document.createElement('div');
+      difference.className = comparison.held ? '' : 'assertion-difference';
+      const label = document.createElement('p');
+      label.textContent = `${comparison.field} ${comparison.operator} · ${comparison.held ? 'matches' : 'differs'} (observed / expected)`;
+      difference.append(label);
+      appendDataTree(difference, { observed: comparison.actual.content, expected: comparison.expected.content });
+      row.append(difference);
+    }
+    appendDataTree(row, envelope.data);
+    target.append(row);
+  }
+}
+
+async function renderComparison() {
+  const request = ++comparisonRequest;
+  const target = document.querySelector('#comparison');
+  const mode = document.querySelector('#compare-mode').value;
+  const snapshot = currentSnapshot;
+  if (!snapshot) return;
+  const loopOwners = new Set((Array.isArray(snapshot.loop_runs) ? snapshot.loop_runs : []).map(run => run.owner));
+  const options = mode === 'sessions'
+    ? (timelineIndex?.sessions || []).map(session => ({ value: String(session.session), label: sessionName(session.session) }))
+    : (snapshot.instances || []).filter(instance => loopOwners.has(instance.owner)).map(instance => ({ value: JSON.stringify(instance.reference), label: `${instance.owner || 'App'} · ${instance.label} · gen ${instance.reference.generation}` }));
+  for (const [index, id] of ['compare-left', 'compare-right'].entries()) {
+    const select = document.getElementById(id);
+    const old = select.value;
+    select.replaceChildren(...options.map(option => { const element = document.createElement('option'); element.value = option.value; element.textContent = option.label; return element; }));
+    select.value = options.some(option => option.value === old) ? old : options[index]?.value || options[0]?.value || '';
+  }
+  const rightSelect = document.querySelector('#compare-right');
+  if (rightSelect.value === document.querySelector('#compare-left').value && options.length > 1) {
+    rightSelect.value = options.find(option => option.value !== rightSelect.value).value;
+  }
+  const left = document.querySelector('#compare-left').value;
+  const right = document.querySelector('#compare-right').value;
+  if (!left || !right || left === right) { empty(target, 'Select two distinct Loop instances or retained sessions.'); return; }
+  let snapshots = [snapshot, snapshot];
+  if (mode === 'sessions') {
+    try {
+      snapshots = await Promise.all([left, right].map(async session => {
+        const frame = timelineFrames(session).find(frame => Number(frame.boundary) === Number(snapshot.timeline.boundary));
+        if (!frame) return null;
+        const response = await fetch(`/api/snapshot?session=${encodeURIComponent(session)}&boundary=${frame.boundary}`);
+        if (!response.ok) throw new Error('A comparison frame is no longer available.');
+        return response.json();
+      }));
+    } catch (error) { if (request === comparisonRequest) empty(target, error.message); return; }
+  }
+  if (request !== comparisonRequest) return;
+  target.className = '';
+  target.replaceChildren();
+  const heading = document.createElement('p');
+  heading.textContent = `Aligned at transition ${snapshot.timeline.boundary} · differences are values, not a replay verdict`;
+  target.append(heading);
+  const columns = snapshots.map((value, index) => {
+    if (!value) return null;
+    const reference = mode === 'instances' ? JSON.parse(index === 0 ? left : right) : null;
+    const instances = (value.instances || []).filter(instance => !reference || sameInstance(instance.reference, reference));
+    return { logical_time: formatLogicalTime(value.execution.logical_time_ns), instances: instances.map(instance => ({ owner: instance.owner || 'App', key: instance.label, phase: instance.phase, state: instance.state })),
+      loops: (Array.isArray(value.loop_runs) ? value.loop_runs : []).filter(run => !reference || sameInstance(run.instance, reference)).map(run => ({ owner: run.owner || 'App', application: run.application, remaining: run.remaining, phase: run.phase, due: run.due_at_ns == null ? null : formatLogicalTime(run.due_at_ns) })) };
+  });
+  for (const field of ['logical_time', 'instances', 'loops']) {
+    const row = document.createElement('div');
+    row.className = `comparison-row${JSON.stringify(columns[0]?.[field]) !== JSON.stringify(columns[1]?.[field]) ? ' different' : ''}`;
+    for (const column of columns) {
+      const cell = document.createElement('div');
+      const label = document.createElement('h4'); label.textContent = field.replaceAll('_', ' '); cell.append(label);
+      if (column) appendDataTree(cell, column[field]); else cell.append(document.createTextNode('This transition is not retained in this session.'));
+      row.append(cell);
+    }
+    target.append(row);
+  }
+}
+
+function lineage() {
+  const result = new Set();
+  if (!selectedEnvelopeId) return result;
+  const envelopes = currentSnapshot?.history?.envelopes || [];
+  const selected = envelopes.find(envelope => envelope.envelope_id === selectedEnvelopeId);
+  const origin = selected?.origin_id;
+  for (const envelope of envelopes) {
+    if (envelope.envelope_id === selectedEnvelopeId || (origin && envelope.origin_id === origin)) result.add(envelope.envelope_id);
+  }
+  return result;
+}
+
+function lineageRecord(record, ids) {
+  return (record.envelope_ids || []).some(id => ids.has(id))
+    || (record.commands_produced || []).some(command => ids.has(command.cause));
 }
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
@@ -1401,7 +1765,11 @@ function appendLoopDial(label, item) {
     return value > max ? value : max;
   }, 0n);
   const dial = svgElement("tspan", { class: "graph-loop-dial", "data-owner": item.path || "" });
-  const value = `⟳ ${admitted}${runs.length > 1 ? ` ·${runs.length}` : ""}${runs.some((run) => run.waiting) ? " ⏱" : ""}`;
+  const fuel = item.loop?.fuel;
+  const waiting = runs.filter(run => run.waiting);
+  const due = waiting.length ? waiting.reduce((a, b) => BigInt(a.due_at_ns) < BigInt(b.due_at_ns) ? a : b).due_at_ns : null;
+  const delay = due === null ? "" : ` ⏱ ${formatLogicalTime(BigInt(due) - BigInt(currentSnapshot.execution.logical_time_ns))}`;
+  const value = `⟳ ${admitted}${fuel == null ? "" : `/${fuel}`}${runs.length > 1 ? ` ·${runs.length}` : ""}${delay}`;
   dial.textContent = `  ${value}`;
   dial.setAttribute("aria-label", `Loop: ${admitted} admitted applications; ${runs.length} active runs`);
   const title = svgElement("title");
@@ -1409,6 +1777,7 @@ function appendLoopDial(label, item) {
     `${String(run.reference).slice(0, 8)} · ${run.remaining}/${run.fuel} applications remaining · ${run.waiting ? `waiting until ${formatLogicalTime(run.due_at_ns)}` : "no armed delay"} · exhaustion: ${run.expired_port || "proved impossible"}`
   ).join("\n") : "No active Loop run · 0 admitted applications";
   dial.append(title);
+  attachTooltip(dial, title.textContent);
   label.append(dial);
 }
 
@@ -1489,7 +1858,7 @@ function renderHistory(history, selection) {
   }
   const start = Math.max(0, records.length - historyLimit);
   const fragment = document.createDocumentFragment();
-  fragment.append(historyTable("Causal records", records.slice(start), ["record_index", "summary", "trigger", "origin_id"], true));
+  fragment.append(historyTable("Causal records", records.slice(start), ["record_index", "record_type", "summary", "trigger", "origin_id"], true));
   fragment.append(historyTable("Observed envelopes", deliveries.slice(Math.max(0, deliveries.length - historyLimit)), ["index", "node", "port", "envelope_id", "meta", "data"], false));
   target.className = "history-stack";
   target.replaceChildren(fragment);
@@ -1510,7 +1879,7 @@ function historyTable(label, rows, columns, open) {
   for (const column of columns) {
     const cell = document.createElement("th");
     cell.scope = "col";
-    cell.textContent = ["meta", "data"].includes(column)
+    cell.textContent = column === "record_index" ? "record · transition" : ["meta", "data"].includes(column)
       ? column.toUpperCase()
       : column.replaceAll("_", " ");
     header.append(cell);
@@ -1521,11 +1890,15 @@ function historyTable(label, rows, columns, open) {
     const line = document.createElement("tr");
     if (Object.hasOwn(row, "record_index")) {
       line.className = "timeline-record";
+      line.classList.toggle("causal-related", lineageRecord(row, lineage()));
+      line.dataset.record = String(row.record_index);
       line.tabIndex = 0;
       line.setAttribute("role", "button");
       line.title = `View the system at causal record R${row.record_index}`;
-      const openRecord = () => showRecordBoundary(row.record_index)
+      const openRecord = () => { selectedRecordIndex = row.record_index; return showRecordBoundary(row.record_index)
+        .then(() => { const item = currentSnapshot?.topology?.nodes.find(item => item.path === row.owner); if (item) selectedTopologyItem = item.id; renderRelatedPanels(currentSnapshot); })
         .catch((error) => setCommandStatus(`Historical view unavailable: ${error.message}`));
+      };
       line.addEventListener("click", openRecord);
       line.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -1540,15 +1913,12 @@ function historyTable(label, rows, columns, open) {
         appendDataTree(cell, row[column]);
       } else if (column === "record_index") {
         const boundary = boundaryForRecord(row[column]);
-        appendValue(cell, boundary === null ? `R${row[column]}` : `R${row[column]} · B${boundary}`);
-      } else if (column === "origin_id" && typeof row[column] === "string") {
-        const abbreviated = document.createElement("code");
-        abbreviated.textContent = row[column].slice(0, 8);
-        abbreviated.title = row[column];
-        abbreviated.setAttribute("aria-label", row[column]);
-        cell.append(abbreviated);
+        appendValue(cell, boundary === null ? `record ${row[column]}` : `record ${row[column]} · transition ${boundary}`);
+      } else if (["origin_id", "envelope_id"].includes(column) && typeof row[column] === "string") {
+        cell.append(identifier(row[column], "", () => selectEnvelope(row[column])));
       } else {
         appendValue(cell, row[column]);
+        if (typeof row[column] === "string") cell.title = row[column];
       }
       line.append(cell);
     }
@@ -1563,7 +1933,7 @@ async function showRecordBoundary(recordIndex) {
   const session = Number(currentSnapshot?.timeline?.session || 0);
   const boundary = boundaryForRecord(recordIndex);
   const frame = timelineFrames(session).find((candidate) => Number(candidate.boundary) === boundary);
-  if (!frame) throw new Error(`no retained boundary contains R${recordIndex}`);
+    if (!frame) throw new Error(`no retained transition contains record ${recordIndex}`);
   clearPlaybackTimer();
   bufferedPlayback = false;
   replayPaused = false;
@@ -1596,7 +1966,7 @@ function renderInjections(snapshot, selection) {
   const session = Number(snapshot?.timeline?.session || 0);
   const table = document.createElement("table");
   const header = document.createElement("tr");
-  for (const label of ["Key", "Logical time", "Boundary", "Session"]) {
+  for (const label of ["Key", "Logical time", "Transition", "Session"]) {
     const cell = document.createElement("th");
     cell.textContent = label;
     header.append(cell);
@@ -1626,7 +1996,7 @@ function renderInjections(snapshot, selection) {
     const logical = delivery?.meta?.sys?.logical_time_ns
       ?? delivery?.meta?.sys?.timestamp_ns
       ?? null;
-    const values = [visibleKeyValue(delivery.data) || truncate(origin, 10), logical === null ? "…" : formatLogicalTime(logical), boundary === null ? "—" : `B${boundary}`, sessionName(session)];
+    const values = [visibleKeyValue(delivery.data) || String(origin).slice(0, 8), logical === null ? "…" : formatLogicalTime(logical), boundary === null ? "—" : String(boundary), sessionName(session)];
     const cells = [];
     for (const value of values) {
       const cell = document.createElement("td");
@@ -1674,10 +2044,14 @@ function renderInstances(instances, selection) {
     heading.append(select);
     const meta = document.createElement("p");
     meta.className = "card-meta";
-    meta.textContent = `${instance.phase} · generation ${instance.reference?.generation ?? "?"}`;
-    const address = document.createElement("code");
+    meta.textContent = `${instance.label || instance.owner || "App"} · gen ${instance.reference?.generation ?? "?"} · ${instance.phase}`;
+    const address = document.createElement("details");
     address.className = "instance-address";
-    address.textContent = `address ${instance.reference?.address || "?"}`;
+    const summary = document.createElement("summary");
+    summary.textContent = "Instance address";
+    const full = document.createElement("code");
+    full.textContent = instance.reference?.address || "?";
+    address.append(summary, full, identifier(instance.reference?.address || "?", "address"));
     card.append(heading, meta, address);
     appendValue(card, instance.state);
     return card;
@@ -1703,6 +2077,7 @@ function renderLoopRuns(runs, selection) {
       const cell = document.createElement("td"); cell.textContent = value; row.append(cell);
     }
     row.firstChild.title = run.reference;
+    row.firstChild.replaceChildren(identifier(run.reference, 'Loop run'));
     body.append(row);
   }
   table.append(body); target.className = "table-scroll"; target.replaceChildren(table);
@@ -1762,19 +2137,10 @@ function renderGeneric(id, value, message) {
 
 function appendValue(target, value) {
   if (value !== null && typeof value === "object") {
-    const details = document.createElement("details");
-    details.open = true;
-    const summary = document.createElement("summary");
-    const count = Array.isArray(value) ? value.length : Object.keys(value).length;
-    summary.textContent = Array.isArray(value)
-      ? `${count} item${count === 1 ? "" : "s"}`
-      : `${count} field${count === 1 ? "" : "s"}`;
-    const pre = document.createElement("pre");
-    pre.textContent = JSON.stringify(value, null, 2);
-    details.append(summary, pre);
-    target.append(details);
+    appendDataTree(target, value);
     return;
   }
+  if (typeof value === "string" && /^[0-9a-f]{32,}$/i.test(value)) { target.append(identifier(value)); return; }
   const code = document.createElement("code");
   code.textContent = value === undefined ? "—" : String(value);
   target.append(code);
@@ -1842,7 +2208,10 @@ function dataTreeLeaf(name, value) {
   const kind = value === null ? "null" : typeof value;
   content.className = `data-tree-value data-tree-value-${kind}`;
   content.textContent = value === undefined ? "—" : value === null ? "null" : String(value);
-  row.append(content);
+  if (typeof value === "string" && /^[0-9a-f]{32,}$/i.test(value)) {
+    const causal = ["id", "origin_id", "parent_id", "envelope_id"].includes(name);
+    row.append(identifier(value, "", causal ? () => selectEnvelope(value) : null));
+  } else row.append(content);
   return row;
 }
 
@@ -1956,6 +2325,9 @@ for (const button of document.querySelectorAll("button[data-command]")) {
       pauseBufferedPlayback();
       if (!(liveSnapshot?.execution?.legal_commands || []).includes("pause")) return;
     }
+    // Returning to the current head via arrows is still an inspection gesture;
+    // an enabled execution control explicitly resumes following the live head.
+    if (sameTimelinePoint(currentSnapshot, liveSnapshot)) manualHistoricalView = false;
     if (command === "resume") {
       clearPlaybackTimer();
       manualHistoricalView = false;
@@ -1972,11 +2344,16 @@ for (const button of document.querySelectorAll("button[data-command]")) {
       replayPaused = false;
       bufferedPlayback = false;
       selectedTopologyItem = null;
+      selectedEnvelopeId = null;
+      selectedRecordIndex = null;
+      selectedLoopInstance = null;
+      explainedFailure = null;
       selectedMailboxRoute = null;
       scenarioDefinitionActive = false;
       setCommandStatus("");
     }
     pendingCommandRevision = liveSnapshot?.revision ?? currentSnapshot?.revision ?? 0;
+    commandOrigin = { command, boundary, action: currentSnapshot?.scenario?.current?.next_action_index, quiescent: currentSnapshot?.scenario?.current?.quiescent };
     updateControls();
     try {
       await post(`/api/command/${command}`);
@@ -2065,6 +2442,10 @@ document.querySelector("#select-scenario").addEventListener("click", async () =>
     bufferedPlayback = false;
     replayPaused = false;
     selectedTopologyItem = null;
+    selectedEnvelopeId = null;
+    selectedRecordIndex = null;
+    selectedLoopInstance = null;
+    explainedFailure = null;
     selectedMailboxRoute = null;
     pendingCommandRevision = liveSnapshot?.revision ?? currentSnapshot?.revision ?? 0;
     updateControls();
@@ -2089,3 +2470,85 @@ events.onerror = () => {
 window.addEventListener("pagehide", releaseControl);
 
 claim().then(refresh).catch((error) => setCommandStatus(error.message));
+
+function dismissFirstContact() {
+  if (!firstContact) return;
+  firstContact = false;
+  setCommandStatus("");
+}
+document.addEventListener("pointerdown", dismissFirstContact, { once: true, capture: true });
+document.addEventListener("keydown", dismissFirstContact, { once: true, capture: true });
+
+function pausePresentation() {
+  clearPlaybackTimer();
+  bufferedPlayback = false;
+  replayPaused = false;
+}
+
+function showViewError(error) { setCommandStatus(`Historical view unavailable: ${error.message}`); }
+
+function stepForward() {
+  const session = currentSnapshot?.timeline?.session || 0;
+  const next = timelineFrames(session).find(frame => Number(frame.boundary) > Number(currentSnapshot?.timeline?.boundary || 0));
+  if (next) { pausePresentation(); showBoundary(session, next.boundary).catch(showViewError); }
+  else document.querySelector('#step:not(:disabled)')?.click();
+}
+
+function openSearch() {
+  document.querySelector('#search-panel').hidden = false;
+  document.querySelector('#search').focus();
+  renderSearchResults();
+}
+
+function renderSearchResults() {
+  const target = document.querySelector('#search-results');
+  if (!target || document.querySelector('#search-panel').hidden) return;
+  const query = document.querySelector('#search').value.toLowerCase();
+  target.replaceChildren();
+  const results = [];
+  for (const item of [...(currentSnapshot?.topology?.owners || []), ...(currentSnapshot?.topology?.nodes || [])]) {
+    results.push({ label: item.path || "App", search: item.path || "App", open: () => selectTopologyItem(item.id) });
+    for (const port of item.ports) results.push({ label: `${item.path || 'App'}.${port.name}`, search: `${item.path || 'App'}.${port.name}`, open: () => {
+      const delivery = currentSnapshot.history.deliveries.findLast(delivery => (delivery.node || '') === item.path && delivery.port === port.name);
+      if (delivery) selectEnvelope(delivery.envelope_id); else selectTopologyItem(item.id);
+    } });
+  }
+  for (const envelope of currentSnapshot?.history?.envelopes || []) results.push({ label: `Envelope ${envelope.envelope_id.slice(0, 8)}`, search: envelope.envelope_id, open: () => selectEnvelope(envelope.envelope_id) });
+  for (const result of results.filter(result => result.search.toLowerCase().includes(query)).slice(0, 50)) {
+    const button = document.createElement('button');
+    button.textContent = result.label;
+    button.addEventListener('click', () => { document.querySelector('#search-panel').hidden = true; result.open(); });
+    target.append(button);
+  }
+  if (!target.children.length) target.textContent = 'No matching node, port or retained envelope.';
+}
+
+document.querySelector('#open-search').addEventListener('click', openSearch);
+document.querySelector('#search').addEventListener('input', renderSearchResults);
+for (const id of ['compare-mode', 'compare-left', 'compare-right']) document.getElementById(id).addEventListener('change', renderComparison);
+document.addEventListener('keydown', event => {
+  if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    document.querySelector('#search-panel').hidden = true;
+    document.querySelector('#graph-tooltip')?.setAttribute('hidden', '');
+    document.querySelector('#future').open = false;
+    selectedEnvelopeId = null; selectedRecordIndex = null;
+    selectTopologyItem(null);
+    (document.querySelector('#step:not(:disabled)') || document.querySelector('#open-search')).focus();
+    return;
+  }
+  if (event.target.closest('input, select, textarea, [contenteditable=true]')) return;
+  const command = name => document.querySelector(`[data-command="${name}"]:not(:disabled)`)?.click();
+  switch (event.key) {
+    case '/': event.preventDefault(); openSearch(); break;
+    case 'ArrowLeft': event.preventDefault(); document.querySelector('#back-boundary:not(:disabled)')?.click(); break;
+    case 'ArrowRight': event.preventDefault(); stepForward(); break;
+    case 'n': event.preventDefault(); stepForward(); break;
+    case 'a': event.preventDefault(); command('next-scenario-action'); break;
+    case ' ': event.preventDefault(); command(bufferedPlayback || liveSnapshot?.execution?.state === 'running' ? 'pause' : 'resume'); break;
+    case 'Enter':
+      if (!event.target.closest('button, a, [role=button], summary')) { event.preventDefault(); activateInspectorTab('envelope', true); }
+      break;
+  }
+});
