@@ -30,7 +30,8 @@ use tokio::sync::{RwLock, mpsc, watch};
 mod view;
 
 pub use view::{
-    ActivityView, ExecutionState, FaultView, SnapshotInput, scenario_injection_json, snapshot,
+    ActivityView, ExecutionState, FaultView, SnapshotInput, scenario_definition_json,
+    scenario_injection_json, snapshot,
 };
 
 const INDEX_HTML: &str = include_str!("index.html");

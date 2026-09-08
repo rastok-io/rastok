@@ -15,8 +15,12 @@ let manualHistoricalView = false;
 let bufferedPlayback = false;
 let replayPaused = false;
 let playbackTimer = null;
+let viewRequest = 0;
+let refreshPromise = null;
+let refreshAgain = false;
 let historyLimit = 100;
 let selectedTopologyItem = null;
+let selectedLoopInstance = null;
 let selectedMailboxRoute = null;
 let mailboxVisibleLimit = 100;
 let lastAnimatedActivity = null;
@@ -71,7 +75,20 @@ function releaseControl() {
   }).catch(() => {});
 }
 
-async function refresh() {
+function refresh() {
+  refreshAgain = true;
+  if (!refreshPromise) {
+    refreshPromise = (async () => {
+      do {
+        refreshAgain = false;
+        await refreshSnapshot();
+      } while (refreshAgain);
+    })().finally(() => { refreshPromise = null; });
+  }
+  return refreshPromise;
+}
+
+async function refreshSnapshot() {
   const [snapshotResponse, timelineResponse] = await Promise.all([
     fetch("/api/snapshot", { cache: "no-store" }),
     fetch("/api/timeline", { cache: "no-store" }),
@@ -97,6 +114,7 @@ async function refresh() {
   }
   if (bufferedPlayback && !sameTimelinePoint(currentSnapshot, liveSnapshot)) {
     scheduleBufferedBoundary();
+    renderExecutionState(currentSnapshot);
     renderTimeline();
     updateControls();
     return;
@@ -146,13 +164,14 @@ function renderExecutionState(snapshot) {
   const liveState = liveSnapshot?.execution?.state || state;
   const atLive = sameTimelinePoint(snapshot, liveSnapshot);
   const pill = document.querySelector("#execution-state");
+  pill.title = `Engine ${liveState}; ${atLive ? "viewing the live head" : "viewing a retained boundary"}`;
   if (!atLive && (bufferedPlayback || replayPaused)) {
-    text("execution-state", `${replayPaused ? "replay paused" : "replaying"} · engine ${liveState}`);
+    text("execution-state", replayPaused ? "replay paused" : "replaying");
     pill.className = `execution-state state-${replayPaused ? "paused" : "running"}`;
     return;
   }
-  text("execution-state", atLive ? state : `${liveState} · live`);
-  pill.className = `execution-state state-${liveState}`;
+  text("execution-state", atLive ? state : "history");
+  pill.className = `execution-state state-${atLive ? liveState : "history"}`;
 }
 
 function sameTimelinePoint(left, right) {
@@ -173,11 +192,20 @@ function timelineFrames(session) {
 }
 
 async function showBoundary(session, boundary, manual = true) {
-  const response = await fetch(`/api/snapshot?session=${encodeURIComponent(session)}&boundary=${encodeURIComponent(boundary)}`, { cache: "no-store" });
-  if (!response.ok) throw new Error(await response.text());
+  const request = ++viewRequest;
+  if (manual) setCommandStatus("");
   manualHistoricalView = manual;
-  currentSnapshot = await response.json();
+  const response = await fetch(`/api/snapshot?session=${encodeURIComponent(session)}&boundary=${encodeURIComponent(boundary)}`, { cache: "no-store" });
+  if (!response.ok) {
+    const message = await response.text();
+    if (request !== viewRequest) return false;
+    throw new Error(message);
+  }
+  const snapshot = await response.json();
+  if (request !== viewRequest) return false;
+  currentSnapshot = snapshot;
   renderSnapshot(currentSnapshot);
+  return true;
 }
 
 function scheduleBufferedBoundary() {
@@ -201,8 +229,8 @@ function scheduleBufferedBoundary() {
   playbackTimer = setTimeout(async () => {
     playbackTimer = null;
     try {
-      await showBoundary(session, next.boundary, false);
-      scheduleBufferedBoundary();
+      const presented = await showBoundary(session, next.boundary, false);
+      if (presented && bufferedPlayback) scheduleBufferedBoundary();
     } catch (error) {
       bufferedPlayback = false;
       setCommandStatus(`Buffered playback stopped: ${error.message}`);
@@ -211,6 +239,9 @@ function scheduleBufferedBoundary() {
 }
 
 function clearPlaybackTimer() {
+  // Cancel the presentation intent as well as its timer: an older HTTP
+  // response must not undo Pause, Reset or a newer history selection.
+  viewRequest += 1;
   if (playbackTimer === null) return;
   clearTimeout(playbackTimer);
   playbackTimer = null;
@@ -218,6 +249,7 @@ function clearPlaybackTimer() {
 
 function startBufferedPlayback() {
   clearPlaybackTimer();
+  setCommandStatus("");
   manualHistoricalView = false;
   replayPaused = false;
   bufferedPlayback = true;
@@ -273,7 +305,8 @@ function renderTimeline() {
         ? "REPLAY PAUSED"
         : "HISTORY";
   text("timeline-position", `${view} · ${sessionName(session)} · B${boundary}`);
-  text("timeline-head", `live ${sessionName(liveSession)} · B${liveBoundary}`);
+  const engine = atLive ? "" : `engine ${liveSnapshot?.execution?.state || "paused"} · `;
+  text("timeline-head", `${engine}live ${sessionName(liveSession)} · B${liveBoundary}`);
   const returnLive = document.querySelector("#return-live");
   returnLive.hidden = atLive;
   const returnLabel = `Return to live ${sessionName(liveSession)} · B${liveBoundary}`;
@@ -296,9 +329,7 @@ function renderRelatedPanels(snapshot) {
   renderHistory(snapshot.history, selection);
   renderInjections(snapshot, selection);
   renderInstances(snapshot.instances, selection);
-  renderGeneric("loop-runs", Array.isArray(snapshot.loop_runs)
-    ? snapshot.loop_runs.filter((run) => rowMatchesSelection(run, selection, ["owner"]))
-    : snapshot.loop_runs, "No admitted Loop run.");
+  renderLoopRuns(snapshot.loop_runs, selection);
   renderExchanges(snapshot.exchanges, selection);
   renderCost(snapshot.cost_report, selection);
 }
@@ -395,25 +426,28 @@ function scenarioDefinitionPanel(scenario) {
   heading.append(identity, close);
   const progress = document.createElement("p");
   progress.className = "scenario-definition-progress";
-  progress.textContent = `A${scenario.next_action_index || 0}/${scenario.action_count || 0}`;
-  const actions = document.createElement("ol");
-  actions.className = "scenario-action-list";
-  if (scenario.last_action) {
-    const previous = document.createElement("li");
-    previous.className = "complete";
-    previous.value = Math.max(1, Number(scenario.next_action_index || 0));
-    previous.textContent = scenario.last_action;
-    actions.append(previous);
+  progress.textContent = `A${scenario.next_action_index || 0}/${scenario.action_count || 0} · ${scenario.complete ? "scenario complete" : `next: ${scenario.next_action || "—"}`}`;
+  panel.append(heading, progress);
+  const definition = scenario.definition;
+  if (typeof definition?.code === "string") {
+    const pre = document.createElement("pre");
+    pre.className = "node-definition-code scenario-definition-code";
+    const currentLine = definition.action_lines?.[scenario.next_action_index || 0];
+    definition.code.split("\n").forEach((text, index) => {
+      const line = document.createElement("span");
+      line.className = `source-line${index + 1 === currentLine ? " current" : ""}`;
+      line.dataset.line = String(Number(definition.first_line) + index);
+      line.textContent = text;
+      if (index + 1 === currentLine) line.setAttribute("aria-current", "step");
+      pre.append(line);
+    });
+    panel.append(pre);
+  } else {
+    const note = document.createElement("p");
+    note.className = "scenario-source-limit";
+    note.textContent = definition?.reason || "Authored scenario source is unavailable in this snapshot.";
+    panel.append(note);
   }
-  const current = document.createElement("li");
-  current.className = "current";
-  current.value = Number(scenario.next_action_index || 0) + 1;
-  current.textContent = scenario.next_action || "scenario complete";
-  actions.append(current);
-  const note = document.createElement("p");
-  note.className = "scenario-source-limit";
-  note.textContent = "This front-only snapshot exposes the current action outline, not the authored scenario source.";
-  panel.append(heading, progress, actions, note);
   return panel;
 }
 
@@ -440,7 +474,11 @@ function updateControls() {
       else if (!controls) reason = "this browser is an observer; take control first";
       else if (!atLive && !physicalControl) {
         reason = "available in LIVE only; select Return live";
-      } else if (!legal.has(command)) reason = "not legal at the current execution state";
+      } else if (!legal.has(command)) {
+        reason = command === "next-scenario-action" && liveSnapshot?.execution?.state === "paused"
+          ? "the current scenario action is still executing; use Step in or Play"
+          : "not legal at the current execution state";
+      }
     }
     button.title = reason ? `${base} — unavailable: ${reason}.` : base;
     button.setAttribute("aria-label", reason ? `${base}. Unavailable: ${reason}.` : base);
@@ -629,10 +667,16 @@ function installGraphViewport(canvas, layer) {
 
 function renderTopology(topology, animateBoundary = false) {
   const target = document.querySelector("#graph");
+  const focusKey = target.contains(document.activeElement)
+    ? document.activeElement.dataset.focusKey : null;
   if (!topology || !(topology.nodes || []).length) {
     empty(target, "Waiting for a validated topology.");
     return;
   }
+  const displayed = (item) => ({ ...item, ports: (item.ports || []).map((port) => ({
+    ...port, display_label: commandPortLabel(topology, item, port),
+  })) });
+  topology = { ...topology, nodes: (topology.nodes || []).map(displayed), owners: (topology.owners || []).map(displayed) };
   const activity = topology.activity || null;
   const drainedOutputs = new Set((topology.edges || [])
     .filter((edge) => edge.target?.kind === "discard")
@@ -680,9 +724,6 @@ function renderTopology(topology, animateBoundary = false) {
     "aria-label": "Validated Rastok graph with current mailbox occupancy",
   });
   svg.classList.add("graph-svg");
-  svg.addEventListener("click", (event) => {
-    if (event.target === svg) selectTopologyItem(null);
-  });
   const definitions = svgElement("defs");
   const marker = svgElement("marker", {
     id: "graph-arrow",
@@ -723,6 +764,7 @@ function renderTopology(topology, animateBoundary = false) {
     });
     if (selectable) {
       group.setAttribute("role", "button");
+      group.dataset.focusKey = owner.id;
       group.setAttribute("tabindex", "0");
       group.setAttribute("aria-pressed", String(selected));
       group.setAttribute("aria-label", `Inspect ${owner.path || "App"} Graph definition`);
@@ -779,7 +821,8 @@ function renderTopology(topology, animateBoundary = false) {
       y: position.y + 18,
       "text-anchor": "end",
     });
-    type.textContent = truncate(scopeDescriptor(owner), 34);
+    type.textContent = scopeDescriptor(owner);
+    appendLoopDial(type, owner);
     group.append(title, body, header, titleHit, name, type);
     appendInstanceBadge(
       group,
@@ -803,7 +846,7 @@ function renderTopology(topology, animateBoundary = false) {
         y: anchor.y - 5,
         "text-anchor": port.direction === "input" ? "start" : "end",
       });
-      label.textContent = port.name;
+      label.textContent = port.display_label || port.name;
       group.append(pin, label);
     }
     scopeLayer.append(group);
@@ -877,6 +920,7 @@ function renderTopology(topology, animateBoundary = false) {
         tabindex: "0",
         "aria-label": `Open mailbox ${destination.path || destination.label}.${edge.target.port}, ${edge.queued_count || "0"} messages waiting`,
       });
+      badge.dataset.focusKey = `mailbox:${edge.route}`;
       const counterTitle = svgElement("title");
       counterTitle.textContent = `Mailbox ${destination.path || destination.label}.${edge.target.port}: ${edge.queued_count || "0"} messages waiting`;
       badge.append(svgElement("rect", { width: "36", height: "18", rx: "2" }));
@@ -915,6 +959,7 @@ function renderTopology(topology, animateBoundary = false) {
     if (selectable) {
       const inspectId = node.id;
       group.setAttribute("role", "button");
+      group.dataset.focusKey = node.id;
       group.setAttribute("tabindex", "0");
       group.setAttribute("aria-pressed", String(selected));
       group.setAttribute("aria-label", `Inspect ${node.path} definition`);
@@ -969,12 +1014,12 @@ function renderTopology(topology, animateBoundary = false) {
     const name = svgElement("text", {
       class: "graph-node-name",
       x: "10",
-      y: nodeSubtitle(node) ? "17" : "25",
+      y: nodeSubtitle(node) || node.extensions?.length ? "17" : "25",
       "text-anchor": "start",
     });
     name.textContent = truncate(node.label || node.path || node.id, 22);
     group.append(body, name);
-    const subtitle = nodeSubtitle(node);
+    const subtitle = [nodeSubtitle(node), ...(node.extensions || []).map((extension) => `+ ${extension}`)].filter(Boolean).join(" · ");
     if (subtitle) {
       const type = svgElement("text", {
         class: "graph-node-type",
@@ -982,7 +1027,8 @@ function renderTopology(topology, animateBoundary = false) {
         y: "33",
         "text-anchor": "start",
       });
-      type.textContent = truncate(subtitle, 17);
+      type.textContent = subtitle;
+      appendLoopDial(type, node);
       group.append(type);
     }
     appendInstanceBadge(group, node.instances || [], position.width - 8, 6, node.id);
@@ -1038,7 +1084,7 @@ function renderTopology(topology, animateBoundary = false) {
         y: anchor.y - position.y - 5,
         "text-anchor": port.direction === "input" ? "end" : "start",
       });
-      portLabel.textContent = port.name;
+      portLabel.textContent = port.display_label || port.name;
       group.append(pin, portLabel);
     }
     nodeLayer.append(group);
@@ -1053,7 +1099,9 @@ function renderTopology(topology, animateBoundary = false) {
   const viewportControls = installGraphViewport(canvas, panLayer);
   canvas.append(panLayer, historyWatermark, viewportControls);
   canvas.addEventListener("click", (event) => {
-    if (event.target === canvas) selectTopologyItem(null);
+    if (event.target === canvas || event.target === panLayer || event.target === svg) {
+      selectTopologyItem(null);
+    }
   });
 
   if (selectedTopologyItem && !selectedTopologyItemView(topology)) {
@@ -1073,12 +1121,13 @@ function renderTopology(topology, animateBoundary = false) {
   }
   const evidence = document.createElement("span");
   evidence.className = "legend-evidence";
-  evidence.textContent = "solid = envelope route · dotted = control, no mailbox";
+  evidence.textContent = "≡ queued messages · ⧉ open instances · dashed = queued route";
   legend.append(evidence);
 
   target.className = "topology";
   target.replaceChildren(activityPanel, canvas, legend);
   keepGraphTextAtInterfaceSize(svg, layout.width);
+  if (focusKey) target.querySelector(`[data-focus-key="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
 }
 
 function visibleKeyValue(value) {
@@ -1094,6 +1143,7 @@ function visibleKeyValue(value) {
 function selectTopologyItem(id) {
   scenarioDefinitionActive = false;
   selectedMailboxRoute = null;
+  selectedLoopInstance = null;
   selectedTopologyItem = selectedTopologyItem === id ? null : id;
   renderTopology(currentSnapshot?.topology, false);
   if (currentSnapshot) renderRelatedPanels(currentSnapshot);
@@ -1225,8 +1275,8 @@ function envelopePanel(snapshot) {
     return panel;
   }
 
-  position.textContent = "Envelope";
-  title.textContent = "No boundary selected";
+  position.textContent = `Boundary B${snapshot?.timeline?.boundary || 0}`;
+  title.textContent = "No envelope delivery observed yet";
   return panel;
 }
 
@@ -1276,7 +1326,8 @@ function definitionPanel(item) {
 
   const badges = document.createElement("div");
   badges.className = "node-definition-badges";
-  for (const label of [item.type, ...(item.extensions || []).map((extension) => `+ ${extension}`)]) {
+  const extensions = [...new Set(item.extensions || [])];
+  for (const label of [extensions.includes(item.type) ? null : item.type, ...extensions.map((extension) => `+ ${extension}`)]) {
     if (!label) continue;
     const badge = document.createElement("span");
     badge.textContent = label;
@@ -1332,6 +1383,47 @@ function scopeDescriptor(owner) {
   return [base, ...(owner.extensions || []).filter((extension) => extension !== base)].join(" + ");
 }
 
+function sameInstance(left, right) {
+  return left && right && left.address === right.address && String(left.generation) === String(right.generation);
+}
+
+function loopRunsFor(item) {
+  return (Array.isArray(currentSnapshot?.loop_runs) ? currentSnapshot.loop_runs : [])
+    .filter((run) => run.owner === (item.path || "")
+      && (!selectedLoopInstance || selectedLoopInstance.owner !== run.owner || sameInstance(run.instance, selectedLoopInstance.reference)));
+}
+
+function appendLoopDial(label, item) {
+  if (!(item.extensions || []).includes("Loop")) return;
+  const runs = loopRunsFor(item).filter((run) => run.active);
+  const admitted = runs.reduce((max, run) => {
+    const value = BigInt(run.application || "0");
+    return value > max ? value : max;
+  }, 0n);
+  const dial = svgElement("tspan", { class: "graph-loop-dial", "data-owner": item.path || "" });
+  const value = `⟳ ${admitted}${runs.length > 1 ? ` ·${runs.length}` : ""}${runs.some((run) => run.waiting) ? " ⏱" : ""}`;
+  dial.textContent = `  ${value}`;
+  dial.setAttribute("aria-label", `Loop: ${admitted} admitted applications; ${runs.length} active runs`);
+  const title = svgElement("title");
+  title.textContent = runs.length ? runs.map((run) =>
+    `${String(run.reference).slice(0, 8)} · ${run.remaining}/${run.fuel} applications remaining · ${run.waiting ? `waiting until ${formatLogicalTime(run.due_at_ns)}` : "no armed delay"} · exhaustion: ${run.expired_port || "proved impossible"}`
+  ).join("\n") : "No active Loop run · 0 admitted applications";
+  dial.append(title);
+  label.append(dial);
+}
+
+function commandPortLabel(topology, item, port) {
+  if (port.direction !== "output") return port.name;
+  const commands = (topology.commands || []).filter((command) =>
+    command.source_owner === (item.path || "") && command.source_port === port.name);
+  const spatial = (topology.edges || []).some((edge) =>
+    edge.source?.id === item.id && edge.source?.port === port.name);
+  if (!spatial && commands.length === 1 && !commands[0].cases?.length) {
+    return `${port.name} ⇢ ${commands[0].command}`;
+  }
+  return port.name;
+}
+
 function nodeSubtitle(node) {
   if (node.kind !== "connector") return "";
   const contract = String(node.type || "Connector").split("/").at(-1).split("@")[0];
@@ -1350,6 +1442,7 @@ function appendInstanceBadge(group, instances, right, top, itemId) {
     role: "button",
     tabindex: "0",
   });
+  badge.dataset.focusKey = `instances:${itemId}`;
   const title = svgElement("title");
   const description = `${instances.length} open logical instance${instances.length === 1 ? "" : "s"}`;
   title.textContent = description;
@@ -1357,6 +1450,7 @@ function appendInstanceBadge(group, instances, right, top, itemId) {
   const inspectInstances = (event) => {
     event.stopPropagation();
     selectedTopologyItem = itemId;
+    selectedLoopInstance = null;
     renderTopology(currentSnapshot?.topology, false);
     if (currentSnapshot) renderRelatedPanels(currentSnapshot);
     activateInspectorTab("instances");
@@ -1566,7 +1660,18 @@ function renderInstances(instances, selection) {
     const card = document.createElement("article");
     card.className = "data-card";
     const heading = document.createElement("h3");
-    heading.textContent = instance.owner || "app";
+    const select = document.createElement("button");
+    select.type = "button";
+    select.textContent = instance.owner || "App";
+    select.title = "Filter Loop runs and the iteration dial by this instance";
+    select.setAttribute("aria-pressed", String(Boolean(sameInstance(instance.reference, selectedLoopInstance?.reference))));
+    select.addEventListener("click", () => {
+      selectedLoopInstance = sameInstance(instance.reference, selectedLoopInstance?.reference)
+        ? null : { owner: instance.owner, reference: instance.reference };
+      renderTopology(currentSnapshot?.topology, false);
+      renderRelatedPanels(currentSnapshot);
+    });
+    heading.append(select);
     const meta = document.createElement("p");
     meta.className = "card-meta";
     meta.textContent = `${instance.phase} · generation ${instance.reference?.generation ?? "?"}`;
@@ -1577,6 +1682,30 @@ function renderInstances(instances, selection) {
     appendValue(card, instance.state);
     return card;
   }));
+}
+
+function renderLoopRuns(runs, selection) {
+  const target = document.querySelector("#loop-runs");
+  if (!Array.isArray(runs)) { empty(target, runs?.error || "No retained Loop run."); return; }
+  const visible = runs.filter((run) => rowMatchesSelection(run, selection, ["owner"])
+    && (!selectedLoopInstance || (run.owner === selectedLoopInstance.owner && sameInstance(run.instance, selectedLoopInstance.reference))));
+  if (!visible.length) { empty(target, "No retained Loop run for this selection."); return; }
+  const table = document.createElement("table");
+  const header = document.createElement("tr");
+  for (const name of ["Run", "Application", "Remaining", "Due", "State"]) {
+    const cell = document.createElement("th"); cell.textContent = name; header.append(cell);
+  }
+  const head = document.createElement("thead"); head.append(header); table.append(head);
+  const body = document.createElement("tbody");
+  for (const run of visible) {
+    const row = document.createElement("tr");
+    for (const value of [String(run.reference).slice(0, 8), run.application, `${run.remaining}/${run.fuel}`, formatLogicalTime(run.due_at_ns), run.phase]) {
+      const cell = document.createElement("td"); cell.textContent = value; row.append(cell);
+    }
+    row.firstChild.title = run.reference;
+    body.append(row);
+  }
+  table.append(body); target.className = "table-scroll"; target.replaceChildren(table);
 }
 
 function renderExchanges(exchanges, selection) {
@@ -1844,11 +1973,14 @@ for (const button of document.querySelectorAll("button[data-command]")) {
       bufferedPlayback = false;
       selectedTopologyItem = null;
       selectedMailboxRoute = null;
+      scenarioDefinitionActive = false;
+      setCommandStatus("");
     }
     pendingCommandRevision = liveSnapshot?.revision ?? currentSnapshot?.revision ?? 0;
     updateControls();
     try {
       await post(`/api/command/${command}`);
+      await refresh();
     } catch (error) {
       if (command === "resume") bufferedPlayback = false;
       pendingCommandRevision = null;
@@ -1891,6 +2023,7 @@ document.querySelector("#return-live").addEventListener("click", () => {
   manualHistoricalView = false;
   bufferedPlayback = false;
   replayPaused = false;
+  setCommandStatus("");
   if (liveSnapshot) renderSnapshot(liveSnapshot);
 });
 document.querySelector("#timeline").addEventListener("change", (event) => {

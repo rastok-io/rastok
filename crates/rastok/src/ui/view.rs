@@ -298,7 +298,7 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
         ),
         "history": history(plan, vm, journal),
         "instances": instances(plan, &inspection, &active_instances),
-        "loop_runs": loop_runs(journal),
+        "loop_runs": loop_runs(plan, journal.records()),
         "exchanges": exchanges(&inspection),
         "cost_report": cost_report(plan, journal, cost_profile),
         "scenario": scenario,
@@ -685,14 +685,13 @@ fn manager_commands(plan: &crate::plan::ExecutionPlan) -> Vec<JsonValue> {
     commands
 }
 
-fn loop_runs(journal: &MemJournal) -> JsonValue {
-    use crate::journal::loop_protocol::{CommandValue, Fact, Fold};
-    let fold = match Fold::from_records(journal.records()) {
+fn loop_runs(plan: &ValidatedExecutionPlan, records: &[Record]) -> JsonValue {
+    use crate::journal::loop_protocol::{CommandValue, Fact, Fold, Phase};
+    let fold = match Fold::from_records(records) {
         Ok(fold) => fold,
         Err(error) => return json!({ "error": error.to_string() }),
     };
-    let owners = journal
-        .records()
+    let owners = records
         .iter()
         .flat_map(|record| {
             let Record::Transaction(transaction) = record else {
@@ -705,20 +704,40 @@ fn loop_runs(journal: &MemJournal) -> JsonValue {
                 .facts
                 .iter()
                 .filter_map(|fact| match fact {
-                    Fact::Open { run, .. } => Some((*run, transaction.owner_path.to_string())),
+                    Fact::Open { run, fuel, .. } => {
+                        Some((*run, (transaction.owner_path.to_string(), *fuel)))
+                    }
                     _ => None,
                 })
                 .collect::<Vec<_>>()
+        })
+        .collect::<BTreeMap<_, _>>();
+    let admitted = records
+        .iter()
+        .filter_map(|record| match record {
+            Record::Transaction(transaction) => transaction.loop_protocol(),
+            _ => None,
+        })
+        .flat_map(|packet| &packet.facts)
+        .filter_map(|fact| match fact {
+            Fact::Admit { run, iteration, .. } => Some((*run, iteration.saturating_add(1))),
+            _ => None,
         })
         .collect::<BTreeMap<_, _>>();
     json!(
         fold.runs()
             .map(|(reference, run)| json!({
                 "reference": reference.to_string(),
-                "owner": owners.get(reference),
+                "owner": owners.get(reference).map(|(owner, _)| owner),
                 "instance": instance_ref_json(&run.instance),
                 "entry": run.entry.name(),
-                "application": run.iteration.saturating_add(1).to_string(),
+                "application": admitted.get(reference).copied().unwrap_or(0).to_string(),
+                "active": matches!(run.phase, Phase::Active | Phase::AwaitingAdmission),
+                "waiting": run.phase == Phase::AwaitingAdmission && run.due_at.is_some(),
+                "fuel": owners.get(reference).map(|(_, fuel)| fuel.to_string()),
+                "expired_port": plan.owners.iter().find(|owner| owners.get(reference).is_some_and(|(path, _)| owner.path.to_string() == *path))
+                    .and_then(|owner| owner.loop_spec()).and_then(|spec| spec.expired.as_ref())
+                    .map(|expired| expired.port.name()),
                 "remaining": run.remaining.to_string(),
                 "phase": format!("{:?}", run.phase),
                 "state_envelope_id": run.state.meta().sys().id().to_string(),
@@ -769,6 +788,57 @@ fn source_definition_json(definition: &SourceDefinition) -> JsonValue {
         "last_line": definition.last_line,
         "code": definition.code,
     })
+}
+
+/// Authored scenario DSL, never a reconstruction from executed values.
+/// Until source-level redaction exists, classified programs expose no raw
+/// scenario text: literals and mock/expect bodies could contain protected DATA.
+#[must_use]
+pub fn scenario_definition_json(
+    compilation: &crate::compiler::Compilation,
+    simulation: &str,
+    scenario: &str,
+) -> JsonValue {
+    let plan = compilation.plan.plan();
+    let resolved = compilation.plan.resolved_ports();
+    let classified = |table: &AnnotationTable| {
+        table
+            .entries()
+            .iter()
+            .any(|(path, _)| is_redacted_path(table, path))
+    };
+    let has_classified_data = resolved
+        .boundary()
+        .iter()
+        .any(|port| classified(port.annotations()))
+        || plan.nodes.iter().enumerate().any(|(index, node)| {
+            resolved
+                .node(Slot::new(u32::try_from(index).unwrap_or(u32::MAX)))
+                .is_some_and(|ports| ports.iter().any(|port| classified(port.annotations())))
+                || node.vars.iter().any(|var| classified(&var.annotations))
+        })
+        || plan.owners.iter().any(|owner| {
+            owner.ports.iter().any(|port| classified(&port.annotations))
+                || owner
+                    .vals
+                    .iter()
+                    .any(|value| classified(&value.annotations))
+        });
+    if has_classified_data {
+        return json!({ "redacted": true, "reason": "Scenario source is hidden because this program carries classified data; inspect the redacted input and history instead." });
+    }
+    compilation
+        .scenario_definitions
+        .iter()
+        .find(|definition| definition.simulation == simulation && definition.scenario == scenario)
+        .map_or(JsonValue::Null, |definition| {
+            json!({
+                "source_index": definition.source.index(),
+                "first_line": definition.first_line,
+                "code": definition.code,
+                "action_lines": definition.action_lines,
+            })
+        })
 }
 
 fn record_traffic(traffic: &mut BTreeMap<String, Traffic>, edge: &str, record_index: usize) {
@@ -865,6 +935,20 @@ fn history_record_description(record: &Record) -> (&'static str, Option<String>,
             ("inbound", None, format!("Input admitted · {source}"))
         }
         Record::Transaction(transaction) => {
+            if let Some(fact) = transaction
+                .loop_protocol()
+                .and_then(|packet| packet.facts.first())
+            {
+                use crate::journal::loop_protocol::Fact;
+                let (kind, trigger) = match fact {
+                    Fact::Open { .. } => ("loop-open", "l:open"),
+                    Fact::Admit { .. } => ("loop-admit", "l:admit"),
+                    Fact::Advance { .. } => ("loop-advance", "l:advance"),
+                    Fact::Close { .. } => ("loop-close", "l:close"),
+                    Fact::Expired { .. } => ("loop-expired", "l:expired"),
+                };
+                return (kind, Some(trigger.into()), transaction_summary(transaction));
+            }
             let kind = match &transaction.trigger {
                 crate::node::Trigger::Port(_) => "port-transaction",
                 crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Start) => "instance-opened",
@@ -1461,6 +1545,30 @@ fn hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scenario_source_never_bypasses_classified_data_redaction() {
+        for annotation in ["@sensitive(level = restricted)", "@personal"] {
+            let source = format!(
+                r#"
+type Protected = struct {{ name: text {annotation} }}
+graph demo : App {{ input in: Protected; output out: Protected; in -> out }}
+lab demo {{ simulation test on app {{ scenario classified {{
+  app.in = {{ name = "private-scenario-literal" }}
+  expect app.out count == 1
+}} }} }}
+"#
+            );
+            let compilation = crate::compiler::compile(
+                &[&source],
+                &crate::contract::ContractCatalog::try_m0().expect("catalogue"),
+            )
+            .expect("classified scenario checks before deployment");
+            let value = super::scenario_definition_json(&compilation, "test", "classified");
+            assert_eq!(value["redacted"], true);
+            assert!(value.get("code").is_none());
+            assert!(!value.to_string().contains("private-scenario-literal"));
+        }
+    }
     use super::*;
     use crate::schema_annotation::{
         AnnotationSet, DataAnnotation, PersonalDataClass, SensitivityLevel,
@@ -1631,13 +1739,13 @@ graph inspected : App {
                 !["Loop.next", "Loop.again", "Loop.done"].contains(&port["name"].as_str().unwrap())
             })
         }));
-        let runs = loop_runs(session.journal());
+        let records = session.journal().records();
+        let runs = loop_runs(&compilation.plan, records);
         let runs = runs.as_array().unwrap();
         assert_eq!(runs.len(), 2, "one run for each admitted conversation");
-        assert!(
-            runs.iter()
-                .all(|run| run["phase"] == "Closed" && run["application"] == "2")
-        );
+        assert!(runs.iter().all(|run| run["phase"] == "Closed"
+            && run["application"] == "2"
+            && run["active"] == false));
         assert!(
             runs.iter().all(|run| run["state_envelope_id"].is_string()
                 && run.get("data").is_none()
@@ -1655,6 +1763,69 @@ graph inspected : App {
                     _ => false,
                 })
         );
+        use crate::journal::loop_protocol::Fact;
+        let mut saw_wait = false;
+        let mut saw_two_active = false;
+        for (index, record) in records.iter().enumerate() {
+            let before = loop_runs(&compilation.plan, &records[..index]);
+            let after = loop_runs(&compilation.plan, &records[..=index]);
+            saw_two_active |= after
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|run| run["active"] == true)
+                .count()
+                == 2;
+            let Record::Transaction(transaction) = record else {
+                continue;
+            };
+            let Some(packet) = transaction.loop_protocol() else {
+                continue;
+            };
+            for fact in &packet.facts {
+                let (reference, trigger) = match fact {
+                    Fact::Open { run, .. } => (run, "l:open"),
+                    Fact::Admit { run, .. } => (run, "l:admit"),
+                    Fact::Advance { run, .. } => (run, "l:advance"),
+                    Fact::Close { run, .. } => (run, "l:close"),
+                    Fact::Expired { run, .. } => (run, "l:expired"),
+                };
+                assert_eq!(
+                    history_record_description(record).1.as_deref(),
+                    Some(trigger)
+                );
+                let run = after
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|run| run["reference"] == reference.to_string())
+                    .unwrap();
+                assert_eq!(run["expired_port"], "failed");
+                match fact {
+                    Fact::Open { .. } => assert_eq!(run["application"], "0"),
+                    Fact::Admit { iteration, .. } => {
+                        assert_eq!(run["application"], (iteration + 1).to_string())
+                    }
+                    Fact::Advance { .. } => {
+                        let old = before
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .find(|old| old["reference"] == run["reference"])
+                            .unwrap();
+                        assert_eq!(
+                            run["application"], old["application"],
+                            "Advance is not Admit"
+                        );
+                        assert_eq!(run["application"], "1");
+                        assert_eq!(run["waiting"], true);
+                        saw_wait = true;
+                    }
+                    Fact::Close { .. } | Fact::Expired { .. } => assert_eq!(run["active"], false),
+                }
+            }
+        }
+        assert!(saw_wait && saw_two_active);
     }
 
     #[test]

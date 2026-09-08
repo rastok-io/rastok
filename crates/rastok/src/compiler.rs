@@ -54,6 +54,26 @@ pub struct Compilation {
     /// inspection. This side table never enters the plan or any identity
     /// recipe.
     pub source_definitions: Vec<SourceDefinition>,
+    /// Authored scenario text for inspection only, outside plan identity.
+    /// Renderers must apply data policy before exposing source literals.
+    pub scenario_definitions: Vec<ScenarioDefinition>,
+}
+
+/// One authored scenario and its action positions, independent of execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScenarioDefinition {
+    /// Checked simulation name.
+    pub simulation: String,
+    /// Checked scenario name.
+    pub scenario: String,
+    /// Source table index.
+    pub source: SourceId,
+    /// One-based first source line.
+    pub first_line: usize,
+    /// Exact scenario declaration, including comments.
+    pub code: String,
+    /// One-based lines relative to `code`, in executable action order.
+    pub action_lines: Vec<usize>,
 }
 
 /// One exact source declaration retained beside a successful compilation.
@@ -249,7 +269,65 @@ pub fn compile_with_assets(
         warnings: bag.into_diagnostics(),
         labs: hir.labs,
         source_definitions,
+        scenario_definitions: scenario_definitions(&unit, sources),
     })
+}
+
+fn scenario_definitions(unit: &Unit, sources: &[&str]) -> Vec<ScenarioDefinition> {
+    let mut definitions = Vec::new();
+    for (_, tree) in &unit.files {
+        for declaration in &tree.decls {
+            let syntax::TopDecl::Lab(lab) = declaration else {
+                continue;
+            };
+            for simulation in &lab.simulations {
+                for scenario in &simulation.scenarios {
+                    let span = scenario.span;
+                    let Some(source) = sources.get(span.source().index() as usize) else {
+                        continue;
+                    };
+                    let Some(code) = source.get(span.range()) else {
+                        continue;
+                    };
+                    let first_line = source[..span.range().start]
+                        .bytes()
+                        .filter(|byte| *byte == b'\n')
+                        .count()
+                        + 1;
+                    let action_lines = scenario
+                        .body
+                        .iter()
+                        .filter_map(|item| {
+                            let start = match item {
+                                syntax::ScenarioItem::Injection { target, .. } => {
+                                    target.span.range().start
+                                }
+                                syntax::ScenarioItem::Advance { span, .. } => span.range().start,
+                                syntax::ScenarioItem::Expect(step) => step.span.range().start,
+                                syntax::ScenarioItem::Mock(_) => return None,
+                            };
+                            Some(
+                                source[span.range().start..start]
+                                    .bytes()
+                                    .filter(|byte| *byte == b'\n')
+                                    .count()
+                                    + 1,
+                            )
+                        })
+                        .collect();
+                    definitions.push(ScenarioDefinition {
+                        simulation: simulation.name.text.clone(),
+                        scenario: scenario.name.text.clone(),
+                        source: span.source(),
+                        first_line,
+                        code: code.to_owned(),
+                        action_lines,
+                    });
+                }
+            }
+        }
+    }
+    definitions
 }
 
 fn source_definitions(unit: &Unit, sources: &[&str]) -> Vec<SourceDefinition> {
@@ -540,6 +618,26 @@ fn internal_plan_diagnostic(error: &PlanValidationError) -> Diagnostic {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scenario_definitions_preserve_authored_dsl_without_affecting_the_plan() {
+        let graph = "graph demo : App { input in: int; output out: int; in -> out }";
+        let lab = "lab demo {\n simulation test on app {\n scenario simple {\n // entrée\n app.in = 3\n expect app.out count == 1\n }\n }\n}";
+        let registry = crate::contract::ContractCatalog::try_m0().expect("catalogue");
+        let plain = super::compile(&[graph], &registry).expect("graph");
+        let compiled = super::compile(&[graph, lab], &registry).expect("graph and lab");
+        assert_eq!(plain.plan, compiled.plan);
+        assert_eq!(plain.hash, compiled.hash);
+        let definition = &compiled.scenario_definitions[0];
+        assert_eq!(definition.simulation, "test");
+        assert_eq!(definition.scenario, "simple");
+        assert_eq!(definition.source.index(), 1);
+        assert_eq!(definition.first_line, 3);
+        assert_eq!(definition.action_lines, [3, 4]);
+        assert_eq!(
+            definition.code,
+            "scenario simple {\n // entrée\n app.in = 3\n expect app.out count == 1\n }"
+        );
+    }
     use super::*;
 
     /// The registered payload: code, phase, and the `detail` field —

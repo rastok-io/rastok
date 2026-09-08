@@ -943,7 +943,7 @@
         portLabelObstacles.push(textLabelBox(
           anchor.x + (port.direction === "input" ? 9 : -9),
           anchor.y - 5,
-          port.name,
+          port.display_label || port.name,
           port.direction === "input" ? "start" : "end",
         ));
       }
@@ -963,7 +963,7 @@
         portLabelObstacles.push(textLabelBox(
           anchor.x + (port.direction === "input" ? -8 : 8),
           anchor.y - 5,
-          port.name,
+          port.display_label || port.name,
           port.direction === "input" ? "end" : "start",
         ));
       }

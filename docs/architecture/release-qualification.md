@@ -30,8 +30,12 @@ dependency of normal development or CI.
 
 R9 attempted the browser pass on 2026-09-07. The installed controller failed
 before connection: its worker referenced an absent older browser-service module.
-No visual/keyboard pass or screenshots are claimed. HTTP/controller/timeline,
-redaction and SVG geometry tests remain separate executable evidence.
+That R9 attempt produced no visual/keyboard evidence. The subsequent
+[UX refinement](m1.9-ux-qualification.md) runs isolated headless Chrome through
+real-browser tests, with keyboard checks and desktop/narrow captures. The
+[independent Fable audit](m1.9-fable-ux-audit.md) then confirmed usable navigation
+but found an open `advance` stepping gap and remaining graph/inspector UX work.
+Neither the automated checks nor that review close the M1.9 row above.
 
 Public Internet probes remain scheduled canaries, never replacements for these
 blocking local qualifications. The gallery, website and demonstration are M1

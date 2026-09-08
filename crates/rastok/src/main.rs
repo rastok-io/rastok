@@ -917,7 +917,29 @@ fn simulate_with_ui(
             };
         }
 
-        if step_requested && state == ExecutionState::Paused {
+        if step_requested && state == ExecutionState::Paused && session.is_quiescent() {
+            let action_records_before = session.journal().records().len();
+            match session.next_action() {
+                Ok(Some(action)) => {
+                    boundary_ordinal = boundary_ordinal.saturating_add(1);
+                    activity = Some(ActivityView::scenario_action(
+                        scenario_action_name(action),
+                        session.journal(),
+                        action_records_before,
+                        boundary_ordinal,
+                    ));
+                    activity_decided = true;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    fault = Some(boundary_fault(error));
+                    state = ExecutionState::Faulted;
+                }
+            }
+            step_requested = false;
+            dirty = true;
+        } else if step_requested && state == ExecutionState::Paused {
+            step_requested = false;
             let transaction_records_before = session.journal().records().len();
             match session.step_transaction() {
                 Ok(ran) => {
@@ -938,6 +960,11 @@ fn simulate_with_ui(
                             ))
                         });
                         activity_decided = true;
+                    } else if session.is_quiescent() {
+                        // Discovering quiescence is not a visible boundary.
+                        // Keep this one Step request until the next authored
+                        // action, just as continuous execution would do.
+                        step_requested = true;
                     }
                     // Step starts from an already-safe pause. An opened Call
                     // remains inspectable there and may depend on a later Lab
@@ -954,8 +981,7 @@ fn simulate_with_ui(
                     state = ExecutionState::Faulted;
                 }
             }
-            step_requested = false;
-            dirty = true;
+            dirty = !step_requested;
         } else if state == ExecutionState::PauseRequested {
             let poll_records_before = session.journal().records().len();
             match session.poll_world() {
@@ -989,37 +1015,6 @@ fn simulate_with_ui(
             {
                 state = ExecutionState::Paused;
                 dirty = true;
-            }
-        } else if state == ExecutionState::Paused {
-            // Scripted Session transports retain their normal bounded
-            // boundary behavior while the scheduler is paused. Polling may
-            // retain a terminal observation, but cannot consume its handler.
-            let poll_records_before = session.journal().records().len();
-            match session.poll_world() {
-                Ok(progressed) => {
-                    dirty |= progressed;
-                    if progressed {
-                        boundary_ordinal = boundary_ordinal.saturating_add(1);
-                        activity = ActivityView::journal_change(
-                            session.journal(),
-                            poll_records_before,
-                            Some(boundary_ordinal),
-                        )
-                        .or_else(|| {
-                            Some(ActivityView::external(
-                                boundary_ordinal,
-                                "connector-boundary",
-                                "A Connector boundary observation became ready",
-                            ))
-                        });
-                        activity_decided = true;
-                    }
-                }
-                Err(error) => {
-                    fault = Some(boundary_fault(error));
-                    state = ExecutionState::Faulted;
-                    dirty = true;
-                }
             }
         } else if state == ExecutionState::Running {
             if until_assertion
@@ -1207,6 +1202,7 @@ fn simulation_view(
         "current": {
             "simulation": session.simulation(),
             "scenario": session.scenario(),
+            "definition": rastok::ui::scenario_definition_json(compilation, session.simulation(), session.scenario()),
             "label": session.label(),
             "next_action_index": session.next_action_index(),
             "action_count": session.action_count(),

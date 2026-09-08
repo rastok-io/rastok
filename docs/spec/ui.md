@@ -1,9 +1,11 @@
 # Visual simulation debugger
 
-> **Status (2026-09-07): v16 projection under D-2026-09-07-8.**
+> **Status (2026-09-08): v17 projection under D-2026-09-07-8 and D-2026-09-08-1.**
 > [R9 qualification](../architecture/rework-r9-qualification.md) records code
 > and protocol evidence. The separate real-browser/keyboard gate remains in
 > [release qualification](../architecture/release-qualification.md).
+> The [host-terminal ledger](../architecture/loop-host-terminal-v17.md) records
+> the journal-derived Loop dial and command-disposition checks.
 
 The debugger observes and controls the checked Lab simulation. It is not an
 editor, a second runtime, a durable monitor or an alternative ingress.
@@ -62,6 +64,9 @@ previous commit must not claim rollback; its message says what remains
 committed and whether retry is legal. An explicit pause requested while a Call
 is open may retain its terminal boundary before pausing; a manually stepped
 Call stays paused and later authored `advance` remains reachable.
+An already paused simulation does not poll its scripted world spontaneously.
+Discovering that no VM work is ready is not an extra user step: the same Step
+request advances to the next authored action without publishing an empty frame.
 
 ## 3. Read-only time navigation
 
@@ -93,7 +98,9 @@ boundary ports come from the plan. The UI never infers execution from geometry.
   `nothing` nor an unused output creates a root-level sink or a fake pipe.
 - Only physical edges are pipes. `Loop.next`, `Loop.again` and `Loop.done`
   are listed as manager commands in definitions and source-port details,
-  never rendered as ports or back-edges. `Loop.expired` is a real output.
+  never rendered as ports or back-edges. A command-only disposition labels
+  its source `retry ⇢ Loop.next`. Exhaustion uses the host's resolved ordinary
+  terminal; no `Loop.expired` pin or extra pipe exists.
 - `≡ n` is current mailbox occupancy, not cumulative traffic. Selecting it
   opens the exact retained FIFO with instance, sequence, META and DATA.
   A claimed Call head still occupies the mailbox until consumed. Large FIFOs
@@ -102,10 +109,26 @@ boundary ports come from the plan. The UI never infers execution from geometry.
   Selecting it opens the filtered Instances tab; keys do not clutter the graph.
 - Selecting a node/scope filters related panels without forcing Definition.
   Definition shows the exact authored source from the compiler debug table;
-  scenario selection shows its DSL. Clicking the background clears selection.
+  scenario selection shows its DSL and highlights the next action. Clicking
+  the background clears selection. Replacing a graph frame preserves keyboard
+  focus on the same surviving node, instance badge or mailbox.
 - Loop runs appear in Instances: exact run, owner, application, remaining fuel,
   phase, pending command, due instant and current state-envelope reference.
   That reference is a dependency, not a second unclassified DATA projection.
+
+Each Loop badge carries a journal-derived `⟳ n` dial. It counts admitted
+applications, not Advance facts: `0` before the first Admit, `1` during the
+first application, `2` only after the second Admit. Close or Expired resets the
+dial to `0`. With multiple active runs, `⟳ n ·k` shows the highest admitted
+ordinal and number of active runs. Selecting an instance filters those runs.
+An armed delay adds `⏱` without incrementing the dial. Hover exposes run ref,
+remaining/initial fuel, due instant and resolved exhaustion target. History
+and replay use the selected journal prefix, never the live head. Instances
+renders runs as a table, not raw JSON.
+
+History displays r2 facts as `l:open`, `l:admit`, `l:advance`, `l:close` and
+`l:expired`. These are presentation labels, not changes to journal triggers.
+Definition shows each Extension once, including the root App.
 
 The page has a compact transport row, a timeline row, a graph canvas and
 Envelope / Mailbox / Definition / Instances / History tabs. Instances includes
@@ -143,11 +166,25 @@ Raw secret payloads remain impossible on the admitted execution path. State
 uses the same policy boundary. No regex masking, string-built HTML or second
 accounting fold: CostReport comes from its existing public journal query.
 
+Scenario source is a physical compiler side table, not a reconstruction from
+values. Until source-level redaction exists, a program with classified ports,
+state or owner bindings exposes no raw scenario text: an injection, mock or
+assertion literal must not bypass DATA redaction through Definition. Unclassified
+scenario source retains comments and original line numbers without changing
+the plan or semantic hash.
+
 ## 6. Identity and named limits
 
 UI state adds no plan field, semantic contribution or causal record. Page
 capabilities, controller identity, session/boundary counters, view revisions
 and playback speed are physical.
+
+Known qualification gap: an authored `advance` currently invokes `vm.advance`
+as one action and can retain several VM transactions/lifecycle facts inside
+one B frame. This does not yet satisfy the individually stepable VM/lifecycle
+intent of section 2. Equal Step/Continue journals do not close that gap;
+intermediate frames must be retained by the controller/Lab seam, never invented
+by the renderer. See the [independent audit](../architecture/m1.9-fable-ux-audit.md).
 
 Deferred: real-I/O experiments and harness Connectors, live-run debugging,
 branch authoring, source hot reload, input/state editing, breakpoints,
