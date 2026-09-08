@@ -96,6 +96,42 @@ remain `5ffba3ea…`, `2f89c8b5…` and `0d3ad43d…`; the full suites enforce t
 existing byte-pinned witnesses. The embedded spike was not remeasured in this
 presentation pass; the three core `no_std` targets were checked.
 
+## Follow-up to the independent UI retest
+
+The retest confirmed the explanatory surfaces and identified the incorrect
+`1 transitions` label. A browser regression first failed on that exact text; the
+presentation now says `1 transition`. There is no execution or projection change.
+
+The remaining manual checks use existing scenarios, not new runtime behavior:
+
+- **Failed assertions:** launch
+  `target/debug/rastok simulate crates/rastok/tests/fixtures/ui-explanation.rkg --ui`.
+  Finish `inspect.mismatch`: the Assertion tab must show `data.value`, observed
+  `7`, expected `8`. Select `inspect.unwanted` and Finish: `expect nothing app.out`
+  must show the one offending envelope. These failures are intentional fixtures.
+- **Fresh keyboard session:** launch
+  `target/debug/rastok simulate examples/keyed-retry.rkg --ui`, or use Reset in
+  the existing debugger. Reloading the browser does not reset the simulation.
+  With focus outside an input, `a` moves LIVE transition 0 to 1, then `n` moves
+  LIVE transition 1 to 2. The browser regression starts its own CLI process.
+- **Mailbox preview:** at retained transition 8, hover a nonempty `≡ 1` badge.
+  The preview shows queued DATA without a click, changing inspector tabs or
+  moving the selected transition. The test exercises pointer hover and keyboard
+  focus separately.
+
+The follow-up captures are named `assertion-difference`, `assertion-unwanted`,
+`fresh-shortcut-a`, `fresh-shortcut-n` and `mailbox-preview`.
+
+Follow-up results: 24 browser tests passed, no skipped test, browser exception or
+console error; 20 Rust UI tests and 13 SVG layout tests passed. The embedded CLI
+was rebuilt; JavaScript syntax checks, `cargo fmt --all -- --check` and
+`git diff --check` passed. The five follow-up captures were visually inspected.
+Logs and captures are under `/tmp/rastok-ui-retest.gN3oLG/`; the expected red
+regression is `regression-before.log`, the green suite is `browser.log`.
+The workspace-wide Rust suite, clippy, documentation and embedded targets were
+not rerun for this JavaScript-only correction; their table above belongs to the
+preceding qualification, not this retest. Existing user sessions were untouched.
+
 ## Limits kept visible
 
 - An authored `advance` can still retain several VM transactions inside one

@@ -89,7 +89,8 @@ test("transitions have explicit transport names, a first-contact hint and an hon
   assert.match(await page.locator('#command-status').innerText(), /Paused before admission/);
   assert.match(await page.locator('#timeline-position').innerText(), /^LIVE · Main · transition 0$/);
   await page.locator('[data-command="next-scenario-action"]').click();
-  await page.locator('#command-status').filter({ hasText: /\d+ transitions/ }).waitFor();
+  await page.locator('#timeline-position').filter({ hasText: /^LIVE · Main · transition 1$/ }).waitFor();
+  assert.equal(await page.locator('#command-status').innerText(), '1 transition · authored action reached its effect');
   await finish(page);
   for (const transition of [21, 22]) {
     await page.locator('#timeline').fill(String(transition));
@@ -111,6 +112,13 @@ test('explanatory hovers expose types, capacity, command disposition, queued dat
   await page.locator('.graph-edge-path[aria-label*="capacity"]').first().focus();
   assert.match(await page.locator('#graph-tooltip').innerText(), /capacity 1024.*shared instance mailbox/);
   const mailbox = page.locator('.edge-counter').filter({ hasText: /≡ 1/ }).first();
+  const inspector = await page.locator('[data-inspector-tab][aria-selected="true"]').getAttribute('id');
+  await mailbox.hover();
+  assert.equal(await page.locator('#graph-tooltip').isVisible(), true);
+  assert.match(await page.locator('#graph-tooltip').innerText(), /messages waiting.*(alice|bob)/s);
+  assert.equal(await page.locator('[data-inspector-tab][aria-selected="true"]').getAttribute('id'), inspector, 'hover previews the mailbox without selecting it');
+  assert.equal(await page.locator('#timeline').inputValue(), '8', 'hover leaves the selected transition unchanged');
+  await capture(page, 'mailbox-preview');
   await mailbox.focus();
   assert.match(await page.locator('#graph-tooltip').innerText(), /messages waiting.*(alice|bob)/s);
   await page.locator('#future summary').click();
@@ -175,15 +183,19 @@ test('causal selection links opening admission, manager command and readmission 
 
 test('scenario actions select their retained transition and all navigation is keyboard reachable', { timeout: 60000 }, async t => {
   const page = await openTour(t);
+  assert.match(await page.locator('#timeline-position').innerText(), /^LIVE · Main · transition 0$/);
+  assert.match(await page.locator('#command-status').innerText(), /Paused before admission/);
   await page.keyboard.press('a');
-  await page.locator('#timeline-position').filter({ hasText: /transition 1$/ }).waitFor();
-  assert.match(await page.locator('#command-status').innerText(), /1 transitions/);
+  await page.locator('#timeline-position').filter({ hasText: /^LIVE · Main · transition 1$/ }).waitFor();
+  assert.equal(await page.locator('#command-status').innerText(), '1 transition · authored action reached its effect');
+  await capture(page, 'fresh-shortcut-a');
   await page.keyboard.press('ArrowLeft');
   await page.locator('#timeline-position').filter({ hasText: /transition 0$/ }).waitFor();
   await page.keyboard.press('ArrowRight');
   await page.locator('#timeline-position').filter({ hasText: /transition 1$/ }).waitFor();
   await page.keyboard.press('n');
-  await page.locator('#timeline-position').filter({ hasText: /transition 2$/ }).waitFor();
+  await page.locator('#timeline-position').filter({ hasText: /^LIVE · Main · transition 2$/ }).waitFor();
+  await capture(page, 'fresh-shortcut-n');
   await finish(page);
   await page.locator('#scenario-definition').press('Enter');
   const action = page.locator('.scenario-definition-code [data-action="2"]');
@@ -306,6 +318,7 @@ test('failed expect shows the observed field difference and expect nothing shows
   await finish(page);
   assert.match(await page.locator('#assertion').innerText(), /expect nothing app.out.*1 observed · 1 matching/s);
   assert.equal(await page.locator('.assertion-envelope').count(), 1);
+  await capture(page, 'assertion-unwanted');
 });
 
 test('comparison aligns two keyed Loop instances and two read-only sessions at the selected transition', { timeout: 60000 }, async t => {

@@ -109,7 +109,7 @@ async function refreshSnapshot() {
     const action = Number(liveSnapshot.scenario?.current?.next_action_index || 0);
     const advancedAction = action > Number(commandOrigin?.action || 0);
     setCommandStatus(commandOrigin?.command === "next-scenario-action"
-      ? `${transitions} transitions · authored action reached its effect`
+      ? `${transitions} transition${transitions === 1 ? "" : "s"} · authored action reached its effect`
       : commandOrigin?.command === "step" && commandOrigin.quiescent && advancedAction
         ? `no VM work ready · advanced to A${action}` : "");
     commandOrigin = null;

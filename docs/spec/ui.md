@@ -42,12 +42,14 @@ Every selection starts paused at B0, before admission. Controls are:
 - **Next action**: one authored action to its effect, available when the
   previous action is quiescent (`run one authored action to its effect`).
   The status reports the number of retained transitions advanced by this command.
+  It reads `1 transition` for one, `n transitions` otherwise.
 - **Run to expect**: stop before the next assertion.
 - **Replay / Pause**: present the same retained transitions at one or four events
   per second; Pause stops buffered playback even after the engine completes.
 - **Finish**: run to completion without pedagogical pacing.
 - **Retry**: available only when a refusal still owns retryable reserved work.
 - **Reset**: fresh VM, mock world, journal and clock for the selected scenario.
+  Reloading the browser only reconnects to the retained session; it is not Reset.
 
 At B0 the status reads `Paused before admission · Next transition advances
 one step`; the first navigation gesture dismisses it. There is no tour or modal.
@@ -284,10 +286,10 @@ Every item has a browser or projection regression; browser tests are in
 | Transports, transition vocabulary, first contact, action count | `transitions have explicit transport names…` |
 | Folded ids across five examples and three viewing states | `echo/jsonl/gauge/countdown/keyed-retry: live, history and replay…` |
 | Dial and waiting at B21–B22, stable selected-prefix values | `transitions have explicit transport names…`; `Loop dials follow historical admissions…` |
-| Every graph hover, mailbox head preview, exact future timeout and cancellation | `explanatory hovers expose types…` |
+| Every graph hover, mailbox head preview by pointer and keyboard without navigation, exact future timeout and cancellation | `explanatory hovers expose types…` |
 | Closed/open decisions, selected route case, prestate and joined inputs | `Operator decisions highlight…`; `open_match_explains_only_evaluated_predicates_using_prestate`; `join_decisions_use_named_inputs_and_the_retained_completing_port` |
 | Causal links without forward leakage | `causal selection links opening admission…`; `decisions_use_consumed_envelopes_and_the_selected_prefix` |
-| Scenario/action links and keyboard navigation | `scenario actions select their retained transition…`; `the explanatory path is reachable with Tab and keyboard alone`; `keyboard node selection retains focus…` |
+| Scenario/action links, `a` and `n` on a fresh LIVE session, keyboard navigation | `scenario actions select their retained transition…`; `the explanatory path is reachable with Tab and keyboard alone`; `keyboard node selection retains focus…` |
 | Assertion diff, expect-nothing offender and redaction | `failed expect shows…`; `failure_explanation_uses_the_exact_assertion_window_and_field`; `classified_predicates_and_assertion_values_are_not_explanation_channels` |
 | Aligned comparisons, separate read-only sessions | `comparison aligns two keyed Loop instances…` |
 
