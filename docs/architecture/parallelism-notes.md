@@ -1,10 +1,11 @@
 # Parallelism — logical instances and physical execution
 
-> Design notes — non-normative, forward-looking. Updated after
-> D-2026-09-05-1 for the v16 target. The semantic authorities are
+> Design notes — non-normative, audited 2026-09-09. Logical Executor/manager
+> ownership is implemented in v17; multi-Worker execution remains future work.
+> The semantic authorities are
 > [instances.md](../spec/instances.md),
 > [extensions.md](../spec/extensions.md), and [loop.md](../spec/loop.md).
-> Current v15 Graph Loop code retains its historical execution path until R7.
+> R9 removed Graph application handlers; Loop commands never enter the spatial DAG.
 
 ## Four concepts that must stay separate
 

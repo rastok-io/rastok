@@ -5,7 +5,7 @@
 > `theorem` is a reserved declaration (§10–§11).
 > Plan v16 removes the historical RootSink observation path: Lab observes
 > every emission once at its source, and `app.<port>` observes only an actual
-> App-boundary crossing. This is the executable v16 projection; discarded
+> App-boundary crossing. This is the executable projection retained by v17; discarded
 > child emissions are not public App outputs.
 > Companion to [execution-model.md](execution-model.md) (virtual time —
 > `advance` is defined there, §8) and

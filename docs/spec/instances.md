@@ -2,7 +2,7 @@
 
 > **Status (2026-09-07): normative, including the implemented v16 model adopted by
 > D-2026-09-05-1.** The compiler
-> accepts and checks the R1 `instance` / `lifetime` surface. Plan-package v16
+> accepts and checks the R1 `instance` / `lifetime` surface. Plan-package v17
 > retains v9's categorical parent-linked owner table, scoped routes,
 > independent instance policy, immutable owner expressions, and phased
 > Connector settings. R3 routes every owner through canonical hierarchical
@@ -699,8 +699,8 @@ The plan/package and journal vocabulary has been rewritten from the draft
 `partition_key` / `target_partition` names to logical instance addresses and
 generation-bearing references without renumbering already reserved
 extend-only journal keys merely for spelling.
-Plan-package v16 retains v9's categorical owner/instance transport and
-refuses v15 and every older format, including the unpublished v8 draft, as
+Plan-package v17 retains v9's categorical owner/instance transport and
+refuses v16 and every older format, including the unpublished v8 draft, as
 input. The original v9
 package-only move left semantic hashes and causal traces unchanged at R2. R3
 made the instance reference

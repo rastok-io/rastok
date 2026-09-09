@@ -1,7 +1,7 @@
 # Data policy, privacy, observations and cost
 
 > **Status: normative and executable through closed M1.8 under
-> D-2026-08-30-1 through D-2026-08-30-6 and D-2026-08-31-1.** Current package v16 retains the M1.8 policy transport as
+> D-2026-08-30-1 through D-2026-08-30-6 and D-2026-08-31-1.** Current package v17 retains the M1.8 policy transport as
 > canonical side-tables. Registry-free validation re-derives every local
 > claim and the effective policy of canonical operations; presentation
 > redacts before formatting. A4 admits personal data only under an attested
@@ -48,7 +48,7 @@ Structural branch indexes refer to the canonical branch order, never source
 order. A path must resolve in the adjacent type tree; dead or mistyped paths
 refuse after decode.
 
-Categorical v16 retains this sparse table locally beside every transported
+Categorical v17 retains this sparse table locally beside every transported
 schema that can own policy: raw and resolved port rows, nested-Graph ports,
 owner values, Node state cells and handler-local typed bindings. Empty tables
 are omitted. The decoder reconstructs the table from its structural wire form;

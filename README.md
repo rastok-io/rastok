@@ -9,7 +9,7 @@ constrained enough for an LLM to generate without hiding the result
 behind a visual low-code format.
 
 A Rastok graph connects existing services, models, tools, data, and
-business processes. In the v16 model, a Node is either
+business processes. In the current model, a Node is either
 a passive Graph scope or an Executor:
 
 - **Graphs** compose a typed boundary, children and static wiring. They own
@@ -35,7 +35,9 @@ and original timer deadlines without re-executing producers or repeating I/O.
 Nested runs, same-context joins, annotations and entry-preserving measures
 are qualified within the [named Loop proof subset](docs/spec/loop.md#16-deferred-by-name).
 The [R9 qualification ledger](docs/architecture/rework-r9-qualification.md)
-records the one format move, unchanged causal witnesses and final checks.
+records the v16 rework; the subsequent
+[v17 ledger](docs/architecture/loop-host-terminal-v17.md) records the
+host-terminal amendment and its unchanged non-Loop witnesses.
 
 This separation makes effects replaceable. In production, Connectors
 interact with real systems. In a simulation sandbox called the
@@ -82,7 +84,7 @@ Rastok DSL source
   -> state-machine execution in a native in-memory VM
   -> mixed real Process and File boundaries selected through one Driver registry
   -> journaled, auditable multi-Contract Lab scenarios with useful golden diffs
-  -> optional paused, transaction-steppable hosted inspection
+  -> optional paused simulation debugger with retained-transition inspection
 ```
 
 Connector contracts have stable semantic ids and inbound/outbound roles.
@@ -123,7 +125,8 @@ The frozen [R0 algebra](docs/architecture/rework-r0-algebra.md),
 [R2 review handoff](docs/architecture/rework-r2-supersession.md). The [R9 qualification](docs/architecture/rework-r9-qualification.md)
 links that design to the executable host and recovery tests.
 
-M1.8 is closed on categorical package v15. The source front end
+M1.8 closed on categorical package v15; its contracts remain in the current
+v17 package. The source front end
 recognizes the closed `@sensitive`/`@secret`/`@personal`/`@measure`/`@cost` family,
 resolves aliases into canonical schema paths and transports the sparse policy
 tables through checked HIR, package decode and Registry-free validation.
@@ -160,14 +163,18 @@ temporal observations exist; no exporter timestamp is presented as commit
 time.
 
 The visual debugger is available through `simulate --ui`. It starts paused,
-uses the checked scenario on disk, and retains a read-only timeline of every
-boundary. Back/forward inspection does not fork or mutate the simulation;
+uses the checked scenario on disk, and retains a read-only transition timeline.
+Back/forward inspection does not fork or mutate the simulation;
 Reset starts a fresh session and preserves the old history. The embedded page
 shows real compound topology, current mailbox FIFOs (`≡ n`), instances
 (`⧉ n`), source definitions, Loop-run state dependencies, redacted `META`/
 `DATA` and the public `CostReport`. Manager commands are described as commands,
-never invented ports or spatial edges. Play presents the same boundaries at
-one or four events per second. The canvas pans/zooms and the inspector resizes.
+never invented ports or spatial edges. Replay presents retained transitions at
+one or four events per second. Decisions, causal links, pending obligations
+and assertion evidence explain the selected journal prefix. The canvas
+pans/zooms and the inspector resizes. One controller limit remains explicit:
+an authored `advance` can retain several VM transactions in one transition;
+the UI does not claim that every transition is exactly one journal record.
 
 `run --ui` and `check --ui` refuse before effects. Editing, simulation
 branches and real-I/O experiment debugging remain separate future work.
@@ -197,7 +204,15 @@ For a local paused debugger, build the optional hosted UI:
 cargo run -p rastok --features hosted-ui -- simulate app.rkg --ui
 ```
 
-The executable UI tour combines structured DATA, keyed Loop retries, a nested
+Start with a small line-counting simulation: a mocked reader supplies one
+header and three data lines, a filter drops the header, and an Operator counts
+the remaining lines. This is not a general CSV parser with quoted-newline support.
+
+```sh
+cargo run -p rastok --features hosted-ui -- simulate examples/csv-count.rkg --ui
+```
+
+The larger executable UI tour combines structured DATA, keyed Loop retries, a nested
 Graph, an Operator and a mocked Process boundary:
 
 ```sh
@@ -206,6 +221,8 @@ cargo run -p rastok --features hosted-ui -- simulate examples/keyed-retry.rkg --
 
 Add `--ui-port PORT` to request one explicit non-zero loopback port. The CLI
 prints the authorized URL and never opens a browser automatically.
+The [example catalogue](docs/examples/README.md) distinguishes executable
+programs from historical sketches and future-surface illustrations.
 
 For projects described by OpenAPI 3.0 or 3.1, run
 `rastok --resolve-open-api <project-dir>` to discover static HTTP endpoints

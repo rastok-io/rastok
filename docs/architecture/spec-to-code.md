@@ -1,24 +1,34 @@
 # Specification-to-implementation map
 
-> Planning aid — non-normative. **Updated 2026-09-05 for the v16 R0–R2
-> design freeze.** The former named-partition P1-P3 implementation is superseded.
-> Categorical v15 transport retains v9's owner model, stable Connector
-> identities/roles/exchange lifecycles; hierarchical route/journal instance
-> references are executable; all five lifetime profiles and explicitly bounded
-> Closing, nested Graph composition, and instance-local bounded joins execute.
-> The table first preserves the M0 evidence;
-> the M1 extension below records which normative owners gained new
-> executable responsibility. Where implementation surfaced a semantic
-> ambiguity, it stopped at the boundary as required: the errata live in
-> [`../spec/errata.md`](../spec/errata.md), the settled choices in
-> [`../spec/decisions.md`](../spec/decisions.md), and the M0 deviations
-> in [`m0-exit-notes.md`](m0-exit-notes.md).
+> Non-normative implementation map, audited 2026-09-09. Current package: v17.
+> The first table describes current ownership; subsequent milestone tables
+> preserve dated landing evidence, including superseded types and ids. They
+> are not a current API inventory. Decisions remain in
+> [decisions.md](../spec/decisions.md).
 
-## V16 rework: frozen design, implementation not started
+## Current implementation and executable evidence
 
-R0, R1 and R2 are documentation gates. They deliberately modify no executable
-Rust. Current binaries remain v15 and the M1.7 rows below remain an evidence
-ledger for that historical implementation until R3–R9 replace it.
+| Normative home | Current code owner | Focused evidence |
+|---|---|---|
+| [Extensions](../spec/extensions.md) | core `node::Kind/Extension`, `plan::ExtensionSpec`; compiler `check/extensions`; each Connector owns `ContractId` | `contracts.rs`, independent `plan::composition` validation |
+| [Dispatch / where / multi-emission](../spec/execution-model.md) | compiler syntax/HIR/check/lower; core `plan/dispatch*`, `runtime/dispatch`, `HandlerExecutor` | `where_dispatch.rs`, `machine_executor.rs`, core emission tests |
+| [Routing / destinations](../spec/grammar.md) | compiler `check/routing`; core `plan::{routing,routing_validation,productibility}` and VM prepare/reserve/commit | `v16_destinations.rs`, route/Dispatch sabotage tests; join-expiry diagnostic gap in the [audit](documentation-audit-2026-09-09.md) |
+| [Contract profiles](../spec/stdlib.md) | `contract::ContractCatalog`, `stdlib`, core mirrors; six exact `@2` sheets | `connector_composition.rs`, `contracts.rs`, Driver conformance |
+| [Loop](../spec/loop.md) | compiler `check/loop_control`; core `plan::{call_loop,graph_loop}`, `journal::loop_protocol`, `runtime/vm/loop_manager` | `v16_loop*`, `v16_graph_calls.rs`, `loop_host_exit.rs` |
+| [Recovery / deadlines](../spec/delivery-semantics.md) | `runtime/vm/recovery`, journal records, retained `timer_schedule`; no public `RecoveryFold` type | `v16_recovery.rs`, `v16_exchange_recovery.rs`; no disk-backend claim |
+| [Package / identity](../spec/identity.md) | core `plan::{serialization,validation}`, compiler canonicalization | `plan_package.rs`, `plan_validation.rs`, echo/JSONL/gauge witnesses; [R9](rework-r9-qualification.md) then [v17](loop-host-terminal-v17.md) |
+| [Data policy / accounting](../spec/observability.md) | core schema annotations, policy, deployment, observation and accounting; hosted profiles/logs | `accounting.rs`, `v16_loop_policy.rs`, core policy/deployment tests |
+| [Visual simulation debugger](../spec/ui.md) | hosted `ui/view.rs`, controller and page over existing VM/journal/CostReport | projection tests, `layout.test.cjs`, `browser.test.cjs`; [external qualification](release-qualification.md) remains separate |
+
+The remaining tables are historical milestone evidence. The M1.7
+Graph-handler/Aspect model, `ConnectorId` spelling, implicit unwired policies
+and v15 package descriptions below were superseded by R3–R9 and v17.
+
+## Historical R0–R2 freeze (completed before R3)
+
+R0, R1 and R2 changed documentation only. At that checkpoint binaries still
+used v15; R3–R9 subsequently implemented the frozen rework. The v17 amendment
+then replaced the contributed expiry port with a resolved host terminal.
 
 | Gate | Frozen responsibility | Intended code boundary at R3–R8 | Review evidence |
 |---|---|---|---|
@@ -45,7 +55,7 @@ they are not promised crate names.
 | [`effects-and-sagas.md`](../spec/effects-and-sagas.md) | Preserve effect classification and explicit outcomes. Live Saga management is deferred. | Effect boundary tests; no placeholder Saga subsystem. |
 | [`loop.md`](../spec/loop.md) | Define the v16 Loop Extension over Operator, Graph and finite outbound Call hosts, with durable manager commands, natural terminals, exact opening-admission identity, fuel/proof and recovery. | R0/R1 written traces now; executable v14 Graph-Loop evidence below is historical and is replaced at R3–R8. |
 
-## M1 extensions now in force
+## Historical M1 landing evidence
 
 | Landed slice | Normative responsibility | Code owner | Evidence boundary |
 |---|---|---|---|
@@ -77,7 +87,7 @@ they are not promised crate names.
 | M1.5 C5 conformance and composition | Real and mock Connector implementations bind by the same exact Contract id/roles. Contract-neutral conformance derives terminal types from the validated plan; Lab factories reuse real pure request protocols while only scripting post-open effects. Static builds explicitly select Process, File or both. | `conformance::{Profile,verify}`, `connectors::{DriverRegistry,RuntimeBindings}`, `lab`, Process/File request bindings | both real factories through one battery; mixed Lab hash/plan parity and journaled calls; malformed mock pin refusal; three static registry compositions; no identity move |
 | M1.5 C6 closure and future discovery seam | A capability manifest describes canonical Connector ids and roles without loading implementation code; actual execution still requires an ordinary factory and binding. One documented contribution path serves static builds and future plugin hosts without freezing a serialized manifest, loader, trust model or ABI. | `connectors::{DriverManifest,DriverRegistry}`, [connector-drivers.md](connector-drivers.md), maintained module diagram | canonical ordering/duplicate refusal without factories; active-doc vocabulary audit; full portability gates; no identity move |
 
-## M1.6 network boundary
+## Historical M1.6–M1.8 landing evidence
 
 | Gate | Normative responsibility | Intended owner boundary | Required evidence |
 |---|---|---|---|

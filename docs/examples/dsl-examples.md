@@ -1,12 +1,14 @@
 # Rastok DSL — current fixtures and historical design sketches
 
-## Current v16 entry points
+## Current v17 entry points
 
 Use [grammar.md](../spec/grammar.md) and the
-[v16 syntax card](../../bench/vibe/prompts/v3.md) for authoring. The current
+[checked example catalogue](README.md) for authoring. Benchmark language cards
+are frozen experimental inputs, not the current specification. The current
 ontology is Node / Graph / Executor / Connector / Extension: Graphs own no
 application handlers, all productible outputs have explicit destinations,
 and Loop uses qualified manager commands rather than spatial feedback ports.
+Exhaustion extends an existing terminal with `LoopExpired`; Loop adds no port.
 
 The checked examples are:
 
@@ -18,9 +20,12 @@ The checked examples are:
   conversations and explicitly routed Call outcomes;
 - [WebSocket gateway](codex-websocket-gateway.rkg): the checked session boundary.
 
-Their qualification is recorded in [R9](../architecture/rework-r9-qualification.md).
+R9's historical v16 qualification is followed by the
+[v17 amendment](../architecture/loop-host-terminal-v17.md) and the
+[2026-09-09 rerun](../architecture/documentation-audit-2026-09-09.md), including
+the CSV and expense-approval examples added to the catalogue.
 
-## Historical designs below — not the executable v16 surface
+## Historical designs below — not the executable current surface
 
 The remaining sections preserve the pre-v16 integration sketches. They include
 unimplemented guests, storage and service profiles as well as superseded

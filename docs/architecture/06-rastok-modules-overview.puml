@@ -1,502 +1,61 @@
 @startuml 06-rastok-modules-overview
+skinparam backgroundColor white
 skinparam shadowing false
 skinparam packageStyle rectangle
+top to bottom direction
+title Rastok — current Rust modules and crate boundary (v17, 2026-09-09)
 
-title Rastok — bird's-eye module overview (M1.7 closed, 2026-08-28)
-
-note as LEGEND
-  Representative load-bearing modules and types (public or
-  architecturally named) ; no fields, no methods, no type-level arrows.
-  Arrows are module-level **uses** only ; trait implementations,
-  ownership edges, and build artifacts are deliberately not shown.
-  Incidental arrows into the shared `node`, `envelope`, and
-  `diagnostics` foundations are omitted.
-  «next» = named later slice ;
-  «guarded» = reachable syntax refuses explicitly.
-end note
-
-package "node — shared graph and execution vocabulary" as P_NODE {
-  class Path <<struct>>
-  Path : stable root-relative node address
-  enum Kind <<enum>>
-  Kind : structural operator, connector, or graph family
-  enum Type <<enum>>
-  Type : one effective implementation or contract
-  enum Aspect <<enum>>
-  Aspect : optional Loop or Saga orchestration protocol
-  class Port <<struct>>
-  Port : named node endpoint
-  enum Direction <<enum>>
-  Direction : input or output port role
-  enum EffectClass <<enum>>
-  EffectClass : external-effect risk category
-  enum Effect <<enum>>
-  Effect : absence or declared class of effect
-  enum Behavior <<enum>>
-  Behavior : deterministic or probabilistic execution
-  enum Lifecycle <<enum>>
-  Lifecycle : non-port transaction causes (timeout, …)
-  enum Trigger <<enum>>
-  Trigger : the CAUSE a committed transaction records
-  enum HandlerActivation <<enum>>
-  HandlerActivation : the PATTERN a handler declares (≠ Trigger)
+package "rastok — hosted / compiler crate" as HOSTED {
+  rectangle "main / render / diagnostics\nCLI assembly, source spans, named errors" as ENTRY
+  rectangle "compiler\nsyntax / HIR / check / lower\nDispatch, routing, Extension checks" as COMP
+  rectangle "contract / stdlib\nContractCatalog / ConnectorContract\nsix executable @2 sheets; frontend readers" as CATALOG
+  rectangle "schema_projection / openapi\nstrict JSON Schema, Avro, Arrow, OpenAPI\ngenerated-source ownership" as SCHEMA
+  rectangle "connectors\nDriverRegistry / RuntimeBindings\nProcess, File, HTTP, WebSocket\nprivate network: bounded async pump" as DRIVERS
+  rectangle "deployment_config\nprofile JSON; explicit environment/provider input\nno clear credentials in semantic artifacts" as CONFIG
+  rectangle "lab / conformance\nScenarioRun; controlled Drivers\nsame VM and exact Contracts" as LAB
+  rectangle "ui / observability\nsimulate-only debugger; structured logs\nread-only prefix and never-block export" as UI
+  rectangle "golden\nTrace / Divergence\ncausal projection, not full-record persistence" as GOLDEN
 }
 
-package "envelope — data and metadata carried through the graph" as P_ENV {
-  class Envelope <<struct>>
-  Envelope : immutable emitted message
-  class Meta <<struct>>
-  Meta : exactly sys, app, and ext metadata zones
-  class MetaSys <<struct>>
-  MetaSys : runtime-owned five-field identity spine
-  class Id <<struct>>
-  Id : deterministically derived 128-bit identity
-  enum Data <<enum>>
-  Data : encoded or materialized envelope data
-  enum Encoding <<enum>>
-  Encoding : raw, Avro, or Arrow IPC encoding
-  enum Scalar <<enum>>
-  Scalar : restricted metadata leaf
-  enum Role <<enum>>
-  Role : default or compensate flow
-  enum WriteTarget <<enum>>
-  WriteTarget : checked landing site of a builder write
+package "rastok-core — no_std + alloc" as CORE {
+  rectangle "node / connector\nPath, Port, Kind, Extension, Trigger\nContractId, roles, exchange profiles" as NODE
+  rectangle "datatype / value / envelope\nDataType, Value, Envelope, Data\none logical type/value authority" as DATA
+  rectangle "expr / json / trivia\nTree, Signature, EvalValue\nbounded pure evaluation and exact readers" as EXPR
+  rectangle "identity / canonical_cbor\nInstanceAddress, InstanceRef\ntagged values and canonical byte discipline" as IDENTITY
+  rectangle "plan / loop_proof\nValidatedExecutionPlan, Owner, Dispatch\nRouteRule, ExtensionSpec, LoopSpec/LoopExpiry\nindependent scope, type and proof validation" as PLAN
+  rectangle "runtime\nHandlerExecutor, Vm, Mailboxes, Scheduler\ncommand manager; spatial/exchange recovery\nGraph has no application handler" as VM
+  rectangle "boundary\nInbound/Outbound Driver traits\nIntent, Completion, CallRef, SessionRef\nDispatcher and Contract completion gates" as BOUNDARY
+  rectangle "journal / journal::loop_protocol\nJournal, MemJournal, Record\nLoopRunRef, command production/consumption\nretained original deadlines; no disk backend" as JOURNAL
+  rectangle "schema_annotation / data_policy\ncanonical SchemaPath and five policies\nindependent propagation and redaction" as POLICY
+  rectangle "deployment\nBootReference, BootBindings, SecretRef\nrun-scoped privacy/price attestations" as DEPLOY
+  rectangle "observation / accounting\nRecordObservation / CostReport\nexact decimals, currency and unpriced facts" as REPORT
 }
 
-package "diagnostics — structured diagnostics shared across phases" as P_DIAG {
-  class "Diagnostic" as DIAG_Diagnostic <<struct>>
-  DIAG_Diagnostic : stable diagnostic identity and structured details
-  class Code <<struct>>
-  Code : registry code carrying severity by prefix
-  enum Severity <<enum>>
-  Severity : error or warning
-  enum Phase <<enum>>
-  Phase : parse, resolve, check, plan, run, replay, or simulation
-  class Span <<struct>>
-  Span : source id and byte range
-  class Bag <<struct>>
-  Bag : accumulating diagnostic destination
-}
+ENTRY -[hidden]right-> COMP
+COMP -[hidden]right-> CATALOG
+ENTRY -[hidden]down-> CONFIG
+CONFIG -[hidden]right-> DRIVERS
+DRIVERS -[hidden]right-> LAB
+CONFIG -[hidden]down-> SCHEMA
+SCHEMA -[hidden]right-> UI
+UI -[hidden]right-> GOLDEN
+GOLDEN -[hidden]down-> NODE
+NODE -[hidden]right-> DATA
+DATA -[hidden]right-> EXPR
+NODE -[hidden]down-> IDENTITY
+IDENTITY -[hidden]right-> PLAN
+PLAN -[hidden]right-> VM
+IDENTITY -[hidden]down-> BOUNDARY
+BOUNDARY -[hidden]right-> JOURNAL
+JOURNAL -[hidden]right-> POLICY
+BOUNDARY -[hidden]down-> DEPLOY
+DEPLOY -[hidden]right-> REPORT
 
-package "datatype / value — core logical data authority" as P_DATA {
-  enum DataType <<enum>>
-  DataType : logical type tree and recursive conformance judge
-  enum "Value" as CORE_Value <<enum>>
-  CORE_Value : one materialized domain and structural validator
-}
+HOSTED -down-> CORE : compile-time dependency only in this direction
 
-package "connector — stable contract identity" as P_CONNECTOR {
-  class ConnectorId <<struct>>
-  ConnectorId : canonical namespace/name@major identity
-  enum ConnectorRoles <<enum>>
-  ConnectorRoles : inbound, outbound, or both
-  enum ConnectorExchange <<enum>>
-  ConnectorExchange : Event, Call, or Session lifecycle
-}
-
-package "expr — Rastok expression engine" as P_EXPR {
-  class Signature <<struct>>
-  Signature : names and types visible to an expression
-  class Tree <<struct>>
-  Tree : canonical typed expression tree
-  enum EvalValue <<enum>>
-  EvalValue : transient core value or lazy payload witness
-  class "Diagnostic" as Expr_Diagnostic <<struct>>
-  Expr_Diagnostic : native expression compiler diagnostic
-  class "Error" as Expr_Error <<struct>>
-  Expr_Error : expression evaluation error
-}
-
-package "loop_proof — finite-recursion certificates" as P_LOOP_PROOF {
-  class Certificate <<struct>>
-  Certificate : checked measure, optional invariant, exact decrements
-  enum "Error" as LoopProof_Error <<enum>>
-  LoopProof_Error : closed unsupported or contradicted proof obligation
-  class "derive / verify" as LOOP_PROOF_API <<mod>>
-  LOOP_PROOF_API : deterministic no-std re-derivation from handlers
-}
-
-note bottom of P_EXPR
-  owns neither DataType nor materialized Value;
-  compatible operations retain the CEL oracle
-end note
-
-package "canonical_cbor — bounded canonical byte discipline" as P_CBOR {
-  enum "Value" as CBOR_Value <<enum>>
-  CBOR_Value : canonical CBOR value tree
-  class CanonicalDouble <<struct>>
-  CanonicalDouble : one bit form for each canonical double
-  enum "DecodeError" as CBOR_Error <<enum>>
-  CBOR_Error : typed malformed, non-canonical, or over-budget input
-}
-
-package "identity — canonical identities and tagged values" as P_IDENT {
-  class InstanceAddress <<struct>>
-  InstanceAddress : owner path plus outer-to-inner canonical frames
-  class InstanceRef <<struct>>
-  InstanceRef : logical address plus journal-derived generation
-  class "value_tagged / meta_tagged" as IDENT_API <<mod>>
-  IDENT_API : one extend-only value alphabet for plans and traces
-}
-
-package "json — exact JSON document reader and writer" as P_JSON {
-  enum DeclaredNumber <<enum>>
-  DeclaredNumber : int, uint, or exact decimal under hard budgets
-  class JsonError <<struct>>
-  JsonError : positioned typed read/write refusal
-  class "parse_value / write_value" as JSON_API <<mod>>
-  JSON_API : one house codec shared by literals and jsonl
-}
-
-package "schema_projection — strict external schema boundary" as P_SCHEMA {
-  enum LossReason <<enum>>
-  LossReason : stable refusal category
-  class ProjectionError <<struct>>
-  ProjectionError : path, reason, and detail
-  class "json_schema / avro / arrow / openapi" as SCHEMA_API <<mod>>
-  SCHEMA_API : exact logical projection and reverse capability check
-}
-
-package "openapi — deterministic project schema resolution" as P_OPENAPI {
-  class ProjectOpenApiResolver <<tool>>
-  ProjectOpenApiResolver : endpoint discovery and generated RKG ownership
-}
-
-package "trivia — one lexical comment fact" as P_TRIVIA {
-  class Comment <<struct>>
-  Comment : comment extent, termination, and multiline fact
-  class comment_at <<mod>>
-  comment_at : recognition only; each consumer owns policy
-}
-
-package "compiler — source-to-plan compilation pipeline" as P_COMP {
-  class Compilation <<struct>>
-  Compilation : valid plan, symbols, hash, warnings, and checked labs
-  class SyntaxTree <<struct>>
-  SyntaxTree : source-faithful parsed representation
-  class Lexer <<struct>>
-  Lexer : owns the only byte cursor and token lookahead
-  enum StatementHead <<enum>>
-  StatementHead : structural, bare value, or recovery
-  enum ValueHead <<enum>>
-  ValueHead : structural or expression region
-  class Unit <<struct>>
-  Unit : merged application and lab sources
-  class Hir <<struct>>
-  Hir : desugared, resolved, and typed graph + labs
-  enum NodeSemantics <<enum>>
-  NodeSemantics : family-specific facts beside the effective node Type
-  class Lab <<struct>>
-  Lab : checked simulation corpus (never hashed)
-  class Scenario <<struct>>
-  Scenario : checked steps, mocks, and expectations
-  class "guest frontend seam" as GuestFrontend <<guarded>>
-  GuestFrontend : no placeholder type until one implementation lands
-}
-
-package "plan — serializable compiled execution model" as P_PLAN {
-  class ExecutionPlan <<struct>>
-  ExecutionPlan : parent-linked owner tree plus scoped edges and handlers
-  class ValidatedExecutionPlan <<struct>>
-  ValidatedExecutionPlan : plan plus total effective port types
-  class ResolvedPortTable <<struct>>
-  ResolvedPortTable : exact declared/inferred type of every port
-  enum NodeExecution <<enum>>
-  NodeExecution : executable operator or connector with its spec
-  class Owner <<struct>>
-  Owner : parent-linked lexical Graph or Node scope
-  enum OwnerKind <<enum>>
-  OwnerKind : graph or reciprocal executable Node slot
-  class OwnerSlot <<struct>>
-  OwnerSlot : compile-time resolved owner reference
-  class OwnerValue <<struct>>
-  OwnerValue : typed immutable expression, phase, and plan reduction
-  enum EvaluationSite <<enum>>
-  EvaluationSite : plan, boot, instance, or invocation
-  class ConnectorSpec <<struct>>
-  ConnectorSpec : typed effect, behavior, and effective phase-tagged attributes
-  class Handler <<struct>>
-  Handler : activation-selected ordered statement body
-  class InstanceSpec <<struct>>
-  InstanceSpec : optional key expression and independent lifetime profile
-  class Slot <<struct>>
-  Slot : compile-time resolved reference
-  class SymbolTable <<struct>>
-  SymbolTable : diagnostic and trace symbol information
-  class SemanticHash <<struct>>
-  SemanticHash : canonical HIR identity
-  class GraphVersion <<struct>>
-  GraphVersion : append-only deployed graph version
-  class Manifest <<struct>>
-  Manifest : semantic-hash to graph-version ledger
-  class GuestProgram <<struct>> <<next>>
-  GuestProgram : opaque compiled guest program
-  class AssetBlob <<struct>>
-  AssetBlob : content-addressed build-time asset bytes
-  class "encode / decode (categorical v15)" as PLAN_CODEC <<mod>>
-  PLAN_CODEC : canonical validated plan package transport
-}
-
-package "contract — compiler-layer node contract metamodel" as P_CONTRACT {
-  class ConnectorContract <<struct>>
-  ConnectorContract : id, roles, exchange, ports, attributes, and profiles
-  class AttributeSpec <<struct>>
-  AttributeSpec : name, presence, and value domain
-  enum Presence <<enum>>
-  Presence : required, optional, or defaulted
-  enum DefaultValue <<enum>>
-  DefaultValue : choice word or constant Rastok expression
-  enum ValueDomain <<enum>>
-  ValueDomain : choice, scalar constant, or deferred composite domain
-  enum Availability <<enum>>
-  Availability : available sheet, declared name, or unknown capability
-  class ProfileSelector <<struct>>
-  ProfileSelector : selects an available or deferred profile
-  class ContractCatalog <<struct>>
-  ContractCatalog : sheets keyed by stable contract id
-}
-
-package "stdlib — standard catalogue instances" as P_STD {
-  class PROCESS <<const>>
-  PROCESS : the available Process contract sheet
-  class GuestContract <<struct>>
-  GuestContract : declared language name and current availability
-}
-
-package "boundary — contracts with the external world" as P_BND {
-  interface InboundConnectorDriver <<trait>>
-  InboundConnectorDriver : retains proposals until accepted-after-commit or rejected
-  interface InboundCallConnectorDriver <<trait>>
-  InboundCallConnectorDriver : reports one correlated terminal completion after admission
-  class InboundCallRef <<struct>>
-  InboundCallRef : committed request-root identity for one inbound Call
-  interface OutboundConnectorDriver <<trait>>
-  OutboundConnectorDriver : exposes exactly one Call or Session protocol view
-  interface CallConnectorDriver <<trait>>
-  CallConnectorDriver : starts calls, answers or stays silent, cancels on demand
-  interface SessionConnectorDriver <<trait>>
-  SessionConnectorDriver : opens sessions, writes messages, reports one terminal exit
-  class SessionRef <<struct>>
-  SessionRef : placement-neutral journal-derived session identity
-  class SessionWriteRef <<struct>>
-  SessionWriteRef : one journaled graph-to-world message obligation
-  interface CompletionGate <<trait>>
-  CompletionGate : admits every typed port draft before call closure
-  interface Supervisor <<trait>>
-  Supervisor : supplies lifecycle events (current build: boot only)
-  class Dispatcher <<struct>>
-  Dispatcher : starts journaled calls, settles gated closures
-  class PumpBatch <<struct>>
-  PumpBatch : events, discarded, uncorrelated, rejected — nothing silent
-  class BoundaryEvent <<struct>>
-  BoundaryEvent : one routable won closure
-  class CallRef <<struct>>
-  CallRef : deterministic internal call identity
-  class InboundSubmission <<struct>>
-  InboundSubmission : draft proposed for atomic acceptance
-  class InboundEnvelopeProvenance <<struct>>
-  InboundEnvelopeProvenance : opaque connector-path and replica provenance
-  class Intent <<struct>>
-  Intent : canonical journaled outbound-call intent
-  class PreparedRequest <<struct>>
-  PreparedRequest : exact request bytes sealed with their digest
-  enum RequestCodec <<enum>>
-  RequestCodec : Process lines, jsonl, or bytes framing
-  class "prepare_request / process_exit_type" as BND_PREP <<mod>>
-  BND_PREP : pure framing and Process port-type authority
-  class PortOutput <<struct>>
-  PortOutput : one ordinary typed output draft
-  class Completion <<struct>>
-  Completion : ordered drafts ending in exactly one exit
-  enum ProcessExit <<enum>>
-  ProcessExit : exact terminal union for one Process invocation
-  class Response <<struct>>
-  Response : protocol-correlated atomic completion
-  enum DatedPayload <<enum>>
-  DatedPayload : delivery budget or Node-instance lifetime event
-}
-
-package "runtime — deterministic execution machinery" as P_RT {
-  class Vm <<struct>>
-  Vm : pure engine — boot, inject, step, drain, pump, advance
-  class Scheduler <<struct>>
-  Scheduler : deterministic work picking; the dated-event queue
-  class Mailboxes <<struct>>
-  Mailboxes : bounded FIFO queues per instance reference
-  class Delivery <<struct>>
-  Delivery : one queued envelope with its port, edge, and seq
-  class TransactionExecutor <<struct>>
-  TransactionExecutor : atomic node-transaction executor
-  class InstanceState <<struct>>
-  InstanceState : private Node state cells indexed by instance reference
-  class EmissionBuffer <<struct>>
-  EmissionBuffer : ordered per-port emissions
-  class Observed <<struct>>
-  Observed : one logged delivery — the observation surface
-  enum Fault <<enum>>
-  Fault : engine refusal returned to supervision, transaction uncommitted
-  interface GuestExecutor <<trait>>
-  GuestExecutor : pure deterministic guest execution contract
-  class BootBindings <<struct>> <<next>>
-  BootBindings : deployment bindings resolved at boot
-  class "Secret<T>" as SecretT <<struct>> <<next>>
-  SecretT : non-serializable protected binding
-}
-
-package "journal — durable causal history and recovery model" as P_J {
-  interface Journal <<trait>>
-  Journal : semantic journal operations
-  class CommittedInbound <<struct>>
-  CommittedInbound : accepted inbound envelope and record
-  enum CloseVerdict <<enum>>
-  CloseVerdict : won or already-closed result
-  enum Closure <<enum>>
-  Closure : driver completion or machine timeout
-  class MemJournal <<struct>>
-  MemJournal : current in-memory journal implementation
-  enum Record <<enum>>
-  Record : inbound, transaction, or outbound record
-  class TransactionRecord <<struct>>
-  TransactionRecord : instance ref, parent ref, consumed, delta, emissions, routes, cause
-  class OutboundRecord <<struct>>
-  OutboundRecord : journaled external-call record
-  class "mod ids" as IDS_API <<mod>>
-  IDS_API : identity recipes — root, emission, call, budget
-  class RecoveryFold <<struct>> <<next>>
-  RecoveryFold : journal-to-state recovery fold
-}
-
-package "golden — canonical projection, seal, and diff" as P_GOLD {
-  class Trace <<struct>>
-  Trace : canonical record bytes with their structured trees
-  class Divergence <<struct>>
-  Divergence : first difference, by record and named key path
-  class "mod golden" as GOLD_API <<mod>>
-  GOLD_API : project, seal, diff over shared canonical CBOR
-}
-
-package "connectors — concrete external-effect Drivers" as P_CONN {
-  class DriverManifest <<struct>>
-  DriverManifest : pre-load canonical id and role claims; no code or ABI
-  class DriverRegistry <<struct>>
-  DriverRegistry : exact id-to-factory and role binding
-  class RuntimeBindings <<struct>>
-  RuntimeBindings : complete pre-VM Node-to-role association
-  interface ConnectorDriverFactory <<trait>>
-  ConnectorDriverFactory : binds one contract implementation
-  class Process <<struct>>
-  Process : pre-bound async process Driver; out*, err*, then typed exit
-  class ProcessBindError <<struct>>
-  ProcessBindError : refuses an unserved or unresolved plan before VM boot
-  class File <<struct>>
-  File : one-file bounded read and atomic replace Driver
-  class HttpClient <<struct>>
-  HttpClient : typed request binding and live H1-H3 Call Driver
-  class HttpServer <<struct>>
-  HttpServer : generic inbound Call binding; live listener remains H5
-  class WebSocketClient <<struct>>
-  class WebSocketServer <<struct>>
-  class WebSocketProtocol <<private>>
-  WebSocketProtocol : shared bounded RFC 6455 message state
-  class HostedNetworkEngine <<private>>
-  HostedNetworkEngine : bounded pump; Hyper H1-H2, quiche H3, Tungstenite
-  class "Timer, Calendar, Memory" as CATALOGUE <<guarded>>
-  CATALOGUE : declared names — sheets and Drivers land by slice
-}
-
-package "conformance — Driver contract harness" as P_CONF {
-  class Profile <<struct>>
-  Profile : happy case, provocations, correlation oracle, honest gaps
-  class Report <<struct>>
-  Report : passed, failed, and honestly unproven cases
-}
-
-package "lab — the scenario runner" as P_LAB {
-  class ScenarioRun <<struct>>
-  ScenarioRun : one executed scenario — verdict and journal records
-  class ScenarioReport <<struct>>
-  ScenarioReport : named failures; empty means green
-  class "mod lab" as LAB_API <<mod>>
-  LAB_API : run — drives scenarios on the production Vm
-}
-
-note bottom of P_LAB
-  the scenario forms live in compiler::hir (one
-  parser, one checker) ; the fixture IS the scenario's
-  steps ; virtual time IS Vm::advance — no separate
-  Fixture or time-source types exist
-end note
-
-package "render — rustc-shaped diagnostic rendering" as P_REN {
-  class Sources <<struct>>
-  Sources : the compiled sources spans resolve against
-  class "mod render" as REN_API <<mod>>
-  REN_API : code, file:line:col, source line, underline
-}
-
-package "cli — binary assembly (main.rs)" as P_CLI {
-  class "check | run | simulate | resolve-open-api" as VERBS <<bin>>
-  VERBS : wiring and verbs; owns nothing semantic
-}
-
-' ===== module-level uses =====
-
-P_COMP ..> P_EXPR : uses
-P_COMP ..> P_PLAN : uses
-P_COMP ..> P_STD : uses
-P_COMP ..> P_CONTRACT : validates sheets
-P_COMP ..> P_JSON : delegates documents
-P_COMP ..> P_TRIVIA : shares comment facts
-P_STD ..> P_CONTRACT : instantiates
-P_ENV ..> P_DATA : carries core values
-P_EXPR ..> P_DATA : consumes types / values
-P_EXPR ..> P_CBOR : canonical doubles / nesting budget
-P_EXPR ..> P_JSON : exact number reader
-P_EXPR ..> P_TRIVIA : shares comment facts
-P_LOOP_PROOF ..> P_EXPR : checks typed trees
-P_LOOP_PROOF ..> P_PLAN : re-derives from handlers
-P_JSON ..> P_DATA : produces core values
-P_SCHEMA ..> P_DATA : projects logical types
-P_SCHEMA ..> P_JSON : parses JSON schemas
-P_OPENAPI ..> P_SCHEMA : projects components
-P_OPENAPI ..> P_COMP : parses project sources
-P_IDENT ..> P_CBOR : emits tagged trees
-P_IDENT ..> P_ENV : tags envelope scalars
-P_IDENT ..> P_DATA : tags core values
-P_PLAN ..> P_CBOR : encodes / decodes
-P_PLAN ..> P_IDENT : tagged values
-P_PLAN ..> P_DATA : carries types / values
-P_PLAN ..> P_CONNECTOR : carries ids / roles
-P_PLAN ..> P_LOOP_PROOF : carries certificate
-P_CONTRACT ..> P_CONNECTOR : keys sheets
-P_RT ..> P_IDENT : addresses work
-P_RT ..> P_PLAN : uses
-P_RT ..> P_BND : uses
-P_RT ..> P_J : uses
-P_RT ..> P_EXPR : uses
-P_BND ..> P_JSON : jsonl framing
-P_BND ..> P_J : uses
-P_J ..> P_IDENT : seals instance references
-P_GOLD ..> P_J : projects
-P_GOLD ..> P_CBOR : encodes / decodes
-P_GOLD ..> P_IDENT : tagged values
-P_CONN ..> P_BND : implements Driver roles
-P_CONN ..> P_PLAN : binds validated plan
-P_CONN ..> P_CONNECTOR : registers exact ids / roles
-P_CONF ..> P_BND : exercises boundary protocols
-P_CONF ..> P_CONTRACT : reads contract
-P_CONF ..> P_CONN : binds through DriverRegistry
-P_LAB ..> P_COMP : uses
-P_LAB ..> P_RT : drives the Vm
-P_LAB ..> P_CONN : registers mock factories
-P_LAB ..> P_BND : mocks outbound Call; probes inbound Event / Call / Session
-P_LAB ..> P_J : uses
-P_CLI ..> P_COMP : uses
-P_CLI ..> P_RT : uses
-P_CLI ..> P_LAB : uses
-P_CLI ..> P_CONN : wires
-P_CLI ..> P_GOLD : golden workflow
-P_CLI ..> P_REN : renders
-P_CLI ..> P_OPENAPI : resolves project schemas
-
+legend bottom
+Module inventory and crate dependency; execution relationships are in view 03.
+Core never imports compiler, Lab, browser, network libraries or OS APIs.
+The shared Node/Executor model is semantic; no public Executor trait.
+endlegend
 @enduml

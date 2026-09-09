@@ -4,8 +4,9 @@ This directory contains implementation views derived from the normative
 specification. It answers *how Rastok is built*; it does not define new
 language or runtime behavior.
 
-The current v16 implementation and its migration evidence are recorded in
-[R9 qualification](rework-r9-qualification.md). Core/HIR share Dispatch and
+The current implementation uses package v17. Its migration evidence is recorded in
+[R9 qualification](rework-r9-qualification.md) for the v16 rework and the
+[v17 host-terminal amendment](loop-host-terminal-v17.md). Core/HIR share Dispatch and
 routing with independent expression, scope, composition and Contract validation.
 Operator, Graph and outbound Call Loops execute and recover within the
 [named proof subset](../spec/loop.md). Original deadlines, run contexts and
@@ -14,6 +15,9 @@ checkpoints, not the current completion status.
 
 Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 
+- [`documentation-audit-2026-09-09.md`](documentation-audit-2026-09-09.md) for
+  the current whitepaper/specification/example/UML audit, executable checks
+  and the implementation discrepancy it exposed;
 - [`m0-slice.md`](m0-slice.md) for the first end-to-end proof;
 - [`m0.5-slice.md`](m0.5-slice.md) for the kernel/package consolidation;
 - [`m1-slice.md`](m1-slice.md) for the current public-opening milestone
@@ -54,9 +58,9 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
   Operator, Graph and outbound-Call Loop profiles and six versioned Contract
   `@2` sheets, now exercised by the R8/R9 host matrix; the M1.7 files remain
   historical evidence for v14/v15;
-- [`rework-r2-supersession.md`](rework-r2-supersession.md) for the live-doc
-  alignment matrix, current-v15/target-v16 boundary, repository-contact
-  corrections and the explicit review stop before R3;
+- [`rework-r2-supersession.md`](rework-r2-supersession.md) for the historical
+  R2 alignment matrix, then-current-v15/target-v16 boundary, repository-contact
+  corrections and review stop before R3 (now completed);
 - [`release-qualification.md`](release-qualification.md) for the single
   inventory of executed third-party interoperability evidence and external
   qualifications still required before a public release;
@@ -69,7 +73,7 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
   data forms, interfaces, dependency direction, and current status;
 - [`spec-to-code.md`](spec-to-code.md) for the map from normative
   documents to implementation responsibilities;
-- [`plan-package.md`](plan-package.md) for the categorical v16 package and
+- [`plan-package.md`](plan-package.md) for the categorical v17 package and
   independent validation boundary, with earlier format ledgers marked historical;
 - [`parallelism-notes.md`](parallelism-notes.md) for the keyed-mailbox
   concurrency model and the decisions left for physical parallelism;
@@ -77,15 +81,17 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
   `no_std` kernel proof;
 - `01-system-context` for the system and its users;
 - `02-rastok-container` for executable and deployment boundaries;
-- `03-rastok-components` for logical responsibilities inside the M0
+- `03-rastok-components` for current logical responsibilities inside the
   executable;
 - `04-app-lab-effect-cycle` for the main runtime interaction;
 - `05-rastok-packages` for the **archived pre-build M0** Rust module and
   type sketch. It deliberately preserves superseded names and must not
   be read as the current API;
-- `06-rastok-modules-overview` for the maintained bird's-eye module
-  companion, including the landed M1 compiler interludes and
-  module-level dependencies.
+- `06-rastok-modules-overview` for the current Rust module inventory and
+  one-way crate dependency;
+- `07-node-executor-extension` for semantic ownership: Graph, Executor,
+  Operator, Connector/Contract, Extension and its manager. These categories
+  do not imply a public Rust trait for every box.
 
 ## Diagram conventions
 

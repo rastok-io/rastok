@@ -2,10 +2,12 @@
 
 > Implementation blueprint — non-normative and under review.
 
-> **V16 implementation (2026-09-07).** The Node/Graph/Executor/Connector/Extension
+> **Current implementation, audited 2026-09-09 (package v17).** The Node/Graph/Executor/Connector/Extension
 > model, explicit dispositions, recursive Dispatch and Loop manager recovery
 > are executable. [R9](docs/architecture/rework-r9-qualification.md) records
-> the qualification and remaining named limits.
+> the v16 qualification and remaining named limits; the
+> [v17 amendment](docs/architecture/loop-host-terminal-v17.md) records Loop
+> exhaustion on a resolved host terminal, with no contributed port.
 
 This document explains how the current Rastok specification becomes an
 executable system. It defines implementation boundaries, dependency direction,
@@ -69,13 +71,16 @@ boundaries:
                          ┌──────────────────────────────┐
 event + state + plan ──▶ │ deterministic semantic step │
                          └──────────────┬───────────────┘
-                                        │ effect intent
+                                        │ commit OUTBOUND open, then effect intent
                             ┌───────────┴───────────┐
                             │                       │
                  real Driver event      scripted Lab event
                             │                       │
                             └───────────┬───────────┘
                                         │ typed outcome event
+                                        ▼
+                          core validates and commits the outcome
+                                        │
                                         ▼
                                       journal
 ```
@@ -87,7 +92,7 @@ effect outcomes and can therefore be recorded and replayed.
 
 ## Logical responsibilities
 
-These are design responsibilities inside the bootstrap crate, not a
+These are responsibilities across `rastok-core` and `rastok`, not a
 promise of one crate per box:
 
 | Responsibility | Owns | Must not own |
@@ -100,12 +105,12 @@ promise of one crate per box:
 | Runtime Connector binding | exact-id and role association before VM/journal construction | compiler catalogue or first-registration-wins selection |
 | Process, File and network Drivers | physical external interactions behind typed Contracts; flat contract-specific modules own binding and private `network` owns sockets/TLS/protocol engines | general runtime semantics, compiler schema projection or journal authority |
 | Project schema tooling | strict OpenAPI discovery/projection and deterministic generated Rastok source | a second runtime type system or authored-source mutation |
-| Lab runner | controlled Driver scripts, virtual inputs, scripted faults | a second execution engine |
-| Hosted execution UI | paused transaction controls and disposable projections of validated topology, VM inspection, journal observations and accounting | execution authority, durable history, remote administration or unredacted classified data |
+| Lab runner | controlled Driver scripts, virtual inputs, time and assertions; authored crash/restart remains deferred | a second execution engine |
+| Visual simulation debugger | paused transition controls and projections of validated topology, VM inspection, journal observations and accounting | a second execution authority, durable history, editing, remote administration or unredacted classified data |
 | Diagnostics and golden diff | stable human-facing evidence | mutation of execution |
 
 The component-level blueprint refining this table — owned data forms,
-interfaces, dependency direction, and M0 status per component — is
+interfaces, dependency direction, and current status per component — is
 [`docs/architecture/components.md`](docs/architecture/components.md).
 The working map from specifications to these responsibilities is in
 [`docs/architecture/spec-to-code.md`](docs/architecture/spec-to-code.md).
@@ -135,19 +140,20 @@ presentation boundary.
 1. **One engine, two interpretations.** App and Lab do not fork the
    planner or runtime semantics.
 2. **Effects are values before they are actions.** The core emits an
-   intent; a handler produces a typed outcome.
+   intent and commits its obligation; only then may a Driver perform an effect
+   and return a typed outcome. Drivers never write the journal.
 3. **Nondeterminism is explicit.** Time, randomness, environment, and
    external responses cannot enter through ambient APIs.
 4. **Identity is canonical.** Stable identifiers and hashes derive only
    from the canonical forms defined by the specification.
-5. **Recovery is journal-relative.** In-memory M0 may use a simple
-   journal, but its API must not erase the distinction between logical
-   events and a future physical layout.
+5. **Recovery is journal-relative.** The VM reconstructs retained routes,
+   state, exchanges, deadlines and Loop commands without rerunning producers.
+   A physical durable-journal backend remains separate future work.
 6. **Abstractions earn their place.** A trait, generic parameter, crate,
    or dependency needs a present boundary or test seam. Repetition is
    preferable to a false abstraction.
-7. **Safe Rust by default.** Unsafe code requires a demonstrated need,
-   a documented invariant, and focused tests.
+7. **Safe Rust in the workspace.** `unsafe` is forbidden. The documented
+   bare-metal spike exception stays outside the workspace and never ships.
 
 ## Crate policy
 
@@ -184,7 +190,7 @@ M1.6 H4.1 extends that same core algebra with the open canonical
 `media_type` scalar. OpenAPI remains a hosted compiler/tool adapter:
 `serde_json`/`serde_yaml_ng` and filesystem discovery stay in `rastok`, while
 only resolved `DataType` trees and categorical plan data cross toward the
-core. Connector modules are flat by contract family; a shared module is named
+core. Connector modules are organized by Contract; a shared module is named
 for its real responsibility (`websocket_protocol` or private `network`) rather
 than becoming a generic utility bucket.
 
@@ -208,8 +214,10 @@ Next/Again/Done into durable manager commands outside the spatial DAG. See the
 [R1 host contracts](docs/architecture/rework-r1-host-contracts.md).
 
 The optional `hosted-ui` feature embeds one loopback HTTP/SSE debugger for
-simulation. Each Step invokes one existing VM boundary or authored Lab action,
-never a second execution model. Immutable snapshots retain history, current
+simulation. Next transition invokes existing VM work or an authored Lab action,
+never a second execution model. An authored `advance` may still group several
+VM transactions into one retained transition; this is a named controller limit.
+Immutable snapshots retain history, current
 mailbox contents, instances, Loop-run dependencies, redacted values and the
 public CostReport. Manager commands are not rendered as spatial edges. Reset
 creates a fresh session; historical inspection neither forks nor executes it.
@@ -222,18 +230,20 @@ debugging remains a separate gate; `run --ui` refuses before effects.
 
 - [System context](docs/architecture/01-system-context.svg) —
   people and external systems around Rastok.
-- [M0 container view](docs/architecture/02-rastok-container.svg) —
-  the executable/deployment boundary for the first slice.
-- [M0 component view](docs/architecture/03-rastok-components.svg) —
+- [Container view](docs/architecture/02-rastok-container.svg) —
+  the current executable and optional local browser boundary.
+- [Component view](docs/architecture/03-rastok-components.svg) —
   logical responsibilities inside the executable.
 - [App/Lab effect cycle](docs/architecture/04-app-lab-effect-cycle.svg)
-  — the shared semantic step and its two handlers.
+  — commit-before-effect with real or scripted Drivers.
 - [Archived pre-build module and type blueprint](docs/architecture/05-rastok-packages.svg)
   — the M0 design artifact, retaining superseded names as history rather than
   current API.
 - [Module overview](docs/architecture/06-rastok-modules-overview.svg)
-  — the bird's-eye companion: every module and type with a one-line
-  description, module-level dependencies only.
+  — current Rust modules, their load-bearing types and the one-way crate
+  dependency. View 03 shows the execution relationships.
+- [Semantic model](docs/architecture/07-node-executor-extension.svg) —
+  Node ownership, passive Graph scopes, Executors and temporal managers.
 
 The adjacent `.puml` files are the editable diagram sources. Rendering
 instructions live in [`tools/diagrams/`](tools/diagrams/README.md).

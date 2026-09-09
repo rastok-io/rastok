@@ -1,11 +1,12 @@
 # Reference simulation 5 — fixture → golden trace, derived by hand
 
-> **Status : Reference derivation — not yet executable.** This document
-> derives the complete golden trace of a small scenario by hand so a
-> conforming runtime has a byte-exact target. Canonicalization follows
-> [identity.md](../../spec/identity.md), while the role of golden traces is
-> defined in
-> [simulation-semantics.md](../../spec/simulation-semantics.md) §6.2.
+> **Status: historical pre-v16 derivation, not a current byte-exact golden.**
+> The source, abbreviated records and timing annotations below are retained
+> as design evidence; they omit later instance, Contract and deadline facts.
+> The running implementation must follow [identity.md](../../spec/identity.md),
+> [simulation-semantics.md](../../spec/simulation-semantics.md) and the checked
+> [echo/JSONL/gauge fixtures](../README.md), not this old hand calculation.
+> `durability = local` also remains a named, non-executable capability.
 
 ## 1. What this sim exercises
 

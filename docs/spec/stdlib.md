@@ -1,6 +1,6 @@
 # Standard library contracts
 
-> **Status (2026-09-07): normative v16.** The six executable Connector
+> **Status (2026-09-09): normative, current package v17.** The six executable Connector
 > Contracts use `@2`, with independently checked production/cardinality/
 > terminal/effect-stage facts in §1.1. HttpClient and
 > HttpServer are live over HTTP/1.1–3, including bounded `ack` and `respond`;
@@ -98,7 +98,7 @@ six ids to `rastok/process@2`, `rastok/file@2`,
 `rastok/websocket-client@2`, and `rastok/websocket-server@2`. An `@1`
 package is never interpreted as `@2`.
 
-The exact target tables, including conservative terminal classifications,
+The exact implemented profile tables, including conservative terminal classifications,
 live in
 [rework-r1-host-contracts.md](../architecture/rework-r1-host-contracts.md).
 

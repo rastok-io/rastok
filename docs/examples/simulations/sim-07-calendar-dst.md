@@ -5,7 +5,9 @@
 > [stdlib.md](../../spec/stdlib.md) §3.5 (the DST policy, stated) and
 > [simulation-semantics.md](../../spec/simulation-semantics.md) §5.3
 > (`origin`). It is a conformance target for cron expansion across both DST
-> edges.
+> edges. `Calendar` and `Memory` remain deferred. The syntax and abbreviated
+> records below also predate v16 and will need a new checked fixture before
+> this design can serve as current implementation evidence.
 
 ## 1. What this sim exercises (the checklist)
 

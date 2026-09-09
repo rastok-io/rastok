@@ -1,0 +1,63 @@
+// A small line-oriented CSV demo: one header, three data rows.
+// The Lab supplies the reader's lines; no file or process is opened in simulation.
+// This counts nonempty physical lines, not CSV records with quoted newlines.
+
+type RowCount = struct { lines: int, last_row: text }
+
+graph csv_count : App {
+  input in: text
+  output out: RowCount
+
+  connector read_csv : Process {
+    mode = job
+    command = "cat"
+    args = ["examples/csv-count.csv"]
+    codec = lines
+    effect = idempotent
+    behavior = deterministic
+    timeout = duration("5s")
+  }
+
+  operator skip_header {
+    input in: text
+    output out: text
+    on in where data != "product,quantity" && data != "" { out = data }
+  }
+
+  operator count {
+    input in: text
+    output out: RowCount
+    var lines: int = 0
+    on in {
+      lines = lines + 1
+      out = { lines = lines; last_row = data }
+    }
+  }
+
+  in -> read_csv -> skip_header -> count -> out
+  read_csv.err -> nothing
+  read_csv.exit -> nothing
+}
+
+lab csv_count {
+  simulation demo on app {
+    mock read_csv {
+      on in {
+        out = "product,quantity"
+        out = "apple,2"
+        out = "pear,5"
+        out = "plum,1"
+        exit = Exited { exit_code = 0; signal = null }
+      }
+    }
+
+    scenario three_rows "count three data rows, excluding the header" {
+      app.in = "read"
+      expect app.out count == 3
+      expect app.out count == 1 where data.lines == 1 && data.last_row == "apple,2"
+      expect app.out count == 1 where data.lines == 2 && data.last_row == "pear,5"
+      expect app.out count == 1 where data.lines == 3 && data.last_row == "plum,1"
+      expect nothing read_csv.err
+    }
+  }
+}

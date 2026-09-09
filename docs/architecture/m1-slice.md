@@ -14,6 +14,13 @@
 > not real-I/O `run`, branches or input authoring. Its external browser pass
 > remains in [release qualification](release-qualification.md).
 
+> **Current-state pointer (2026-09-09).** The
+> [v17 amendment](loop-host-terminal-v17.md) supersedes the contributed Loop
+> expiry port without changing the three non-Loop witnesses. The
+> [documentation audit](documentation-audit-2026-09-09.md) owns the latest
+> executable-example and documentation checks; the dated ledger below is
+> not retroactively rewritten.
+
 > Implementation slice — non-normative. Opened 2026-08-06, target 15
 > October 2026: the repository goes public with this milestone, and
 > its closing demonstration is **a complete flow running without the

@@ -1,10 +1,11 @@
 # Reference simulation 1 — session router with a timeout path
 
-> **Status : Reference derivation — not yet executable.** The expected trace
-> is derived by hand, rule by rule, from
-> [envelope.md](../../spec/envelope.md) and
-> [execution-model.md](../../spec/execution-model.md). It is a conformance
-> target, not implementation evidence.
+> **Status: historical pre-v16 derivation, not a current golden or program.**
+> Process service/correlation remains deferred; the abbreviated identity and
+> timing formulas below also predate current instance/run records. Preserve
+> them as design evidence, not byte-exact conformance. Use the
+> [current examples](../README.md), [identity rules](../../spec/identity.md)
+> and [execution model](../../spec/execution-model.md) for current behavior.
 
 ## 1. What this sim exercises (the checklist)
 

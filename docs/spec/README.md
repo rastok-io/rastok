@@ -23,17 +23,18 @@ semantic ownership rather than by release layer.
    intentionally deferred behavior are stated where they apply. Private
    design history does not compete with the public contract.
 3. **Simulation is executable specification.** Spec-critical behavior
-   should have a falsifiable artifact: a reference simulation
-   (`../examples/simulations/`), a golden trace, or a conformance test.
+   should have executable evidence: a checked example from the
+   [catalogue](../examples/README.md), a golden trace, or a conformance test.
+   The seven historical paper derivations are not a substitute for those tests.
 4. **Specification and implementation stay explicitly aligned.** Normally an
    observable change updates its normative home and executable evidence in one
    change. A large rework may freeze the specification first only when a
    decision names the ordered code gates, the documents label current versus
    target behavior, and non-executable syntax continues to fail closed. The
    v16 R0–R2/R3–R9 split is such a staged decision.
-5. **The normative text stands on its own.** Internal work logs,
-   superseded alternatives, and private planning material are deliberately
-   absent from this repository.
+5. **The normative text stands on its own.** Historical design and qualification reports are explicitly dated and linked;
+   they never override current rules. Private planning material is not an
+   alternative semantic authority.
 
 ## Reader path
 
@@ -58,7 +59,8 @@ six Connectors and guest languages) →
 [extensions.md](extensions.md) / [loop.md](loop.md) /
 [effects-and-sagas.md](effects-and-sagas.md) (Extensions, finite recurrence,
 and future compensation) →
-`../examples/` (canonical graphs and seven reference simulations).
+[example catalogue](../examples/README.md) (runnable graphs and separately
+labelled historical derivations).
 
 ## The map
 
@@ -70,7 +72,7 @@ and future compensation) →
 | [expressions.md](expressions.md) | Rastok expression contract, CEL-compatible core, `IDENT!` tagged frontends, JSON values, narrowing |
 | [grammar.md](grammar.md) | host syntax, keywords, LL(1) productions, expression/frontend positions and delimitation, simulation grammar |
 | [envelope.md](envelope.md) | envelope structure, `meta.sys`, identity framing, storage and wire form, provenance |
-| [instances.md](instances.md) | Node-owned instance keys, canonical logical addresses, Node-local mutable state, lifetime, lifecycle containment, placement/shard separation |
+| [instances.md](instances.md) | Node-owned instance keys, canonical logical addresses, Operator-local mutable state, lifetime, lifecycle containment, placement/shard separation |
 | [execution-model.md](execution-model.md) | Executor and manager transactions, mailboxes M:N, Dispatch, ordering, dated events, timeouts, windows, `advance` |
 | [delivery-semantics.md](delivery-semantics.md) | journal records, cursors, backpressure, boundary WAL, recovery, sagas × lifecycle |
 | [simulation-semantics.md](simulation-semantics.md) | simulations, scenarios, fixtures, mocks, expectations, golden traces, coverage, production-to-fixture projection |

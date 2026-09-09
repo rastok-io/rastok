@@ -1,24 +1,13 @@
 # Component blueprint
 
-> Implementation blueprint — non-normative. Originally written ahead
-> of the build; updated 2026-09-05 for the v16 R0–R2 design freeze. The
-> former named-partition P1-P3 implementation is superseded; categorical v15
-> owner transport and hierarchical instance routing are executable evidence.
-> The M0 deviations remain recorded in
-> [`m0-exit-notes.md`](m0-exit-notes.md), while the chronological M1
-> evidence lives in [`m1-slice.md`](m1-slice.md). The specified M1.3
-> replacement of the type/value and boundary seams is tracked in
-> [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md); this file
-> distinguishes the retained v7 type/value/expression registry from the
-> categorical v15 plan transport (retaining v9's instance model, v10's stable
-> Connector ids/roles, v11's exchange lifecycles, and v12's `media_type` while
-> adding the historical v15 Graph-Loop contract), R3 causal routing rows, R4 lifetime
-> execution, R5 Closing, R6 joins, and R7 placement-neutrality proof.
-> Current Rust remains v15. The v16 target separates passive Graph scopes from
-> the common Executor mechanics of Operator and Connector, replaces Aspect with
-> Extension, and attaches temporal managers without making them DAG nodes; see
-> [R0 algebra](rework-r0-algebra.md) and
-> [R1 contracts](rework-r1-host-contracts.md). R3 is the first code gate.
+> Current implementation blueprint — non-normative, audited 2026-09-09.
+> Package **v17** retains the v7 type/value registry and six Connector
+> Contracts at **@2**. [R9](rework-r9-qualification.md) records the v16 rework;
+> the [v17 amendment](loop-host-terminal-v17.md) removes Loop's contributed
+> expiry port. Earlier milestone names below identify when a responsibility
+> landed; they are not current package versions or pending-work claims.
+> Current limits are in [Loop](../spec/loop.md#16-deferred-by-name),
+> [observability](../spec/observability.md) and [release qualification](release-qualification.md).
 
 This document refines the responsibility table of
 [`ARCHITECTURE.md`](../../ARCHITECTURE.md) to the component level: the
@@ -101,9 +90,11 @@ crates/rastok-core/src/       # the kernel — #![no_std] + alloc (split at M0.5
 ├── identity.rs               # canonical instance address/reference
 │   └── identity/encoding.rs  # tagged-value identity registry
 ├── json.rs, trivia.rs        # shared exact JSON and lexical-comment facts
+├── deployment.rs             # typed boot/secret/privacy/price inputs, no environment reads
 ├── journal.rs, observation.rs # causal records plus retained typed correlation
 ├── boundary.rs               # host vocabulary, request framing, five traits
-└── runtime.rs, runtime/vm.rs # the machine
+├── plan/                     # Dispatch, routing, composition, policy, validation, serialization
+└── runtime/                  # HandlerExecutor, VM, Loop manager, Closing and spatial recovery
 
 crates/rastok/src/            # the std layer — re-exports the kernel
 ├── diagnostics.rs    # Diagnostic, Code, Severity, Phase, Span, Bag
@@ -129,6 +120,7 @@ crates/rastok/src/            # the std layer — re-exports the kernel
 │   └── network/      # private sockets/TLS/pumps/protocol codecs
 ├── conformance.rs    # Driver contract harness over the production seam
 ├── lab.rs            # run → ScenarioRun { report, records } ; mock Drivers
+├── deployment_config.rs # hosted profile JSON and provider resolution
 ├── observability.rs  # bounded never-block structured-log projection
 ├── ui/               # optional loopback HTTP/SSE controller and embedded page;
 │                     #   journal/inspection/accounting projection only
@@ -153,8 +145,8 @@ crate promotion (the final layout stays open per `ARCHITECTURE.md`):
    names (`compiler`, `runtime`, `boundary`, `expr`).
 2. **Explicit English over abbreviations.** A newcomer must understand
    a name without the project's internal vocabulary: `diagnostics`,
-   `guest_engines`, `ScenarioReport`, `RecoveryFold`. No blessed
-   abbreviations remain.
+   `ScenarioReport`, `ValidatedExecutionPlan`. Names follow actual contracts;
+   a future responsibility does not justify a placeholder type or module.
 3. **Qualified paths give context; precision beats brevity.** A type
    never repeats its module name (`expr::Tree`, never `ExpressionTree`), but
    keeps a precise compound when the bare word would be too generic
@@ -163,10 +155,10 @@ crate promotion (the final layout stays open per `ARCHITECTURE.md`):
    (`plan::ExecutionPlan`, `plan::SemanticHash`). The `x::X` stutter
    stays idiomatic where the type *is* the module's whole concept:
    `journal::Journal`, `envelope::Envelope`.
-4. **Flat, depth ≤ 2.** A directory exists for exactly two reasons — a
-   catalogue (one file per item: `connectors/`, `guest_engines/`) or an
-   overflow split behind an unchanged facade (`compiler/`). Never
-   created in advance.
+4. **Cohesive facades.** Subdirectories group one contract or split a large
+   responsibility behind its existing facade. Dispatch, routing, validation
+   and recovery now have focused submodules; depth is not an API promise.
+   A directory is never created for an unimplemented responsibility.
 5. **One engine.** There is no simulator component: `rastok simulate`
    drives the same `runtime`, injects/advances through its public VM
    surface, and substitutes the `OutboundConnectorDriver` with the Lab's mock.
@@ -183,32 +175,36 @@ data out, the governing spec, and current status.
 | **Lexer + parser** | one forward byte cursor and token lookahead in `Lexer`; complete host lexemes; byte-adjacent `IDENT!` frontend selection; specialized expression/JSON/verbatim/guest regions; spans and structural recovery | source bytes + frontend Registry → syntax tree + diagnostics | [grammar.md](../spec/grammar.md); D-2026-08-13-1; D-2026-08-14-1 | M1.3 B4 |
 | **Unit assembly** | the deployed unit: multi-file resolution, lab-fragment merge, exactly-one-App, wiring by name, no shadowing | syntax trees → one resolved `Unit` | [grammar.md](../spec/grammar.md) scope rules; [simulation-semantics.md §2](../spec/simulation-semantics.md) | M0 (single unit) |
 | **Desugarer** | the finite sugar table — afterwards there is one way to say each thing | resolved unit → core-form graph | [grammar.md](../spec/grammar.md) | M0 |
-| **Type checker** | current v15 envelope/type/policy, Contract sheets, `node::Kind/Type/Aspect`, instances, joins and Graph Loop; target v16 Node/Graph/Executor/Connector/Extension, one Dispatch per trigger, route case tables, explicit productibility/dispositions and three qualified Loop hosts | source → checked `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [types.md](../spec/types.md); [observability.md](../spec/observability.md); [instances.md](../spec/instances.md); [expressions.md](../spec/expressions.md); [extensions.md](../spec/extensions.md); [loop.md](../spec/loop.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | v15/M1.8 executable; v16 design frozen at R0–R2, code begins R3 |
+| **Type checker** | Node/Graph/Executor/Connector/Extension, one Dispatch per trigger, typed routes, explicit productibility/dispositions, instances, joins, policy and three qualified Loop hosts with a resolved host exhaustion terminal | source → checked `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [types.md](../spec/types.md); [observability.md](../spec/observability.md); [instances.md](../spec/instances.md); [expressions.md](../spec/expressions.md); [extensions.md](../spec/extensions.md); [loop.md](../spec/loop.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | R3–R9 and v17 executable |
 | **Canonicalizer** | the canonical byte form of the resolved HIR; the semantic hash | `Hir` → canonical bytes + `plan::SemanticHash` | [identity.md §1](../spec/identity.md) | M0, extended in M1 |
-| **Lowering + plan gate** | current v15 owner/execution tables, scoped edges, Node/Graph handlers, Connector identities and policies; target v16 preserves owners but lowers Operator Dispatch, Contract-defined Connector transitions, RouteRule/PhysicalEdge separation, ExtensionSpec and manager commands while forbidding Graph handlers | `Hir` → `plan::ValidatedExecutionPlan` | [identity.md](../spec/identity.md); [observability.md](../spec/observability.md); [instances.md](../spec/instances.md); [execution-model.md](../spec/execution-model.md); [extensions.md](../spec/extensions.md); [plan-package.md](plan-package.md) | categorical v15 executable; v16 representation deliberately waits for R4 |
+| **Lowering + plan gate** | owner/address tables, Operator Dispatch, Contract-defined Connector transitions, RouteRule/PhysicalEdge separation, ExtensionSpec, manager commands and sparse policy; Graphs carry no application handlers | `Hir` → `plan::ValidatedExecutionPlan` | [identity.md](../spec/identity.md); [observability.md](../spec/observability.md); [instances.md](../spec/instances.md); [execution-model.md](../spec/execution-model.md); [extensions.md](../spec/extensions.md); [plan-package.md](plan-package.md) | categorical v17 executable; hostile validation in core |
 | **Tagged frontends** | registered name, framing and reader policy; built-in JSON/text/base64 decoding; deferred guest/data compiler identity; the host never tokenizes an owned body | `IDENT!` region → typed value, named deferral, or future compiled guest program | [expressions.md](../spec/expressions.md); [stdlib.md §5](../spec/stdlib.md) | B4 framing/readers; guest execution guarded |
 
-The facade returns `Result<Compilation, Diagnostics>` with
-`Compilation { plan, symbols, hash, warnings, labs }`: **a plan with errors is
+The facade returns `Result<Compilation, diagnostics::Bag>` with
+`Compilation { plan, symbols, hash, warnings, labs, source_definitions,
+scenario_definitions }`. The two source side tables support redacted inspection
+and never enter plan identity. **A plan with errors is
 unrepresentable** — warnings ride the success value, errors preclude
-it, and `plan` already has type `ValidatedExecutionPlan`. Node declarations are an algebraic type,
+it, and `plan` already has type `ValidatedExecutionPlan`. Checked Executor
+semantics are an algebraic type:
 
 ```text
-NodeDecl = Operator(OperatorDecl)
-         | Connector(ConnectorDecl { effect : Effect,
-                                     behavior : Behavior, … })  — both mandatory
-         | Graph(GraphDecl)
+hir::NodeSemantics = Operator
+                   | Connector { contract: ContractId, roles, exchange, attributes }
 
 Effect   = None | Class(EffectClass)   — `none` is an explicit declared
                                          value, never an absent field;
                                          the three effect *classes* stay three
 ```
 
-so "an Operator with an effect" or "a Connector without a declaration"
-cannot be constructed. `Effect::None` also represents the catalogue's
-pure-source connectors (Timer, Calendar, HttpServer) without turning
-`none` into a fourth effect class; their current declared-only status is
-still rejected before HIR construction
+Graphs have their own checked scope tree, not an Executor variant. Parsed
+`GraphItem`s may still carry invalid forms for named diagnostics; checking and
+independent package validation enforce legal attributes, required Connector
+settings and the absence of Graph/Connector application code. The syntax tree
+is not a proof of those invariants. `Effect::None` represents the catalogue's
+pure-source contracts without turning
+`none` into a fourth effect class. HttpServer executes; Timer and Calendar
+remain declared-only and reject before HIR construction
 ([effects-and-sagas.md §2.1–2.2](../spec/effects-and-sagas.md),
 [stdlib.md §2](../spec/stdlib.md), [loop.md](../spec/loop.md)). The checker reads Connector
 contracts from `stdlib` (§3.7) through the `contract` metamodel,
@@ -235,7 +231,7 @@ Two compiler rules with consequences elsewhere:
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`expr`** | the expression compiler/evaluator over core `DataType` and `Value`; its evaluator-only carrier may additionally hold the lazy payload witness | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → evaluation result; (`Tree`, boot constants) → core value | [expressions.md](../spec/expressions.md); [execution-model.md §5](../spec/execution-model.md) (no ambient time) | M1.3 B3 core + v7 registry; v12 added `media_type(text)`, retained by v15 |
+| **`expr`** | the expression compiler/evaluator over core `DataType` and `Value`; its evaluator-only carrier may additionally hold the lazy payload witness | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → evaluation result; (`Tree`, boot constants) → core value | [expressions.md](../spec/expressions.md); [execution-model.md §5](../spec/execution-model.md) (no ambient time) | M1.3 B3 core + v7 registry; v12 added `media_type(text)`, retained by v17 |
 
 `expr` never sees an envelope, Node, or placement boundary, and owns its own
 `expr::Diagnostic` (the compiler adapts it into `diagnostics::Diagnostic`).
@@ -267,7 +263,7 @@ resolved constructor/narrowing forms their canonical package ids.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`plan::ValidatedExecutionPlan`** | current v15 private plan plus total ports, owners, scoped routes, Connector exchange, historical Graph Aspect/Loop proof and sparse policy tables; target v16 retains owner/address authority while replacing the execution/control/routing forms enumerated in the R0 identity ledger | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [types.md](../spec/types.md); [observability.md](../spec/observability.md); [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [extensions.md](../spec/extensions.md); [plan-package.md](plan-package.md) | v15 executable; v16 categorical move frozen but no tags allocated before R4 |
+| **`plan::ValidatedExecutionPlan`** | private v17 plan with total ports, owners, recursive Dispatch, route selection, Contract profiles, Extensions, Loop proof/host terminals and sparse policy tables | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [types.md](../spec/types.md); [observability.md](../spec/observability.md); [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [extensions.md](../spec/extensions.md); [plan-package.md](plan-package.md) | v17 executable; removed versions/tags refuse without reinterpretation |
 | **`plan::Manifest`** | the append-only ledger `SemanticHash → GraphVersions` — plural: a rollback allocates a **new** version for the same hash; a version is never renumbered, never reused | allocated at boot | [identity.md §2](../spec/identity.md) | M0 (minimal) |
 
 `ExecutionPlan` remains the whitepaper's domain term and the private data
@@ -282,12 +278,12 @@ and it is long-lived: stateful, journaled, versioned, upgraded —
 closer to a streaming engine's job graph than to a query's throwaway
 plan.
 
-The current build does **not** ship unresolved `env()` or `secret()`
-nodes: those calls are guarded and refuse before a plan exists.
-`BootBindings` remains the intended future boundary; when that slice
-lands, deployment values must bind outside semantic identity so one
-package can run under different profiles without hiding an ambient
-environment read in the core.
+The current build transports exact `BootReference` values for HttpClient
+`url = env(...)` and `auth_bearer = secret(...)`. `deployment::BootBindings`
+supplies typed deployment values; hosted `deployment_config` reads profile JSON
+and the selected secret provider. The run header attests references and versions,
+not clear credentials. General boot `val`s and other secret consumers remain
+named gates; the evaluator never reads the environment.
 
 ### 3.4 The runtime machinery (`runtime`)
 
@@ -302,10 +298,11 @@ The same engine runs `rastok run` and `rastok simulate`, through a
 debugger-shaped surface: `Vm::boot(&validated_plan, graph_version)`
 constructs the machine; `inject`, `step`, `drain`, `pump`, and `advance`
 receive the journal explicitly at each causal operation. Recovery is
-not hidden in construction: `RecoveryFold` remains a later slice and
-must restore the machine through an explicit journal-facing boundary.
-The lab's Runner is literally a stepper over this surface, which keeps
-single-stepping and future journal-relative inspection structural.
+explicit: `Vm::recover_from_journal` and `recover_with_bindings` rebuild a
+candidate VM from retained records before replacing live state. They do not
+re-execute producers or perform physical I/O. “RecoveryFold” names the design
+responsibility, not a public Rust type. The Lab runner and visual debugger use
+the same VM surface; authored Lab crash/restart actions remain deferred.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
@@ -316,7 +313,7 @@ single-stepping and future journal-relative inspection structural.
 | **Boundary completion** | one correlated completion closes a Call and carries ordered ordinary output drafts plus one final typed `exit`; the VM mints and commits all output envelopes atomically. Outbound Calls consume a delivery and close an OUTBOUND record; inbound Calls close their committed root through `l:reply`: fixed ack consumes no cursor, while a graph response consumes its one already-journaled delivery. The orthogonal Session path journals opening and individual write obligations, then publishes one terminal exit. | completion drafts or session facts → causal records and routed envelopes | [types.md](../spec/types.md); [m1.3 backlog](m1.3-type-system-backlog.md); [M1.6 backlog](m1.6-http-websocket-backlog.md) | M1.3 B7 outbound Call; M1.6 H1 Session fold; H5/H5.2 generic inbound Call |
 | **Instance Closing** | durable close-scope arbitration; successor-generation admission; bounded drain, canonical cancellation and settlement; residual cursor retirement; inner-first stop and state reclamation | `closing` policy + lifecycle cause + journal fold → terminal exits and `l:stop` | [instances.md §7](../spec/instances.md); [execution-model.md §2.1](../spec/execution-model.md) | M1.4 R5 |
 | **`GuestExecutor`** | the existing runtime seam future guest engines implement: `run(&[u8], value, budget)` — pure, deterministic, budgeted, inside the node transaction; the bytes become a typed/versioned `GuestProgram` only when that slice lands | opaque program bytes → value or typed error | [stdlib.md §5](../spec/stdlib.md) | seam only; no engine/program type yet |
-| **`BootBindings`** | future `env()` / `secret()` resolution at boot; a missing or ill-typed binding will be a typed refusal, never a default; `Secret<T>` remains a design requirement, not a current type | plan + deployment profile → bound constants | [grammar.md](../spec/grammar.md) initializer positions | guarded / later |
+| **`deployment::BootBindings`** | exact environment values, opaque SecretRef/version bindings and privacy/price attestations; clear material stays at the Driver boundary | plan + typed deployment profile → bound settings and run attestation | [observability.md](../spec/observability.md) | M1.8 A4, narrow HttpClient sites |
 
 ### 3.5 The boundary (`boundary`) — host interfaces and explicit time
 
@@ -380,14 +377,14 @@ Ownership rules that the types must make unrepresentable:
 |---|---|---|---|---|
 | **`Journal`** | the typed logical records and their order plus retained typed `RecordObservation` correlation outside the causal seal; `MemJournal` in-memory first | **semantic operations**, not bare appends: `prepare_inbound` mints the final root envelope without consuming its sequence; `commit_inbound` atomically advances that sequence with producer-sealed routes; `instance_ref_for_admission` folds lifecycle history; `commit(Transaction)` verifies firing/parent/route/closing generations; `open_outbound` is journal-before-effect; `close_outbound` and `abandon_outbound` return `Won \| AlreadyClosed`; `retained_observations` feeds reports/export without exposing physical layout; `CostReport` folds exact annotated envelopes without a second ledger | [delivery-semantics.md §1, §4, §6](../spec/delivery-semantics.md); [observability.md §6–7](../spec/observability.md); [envelope.md §2, §5](../spec/envelope.md); [instances.md](../spec/instances.md) | M0 base; M1.4 R5 closing; M1.8 observation and accounting planes |
 | **Id derivation** | derived envelope and record ids — zero per-envelope randomness | recipe inputs → `envelope::Id` | [envelope.md §2–3](../spec/envelope.md) | M0 |
-| **`RecoveryFold`** | journal → state, dated obligations, open-effect triage; at recovery it may use the same `OutcomeUnknown`/`Abandoned` operation already exercised by bounded Closing; snapshots are derived accelerations, never causal | records → recovered runtime state | [delivery-semantics.md §4.4, §6–7](../spec/delivery-semantics.md) | next |
+| **Spatial/Loop recovery** | `runtime/vm/recovery` reconstructs generations, deltas, pending deliveries/cursors, Calls/Sessions, retained original deadlines and r2 runs/commands; physical effects are never replayed by reconstruction | journal prefix + optional pure Contract projections → recovered VM, or unchanged original VM on refusal | [delivery-semantics.md](../spec/delivery-semantics.md); [loop.md](../spec/loop.md) | R7–R9 executable; no disk backend |
 | *(golden projection)* | moved to its own `golden` module as built — see §3.6b | | | |
 
 ### 3.6b The golden evidence (`golden`)
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`golden::Trace`** | the canonical record projection (identity.md §3 tables, armed timers included) and blake3 seal, encoded/decoded through the kernel's shared canonical CBOR | records → deterministic bytes; stored golden → structural re-read | [identity.md §3](../spec/identity.md); [simulation-semantics.md §6](../spec/simulation-semantics.md) | M0.5 |
+| **`golden::Trace`** | the canonical causal projection and blake3 seal, encoded/decoded through shared canonical CBOR; timer identities are causal, the separately retained deadline schedule is not part of this projection | records → deterministic bytes; stored golden → structural re-read | [identity.md §3](../spec/identity.md); [simulation-semantics.md §6](../spec/simulation-semantics.md) | M0.5, extended causal registry |
 | **`golden::Divergence`** | the first meaningful difference, by record index and NAMED key path — a broken seal explains itself, never a hex dump | two traces → divergence or none | — | M0 |
 
 The module owns both directions of the **trace projection** and uses the
@@ -407,7 +404,7 @@ bless, diff rendering) is driven by `lab` and `main`.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`contract::ConnectorContract` / `ContractCatalog`** | the compiler-facing contract sheet: canonical `ConnectorId`, required roles, one `PortContract` table, common attributes, optional profile selector, and effective presence/default/domain/evaluation-site rules. The catalogue is keyed by id while source symbols remain a checker concern; two symbols cannot alias one id | resolved by the checker into self-contained plan rows; **never depends on Driver code and never travels as a catalogue** | [stdlib.md §1–3](../spec/stdlib.md); [instances.md §3](../spec/instances.md); D-2026-08-22-1 | M1.5 C1 |
+| **`contract::ConnectorContract` / `ContractCatalog`** | the compiler-facing contract sheet: canonical `ContractId`, required roles, one `PortContract` table, common attributes, optional profile selector, and effective presence/default/domain/evaluation-site rules. The catalogue is keyed by id while source symbols remain a checker concern; two symbols cannot alias one id | resolved by the checker into self-contained plan rows; **never depends on Driver code and never travels as a catalogue** | [stdlib.md §1–3](../spec/stdlib.md); [instances.md §3](../spec/instances.md); D-2026-08-22-1 | M1.5 C1 |
 | **`contract::FrontendContract`** | an ordinary source name plus its registered framing/reader policy. Built-in JSON/text/base64 execute; guest/data names retain a specific framing contract and named deferral until their compiler lands | consumed by parser and checker; never serialized by itself | [expressions.md](../spec/expressions.md); [stdlib.md §5](../spec/stdlib.md); [identity.md §1](../spec/identity.md) | M1.3 B4 |
 
 This module answers "how does the compiler know what `Process` is
@@ -427,13 +424,13 @@ whatever its execution format.
 
 | Component | Owns | Spec | Status |
 |---|---|---|---|
-| **`connectors::DriverRegistry`** | exact `ConnectorId` → implementation factory mapping and role-availability checks; duplicate ids refuse | [decisions.md D-2026-08-22-1](../spec/decisions.md) | M1.5 C1 |
+| **`connectors::DriverRegistry`** | exact `ContractId` → implementation factory mapping and role-availability checks; duplicate ids refuse | [decisions.md D-2026-08-22-1](../spec/decisions.md) | M1.5 C1 |
 | **`connectors::DriverManifest`** | data-only, canonically ordered stable id/role claims readable before implementation code loads; no factory, artifact locator, ABI or trust policy | [decisions.md D-2026-08-22-1](../spec/decisions.md); [connector-drivers.md](connector-drivers.md) | M1.5 C6 |
 | **`connectors::RuntimeBindings`** | the pre-VM association of every runnable inbound and callable outbound Connector with one bound Driver object; exact role-view proof; Node-path and Call routing without concrete contract matching | [decisions.md D-2026-08-22-1](../spec/decisions.md) | M1.5 C2 |
-| **`connectors::ProcessFactory` / `Process`** | the explicit `rastok/process@1` factory and real job-mode Outbound Driver: pre-binds every effective setting before the VM/journal exists, spawns asynchronously, captures under one aggregate budget, and supports `lines` / `jsonl` / `bytes` | [stdlib.md §3.3](../spec/stdlib.md) | M1.2 behavior; contract-specific module C0; registry binding C2 |
-| **`stdlib::FILE` contract** | compiler sheet and Registry-free core mirror for `rastok/file@1`: `read`/`replace`, exact pins and `FileExit`, invocation-bound path, read budget | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 | M1.5 C3 |
+| **`connectors::ProcessFactory` / `Process`** | the explicit `rastok/process@2` factory and real job-mode Outbound Driver: pre-binds every effective setting before the VM/journal exists, spawns asynchronously, captures under one aggregate budget, and supports `lines` / `jsonl` / `bytes` | [stdlib.md §3.3](../spec/stdlib.md) | M1.2 behavior; contract-specific module C0; registry binding C2 |
+| **`stdlib::FILE` contract** | compiler sheet and Registry-free core mirror for `rastok/file@2`: `read`/`replace`, exact pins and `FileExit`, invocation-bound path, read budget | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 | M1.5 C3 |
 | **`connectors::FileFactory` / `File`** | explicit physical-root binding and real one-file Outbound Driver: seals mode/path/budget-or-payload before open; performs complete bounded reads or native atomic replace after open; cooperates with generic cancel/close-once/replay rules | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 C4 checkpoint | M1.5 C4 |
-| **Network contract sheets** | exact `rastok/http-client@1`, `http-server@1`, `websocket-client@1`, and `websocket-server@1` roles/exchanges, codec-selected ports, phased settings, lossless HTTP metadata and portable terminal unions; the Registry-free mirror refuses forged rows without consulting the compiler catalogue | [stdlib.md §3.1–3.2, §3.8–3.9](../spec/stdlib.md); D-2026-08-25-2 | M1.6 H2 |
+| **Network contract sheets** | exact `rastok/http-client@2`, `http-server@2`, `websocket-client@2`, and `websocket-server@2` roles/exchanges, codec-selected ports, phased settings, lossless HTTP metadata and portable terminal unions; the Registry-free mirror refuses forged rows without consulting the compiler catalogue | [stdlib.md §3.1–3.2, §3.8–3.9](../spec/stdlib.md); D-2026-08-25-2 | M1.6 H2 |
 | **flat HTTP/WebSocket Connector modules** | `http_client`, `http_server`, `websocket_client` and `websocket_server` own contract-specific binding; `websocket_protocol` alone owns shared message framing. Every Contract resolves complete settings before external work and exposes only generic Call/Session views to the registry. | [M1.6 backlog](m1.6-http-websocket-backlog.md) | M1.6 H2–H7 complete |
 | **private `connectors::network` seam** | feature-selected bounded synchronous/async pump; Hyper/Rustls H1-H2, quiche/BoringSSL H3, shared trust bytes and bounded Tungstenite message machine; all runtime/library types stop below the Driver boundary | [connector-drivers.md](connector-drivers.md); D-2026-08-26-1; [M1.6 exit](m1.6-exit-report.md) | M1.6 H3 engine through H6 live client/server/Session execution |
 | **`connectors::http_client` / hosted HttpClient** | exact pre-open HTTP request descriptor; typed standard/custom request headers; bounded `CallStart` admission; H1 origin-form, pooled H2 and verified quiche H3; visibility-safe fallback; codec/body/header gates; lossless and typed response metadata plus portable exits | [stdlib.md §3.2](../spec/stdlib.md); D-2026-08-26-2/-3 | M1.6 H4/H4.1 |
@@ -463,7 +460,7 @@ second parser and no second engine.
 
 | Component | Owns | Spec | Status |
 |---|---|---|---|
-| **`node`** | shared path, port, effect, Connector `behavior` and trigger vocabulary; v16 target additionally owns `Extension` as the canonical closed annotation vocabulary, without inventing an `Executor` trait before a real substitution seam exists | [grammar.md](../spec/grammar.md); [extensions.md](../spec/extensions.md); [effects-and-sagas.md](../spec/effects-and-sagas.md); [stdlib.md §2](../spec/stdlib.md); [envelope.md §3](../spec/envelope.md) | current v15 types; v16 rename at R3 |
+| **`node`** | shared path, port, effect, Connector `behavior`, trigger and closed `Extension` vocabulary; Executor is a semantic category, not a public trait | [grammar.md](../spec/grammar.md); [extensions.md](../spec/extensions.md); [effects-and-sagas.md](../spec/effects-and-sagas.md); [stdlib.md §2](../spec/stdlib.md); [envelope.md §3](../spec/envelope.md) | R3 vocabulary executable |
 | **`envelope`** | `Envelope { meta, data }` with the five-field Tier-1 spine, optional Extension birth-context fields, and encoded/materialized data; Loop context and manager commands remain journal facts rather than new envelope fields | [envelope.md](../spec/envelope.md) | M0 core retained; Loop r2 causal context at R7 |
 | **`diagnostics`** | stable codes, severity, the registry's **phase vocabulary** (`parse`, `resolve`, `check`, `plan`, `run`, `replay`, `sim`), multi-span, structured fields; a check ships with its code, its negative test, and its registry row in the same change | [diagnostics.md](../spec/diagnostics.md) | M0 |
 | **`main`** | the `check` / `run` / `simulate` verbs, wiring (Drivers, dispatcher, stdlib contracts), rendering; owns nothing semantic | — | M0 |
@@ -489,23 +486,23 @@ compiler ──▶ plan (the execution plan) ◀── interprets ────�
 
 Rules, in force from the first commit:
 
-1. **`runtime`** depends only on `plan`, the `node`/`envelope` value types,
-   the `boundary` contracts it emits into, and the `journal` trait — never
-   on a Driver, the Lab, or the compiler. The M0 debt is closed:
+1. **`runtime`** consumes the plan, core types/expressions, deployment/policy
+   inputs, boundary contracts and the journal — never a concrete hosted
+   Driver implementation, the Lab, or the compiler. The M0 debt is closed:
    `boundary::prepare_request` creates one `PreparedRequest`, so the
    digest and transported bytes are the same sealed value without a
    VM→`connectors` dependency.
-2. **`expr`** depends on no graph/runtime concept; it shares only
-   `canonical_cbor`, `json`, and `trivia` primitives from the kernel.
-3. **Extensions** (`connectors`, `guest_engines`, the Lab's boundary
-   implementations) implement traits; nothing depends on a Driver
-   except `main`'s wiring. The `Dispatcher` is the only `boundary`
-   component that touches `journal` — through the `Journal` trait,
-   never a concrete store.
+2. **`expr`** depends on no graph/runtime concept; it consumes core
+   `DataType`/`Value` and shares canonical, JSON and trivia primitives.
+3. **Driver/guest implementations** (`connectors`, future `guest_engines`, the Lab's boundary
+   implementations) implement traits. Hosted CLI, Lab and conformance assembly
+   bind concrete implementations; the core consumes their abstract role views.
+   The boundary dispatcher uses the `Journal` trait, never a concrete store.
 4. **`stdlib`** is declarative data over the base vocabulary; the
    checker and `main` read it; it depends on no Driver.
-5. **`lab`** depends on `compiler`, the `boundary` contracts, and
-   `journal`. It never patches or introspects `runtime` internals.
+5. **`lab`** consumes compiler output, the public VM, boundary/Driver bindings,
+   and journal records. It never patches runtime internals or implements a
+   second execution engine.
 6. **`node`, `envelope`, `diagnostics`** are shared foundations for the
    layers that need them; `node` is leaf-like, `envelope` builds on it,
    and diagnostics stays in the compiler/std crate rather than entering
@@ -544,8 +541,8 @@ items still constrain later slices.
   compare is defined on cores only.
 - **Refusal is a feature.** An error-node tree is never lowered; a
   reachable-but-unbuilt surface produces its explicit diagnostic;
-  `env()` / `secret()` currently refuse before a plan exists until the
-  boot-binding slice lands. Silence is the only forbidden outcome.
+  unsupported `env()` / `secret()` sites refuse explicitly; only the two
+  declared HttpClient sites bind through M1.8 deployment values. Silence is the only forbidden outcome.
 
 ## 6. M0 coverage map
 
@@ -561,7 +558,7 @@ The slice stages of [`m0-slice.md`](m0-slice.md), in module terms:
 | Record | `journal` (semantic operations, id derivation) |
 | Compare | `golden` projection, seal, and diff; `lab`-returned records; `main --golden/--bless` |
 
-Deliberately without M0 code: `journal::RecoveryFold` and the lab's fault injector
+Historical M0 exclusions (not the current status above): `journal::RecoveryFold` and the lab's fault injector
 (`next` — the record API already carries their inputs), `runtime::BootBindings`
 (`next`), `guest_engines` and the connector catalogue beyond Process
 (`guarded`), coverage (`later`), and live Saga and Loop managers
@@ -609,3 +606,16 @@ The chronological detail and commit evidence remain in
   is the contributor path. Later M1 slices have since landed Loop, policy and
   accounting, and the optional `--ui` debugger in the order recorded by
   [`m1-slice.md`](m1-slice.md).
+
+The R3–R9 rework and v17 amendment add the current load-bearing components:
+
+- `plan::{Dispatch,RouteRule}` and independent scope/type/composition validators;
+- `runtime::HandlerExecutor` with one selected Dispatch leaf and ordered multi-emission;
+- `journal::loop_protocol` plus `runtime/vm/loop_manager`: distinct command
+  production/consumption, exact admission identity, quiescence, fuel and delay;
+- `runtime/vm/recovery`: spatial/exchange/timer/Loop reconstruction from a prefix;
+- `LoopSpec::expired`: a resolved existing terminal and extended type, never a
+  contributed port or a VM comparison of the spelling `err`;
+- hosted `ui`: simulation-only retained transitions, source/decision/causal
+  explanations and the public CostReport. It never derives execution authority
+  from an exported observation or invents a spatial manager edge.

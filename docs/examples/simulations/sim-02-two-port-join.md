@@ -1,10 +1,13 @@
 # Reference simulation 2 — two-port join, with a `JoinExpired` eviction
 
-> **Status: executable join semantics, reference-only Drivers.** M1.4 R6
-> executes the presence, FIFO, instance-local correlation and typed-expiry
-> rules below. The complete scenario remains a paper derivation until its
-> `HttpServer` and `Memory` Drivers land; the public executable proof lives in
-> `crates/rastok/tests/instances_lab.rs`.
+> **Status: historical derivation, not a current executable fixture.**
+> Presence, FIFO, instance-local correlation and typed join expiry execute;
+> real HttpServer Drivers have also landed. `Memory` remains deferred, and
+> this sketch's interface/disposition syntax and hand trace predate v16.
+> Current proofs: [instance/join tests](../../../crates/rastok/tests/instances_lab.rs)
+> and [expense approval](../expense-approval.rkg). Keep the expiry route explicit;
+> the [audit](../../architecture/documentation-audit-2026-09-09.md) records a
+> current false impossibility warning for that output.
 
 ## 1. What this sim exercises (the checklist)
 

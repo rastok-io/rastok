@@ -1,10 +1,18 @@
 # Rastok — White Paper
 
-> **Model revision (2026-09-08).** The Node/Executor/Extension model, with v17
+> **Documentation audit (2026-09-09), model revision 2026-09-08.** The Node/Executor/Extension model, with v17
 > Loop exhaustion through host terminals, is
 > executable. [R9 qualification](docs/architecture/rework-r9-qualification.md)
 > distinguishes tested capabilities, proof-subset limits and external release
-> qualifications; this white paper is not a production-readiness claim.
+> qualifications; the [v17 amendment](docs/architecture/loop-host-terminal-v17.md)
+> records the current format. This white paper is not a production-readiness claim.
+>
+> **Reading examples.** Linked `.rkg` programs in the
+> [example catalogue](docs/examples/README.md) are checked and simulated.
+> Inline snippets are excerpts, not standalone compilation units. Sections
+> explicitly marked *future design* do not describe commands available today;
+> optional-access expressions, jq/SQL guests, Process service, Timer, Calendar,
+> Saga, experiment and coverage generation remain named gates.
 
 > **Integrate AI faster. Keep production calm.**
 >
@@ -115,11 +123,11 @@ difficult operational properties:
 
 | Problem | What commonly goes wrong | Rastok's contract |
 |---|---|---|
-| Long-lived keyed state | Session state is scattered across workers, caches, and correlation tables. | A Node selects a logical instance by key; its private state and mailbox serialize work, while lifetime remains an independent policy. |
+| Long-lived keyed state | Session state is scattered across workers, caches, and correlation tables. | A Node selects a logical instance by key; an Executor owns the private state and mailbox, while a Graph scopes descendants and lifetime remains independent. |
 | Events arriving out of order | Each flow grows its own correlation state machine and locking rules. | Bounded joins correlate typed envelopes by key. |
 | External side effects | HTTP calls, processes, files, payments, and retries are hidden inside application code. | Every external interaction crosses a declared Connector. |
 | Probabilistic components | An LLM may return different answers for the same request, with variable latency and cost. | The journal records each boundary outcome; the graph isolates and measures the probabilistic surface. |
-| Time-dependent behavior | Code reads the host clock or sleeps, so tests wait in real time and cannot reproduce the same timeout race. | The VM owns an explicit logical timeline: `now()` observes one transaction-fixed instant, and `Timer`/`Calendar` create events only when the graph needs them. |
+| Time-dependent behavior | Code reads the host clock or sleeps, so tests wait in real time and cannot reproduce the same timeout race. | The VM owns an explicit logical timeline: `now()` observes one transaction-fixed instant; internal deadlines execute today, while Timer/Calendar source Contracts remain future work. |
 | Recovery and audit | Effects and state updates leave separate, incomplete records. | Transactions and boundary outcomes form one causal journal. |
 | Operational policy | Every team reimplements retries, timeouts, supervision, backpressure, and cost metering. | The graph declares shared runtime policy once. |
 | Change control | Visual canvases and custom glue are difficult to review, compare, and generate safely. | Typed text is versioned in Git, checked before execution, and projected into a diagram. |
@@ -231,8 +239,8 @@ The platform of §1.2 follows from four decisions:
    deterministic system. That makes simulation (§6) a first-class artifact
    instead of a best-effort test harness.
 3. **A Node may select its own logical instance by key** (§3), independently
-   of its lifetime. Its `var` state remains private to that Node. Processing
-   is serialized within one instance and may run in parallel across addresses;
+   of its lifetime. An Operator's `var` remains private to that Operator. Processing
+   is serialized within one Executor instance and may run in parallel across addresses;
    every keyed owner is also a future sharding boundary (§4).
 4. **Every transaction is journaled.** A node consumes an envelope,
    updates its state, and emits atomically. The journal records the
@@ -254,7 +262,9 @@ the deterministic fragment when the necessary verification support
 exists.
 
 For example, begin with an LLM Connector that classifies support
-requests. The journal records its answers, latency, and cost. If refund
+requests. The journal records its answers; annotated usage and price evidence support
+exact cost reports. Universal commit timestamps and per-call latency are not
+yet retained, so OTLP spans remain deferred. If refund
 requests become a stable rule, move that case into a typed Operator with
 statically declared outputs and keep the LLM only as a fallback for ambiguous
 requests. Replay the Lab
@@ -305,275 +315,136 @@ production incident, or failed experiment becomes another scenario
 that constrains the next candidate. This accumulating executable corpus
 is one of the project's central advantages.
 
-### 1.5 A first taste — an asynchronous approval
+### 1.5 A first taste — correlating an approval
 
-The next two sections make §1.2 concrete. Read them with the right
-question in mind — not « could I code this? » (you could), but
-« what would I otherwise have to build, test and operate around it? »
+Two independent events must be correlated in either order, with a business
+deadline. A request arrives on one input; a decision arrives on the other.
+Keying the deciding Operator by request id puts both in the same mailbox
+context. Missing input becomes a typed `JoinExpired`, not a silent discard.
 
-The flagship example is deliberately *not* an HTTP-in, HTTP-out
-transformation — that is the happy path every flow tool demonstrates
-well. It is the case where they all get uncomfortable: **two
-independent events that must be correlated, arriving in any order, with
-a business deadline**. An expense request arrives on one channel; the
-manager's decision arrives on another. Independent queues, retries, and
-service latency mean that the decision can reach Rastok first even if
-the human made it after seeing the request. An approval may reach the
-accounting system; a rejection is a separate business outcome. If one
-side never arrives, the bounded join reports the technical
-`JoinExpired` error instead of leaving a stuck message.
+The full checked source and three executable scenarios are in
+[expense-approval.rkg](docs/examples/expense-approval.rkg). This excerpt shows
+the application logic; types, the outbound HttpClient and the Lab are in
+that file:
 
 ```rastok
-graph expense_approval : App {                     // `: App` marks the deployment entry
-  output rejection
+operator decide {
+  input request: Request
+  input decision: Decision
+  output approval: Request
+  output rejection: Rejection
+  output expired: JoinExpiry
+  instance = { key = data.request_id }
 
-  connector requests   : HttpServer { listen = "0.0.0.0:8080" ; path = "/requests" ; codec = json }
-  connector decisions  : HttpServer { listen = "0.0.0.0:8080" ; path = "/decisions" ; codec = json }
-  connector accounting : HttpClient {
-    url             = "https://accounting.internal/entries"
-    method          = "POST"
-    codec           = json
-    timeout         = duration("10s")
-    effect          = irreversible
-    behavior        = deterministic
-    idempotency_key = meta.ext.request_id
-  }
-
-  operator decide {                                // one logical instance per expense
-    instance = { key = meta.ext.request_id }
-    lifetime = { kind = idle ; after = duration("72h") }
-
-    output approval
-    output rejection
-
-    on (request, decision) within duration("48h") match {
-      decision.data.approved => {
-        approval = {
-          meta.ext.request_id = request.meta.ext.request_id
-          data = { request_id = instance.key,
-                          amount     = request.data.amount }
-        }
-      }
-      _ => {
-        rejection = {
-          meta.ext.request_id = request.meta.ext.request_id
-          data = { request_id = instance.key,
-                          amount     = request.data.amount,
-                          reason     = decision.data.reason }
-        }
-      }
-    }
-  }
-
-  requests  -> decide.request                      // wiring is explicit and graph-level
-  decisions -> decide.decision
-  requests.exit  -> nothing
-  decisions.exit -> nothing
-  decide.approval  -> accounting
-  decide.rejection -> rejection
-  accounting.out -> nothing                        // reply discarded ON PURPOSE (explicit, or it won't compile)
-  accounting.exit -> nothing
-  decide.expired -> nothing                        // observed by Lab at its source, explicitly discarded
-}
-
-lab expense_approval {
-  simulation approvals on app {
-    scenario decision_before_request "the decision arrives first; correlation still works" {
-      mock accounting {                              // mock the CALLED system…
-        on in { out = { entry_id = "acc-1" } }
-      }
-      // …but DRIVE the sources by injection (they are inputs, not partners) :
-      decisions.out = { meta.ext.request_id = "r-42",
-                                 data = { approved = true } }
-      requests.out  = { meta.ext.request_id = "r-42",
-                                 data = { amount = 1250 } }
-
-      expect "posted to accounting" accounting.in where
-        data.request_id == "r-42"
-    }
-
-    scenario rejected "a rejection is a business outcome, not an accounting entry" {
-      decisions.out = { meta.ext.request_id = "r-43",
-                                 data = { approved = false,
-                                                 reason = "policy" } }
-      requests.out  = { meta.ext.request_id = "r-43",
-                                 data = { amount = 1800 } }
-
-      expect "rejection is explicit" app.rejection where
-        data.request_id == "r-43" && data.reason == "policy"
-      expect nothing accounting.in
-    }
-
-    scenario approval_timeout "no decision within 48 hours; the join expires" {
-      mock accounting { on in { out = { entry_id = "acc-1" } } }
-
-      requests.out = { meta.ext.request_id = "r-7",
-                                data = { amount = 990 } }
-      expect nothing accounting.in                   // window ① : nothing moves on arrival
-
-      advance duration("48h")                                    // virtual time — nothing sleeps
-
-      expect "expiry is typed" decide.expired where data is JoinExpired
-      expect nothing accounting.in                   // window ② : and nothing moved at expiry
-      // (each action step — injection or advance — opens a fresh observation
-      //  window ; only asserting the absence in BOTH windows covers the whole
-      //  run : the money never moved)
+  on (request, decision) within duration("48h") match {
+    decision.data.approved => approval = request.data
+    _ => rejection = {
+      request_id = request.data.request_id
+      reason = decision.data.reason
     }
   }
 }
 ```
 
-The message of this example: **two independent events may arrive in any
-order; Rastok correlates them by key, separates approval from rejection,
-and bounds the wait.** Note what is already visible:
-
-- **Stateful correlation is the model, not plumbing.** `instance.key`
-  selects the Operator instance; the join `on (request, decision)` matches
-  the two legs of the *same* expense automatically, whatever the arrival
-  order.
-- **Business outcomes and technical outcomes remain distinct.** One exhaustive
-  Dispatch emits `approval` or `rejection`. Missing input is not a
-  business refusal: after 48 hours it becomes the typed `JoinExpired`
-  case on `decide.expired`.
-- **The simulation drives the world.** The *called* system
-  (`accounting`) is mocked; the *sources* are driven by injection;
-  `advance duration("48h")` moves virtual time deterministically. Nothing here
-  touches a network or a clock.
-- **The lab is the App's twin.** `lab expense_approval` binds to the
-  homonymous `: App` graph (§2.2, §6) and is never deployed; its
-  simulation names the graph it closes (`on app` — `app` is pre-bound),
-  and node references resolve in the unit's
-  namespace as root-relative qualified names.
-
-Now count what this file does **not** contain: no state-machine class
-for out-of-order arrival, no correlation table and its locks, no
-persistence layer for the pending request, no scheduler for the
-48-hour expiry, no mocking framework, no fake clock, no audit
-middleware, no recovery logic, no replay tooling. The business logic —
-one join, one bound, one emission — is the easy part, *and it is the
-whole file*. Everything a platform team would normally build around it
-is the runtime's contract, not your code.
-
-And the same scenario grammar keeps going where a hand-rolled harness
-stops: `crash after <record>` / `restart` kills the process at a chosen
-journal boundary and exercises recovery (reference simulation 4 replays
-a saga through a crash); re-delivering a duplicate is just injecting
-the same envelope twice — whether the flow deduplicates or double-fires
-becomes an *asserted* behavior, not a production surprise;
-`expect … count == 1` asserts that the scenario produces exactly one
-effect; a partner that
-answers *too late* is one dated line in a mock (`after
-duration("12s")`, §6.2); and the run's evidence splits cleanly: the
-journal provides the proof for replay and audit, while the golden trace
-makes the resulting behavior regression-testable byte-for-byte.
-
-### 1.6 A second taste — supervising agent sessions
-
-The same model on the agentic terrain: a gateway that gives every
-conversation its own supervised OS process (here `codex`, an AI coding
-agent), with bounded concurrency and per-session lifetime. Abridged from
-[docs/examples/teams-codex-gateway.rkg](docs/examples/teams-codex-gateway.rkg):
+The enclosing App exposes two typed inputs rather than inventing ingress
+metadata or bypassing a real listener. Its wiring is explicit:
 
 ```rastok
-graph sessions {                       // declaration = instantiation
-  instance = { key = meta.ext.session_key }
-  lifetime  = { kind = idle ; after = duration("2h") }
-  val cwd = "/workspace/" + instance.key           // immutable instance context
+request -> decide.request
+decision -> decide.decision
+decide.approval -> accounting
+decide.rejection -> rejection
+decide.expired -> expired
+accounting.out -> nothing
+accounting.exit -> nothing
+```
 
-  connector codex : Process {
-    command = "codex"
-    args    = ["app-server"]
-    mode    = service                              // resident child process, one per session
-    cwd     = cwd
-    codec   = jsonl
-    effect  = idempotent
-    behavior = probabilistic
-    timeout = duration("120s")                                 // per-call budget
-    restart = { backoff = "1s..30s", max_attempts = 5 }
-  }
+The accounting example assumes an idempotent upsert service keyed by
+`request_id`. Its mock proves graph behavior, not the external service's
+idempotency or a payment guarantee. Irreversible/compensable effect profiles
+and Saga remain deferred; this example does not pretend to execute them.
 
-  in        -> codex.in { capacity = 1024, backpressure = block }
-  codex.out -> out
-  codex.err           -> nothing      // abridged: production wires a diagnostic sink
-  codex.exit          -> nothing      // terminal outcome of each correlated call
-  // err is stderr; exit carries Exited/TimeoutExpired/etc. Every
-  // boundary crossing is journaled, so
-  // per-session cost is an aggregate over the journal, not a guess.
-}
+The Lab supplies the service response and exercises three cases:
 
-graph agent_gateway : App {
-  connector teams_in  : HttpServer {
-    listen = "0.0.0.0:8080" ; path = "/api/messages" ; codec = json
-  }
-  connector teams_out : HttpClient {
-    url             = "https://smba.trafficmanager.net/"
-    method          = "POST"
-    codec           = json
-    timeout         = duration("10s")
-    effect          = irreversible
-    behavior        = deterministic
-    idempotency_key = meta.sys.id
-  }
+- decision before request: one accounting call, no rejection;
+- rejection: one domain rejection, no accounting call;
+- missing decision: `advance duration("48h")` produces one expiry without
+  sleeping or calling a real service.
 
-  teams_in -> sessions -> teams_out.in  // a Graph is a Node: wired by name
-  teams_in.exit -> nothing
-  teams_out.out -> nothing              // delivery receipt discarded on purpose
-  teams_out.exit -> nothing
-}
+For example, the timeout scenario is ordinary source:
 
-lab agent_gateway {
-  simulation conversations on app {
-    scenario first_turn "a user message reaches codex ; the reply reaches the user" {
-      mock sessions.codex {             // a qualified path into the keyed sub-graph
-        on in where data.type == "message" {
-          out = { method = "item/agentMessage",
-                  params = { message = "Bonjour" } }
-        }
-      }
-      mock teams_out {                  // EVERY called external system must be covered —
-        on in { out = { delivered = true } }   // an uncovered call fails the scenario loudly
-      }
-
-      teams_in.out = { meta.ext.session_key = "conv-1",
-                                data = { type = "message", text = "Bonjour" } }
-
-      expect "reply reaches the user" teams_out.in where
-        data.params.message == "Bonjour"
-    }
-  }
+```rastok
+scenario approval_timeout "the missing decision expires in virtual time" {
+  app.request = { request_id = "r-7"; amount = 990 }
+  expect nothing accounting.in
+  advance duration("48h")
+  expect app.expired count == 1 where data is JoinExpired
+  expect nothing accounting.in
 }
 ```
 
-The rule this example makes visible: **declaring is placing, key selection is
-cardinality, wiring is naming.** A Graph is a passive Node scope—`sessions` is
-declared once and wired by name, without gaining a mailbox or handler. Because it has
-`instance.key`, the runtime materializes one graph instance for each
-distinct session key. Every child Node belongs to that graph instance.
-A child with its own `instance.key` adds an independently shardable address
-frame; a child without one has one singleton instance inside its parent Graph
-instance. Live-cardinality caps and placement remain deployment policy rather
-than source semantics.
+Each injection or time advance opens a new observation window. Asserting
+absence in both windows proves that neither admission nor expiry posts the
+request. Assertions read the real App boundary, not an implicit sink that
+mixes outputs from unrelated producers.
 
-Beyond the mechanics, note the operational posture: a thousand
-concurrent sessions are one declaration and one knob — and one journal.
-Per-session cost (every LLM and API crossing is an OUTBOUND record) is
-a replayable fold over typed journal observations, not an exporter-dependent
-instrumentation project. OpenTelemetry is a standards-first projection of
-that truth, never the accounting authority. Sensitive, secret, measure and
-cost meaning lives in a canonical schema side-table beside the logical type,
-so redaction and accounting policy survive composition without changing type
-assignability. A
-dying `codex` is a typed terminal error with a declared restart policy,
-not a 3 a.m. mystery; and the whole gateway is simulated — process,
-clock and Teams included — before it ever touches production.
+Key selection, bounded correlation, virtual time, explicit outcomes and
+inspectable causal history compose without another application state machine.
+The current engine retains this evidence in memory. Durable storage,
+automatic incident-to-fixture conversion and authored `crash`/`restart`
+scenarios are separate future capabilities.
 
-The HTTP Teams edge is not essential to the shape. The M1.6 design reference
+The [audit ledger](docs/architecture/documentation-audit-2026-09-09.md)
+records one current diagnostic defect exposed by this example: the checker
+warns that `decide.expired` is dead although the timeout scenario produces it.
+The example keeps the required disposition; the warning is not a reason to
+remove it.
+
+### 1.6 A second taste — a session gateway
+
+The same separation supports an agent gateway. The checked
 [codex-websocket-gateway.rkg](docs/examples/codex-websocket-gateway.rkg)
-replaces it with `WebSocketServer`: each accepted connection supplies one
-logical session reference, complete text/JSON messages cross ordinary
-`in`/`out` ports, and one `exit` reports the connection's termination. The
-same graph works whether the Driver negotiated HTTP/1.1 Upgrade, HTTP/2
-Extended CONNECT or HTTP/3 Extended CONNECT.
+connects a WebSocket Session to finite Process jobs. One accepted connection
+is one Session; a complete JSON message invokes one job; its reply retains
+the Session reference through causal lineage.
+
+The core wiring is short:
+
+```rastok
+clients.out -> codex.in
+codex.out -> clients.in
+codex.out -> reply
+codex.err -> nothing
+clients.exit -> session_exit
+codex.exit -> process_exit
+```
+
+The complete source declares the actual Process and WebSocketServer contracts,
+typed App boundaries and a Lab scenario that checks two session identities.
+The simulation scripts the job; it neither launches an agent nor validates a
+real agent's command-line protocol. Live Driver and transport evidence is
+listed separately in the
+[release-qualification inventory](docs/architecture/release-qualification.md).
+
+Three distinctions matter:
+
+- **Session is not instance.** A socket's Session reference correlates its
+  messages; `instance.key` independently selects Node-owned state. A keyed
+  Graph scopes its children without acquiring an application mailbox.
+- **Job is not resident service.** The shipped Process job publishes its
+  bounded captured frames at completion. This example is not a token-streaming
+  API and does not keep one app-server process alive per conversation.
+- **An OUTBOUND record is not a price.** Per-flow `CostReport` uses annotated
+  quantities/amounts and optional deployment prices. Missing price is
+  `unpriced`, never inferred from the number of calls. OTLP export and budget
+  enforcement remain separate future consumers.
+
+The larger [Teams design](docs/examples/teams-codex-gateway.rkg) is preserved
+as a historical pre-v16 sketch. A resident Process service, Teams-specific
+authentication and adaptation, a broader secret-binding surface and an
+operational concurrency policy must be designed and qualified before that
+sketch can become a runnable example. It is not evidence of a shipped
+thousand-session gateway.
 
 ### 1.7 When Rastok is more platform than you need
 
@@ -628,45 +499,18 @@ dozens of repositories, and the industry spent the next decade
 rebuilding sight of it — distributed tracing and OpenTelemetry are the
 graph, reconstructed after the fact, at runtime, from fragments.
 
-The tools that took the drawing seriously hit a shared ceiling from
-two sides. **NiFi** (the enterprise side) got provenance, visible
-queues, and backpressure right; but the canvas is the program. Its versioning
-stores *snapshots of the canvas*, not a source a human writes and a
-reviewer reads; there is no deterministic simulation of the whole
-external world, so changes are validated in staging against live
-dependencies; state and correlation are assembled from attributes and
-controller services rather than keyed into the model; and reaching the
-edge took a separate sub-project (MiNiFi). **The low-code wave** (the
-mainstream side — Zapier, Make, n8n) proved the demand at massive scale
-and matured its engines — execution history, step re-runs, pinned test
-data, Git sync in enterprise tiers — without changing the model:
-duck-typed steps with no contracts, exercised against real or recorded
-services, governed one workflow at a time; the pattern operations
-teams call *click-ops*. Organizations that outgrow either side do the
-only thing left: they rewrite the flows in code, regain engineering,
-and lose the drawing. The market, as it stands, forces a choice:
+Rastok's choice is **text as the authored source, a graph as its projection**.
+The visual debugger makes retained messages, instances and causal decisions
+inspectable without turning the canvas into an editor. Compile-time contracts
+and deterministic Lab scenarios are part of the same workflow.
 
-```
-                 ENGINEERABLE
-            (git, typed, tested, CI/CD)
-                      ▲
-                      │
-     custom code      │      ★ RASTOK
-     (Kafka Streams,  │      typed, text-first graphs
-      Temporal,       │
-      microservices)  │
-   ───────────────────┼─────────────────────▶  VISIBLE
-                      │       (the flow can be seen : nodes & edges,
-                      │        ops and business read the same object)
-                      │
-                      │      NiFi · n8n · Make · Zapier · SmythOS
-                      │      (the diagram IS the program,
-                      ▼       stored as XML/JSON behind a UI)
-                  CLICK-OPS
-```
-
-Rastok exists to make that choice obsolete. The tool-by-tool scorecard —
-including what NiFi still does better today — is in the annex, §9.10.
+This is a design position, not a ranking of current competitor features.
+Visual integration tools, code-first workflows and stream processors all have
+overlapping capabilities. Rastok does not infer production maturity from an
+attractive diagram, nor claim that competing products lack testing or Git
+integration. Its own durable storage, cluster operation and wider Connector
+catalogue remain future work. The annex (§9.10) compares intended use cases,
+not a versioned feature scorecard.
 
 ### 1.9 Who this document is for
 
@@ -863,6 +707,8 @@ Only Operators contain handlers:
 operator classify : Loop {
   input in: Request
   output accepted: Request
+  output err: union { LoopExpired { last_state: Request } }
+  Loop.terminal = [accepted, err]
   var seen: int = 0
 
   instance = { key = data.tenant }
@@ -897,12 +743,15 @@ children or Extension manager:
 graph conversation : Loop {
   input in: Request
   output out: Answer
+  output err: union { LoopExpired { last_state: Request } }
   instance = { key = data.session_id }
   Loop.fuel = 4
 
   in -> model -> decide
   decide.retry -> Loop.next
   decide.answer -> out
+  model.exit -> nothing
+  // Child declarations and their other dispositions are omitted in this excerpt.
 }
 ```
 
@@ -985,10 +834,10 @@ outcome spaces enumerable without an `error_set` side channel. Port
 names do not close calls or classify failures. Genuine panics (bugs) are
 supervision faults, never envelopes.
 
-**Guest-language blocks in multi-input handlers.** In a single-input handler a
+**Future guest-language blocks in multi-input handlers.** In a single-input handler a
 jq block's `.` is the input envelope; in a join there is no implicit
 `.` — reference envelopes by port name (`a.data.x`, a Rastok expression) and scope
-a jq block to one input when needed (`a | jq! { … }`). See §2.5 for the
+a jq block to one input when needed (`jq!(a) { … }`). See §2.5 for the
 languages themselves.
 
 **Meta on a join.** `meta.sys` is always runtime-fresh on the emitted
@@ -1015,8 +864,8 @@ pretending to execute application handlers.
 
 **No implicit `on tick`.** `now()` may observe the fixed logical instant of an
 already-running handler, but it does not create a firing. When elapsed time
-must itself trigger work, declare a `Timer` and wire its event like any other
-input (§5):
+must itself trigger work, the future Timer Contract supplies an event (§5).
+Timer/Calendar sources are not executable yet; this is the intended shape:
 
 ```rastok
 operator stats {
@@ -1101,17 +950,20 @@ handlers alone admit `now()`, which reads their injected fixed logical instant
 rather than an ambient clock.
 
 **Emitting.**
-- A port emits **once per transaction** — the value of its *final* assignment
-  (last-write-wins); a port never assigned emits nothing.
+- Each executed output assignment emits an envelope. Repeated assignments to
+  the same output preserve source order and receive successive per-port
+  `emission_index` values; they do not overwrite earlier emissions. The whole
+  transaction still commits all emissions or none ([execution-model.md §4](docs/spec/execution-model.md)).
 - `out = { … }` with only reserved roots (`data`, `meta`)
   is the envelope form: it **inherits** the input (meta + data) and
   overrides only the listed fields — a *patch* ; a whole-`data`
   assignment makes the data fresh.
 - `out = { … }` with no reserved root is a data record (§2.1): it
   inherits the input's `meta` and replaces `data` with the new struct.
-- `out = .` re-emits the current envelope unchanged.
-- `out = nothing` emits nothing on that port this transaction (the explicit
-  form of simply not assigning it).
+- `out = .` preserves the input data and heritable metadata, but creates a
+  fresh emission identity and causal parent like every other emission.
+- `nothing`, or `out = nothing`, emits nothing at that statement; it does not
+  cancel preceding emissions. There is no implicit terminal verdict for Loop.
 
 There is no `previous(x)` operator and no within-transaction snapshot trap:
 a transaction reads the previous transaction's committed state at its start, then
@@ -1222,8 +1074,8 @@ Reading rules:
   SQL uses `?` parameters or named bindings depending on dialect.
 - **Writing `var X`**: `X = <expr>` (assignment, bare).
 - Both bare `X` (in DSL) and `$X` (inside jq) read the **same**
-  previously committed value. They are the same operation
-  expressed in the respective grammars.
+  current transaction-local value, including preceding assignments. The
+  guest-language spelling remains prospective until that guest executes.
 
 Tunable runtime knobs (e.g., a feature flag that an admin can flip without
 redeploying) are not shared variables. They are an explicit stateful Operator
@@ -1242,8 +1094,10 @@ operator settings {
 }
 ```
 
-The admin pushes envelopes to `settings.admin` (via the Cloud UI or an HTTP
-endpoint); consumers wire `settings.changed` or request `settings.read`.
+A future admin surface would push envelopes to `settings.admin` through an
+explicit inbound Connector; neither Rastok Cloud nor UI data editing is shipped.
+The optional-access expression above is a future expression-subset example;
+consumers wire `settings.changed` or request `settings.read`.
 Ownership and ordering are visible in topology instead of hidden behind a
 nominal remote read.
 
@@ -1254,8 +1108,9 @@ nominal remote read.
 The DSL itself is deliberately **declarative** — nodes, ports, handlers,
 wiring. Intrinsic computation uses Rastok expressions. Structural or
 specialized computation may use registered tagged frontends with fixed
-compilers/executors and typed boundaries. jq is the initial document
-guest; SQL is the planned relational guest.
+compilers/executors and typed boundaries. jq is the initial specified document
+guest; jq and SQL execution are both still deferred. The executable tagged
+readers are JSON, text and base64, not general guest programs.
 Additional guests are admitted only through the same contract.
 
 **Rastok expressions — the intrinsic core.** Every expression position in the
@@ -1272,11 +1127,11 @@ key   = meta.app.session_id
 The expression language is *total*: it always terminates, has no side
 effects, and cannot express loops. That is the point — every expression in a graph
 can be type-checked, costed, and simulated without running anything.
-Absence is explicit: `data.?discount.orValue(0)` reads a
-possibly-missing field with a default; a *bare* read is accepted only
-when the type proves the field present, never converted to a silent null.
+Absence is explicit: a bare read requires the field to be present. Optional
+access such as `data.?discount.orValue(0)` is a future expression-subset
+surface, not an executable fallback in the current build.
 
-**`jq! { … }` — document reshaping.** When the job is structural — build
+**`jq! { … }` — future document reshaping.** When the job is structural — build
 a nested JSON body, filter and restructure a collection — a tagged jq
 block hands its body to the jq guest:
 
@@ -1370,8 +1225,9 @@ This is non-negotiable. The static DAG is what enables:
   capacity.
 - **Deterministic simulation** — the system can be closed under
   simulation because all I/O happens through declared Connectors.
-- **Workflow soundness** — properties like proper completion and
-  absence of deadlocks become decidable.
+- **Workflow analysis** — a finite spatial topology is a useful proof
+  input, not a proof of deadlock-freedom or a finite state space. Broader
+  soundness claims require explicitly bounded data, instances and effects.
 
 Dynamism is recovered through finite forms whose possible destinations remain
 static:
@@ -1433,7 +1289,7 @@ journaled:
   operator refine : Loop {
     input in: struct { remaining: int }
     output out: text
-    Loop.measure = data.remaining
+    Loop.measure = Loop.state.data.remaining
 
     on in match {
       data.remaining <= 0 => out = "done"
@@ -1449,7 +1305,7 @@ journaled:
   Done are durable **manager commands**, not ports or `PhysicalEdge`s. Their
   production commits atomically with the Executor transaction; a separate
   manager transaction consumes the command only after run-scoped quiescence.
-  Any delay is logical time after command consumption. The later `l:next`
+  Any delay is logical time after command consumption. The later `Admit` fact
   re-admits at the exact input which opened the run, so recursion is temporal
   and the spatial topology stays acyclic.
 
@@ -1497,7 +1353,7 @@ exactly what makes replay deterministic (envelope.md §2.0/§8). The
 Connector draws the boundary; the journal captures what crosses it.
 
 **The Contract is not the Driver.** Source names resolve through a compiler
-catalogue to a stable versioned contract id such as `rastok/process@1`. The
+catalogue to a stable versioned contract id such as `rastok/process@2`. The
 Contract declares inbound/outbound roles, typed ports, attributes and
 lifecycle rules. A Driver is one physical implementation of those semantics.
 Before execution, a runtime registry binds every active Connector Node by the
@@ -1587,7 +1443,7 @@ call     operation ──▶ zero or more outputs ──▶ exactly one exit
 session  open ──▶ messages in both directions* ──▶ exactly one exit
 ```
 
-Timer firings and calendar instants are events. Every call has a causal
+The future Timer and Calendar sources have Event-shaped contracts. Every call has a causal
 call identity. For a world-originated Call, the committed request root itself
 is that identity and opens the obligation on the exact source Connector
 instance; its sole terminal fact is an ordinary `l:reply` transaction, not a
@@ -1617,9 +1473,8 @@ per-message exit. No output may follow the corresponding terminal `exit`.
 For a `Process`, `Exited { exit_code, signal }`, `TimeoutExpired`,
 `SpawnFailed` and the former typed error codes are cases of `ProcessExit`.
 `out` stays the data stream and `Process.err` stays stderr; a graph reacting
-to termination wires `process.exit -> …`. A resident resource has a separate
-runtime `run_id`; `restart = { … }` may create a fresh resource run inside the
-same logical Node instance without inventing another source key. `meta.sys`
+to termination wires `process.exit -> …`. The future resident Process service profile requires a separate resource-run
+and restart contract; the current job profile does not implement that supervision. `meta.sys`
 stays closed while call, resource, and Node-instance identities remain causal
 journal facts.
 
@@ -1831,7 +1686,7 @@ over the journal and survives instance closure, restart, and shard movement.
 
 ### 3.5 Concurrency and future sharding
 
-One logical instance reference owns one bounded mailbox; at most one worker
+One logical Executor instance reference owns one bounded mailbox; at most one worker
 executes a transaction from it at a time. FIFO is guaranteed within that
 reference. No
 order is promised across independent addresses, and Node-private state makes
@@ -1856,6 +1711,11 @@ The synchronous one-worker runtime is the embedded/reference realization of
 this same contract, not a different language model.
 
 ## 4. Distribution Model
+
+**Future deployment design.** Only the single-process, one-worker, in-memory
+engine is shipped. Spatial recovery from retained records is implemented, but
+no durable storage backend, multi-Worker scheduler or clustered runtime is
+claimed by this section. The durability syntax below remains deferred.
 
 Rastok is designed for three execution scales, with the same `.rkg`
 source remaining portable across them:
@@ -2066,8 +1926,8 @@ orthogonal mechanisms.
 |---|---|---|
 | **Sequence** | FIFO order of envelopes on one input | Stateful reads (`x` carries history) |
 | **Logical instant** | The VM timeline; one fixed value per firing | `now()`, timeout/lifetime/deadline arithmetic |
-| **Timer event** | Elapsed time itself triggers one root envelope | Declared `Timer` Connector |
-| **Civil schedule** | Calendar date/time in an explicit zone | Declared `Calendar` Connector |
+| **Timer event** | Elapsed time itself triggers one root envelope | Future `Timer` Connector |
+| **Civil schedule** | Calendar date/time in an explicit zone | Future `Calendar` Connector |
 | **Causality** | Happens-before partial order on the global trace | Journal and theorem reasoning |
 
 Instance lifetimes combine a declared duration with journaled supervision
@@ -2128,9 +1988,9 @@ Use `now()` for “what is this transaction's logical instant?” Use `Timer` fo
 “run this handler after/every duration.” These are deliberately different
 questions.
 
-**Wiring is always graph-level, never inside a node body.** A node body
-declares **what the node is** (its ports, handlers, effects); the graph
-section declares **how nodes compose**. A shared source is reused by
+**Wiring belongs in a Graph body, never an Executor body.** Operators declare
+handlers and Connectors declare Contract settings; their containing Graph
+declares how those Nodes compose. A shared source is reused by
 adding edges, not by touching the nodes:
 
 ```rastok
@@ -2186,7 +2046,7 @@ trajectories — a reserved surface whose body is not yet specified
 
 The simulator owns a virtual timeline. It dispatches injected
 envelopes at declared virtual times, drives mocked Connectors
-(including `Timer`) accordingly, supplies the transaction context observed by
+(including future Timer sources) accordingly, supplies the transaction context observed by
 `now()`, and asserts on the
 observed output trace.
 
@@ -2197,6 +2057,12 @@ under controlled inputs and replays deterministically.
 ---
 
 ## 6. The Lab: Simulation, Experiment, and Verification
+
+**Current versus future.** `simulate` and the read-only visual simulation
+debugger execute today. `experiment`, `challenge`, `prove`, coverage generation,
+authored crash/restart actions and automatic incident-to-fixture extraction do
+not. Their descriptions below are design directions, not available CLI verbs.
+The core recovery tests exercise retained journals independently of Lab syntax.
 
 Every App may declare its twin: the **lab** — at
 most one *logical* lab per App, possibly split across same-name
@@ -2345,15 +2211,15 @@ Key properties:
   legal anywhere.
 - **Description** is free-form prose, attached as metadata.
 
-The vocabulary not shown in §1.5 stays small — `after <duration>` (a dated
-mock emission: "the answer arrives, but too late"), `expect … count == N`
-(exact-count assertions), `crash after <record>` / `restart` (kill the
-process at a journal boundary and exercise recovery), `origin` (anchor
-virtual time to a civil instant for cron/calendar logic). About six words
-in total; everything else is the graph grammar itself. The normative
+The executable vocabulary includes `after <duration>` (dated mock emission),
+`expect … count == N` (exact count) and `origin` (explicit virtual-time origin).
+The reserved `crash after <record>` / `restart` actions remain deferred; core
+recovery evidence must not be mistaken for a working Lab crash command. The normative
 surface is [simulation-semantics.md](docs/spec/simulation-semantics.md).
 
 ### 6.3 Experiment — where the Lab meets reality
+
+**Future design; execution is currently refused.**
 
 An `experiment` runs the **real App under an external deployment
 profile, with at least one real Connector boundary, in real time**. The
@@ -2418,7 +2284,8 @@ Five things define the contract in
 ### 6.4 Graph coverage and test generation
 
 Because the topology is a static DAG, paths from source to sink are
-finitely enumerable. The compiler can produce:
+finitely enumerable. Future coverage tooling could produce the following
+illustrative report; `rastok coverage` is not a current CLI command:
 
 ```
 $ rastok coverage approved_action_flow
@@ -2462,8 +2329,8 @@ new development workflow:
 8. The LLM fixes the graph and repeats the loop.
 9. The Lab remains as the locked, living specification.
 ```
-**The LLM generates candidates; the verifier decides.** This is feasible
-because the DSL search space is bounded by a typed grammar — the LLM is
+**The LLM generates candidates; the verifier decides.** This is an engineering workflow,
+not a completeness proof: the DSL search space is constrained by a typed grammar — the LLM is
 constrained to remain within the contract. It is robust because the lab
 both specifies and verifies. It is sustainable because the lab becomes
 living documentation.
@@ -2603,8 +2470,8 @@ journal's role.
 
 **What Rastok leaves behind:** unbounded channels (Rastok requires
 bounded capacities for backpressure), pure-process actors (Rastok adds
-state machines), and the assumption of static topology only (Rastok
-allows bounded dynamic dispatch).
+state machines), but not static topology: Rastok also fixes the physical graph. Its bounded
+Dispatch selects among statically declared routes; it does not add edges.
 
 ### 9.3 I/O Automata (Lynch & Tuttle)
 
@@ -2761,185 +2628,72 @@ the specific shape of modern stateful and agentic systems.
 
 ### 9.10 Practical positioning — adjacent systems
 
-Several categories of system map cleanly onto the Rastok model. The
-conceptual model overlaps with their use cases; the current
-implementation does not claim operational parity with mature
-incumbents.
+This is a map of overlapping use cases, not a current product-feature audit.
+No operational, performance, certification or ecosystem parity is claimed.
 
-- **The visual-flow generation** (NiFi, Camel — then Zapier, Make, n8n,
-  SmythOS). Rastok's direct ancestry; §1.8 told its story, here
-  is the honest scorecard. What NiFi got right — and Rastok keeps:
-  provenance as a first-class object, visible bounded queues,
-  backpressure as an operational surface, the connector catalogue as
-  the unit of reuse. What its *model* does not give — and Rastok is
-  built around: a small textual DSL as the **human-authored source of
-  truth** (NiFi's Git integrations version canvas snapshots; the
-  canvas remains the program), typed envelope contracts between nodes
-  (§2.1), state and correlation keyed into the model rather than
-  assembled from attributes (§3), deterministic whole-world simulation
-  with golden traces (§6), a causal journal built for byte-for-byte
-  replay, and one runtime from embedded device to cluster (§4 — where
-  NiFi needed the separate MiNiFi sub-project). To be fair in the
-  other direction: NiFi today has mature UI, production-hardened
-  provenance tooling, clustering operations, and ecosystem breadth
-  that Rastok does not claim. The low-code wave (Zapier, Make, n8n) is
-  the same paradigm at mainstream scale, and its ceiling is the
-  governance wall of §1.8: Rastok does not compete with click-ops for
-  the first five workflows — it is where flows go when they outgrow
-  click-ops without giving up being seen.
+- **Integration and visual flows** — NiFi, Camel, n8n, Make and Zapier are
+  relevant points of comparison for connecting systems. Rastok's chosen
+  authoring contract is typed RKG text, explicit dispositions and a read-only
+  diagram over the actual plan and journal.
+- **Workflow orchestration** — Airflow, Prefect, Dagster and Temporal overlap
+  with scheduling and effectful coordination. Rastok currently proves finite
+  Loop recurrence and deterministic simulations; civil scheduling, durable
+  deployment, backfill semantics and Saga are not shipped substitutes.
+- **Agent orchestration** — LangGraph, Semantic Kernel and ADK overlap with
+  agent/model/tool composition. Rastok focuses on typed integration boundaries,
+  keyed state, effect visibility and reproducible scenarios. A complete AI
+  gateway still needs provider adapters and deployment/security policy.
+- **Stream processing** — Beam, Flink and Kafka Streams are relevant to keyed
+  state and joins. Rastok uses bounded processing-time correlation; it does not
+  claim event-time/watermark semantics or large-scale analytics performance.
+- **Safety-critical tooling** — Lustre/SCADE and Ada/SPARK inform the taste for
+  analyzability. Rastok's narrow Loop proof is not a certification, hard-real-time
+  guarantee or general theorem prover.
 
-- **Workflow orchestrators** (Airflow, Prefect, Dagster, Temporal).
-  Rastok's declared DAG of typed Operators with deterministic
-  simulation is a direct evolution of the "DAG of tasks" pattern.
-  Compared to Airflow specifically, Rastok intends to offer a dedicated
-  declarative DSL, compile-time typing of envelope contracts,
-  deterministic simulation as a first-class primitive, and a
-  runtime-owned journal. Airflow is a mature Python platform with a
-  scheduler, DAG processor, API server, and metadata database; Rastok
-  does not yet make a performance or operational-footprint comparison.
-  Equivalences: cron triggers map to a `Calendar` (civil time);
-  retries and delayed re-entry use the `Loop` Extension; XCom-like passing
-  becomes typed envelopes on edges; backfill is a replay over the
-  event log. The practical gaps to close before claiming full
-  Airflow parity: the stdlib `Calendar` (cron + tz, spec'd in stdlib.md),
-  documented backfill semantics, and a monitoring UI for live
-  logical instances.
-
-- **Agent runtimes and LLM orchestration** (LangGraph, Semantic
-  Kernel, ADK). The Operator/Connector model with keyed session
-  instances, mockable Connectors, and `on (a, b)` join handlers for
-  multi-input correlation covers the common patterns of agentic
-  graphs. Rastok adds a constrained typed DSL, specified deterministic
-  simulation, and keyed Dispatch as part of the model.
-
-- **Stream gateways and process-backed services** (custom NiFi
-  flows, gRPC gateways, Apache Camel routes). The Connector model
-  with typed input/output ports and explicit boundary attributes
-  (address, codec, protocol, auth) expresses these declaratively,
-  with the same Lab contract used by every other Rastok boundary.
-
-**Boundaries.** Rastok is not trying to be every data or automation
-system. Some adjacent categories are outside its target; others define
-the practical territory Rastok wants to make stricter, simulation-first,
-and eventually checkable.
-
-- **Large-scale batch analytics frameworks** (Spark, Hadoop, Apache Beam,
-  Flink in its analytics posture). Those systems optimize for petabyte-scale
-  batch or streaming analytics. Rastok targets stateful operational graphs:
-  agent sessions, process-backed services, integrations, approvals, effects,
-  and replayable behavior.
-- **Visual automation and flow tools** (NiFi, n8n, Zapier, Camel routes).
-  This is close to Rastok's territory. Rastok does not imitate their UI-first
-  or low-code model; it takes the underlying need — integration flows,
-  stateful routing, retries, effects, and operational visibility — and moves
-  it into a typed, text-first, simulation-first graph model. The source is
-  reviewable, generatable, testable, replayable, and built so that future
-  versions can prove selected graph properties when the graph stays within
-  the decidable fragment.
-- **Hard real-time and safety-critical systems** (SCADE, Ada/SPARK,
-  certified Lustre toolchains). Those targets have certified toolchains
-  (DO-178C, IEC 61508). Rastok borrows their taste for static structure,
-  variants, typing and analyzability, but targets cloud-native asynchronous
-  systems rather than certified avionics or hard real-time control.
+A useful evaluation compares a concrete workflow, its declared failure cases
+and its operational constraints. The runnable examples and qualification
+ledgers are evidence for Rastok; future design sections are not.
 
 ---
 
 ## 10. Status
 
-Rastok is at an early experimental stage. It is not production-ready.
-What exists today is the conceptual model, the normative specification
-under review, a minimal Rust workspace, and reference graphs and
-simulations designed to become executable evidence as the runtime
-lands. The current evidence gates are listed in
-[ROADMAP.md](ROADMAP.md).
+Rastok is experimental, not production-ready. The current package is **v17**;
+the retained type/value registry is v7 and the six Connector Contracts are
+`@2`. These version registers are independent.
 
-As of the M1.6 H7 closure, the one-worker reference executes canonical keyed/lifetime
-instances, bounded Closing, nested Graph composition, and instance-local
-bounded joins from source through package validation and public Lab scenarios.
-The closure audit also proves that moving a stable virtual shard between
-physical Host/Worker assignments changes neither semantic identity, causal
-journal bytes, nor replay input. This is milestone evidence, not a
-production-readiness or cluster-runtime claim; distributed leases, fencing,
-recovery, and scheduling remain later physical implementations of the same
-logical addresses. Process and File now execute as two real outbound Driver
-Contracts through one exact-id/role registry and one VM boundary; the Lab
-composes both through the same binding and protocol. Static Driver selection is
-implemented. A data-only capability manifest proves the future discovery seam,
-but no plugin loader or native ABI is claimed. Four exact HTTP/WebSocket
-  contracts now cross source, checked v17 plan, Registry-free validation and
-Contract-owned Lab binding with codec-selected ports, lossless protocol metadata
-and typed terminal unions. H3 pins one bounded private hosted
-pump, Hyper/Rustls for HTTP/1.1-2, quiche/BoringSSL for HTTP/3 and Tungstenite
-for WebSocket framing. It proves all three HTTP engines coexist and compares
-h3/Quinn on real UDP. H4 executes HttpClient over all three versions, including exact
-pre-open request sealing, visibility-safe fallback, bounded bodies, lossless
-response observations, generic Call conformance and outbound backpressure.
-H4.1 adds the open `media_type` scalar, typed standard/custom request-header
-separation, typed response metadata and strict project-wide OpenAPI type
-resolution without changing the runtime's one type algebra. H5's generic
-inbound Call seam proves bounded commit-before-accept at the exact source
-instance and close-once typed `l:reply`. H5.1 attaches that seam to a real
-bounded Hyper listener: HTTP/1.1 and HTTP/2 ack requests keep body memory
-charged through admission and cannot expose 202 before the causal root
-commits. H5.2 adds the generic graph-response return: direct lineage seals the
-exact opening instance before the producing transaction commits, bounded
-Driver capacity can leave the real response cursor pending without bytes, and
-the final `l:reply` consumes it without an OUTBOUND record. Final H5 executes
-`ack` and `respond` over H1/H2/H3 with bounded deadlines and close-once races.
-H6 executes WebSocket Client and Server through HTTP/1.1 Upgrade, RFC 8441 and
-RFC 9220 using one bounded Session fold, durable message writes and one typed
-terminal. The Codex gateway runs through the real CLI; independent Node `ws`
-and hyper-h2/wsproto probes exercise two non-Rastok peers. H7 closes feature
-assembly, all-feature/no-std gates, identity audit and Cortex-M33 evidence.
-The official Autobahn report remains a named external qualification because
-the reference host has no container engine; M1.6 does not substitute an
-unmaintained runner or convert that missing report into a production claim.
+| Executable today | Qualification / exact limit |
+|---|---|
+| Node / Graph / Executor / Connector / Extension; recursive Dispatch; explicit destinations; case routing; ordered multi-emission | [R9 ledger](docs/architecture/rework-r9-qualification.md), Registry-free validation and hostile-package tests |
+| Operator, Graph and outbound Call Loop; exact run context, fuel, delay and integer measure | [Loop contract](docs/spec/loop.md); guarded/timed joins, lifecycle-dependent bodies and broader proof fragments refuse by name |
+| Loop exhaustion on an existing host terminal, no contributed port | [v17 amendment](docs/architecture/loop-host-terminal-v17.md); non-Loop identity witnesses unchanged |
+| Keyed instances, all five lifetimes, bounded Closing, joins and recovery from retained records | One synchronous Worker; recovery is not a durable storage backend or distributed runtime |
+| Process job, File read/replace, HttpClient/HttpServer, WebSocketClient/WebSocketServer | Six exact Contracts; HTTP/1.1–3 and complete-message Sessions, not token-streaming SSE or Process service |
+| Strict logical types and JSON Schema / Avro / Arrow / OpenAPI projections | Unsupported/lossy cases refuse by path; guest-language execution remains deferred |
+| Five data annotations, exact HttpClient boot references, privacy attestations, redaction, structured logs and per-flow `CostReport` | [Observability contract](docs/spec/observability.md); no raw-secret payload, legal-compliance certificate, budget enforcement, FX, FOCUS/OpenCost or OTLP exporter |
+| `simulate --ui`: retained transitions, source, mailboxes, instances, Loop dials, decisions, causal links, assertion evidence and comparisons | [UI contract](docs/spec/ui.md); read-only source-authored scenarios, no `run --ui`, editing or branches; an authored `advance` may still group VM transactions |
 
-Closed M1.7 remains the evidence that finite journal-owned recurrence, exact
-fuel exhaustion, logical delay and a re-derived integer measure work on v14/v15.
-D-2026-09-05-1 supersedes its Graph-handler and port-shaped control ontology.
-V16 now executes: passive Graph scopes; Operator and Connector
-as the two shared-mechanics Executors; canonical Extensions; explicit output
-dispositions; recursive Dispatch and case routing; ordered atomic
-multi-emission; and Loop over Operator, Graph and outbound finite Call through
-durable Next/Again/Done manager commands. A run derives from its exact opening
-admission, and recovery reconstructs every pending command and spatial delivery
-from the journal. The six boundary Contracts move to `@2` because they
-gain cardinality, terminal and effect-visibility evidence while losing implicit
-unwired policy. R9 records the full migration and qualification. Stronger Loop body proofs,
-real-I/O experiment debugging and durable storage remain named future gates.
+The [example catalogue](docs/examples/README.md) distinguishes passing programs,
+isolated illustrative fragments and historical future-surface sketches.
+The [documentation audit](docs/architecture/documentation-audit-2026-09-09.md)
+records checks against the current repository, including discrepancies that
+documentation alone cannot fix.
 
-Closed M1.8 executes the `@sensitive`, `@secret`, `@personal`,
-`@measure` and `@cost` family through source, checked HIR and categorical v17 as canonical
-side-tables beside logical schemas. Independent package validation re-derives
-every local structural path, legal target, registered measure carrier,
-currency authority and effective resolved-port policy through canonical
-operations without changing `DataType` assignability. Exact transforms retain
-meaning; calculations and control dependencies retain security taint but do
-not invent accounting meaning; incompatible producers refuse. Presentation
-redacts before formatting. Personal data is a GDPR-facing class orthogonal to
-confidentiality, with distinct special-category, criminal-offence and
-data-subject identifier facts. Personal data is admitted only with a complete
-run-scoped privacy attestation; exact HttpClient environment/secret references
-bind through one real/Lab request descriptor while clear credentials stay out
-of graph and causal artifacts. Raw incoming `@secret` fields remain
-fail-closed. Every causal record also yields a typed retained observation with
-flow, logical instance and direction-safe Call/Session correlation. The hosted
-JSON log lane consumes only bounded disposable copies, omits payload by
-default and redacts classified values before formatting; its saturation or
-failure cannot change execution or accounting. Unannotated semantic identities
-and causal traces remain fixed. Exact field measures and provider-reported
-money are reconstructed lazily at each flow point from those same records and
-schemas. A deployment price profile can add exact calculated rows without
-entering graph identity; token subset relations prevent cache/reasoning double
-counting, unmatched positive quantities stay `unpriced`, and currencies are
-never combined without an explicit later FX authority. The retained report is
-independent from the bounded JSON projection; the optional OpenTelemetry
-transport remains explicitly deferred until exact temporal observations exist.
+Historical milestone reports retain their original counts and format versions.
+[R9](docs/architecture/rework-r9-qualification.md) and
+[v17](docs/architecture/loop-host-terminal-v17.md) record separate, declared
+format movements; neither rewrites the earlier evidence. The
+[release inventory](docs/architecture/release-qualification.md) is the authority
+for independent interop and outstanding browser, ngtcp2 and Autobahn work.
+Workspace tests do not replace those external qualifications.
 
-This white paper is designed to outlive individual releases. The DSL
-grammar, runtime traits, and feature set will evolve; the conceptual
-model laid out here is the contract Rastok intends to keep.
+Durable storage, multi-Worker/cluster deployment, resident Process services,
+Timer/Calendar/Memory, Saga, general guests, experiments and broad verification
+remain future gates. The [roadmap](ROADMAP.md) orders evidence, not implied
+production guarantees.
+
+This white paper is designed to outlive releases. Intent can lead the
+implementation, but it must never be confused with what a current binary accepts.
 
 ---
 
@@ -2949,6 +2703,9 @@ A short list of phrases, useful when in doubt. They are mnemonics, not
 norms — each compresses a rule whose exact contract lives in
 [docs/spec/](docs/spec/); when a maxim and a spec disagree, the spec
 wins.
+
+The durability, cluster, Timer/Calendar, experiment and theorem maxims describe
+the target architecture; the status table above bounds the shipped subset.
 
 1. **Pure logic belongs in Operators. Effects belong in Connectors.**
 2. **An Executor consumes a typed fact and commits state, ordered emissions

@@ -4,7 +4,7 @@
 > executable module is `expr` and consumes core `DataType`/`Value`. Its
 > `is`/`as`, closed-struct and tagged-constructor trees execute, are
 > type-checked, and travel in the v7 registry with their resolved targets.
-> Categorical package v16 retains the registry that v12 extended with the open
+> Categorical package v17 retains the registry that v12 extended with the open
 > `media_type(text)` constructor. The
 > `IDENT!` frontend surface and full JSON-value reader described below are
 > executable. M1.7's temporal prerequisite adds the transaction-context

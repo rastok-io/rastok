@@ -1,0 +1,76 @@
+@startuml 07-node-executor-extension
+skinparam backgroundColor white
+title Rastok — semantic ownership (v17; not a Rust API inventory)
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+hide empty methods
+top to bottom direction
+
+abstract class Node {
+  path; typed ports
+  instance; lifetime; Closing
+}
+class Graph {
+  boundary; children; wiring; lexical val
+  no application mailbox, var or handler
+}
+abstract class Executor {
+  instance mailbox; semantic state
+  atomic transactions; ordered emissions
+}
+class Operator {
+  private var; one Dispatch per trigger
+}
+class Connector {
+  one exact versioned Contract
+  no DSL handler or var
+}
+class Contract {
+  ports; settings; exchange profile
+  cardinality; terminal cases; effect visibility
+}
+abstract class Extension
+class App {
+  exactly one root Graph; no manager
+}
+class Loop {
+  entry; terminals; fuel / measure; delay
+  Loop.state; resolved exhaustion target
+  contributes no port
+}
+class "Saga (deferred)" as Saga
+class Manager {
+  bounded journal-owned commands per run
+  Next / Again / Done
+  temporal admission; no PhysicalEdge
+}
+class Driver {
+  physical resource state
+  typed external events; no journal writes
+}
+
+Node <|-- Graph
+Node <|-- Executor
+Executor <|-- Operator
+Executor <|-- Connector
+Graph "0..1 parent" o-- "0..* children" Node
+Node "1 owner" *-- "0..* canonical" Extension
+Connector "*" --> "1" Contract
+Connector --> Driver : bound before execution
+Extension <|-- App
+Extension <|-- Loop
+Extension <|-- Saga
+Loop *-- Manager
+Manager ..> Node : owner address / generation
+
+note bottom of Graph
+Generic lifecycle records may name a Graph.
+They are not Graph application transactions.
+end note
+note bottom of Loop
+Hosts: Operator, Graph, finite outbound Call.
+Exhaustion is LoopExpired on existing err,
+custom terminal, or the Call's extended exit.
+Commands are not ports or spatial edges.
+end note
+@enduml

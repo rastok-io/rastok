@@ -11,7 +11,7 @@
 > structural-union and tagged-union targets is executable in memory. Tagged
 > constructors and contextual structural-union wrapping are checked,
 > executable and transported; `err` uses the same emission path as any port.
-> Current categorical plan-package v16 retains the parent-linked lexical
+> Current categorical plan-package v17 retains the parent-linked lexical
 > owner tree and instance-key/lifetime descriptors introduced in v9, the
 > type/value/expression registry and total effective port table, and the
 > M1.8 annotation side-tables without changing this logical algebra.
@@ -460,7 +460,7 @@ checked and reviewable.
 
 This schema adapter is distinct from:
 
-- a package-format reader (the current v16 rejects older `.rkp` versions rather than
+- a package-format reader (the current v17 rejects older `.rkp` versions rather than
   translating application schemas);
 - an internal representation codec;
 - a journal-format decoder.
@@ -482,7 +482,7 @@ adds no recursive wrapper to this type tree. `Money` likewise remains the
 canonical struct shape `{ amount: decimal(38,18), currency: text }`, not a new
 `DataType` family. The source form, path vocabulary, propagation rules,
 secret boundary and observation semantics are normative in
-[observability.md](observability.md). Categorical package v16 carries the
+[observability.md](observability.md). Categorical package v17 carries the
 sparse table beside every owning schema without allocating a `DataType` tag.
 Registry-free validation resolves each path against that adjacent type and
 independently derives effective resolved-port policy from raw declarations and

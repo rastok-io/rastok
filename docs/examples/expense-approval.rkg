@@ -1,0 +1,85 @@
+// Executable whitepaper example. Two App inputs stand for independent ingress
+// channels; the Lab scripts the outbound accounting service, without network I/O.
+type Request = struct { request_id: text, amount: int }
+type Decision = struct { request_id: text, approved: bool, reason: text }
+type Rejection = struct { request_id: text, reason: text }
+type JoinExpiry = union { JoinExpired {} }
+
+graph expense_approval : App {
+  input request: Request
+  input decision: Decision
+  output rejection: Rejection
+  output expired: JoinExpiry
+
+  operator decide {
+    input request: Request
+    input decision: Decision
+    output approval: Request
+    output rejection: Rejection
+    output expired: JoinExpiry
+    instance = { key = data.request_id }
+
+    on (request, decision) within duration("48h") match {
+      decision.data.approved => approval = request.data
+      _ => rejection = {
+        request_id = request.data.request_id
+        reason = decision.data.reason
+      }
+    }
+  }
+
+  connector accounting : HttpClient {
+    url = "https://accounting.example.test/entries/upsert"
+    method = "POST"
+    codec = json
+    timeout = duration("10s")
+    // Required service contract: repeating a request_id cannot create a second entry.
+    // The mock exercises that boundary shape, not a real service's guarantee.
+    effect = idempotent
+    behavior = deterministic
+  }
+
+  request -> decide.request
+  decision -> decide.decision
+  decide.approval -> accounting
+  decide.rejection -> rejection
+  decide.expired -> expired
+  accounting.out -> nothing
+  accounting.exit -> nothing
+}
+
+lab expense_approval {
+  simulation approvals on app {
+    mock accounting {
+      on in {
+        out = { entry_id = "acc-1" }
+        exit = Completed { status = 201 }
+      }
+    }
+
+    scenario decision_before_request "the decision can arrive first" {
+      app.decision = { request_id = "r-42"; approved = true; reason = "" }
+      expect nothing accounting.in
+      app.request = { request_id = "r-42"; amount = 1250 }
+      expect accounting.in count == 1
+      expect decide.approval count == 1 where data.request_id == "r-42"
+      expect nothing app.rejection
+    }
+
+    scenario rejected "a rejection never reaches accounting" {
+      app.request = { request_id = "r-43"; amount = 1800 }
+      expect nothing accounting.in
+      app.decision = { request_id = "r-43"; approved = false; reason = "policy" }
+      expect app.rejection count == 1 where data.reason == "policy"
+      expect nothing accounting.in
+    }
+
+    scenario approval_timeout "the missing decision expires in virtual time" {
+      app.request = { request_id = "r-7"; amount = 990 }
+      expect nothing accounting.in
+      advance duration("48h")
+      expect app.expired count == 1 where data is JoinExpired
+      expect nothing accounting.in
+    }
+  }
+}

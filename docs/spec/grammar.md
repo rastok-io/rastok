@@ -14,12 +14,15 @@
 > **Conceptual basis** : this document assumes the model defined in [WHITEPAPER.md](../../WHITEPAPER.md) and the normative instance contract in [instances.md](instances.md). This document is the grammar ; foundations is the constitution.
 >
 > The `simulation` DSL is covered in this document. Formal verification,
-> multi-tenancy and runtime deployment remain outside the current normative
-> surface.
+> distributed multi-tenancy and cluster deployment remain future work. Keyed
+> instances, local execution and the bounded Loop proof are implemented.
 
 ## File extension
 
-`.rkg` — short for "rastok graph". Examples in `docs/*.rkg`.
+`.rkg` — short for "rastok graph". Complete checked programs are indexed in
+[the example catalogue](../examples/README.md). Inline blocks below illustrate
+individual productions, not necessarily complete deployable units. A declared
+future form does not override a current named capability refusal.
 
 ## Syntax conventions — two configuration forms, no exceptions
 
@@ -64,28 +67,18 @@ Rules :
   AST, a plan, or a hash. See `Formal grammar` for the decision
   table.
 
-Example mixing all forms :
+Example of executable Process job settings (excerpt; wire its outputs in an App):
 
 ```rastok
-connector codex : Process {        // type annotation with ":"
-  command  = "codex"               // attribute "="
-  args     = ["app-server"]        // list value
-  mode     = service
+connector echo : Process {         // type annotation with ":"
+  command  = "cat"                  // attribute "="
+  args     = []                     // list value
+  mode     = job
   codec    = jsonl
-  protocol = "jsonrpc"
   effect   = idempotent
-  behavior = probabilistic
-  // in / out / err / exit = stdin / stdout / stderr / invocation terminal (Process defaults)
-
-  init = {                         // composite attribute : startup handshake
-    message = { method = "initialize" }
-    timeout = duration("15s")
-  }
-  restart  = {                     // struct value ; the attribute names it
-    backoff = "1s..30s"
-    max_attempts = 5
-  }
-  kill     = process_group         // enum-like ident value
+  behavior = deterministic
+  timeout  = duration("5s")         // expression value
+  env      = { "LANG": "C" }       // map value
 }
 ```
 
@@ -95,7 +88,13 @@ The `app` and `compose` keywords are not part of the grammar. The `App`
 Extension marks the deployment entry point instead.
 
 There is **one** keyword for composite units. No `pipeline`, `flow`,
-`session`, `template` — and no `app` :
+`session`, `template` — and no `app`.
+
+The following is a **target-architecture composition sketch**, not a checked
+program: durable storage and Process service/correlation remain named gates,
+and a complete current program must also declare typed boundaries and dispose
+of every productible output. For an executable session boundary, use the
+[WebSocket gateway](../examples/codex-websocket-gateway.rkg).
 
 ```rastok
 graph teams_gateway : App {          // the DEPLOYMENT ENTRY POINT — exactly one per deployed unit
@@ -438,7 +437,10 @@ The named archetypes map mechanically to combinations of these axes:
 These names do not appear in the type annotation. The compiler sees the
 ordinary Operator, state, instance policy, lifetime, and handler form directly.
 
-Less frequent patterns (filter-with-dedup, buffer-by-size, rate-limit, debouncer, memoize-cache, …) are expressed as the appropriate Operator parameterization plus jaq logic — they do not need their own DSL keyword.
+Less frequent patterns (filter-with-dedup, buffer-by-size, rate-limit, debouncer,
+memoize-cache, …) compose Operator state, expressions and lifetime policy rather
+than new DSL keywords. jq/SQL guest evaluation is still a named capability gate;
+its proposed spelling is not an executable alternative to current expressions.
 
 ### State semantics — read-modify-write per transaction
 
@@ -458,10 +460,10 @@ operator counter {
 
 **State expressions are Rastok expressions**: `count = count + 1`, `x = x * 2 + data.n`.
 There are no mutation shortcuts (`x++` / `x += v`) ; they are redundant with
-ordinary expressions. Structural reshaping may use tagged frontends
-(`jq! { … }` / `sql! { … }`).
+ordinary expressions. The proposed jq/SQL tagged guests for structural reshaping remain deferred;
+current executable handlers use the checked Rastok expression subset.
 
-**Emitting** : a braced value is classified ONCE by its top-level roots (D-2026-08-09-1). With only the reserved roots `data` and `meta` it is the ENVELOPE form : `out = { meta.app.count = count }` inherits the input envelope (meta + data) and patches the listed fields, and a whole-`data` assignment makes the data fresh. With no reserved root, `out = { total = n }` builds a fresh data record (a `struct`), keeping the input's heritable metadata per the uniform propagation rule (D-2026-08-10-2 ; `content_type` excluded — D-2026-08-10-4). Mixing the two refuses with `E-BRACE-MIXED` — business fields named `data` or `meta` take the explicit escape `data = { … }`. `out = .` re-emits the input envelope unchanged ; `out = nothing` emits nothing on that port this transaction. There is no `previous(x)` operator — a transaction reads the previous transaction's committed state at its start, then proceeds imperatively. The synchronous-dataflow `pre` of Lustre/SCADE applies at the **inter-transaction** boundary (each transaction is one cycle), not inside a transaction. `now()` observes the one logical timestamp fixed for the current firing; it never reads the host clock and its value is sealed when observable (see [expressions.md §1.2](expressions.md)).
+**Emitting** : a braced value is classified ONCE by its top-level roots (D-2026-08-09-1). With only the reserved roots `data` and `meta` it is the ENVELOPE form : `out = { meta.app.count = count }` inherits the input envelope (meta + data) and patches the listed fields, and a whole-`data` assignment makes the data fresh. With no reserved root, `out = { total = n }` builds a fresh data record (a `struct`), keeping the input's heritable metadata per the uniform propagation rule (D-2026-08-10-2 ; `content_type` excluded — D-2026-08-10-4). Mixing the two refuses with `E-BRACE-MIXED` — business fields named `data` or `meta` take the explicit escape `data = { … }`. `out = .` preserves data and heritable metadata but creates a fresh emission identity; `out = nothing` makes that statement emit nothing. It never cancels an earlier emission. Every executed assignment to an output is retained, in source order, in the same atomic transaction. There is no `previous(x)` operator — a transaction reads the previous transaction's committed state at its start, then proceeds imperatively. The synchronous-dataflow `pre` of Lustre/SCADE applies at the **inter-transaction** boundary (each transaction is one cycle), not inside a transaction. `now()` observes the one logical timestamp fixed for the current firing; it never reads the host clock and its value is sealed when observable (see [expressions.md §1.2](expressions.md)).
 
 ## Dispatch, route selection, and keyed placement
 

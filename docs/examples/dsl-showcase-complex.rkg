@@ -1,9 +1,8 @@
-// Illustrative target-surface example. Process(job), keyed owners, lifetimes,
-// joins, File(read/replace), and the HttpServer sheet/Lab binding are executable. Postgres, the
-// append-style File usage below, Process(service), and jq/SQL guests remain
-// guarded as of 2026-08-25. The network sheet binds only in the Lab until H3;
-// this file is a design reference, not a current
-// executable fixture.
+// Historical pre-v16 integration sketch, not an executable fixture.
+// It retains superseded interface/disposition forms and deferred Postgres,
+// File append, Process(service), jq and SQL capabilities. The old status below
+// is not a claim about current Drivers: real HTTP/WebSocket execution has landed.
+// Use docs/examples/README.md for checked v17 programs and current limitations.
 graph agent_gateway : App {
 
   connector webhook : HttpServer {

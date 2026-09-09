@@ -251,6 +251,12 @@ takes semantic priority; no public date overrides its R0–R9 exit gates.
 - A guided example gallery seeded by the benchmark's reference
   solutions, closed by the October demo flow.
 
+The [2026-09-09 documentation audit](docs/architecture/documentation-audit-2026-09-09.md)
+refreshes the whitepaper, specifications, checked examples and UML views. It also
+records an open implementation defect: timed-join `JoinExpired` production is
+missing from output-productibility analysis. Its route must remain explicit;
+the new expense-approval fixture demonstrates why the warning is unsound.
+
 ## Later — incident lab and safe dogfood
 
 - Turn one real internal failure into a redacted fixture and scenario.

@@ -1,10 +1,12 @@
 # Reference simulation 6 — HttpServer `respond` : lineage correlation, 504, the orphan answer
 
-> **Status : Reference derivation — not yet executable.** The expected trace
-> is derived by hand from
-> [stdlib.md](../../spec/stdlib.md) §3.1, [execution-model.md](../../spec/execution-model.md)
-> §6/§8 and [delivery-semantics.md](../../spec/delivery-semantics.md) §5.
-> It is a conformance target for `respond` correlation, expiry and overload.
+> **Status: historical pre-v16 derivation, not a current program or golden.**
+> HttpServer respond, expiry and bounded admission are implemented. This
+> sketch's `base_url`, implicit output disposal and abbreviated payload/trace
+> shapes are not their current interface. Use the exact
+> [Contract sheet](../../spec/stdlib.md), [execution model](../../spec/execution-model.md)
+> and [release evidence](../../architecture/release-qualification.md); the
+> historical derivation below does not override them.
 
 ## 1. What this sim exercises (the checklist)
 

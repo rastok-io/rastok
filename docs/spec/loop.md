@@ -385,6 +385,10 @@ only the ordinary expiry emission's destination changes.
 
 ## 14. Examples
 
+These are interface excerpts. Complete checked programs, including every
+disposition and their Lab scenarios, are [countdown](../../examples/countdown.rkg)
+and [keyed retry](../../examples/keyed-retry.rkg).
+
 ```rastok
 operator countdown : Loop {
   input in: struct { n: int }
@@ -405,6 +409,8 @@ graph refinement : Loop {
   output out: Answer
   output failed: RefinementFailure
   // RefinementFailure includes LoopExpired { last_state: Draft }.
+  // It must also accept every model.exit case routed by `_` below;
+  // otherwise route those cases through a typed error-adapter Operator.
   Loop.fuel = 5
   Loop.terminal = [out, failed]
   Loop.expired = failed
@@ -431,7 +437,7 @@ refinement.failed -> alert
 | `E-LOOP-HOST` | resolved host profile is not a finite application |
 | `E-LOOP-ENTRY` | recurrent entry is absent or ambiguous |
 | `E-LOOP-TERMINAL` | terminal set is absent, contradictory, or ill-typed |
-| `E-LOOP-CONTEXT` | work cannot be associated with one exact run |
+| `E-LOOP-CONTEXT` | work cannot be associated with one exact run; currently a runtime refusal name, reserved as a dedicated tool code in the diagnostic registry |
 | `E-LOOP-CONTROL` | a reachable path has zero or competing verdicts |
 | `E-LOOP-CARDINALITY` | a Call output can issue more than one command per application |
 | `E-LOOP-EFFECT` | recurrence could repeat a non-repeat-safe effect |
@@ -447,9 +453,11 @@ several recurrent entry ports; internal fallback from exhaustion; explicit
 outer-Loop state access; detachable obligations; affine, lexicographic, opaque
 Connector, or Rocq proofs; jitter.
 
-A v16 join inside a Loop Graph cannot combine a candidate carrying the active
+A join inside a Loop Graph cannot combine a candidate carrying the active
 `LoopContext` with an unrelated delivery arriving from outside that context.
-Such a pair refuses with `E-LOOP-CONTEXT` and consumes neither candidate. Data
+The runtime guard names `E-LOOP-CONTEXT` and consumes neither candidate; the
+checker may refuse the surrounding application earlier through the bounded
+control-proof gate. Data
 needed by every application must enter through the opening state, be retained
 in `Loop.state`, and travel through `Loop.next`; alternatively, perform the
 join outside the Loop Graph. Cross-context joins are deferred until they have

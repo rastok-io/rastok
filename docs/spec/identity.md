@@ -189,7 +189,8 @@ port in that same order; key 33 independently remains canonically sorted by
 cursor.
 
 **M1.5 C1 Connector-identity checkpoint (2026-08-22).** The source contract
-symbol resolves to one canonical versioned `ConnectorId`; that id and the
+symbol resolves to one canonical versioned id (`ConnectorId` at that
+checkpoint, now `ContractId`); that id and the
 contract's closed inbound/outbound role requirement replace the source name
 in canonical HIR and format v10. Process identities therefore move once:
 compiler probe `29c69b70… → 52406fcf…`, JSONL
@@ -565,7 +566,8 @@ a separate categorical transport change (D-2026-08-14-1).
 
 ## 3. The canonical record form
 
-These tables describe the current v16 causal projection. Historical key 53
+These tables describe the current causal projection, established at v16 and
+unchanged by v17. Historical key 53
 is retained in the registry solely to prevent reuse; active Loop state uses
 key 55. Required timer dates are retained separately at key 56 and are not
 part of the causal seal.

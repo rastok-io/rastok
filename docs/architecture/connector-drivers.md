@@ -1,10 +1,12 @@
 # Contributing a Connector Driver
 
-> The shipped implementation remains categorical plan v15 until R3–R8 land.
-> D-2026-09-05-1 freezes the v16 target used by new design work: Connector is
+> Current implementation, audited 2026-09-09: categorical package v17.
+> D-2026-09-05-1 established the model implemented by R3–R9: Connector is
 > one of the two Executor forms, its semantic transition comes from a
 > versioned Contract, all productible outcomes have explicit
-> dispositions, and the six shipped Contract ids move from `@1` to `@2` at R4.
+> dispositions, and all six shipped Contracts have `@2` identities.
+> The v17 Loop amendment extends a Call's existing terminal type; it creates
+> neither a new Contract id nor a contributed port.
 > The normative contract lives in
 > [`../spec/stdlib.md`](../spec/stdlib.md) and
 > [D-2026-08-22-1 through D-2026-08-27-3](../spec/decisions.md). This guide
@@ -28,8 +30,7 @@ remains pending under the Driver's ordinary finite capacities.
 
 No Rust crate name, Cargo feature, library path, Host, Worker or concrete
 Driver version enters the semantic plan. The meeting key is the canonical
-Contract id, for example the v16 target `rastok/file@2` (the currently shipped
-v15 implementation still binds `rastok/file@1`).
+Contract id, for example `rastok/file@2`.
 
 ```text
                          compile time
@@ -226,9 +227,9 @@ deliberately unresolved; the role model does not decide contract versioning.
 ### 1. Publish the Contract
 
 Add or extend one `ConnectorContract` sheet and give it one canonical
-`ContractId` (named `ConnectorId` in the current v15 Rust API until R3).
+`ContractId`.
 Declare exact roles, exchange shape and all effective ports.
-Under v16, also declare application profile, frame cardinality, terminal cases,
+Also declare application profile, frame cardinality, terminal cases,
 effect-visibility stage, and productibility evidence. These fields are what
 move the six shipped Contracts to `@2`; removing implicit `unwired` policy does
 not erase the old `@1` meaning.
@@ -290,9 +291,10 @@ application acknowledgement.
 
 ### 4. Register one factory
 
-Implement `ConnectorDriverFactory` with the exact id and roles. `bind` may
-validate plan facts and allocate local state, but it must not observe or mutate
-the external world or launch work. `RuntimeBindings::try_new` calls each
+Implement `ConnectorDriverFactory` with the exact id and roles. `bind` validates
+settings and may reserve passive listeners as described above; it must not
+admit an external fact, acknowledge a request or launch an outbound effect.
+`RuntimeBindings::try_new` calls each
 required Contract factory once before execution and rejects missing, incomplete
 or lying implementations.
 

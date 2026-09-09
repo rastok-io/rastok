@@ -26,7 +26,7 @@ dependency of normal development or CI.
 | ngtcp2 client against live Rastok HTTP/3 server | current C++23 compiler, nghttp3, event loop and explicit supported TLS backend | pinned command, versions and successful terminal transcript |
 | Official Autobahn RFC 6455 client and server roles | container-capable host for the maintained frozen PyPy 2 runner | client/server HTML reports linked from the release record |
 | Marginal Connector implementation benchmark | one new representative Connector after M1.6, measured from empty contract-specific module to conformance | repeatable timing and scope record in the release report |
-| M1.9 hosted UI visual and interaction pass | a working real-browser controller on the reference host | initial-pause/control/reconnect/reset/completed-state transcript; read-only simulation back/forward and reset-session isolation; buffered Play at 1/4 events per second; mailbox/instance inspection, zoom/pan and splitter pass; keyboard pass; same-viewport 1352×760 captures at B0, B1, B8 and the completed boundary plus a narrow screenshot linked from the M1.9 report |
+| M1.9 hosted UI visual and interaction pass | a working real-browser controller on the reference host | initial-pause/control/reconnect/reset/completed-state transcript; read-only simulation back/forward and reset-session isolation; buffered Replay at 1/4 transitions per second; mailbox/instance inspection, zoom/pan and splitter pass; keyboard pass; same-viewport 1352×760 captures at B0, B1, B8 and the completed transition plus a narrow screenshot linked from the M1.9 report |
 
 R9 attempted the browser pass on 2026-09-07. The installed controller failed
 before connection: its worker referenced an absent older browser-service module.
@@ -42,6 +42,20 @@ adds retained decision/causal explanations, timer and assertion evidence,
 keyboard navigation and read-only comparisons. Its browser checks include
 console errors and five examples in LIVE, HISTORY and REPLAY. The existing
 authored-`advance` stepping gap remains explicitly outside this presentation pass.
+
+The subsequent user-supplied independent retest of `ui_tour.two_tenants`
+confirmed the transport vocabulary, prefix-relative Loop/delay dial, selected
+match arm, causal links, scenario navigation and pending obligations (9/10).
+It did not exercise a failing assertion, fresh-session `n`/`a`, or mailbox hover.
+Commit `fd525d7` adds focused regression evidence for those paths and singular
+transition wording; automated evidence is not a substitute for their independent
+visual retest. The open qualification row remains open.
+
+The [documentation audit](documentation-audit-2026-09-09.md) reruns the hermetic
+workspace and executable examples, not the external protocol probes or a new
+bare-metal measurement. It additionally identifies a pre-release checker/core
+productibility defect for timed-join expiry; that finding is not waived by the
+otherwise green tests.
 
 Public Internet probes remain scheduled canaries, never replacements for these
 blocking local qualifications. The gallery, website and demonstration are M1

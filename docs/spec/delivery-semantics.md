@@ -1,6 +1,6 @@
 # Delivery Semantics — the journal, the transaction, and the boundary
 
-> **Status (2026-09-07): normative v16 under D-2026-09-05-1.**
+> **Status (2026-09-09): normative, current v17 under D-2026-09-05-1 and D-2026-09-08-1.**
 > Companion to [envelope.md](envelope.md) (identity ; its §7 journal stub is
 > filled by §6 below) and [execution-model.md](execution-model.md)
 > (Executor/manager transactions, ordering, and the dated-events queue).
@@ -453,7 +453,7 @@ produces an impossible port or case raises `ContractViolation` before
 publication.
 
 `RootSink`, `UnwiredPolicy`, and name tests for `err` or `exit` have no
-v16 meaning. Each emission is observed once at its source. Crossing the App
+current meaning. Each emission is observed once at its source. Crossing the App
 boundary feeds `vm.outputs()` without a duplicate emission or anonymous
 observation.
 

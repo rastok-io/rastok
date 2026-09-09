@@ -44,7 +44,7 @@ A Connector's Contract/exchange/cursor state is semantic, belongs to the core,
 and is recoverable from the journal. Its Driver's socket, process, file handle,
 pool, and library state are physical and reconstructible. A Driver supplies a
 typed event; it cannot write semantic state or the journal directly. A
-Connector has no DSL handler or author-declared `var` in v16.
+Connector has no DSL handler or author-declared `var` in the current profile.
 
 ## 2. Source forms
 
@@ -218,7 +218,7 @@ is non-empty. Registry-free validation re-derives:
 
 App's presence is explicit on the root owner. The `owners` table remains the
 authority for containment, instances, lifetime, Closing, and managers.
-`node::Type` is not transported and disappears from the target HIR. A
+`node::Type` was never transported and has been removed from the HIR. A
 Connector's exact versioned `ContractId` remains transported in its
 specification.
 
@@ -242,7 +242,7 @@ exact explicit-boundary replacement. R9 enabled this refusal after the source
 twins proved plan/hash neutrality; `out = .` remains a full-envelope value,
 not a wiring alias.
 
-Rust target renames are `node::Aspect -> node::Extension`,
+The completed Rust renames are `node::Aspect -> node::Extension`,
 `AspectSpec -> ExtensionSpec`, `ConnectorId -> ContractId`, and
 `TransactionExecutor -> HandlerExecutor`. The latter frees “Executor” for the
 semantic category without asserting a trait. `ConnectorId -> ContractId`

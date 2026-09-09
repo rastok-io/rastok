@@ -1,37 +1,45 @@
 @startuml 04-app-lab-effect-cycle
-title Rastok — same semantic step, different effect world
+skinparam backgroundColor white
+title Rastok — one outbound Call, real or scripted world
+skinparam shadowing false
 
 actor Caller
-participant "Rastok entry point" as Entry
-participant "Deterministic\nsemantic core" as Core
-participant "Effect boundary" as Boundary
-participant "App Process\nhandler" as App
-participant "Lab controlled\nhandler" as Lab
-database "Typed journal" as Journal
+participant "Hosted runner / Lab" as Entry
+participant "Core VM / dispatcher" as Core
+database "Journal" as Journal
+participant "Bound Driver" as Driver
+participant "External system" as World
 
 Caller -> Entry: execute checked plan
-Entry -> Core: step(plan, state, input event)
-Core -> Journal: append input / decision records
-Core --> Entry: new state + Process intent
-Entry -> Boundary: resolve(intent, mode)
+Entry -> Core: inject explicit typed input
+Core -> Core: prepare identity, routes and capacity
+Core -> Journal: commit INBOUND + selected routes
+Core -> Core: consume ready work; prepare exact request
+Core -> Journal: commit OUTBOUND open before any effect
 
-alt App mode
-  Boundary -> App: typed Process intent
-  App -> App: perform real host effect
-  App --> Boundary: typed outcome
-else Lab mode
-  Boundary -> Lab: same typed Process intent
-  Lab -> Lab: consume scripted outcome or fault
-  Lab --> Boundary: typed controlled outcome
+alt real Driver
+  Core -> Driver: start committed Call intent
+  Driver -> World: perform effect
+  World --> Driver: physical outcome
+else Lab Driver
+  Core -> Driver: same committed intent and Contract
+  Driver -> Driver: select scripted outcome / remain silent
 end
 
-Boundary -> Journal: append outcome event
-Boundary -> Core: outcome as next event
-Core --> Entry: next state + intents or completion
-Entry --> Caller: result and review evidence
+Driver --> Core: correlated typed completion
+Core -> Core: validate Contract; select routes; reserve capacity
+Core -> Journal: close OUTBOUND once; commit completion transition
+Core -> Core: publish ordered frames / terminal and deliveries
+Core --> Entry: retained state and causal evidence
+Entry --> Caller: result / report / read-only projection
 
 note over Core,Journal
-No wall clock, randomness, environment,
-filesystem, or network enters the core implicitly.
+If capacity is unavailable, no partial publication.
+A timeout is a scheduler decision, not a Driver reply.
+An outbound result is not a new INBOUND root.
+end note
+note over Driver,World
+Drivers never mint envelopes or write journal records.
+Recovery never blindly repeats the physical effect.
 end note
 @enduml
