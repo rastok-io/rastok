@@ -1845,6 +1845,18 @@ graph api : App {
                 attributes.push((name.to_string(), setting));
             }
         };
+        // The probe verifies localhost's certificate; bind its first resolved
+        // address rather than assuming that localhost selects IPv4.
+        let listen = std::net::ToSocketAddrs::to_socket_addrs(&("localhost", 0))
+            .expect("localhost resolves for the loopback fixture")
+            .next()
+            .expect("localhost has a loopback address");
+        assert!(listen.ip().is_loopback());
+        replace(
+            &mut server.attributes,
+            "listen",
+            crate::plan::AttrSetting::Value(crate::value::Value::Text(listen.to_string())),
+        );
         replace(
             &mut server.attributes,
             "versions",

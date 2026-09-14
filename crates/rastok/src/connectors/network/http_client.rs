@@ -2206,7 +2206,15 @@ graph bounded_request : App {
             .build()
             .expect("the test runtime builds");
         runtime.block_on(async {
-            let socket = tokio::net::UdpSocket::bind("127.0.0.1:0")
+            // Match the client's localhost resolution without dropping DNS-name
+            // certificate verification or assuming IPv4 is preferred by the host.
+            let listen = tokio::net::lookup_host(("localhost", 0))
+                .await
+                .expect("localhost resolves for the loopback fixture")
+                .next()
+                .expect("localhost has a loopback address");
+            assert!(listen.ip().is_loopback());
+            let socket = tokio::net::UdpSocket::bind(listen)
                 .await
                 .expect("the HTTP/3 server socket binds");
             let address = socket.local_addr().expect("the server has an address");
