@@ -439,6 +439,16 @@ output case has at least one explicit disposition in the validated plan:
 - a temporal-manager command;
 - `nothing`.
 
+> **Approved Retry target, not an executable v18 disposition:**
+> [D-2026-09-14-4](decisions.md#pre-c1-review-amendments--14-september)
+> gives intermediate attempt envelopes an explicit retained disposition to
+> their Retry manager and a separate consumption fact. They are emitted and
+> accounted, never silently dropped or delivered downstream. Final attempts
+> still require the ordinary authored destinations. This creates no manager
+> port, user command or spatial edge; the
+> [refactor contract](../architecture/retry-extension-refactor.md#31-every-attempt-emission-has-a-retained-disposition)
+> owns the producer/consumer crash window to qualify in C1.
+
 Missing disposition is recursive `E-UNWIRED-OUTPUT`, including a nested
 Graph boundary and a particular uncovered union case. A deliberate discard is
 written `source -> nothing`; it consumes without backpressure. The same case

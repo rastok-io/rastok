@@ -68,6 +68,46 @@ pass the existing gate; running a Driver retry without a retained attempt;
 exposing intermediate failures as final graph results; erasing those attempts
 from accounting; reusing an old tag with a different meaning.
 
+### Pre-C1 review amendments — 14 September
+
+Intermediate attempt envelopes have an explicit validated disposition to the
+Retry manager, retained atomically with the Connector emissions. A separate
+`AttemptConsumed` fact acknowledges the exact batch before another attempt;
+this is neither `nothing`, a hidden drop, an authored command nor a spatial
+edge. Final attempts use the graph's ordinary dispositions and remain subject
+to `E-UNWIRED-OUTPUT`. C1 must specify producer/consumer crash prefixes before
+allocating the common protocol encoding.
+
+The future HttpClient Contract splits complete usable 500–599 responses into
+`ServerError { status }`, with `Completed { status }` for the other admitted
+final statuses. Both are `after_effect` and both produce the response-body
+frame. Protocol/body/decode faults keep their distinct terminals. The change
+applies to that versioned Contract even without Retry; it adds no Retry port,
+case or predicate. `Retry.on = [ServerError]` selects all 5xx and still requires
+idempotence. Current `http-client@2` and its goldens are unchanged by this entry.
+
+Loop `again` paths that may repeat a visible Call without an idempotence
+guarantee require an advisory named warning, including successful siblings;
+proven before-effect-only paths do not. Its proposed name `W-LOOP-REPEAT` is
+registered with the implementing tests, not reserved in this documentary pass.
+Retry safety remains a hard admission rule. The initial host remains an
+outbound Call; future Graph Retry requires every repeated Call to be
+idempotent plus a separately qualified operation/private-state protocol.
+
+Retry delay is measured from the retained logical Call closure, not manager
+consumption or restart, with the common delayed-recurrence timer kind 5. C1
+must retain the original closure instant and deadline, preserve historical
+Loop-reference meaning, resolve the replacement/removal of `Intent.effect`,
+and enumerate Contract versions per profile before its identity inventory.
+Process service already occupies `process@3`; there is no blanket @3 move.
+
+Removing effect requires preserving exact Contract opening rules. Roles and
+exchange distinguish Calls but not Session initiators: both WebSocket profiles
+have inbound/outbound roles. A server's orphan write must not open a client
+Session; a client's or Process service's input may open its own instance
+resource. C1 must represent this independently of idempotence. These amendments
+remain approved target semantics, not executable support in package v18.
+
 ## D-2026-09-14-3 — Test object-member presence without reading absent data
 
 Yoann authorized the minimal `has(...)` addition to complete the HTTP usage

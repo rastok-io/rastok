@@ -218,6 +218,14 @@ request.
 
 ### 3.2 `HttpClient` — outbound HTTP
 
+> **Approved next Contract, not current execution:** the pre-C1 amendment to
+> [D-2026-09-14-4](decisions.md#pre-c1-review-amendments--14-september)
+> separates usable 500–599 responses as `ServerError { status }`; other
+> admitted final statuses remain `Completed { status }`. Both produce `out`
+> and are `after_effect`. The table below still describes `http-client@2`;
+> [C1](../architecture/retry-extension-refactor.md#21-http-server-failures--approved-contract-amendment)
+> must inventory the version, cardinality, validation and golden changes.
+
 | Case | Contract |
 |---|---|
 | Stable identity | `rastok/http-client@2` (v16; `@1` is its v15 predecessor) |

@@ -3,7 +3,8 @@
 14 September 2026. **Semantic direction approved; implementation not started.**
 [D-2026-09-14-4](../spec/decisions.md#d-2026-09-14-4--separate-loop-retry-and-saga-over-one-recurrence-engine)
 owns the decision. This document records the repository contact, implementation
-order and acceptance evidence still required. Current packages remain v18.
+order and acceptance evidence still required, including the pre-C1 review
+amendments. Current packages remain v18.
 
 > A Loop advances a state; a Retry repeats an operation. The first proves
 > finite iteration; the second proves safe repetition.
@@ -49,7 +50,7 @@ connector pay : HttpClient + Retry {
     first = duration("100ms")
     ceiling = duration("2s")
   }
-  Retry.on = [ConnectFailed, TimeoutExpired]
+  Retry.on = [ConnectFailed, TimeoutExpired, ServerError]
   // Ordinary HTTP request, codec, behavior and timeout settings follow.
 }
 ```
@@ -68,10 +69,35 @@ connector pay : HttpClient + Retry {
   and a positive timeout. Event, Session, Process service, inbound Call,
   Operator and whole-Graph retry remain named, unadmitted profiles.
 
-HTTP 500 is `Completed { status: 500 }`, not a transport-failure case.
-Selecting `Completed` selects that entire case, not only non-2xx responses.
-Payload-selective retry requires a separate decision; the new Extension must
-not silently change the flagship's explicit HTTP-status policy.
+### 2.1 HTTP server failures — approved Contract amendment
+
+Today's `http-client@2` represents HTTP 500 as `Completed { status: 500 }`.
+The reviewed target splits a successfully received and decoded response into:
+
+| Terminal | Status | Visibility |
+|---|---|---|
+| `ServerError { status: int }` | 500–599 | `after_effect` |
+| `Completed { status: int }` | every other currently admitted final status | `after_effect` |
+
+Both cases produce the same ordinary response-body `out` before the terminal;
+neither denotes a transport fault. `Completed` is not a claim of business
+success: 4xx, including 429, remain there. `Retry.on = [ServerError]` selects
+all 5xx, not an arbitrary predicate or only status 500. The idempotence
+requirement still applies. Body-limit, protocol and decode failures retain
+their existing cases; a status does not hide an unusable response body.
+
+This is a versioned HttpClient Contract change, with or without Retry, not a
+new Retry exit case or a Driver heuristic. C1 must specify the response-frame
+cardinality change from "one iff Completed" to "one iff Completed or ServerError",
+including independent validation and forged status/case refusal. Physical
+Drivers and the Lab must select the same terminal for the same response.
+Current sources, Contract ids and goldens remain untouched until cutover.
+
+The actual retry-on-500 migration is in
+[`webhook-to-partner.rkg`](../../examples/webhook-to-partner.rkg).
+The [`agent-http-candidate.rkg`](../examples/agent-http-candidate.rkg) `terminal`
+Operator currently reports non-2xx as failures; it does not request a retry.
+That business classification cannot simply be deleted as retry bookkeeping.
 
 ## 3. One operation, several retained attempts
 
@@ -100,6 +126,33 @@ The selection and publication decision must be reconstructible and accepted
 exactly once. Recovery between settlement and publication must neither lose a
 final result nor publish it twice. A late outcome of an already closed attempt
 cannot win over its retained closure or settle another attempt.
+
+### 3.1 Every attempt emission has a retained disposition
+
+An intermediate attempt's Connector transaction still creates and journals
+its ordered `out`, `err` and terminal envelopes. They are emitted, not delivered
+to downstream Nodes. Their disposition is the exact Retry manager, derived
+from the validated policy, terminal and remaining attempts; it is neither an
+implicit `nothing` nor an omitted route. The producer retains that disposition
+atomically with its emissions, after reserving bounded manager receipt capacity.
+No manager port, authored command or `PhysicalEdge` is introduced.
+
+The manager's consumption is a separate retained fact, called `AttemptConsumed`
+in this algebra: operation, attempt, Call, producing transaction and exact
+ordered emission references. It acknowledges the complete attempt batch before
+another attempt is admitted. The shared fold rejects a missing producer,
+omitted/duplicated emission, wrong run or repeated consumption. C1 owns its
+encoding, not a new top-level journal kind allocated here.
+Quiescence excludes this manager receipt itself, just as Loop excludes its
+pending command; otherwise the consumer would wait on its own consumption.
+
+After a crash between production and consumption the batch remains pending;
+neither the Connector transaction nor the settled Call is re-executed. Manager
+consumption advances no downstream mailbox cursor. Final attempts instead use
+the authored graph dispositions, with no second emission or new EnvelopeId.
+Every case can be final when attempts are exhausted, so selecting it in
+`Retry.on` never exempts it from explicit output wiring. An unconnected final
+output still fails `E-UNWIRED-OUTPUT`.
 
 ## 4. One recurrence manager and fold, distinct policy causes
 
@@ -134,6 +187,28 @@ generation. Quiescence is established from retained obligations, not inferred
 from wall-clock silence. Replay/recovery reconstructs the manager without
 calling an old Driver effect; idempotence alone is not an execution command.
 
+### 4.1 Delay origin and retained time
+
+`Retry.delay` starts at the retained logical instant of the winning Call
+closure, not at request opening, manager consumption, Driver wall time or
+restart. For attempt ordinal `i` starting at 1, a selected failure with another
+attempt available fixes `due = closed_at + delay(i)` using the existing
+saturating delay arithmetic. Delayed recurrence uses timer kind 5 in the common
+manager; C1 must preserve old Loop references and distinguish the policy's
+references in the versioned algebra, never reinterpret an old Loop wakeup.
+
+The closure instant and exact due time must survive the crash before manager
+consumption. Recovery never grants a fresh delay. Admission waits for both the
+due time and retained quiescence/capacity; a late consumption can make the
+attempt immediately eligible, not move its deadline. No downstream capacity
+is held during the delay. Closing wins and a final attempt arms no retry timer.
+
+Current `CallRecord` has no closure timestamp; `Intent.logical_time` describes
+the opening context, and `Record::timer_schedule()` returns none for OUTBOUND.
+Thus C1 must specify this temporal retention before its identity inventory.
+Reuse the existing distinction between mandatory retained time and the causal
+seal; do not infer the missing instant from record position or an opening time.
+
 ## 5. Composition
 
 Containment is `Loop -> Retry -> Call`, never `Retry -> Loop`. An ordinary
@@ -141,6 +216,26 @@ Loop Graph containing a Retry Connector is the initial composition target.
 A same-owner `Loop + Retry` needs the same unambiguous nesting and qualification,
 independent of Extension spelling order; it is not admitted by manager ordering.
 Retry attempts do not consume extra Loop fuel: they belong to one application.
+
+The Call-only staging is confirmed. A future whole-Graph Retry must establish
+idempotence for **every Call it can repeat**, including a successful sibling
+of the Call that failed; the selected terminal alone is insufficient. This is
+a necessary admission rule, not a complete Graph profile. Preserving each
+logical operation's request/key, private-state behavior between attempts,
+aggregate termination and final publication must be decided and qualified
+before that profile opens. It contains no Loop iteration.
+
+An authored Loop `again` that may repeat an externally visible Call without
+an idempotence guarantee requires a named warning, not a restored global
+effect error. The analysis includes sibling Calls and treats absent/false as
+no guarantee; a path proved to have failed entirely `before_effect` does not
+warn. The warning identifies the Loop, `again` site and repeated Connector in
+canonical order. It does not add retries or certify safety. `W-LOOP-REPEAT` is
+the proposed code, to register with its focused warning tests in C2 under the
+[diagnostic registration rule](../spec/diagnostics.md#rules); this planning
+pass allocates no executable diagnostic. Retry's own unsafe-attempt refusal
+remains an error. Intentional state-changing `Loop.next` is not silently
+reclassified as Retry by this warning.
 
 In a future Saga, multiple attempts of one operation are not multiple successful
 steps. Separate Loop applications can undertake separate operations and thus
@@ -177,7 +272,7 @@ claim to make a single invocation after the global effect gate is removed.
 | [`node::Extension`](../../crates/rastok-core/src/node.rs) and [`plan::ExtensionSpec`](../../crates/rastok-core/src/plan.rs) are closed | add Retry only with complete source, transport and independent validation; no speculative tag |
 | [`TerminalVisibility`](../../crates/rastok-core/src/connector/call.rs) already classifies each terminal | retain the Contract facts; separate their consumer from the global effect enum |
 | [Compiler check](../../crates/rastok/src/compiler/check.rs) admits only `none`/`idempotent` effect words | remove the global effect gate at cutover, not by calling paid inference idempotent |
-| [Plan validation](../../crates/rastok-core/src/plan/validation.rs) and [VM Call dispatch](../../crates/rastok-core/src/runtime/vm.rs) require an effect class for outbound callees | removing an attribute is insufficient; rebase dispatch on Contract roles/exchange |
+| [Plan validation](../../crates/rastok-core/src/plan/validation.rs) and [VM dispatch](../../crates/rastok-core/src/runtime/vm.rs) also use effect as an initiation classifier | rebase Calls on roles/exchange and Sessions on their Contract opening rule; roles alone do not distinguish the two WebSocket profiles |
 | [`Intent`](../../crates/rastok-core/src/boundary.rs) retains `EffectClass`; [Call recovery](../../crates/rastok-core/src/runtime/vm/recovery/calls.rs) checks equality | audit plan, causal seal and recording together; do not reinterpret a class tag as a boolean |
 | [Loop protocol](../../crates/rastok-core/src/journal/loop_protocol.rs) has Loop state and command-shaped causes | generalize the recurrence algebra; never synthesize a command for Retry |
 | [Stdlib Process job](../spec/stdlib.md) publishes a bounded completion at exit | use the existing completion boundary for selection; do not claim unqualified streaming retry |
@@ -189,13 +284,61 @@ the outbound recovery descriptions, and affected Contract sheets/identity
 tables. Node ontology, ordinary routing, user data annotations, Call close-once,
 logical time, no-recall replay and Saga's execution deferral stay intact.
 
+### 7.1 Effect is not a role — exact Session migration gate
+
+The current overload is real: network validation requires `Effect::None` for
+HttpServer and WebSocketServer; outbound Call admission rejects it through
+`EffectlessCallee`. VM peer Session opening and orphan-write handling also
+branch on `Effect::None`. Those are protocol-direction decisions, not proofs
+that an HTTP response or a WebSocket write has no external consequences.
+
+`roles.has_outbound()` plus `exchange` replaces the Call-direction shortcut,
+including the inbound Call response exception. It does **not** select a
+Session initiator: WebSocketClient and WebSocketServer both resolve to
+`InboundAndOutbound` plus `Session` in `validate_network_connector`.
+Process service also has both roles and opens on local input. C1 must derive
+and independently validate the opening rule from the exact Contract profile:
+
+| Profile | Opening authority | Input without a selected peer Session |
+|---|---|---|
+| WebSocketServer | peer admission | existing observable orphan-write discard; never open a client Session |
+| WebSocketClient | local input | open or reuse this instance's Session |
+| Process service | local input | open or reuse this instance's child; an upstream socket ref cannot select it |
+
+No inference from `idempotent`, port names, `url`/`listen` presence or incidental
+manager order is permitted. C1 must make that Contract rule available to the
+generic VM before removing the overloaded effect checks. No new public trait
+or new user-facing setting is required by this constraint.
+
+### 7.2 Intent guarantee and exact Contract versions — C1 decisions
+
+Before producing the identity inventory, C1 must explicitly choose between a
+retained resolved `idempotent` boolean replacing `Intent.effect`, and removal
+of that redundant field with the guarantee re-derived from the exact retained
+validated plan/Contract. Either choice must bind every attempt to the original
+operation guarantee and reject contradictory retained material. It must never
+turn an old effect word or missing field into permission to repeat.
+
+The current diagnostic [recording codec](../../crates/rastok/src/recording/codec.rs)
+serializes the effect word; [Call recovery](../../crates/rastok-core/src/runtime/vm/recovery/calls.rs)
+checks it against the plan. The choice must cover recording decode, recovery,
+plan identity and the separately defined causal projection together, without
+pretending that every in-memory field is already a causal key. The decision
+cannot be deferred past the inventory or handled as a mechanical field rename.
+
+Contract majors are allocated per exact profile, not by a blanket "all @3"
+rule: [`connector.rs`](../../crates/rastok-core/src/connector.rs) already gives
+Process service `process@3`, distinct from job `process@2`. The HttpClient
+status split requires a new major; every other affected Contract must be
+inventoried individually. No existing id may acquire another meaning.
+
 ## 8. Implementation order and exits
 
 | Slice | Required result | Status |
 |---|---|---|
 | C0 — contract and contact | approved semantic distinction, output publication, audit and migration inventory | recorded here; exact encoding still unallocated |
-| C1 — operation and recurrence algebra | sealed-request binding, common fold with typed decision causes, identity register and crash traces | not started |
-| C2 — source and validated plan | Retry settings, idempotence, removal of global effect, full registry-free checks, one declared format cutover | not started |
+| C1 — operation and recurrence algebra | pinned operation, retained attempt disposition/consumption, closure-based deadlines, exact Session opening rule, Intent guarantee choice, shared fold, identity register and crash traces | not started; all choices precede the inventory |
+| C2 — source and validated plan | Retry settings, idempotence, Loop warning, typed HTTP 5xx/cardinality, removal of global effect, full registry-free checks, one declared format cutover | not started |
 | C3 — runtime and accounting | qualified Call attempts, final publication, shared scheduling/recovery, exact per-attempt report input | not started |
 | C4 — migration and qualification | examples, goldens with reasons, UI, docs, no_std and memory/code-size gates | not started |
 
@@ -212,8 +355,9 @@ The acceptance matrix must cover:
 2. before-effect repetition without idempotence; ambiguous repetition refused
    without the guarantee; a key alone not waiving it;
 3. frozen requests/settings across attempts and distinct Call identities;
-4. intermediate failure/data withheld from the graph but retained/accounted;
-   last failure unchanged; a final result published exactly once;
+4. intermediate failure/data explicitly disposed to and consumed by the
+   manager, retained/accounted without downstream delivery; forged or repeated
+   consumption refused; final wiring required and result published once;
 5. crash prefixes after settlement, before/after scheduling, before final
    publication, plus late outcomes and Closing at the due instant;
 6. two keys and two same-origin admissions with independent Retry runs;
@@ -224,6 +368,14 @@ The acceptance matrix must cover:
 9. CLI, Lab batch/step, diagnostic replay and debugger agreement;
 10. workspace checks, three no_std targets, embedded heap/code size measured
     before growth is accepted, and explicitly explained golden migrations.
+
+Pre-C1 review adds focused cases to that matrix: complete 499/500/599 responses
+and status/case contradictions; a 5xx with decode failure; retained body usage
+on both HTTP response cases; delay unchanged after a crash before consumption;
+Loop `again` warning for a non-idempotent sibling and no warning on a proven
+before-effect-only path; server orphan writes never opening clients; client
+and Process-service local opening preserved; contradictory Intent guarantee
+refused under the selected new recording representation.
 
 No implementation, runtime qualification, benchmark call, paid model invocation,
 release tag or public push is claimed by this preparatory slice.
