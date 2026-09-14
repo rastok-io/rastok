@@ -2440,47 +2440,54 @@ fn concrete(value: EvalValue, bindings: &dyn Bindings) -> Result<EvalValue, Erro
 /// materializes too, so `[data] == [x]` compares values, never
 /// markers.
 fn concrete_deep(value: EvalValue, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
+    materialize_deep(value, bindings, false)
+}
+
+fn materialize_deep(
+    value: EvalValue,
+    bindings: &dyn Bindings,
+    preserve_branches: bool,
+) -> Result<EvalValue, Error> {
+    let resolve = |value| materialize_deep(value, bindings, preserve_branches);
     Ok(match value {
         EvalValue::Payload(reference) => bindings.payload(&reference)?,
-        EvalValue::List(items) => EvalValue::List(
-            items
-                .into_iter()
-                .map(|item| concrete_deep(item, bindings))
-                .collect::<Result<_, _>>()?,
-        ),
+        EvalValue::List(items) => {
+            EvalValue::List(items.into_iter().map(resolve).collect::<Result<_, _>>()?)
+        }
         EvalValue::Map(map) => {
             let mut deep = BTreeMap::new();
             for (key, value) in map {
-                deep.insert(key, concrete_deep(value, bindings)?);
+                deep.insert(key, resolve(value)?);
             }
             EvalValue::Map(deep)
         }
         EvalValue::KeyedMap(entries) => EvalValue::KeyedMap(
             entries
                 .into_iter()
-                .map(|(key, value)| {
-                    Ok((
-                        concrete_deep(key, bindings)?,
-                        concrete_deep(value, bindings)?,
-                    ))
-                })
+                .map(|(key, value)| Ok((resolve(key)?, resolve(value)?)))
                 .collect::<Result<_, Error>>()?,
         ),
         EvalValue::Struct(fields) => EvalValue::Struct(
             fields
                 .into_iter()
-                .map(|(name, value)| Ok((name, concrete_deep(value, bindings)?)))
+                .map(|(name, value)| Ok((name, resolve(value)?)))
                 .collect::<Result<_, _>>()?,
         ),
         // Structural branches are pairwise disjoint, so exposing the selected
         // value cannot guess between cases. Tagged unions stay tagged because
         // their case name is semantic and payload shapes may coincide.
-        EvalValue::StructuralUnion { value, .. } => concrete_deep(*value, bindings)?,
+        EvalValue::StructuralUnion { branch, value } if preserve_branches => {
+            EvalValue::StructuralUnion {
+                branch,
+                value: Box::new(resolve(*value)?),
+            }
+        }
+        EvalValue::StructuralUnion { value, .. } => resolve(*value)?,
         EvalValue::TaggedUnion { case, payload } => EvalValue::TaggedUnion {
             case,
             payload: payload
                 .into_iter()
-                .map(|(name, value)| Ok((name, concrete_deep(value, bindings)?)))
+                .map(|(name, value)| Ok((name, resolve(value)?)))
                 .collect::<Result<_, Error>>()?,
         },
         other => other,
@@ -2694,7 +2701,10 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
             })
         }
         Expr::Is { expr, target } => {
-            let value = concrete_deep(eval_expr(expr, bindings)?, bindings)?.into_value()?;
+            // Type tests judge the retained logical value, including nullable
+            // fields' branch witnesses; comparison unwrapping destroys them.
+            let value =
+                materialize_deep(eval_expr(expr, bindings)?, bindings, true)?.into_value()?;
             match target.as_ref() {
                 NarrowTarget::Type(target) => target
                     .ty()
@@ -2709,7 +2719,8 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
             }
         }
         Expr::As { expr, target } => {
-            let value = concrete_deep(eval_expr(expr, bindings)?, bindings)?.into_value()?;
+            let value =
+                materialize_deep(eval_expr(expr, bindings)?, bindings, true)?.into_value()?;
             match target.as_ref() {
                 NarrowTarget::Type(target) => target
                     .ty()
@@ -3129,6 +3140,22 @@ mod tests {
             );
             assert_eq!(rederive_type(&tree.root, &signature), None, "{operator}");
         }
+    }
+
+    #[test]
+    fn a_case_test_preserves_optional_payload_branch_witnesses() {
+        let ty = crate::boundary::process_exit_type().unwrap();
+        let signature = Signature::new().with("data", ty);
+        let tree = compile("data is Exited", &signature).unwrap();
+        let value = crate::boundary::ProcessExit::Exited {
+            exit_code: 0,
+            signal: None,
+        }
+        .into_value();
+        let env = BTreeMap::from([(String::from("data"), EvalValue::from(value))]);
+        assert_eq!(eval(&tree, &env).unwrap(), EvalValue::Bool(true));
+        let as_case = compile("data as Exited", &signature).unwrap();
+        assert!(eval(&as_case, &env).is_ok());
     }
 
     #[test]

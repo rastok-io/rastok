@@ -7,6 +7,18 @@
 > An erratum is not a license to improvise — until the fix lands, the
 > designated home is the contract.
 
+## E-2026-09-14-1 — type tests lost optional payload witnesses — RESOLVED
+
+- **Where:** `rastok-core/src/expr.rs`, runtime `is`/`as` evaluation.
+- **Defect:** deep comparison normalization stripped structural-union branch
+  witnesses from nullable fields. A valid `Exited { exit_code, signal: null }`
+  consequently failed `data is Exited` when evaluated from a materialized
+  value, despite its correct retained type.
+- **Resolution:** materialize type-test values without erasing their branch
+  witnesses; value-comparison normalization is unchanged. A focused `is`/`as`
+  regression and the resident Lab's terminal expectations prove the fix.
+  No type tag, source identity or serialized value representation changes.
+
 ## E-2026-08-26-1 — pre-admission HTTP refusals cannot be Call exits — RESOLVED
 
 - **Where:** [stdlib.md §3.1](stdlib.md) publishes `MalformedRequest`,
