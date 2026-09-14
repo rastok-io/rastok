@@ -1,0 +1,23 @@
+// A business field named tenant is deliberately not the instance key.
+type Entry = struct { account: text, tenant: text }
+
+graph accounts : App {
+  input in: Entry
+  output out: Entry
+  instance = { key = data.account }
+  operator relay {
+    input in: Entry
+    output out: Entry
+    on in { out = data }
+  }
+  in -> relay -> out
+}
+
+lab accounts {
+  simulation keys on app {
+    scenario routed_key {
+      app.in = { account = "actual-account"; tenant = "not-the-instance-key" }
+      expect app.out where data.account == "actual-account"
+    }
+  }
+}

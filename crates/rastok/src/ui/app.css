@@ -275,7 +275,7 @@ body.historical-view .history-watermark { display: block; }
 .envelope-zone > h4 { margin-bottom: 4px; color: var(--muted); font: 700 10px var(--mono); }
 
 .data-tree { display: grid; gap: 1px; min-width: 0; font: 11px/1.35 var(--mono); }
-.data-tree-leaf { display: grid; min-width: 0; grid-template-columns: minmax(70px, .36fr) minmax(0, 1fr); gap: 4px; padding: 1px 2px; }
+.data-tree-leaf { display: grid; min-width: 0; grid-template-columns: minmax(14ch, .5fr) minmax(0, 1fr); gap: 4px; padding: 1px 2px; }
 .data-tree-leaf:hover { background: var(--surface-raised); }
 .data-tree-leaf > .data-tree-value:first-child { grid-column: 1 / -1; }
 .data-tree-key { min-width: 0; color: var(--muted); overflow-wrap: anywhere; }

@@ -975,10 +975,9 @@ fn history(plan: &ValidatedExecutionPlan, vm: &Vm<'_>, journal: &MemJournal) -> 
             let Record::Inbound(root) = record else {
                 return None;
             };
-            let path = root.connector_path.as_ref()?;
             Some(json!({
                 "record_index": index,
-                "node": path.to_string(),
+                "node": root.connector_path.as_ref().map(ToString::to_string),
                 "port": root.port.name(),
                 "envelope_id": root.envelope.meta().sys().id().to_string(),
                 "origin_id": root.envelope.meta().sys().origin_id().to_string(),
@@ -986,12 +985,29 @@ fn history(plan: &ValidatedExecutionPlan, vm: &Vm<'_>, journal: &MemJournal) -> 
                 "data": if explanation::classified(plan) {
                     json!({ "redacted": true })
                 } else {
-                    data_json(root.envelope.data(), node_port_annotations(plan, path, &root.port))
+                    port_data_json(plan, root.connector_path.as_ref(), &root.port, root.envelope.data())
                 },
+                "instance_labels": root.routes.iter().map(|route| explanation::instance_label(&route.target, explanation::classified(plan))).collect::<BTreeSet<_>>(),
             }))
         })
         .collect::<Vec<_>>();
-    json!({ "records": records, "deliveries": deliveries, "sources": sources, "envelopes": explanation.envelopes, "commands": explanation.commands })
+    let outputs = vm
+        .outputs()
+        .iter()
+        .map(|output| {
+            json!({
+                "node": null,
+                "port": output.port.name(),
+                "envelope_id": output.envelope.meta().sys().id().to_string(),
+                "origin_id": output.envelope.meta().sys().origin_id().to_string(),
+                "meta": meta_json(output.envelope.meta()),
+                "data": port_data_json(plan, None, &output.port, output.envelope.data()),
+            })
+        })
+        .collect::<Vec<_>>();
+    // Boundary crossings reference the original emission; they must not be
+    // added to the source-observation count as synthetic deliveries.
+    json!({ "records": records, "deliveries": deliveries, "sources": sources, "outputs": outputs, "envelopes": explanation.envelopes, "commands": explanation.commands })
 }
 
 fn history_record_description(record: &Record) -> (&'static str, Option<String>, String) {

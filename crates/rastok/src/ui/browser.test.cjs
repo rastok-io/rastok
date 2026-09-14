@@ -60,6 +60,45 @@ async function finish(page) {
   return page.locator("#timeline").inputValue();
 }
 
+test('an authored advance retains each transaction and App output pins inspect the original emission', { timeout: 90000 }, async t => {
+  const page = await openTour(t);
+  let previousRecords = 0;
+  let transactionsDuringAdvance = 0;
+  for (let count = 0; count < 100; count += 1) {
+    if (await page.locator('#execution-state').innerText() === 'completed') break;
+    const revision = await page.evaluate(() => currentSnapshot.revision);
+    await page.locator('#step').click();
+    await page.waitForFunction(previous => currentSnapshot.revision > previous && pendingCommandRevision === null, revision);
+    const state = await page.evaluate(previous => ({
+      records: currentSnapshot.history.records.length,
+      transactions: currentSnapshot.history.records.slice(previous).filter(record => record.record_type === 'TRANSACTION').length,
+      action: currentSnapshot.scenario.current.last_action,
+    }), previousRecords);
+    assert.ok(state.transactions <= 1, `one transition hid ${state.transactions} transactions`);
+    if (state.action === 'advance') transactionsDuringAdvance += state.transactions;
+    previousRecords = state.records;
+  }
+  assert.equal(await page.locator('#execution-state').innerText(), 'completed');
+  assert.ok(transactionsDuringAdvance > 1, 'several time-driven transactions were inspected separately');
+  const output = await page.evaluate(() => currentSnapshot.history.outputs.findLast(output => output.port === 'done'));
+  await page.locator('.graph-scope.root > .graph-port[data-port="done"]').press('Enter');
+  assert.equal(await page.evaluate(() => selectedEnvelopeId), output.envelope_id);
+  assert.equal(await page.locator('#tab-envelope').getAttribute('aria-selected'), 'true');
+  assert.match(await page.locator('#envelope').innerText(), /attempts/);
+  const keyLines = await page.locator('#envelope .data-tree-key').filter({ hasText: /^graph_version$/ }).evaluate(key => {
+    const range = document.createRange();
+    range.selectNodeContents(key);
+    return range.getClientRects().length;
+  });
+  assert.equal(keyLines, 1, 'ordinary META names remain readable without splitting graph_version');
+  await page.locator('#tab-history').click();
+  await page.locator('#history > details').filter({ hasText: 'Observed envelopes' }).locator(':scope > summary').click();
+  const rows = page.locator('.delivery-history-table tbody tr');
+  assert.ok(await rows.count() > 10);
+  assert.ok(await rows.first().evaluate(row => row.getBoundingClientRect().height < 48));
+  assert.equal(await rows.first().locator('td > details[open]').count(), 0, 'payload trees start folded, without losing data');
+});
+
 test('the resident gateway explains independent Process Sessions without starting a child', { timeout: 60000 }, async t => {
   const page = await openTour(t, undefined, 'examples/agent-gateway.rkg');
   await finish(page);
@@ -72,6 +111,18 @@ test('the resident gateway explains independent Process Sessions without startin
   await page.locator('[data-command="resume"]').click();
   await page.locator('#timeline-position').filter({ hasText: /^REPLAY/ }).waitFor();
   await page.locator('[data-command="pause"]').click();
+});
+
+test('injection history names the retained routing key, not a guessed tenant field', { timeout: 60000 }, async t => {
+  const page = await openTour(t, undefined, 'crates/rastok/tests/fixtures/ui-instance-keys.rkg');
+  await finish(page);
+  await page.locator('#tab-instances').click();
+  const history = await page.locator('#injections').innerText();
+  assert.match(history, /Routed instance.*actual-account/is);
+  assert.doesNotMatch(history, /not-the-instance-key/);
+  await page.locator('#injections tbody tr').press('Enter');
+  await page.locator('#timeline-position').filter({ hasText: /^HISTORY.*transition 1$/ }).waitFor();
+  assert.match(await page.locator('#injections').innerText(), /actual-account/);
 });
 
 test('the flagship keeps readable graph text clear of badges, ports and pipes', { timeout: 60000 }, async t => {
@@ -250,6 +301,7 @@ test('a real recording is navigable without any execution command or Driver', { 
   assert.match(await page.locator('#envelope').innerText(), /shell.exit.*Exited/s);
   await page.locator('#tab-history').click();
   await page.locator('#history summary').filter({ hasText: /Observed envelopes/ }).click();
+  await page.locator('.delivery-history-table tbody tr').first().locator('td:last-child > details > summary').click();
   assert.match(await page.locator('#history').innerText(), /retained hello/);
   assert.deepEqual(commands, [], 'navigation must not ask the server to execute');
 });
@@ -258,6 +310,26 @@ async function seek(page, transition) {
   await page.locator('#timeline').fill(String(transition));
   await page.locator('#timeline').dispatchEvent('change');
   await page.locator('#timeline-position').filter({ hasText: new RegExp(`transition ${transition}$`) }).waitFor();
+}
+
+// Time advancement retains real intermediate commits. Locate the waiting
+// interval by the Loop fold, not by an incidental presentation ordinal.
+async function bothRunsWaiting(page) {
+  const transitions = await page.evaluate(async () => {
+    const session = currentSnapshot.timeline.session;
+    const result = [];
+    for (const frame of timelineFrames(session)) {
+      const response = await fetch(`/api/snapshot?session=${session}&boundary=${frame.boundary}`);
+      const snapshot = await response.json();
+      const runs = snapshot.loop_runs.filter(run => run.active);
+      if (runs.length === 2 && runs.every(run => run.waiting && Number(run.application) === 1)) {
+        result.push(Number(frame.boundary));
+      }
+    }
+    return result;
+  });
+  assert.ok(transitions.length > 0, 'both first applications have retained delayed recurrences');
+  return transitions;
 }
 
 async function capture(page, name) {
@@ -288,10 +360,15 @@ test("transitions have explicit transport names, a first-contact hint and an hon
   assert.match(await page.locator('#command-status').innerText(), /Paused before admission/);
   assert.match(await page.locator('#timeline-position').innerText(), /^LIVE · Main · transition 0$/);
   await page.locator('[data-command="next-scenario-action"]').click();
-  await page.locator('#timeline-position').filter({ hasText: /^LIVE · Main · transition 1$/ }).waitFor();
+  await page.waitForFunction(() => commandOrigin === null && currentSnapshot.scenario.current.quiescent && currentSnapshot.execution.state === 'paused');
+  const transitions = Number(await page.locator('#timeline').inputValue());
+  assert.ok(transitions > 1, 'admission includes its intermediate VM transitions');
+  assert.equal(await page.locator('#command-status').innerText(), `${transitions} transitions · authored action reached its effect`);
+  await page.locator('[data-command="next-scenario-action"]').click();
+  await page.waitForFunction(previous => Number(currentSnapshot.timeline.boundary) === previous + 1 && commandOrigin === null, transitions);
   assert.equal(await page.locator('#command-status').innerText(), '1 transition · authored action reached its effect');
   await finish(page);
-  for (const transition of [21, 22]) {
+  for (const transition of await bothRunsWaiting(page)) {
     await page.locator('#timeline').fill(String(transition));
     await page.locator('#timeline').dispatchEvent('change');
     await page.locator('#timeline-position').filter({ hasText: new RegExp(`transition ${transition}$`) }).waitFor();
@@ -327,13 +404,13 @@ test('explanatory hovers expose types, capacity, command disposition, queued dat
   assert.match(await page.locator('#graph-tooltip').innerText(), /Commands:.*Loop.next.*Fuel: 2/s);
   await page.locator('.graph-node-name').filter({ hasText: /^model$/ }).focus();
   assert.match(await page.locator('#graph-tooltip').innerText(), /connector.*rastok\/process@2.*open instances/);
-  await seek(page, 21);
+  await seek(page, (await bothRunsWaiting(page))[0]);
   await page.locator('.graph-loop-dial').focus();
   assert.match(await page.locator('#graph-tooltip').innerText(), /applications remaining.*waiting until.*exhaustion: failed/s);
   await page.locator('#future summary').click();
   assert.match(await page.locator('#future-items').innerText(), /l:admit/);
   assert.doesNotMatch(await page.locator('#future-items').innerText(), /l:timeout/, 'a closed Call has no future timeout');
-  await capture(page, 'B21-waiting');
+  await capture(page, 'both-runs-waiting');
 });
 
 test('Operator decisions highlight the exact authored arm and ordered predicate results', { timeout: 60000 }, async t => {
@@ -385,15 +462,17 @@ test('scenario actions select their retained transition and all navigation is ke
   assert.match(await page.locator('#timeline-position').innerText(), /^LIVE · Main · transition 0$/);
   assert.match(await page.locator('#command-status').innerText(), /Paused before admission/);
   await page.keyboard.press('a');
-  await page.locator('#timeline-position').filter({ hasText: /^LIVE · Main · transition 1$/ }).waitFor();
-  assert.equal(await page.locator('#command-status').innerText(), '1 transition · authored action reached its effect');
+  await page.waitForFunction(() => commandOrigin === null && currentSnapshot.scenario.current.quiescent && currentSnapshot.execution.state === 'paused');
+  const actionHead = Number(await page.locator('#timeline').inputValue());
+  assert.ok(actionHead > 1, 'Next action retains its intermediate VM transitions');
+  assert.equal(await page.locator('#command-status').innerText(), `${actionHead} transitions · authored action reached its effect`);
   await capture(page, 'fresh-shortcut-a');
   await page.keyboard.press('ArrowLeft');
-  await page.locator('#timeline-position').filter({ hasText: /transition 0$/ }).waitFor();
+  await page.locator('#timeline-position').filter({ hasText: new RegExp(`transition ${actionHead - 1}$`) }).waitFor();
   await page.keyboard.press('ArrowRight');
-  await page.locator('#timeline-position').filter({ hasText: /transition 1$/ }).waitFor();
+  await page.locator('#timeline-position').filter({ hasText: new RegExp(`transition ${actionHead}$`) }).waitFor();
   await page.keyboard.press('n');
-  await page.locator('#timeline-position').filter({ hasText: /^LIVE · Main · transition 2$/ }).waitFor();
+  await page.locator('#timeline-position').filter({ hasText: new RegExp(`^LIVE · Main · transition ${actionHead + 1}$`) }).waitFor();
   await capture(page, 'fresh-shortcut-n');
   await finish(page);
   await page.locator('#scenario-definition').press('Enter');
@@ -448,9 +527,10 @@ test('the explanatory path is reachable with Tab and keyboard alone', { timeout:
   };
   assert.match(await page.locator('#command-status').innerText(), /Paused before admission/);
   await page.keyboard.press('a');
-  await at(1);
+  await page.waitForFunction(() => commandOrigin === null && currentSnapshot.scenario.current.quiescent && currentSnapshot.execution.state === 'paused');
+  const actionHead = Number(await page.locator('#timeline').inputValue());
   await page.keyboard.press('n');
-  await at(2);
+  await at(actionHead + 1);
   await tabTo(page.locator('[data-command="run-to-completion"]'));
   await page.keyboard.press('Enter');
   await page.locator('#execution-state').filter({ hasText: /^completed$/ }).waitFor();
@@ -469,7 +549,7 @@ test('the explanatory path is reachable with Tab and keyboard alone', { timeout:
     await tabTo(target);
     assert.match(await page.locator('#graph-tooltip').innerText(), explanation);
   }
-  await moveTo(21);
+  await moveTo((await bothRunsWaiting(page))[0]);
   await tabTo(page.locator('.graph-loop-dial'));
   assert.match(await page.locator('#graph-tooltip').innerText(), /waiting until/);
   assert.match(await page.locator('.graph-loop-dial').evaluate(element => element.firstChild.textContent), /⟳ 1\/2.*⏱/);
@@ -580,7 +660,9 @@ test("Loop dials follow historical admissions and instance selection without syn
     seen.add(value.match(/^⟳ (\d+)/)[1]);
     if (value.includes("·2") && !value.startsWith("⟳ 0")) multiple = boundary;
     if (value.includes("⏱")) {
-      assert.match(value, /^⟳ 1/, "an armed delay has not admitted application 2");
+      const waitingRuns = await page.evaluate(() => currentSnapshot.loop_runs.filter(run => run.active && run.waiting));
+      assert.ok(waitingRuns.length > 0);
+      assert.ok(waitingRuns.every(run => Number(run.application) === 1), "an armed run has not admitted its second application; another run may have");
       waiting = boundary;
     }
     assert.equal(await page.locator('[data-port="Loop.expired"]').count(), 0);
@@ -798,9 +880,19 @@ test("the complete tour stays inspectable by mouse and keyboard", { timeout: 600
   const scope = await page.locator(".graph-scope.root .graph-scope-body").boundingBox();
   assert.ok(scope.x >= graph.x && scope.x + scope.width <= graph.x + graph.width);
   assert.ok(scope.y >= graph.y && scope.y + scope.height <= graph.y + graph.height);
+  const graphPointAtCentre = () => page.locator('.graph-svg').evaluate(svg => {
+    const canvas = svg.closest('.graph-canvas').getBoundingClientRect();
+    const point = new DOMPoint(canvas.x + canvas.width / 2, canvas.y + canvas.height / 2).matrixTransform(svg.getScreenCTM().inverse());
+    return { x: point.x, y: point.y };
+  });
+  const centre = await graphPointAtCentre();
   await page.getByRole("button", { name: "Zoom in", exact: true }).click();
   assert.equal(await page.locator(".graph-zoom-value").innerText(), "120%");
+  assert.match(await page.locator('.graph-zoom-value').getAttribute('title'), /relative to Fit graph.*canvas centre/);
+  const zoomed = await graphPointAtCentre();
+  assert.ok(Math.abs(centre.x - zoomed.x) < 0.1 && Math.abs(centre.y - zoomed.y) < 0.1, 'toolbar zoom keeps the canvas centre fixed in graph coordinates');
   await page.getByRole("button", { name: "Fit graph", exact: true }).click();
+  assert.equal(await page.locator('.graph-zoom-value').innerText(), '100%');
   const splitter = page.locator("#workspace-splitter");
   await splitter.focus();
   const width = Number(await splitter.getAttribute("aria-valuenow"));

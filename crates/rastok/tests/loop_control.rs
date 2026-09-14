@@ -7,6 +7,43 @@ use rastok::contract::ContractCatalog;
 use rastok::journal::Record;
 use rastok::plan::GraphVersion;
 
+#[test]
+fn advancing_time_keeps_each_ready_transaction_individually_inspectable() {
+    let compilation = compile_one(SINGLETON_LOOP_LAB).expect("the delayed Loop checks");
+    let lab = &compilation.labs[0];
+    let simulation = &lab.simulations[0];
+    let expected = rastok::lab::run(&compilation.plan, GraphVersion(1), lab);
+    let mut session = rastok::lab::ScenarioSession::try_new(
+        &compilation.plan,
+        GraphVersion(1),
+        &simulation.name,
+        &simulation.mocks,
+        &simulation.scenarios[0],
+        None,
+    )
+    .expect("the Lab binds");
+    let mut transitions = 0;
+    while !session.is_complete() {
+        let before = session.journal().records().len();
+        if session.is_quiescent() {
+            session.next_action().expect("the authored action starts");
+        } else {
+            session.step_transaction().expect("one transition executes");
+        }
+        let transactions = session.journal().records()[before..]
+            .iter()
+            .filter(|record| matches!(record, Record::Transaction(_)))
+            .count();
+        assert!(
+            transactions <= 1,
+            "one step hid {transactions} transactions"
+        );
+        transitions += 1;
+        assert!(transitions < 200, "the finite scenario must make progress");
+    }
+    assert_eq!(session.finish(), expected[0]);
+}
+
 fn compile_one(source: &str) -> Result<rastok::compiler::Compilation, rastok::diagnostics::Bag> {
     compile(
         &[source],

@@ -46,6 +46,8 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
+mod advance;
+pub use advance::TimeAdvance;
 mod call_completion;
 mod closing;
 mod graph_loop;
@@ -2719,71 +2721,8 @@ impl<'plan> Vm<'plan> {
         bindings: &mut B,
         target: i64,
     ) -> Result<(), VmError> {
-        // Ready work at the current logical instant precedes any future
-        // expiry. In particular, a just-created instance commits `l:start`
-        // before its first idle deadline can close it.
-        self.drain_with_bindings(journal, bindings)?;
-        while let Some((key, payload)) = self.peek_due(target) {
-            self.now = self.now.max(key.0);
-            let mut polled_at_settlement = false;
-            if matches!(
-                &payload,
-                DatedPayload::InstanceClosing {
-                    deadline: ClosingDeadline::Settlement,
-                    ..
-                }
-            ) {
-                let report = self.poll_outbound_driver(journal, bindings)?;
-                self.buffered_pump.append(report);
-                self.drain_with_bindings(journal, bindings)?;
-                polled_at_settlement = true;
-            }
-            let mut saw_drain = matches!(
-                &payload,
-                DatedPayload::InstanceClosing {
-                    deadline: ClosingDeadline::Drain,
-                    ..
-                }
-            );
-            // Every expiry OF THIS INSTANT fires before the machine
-            // drains: the drain happens between jumps of the clock,
-            // never between simultaneous events — a same-instant
-            // budget must not see the world advanced by its sibling.
-            // A failed expiry stays armed: reserve, resolve, ack.
-            self.expire(journal, bindings, payload)?;
-            self.scheduler.ack(key);
-            while let Some((sibling_key, sibling)) = self.peek_due(key.0) {
-                if !polled_at_settlement
-                    && matches!(
-                        &sibling,
-                        DatedPayload::InstanceClosing {
-                            deadline: ClosingDeadline::Settlement,
-                            ..
-                        }
-                    )
-                {
-                    let report = self.poll_outbound_driver(journal, bindings)?;
-                    self.buffered_pump.append(report);
-                    self.drain_with_bindings(journal, bindings)?;
-                    polled_at_settlement = true;
-                }
-                saw_drain |= matches!(
-                    &sibling,
-                    DatedPayload::InstanceClosing {
-                        deadline: ClosingDeadline::Drain,
-                        ..
-                    }
-                );
-                self.expire(journal, bindings, sibling)?;
-                self.scheduler.ack(sibling_key);
-            }
-            if saw_drain {
-                let report = self.poll_outbound_driver(journal, bindings)?;
-                self.buffered_pump.append(report);
-            }
-            self.drain_with_bindings(journal, bindings)?;
-        }
-        self.now = self.now.max(target);
+        let mut advance = TimeAdvance::new(target);
+        while advance.step(self, journal, bindings)? {}
         Ok(())
     }
 

@@ -56,6 +56,8 @@ Every selection starts paused at B0, before admission. Controls are:
   previous action is quiescent (`run one authored action to its effect`).
   The status reports the number of retained transitions advanced by this command.
   It reads `1 transition` for one, `n transitions` otherwise.
+  Intermediate states are retained before the controller pauses at quiescence;
+  executing an `advance` does not compress its ready transactions into one frame.
 - **Run to expect**: stop before the next assertion.
 - **Replay / Pause**: present the same retained transitions at one or four events
   per second; Pause stops buffered playback even after the engine completes.
@@ -95,6 +97,9 @@ committed and whether retry is legal. An explicit pause requested while a Call
 is open may retain its terminal boundary before pausing; a manually stepped
 Call stays paused and later authored `advance` remains reachable.
 An already paused simulation does not poll its scripted world spontaneously.
+An in-progress logical-time advance can pause between its real transitions,
+including while a scripted Call is open. Continuing resumes the same time
+sweep; viewing the pause does not poll or advance it.
 Discovering that no VM work is ready is not an extra user step: the same Step
 request advances to the next authored action without publishing an empty frame.
 Its status says `no VM work ready · advanced to A4` (using the actual action).
@@ -127,6 +132,9 @@ boundary ports come from the plan. The UI never infers execution from geometry.
 - Hollow square pins are inputs; filled square pins are outputs. Graph pins
   belong to their real boundary. Disposed outputs remain local ports: neither
   `nothing` nor an unused output creates a root-level sink or a fake pipe.
+  Clicking an App output pin, or pressing Enter while it is focused, inspects
+  its latest retained output. This references the original emission, not an
+  extra observation or synthetic emission at the App boundary.
 - Only physical edges are pipes. `Loop.next`, `Loop.again` and `Loop.done`
   are listed as manager commands in definitions and source-port details,
   never rendered as ports or back-edges. A command-only disposition labels
@@ -172,6 +180,14 @@ Envelope / Mailbox / Definition / Instances / History / Assertion / Compare tabs
 Tabs wrap without overlapping their panel. Instances includes
 exchanges, injection history and the public CostReport. The canvas pans/zooms;
 a splitter resizes the inspector. Initial fit uses the available space.
+Zoom percentages are relative to Fit graph (100%), not an absolute SVG scale.
+Toolbar zoom anchors at the canvas centre; wheel zoom anchors at the pointer.
+The label exposes those conventions in its tooltip. Injection history names
+the instances in the admission's sealed routes, never a guessed DATA field.
+Observed-envelope rows initially fold META and DATA; opening a cell retains
+the same structured inspector and redaction, without a full-height tree per row.
+Key columns reserve fourteen monospace characters so ordinary META names such
+as `graph_version` do not split across lines at the default inspector width.
 Graph text stays at interface text size. Automatic fit has a readability floor;
 larger drawings remain pannable instead of shrinking their boxes below the space
 reserved for text. Separate vertical scope bands reuse horizontal rank columns.
@@ -324,7 +340,7 @@ Every item has a browser or projection regression; browser tests are in
 | --- | --- |
 | Transports, transition vocabulary, first contact, action count | `transitions have explicit transport names…` |
 | Folded ids across five examples and three viewing states | `echo/jsonl/gauge/countdown/keyed-retry: live, history and replay…` |
-| Dial and waiting at B21–B22, stable selected-prefix values | `transitions have explicit transport names…`; `Loop dials follow historical admissions…` |
+| Dial and delayed recurrences, stable selected-prefix values | `transitions have explicit transport names…`; `Loop dials follow historical admissions…`. The original B21–B22 positions predate fine-grained advance; tests now select the actual waiting folds rather than accidental ordinals |
 | Every graph hover, mailbox head preview by pointer and keyboard without navigation, exact future timeout and cancellation | `explanatory hovers expose types…` |
 | Readable compound layout at 1352×760 and narrow width; text/curve clearance; HISTORY clears zoom; four-digit mailbox badges | `the flagship keeps readable graph text…`; `vertically stacked scopes reuse horizontal ranks…`; `a four-digit mailbox count fits…` |
 | Closed/open decisions, selected route case, prestate and joined inputs | `Operator decisions highlight…`; `open_match_explains_only_evaluated_predicates_using_prestate`; `join_decisions_use_named_inputs_and_the_retained_completing_port` |
@@ -333,6 +349,9 @@ Every item has a browser or projection regression; browser tests are in
 | Assertion diff, expect-nothing offender and redaction | `failed expect shows…`; `failure_explanation_uses_the_exact_assertion_window_and_field`; `classified_predicates_and_assertion_values_are_not_explanation_channels` |
 | Aligned comparisons, separate read-only sessions | `comparison aligns two keyed Loop instances…` |
 | Resident Process gateway, no child in simulation, correct scripted reply counts in LIVE/HISTORY/REPLAY | `the resident gateway explains independent Process Sessions…`; `resident_gateway_steps_deliver_opening_before_frames_like_the_batch_lab` compares the complete batch/step trace |
+| Individually inspectable advance transactions, original App output, folded history cells | `an authored advance retains each transaction…`; Rust `advancing_time_keeps_each_ready_transaction_individually_inspectable` compares the complete batch/step result |
+| Admission keys from retained routes, including a misleading `tenant` field | `injection history names the retained routing key…` |
+| Toolbar zoom keeps the canvas centre fixed, Fit is 100%, splitter remains usable | `the complete tour stays inspectable by mouse and keyboard` |
 
 The browser harness checks both uncaught exceptions and console errors on every
 page. SVG sizing uses the CSSOM rather than a blocked inline style attribute;
@@ -351,12 +370,13 @@ UI state adds no plan field, semantic contribution or causal record. Page
 capabilities, controller identity, session/boundary counters, view revisions
 and playback speed are physical.
 
-Known qualification gap: an authored `advance` currently invokes `vm.advance`
-as one action and can retain several VM transactions/lifecycle facts inside
-one B frame. This does not yet satisfy the individually stepable VM/lifecycle
-intent of section 2. Equal Next transition/Finish journals do not close that gap;
-intermediate frames must be retained by the controller/Lab seam, never invented
-by the renderer. See the [independent audit](../architecture/m1.9-fable-ux-audit.md).
+The authored-`advance` gap from the [independent audit](../architecture/m1.9-fable-ux-audit.md)
+is corrected at the controller/Lab seam. A caller-owned time-sweep cursor
+retains real intermediate states; batch `Vm::advance` drives the same cursor
+to completion. This is neither a new timer queue nor a journal authority.
+Same-instant expiry ordering and settlement polling remain unchanged. The
+regressions check both individual transaction visibility and identical final
+canonical journals. The independent visual retest remains a separate gate.
 
 Deferred: real-I/O experiments and harness Connectors, live-run debugging,
 branch authoring, source hot reload, input/state editing, breakpoints,

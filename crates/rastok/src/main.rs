@@ -900,6 +900,7 @@ fn simulate_with_ui(
 
     let mut step_requested = false;
     let mut until_assertion = false;
+    let mut until_action = false;
     let mut close_requested = false;
     let mut reported = false;
     let mut any_failed = false;
@@ -917,6 +918,7 @@ fn simulate_with_ui(
                 {
                     state = ExecutionState::Running;
                     until_assertion = false;
+                    until_action = false;
                     step_requested = false;
                     fault = None;
                     dirty = true;
@@ -926,17 +928,21 @@ fn simulate_with_ui(
                 {
                     state = ExecutionState::Running;
                     until_assertion = true;
+                    until_action = false;
                     step_requested = false;
                     fault = None;
                     dirty = true;
                 }
                 UiCommand::Pause if state == ExecutionState::Running => {
-                    state = if session.vm().awaiting_outbound_calls() == 0 {
+                    state = if session.is_advancing_time()
+                        || session.vm().awaiting_outbound_calls() == 0
+                    {
                         ExecutionState::Paused
                     } else {
                         ExecutionState::PauseRequested
                     };
                     until_assertion = false;
+                    until_action = false;
                     dirty = true;
                 }
                 UiCommand::Step if state == ExecutionState::Paused && !session.is_quiescent() => {
@@ -961,6 +967,10 @@ fn simulate_with_ui(
                         Ok(Some(action)) => {
                             fault = None;
                             reported = false;
+                            if command == UiCommand::NextScenarioAction && !session.is_quiescent() {
+                                until_action = true;
+                                state = ExecutionState::Running;
+                            }
                             boundary_ordinal = boundary_ordinal.saturating_add(1);
                             activity = Some(ActivityView::scenario_action(
                                 scenario_action_name(action),
@@ -1003,6 +1013,9 @@ fn simulate_with_ui(
                             reported = false;
                             any_failed = false;
                             golden_failures.clear();
+                            until_action = false;
+                            until_assertion = false;
+                            step_requested = false;
                         }
                         Err(error) => fault = Some(boundary_fault(error)),
                     }
@@ -1025,6 +1038,9 @@ fn simulate_with_ui(
                             reported = false;
                             any_failed = false;
                             golden_failures.clear();
+                            until_action = false;
+                            until_assertion = false;
+                            step_requested = false;
                         }
                         Err(error) => {
                             fault = Some(FaultView {
@@ -1158,8 +1174,12 @@ fn simulate_with_ui(
                 state = ExecutionState::Paused;
                 dirty = true;
             }
-        } else if state == ExecutionState::Running {
-            if until_assertion
+        } else if state == ExecutionState::Running && !activity_decided {
+            if until_action && session.is_quiescent() {
+                state = ExecutionState::Paused;
+                until_action = false;
+                dirty = true;
+            } else if until_assertion
                 && session.is_quiescent()
                 && session.next_action_kind() == Some(lab::ScenarioActionKind::Expect)
             {

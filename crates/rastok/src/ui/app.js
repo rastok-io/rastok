@@ -105,6 +105,11 @@ async function refreshSnapshot() {
   timelineIndex = await timelineResponse.json();
   if (pendingCommandRevision !== null && liveSnapshot.revision > pendingCommandRevision) {
     pendingCommandRevision = null;
+  }
+  if (commandOrigin && pendingCommandRevision === null
+      && (commandOrigin.command !== "next-scenario-action"
+        || liveSnapshot.scenario?.current?.quiescent
+        || liveSnapshot.execution?.state !== "running")) {
     const transitions = Number(liveSnapshot.timeline.boundary) - Number(commandOrigin?.boundary || 0);
     const action = Number(liveSnapshot.scenario?.current?.next_action_index || 0);
     const advancedAction = action > Number(commandOrigin?.action || 0);
@@ -706,7 +711,11 @@ function clampGraphZoom(value) {
 
 function applyGraphViewport(layer, label) {
   layer.style.transform = `matrix(${graphViewport.scale}, 0, 0, ${graphViewport.scale}, ${graphViewport.x}, ${graphViewport.y})`;
-  if (label) label.textContent = `${Math.round(graphViewport.scale * 100)}%`;
+  if (label) {
+    label.textContent = `${Math.round(graphViewport.scale * 100)}%`;
+    label.title = "Zoom relative to Fit graph (100%); buttons zoom around the canvas centre, wheel around the pointer";
+    label.setAttribute("aria-label", `${label.textContent} of fitted graph`);
+  }
   requestAnimationFrame(() => graphTextSync?.());
 }
 
@@ -1000,6 +1009,14 @@ function renderTopology(topology, animateBoundary = false) {
       label.textContent = port.display_label || port.name;
       pin.dataset.port = port.name;
       attachTooltip(pin, portDescription(topology, owner, port));
+      const inspectPort = event => {
+        const outputs = owner.path ? [] : (currentSnapshot?.history?.outputs || []);
+        const observed = [...(currentSnapshot?.history?.deliveries || []), ...outputs]
+          .findLast(delivery => (delivery.node || "") === (owner.path || "") && delivery.port === port.name);
+        if (observed) { event.stopPropagation(); selectEnvelope(observed.envelope_id); }
+      };
+      pin.addEventListener("click", inspectPort);
+      pin.addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); inspectPort(event); } });
       group.append(pin, label);
     }
     scopeLayer.append(group);
@@ -1316,16 +1333,6 @@ function renderTopology(topology, animateBoundary = false) {
   if (focusKey) target.querySelector(`[data-focus-key="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
 }
 
-function visibleKeyValue(value) {
-  if (value === null || typeof value !== "object") return null;
-  if (!Array.isArray(value) && typeof value.tenant === "string") return value.tenant;
-  for (const child of Object.values(value)) {
-    const found = visibleKeyValue(child);
-    if (found) return found;
-  }
-  return null;
-}
-
 function selectTopologyItem(id) {
   scenarioDefinitionActive = false;
   selectedMailboxRoute = null;
@@ -1423,8 +1430,9 @@ function envelopePanel(snapshot) {
   const nextInjection = snapshot?.scenario?.current?.next_injection;
   const deliveries = snapshot?.history?.deliveries || [];
   const sources = snapshot?.history?.sources || [];
+  const outputs = snapshot?.history?.outputs || [];
   const delivery = selectedEnvelopeId
-    ? deliveries.find(row => row.envelope_id === selectedEnvelopeId) || sources.find(row => row.envelope_id === selectedEnvelopeId)
+    ? deliveries.find(row => row.envelope_id === selectedEnvelopeId) || sources.find(row => row.envelope_id === selectedEnvelopeId) || outputs.find(row => row.envelope_id === selectedEnvelopeId)
     : deliveries.at(-1) || sources.at(-1);
   const heading = document.createElement("div");
   heading.className = "envelope-heading";
@@ -1925,7 +1933,12 @@ function historyTable(label, rows, columns, open) {
     for (const column of columns) {
       const cell = document.createElement("td");
       if (["meta", "data"].includes(column)) {
-        appendDataTree(cell, row[column]);
+        const payload = document.createElement("details");
+        const summary = document.createElement("summary");
+        summary.textContent = column === "data" ? row.data?.kind || "DATA" : "META";
+        payload.append(summary);
+        appendDataTree(payload, row[column]);
+        cell.append(payload);
       } else if (column === "record_index") {
         const boundary = boundaryForRecord(row[column]);
         appendValue(cell, boundary === null ? `record ${row[column]}` : `record ${row[column]} · transition ${boundary}`);
@@ -1981,7 +1994,7 @@ function renderInjections(snapshot, selection) {
   const session = Number(snapshot?.timeline?.session || 0);
   const table = document.createElement("table");
   const header = document.createElement("tr");
-  for (const label of ["Key", "Logical time", "Transition", "Session"]) {
+  for (const label of ["Routed instance", "Logical time", "Transition", "Session"]) {
     const cell = document.createElement("th");
     cell.textContent = label;
     header.append(cell);
@@ -2011,7 +2024,8 @@ function renderInjections(snapshot, selection) {
     const logical = delivery?.meta?.sys?.logical_time_ns
       ?? delivery?.meta?.sys?.timestamp_ns
       ?? null;
-    const values = [visibleKeyValue(delivery.data) || String(origin).slice(0, 8), logical === null ? "…" : formatLogicalTime(logical), boundary === null ? "—" : String(boundary), sessionName(session)];
+    const source = (snapshot?.history?.sources || []).find(source => source.envelope_id === origin);
+    const values = [source?.instance_labels?.join(" · ") || "no spatial target", logical === null ? "…" : formatLogicalTime(logical), boundary === null ? "—" : String(boundary), sessionName(session)];
     const cells = [];
     for (const value of values) {
       const cell = document.createElement("td");
@@ -2384,6 +2398,7 @@ for (const button of document.querySelectorAll("button[data-command]")) {
     } catch (error) {
       if (command === "resume") bufferedPlayback = false;
       pendingCommandRevision = null;
+      commandOrigin = null;
       updateControls();
       setCommandStatus(`UI command refused: ${error.message}`);
     }

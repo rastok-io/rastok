@@ -27,7 +27,7 @@ use crate::connectors::{
 use crate::envelope::{Data, Envelope, Namespace, Value, WriteTarget};
 use crate::journal::{MemJournal, Record};
 use crate::plan::{GraphVersion, ValidatedExecutionPlan};
-use crate::runtime::vm::{Observed, Vm};
+use crate::runtime::vm::{Observed, TimeAdvance, Vm};
 use crate::{expr, node, runtime};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -157,6 +157,7 @@ pub struct ScenarioSession<'plan, 'scenario> {
     output_window_start: usize,
     record_window_start: usize,
     next_action: usize,
+    advance: Option<TimeAdvance>,
     quiescent: bool,
     last_action: Option<ScenarioActionKind>,
     next_injection_override: Option<Draft>,
@@ -220,6 +221,7 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
             output_window_start: 0,
             record_window_start: 0,
             next_action: 0,
+            advance: None,
             quiescent: true,
             last_action: None,
             next_injection_override: None,
@@ -413,6 +415,12 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
         &self.journal
     }
 
+    /// Whether an authored clock advance is suspended between its transitions.
+    #[must_use]
+    pub const fn is_advancing_time(&self) -> bool {
+        self.advance.is_some()
+    }
+
     /// Applies one authored action without draining subsequent VM work.
     ///
     /// # Errors
@@ -489,10 +497,7 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
                 self.output_window_start = self.vm.outputs().len();
                 self.record_window_start = self.journal.records().len();
                 let target = self.vm.now().saturating_add(*nanos);
-                if let Err(error) = self.vm.advance(&mut self.journal, &mut self.driver, target) {
-                    self.failures.push(format!("the advance faulted: {error}"));
-                }
-                self.collect_driver_faults();
+                self.advance = Some(TimeAdvance::new(target));
                 self.quiescent = false;
                 ScenarioActionKind::Advance
             }
@@ -523,6 +528,22 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
     ///
     /// A faulting transaction commits nothing and remains reserved for retry.
     pub fn step_transaction(&mut self) -> Result<bool, ScenarioStepError> {
+        if let Some(advance) = &mut self.advance {
+            let progressed = advance
+                .step(&mut self.vm, &mut self.journal, &mut self.driver)
+                .map_err(|error| {
+                    // A deadline can retain a closure before a Driver refuses.
+                    // Do not advertise transaction rollback for this wider seam.
+                    ScenarioStepError::Boundary(format!("the advance faulted: {error}"))
+                })?;
+            if advance.is_complete() {
+                self.advance = None;
+            }
+            self.collect_driver_faults();
+            if progressed {
+                return Ok(true);
+            }
+        }
         let ran = self
             .vm
             .step_with_bindings(&mut self.journal, &mut self.driver)
@@ -544,6 +565,9 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
     /// This is the safe-pause seam: a Call may acquire a retained completion,
     /// but its handler cannot run until an explicit transaction step.
     pub fn poll_world(&mut self) -> Result<bool, String> {
+        if self.advance.is_some() {
+            return Ok(false);
+        }
         let progressed = self.pump_driver()?;
         self.quiescent = !progressed && !self.vm.has_ready_transaction();
         Ok(progressed)
@@ -551,6 +575,18 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
 
     /// Runs ready work to the same boundary used by the historical batch Lab.
     pub fn settle_current_action(&mut self) {
+        if let Some(mut advance) = self.advance.take() {
+            loop {
+                match advance.step(&mut self.vm, &mut self.journal, &mut self.driver) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(error) => {
+                        self.failures.push(format!("the advance faulted: {error}"));
+                        break;
+                    }
+                }
+            }
+        }
         settle(
             &mut self.vm,
             &mut self.journal,
