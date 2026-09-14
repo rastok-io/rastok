@@ -5,6 +5,40 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-09-15-2 — Stop a waiting Retry without publishing its held failure
+
+**Approved refactor target; no executable v18 change.** Yoann chose to stop
+a Retry during backoff without publishing a failure already held by its
+manager. Its original Connector emissions and explicit manager disposition
+remain retained for inspection and accounting. Closing does not release,
+re-emit or retroactively route those envelopes to the graph.
+
+A held batch not yet consumed is consumed once for `Close(Stopped)`, without
+Advance. An already consumed/advanced attempt closes without another receipt;
+its original due obligation becomes inert. No next attempt is admitted and
+no operation/timer migrates to the owner's successor generation. This is
+exact-instance closure, not a stop of every Connector with the same name.
+An explicit stop is not attempt-bound exhaustion, which still publishes the
+last failure unchanged.
+
+The winning closure and Closing prefix, not a transient queue entry, determine
+the case. A selected non-final closure retained before Closing keeps its
+manager disposition even if its Connector transaction had not yet committed.
+The existing settlement rules still apply to a Call that was open when
+Closing began; already committed final publication is not retracted.
+
+[C1 algebra](../architecture/retry-c1-algebra.md),
+[crash/closure traces](../architecture/retry-c1-traces.md) and the
+[identity inventory](../architecture/retry-c1-identity.md) record the design
+handoff. They propose one v19 package / v3 recording cutover, with Loop r2
+meaning preserved. C2–C4 still owe implementation, hostile validation and
+qualification. These documents do not allocate executable support or bless
+new bytes.
+
+Rejected: publishing the held failure as a new final result on stop; losing
+its accounting evidence; inventing a RetryExpired or RetryStopped port/case;
+using restart or a late receipt to renew the backoff.
+
 ## D-2026-09-15-1 — Keep idempotence in the original validated plan
 
 **Approved refactor target; not an executable v18 amendment.** Yoann selected

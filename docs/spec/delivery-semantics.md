@@ -228,9 +228,9 @@ only while no request byte can have become visible. Once visibility is
 possible, an error closes through the ordinary typed result; automatic recall
 would be an ambiguous second external operation.
 
-One call = exactly one closure. The recall rows of §4.4 need no new closure
-kind — a recall is *the same call* re-attempted, and its reply (or timeout)
-closes it through the normal rule.
+One Call has exactly one closure. Recovery starts no existing open Call again
+(§4.4). Repetition under the approved Retry target is a distinct admitted
+attempt with a new CallRef; it does not give the old Call another closure.
 
 Bounded instance Closing uses the same close-once operation, not a parallel
 record state. At its settlement deadline an OUTBOUND still `open` becomes
@@ -249,11 +249,18 @@ loud error, never a silent divergence (§2's cousin).
 
 ### 4.3 Retry with the byte-same key — and the key-stability rule
 
-On an unknown partner outcome, **retry with the re-derived key** : replaying
-the same transaction re-evaluates the same Rastok expression on the same
-envelope → **the key is byte-identical for free**. At-least-once against the
-world ; the partner's dedup makes it effectively-once when the partner
-cooperates.
+> The key examples below include future Saga classes, not executable M1
+> effect admission. They do not authorize recovery to re-run a transaction or
+> a Call. Under the approved [Retry target](../architecture/retry-c1-algebra.md),
+> the prepared operation, resolved settings and key are retained once;
+> invocation expressions are not re-evaluated between attempts. This target
+> is not implemented in v18.
+
+On an unknown partner outcome, repeating an operation with the same business
+key is safe only when the partner actually honors the required guarantee.
+Neither a key's presence nor deterministic expression evaluation proves that
+remote behavior. A Retry uses the retained key unchanged, after an explicit
+new admission. Replay itself starts no effect and replays no producer code.
 
 **The key names the business operation, not the attempt** (the
 Stripe-semantics rule) :
@@ -296,14 +303,23 @@ At restart, `open` outbound records without closure = the set of unknowns :
 
 | Situation | Resolution |
 |---|---|
-| emission delivered, **no** outbound record | the call never left → call now. Trivial. |
-| open + `effect = idempotent` | recall, blindly (safe by declaration) |
-| open + `idempotency_key` present | recall with the **byte-same key** (§4.3) |
-| open + `compensable`, **no key** | do NOT guess: emit **`OutcomeUnknown`** on the Connector contract's typed call-exit port (normally `exit`; trigger **`l:recover`**, parent = request) and close the record as `abandoned` — no eternal re-triage, no duplicate case. The graph/saga decides: verify, compensate, or park; a deliberate retry is a NEW call. |
+| emission delivered, **no** outbound record | no effect started; an explicit continuation may open/start the Call after ordinary admission checks. Read-only replay does not. |
+| open, no closure, regardless of effect declaration or key | reconstruct the unresolved Call; never automatically recall it. Resume uses its retained timeout or the explicit bounded-Closing settlement; replay only inspects it. |
+| retained timeout wins | close exactly once as Timeout; emit the Contract's TimeoutExpired terminal through the ordinary completion transaction |
+| bounded settlement exhausts without a confirmed outcome | emit **OutcomeUnknown** on the Contract terminal (normally exit; trigger **l:recover**, parent = request) and close as abandoned; no invented success or silent recall |
+| closure already retained | reconstruct its completion/publication obligation; never restart that effect |
+
+**15 September contact correction.** The previous table proposed blind recall
+for idempotence or a present key. That was not the implemented
+`Dispatcher::resume` contract and conflicts with D-2026-09-15-1. It is superseded
+here, not admitted as a new recovery capability. Under the future Retry policy,
+only a selected *closed* terminal can authorize a distinct later attempt;
+that attempt is not a second start of the original Call. Durable storage and
+Saga triage remain separate gates.
 
 The same empty case is the last resort of explicit bounded Closing when
 cancellation produced no confirmed terminal outcome before `settle_for`.
-Closing does not run the recovery recall table: it first cancels, allows the
+Closing does not recall: it first cancels, allows the
 ordinary response race to settle, then abandons only what remains open. The
 OUTBOUND state and `l:recover` envelope are identical facts in both paths, so
 replay and compensation need no second unknown-outcome protocol.

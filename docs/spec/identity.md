@@ -1,5 +1,10 @@
 # Identity and canonical form
 
+> **Next refactor, not current encoding:** the 15 September
+> [C1 inventory](../architecture/retry-c1-identity.md) proposes the single
+> Retry/idempotence package v19 and recording v3 cutover. Current readers,
+> writers, tags and goldens below remain v18 until C2 lands and is qualified.
+
 > **Status (2026-09-05): normative.** This document fixes the
 > **semantic identity** of a graph, the
 > **allocation of `graph_version`**, and the **canonical byte form** of

@@ -7,6 +7,11 @@ order and acceptance evidence still required, including the pre-C1 review
 amendments. Current packages remain v18.
 The original-plan idempotence authority was settled on 15 September by
 [D-2026-09-15-1](../spec/decisions.md#d-2026-09-15-1--keep-idempotence-in-the-original-validated-plan).
+The C1 design handoff now consists of the [operation algebra](retry-c1-algebra.md),
+[reference traces](retry-c1-traces.md) and [identity inventory](retry-c1-identity.md).
+Closing during backoff is settled by
+[D-2026-09-15-2](../spec/decisions.md#d-2026-09-15-2--stop-a-waiting-retry-without-publishing-its-held-failure).
+These are design artifacts, not executable Retry qualification.
 
 > A Loop advances a state; a Retry repeats an operation. The first proves
 > finite iteration; the second proves safe repetition.
@@ -188,6 +193,10 @@ Closing wins over a due retry; nothing migrates into the owner's successor
 generation. Quiescence is established from retained obligations, not inferred
 from wall-clock silence. Replay/recovery reconstructs the manager without
 calling an old Driver effect; idempotence alone is not an execution command.
+As settled in D-2026-09-15-2, stopping during backoff consumes any pending
+manager batch for Stopped and publishes no new graph output. An already
+consumed batch is not consumed again. The original failure remains retained;
+neither replay nor Closing turns its manager disposition into a public route.
 
 ### 4.1 Delay origin and retained time
 
@@ -347,7 +356,7 @@ inventoried individually. No existing id may acquire another meaning.
 | Slice | Required result | Status |
 |---|---|---|
 | C0 — contract and contact | approved semantic distinction, output publication, audit and migration inventory | recorded here; exact encoding still unallocated |
-| C1 — operation and recurrence algebra | pinned operation, retained attempt disposition/consumption, closure-based deadlines, exact Session opening rule, plan-owned guarantee and Intent field removal, shared fold, identity register and crash traces | not started; option B settled by D-2026-09-15-1; remaining representation details precede the inventory |
+| C1 — operation and recurrence algebra | pinned operation, retained attempt disposition/consumption, closure-based deadlines, exact Session opening rule, plan-owned guarantee and Intent field removal, shared fold, identity register and crash traces | design handoff written on 15 September: [algebra](retry-c1-algebra.md), [traces](retry-c1-traces.md), [inventory](retry-c1-identity.md); backoff stop settled, no runtime/format changes; review before C2 |
 | C2 — source and validated plan | Retry settings, idempotence, Loop warning, typed HTTP 5xx/cardinality, removal of global effect, full registry-free checks, one declared format cutover | not started |
 | C3 — runtime and accounting | qualified Call attempts, final publication, shared scheduling/recovery, exact per-attempt report input | not started |
 | C4 — migration and qualification | examples, goldens with reasons, UI, docs, no_std and memory/code-size gates | not started |
@@ -391,3 +400,18 @@ Intent/recording representation.
 
 No implementation, runtime qualification, benchmark call, paid model invocation,
 release tag or public push is claimed by this preparatory slice.
+
+### C1 contact additions — 15 September
+
+- Recovery currently re-evaluates invocation settings at each Call open;
+  Retry must instead validate later attempts against the pinned operation.
+- Loop r2 can retain its transport/identity while both policies share one
+  recurrence implementation. Fresh Retry facts must not fake Loop commands.
+- Retry closure time and its timer arm must be retained on the winning
+  OUTBOUND closure, before a potentially late manager receipt.
+- Accounting reads typed transaction emissions, not raw OUTBOUND drafts.
+  The HTTP candidate decodes usage downstream; withholding its intermediate
+  bodies does not run that Operator. C3 must prove measured attempt evidence
+  where available and preserve unknown otherwise, not claim extraction it lacks.
+- The older recall table in delivery-semantics §4.4 is historical, not current
+  permission to call an open effect again. C1 clarifies this discrepancy.

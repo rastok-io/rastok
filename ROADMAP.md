@@ -66,6 +66,9 @@ and no global Saga effect classification for ordinary Calls. This is a
 new refactor, not delivered Retry support; current packages remain v18.
 Its [contract and staged gates](docs/architecture/retry-extension-refactor.md)
 require an identity inventory before any executable format cutover.
+The 15 September C1 design handoff now supplies the operation algebra, crash
+traces and proposed v19/v3 inventory; stopping during Retry backoff publishes
+no new output (D-2026-09-15-2). C2–C4 implementation/qualification remain open.
 Other semantics remain frozen. The remaining work includes the six-example
 showcase and its qualification, tracked in the
 [opening ledger](docs/architecture/opening-showcase.md).

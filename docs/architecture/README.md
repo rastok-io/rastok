@@ -16,6 +16,10 @@ checkpoints, not the current completion status.
 
 Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 
+- [`retry-extension-refactor.md`](retry-extension-refactor.md) for the approved
+  Loop/Retry separation and C0–C4 gates; C1's [algebra](retry-c1-algebra.md),
+  [reference traces](retry-c1-traces.md) and [identity inventory](retry-c1-identity.md)
+  are the 15 September design handoff, not executable v18 support;
 - [`instance-stop-command.md`](instance-stop-command.md) for the accepted
   explicit-lifecycle command implementation, child-only closure and v18 ledger;
 - [`process-service.md`](process-service.md) for the resident Process Contract,
