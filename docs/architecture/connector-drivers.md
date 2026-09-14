@@ -4,7 +4,8 @@
 > D-2026-09-05-1 established the model implemented by R3–R9: Connector is
 > one of the two Executor forms, its semantic transition comes from a
 > versioned Contract, all productible outcomes have explicit
-> dispositions, and all six shipped Contracts have `@2` identities.
+> dispositions. The original six Contracts retain `@2`; resident Process
+> selects `process@3` inside the unchanged package.
 > The v17 Loop amendment extends a Call's existing terminal type; it creates
 > neither a new Contract id nor a contributed port.
 > The normative contract lives in
@@ -19,8 +20,8 @@
 - Its **Contract** is compiler data: stable id, required roles, ports, types,
   attributes, evaluation phases and lifecycle rules.
 - A **Driver** is physical code that performs the external interaction.
-- A **Binding** proves, before the VM and journal exist, which Driver object
-  serves each active Connector Node.
+- A **Binding** proves, before the VM and journal exist, which real or
+  effectless Driver object serves each active Connector Node.
 
 An inbound binding may reserve every passive listener governed by its Contract so a
 partial bind cannot expose a half-live service. This is fail-fast host
@@ -55,8 +56,30 @@ Contract id, for example `rastok/file@2`.
                          simulation
 
   Lab mock factory ──same id/roles/binding/protocol──▶ same VM + journal
-                                      only the post-open world is scripted
+                                      only the external world is scripted
 ```
+
+### Simulation does not require the physical implementation
+
+The Contract and its pure protocol rules must be executable independently of
+the physical Driver. `check` needs those rules; `simulate` binds a Lab model;
+`run` binds real I/O. Request framing affecting a digest is shared pure code,
+not reimplemented in the mock and not hidden behind a networking feature.
+Port types alone do not describe an exchange's lifecycle or cardinality.
+
+The HttpServer ack Lab model owns one bounded decoded-request proposal and one
+acknowledgement slot. It uses `RuntimeBindings::pump_inbound` and the generic
+inbound Call terminal queue; the core still mints the root, Call reference,
+routes and journal records. The scenario selects `listener.out`, not an extra
+test-only App input. Pending admission cannot acknowledge or overwrite the
+request. HttpServer respond and Session source scripting remain check-time
+gates; passive role binding is not proof of a complete simulation model.
+
+This model scripts a successful fixed ACK after a decoded request. It does not
+claim to test the wire decoder, TLS, auth, body limits or real 202 delivery.
+Those are physical Driver conformance obligations. See
+[simulation-semantics §2](../spec/simulation-semantics.md#2-the-fixture-is-the-journals-world-half)
+and D-2026-09-09-3 for the separation.
 
 ## Two roles, three exchange shapes
 
@@ -95,6 +118,21 @@ A correlated result for an existing outbound exchange is not a second
 world-originated INBOUND root: it settles the already committed obligation and
 then enables the Connector's ordinary core-owned transition. Neither Driver
 writes records or manufactures scheduler outcomes such as timeouts.
+
+Session shutdown has three separate handoffs: `close_session` requests
+cooperative protocol closure during bounded Closing; `abort_session` requests
+forced local cleanup at its retained settlement deadline; `release_session`
+notifies the Driver after the sole terminal transaction has committed. The
+last two must not wait for peer cooperation, allocate an unbounded cleanup
+queue or start another grace period. They are fenced by the exact `SessionRef`
+and cannot affect its successor. Aborting does not fabricate a normal exit or
+forget correlation early. Resource-free Lab Drivers may use the no-op defaults;
+physical shutdown needs separate qualification. In particular, these common
+seams alone do not qualify physical signals or a hosted WebSocket abort.
+The [resident Process tests](process-service.md) separately qualify Unix
+signal handoff, frame ordering and cleanup under backpressure.
+The hosted WebSocket Driver still uses its existing protocol-close path and
+the new callbacks' no-op defaults, not a newly implemented forced-close path.
 
 A contract may require either role or both. A both-role factory returns one
 bound object exposing both views over shared protocol state; registering two
@@ -216,7 +254,7 @@ The model covers the intended catalogue without new role kinds:
 | `Process(job)`, `File(read/replace)`, HTTP client, LLM, database call | outbound call |
 | HTTP server | inbound call |
 | Timer, Calendar | inbound event |
-| WebSocket client/server, queue consumer/producer, future `File.watch` plus writes | both-role session, when one contract really shares one protocol state |
+| Process service, WebSocket client/server, queue consumer/producer, future `File.watch` plus writes | both-role session, when one contract really shares one protocol state |
 
 Whether `File.watch` widens File's Contract again or becomes a separate
 contract is

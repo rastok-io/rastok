@@ -2,23 +2,23 @@
 skinparam backgroundColor white
 !include <C4/C4_Component>
 LAYOUT_TOP_DOWN()
-title Rastok — current responsibilities (package v17)
+title Rastok — current responsibilities (package v18)
 
-System_Ext(project, "Project files", "RKG, Lab scenarios, deployment profiles and golden artifacts.")
+System_Ext(project, "Project files", "RKG, Lab scenarios, profiles, goldens and diagnostic recordings.")
 System_Ext(world, "External systems", "Process, File, HTTP and WebSocket peers.")
-System_Ext(browser, "Optional browser", "simulate --ui; retained-transition inspection.")
+System_Ext(browser, "Optional browser", "Visual simulation and diagnostic replay; retained-transition inspection.")
 
 Container_Boundary(executable, "rastok executable") {
-  Component(entry, "CLI / Lab runner", "rastok", "Check, run, simulate and explicit logical-time inputs. One engine.")
+  Component(entry, "CLI / Lab runner", "rastok", "Check, run, simulate, new and diagnostic replay. Explicit logical time; one engine.")
   Component(compiler, "Compiler / Contract catalogue", "rastok", "Parse, resolve, type, Dispatch and route checks; canonical HIR identity.")
-  Component(plan, "Validated plan gate", "rastok-core, no_std + alloc", "Independent v17 validation: scopes, Contracts, Dispatch, routes, policy and Loop proofs.")
+  Component(plan, "Validated plan gate", "rastok-core, no_std + alloc", "Independent v18 validation: scopes, Contracts, Dispatch, routes, instance commands, policy and Loop proofs.")
   Component(core, "VM / HandlerExecutor / managers", "rastok-core", "Reserve before commit; atomic state, emissions and commands; recover from retained facts.")
   Component(binding, "Registry / runtime binding", "rastok", "Exact Contract id and role; pure request preparation shared by real and Lab Drivers.")
-  Component(drivers, "Real or scripted Drivers", "rastok", "Physical effects after open; typed outcomes only. Network async stays private.")
+  Component(drivers, "Real or scripted Drivers", "rastok", "Effects after open; typed outcomes. Process job: Call; resident service: Session. Async stays private.")
   ComponentDb(journal, "Journal", "rastok-core: MemJournal", "INBOUND, TRANSACTION, OUTBOUND; routes, commands and retained original deadlines. No disk backend.")
   Component(report, "Policy / observations / CostReport", "rastok-core", "Validated annotations; redaction policy; exact journal-derived accounting.")
   Component(ui, "UI / structured logs", "rastok", "Never-block presentation, prefix-relative inspection; no second accounting ledger.")
-  Component(evidence, "Diagnostics / golden diff", "rastok", "Named source failures, canonical trace projection and mismatch evidence.")
+  Component(evidence, "Diagnostics / golden / recording", "rastok", "Named failures; causal diff; immutable diagnostic capture/replay, not durable recovery.")
 }
 
 Rel(entry, project, "Reads source/profile; compares goldens")

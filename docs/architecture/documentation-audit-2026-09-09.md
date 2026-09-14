@@ -1,5 +1,11 @@
 # Documentation audit — 2026-09-09
 
+> Dated baseline, not the current delivery register. The bounded-join expiry
+> defect below is resolved in the [opening ledger](opening-showcase.md).
+> The v18/Process(service) follow-ups and resident gateway are tracked there
+> and in [the gateway evidence](agent-gateway-showcase.md); the baseline's
+> format versions, measurements and failed probes are preserved below.
+
 Scope: whitepaper, current specifications, architecture, examples and PlantUML
 sources/generated SVGs. Implementation baseline: `main` at `fd525d7`.
 This pass changes documentation and example sources only: no runtime, compiler,
@@ -45,7 +51,12 @@ In particular:
   An authored `advance` can still group VM transactions; this pass does not
   close that execution-control gap.
 
-## Open implementation finding: timed-join expiry productibility
+## Implementation finding: bounded-join expiry productibility
+
+Follow-up: the [opening correction](opening-showcase.md) now addresses this
+finding in checker and core, including `last` bounds. The observations below
+describe the audit baseline, not the corrected binary; qualification of the
+fix is tracked separately so the audit evidence is not rewritten.
 
 **The destination rule is not weakened. The current implementation misses a
 runtime producer in both checker and independent core productibility analysis.**

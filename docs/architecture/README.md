@@ -4,9 +4,10 @@ This directory contains implementation views derived from the normative
 specification. It answers *how Rastok is built*; it does not define new
 language or runtime behavior.
 
-The current implementation uses package v17. Its migration evidence is recorded in
+The current implementation uses package v18. Its migration evidence is recorded in
 [R9 qualification](rework-r9-qualification.md) for the v16 rework and the
-[v17 host-terminal amendment](loop-host-terminal-v17.md). Core/HIR share Dispatch and
+[v17 host-terminal amendment](loop-host-terminal-v17.md), followed by
+[v18 exact-instance closure](instance-stop-command.md). Core/HIR share Dispatch and
 routing with independent expression, scope, composition and Contract validation.
 Operator, Graph and outbound Call Loops execute and recover within the
 [named proof subset](../spec/loop.md). Original deadlines, run contexts and
@@ -15,9 +16,18 @@ checkpoints, not the current completion status.
 
 Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 
+- [`instance-stop-command.md`](instance-stop-command.md) for the accepted
+  explicit-lifecycle command implementation, child-only closure and v18 ledger;
+- [`process-service.md`](process-service.md) for the resident Process Contract,
+  real/Lab transport, shutdown, dialogue and remaining gateway limits;
+- [`agent-gateway-showcase.md`](agent-gateway-showcase.md) for the composed
+  resident WebSocket bridge, its ownership/order regressions, native JSON
+  protocol seam and the still-open HTTP usage adapter;
+- [`process-contract-review.md`](process-contract-review.md) for the requested
+  historical Process job/service design review and its subsequent amendments;
 - [`documentation-audit-2026-09-09.md`](documentation-audit-2026-09-09.md) for
-  the current whitepaper/specification/example/UML audit, executable checks
-  and the implementation discrepancy it exposed;
+  the dated whitepaper/specification/example/UML audit, executable checks
+  and the subsequently corrected join-productibility discrepancy;
 - [`m0-slice.md`](m0-slice.md) for the first end-to-end proof;
 - [`m0.5-slice.md`](m0.5-slice.md) for the kernel/package consolidation;
 - [`m1-slice.md`](m1-slice.md) for the current public-opening milestone
@@ -73,7 +83,7 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
   data forms, interfaces, dependency direction, and current status;
 - [`spec-to-code.md`](spec-to-code.md) for the map from normative
   documents to implementation responsibilities;
-- [`plan-package.md`](plan-package.md) for the categorical v17 package and
+- [`plan-package.md`](plan-package.md) for the categorical v18 package and
   independent validation boundary, with earlier format ledgers marked historical;
 - [`parallelism-notes.md`](parallelism-notes.md) for the keyed-mailbox
   concurrency model and the decisions left for physical parallelism;
@@ -117,3 +127,9 @@ tools/diagrams/render.sh
 The initial views were checked with PlantUML 1.2026.6. The source should
 remain compatible with the bundled C4 standard library rather than rely
 on a machine-specific include path.
+
+The 14 September documentation follow-up renders views 02, 03, 06 and 07
+with the existing PlantUML 1.2026.8 installation: v18, exact-instance closure,
+Process job/service and diagnostic record/replay. View 04 remains explicitly
+an outbound **Call**, not the resident Session frame protocol. Views 01, 04
+and archived 05 render unchanged; no renderer or frontend dependency is added.

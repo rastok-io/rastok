@@ -109,6 +109,8 @@ crates/rastok/src/            # the std layer — re-exports the kernel
 ├── stdlib.rs         # the standard CATALOGUE instancing those contracts (PROCESS,
 │                     #   declared connector names, built-in/deferred frontends)
 ├── golden.rs         # Trace, Divergence — projection, seal, named diff
+├── recording/        # bounded diagnostic files, exact-record codec and read-only
+│                     # recovery/UI; not the M2 durable deployment Journal
 ├── connectors/       # registry/global binder plus one module per Connector contract
 │   ├── registry.rs   # exact-id factories and role-aware RuntimeBindings
 │   ├── manifest.rs   # pre-load data-only Connector id/role capabilities
@@ -125,8 +127,8 @@ crates/rastok/src/            # the std layer — re-exports the kernel
 ├── ui/               # optional loopback HTTP/SSE controller and embedded page;
 │                     #   journal/inspection/accounting projection only
 ├── render.rs         # Sources + rustc-shaped diagnostic rendering
-└── main.rs           # thin bin : check | run | simulate | --resolve-open-api;
-                      # optional --json-logs exporter and --ui controller
+└── main.rs           # thin bin : check | run | replay | simulate | --resolve-open-api;
+                      # optional --record, --json-logs and --ui
 ```
 
 Two deviations from the pre-build sketch, both deliberate: the golden
@@ -428,6 +430,7 @@ whatever its execution format.
 | **`connectors::DriverManifest`** | data-only, canonically ordered stable id/role claims readable before implementation code loads; no factory, artifact locator, ABI or trust policy | [decisions.md D-2026-08-22-1](../spec/decisions.md); [connector-drivers.md](connector-drivers.md) | M1.5 C6 |
 | **`connectors::RuntimeBindings`** | the pre-VM association of every runnable inbound and callable outbound Connector with one bound Driver object; exact role-view proof; Node-path and Call routing without concrete contract matching | [decisions.md D-2026-08-22-1](../spec/decisions.md) | M1.5 C2 |
 | **`connectors::ProcessFactory` / `Process`** | the explicit `rastok/process@2` factory and real job-mode Outbound Driver: pre-binds every effective setting before the VM/journal exists, spawns asynchronously, captures under one aggregate budget, and supports `lines` / `jsonl` / `bytes` | [stdlib.md §3.3](../spec/stdlib.md) | M1.2 behavior; contract-specific module C0; registry binding C2 |
+| **`connectors::ProcessServiceFactory`** | `rastok/process@3`, one resident Session per exact instance; framed streaming, bounded writes, Unix supervision, no application RPC | [stdlib.md §3.3](../spec/stdlib.md) | [Resident qualification](process-service.md); pure Lab substitution and no package move |
 | **`stdlib::FILE` contract** | compiler sheet and Registry-free core mirror for `rastok/file@2`: `read`/`replace`, exact pins and `FileExit`, invocation-bound path, read budget | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 | M1.5 C3 |
 | **`connectors::FileFactory` / `File`** | explicit physical-root binding and real one-file Outbound Driver: seals mode/path/budget-or-payload before open; performs complete bounded reads or native atomic replace after open; cooperates with generic cancel/close-once/replay rules | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 C4 checkpoint | M1.5 C4 |
 | **Network contract sheets** | exact `rastok/http-client@2`, `http-server@2`, `websocket-client@2`, and `websocket-server@2` roles/exchanges, codec-selected ports, phased settings, lossless HTTP metadata and portable terminal unions; the Registry-free mirror refuses forged rows without consulting the compiler catalogue | [stdlib.md §3.1–3.2, §3.8–3.9](../spec/stdlib.md); D-2026-08-25-2 | M1.6 H2 |

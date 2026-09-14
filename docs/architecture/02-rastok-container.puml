@@ -3,23 +3,23 @@ skinparam backgroundColor white
 !include <C4/C4_Container>
 
 LAYOUT_LEFT_RIGHT()
-title Rastok — current container view (package v17)
+title Rastok — current container view (package v18)
 
 Person(author, "Graph author", "Checks and exercises an integration graph.")
 Person(operator, "Application operator", "Runs the App path and inspects evidence.")
 
-System_Ext(project, "Project files", ".rkg source, Lab scenarios, and golden artifacts.")
+System_Ext(project, "Project files", ".rkg source, Lab scenarios, goldens and diagnostic recordings.")
 System_Ext(world, "External systems", "Processes, files, HTTP services and WebSocket peers. Replaced by controlled Drivers in simulation.")
 
 System_Boundary(rastok_boundary, "Rastok") {
   Container(rastok_exec, "rastok executable", "Rust", "Parses, checks, plans, and executes one graph. App and Lab share the same semantic core.")
-  Container(browser, "Optional visual simulation debugger", "Embedded HTML / CSS / JS in a browser", "Read-only retained history, source, mailboxes, instances and cost. No authoring, branches or real-I/O debugging.")
+  Container(browser, "Optional visual simulation debugger", "Embedded HTML / CSS / JS in a browser", "Simulation and recorded-history inspection: source, mailboxes, instances and cost. No authoring, branches or real-I/O debugging.")
 }
 
 Rel(author, rastok_exec, "Check, run, simulate", "CLI")
 Rel(operator, rastok_exec, "Run and diagnose", "CLI")
 Rel(rastok_exec, project, "Reads source/scenarios; compares artifacts", "Filesystem")
-Rel(rastok_exec, world, "Performs effects only after causal commit", "Six versioned Contracts / bound Drivers")
+Rel(rastok_exec, world, "Performs effects only after causal commit", "Versioned Contracts / bound Drivers")
 Rel(author, browser, "Inspects and steps a simulation")
 Rel(browser, rastok_exec, "Controls and reads retained snapshots", "Loopback HTTP / SSE, capability and controller checks")
 

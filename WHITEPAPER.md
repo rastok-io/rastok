@@ -1,17 +1,21 @@
 # Rastok — White Paper
 
-> **Documentation audit (2026-09-09), model revision 2026-09-08.** The Node/Executor/Extension model, with v17
-> Loop exhaustion through host terminals, is
+> **Documentation follow-up (2026-09-14), package v18.** The Node/Executor/Extension
+> model, Loop exhaustion through host terminals and exact-instance closure are
 > executable. [R9 qualification](docs/architecture/rework-r9-qualification.md)
 > distinguishes tested capabilities, proof-subset limits and external release
 > qualifications; the [v17 amendment](docs/architecture/loop-host-terminal-v17.md)
-> records the current format. This white paper is not a production-readiness claim.
+> records that host-terminal change. This white paper is not a production-readiness claim.
+> The [v18 amendment](docs/architecture/instance-stop-command.md), 10 September,
+> adds exact-instance closure commands without restoring Graph execution.
+> The [resident Process Contract](docs/architecture/process-service.md),
+> 14 September, selects `process@3` within v18, independently of the job Contract.
 >
 > **Reading examples.** Linked `.rkg` programs in the
 > [example catalogue](docs/examples/README.md) are checked and simulated.
 > Inline snippets are excerpts, not standalone compilation units. Sections
 > explicitly marked *future design* do not describe commands available today;
-> optional-access expressions, jq/SQL guests, Process service, Timer, Calendar,
+> optional-access expressions, jq/SQL guests, Timer, Calendar,
 > Saga, experiment and coverage generation remain named gates.
 
 > **Integrate AI faster. Keep production calm.**
@@ -62,7 +66,9 @@ changes the external world. Both share the Executor mechanics of mailboxes,
 transactions, journaled state and ordered emissions; their transitions come
 respectively from DSL Dispatch and a versioned Contract plus Driver events. A
 **Graph** is a passive scope that composes these nodes. In the Lab, controlled
-Drivers replace real Connectors while the same Operators and checked graph run.
+models replace external effects while the same Connectors, Operators and
+checked graph run. Their executable Contracts do not require physical Drivers
+to be linked into a simulation build.
 
 AI agents are a useful stress test: they combine long-lived state,
 external effects, variable cost, and probabilistic results in one
@@ -395,56 +401,61 @@ automatic incident-to-fixture conversion and authored `crash`/`restart`
 scenarios are separate future capabilities.
 
 The [audit ledger](docs/architecture/documentation-audit-2026-09-09.md)
-records one current diagnostic defect exposed by this example: the checker
-warns that `decide.expired` is dead although the timeout scenario produces it.
-The example keeps the required disposition; the warning is not a reason to
-remove it.
+records the productibility defect this example exposed. It is now corrected:
+timed/count-bounded joins make `JoinExpired` productible in both the compiler
+and the independent plan validator. Removing its destination is an
+`E-UNWIRED-OUTPUT`, not a dead-output warning.
 
 ### 1.6 A second taste — a session gateway
 
 The same separation supports an agent gateway. The checked
-[codex-websocket-gateway.rkg](docs/examples/codex-websocket-gateway.rkg)
-connects a WebSocket Session to finite Process jobs. One accepted connection
-is one Session; a complete JSON message invokes one job; its reply retains
-the Session reference through causal lineage.
+[agent-gateway.rkg](examples/agent-gateway.rkg) connects WebSocket conversations
+to resident JSONL children. A Graph keyed by `meta.ext.session_id` owns one
+Process per conversation, retained across messages. Alice and Bob can use the
+same request id without sharing either the child or the reply address.
 
 The core wiring is short:
 
 ```rastok
-clients.out -> codex.in
-codex.out -> clients.in
-codex.out -> reply
-codex.err -> nothing
+clients.out -> conversation
+conversation.out -> { clients.in; reply }
+conversation.exit -> process_exit
 clients.exit -> session_exit
-codex.exit -> process_exit
 ```
 
-The complete source declares the actual Process and WebSocketServer contracts,
-typed App boundaries and a Lab scenario that checks two session identities.
-The simulation scripts the job; it neither launches an agent nor validates a
-real agent's command-line protocol. Live Driver and transport evidence is
-listed separately in the
-[release-qualification inventory](docs/architecture/release-qualification.md).
+Inside `conversation`, an Operator remembers the incoming socket coordinate
+and restores it on each child response. Process remains a generic JSONL
+transport; the client speaks the app-server initialization, thread and turn
+protocol. The Lab uses explicit fixture inputs, scripts replies and
+notifications, closes Alice's child, then proves Bob can continue. It launches
+no agent and does not pretend to simulate a WebSocket handshake. A separate
+local integration test uses two real sockets and harmless shell children.
+The [composition ledger](docs/architecture/agent-gateway-showcase.md) separates
+those proofs from paid-model or complete protocol qualification.
 
 Three distinctions matter:
 
 - **Session is not instance.** A socket's Session reference correlates its
   messages; `instance.key` independently selects Node-owned state. A keyed
   Graph scopes its children without acquiring an application mailbox.
-- **Job is not resident service.** The shipped Process job publishes its
-  bounded captured frames at completion. This example is not a token-streaming
-  API and does not keep one app-server process alive per conversation.
+- **Session is not job.** A resident Process response is a fresh Session
+  ingress root. Restoring a socket's return coordinate does not rewrite its
+  `origin_id` into a previous request's cause. Application request/turn ids,
+  not the number of Session writes, identify agent jobs.
 - **An OUTBOUND record is not a price.** Per-flow `CostReport` uses annotated
   quantities/amounts and optional deployment prices. Missing price is
   `unpriced`, never inferred from the number of calls. OTLP export and budget
   enforcement remain separate future consumers.
 
-The larger [Teams design](docs/examples/teams-codex-gateway.rkg) is preserved
-as a historical pre-v16 sketch. A resident Process service, Teams-specific
-authentication and adaptation, a broader secret-binding surface and an
-operational concurrency policy must be designed and qualified before that
-sketch can become a runnable example. It is not evidence of a shipped
-thousand-session gateway.
+The earlier [WebSocket-to-job example](docs/examples/codex-websocket-gateway.rkg)
+remains a finite-job demonstration, and the
+[resident dialogue](examples/agent-dialogue.rkg) a smaller typed-adapter primer.
+The larger [Teams design](docs/examples/teams-codex-gateway.rkg) is a historical
+pre-v16 sketch. Public authentication, arbitrary protocol redaction, measured
+model usage and operational concurrency policy are not supplied by the local
+bridge. The HTTP usage/credential variant remains open; it must safely handle
+missing JSON usage before claiming cost attribution. None of these examples
+proves a shipped thousand-session gateway.
 
 ### 1.7 When Rastok is more platform than you need
 
@@ -1186,9 +1197,11 @@ nature:
   without reviving a `NodeType` axis.
 - **Connectors are runtime primitives.** They bridge the graph to
   the outside world through Driver code (HTTP libraries, process
-  spawning, database drivers, file I/O). A new Connector requires a
-  semantic Contract and a registered native or sandboxed Driver; it cannot be
-  defined in DSL alone. This is the *syscall surface* of Rastok.
+  spawning, database drivers, file I/O). A new Connector requires an executable
+  semantic Contract and pure exchange rules; port declarations in DSL alone
+  are insufficient. Simulation binds a model of the external world. Real
+  execution additionally requires a registered physical Driver. This is the
+  *syscall surface* of Rastok.
 
 In OS terms: Operators are userspace functions composed from DSL primitives;
 Connectors are syscalls. The stdlib names, Connector contracts, `behavior`
@@ -1355,11 +1368,19 @@ Connector draws the boundary; the journal captures what crosses it.
 **The Contract is not the Driver.** Source names resolve through a compiler
 catalogue to a stable versioned contract id such as `rastok/process@2`. The
 Contract declares inbound/outbound roles, typed ports, attributes and
-lifecycle rules. A Driver is one physical implementation of those semantics.
+lifecycle rules. A physical Driver supplies real I/O; a Lab model supplies
+scripted arrivals and outcomes through the same pure protocol and admission
+seams. Simulation needs the latter, not a linked physical implementation.
 Before execution, a runtime registry binds every active Connector Node by the
 exact id and proves that the implementation exposes every required role.
 Neither crate names, shared-library paths, build features, Hosts nor Workers
 enter the plan or causal identity.
+
+For example, the HttpServer ack model accepts decoded fixture requests at
+`listener.out`, without opening a socket or adding an App input. Only committed
+admission permits its scripted `202` acknowledgement. This tests the graph
+under those assumptions; wire decoding, authentication and successful delivery
+of a real response remain separate Driver conformance obligations.
 
 ```text
 RKG Connector ──▶ Contract catalogue ──▶ validated plan
@@ -1450,7 +1471,7 @@ instance; its sole terminal fact is an ordinary `l:reply` transaction, not a
 second outbound call. Every session has a causal
 logical session reference independent of its socket, negotiated transport and
 physical placement. A Process job or database operation is a call; a
-WebSocket connection and the future Process service profile are sessions.
+WebSocket connection and the resident Process service profile are sessions.
 Neither automatically invents a Node-instance key.
 
 For WebSocket, one server Driver owns many logical SessionRefs and one client
@@ -1473,8 +1494,9 @@ per-message exit. No output may follow the corresponding terminal `exit`.
 For a `Process`, `Exited { exit_code, signal }`, `TimeoutExpired`,
 `SpawnFailed` and the former typed error codes are cases of `ProcessExit`.
 `out` stays the data stream and `Process.err` stays stderr; a graph reacting
-to termination wires `process.exit -> …`. The future resident Process service profile requires a separate resource-run
-and restart contract; the current job profile does not implement that supervision. `meta.sys`
+to termination wires `process.exit -> …`. The resident Process profile uses
+one Session per child incarnation: new input may open a fresh child after
+death, but automatic restart and request replay are not implied. `meta.sys`
 stays closed while call, resource, and Node-instance identities remain causal
 journal facts.
 
@@ -2658,9 +2680,10 @@ ledgers are evidence for Rastok; future design sections are not.
 
 ## 10. Status
 
-Rastok is experimental, not production-ready. The current package is **v17**;
-the retained type/value registry is v7 and the six Connector Contracts are
-`@2`. These version registers are independent.
+Rastok is experimental, not production-ready. The current package is **v18**;
+the retained type/value registry is v7. The original six Connector Contracts
+remain `@2`; resident Process selects `process@3` without changing the job
+Contract or package. These version registers are independent.
 
 | Executable today | Qualification / exact limit |
 |---|---|
@@ -2668,10 +2691,12 @@ the retained type/value registry is v7 and the six Connector Contracts are
 | Operator, Graph and outbound Call Loop; exact run context, fuel, delay and integer measure | [Loop contract](docs/spec/loop.md); guarded/timed joins, lifecycle-dependent bodies and broader proof fragments refuse by name |
 | Loop exhaustion on an existing host terminal, no contributed port | [v17 amendment](docs/architecture/loop-host-terminal-v17.md); non-Loop identity witnesses unchanged |
 | Keyed instances, all five lifetimes, bounded Closing, joins and recovery from retained records | One synchronous Worker; recovery is not a durable storage backend or distributed runtime |
-| Process job, File read/replace, HttpClient/HttpServer, WebSocketClient/WebSocketServer | Six exact Contracts; HTTP/1.1–3 and complete-message Sessions, not token-streaming SSE or Process service |
+| Explicit Graph or direct-child closure, idempotent per exact instance generation | [Closure ledger](docs/architecture/instance-stop-command.md); no global key lookup, implicit creation or repeated cancellation |
+| Process job/service, File read/replace, HttpClient/HttpServer, WebSocketClient/WebSocketServer | Exact Contracts; HTTP/1.1–3 and complete-message Sessions; resident Process [qualification](docs/architecture/process-service.md), not a model-specific protocol or token-streaming SSE |
 | Strict logical types and JSON Schema / Avro / Arrow / OpenAPI projections | Unsupported/lossy cases refuse by path; guest-language execution remains deferred |
 | Five data annotations, exact HttpClient boot references, privacy attestations, redaction, structured logs and per-flow `CostReport` | [Observability contract](docs/spec/observability.md); no raw-secret payload, legal-compliance certificate, budget enforcement, FX, FOCUS/OpenCost or OTLP exporter |
 | `simulate --ui`: retained transitions, source, mailboxes, instances, Loop dials, decisions, causal links, assertion evidence and comparisons | [UI contract](docs/spec/ui.md); read-only source-authored scenarios, no `run --ui`, editing or branches; an authored `advance` may still group VM transactions |
+| `new`, readable golden divergence, `run --record` and `replay [--ui]` | [Diagnostic recording](docs/architecture/diagnostic-recording.md); immutable restitution without a Driver, not durable recovery; classified/boot-dependent recording limits remain explicit |
 
 The [example catalogue](docs/examples/README.md) distinguishes passing programs,
 isolated illustrative fragments and historical future-surface sketches.
@@ -2687,7 +2712,7 @@ format movements; neither rewrites the earlier evidence. The
 for independent interop and outstanding browser, ngtcp2 and Autobahn work.
 Workspace tests do not replace those external qualifications.
 
-Durable storage, multi-Worker/cluster deployment, resident Process services,
+Durable storage, multi-Worker/cluster deployment, a complete resident AI gateway,
 Timer/Calendar/Memory, Saga, general guests, experiments and broad verification
 remain future gates. The [roadmap](ROADMAP.md) orders evidence, not implied
 production guarantees.

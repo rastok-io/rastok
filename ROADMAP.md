@@ -52,8 +52,24 @@ integration seam — request, external partner, late callback — be
 built, simulated, and shown end to end, before its real systems
 exist? Scope, order, and evidence:
 [`docs/architecture/m1-slice.md`](docs/architecture/m1-slice.md).
-The original public-opening target was 15 October 2026. The v16 rework now
-takes semantic priority; no public date overrides its R0–R9 exit gates.
+Public opening is **15 October 2026**. R0–R9 and the v17 host-terminal
+amendment have passed. The 10 September approved exact-instance closure is the
+named package exception to the opening freeze: v18, D-2026-09-10-1.
+The subsequently requested resident Process uses a distinct `process@3`
+Session contract inside that unchanged package (D-2026-09-14-1); jobs stay
+`process@2`. See the [service ledger](docs/architecture/process-service.md).
+Other semantics remain frozen. The remaining work is the six-example showcase and its
+qualification, tracked in the [opening ledger](docs/architecture/opening-showcase.md).
+
+The 10 September opening brief separates the gates. The six-example gallery,
+measured quickstart, two CLI helpers, release binaries, editor grammar, captures
+and GIF, debugger browser pass, CHANGELOG and release preparation block the
+opening. Independent HTTP/3-server ngtcp2, official Autobahn and marginal
+Connector implementation-cost measurements remain **open but non-blocking**;
+their absence stays visible in the release inventory and README. No public
+push, release tag or crate publication occurs before 15 October or without
+Yoann's instruction. Public documentation is authored here as plain Markdown
+in `docs/site/`; the separate site consumes it and the examples at one tag.
 
 - Multiport execution, then the constructs that stand on it: Node-owned
   logical instances (`instance.key`), orthogonal lifetime and bounded
@@ -253,9 +269,9 @@ takes semantic priority; no public date overrides its R0–R9 exit gates.
 
 The [2026-09-09 documentation audit](docs/architecture/documentation-audit-2026-09-09.md)
 refreshes the whitepaper, specifications, checked examples and UML views. It also
-records an open implementation defect: timed-join `JoinExpired` production is
-missing from output-productibility analysis. Its route must remain explicit;
-the new expense-approval fixture demonstrates why the warning is unsound.
+identified a missing runtime producer in bounded-join output-productibility
+analysis. The opening correction covers both `within` and `last`, independently
+in the checker and core, without changing the runtime, plan format or goldens.
 
 ## Later — incident lab and safe dogfood
 

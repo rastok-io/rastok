@@ -1,6 +1,6 @@
 @startuml 07-node-executor-extension
 skinparam backgroundColor white
-title Rastok — semantic ownership (v17; not a Rust API inventory)
+title Rastok — semantic ownership (v18; not a Rust API inventory)
 skinparam shadowing false
 skinparam classAttributeIconSize 0
 hide empty methods
@@ -63,6 +63,11 @@ Extension <|-- Saga
 Loop *-- Manager
 Manager ..> Node : owner address / generation
 
+note left of Node
+instance.stop closes the current generation.
+child.instance.stop targets a direct child.
+Retained commands, never spatial ports.
+end note
 note bottom of Graph
 Generic lifecycle records may name a Graph.
 They are not Graph application transactions.
@@ -72,5 +77,10 @@ Hosts: Operator, Graph, finite outbound Call.
 Exhaustion is LoopExpired on existing err,
 custom terminal, or the Call's extended exit.
 Commands are not ports or spatial edges.
+end note
+note bottom of Driver
+Process job: finite Call.
+Process service: resident Session per instance.
+Session frames are fresh admitted INBOUND facts.
 end note
 @enduml

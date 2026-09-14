@@ -19,14 +19,19 @@ These are blocking loopback probes with finite deadlines. Package retrieval is
 explicit, pinned and separate from `cargo test`; it is not a hidden network
 dependency of normal development or CI.
 
-## Open before a public release
+## Open qualification inventory
 
-| Qualification | Required environment | Closure evidence |
-|---|---|---|
-| ngtcp2 client against live Rastok HTTP/3 server | current C++23 compiler, nghttp3, event loop and explicit supported TLS backend | pinned command, versions and successful terminal transcript |
-| Official Autobahn RFC 6455 client and server roles | container-capable host for the maintained frozen PyPy 2 runner | client/server HTML reports linked from the release record |
-| Marginal Connector implementation benchmark | one new representative Connector after M1.6, measured from empty contract-specific module to conformance | repeatable timing and scope record in the release report |
-| M1.9 hosted UI visual and interaction pass | a working real-browser controller on the reference host | initial-pause/control/reconnect/reset/completed-state transcript; read-only simulation back/forward and reset-session isolation; buffered Replay at 1/4 transitions per second; mailbox/instance inspection, zoom/pan and splitter pass; keyboard pass; same-viewport 1352×760 captures at B0, B1, B8 and the completed transition plus a narrow screenshot linked from the M1.9 report |
+The 10 September M1 opening brief makes the debugger visual/interaction pass
+**blocking for 15 October**. The three protocol/contribution rows are
+**non-blocking, still unqualified**: they must remain disclosed in the README
+and release evidence. This reclassification is not a passing result.
+
+| Qualification | Opening gate | Required environment | Closure evidence |
+|---|---|---|---|
+| ngtcp2 client against live Rastok HTTP/3 server | Non-blocking; open | current C++23 compiler, nghttp3, event loop and explicit supported TLS backend | pinned command, versions and successful terminal transcript |
+| Official Autobahn RFC 6455 client and server roles | Non-blocking; open | container-capable host for the maintained frozen PyPy 2 runner | client/server HTML reports linked from the release record |
+| Marginal Connector implementation benchmark | Non-blocking; open | one new representative Connector after M1.6, measured from empty contract-specific module to conformance | repeatable timing and scope record in the release report |
+| M1.9 hosted UI visual and interaction pass | Blocking; open | a working real-browser controller on the reference host | initial-pause/control/reconnect/reset/completed-state transcript; read-only simulation back/forward and reset-session isolation; buffered Replay at 1/4 transitions per second; mailbox/instance inspection, zoom/pan and splitter pass; keyboard pass; same-viewport 1352×760 captures at B0, B1, B8 and the completed transition plus a narrow screenshot linked from the M1.9 report |
 
 R9 attempted the browser pass on 2026-09-07. The installed controller failed
 before connection: its worker referenced an absent older browser-service module.
@@ -54,14 +59,85 @@ visual retest. The open qualification row remains open.
 The [documentation audit](documentation-audit-2026-09-09.md) reruns the hermetic
 workspace and executable examples, not the external protocol probes or a new
 bare-metal measurement. It additionally identifies a pre-release checker/core
-productibility defect for timed-join expiry; that finding is not waived by the
-otherwise green tests.
+productibility defect for bounded-join expiry. The
+[opening correction and its regression evidence](opening-showcase.md) track
+its closure separately; the otherwise green audit tests did not waive it.
 
 Public Internet probes remain scheduled canaries, never replacements for these
-blocking local qualifications. The gallery, website and demonstration are M1
+local qualifications. The gallery, website and demonstration are M1
 deliverables tracked by the roadmap rather than protocol-conformance evidence.
 
+### 10 September local continuation
+
+The two HTTP/3 workspace probes were reproduced failing on a host resolving
+`localhost` to IPv6 first while their fixtures listened only on IPv4. Their
+listeners now follow the same local resolution as the client. Both focused
+probes pass with DNS-name certificate verification still enabled; no physical
+Driver, TLS policy, semantic Contract or golden changed. This corrects local
+test setup, not ngtcp2 qualification or a claim of multi-address connection
+fallback in the Driver.
+
+The isolated Chrome harness passes 30 tests, including all six webhook
+scenarios in LIVE, HISTORY and REPLAY with exact costs and no email or bearer
+disclosure. Fifteen layout and three editor lexical tests also pass. The
+integrated browser still fails before connection, so its independent pass
+remains unclaimed. The flagship's initial captures exposed crowded titles,
+badges and labels. A rendered-geometry regression reproduced 23 text overlaps
+before correction. Separate scope bands now reuse rank columns, text and
+badges have reserved space, and the actual cubic curves avoid label/header
+obstacles. The rebuilt binary passes the new regression at transitions 0,
+1, 8 and completed at 1352×760, plus narrow width: interface-sized titles,
+no overlapping text or curves crossing labels, the full desktop graph in its
+canvas, and HISTORY clear of zoom controls. Four-digit mailbox badges have a
+separate layout regression. The captures were visually rechecked locally;
+they remain diagnostic, not approved publication assets. Evidence:
+`/tmp/rastok-graph.IgAGKl/browser.log`, `layout-editor.log` and
+`screens/webhook-geometry-{initial,1,8,completed,narrow}.png`.
+The independent browser audit, the remaining controller granularity gap,
+approved captures and GIF were still open at that checkpoint; these totals
+did not waive those gates.
+
+### Publication assets — 14 September
+
+The three real flagship PNGs and 30-second GIF now live in
+`docs/site/assets/` and are linked from the chapter and README. They show
+`webhook.timeout_then_success`, 1352×760, transitions 0, 18 (armed delay),
+and 29 (success after two applications). The machine-readable capture manifest
+maps all 120 GIF frames to retained prefixes; `ffprobe` verified 30.000 seconds.
+All three PNGs were visually inspected locally. Reproduction:
+
+```sh
+RASTOK_PLAYWRIGHT=/path/to/playwright \
+RASTOK_CHROME=/path/to/chrome \
+RASTOK_UI_ASSETS=/path/to/an/empty/output-directory \
+node crates/rastok/src/ui/capture-showcase.cjs
+```
+
+This uses installed browser/FFmpeg tooling, not a frontend dependency or an
+independent audit. The in-app browser provider was unavailable; the repository's
+headless Chromium path produced these assets. Yoann's publication review and
+the independent browser/controller gate remain distinct and open.
+
+The gateway/documentation follow-up passes **31** local Chrome tests,
+**15** SVG/layout tests and **5** editor tests (three lexical, two real
+TextMate/Oniguruma). The new gateway is exercised in LIVE, HISTORY and REPLAY
+without a process or model invocation. This is automated local evidence, not
+the separate independent audit. Its batch/step regression additionally compares
+complete canonical journals, including resident multi-frame replies.
+
 ## Embedded code-size watch before Saga
+
+The 14 September resident Process pass retains **111,732 B** peak heap on
+the same Cortex-M33 echo workload, leaving **19,340 B** below 128 KiB.
+`.text` **881,788 B** + `.rodata` **69,680 B** = **951,468 B**, leaving
+**97,108 B** below 1 MiB. That is **408 B** above the two-budget shutdown
+checkpoint, with unchanged heap. QEMU reports `SPIKE_OK`, 67 records and the
+same echo hash. The Unix Driver is hosted-only; these measurements qualify
+the core changes, not 64 resident children or arbitrary deployment workloads.
+
+The gateway ownership correction was remeasured on 14 September: the same
+**111,732 B** heap and **951,468 B** text/rodata, 67 records and echo hash.
+All three bare-metal compilation targets pass as well; no gate was raised.
 
 The [R9 Cortex-M33 measurement](spike-rp2350-emulated.md) retains **927,060 B**
 of `.text` plus `.rodata` against the unchanged **1,048,576 B (1 MiB)** gate:
@@ -78,3 +154,19 @@ The [v17 host-terminal amendment](loop-host-terminal-v17.md) was remeasured on
 1 MiB code gate retains **119,720 B**; peak heap remains **111,452 B**, with
 **19,620 B** below 128 KiB. `SPIKE_OK` retains 67 journal records. These remain
 workload-specific measurements, not worst-case Loop or recovery bounds.
+
+The 2026-09-09 bounded-join correction and diagnostic-reader seams retain
+**111,452 B** peak heap on that same Cortex-M33 workload. The rebuilt image is
+`.text` **860,404 B** + `.rodata` **68,172 B** = **928,576 B**: **280 B less**
+than the v17 measurement, with **120,000 B** below the code gate. QEMU reports
+`SPIKE_OK`, the same echo hash and 67 retained records; the worst relay sample
+is 2,065 calibration ticks. This does not qualify the hosted recording codec
+for bare metal: file I/O and the debugger remain outside `rastok-core`.
+
+The 2026-09-10 exact-instance closure amendment (v18) measures **111,732 B**
+peak heap on the same relay: +280 B, leaving **19,340 B** below 128 KiB.
+`.text` **881,156 B** + `.rodata` **69,624 B** = **950,780 B**: +22,204 B,
+leaving **97,796 B** below 1 MiB. QEMU reports `SPIKE_OK`, 67 records and
+the unchanged echo hash; the slowest relay is 2,093 calibration ticks.
+No gate is raised. This prices the linked implementation and the unchanged
+relay, not an embedded workload executing/recovering closure commands.

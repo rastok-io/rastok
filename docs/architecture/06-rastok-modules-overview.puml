@@ -3,18 +3,18 @@ skinparam backgroundColor white
 skinparam shadowing false
 skinparam packageStyle rectangle
 top to bottom direction
-title Rastok — current Rust modules and crate boundary (v17, 2026-09-09)
+title Rastok — current Rust modules and crate boundary (v18, 2026-09-14)
 
 package "rastok — hosted / compiler crate" as HOSTED {
   rectangle "main / render / diagnostics\nCLI assembly, source spans, named errors" as ENTRY
   rectangle "compiler\nsyntax / HIR / check / lower\nDispatch, routing, Extension checks" as COMP
-  rectangle "contract / stdlib\nContractCatalog / ConnectorContract\nsix executable @2 sheets; frontend readers" as CATALOG
+  rectangle "contract / stdlib\nContractCatalog / ConnectorContract\nsix @2 sheets plus Process service @3" as CATALOG
   rectangle "schema_projection / openapi\nstrict JSON Schema, Avro, Arrow, OpenAPI\ngenerated-source ownership" as SCHEMA
-  rectangle "connectors\nDriverRegistry / RuntimeBindings\nProcess, File, HTTP, WebSocket\nprivate network: bounded async pump" as DRIVERS
+  rectangle "connectors\nDriverRegistry / RuntimeBindings\nProcess job / service, File, HTTP, WebSocket\nbounded physical pumps; no DSL in Drivers" as DRIVERS
   rectangle "deployment_config\nprofile JSON; explicit environment/provider input\nno clear credentials in semantic artifacts" as CONFIG
   rectangle "lab / conformance\nScenarioRun; controlled Drivers\nsame VM and exact Contracts" as LAB
-  rectangle "ui / observability\nsimulate-only debugger; structured logs\nread-only prefix and never-block export" as UI
-  rectangle "golden\nTrace / Divergence\ncausal projection, not full-record persistence" as GOLDEN
+  rectangle "ui / observability\nsimulation / recorded-history debugger\nread-only prefix; never-block structured logs" as UI
+  rectangle "golden / recording\nTrace / Divergence; diagnostic record/replay\nimmutable capture, not durable recovery" as GOLDEN
 }
 
 package "rastok-core — no_std + alloc" as CORE {
@@ -25,7 +25,7 @@ package "rastok-core — no_std + alloc" as CORE {
   rectangle "plan / loop_proof\nValidatedExecutionPlan, Owner, Dispatch\nRouteRule, ExtensionSpec, LoopSpec/LoopExpiry\nindependent scope, type and proof validation" as PLAN
   rectangle "runtime\nHandlerExecutor, Vm, Mailboxes, Scheduler\ncommand manager; spatial/exchange recovery\nGraph has no application handler" as VM
   rectangle "boundary\nInbound/Outbound Driver traits\nIntent, Completion, CallRef, SessionRef\nDispatcher and Contract completion gates" as BOUNDARY
-  rectangle "journal / journal::loop_protocol\nJournal, MemJournal, Record\nLoopRunRef, command production/consumption\nretained original deadlines; no disk backend" as JOURNAL
+  rectangle "journal / loop_protocol / instance_stop\nJournal, MemJournal, Record\nrun and exact-instance command facts\nretained original deadlines; no disk backend" as JOURNAL
   rectangle "schema_annotation / data_policy\ncanonical SchemaPath and five policies\nindependent propagation and redaction" as POLICY
   rectangle "deployment\nBootReference, BootBindings, SecretRef\nrun-scoped privacy/price attestations" as DEPLOY
   rectangle "observation / accounting\nRecordObservation / CostReport\nexact decimals, currency and unpriced facts" as REPORT

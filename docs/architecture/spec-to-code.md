@@ -1,6 +1,6 @@
 # Specification-to-implementation map
 
-> Non-normative implementation map, audited 2026-09-09. Current package: v17.
+> Non-normative implementation map. Current package: v18; closure update 2026-09-10.
 > The first table describes current ownership; subsequent milestone tables
 > preserve dated landing evidence, including superseded types and ids. They
 > are not a current API inventory. Decisions remain in
@@ -11,14 +11,17 @@
 | Normative home | Current code owner | Focused evidence |
 |---|---|---|
 | [Extensions](../spec/extensions.md) | core `node::Kind/Extension`, `plan::ExtensionSpec`; compiler `check/extensions`; each Connector owns `ContractId` | `contracts.rs`, independent `plan::composition` validation |
+| [Exact-instance closure](../spec/instances.md#73-explicit-closure-commands) | core `journal::instance_stop`, `runtime::vm::instance_stop`; compiler routing; diagnostic recording v2 | `instance_stop.rs`, hostile protocol/plan/prefix tests; [v18 ledger](instance-stop-command.md) |
 | [Dispatch / where / multi-emission](../spec/execution-model.md) | compiler syntax/HIR/check/lower; core `plan/dispatch*`, `runtime/dispatch`, `HandlerExecutor` | `where_dispatch.rs`, `machine_executor.rs`, core emission tests |
-| [Routing / destinations](../spec/grammar.md) | compiler `check/routing`; core `plan::{routing,routing_validation,productibility}` and VM prepare/reserve/commit | `v16_destinations.rs`, route/Dispatch sabotage tests; join-expiry diagnostic gap in the [audit](documentation-audit-2026-09-09.md) |
-| [Contract profiles](../spec/stdlib.md) | `contract::ContractCatalog`, `stdlib`, core mirrors; six exact `@2` sheets | `connector_composition.rs`, `contracts.rs`, Driver conformance |
+| [Routing / destinations](../spec/grammar.md) | compiler `check/routing`; core `plan::{routing,routing_validation,productibility}` and VM prepare/reserve/commit | `v16_destinations.rs`, route/Dispatch sabotage; bounded JoinExpired is a mandatory producer under D-2026-09-09-1, closing the [audit finding](documentation-audit-2026-09-09.md) |
+| [Contract profiles](../spec/stdlib.md) | `contract::ContractCatalog`, `stdlib`, core mirrors; six original `@2` Contracts plus resident `process@3` | `connector_composition.rs`, `contracts.rs`, Driver conformance |
+| [Resident Process](process-service.md) | profile-selected Contract; `connectors/process/service.rs`, Lab Session world, shared core lifecycle | `process_service.rs`, framing/cleanup tests, two dialogue scenarios and new goldens |
 | [Loop](../spec/loop.md) | compiler `check/loop_control`; core `plan::{call_loop,graph_loop}`, `journal::loop_protocol`, `runtime/vm/loop_manager` | `v16_loop*`, `v16_graph_calls.rs`, `loop_host_exit.rs` |
 | [Recovery / deadlines](../spec/delivery-semantics.md) | `runtime/vm/recovery`, journal records, retained `timer_schedule`; no public `RecoveryFold` type | `v16_recovery.rs`, `v16_exchange_recovery.rs`; no disk-backend claim |
 | [Package / identity](../spec/identity.md) | core `plan::{serialization,validation}`, compiler canonicalization | `plan_package.rs`, `plan_validation.rs`, echo/JSONL/gauge witnesses; [R9](rework-r9-qualification.md) then [v17](loop-host-terminal-v17.md) |
 | [Data policy / accounting](../spec/observability.md) | core schema annotations, policy, deployment, observation and accounting; hosted profiles/logs | `accounting.rs`, `v16_loop_policy.rs`, core policy/deployment tests |
-| [Visual simulation debugger](../spec/ui.md) | hosted `ui/view.rs`, controller and page over existing VM/journal/CostReport | projection tests, `layout.test.cjs`, `browser.test.cjs`; [external qualification](release-qualification.md) remains separate |
+| [Visual simulation debugger](../spec/ui.md) | hosted `ui/view.rs`, controller and page over existing VM/journal/CostReport | projection tests, `graph_layout.test.cjs`, `browser.test.cjs`; [external qualification](release-qualification.md) remains separate |
+| [Diagnostic recording](diagnostic-recording.md) | hosted `recording/`, CLI `run --record` / `replay [--ui]`, journal acceptance and VM recovery; no physical Driver in the reader | every-prefix and corruption tests, real File deletion/replay, personal-data refusal and read-only browser controls; durable deployment storage remains M2 |
 
 The remaining tables are historical milestone evidence. The M1.7
 Graph-handler/Aspect model, `ConnectorId` spelling, implicit unwired policies

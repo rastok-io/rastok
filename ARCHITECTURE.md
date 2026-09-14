@@ -2,12 +2,14 @@
 
 > Implementation blueprint — non-normative and under review.
 
-> **Current implementation, audited 2026-09-09 (package v17).** The Node/Graph/Executor/Connector/Extension
+> **Current implementation (package v18).** The Node/Graph/Executor/Connector/Extension
 > model, explicit dispositions, recursive Dispatch and Loop manager recovery
 > are executable. [R9](docs/architecture/rework-r9-qualification.md) records
 > the v16 qualification and remaining named limits; the
 > [v17 amendment](docs/architecture/loop-host-terminal-v17.md) records Loop
 > exhaustion on a resolved host terminal, with no contributed port.
+> [Exact-instance closure](docs/architecture/instance-stop-command.md) adds
+> bounded, retained lifecycle requests without restoring Graph handlers.
 
 This document explains how the current Rastok specification becomes an
 executable system. It defines implementation boundaries, dependency direction,
@@ -108,6 +110,7 @@ promise of one crate per box:
 | Lab runner | controlled Driver scripts, virtual inputs, time and assertions; authored crash/restart remains deferred | a second execution engine |
 | Visual simulation debugger | paused transition controls and projections of validated topology, VM inspection, journal observations and accounting | a second execution authority, durable history, editing, remote administration or unredacted classified data |
 | Diagnostics and golden diff | stable human-facing evidence | mutation of execution |
+| Diagnostic recording | bounded lossless capture of retained records and offline read-only reconstruction, optionally in the debugger | write-ahead durability, automatic restart, producer re-execution or unqualified personal-data persistence |
 
 The component-level blueprint refining this table — owned data forms,
 interfaces, dependency direction, and current status per component — is
