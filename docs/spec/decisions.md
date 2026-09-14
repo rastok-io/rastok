@@ -33,6 +33,19 @@ Rejected: duplicating long IDs in each scenario, inventing fixture-only
 constants, implicitly shadowing an outer binding, and serializing a global
 constant table into every production plan.
 
+## D-2026-09-09-1 — Bound-generated JoinExpired requires a destination
+
+The opening-showcase audit exposed a disagreement with explicit destinations:
+`within` and `last` can produce `JoinExpired` without an authored emission, but
+the two productibility analyses missed that producer. Both now derive it from
+the resolved Join activation. A missing disposition refuses with
+`E-UNWIRED-OUTPUT`, including nested boundaries and forged packages. Without
+a bound or an authored producer, the output remains dead.
+
+Yoann approved the correction before implementation. It tightens acceptance
+to the existing rule; runtime outcomes, v17 shapes, hashes of valid programs
+and causal goldens do not change. No implicit discard or re-blessing is needed.
+
 ## D-2026-09-08-1 — Loop extends the host terminal without contributing ports
 
 Loop contributes no port. Operator and Graph use their declared `out` and

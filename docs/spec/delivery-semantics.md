@@ -444,6 +444,12 @@ Graph boundary and a particular uncovered union case. A deliberate discard is
 written `source -> nothing`; it consumes without backpressure. The same case
 cannot select `nothing` and a real destination.
 
+A Join's `within` or `last` bound is a producer of `JoinExpired` on `expired`,
+even without an authored emission. The source checker and independent core
+validator both derive that obligation. An unbounded, otherwise unproduced
+`expired` output remains dead. D-2026-09-09-1 corrects the implementation of
+this existing rule without changing the expiry fact or its causal encoding.
+
 An output is exempt only when impossibility is re-derived by the core
 validator from reachable Dispatch leaves, structure, closed narrowing, the
 resolved Contract cardinality, or whole-Graph inaccessibility. Unknown remains

@@ -51,10 +51,15 @@ pub(super) fn may_produce(plan: &ExecutionPlan, slot: Slot, port: &node::Port) -
         return true;
     }
     match &node.execution {
-        NodeExecution::Operator => plan
-            .handlers
-            .iter()
-            .any(|handler| handler.owner == slot && handler.dispatch.may_emit(port)),
+        NodeExecution::Operator => plan.handlers.iter().any(|handler| {
+            handler.owner == slot
+                && (handler.dispatch.may_emit(port)
+                    // Re-derive the implicit producer from the validated join bound.
+                    || (port.name() == "expired"
+                        && matches!(handler.activation,
+                            node::HandlerActivation::Join { within_ns: Some(_), .. }
+                            | node::HandlerActivation::Join { last: Some(_), .. })))
+        }),
         NodeExecution::Connector(connector) => !connector
             .call_semantics()
             .is_some_and(|call| call.frame_production(port.name()) == Some(FrameProduction::Never)),

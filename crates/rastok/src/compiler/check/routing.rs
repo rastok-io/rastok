@@ -1263,10 +1263,14 @@ fn node_output_possible(node: &Node, port: &node::Port) -> bool {
         return true;
     }
     match &node.semantics {
-        NodeSemantics::Operator => node
-            .handlers
-            .iter()
-            .any(|handler| handler.dispatch.may_emit(port)),
+        NodeSemantics::Operator => node.handlers.iter().any(|handler| {
+            handler.dispatch.may_emit(port)
+                // Eviction is a runtime producer, not an authored Dispatch leaf.
+                || (port.name() == "expired"
+                    && matches!(handler.activation,
+                        node::HandlerActivation::Join { within_ns: Some(_), .. }
+                        | node::HandlerActivation::Join { last: Some(_), .. }))
+        }),
         NodeSemantics::Connector {
             contract,
             roles,

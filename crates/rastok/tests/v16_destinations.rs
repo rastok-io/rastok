@@ -94,6 +94,146 @@ fn a_declared_but_unproduced_output_needs_no_fake_discard() {
     plan::decode(&bytes).unwrap();
 }
 
+fn join_expiry_source(bound: &str, disposition: &str) -> String {
+    format!(
+        r#"type JoinExpiry = union {{ JoinExpired {{}} }}
+graph app : App {{
+  input left: int
+  input right: int
+  output expired: JoinExpiry
+  operator pair {{
+    input left: int
+    input right: int
+    output expired: JoinExpiry
+    on (left, right) {bound} {{ nothing }}
+  }}
+  left -> pair.left
+  right -> pair.right
+  {disposition}
+}}"#
+    )
+}
+
+#[test]
+fn bounded_join_expiry_requires_an_explicit_disposition() {
+    for bound in [
+        "within duration(\"1s\")",
+        "last 2",
+        "within duration(\"1s\") last 2",
+    ] {
+        let errors = compile(&join_expiry_source(bound, "")).unwrap_err();
+        assert!(
+            errors.diagnostics().iter().any(|error| {
+                error.code().as_str() == "E-UNWIRED-OUTPUT"
+                    && error.to_string().contains("pair.expired")
+            }),
+            "{bound}: {errors:?}"
+        );
+
+        for disposition in [
+            "pair.expired -> nothing",
+            "pair.expired -> expired",
+            "pair.expired -> match { JoinExpired -> expired }",
+        ] {
+            let compilation = compile(&join_expiry_source(bound, disposition)).unwrap();
+            assert!(
+                !compilation.warnings.iter().any(|warning| {
+                    warning.code().as_str() == "W-DEAD-OUTPUT"
+                        && warning.to_string().contains("pair.expired")
+                }),
+                "{bound}: {:?}",
+                compilation.warnings
+            );
+            plan::decode(&plan::encode(&compilation.plan, &compilation.hash)).unwrap();
+        }
+    }
+}
+
+#[test]
+fn an_unbounded_join_does_not_make_an_unwritten_expired_port_productible() {
+    let compilation = compile(&join_expiry_source("", "")).unwrap();
+    assert!(compilation.warnings.iter().any(|warning| {
+        warning.code().as_str() == "W-DEAD-OUTPUT" && warning.to_string().contains("pair.expired")
+    }));
+    plan::decode(&plan::encode(&compilation.plan, &compilation.hash)).unwrap();
+}
+
+#[test]
+fn a_forged_plan_cannot_erase_a_bounded_joins_expiry_disposition() {
+    for bound in ["within duration(\"1s\")", "last 2"] {
+        let compilation = compile(&join_expiry_source(bound, "pair.expired -> nothing")).unwrap();
+        let mut forged = compilation.plan.into_inner();
+        forged
+            .edges
+            .retain(|edge| edge.from.port.name() != "expired");
+        let error = plan::ValidatedExecutionPlan::try_new(forged).unwrap_err();
+        assert!(
+            matches!(&error, plan::PlanValidationError::UnwiredOutput { node, port }
+            if node.to_string() == "pair" && port.name() == "expired"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn a_nested_graph_cannot_hide_its_bounded_joins_expiry() {
+    let source = r#"type JoinExpiry = union { JoinExpired {} }
+graph app : App {
+  input in: int
+  graph inner {
+    input left: int
+    input right: int
+    output expired: JoinExpiry
+    operator pair {
+      input left: int
+      input right: int
+      output expired: JoinExpiry
+      on (left, right) within duration("1s") { nothing }
+    }
+    left -> pair.left
+    right -> pair.right
+    pair.expired -> expired
+  }
+  in -> inner.left
+}"#;
+    let errors = compile(source).unwrap_err();
+    assert!(
+        errors.diagnostics().iter().any(|error| {
+            error.code().as_str() == "E-UNWIRED-OUTPUT"
+                && error.to_string().contains("inner.expired")
+        }),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn bounded_join_expiry_is_observable_for_time_and_count_evictions() {
+    for (bound, actions) in [
+        (
+            "within duration(\"1s\")",
+            "app.left = 1\nadvance duration(\"1s\")",
+        ),
+        ("last 2", "app.left = 1\napp.left = 2\napp.left = 3"),
+    ] {
+        let source = format!(
+            "{}\nlab app {{ simulation proof on app {{ scenario eviction {{\n{actions}\nexpect app.expired count == 1 where data is JoinExpired\n}} }} }}",
+            join_expiry_source(bound, "pair.expired -> expired"),
+        );
+        let compilation = compile(&source).unwrap();
+        let runs = rastok::lab::run(
+            &compilation.plan,
+            plan::GraphVersion(1),
+            &compilation.labs[0],
+        );
+        assert_eq!(runs.len(), 1);
+        assert!(
+            runs[0].report.passed(),
+            "{bound}: {:?}",
+            runs[0].report.failures
+        );
+    }
+}
+
 #[test]
 fn deleting_a_discard_from_a_package_cannot_turn_it_into_an_implicit_sink() {
     let compilation = compile(
