@@ -1090,7 +1090,7 @@ fn expression_requirement(expr: &expr::Expr, expected: &DataType) -> Option<Type
                 | expr::Function::Timestamp
                 | expr::Function::Decimal
                 | expr::Function::MediaType => Some(DataType::Text),
-                expr::Function::Size => None,
+                expr::Function::Size | expr::Function::Has => None,
             }?;
             args.first()
                 .and_then(|expr| expression_requirement(expr, &argument))
@@ -1232,6 +1232,7 @@ pub(super) fn resolved_expression_type(expr: &expr::Expr, input: &DataType) -> O
             expr::Function::Size => DataType::INT,
             expr::Function::Decimal => DataType::Number,
             expr::Function::MediaType => DataType::MediaType,
+            expr::Function::Has => DataType::Bool,
         }),
         expr::Expr::List(items) => {
             let mut element = None;
@@ -1305,6 +1306,7 @@ fn intrinsic_expression_type(expr: &expr::Expr) -> Option<DataType> {
             expr::Function::Size => DataType::INT,
             expr::Function::Decimal => DataType::Number,
             expr::Function::MediaType => DataType::MediaType,
+            expr::Function::Has => DataType::Bool,
         }),
         expr::Expr::List(items) => {
             let mut element = None;

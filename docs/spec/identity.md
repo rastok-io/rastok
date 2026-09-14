@@ -564,6 +564,20 @@ the resolved process descriptor and its first input; write intents seal later
 frames. All existing Session identity and close-once recipes retain their
 meaning. See the [service ledger](../architecture/process-service.md).
 
+### 1.5 Optional member presence — expression allocation inside v18
+
+D-2026-09-14-3 appends pure function id **7**, `has`, to the transported
+expression and semantic-HIR function tables. Its two internal arguments are
+the receiver expression and literal text member; the absent final member is
+never evaluated. Registry-free validation checks that shape and re-derives
+the receiver and result types. This allocates no expression tag, plan field,
+Contract id or causal key; the package remains v18. A reader without function
+7 refuses it by name rather than treating it as another function.
+
+Only programs using presence inspection gain these expression bytes. Existing
+echo, JSONL and gauge packages, hashes and causal traces remain unchanged.
+No witness re-blessing accompanies this approved opening-freeze exception.
+
 ## 2. `graph_version` and the manifest
 
 `meta.sys.graph_version` is a small integer. It is a

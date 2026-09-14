@@ -1084,6 +1084,7 @@ fn expr_tree(expr: &expr::Expr) -> Cbor {
                 // constructor; v7 preserves that append-only spelling.
                 expr::Function::Decimal => 4,
                 expr::Function::MediaType => 6,
+                expr::Function::Has => 7,
             }),
             Cbor::Array(args.iter().map(expr_tree).collect()),
         ]),
@@ -2640,6 +2641,7 @@ fn expr_from(tree: &Cbor) -> Result<expr::Expr, DecodeError> {
                 4 => expr::Function::Decimal,
                 5 => expr::Function::Asset,
                 6 => expr::Function::MediaType,
+                7 => expr::Function::Has,
                 _ => return Err(err("function")),
             },
             args: args.iter().map(expr_from).collect::<Result<Vec<_>, _>>()?,
@@ -4128,6 +4130,13 @@ mod tests {
             expr::Expr::Call {
                 function: expr::Function::MediaType,
                 args: vec![expr::Expr::Literal(Value::Text(text("application/json")))],
+            },
+            expr::Expr::Call {
+                function: expr::Function::Has,
+                args: vec![
+                    expr::Expr::Path(vec![text("data")]),
+                    expr::Expr::Literal(Value::Text(text("usage"))),
+                ],
             },
         ];
         for form in forms {

@@ -631,7 +631,7 @@ expr       := [1, tagged_value]                   — literal
             | [5, expr, expr, expr]               — ternary
             | [6, expr, expr]                     — index
             | [7, fn (uint), [expr*]]             — call    (1 duration · 2 timestamp · 3 size · 4 decimal ·
-                                                  //   5 asset · 6 media_type; asset is a decoder-recognized pre-binding
+                                                  //   5 asset · 6 media_type · 7 has; asset is a decoder-recognized pre-binding
                                                   //   form that validation refuses)
             | [8, [expr*]]                        — list literal
             | [9, [[key (text), expr]*]]          — map literal (already construction-sorted)

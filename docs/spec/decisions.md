@@ -5,6 +5,31 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-09-14-3 — Test object-member presence without reading absent data
+
+Yoann authorized the minimal `has(...)` addition to complete the HTTP usage
+adapter. `has(object.member)` is a pure boolean expression, available wherever
+ordinary expressions are admitted. Its receiver must already be a resolved
+text-keyed map or closed struct; it does not narrow an opaque `variant`.
+Only a dotted member selector is admitted, not arbitrary arguments, indexed
+access, comprehensions or optional-access syntax. The receiver is evaluated
+once; its errors propagate. The final member is tested, not read: absent is
+false, present null is true, and presence says nothing about the value's type.
+Nested access still requires explicit tests/narrowing of each parent.
+
+The parser lowers the selector to the existing Call shape with function id 7,
+receiver expression and literal text key. Independent validation rechecks
+arity, key shape and receiver type. This is an additive function-registry
+entry, not a new expression/container shape: package v18, type/value tags,
+Contracts and journal forms are unchanged. Older readers refuse the unknown
+function id. Only programs using `has` gain new bytes; existing witnesses and
+goldens must remain unchanged. Data-policy derivation retains receiver taint;
+testing presence never declassifies data.
+
+Rejected: treating missing usage as zero, swallowing receiver/type errors,
+permissive map-to-struct casts, adding `has` inside a physical Driver, or
+expanding the rest of the optional-expression subset.
+
 ## D-2026-09-14-2 — Resolve unit-global constants in the App and its Lab
 
 Yoann requested that repeated fixture identifiers use ordinary top-level

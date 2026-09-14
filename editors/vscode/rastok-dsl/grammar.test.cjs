@@ -22,6 +22,7 @@ test("v18 manager commands, annotations and spatial arrows have distinct scopes"
   for (const word of ["model.instance.stop", "conversation.model.instance.stop"]) assert.ok(matches(word, "support.function.instance-command.rkg"));
   for (const word of ["@personal", "@secret", "@sensitive", "@measure", "@cost"]) assert.ok(matches(word, "storage.modifier.annotation.rkg"));
   for (const arrow of ["->", "=>", "<->"]) assert.ok(matches(arrow, "keyword.operator.rkg"));
+  assert.ok(matches("has(data.usage)", "support.function.rkg"));
   assert.equal(matches("when", "keyword.control.rkg"), false, "removed wiring guard is not an executable keyword");
   assert.match("operator decide", new RegExp(grammar.repository.declarations.match));
   assert.equal(new RegExp(grammar.repository.declarations.match).exec("connector model")[2], "model");

@@ -30,7 +30,7 @@ use crate::datatype::{
 use crate::value::Value;
 
 /// Names refused explicitly: admitted by full CEL, outside this build.
-const UNSUPPORTED_FUNCTIONS: &[&str] = &["has", "exists", "exists_one", "all", "map", "filter"];
+const UNSUPPORTED_FUNCTIONS: &[&str] = &["exists", "exists_one", "all", "map", "filter"];
 
 /// An evaluator-only value.
 ///
@@ -932,6 +932,9 @@ pub enum Function {
     /// `media_type("application/json")` — canonical open Internet media
     /// type; ranges such as `*/*` are deliberately a different future type.
     MediaType,
+    /// Final-member presence. The parser lowers `has(object.member)` to
+    /// `[object, literal-member-name]`, never a potentially failing read.
+    Has,
 }
 
 /// Compiles expression text against a signature into a typed tree.
@@ -1849,6 +1852,7 @@ impl<'a> ExprParser<'_, 'a> {
             "size" => Function::Size,
             "decimal" => Function::Decimal,
             "media_type" => Function::MediaType,
+            "has" => Function::Has,
             "env" => {
                 return Err(Diagnostic {
                     kind: DiagnosticKind::General,
@@ -1890,6 +1894,30 @@ impl<'a> ExprParser<'_, 'a> {
             }
         }
         self.expect(&Tok::RParen, "`)`")?;
+        if function == Function::Has {
+            let [Expr::Path(path)] = args.as_slice() else {
+                return Err(Diagnostic {
+                    kind: DiagnosticKind::General,
+                    message: String::from(
+                        "`has` requires one dotted member selector: has(object.member)",
+                    ),
+                    range,
+                });
+            };
+            if path.len() < 2 {
+                return Err(Diagnostic {
+                    kind: DiagnosticKind::General,
+                    message: String::from(
+                        "`has` requires one dotted member selector: has(object.member)",
+                    ),
+                    range,
+                });
+            }
+            args = vec![
+                Expr::Path(path[..path.len() - 1].to_vec()),
+                Expr::Literal(Value::Text(path[path.len() - 1].clone())),
+            ];
+        }
         Ok(Expr::Call { function, args })
     }
 }
@@ -2132,6 +2160,20 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
             }
         }
         Expr::Call { function, args } => match function {
+            Function::Has => {
+                let [receiver, Expr::Literal(Value::Text(_))] = args.as_slice() else {
+                    return Err(fail(String::from(
+                        "`has` requires an object and a literal member name",
+                    )));
+                };
+                match check(receiver, signature, text)? {
+                    DataType::Map(map) if map.key() == &DataType::Text => Ok(DataType::Bool),
+                    DataType::Struct(_) => Ok(DataType::Bool),
+                    _ => Err(fail(String::from(
+                        "`has` requires a resolved object; narrow variant to a text-keyed map or struct first",
+                    ))),
+                }
+            }
             Function::Asset => {
                 if !(1..=2).contains(&args.len()) {
                     return Err(Diagnostic {
@@ -2614,6 +2656,17 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
                 values.push(concrete(eval_expr(arg, bindings)?, bindings)?);
             }
             match (function, values.as_slice()) {
+                (Function::Has, [EvalValue::Map(map), EvalValue::Text(key)]) => {
+                    Ok(EvalValue::Bool(map.contains_key(key)))
+                }
+                (Function::Has, [EvalValue::Struct(fields), EvalValue::Text(key)]) => {
+                    Ok(EvalValue::Bool(fields.iter().any(|(name, _)| name == key)))
+                }
+                (Function::Has, [EvalValue::KeyedMap(entries), EvalValue::Text(key)]) => {
+                    Ok(EvalValue::Bool(entries.iter().any(
+                        |(name, _)| matches!(name, EvalValue::Text(name) if name == key),
+                    )))
+                }
                 (Function::Asset, _) => Err(fault(String::from(
                     "an asset call reached evaluation before build-time binding",
                 ))),
@@ -3893,6 +3946,145 @@ mod tests {
     }
 
     #[test]
+    fn has_checks_presence_without_reading_a_missing_member() {
+        let signature = Signature::new().with("data", DataType::text_map(DataType::Variant));
+        let tree = compile_ok("has(data.usage)", &signature);
+        for (object, present) in [
+            (BTreeMap::new(), false),
+            (
+                BTreeMap::from([(String::from("usage"), EvalValue::Null)]),
+                true,
+            ),
+            (
+                BTreeMap::from([(String::from("usage"), EvalValue::Int(0))]),
+                true,
+            ),
+        ] {
+            let bindings = BTreeMap::from([(String::from("data"), EvalValue::Map(object))]);
+            assert_eq!(eval(&tree, &bindings).unwrap(), EvalValue::Bool(present));
+        }
+        assert_eq!(tree.ty, DataType::Bool);
+    }
+
+    #[test]
+    fn has_is_a_selector_not_an_optional_access_or_type_test() {
+        let signature = Signature::new().with("data", DataType::text_map(DataType::Variant));
+        for source in [
+            "has()",
+            "has(data)",
+            "has(data.usage, data.other)",
+            "has(data['usage'])",
+            "has(1 + 2)",
+        ] {
+            let errors = compile(source, &signature).unwrap_err();
+            assert!(
+                errors[0].message.contains("dotted member selector"),
+                "{errors:?}"
+            );
+            assert_eq!(
+                errors[0].range,
+                0..3,
+                "name the restricted call, not end-of-input"
+            );
+        }
+        for ty in [
+            DataType::Variant,
+            DataType::Text,
+            DataType::INT,
+            DataType::array(DataType::Text),
+        ] {
+            let errors =
+                compile("has(data.usage)", &Signature::new().with("data", ty)).unwrap_err();
+            assert!(errors[0].message.contains("resolved object"), "{errors:?}");
+        }
+        let guarded = compile_ok("has(data.usage) && data.usage is int", &signature);
+        for value in [EvalValue::Null, EvalValue::Text(String::from("not tokens"))] {
+            let data = EvalValue::Map(BTreeMap::from([(String::from("usage"), value)]));
+            assert_eq!(
+                eval(&guarded, &BTreeMap::from([(String::from("data"), data)])).unwrap(),
+                EvalValue::Bool(false)
+            );
+        }
+        assert_eq!(
+            eval(
+                &guarded,
+                &BTreeMap::from([(String::from("data"), EvalValue::Map(BTreeMap::new()))])
+            )
+            .unwrap(),
+            EvalValue::Bool(false)
+        );
+    }
+
+    #[test]
+    fn has_keeps_receiver_errors_and_rechecks_internal_arguments() {
+        let signature = Signature::new().with(
+            "data",
+            DataType::text_map(DataType::text_map(DataType::Variant)),
+        );
+        let tree = compile_ok("has(data.usage.tokens)", &signature);
+        let bindings = BTreeMap::from([(String::from("data"), EvalValue::Map(BTreeMap::new()))]);
+        assert!(
+            eval(&tree, &bindings).is_err(),
+            "an absent parent is not an absent final member"
+        );
+        for args in [
+            vec![],
+            vec![Expr::Path(vec![String::from("data")])],
+            vec![
+                Expr::Path(vec![String::from("data")]),
+                Expr::Path(vec![String::from("key")]),
+            ],
+            vec![
+                Expr::Literal(Value::Int(3)),
+                Expr::Literal(Value::Text(String::from("usage"))),
+            ],
+        ] {
+            assert!(
+                check(
+                    &Expr::Call {
+                        function: Function::Has,
+                        args
+                    },
+                    &signature,
+                    ""
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn has_on_typed_maps_matches_the_pinned_cel_presence_oracle() {
+        let signature = Signature::new().with("data", DataType::text_map(DataType::Variant));
+        for (entries, expected) in [
+            (BTreeMap::new(), false),
+            (BTreeMap::from([(String::from("usage"), Value::Null)]), true),
+        ] {
+            let bindings = BTreeMap::from([(
+                String::from("data"),
+                EvalValue::from(Value::Map(entries.clone())),
+            )]);
+            let mut context = cel_interpreter::Context::default();
+            context
+                .add_variable(
+                    "data",
+                    entries
+                        .into_keys()
+                        .map(|name| (name, ()))
+                        .collect::<BTreeMap<_, _>>(),
+                )
+                .unwrap();
+            let oracle = cel_interpreter::Program::compile("has(data.usage)")
+                .unwrap()
+                .execute(&context)
+                .unwrap();
+            let actual = eval(&compile_ok("has(data.usage)", &signature), &bindings).unwrap();
+            assert_eq!(actual, EvalValue::Bool(expected));
+            assert_eq!(actual, oracle_value(oracle));
+        }
+    }
+
+    #[test]
     fn durations_follow_the_go_format() {
         assert_eq!(
             eval_const("duration(\"2h\")"),
@@ -3949,7 +4141,7 @@ mod tests {
         let cases: &[(&str, &str)] = &[
             ("data.?text", "outside this build's subset"),
             ("items.map(i, i * 2)", "outside this build's subset"),
-            ("has(data.text)", "macro is outside"),
+            ("has(data)", "dotted member selector"),
             ("1 in [1]", "outside this build's subset"),
         ];
         let signature = Signature::new()

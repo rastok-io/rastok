@@ -81,7 +81,8 @@ the oracle detects accidental drift only in this named common subset.
 | `//` comments and ordinary string escapes | compatible subset, with Rastok's line boundary made explicit | lexer and recovery tests |
 | `/* ... */` comments | Rastok extension | shared `trivia` recognizer |
 | `decimal(...)`, `media_type(...)`, `is`, `as`, named types and union cases | Rastok extensions | `DataType`, `Value`, typed narrowing tests |
-| absence/optional access, macros/comprehensions and `in` | not admitted in this build | named compile-time refusals |
+| `has(object.member)` | explicit final-member presence on a typed object | D-2026-09-14-3; no implicit optional access |
+| optional access, other macros/comprehensions and `in` | not admitted in this build | named compile-time refusals |
 | `variant`, structs, enums and structural/tagged unions | Rastok payload semantics, not CEL types | [`types.md`](types.md) |
 
 This is a test-only dependency: it adds 38 package entries to the lockfile,
@@ -123,6 +124,21 @@ Connector-setting expressions. Bare `now`, `now(args)` and user bindings named
 `now` refuse. Programs that need one-shot or periodic events rather than an
 observation in an already-running transaction use the `Timer` Connector;
 civil schedules use `Calendar`.
+
+### 1.3 Member presence
+
+`has(object.member)` tests a member without reading its value. The object must
+already be a text-keyed map or closed struct. Missing is false; present null
+is true. A value's type still requires `is`; presence is not a cast or proof
+that usage is numeric. Receiver evaluation errors remain errors, so nested
+optional members need explicit guards on their parents. Only dotted selectors
+are admitted; `has(value)`, multiple arguments and indexed selectors refuse.
+
+The parser lowers this spelling to a Call with the receiver and a literal key.
+The evaluator reads the receiver once and tests membership. This also permits
+pure `val` constants without eagerly evaluating the missing final member.
+Policy taint from the receiver follows the boolean result, including control
+flow; no sensitive-presence side channel is exempted from redaction.
 
 ## 2. A tagged frontend is not an expression keyword
 

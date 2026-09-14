@@ -1958,6 +1958,7 @@ impl Writer<'_> {
                     expr::Function::Size => 3,
                     expr::Function::Decimal => 4,
                     expr::Function::MediaType => 6,
+                    expr::Function::Has => 7,
                 });
                 self.count(args.len());
                 for arg in args {
