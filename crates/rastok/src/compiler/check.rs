@@ -306,20 +306,15 @@ pub fn check(
         pending_instances: Vec::new(),
         pending_connector_attributes: Vec::new(),
         declared_outputs: BTreeSet::new(),
+        unit_constants: BTreeMap::new(),
     };
-    // No top-level declaration is silently ignored, and none is
-    // silently dropped either: until unit composition and a real
-    // liveness analysis exist, every additional top-level declaration
-    // defers explicitly. W-DEAD-GRAPH belongs to that future analysis
-    // and is deliberately not emitted before it.
+    // Additional top-level Graphs still require unit composition/liveness.
+    // Constants are checked independently below, never silently ignored.
     for (_, tree) in &unit.files {
         for decl in &tree.decls {
             match decl {
                 TopDecl::Graph(graph) if !std::ptr::eq(app, graph) => {
                     checker.deferred("a top-level graph outside the App", graph.name.span);
-                }
-                TopDecl::Val(val) => {
-                    checker.deferred("a top-level val", val.span);
                 }
                 _ => {}
             }
@@ -369,6 +364,7 @@ pub fn check(
     // were refused above and collapse stops harmlessly on them).
     checker.collapse_alias_chains();
     checker.resolve_expression_types(&valid_type_names);
+    checker.check_unit_constants(unit);
     let mut checked_app = checker.graph(app);
     // The production schema seals HERE — from the deployed graph's
     // writes alone. Everything the Lab compiles below is checked
@@ -511,6 +507,9 @@ struct Checker<'bag, 'registry> {
     /// Source declarations only: contributed/inferred ports have routing
     /// obligations, but cannot warrant an unused-declaration warning.
     declared_outputs: BTreeSet<Endpoint>,
+    /// Pure unit bindings are expanded before HIR. Lab-only values cannot
+    /// create owner state or contribute to production identity.
+    unit_constants: BTreeMap<String, Const>,
 }
 
 #[derive(Clone)]
@@ -576,7 +575,7 @@ impl Checker<'_, '_> {
     /// source with offset-mapped spans.
     fn expr(&mut self, expr: &ExprSource, signature: &expr::Signature) -> Option<expr::Tree> {
         self.expr_with_asset_policy(expr, signature, false)
-            .map(|(tree, _)| tree)
+            .map(|(tree, _)| self.inline_unit_constants(tree, signature))
     }
 
     /// Compiles an expression used as the whole payload. Only this door may
@@ -587,6 +586,7 @@ impl Checker<'_, '_> {
         signature: &expr::Signature,
     ) -> Option<(expr::Tree, Option<String>)> {
         self.expr_with_asset_policy(expr, signature, true)
+            .map(|(tree, content_type)| (self.inline_unit_constants(tree, signature), content_type))
     }
 
     fn expr_with_asset_policy(
@@ -595,10 +595,11 @@ impl Checker<'_, '_> {
         signature: &expr::Signature,
         allow_root_content_type: bool,
     ) -> Option<(expr::Tree, Option<String>)> {
+        let signature = self.unit_signature(signature);
         let signature = self
             .resolved_types
             .iter()
-            .fold(signature.clone(), |signature, (name, ty)| {
+            .fold(signature, |signature, (name, ty)| {
                 signature.with_type(name.clone(), ty.clone())
             });
         match expr::compile(&source.text, &signature) {
@@ -1469,10 +1470,11 @@ impl Checker<'_, '_> {
     }
 
     fn graph(&mut self, decl: &GraphDecl) -> Graph {
+        let signature = self.unit_signature(&expr::Signature::new());
         self.graph_at(
             decl,
             crate::plan::OwnerPath::root(),
-            &expr::Signature::new(),
+            &signature,
             &BTreeMap::new(),
             true,
         )
@@ -2705,6 +2707,172 @@ impl Checker<'_, '_> {
             .map(|value| (value, annotations))
     }
 
+    fn check_unit_constants(&mut self, unit: &Unit) {
+        for (_, file) in &unit.files {
+            for declaration in &file.decls {
+                let TopDecl::Val(val) = declaration else {
+                    continue;
+                };
+                let signature = self.unit_signature(&expr::Signature::new());
+                if matches!(val.name.text.as_str(), "instance" | "Loop") {
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_DUP_BINDING,
+                            Phase::Check,
+                            format!(
+                                "`{}` is a reserved execution-context root, not a unit constant",
+                                val.name.text
+                            ),
+                        )
+                        .with_span(val.name.span)
+                        .with_field("name", val.name.text.clone()),
+                    );
+                    continue;
+                }
+                if !self.bindable(&val.name, &signature) {
+                    continue;
+                }
+                let Some((mut value, annotations)) =
+                    self.graph_val(val, &signature, &BTreeMap::new())
+                else {
+                    continue;
+                };
+                if !annotations.is_empty() {
+                    self.deferred(
+                        "an annotated unit val (use an annotated Graph or Operator binding)",
+                        val.span,
+                    );
+                    continue;
+                }
+                // Fold once, not once per use. The explicit witness preserves
+                // collection/composite types which a raw Value literal erases.
+                if !matches!(&value.tree.root, expr::Expr::Literal(_)) {
+                    value.tree.root = expr::Expr::As {
+                        expr: Box::new(expr::Expr::Literal(value.value.clone())),
+                        target: Box::new(expr::NarrowTarget::Type(Box::new(
+                            expr::NarrowType::new(value.tree.ty.clone()),
+                        ))),
+                    };
+                }
+                self.unit_constants.insert(val.name.text.clone(), value);
+            }
+        }
+    }
+
+    fn unit_signature(&self, local: &expr::Signature) -> expr::Signature {
+        self.unit_constants
+            .iter()
+            .fold(local.clone(), |signature, (name, value)| {
+                // A Dispatch guard may have narrowed an immutable global. Never
+                // overwrite that checked local fact with its original broad type.
+                if signature.get(name).is_some() {
+                    signature
+                } else {
+                    signature.with(name.clone(), value.tree.ty.clone())
+                }
+            })
+    }
+
+    fn inline_unit_constants(
+        &self,
+        mut tree: expr::Tree,
+        signature: &expr::Signature,
+    ) -> expr::Tree {
+        if self.unit_constants.is_empty() {
+            return tree;
+        }
+        tree.root = self.inline_unit_expression(&tree.root, &self.unit_signature(signature));
+        tree
+    }
+
+    fn inline_unit_expression(&self, tree: &expr::Expr, signature: &expr::Signature) -> expr::Expr {
+        super::constants::substitute(tree, &|expression| match expression {
+            expr::Expr::Path(path) => self.unit_constant_reference(path, signature),
+            // Keep the expression language's positive flow facts until the
+            // selected subexpression is typed; only then erase global names.
+            expr::Expr::Binary {
+                op: expr::BinaryOp::And,
+                left,
+                right,
+            } => Some(expr::Expr::Binary {
+                op: expr::BinaryOp::And,
+                left: Box::new(self.inline_unit_expression(left, signature)),
+                right: Box::new(self.inline_unit_expression(right, &signature.narrowed_by(left))),
+            }),
+            expr::Expr::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => Some(expr::Expr::Ternary {
+                cond: Box::new(self.inline_unit_expression(cond, signature)),
+                then: Box::new(self.inline_unit_expression(then, &signature.narrowed_by(cond))),
+                otherwise: Box::new(self.inline_unit_expression(otherwise, signature)),
+            }),
+            _ => None,
+        })
+    }
+
+    fn unit_constant_reference(
+        &self,
+        path: &[String],
+        signature: &expr::Signature,
+    ) -> Option<expr::Expr> {
+        use crate::value::Value;
+        let constant = self.unit_constants.get(path.first()?)?;
+        let reference = expr::compile(&path.join("."), signature).ok()?;
+        if path.len() == 1 && reference.ty == constant.tree.ty {
+            return Some(constant.tree.root.clone());
+        }
+        let mut value = &constant.value;
+        for member in &path[1..] {
+            let fields = match value {
+                Value::Struct(fields) => Some(fields),
+                Value::TaggedUnion(tagged) => Some(&tagged.payload),
+                _ => None,
+            };
+            let found = match value {
+                Value::Map(fields) => fields.get(member),
+                _ => fields.and_then(|fields| {
+                    fields
+                        .iter()
+                        .find(|(name, _)| name == member)
+                        .map(|(_, value)| value)
+                }),
+            };
+            match found {
+                Some(next) => value = next,
+                None => {
+                    // A false guard may protect a missing member. Keep that
+                    // fallible read inside its expression, not at check time.
+                    let object = fields.map_or_else(
+                        || value.clone(),
+                        |fields| Value::Map(fields.iter().cloned().collect()),
+                    );
+                    let read = expr::Expr::Index {
+                        base: Box::new(super::constants::typed_literal(
+                            object,
+                            DataType::text_map(DataType::Variant),
+                        )),
+                        index: Box::new(expr::Expr::Literal(Value::Text(member.clone()))),
+                    };
+                    return Some(expr::Expr::As {
+                        expr: Box::new(read),
+                        target: Box::new(expr::NarrowTarget::Type(Box::new(
+                            expr::NarrowType::new(reference.ty),
+                        ))),
+                    });
+                }
+            }
+        }
+        let value = match (value, &reference.ty) {
+            (Value::TaggedUnion(tagged), DataType::Struct(_)) => {
+                Value::Struct(tagged.payload.clone())
+            }
+            _ => value.clone(),
+        };
+        Some(super::constants::typed_literal(value, reference.ty))
+    }
+
     fn operator(
         &mut self,
         decl: &OperatorDecl,
@@ -3559,6 +3727,11 @@ impl Checker<'_, '_> {
                         .collect::<Vec<_>>()
                         .join(".");
                     let invocation_spec = self.invocation_attribute_spec(node, &name);
+                    let expression_setting = node
+                        .connector_contract_id()
+                        .and_then(|id| self.registry.connector_by_id(id))
+                        .and_then(|sheet| sheet.attribute(sheet.owning_profile(&name), &name))
+                        .is_some_and(|spec| spec.domain.expression_type().is_some());
                     if node.connector_contract_id().is_none() {
                         self.deferred("an operator attribute", attribute.span);
                     } else if !written_attributes.insert(name.clone()) {
@@ -3584,9 +3757,14 @@ impl Checker<'_, '_> {
                                 consts: consts.clone(),
                                 span: attribute.span,
                             });
-                    } else if let Some(checked) =
-                        self.attribute_value(&attribute.value, &signature, &consts, attribute.span)
-                        && let NodeSemantics::Connector { attributes, .. } = &mut node.semantics
+                    } else if let Some(checked) = self.attribute_value(
+                        &attribute.value,
+                        &signature,
+                        &consts,
+                        attribute.span,
+                        expression_setting,
+                    ) && let NodeSemantics::Connector { attributes, .. } =
+                        &mut node.semantics
                     {
                         attributes.push(Attribute {
                             name,
@@ -3937,7 +4115,9 @@ impl Checker<'_, '_> {
         }
         let collision = if matches!(name.text.as_str(), "data" | "meta") {
             Some("a reserved handler name")
-        } else if signature.get(&name.text).is_some() {
+        } else if signature.get(&name.text).is_some()
+            || self.unit_constants.contains_key(&name.text)
+        {
             Some("an already visible binding")
         } else {
             None
@@ -4958,11 +5138,15 @@ impl Checker<'_, '_> {
         signature: &expr::Signature,
         consts: &BTreeMap<String, crate::value::Value>,
         span: Span,
+        expression_setting: bool,
     ) -> Option<AttrValue> {
         match value {
             // The parser already spoke for its recovery form.
             SynValue::Error(_) => None,
-            SynValue::Expr(expr) if is_bare_word(&expr.text) => {
+            SynValue::Expr(expr)
+                if is_bare_word(&expr.text)
+                    && !(expression_setting && signature.get(&expr.text).is_some()) =>
+            {
                 Some(AttrValue::Word(expr.text.clone()))
             }
             SynValue::Expr(expr) => self.constant(expr, signature, consts).map(AttrValue::Const),

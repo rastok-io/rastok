@@ -160,6 +160,17 @@ compare them to the bridge-generated scenario's.
 
 ## 3. Syntax — the graph's own grammar, mirrored
 
+Top-level `val`s belong to the compilation unit and are visible in mock
+Dispatch, fixture data and metadata, expectation predicates and `advance`
+durations. For example, `val bob_session = "22222222222222222222222222222222"`
+may supply both `meta.ext.session_id = bob_session` and its assertion.
+Graph/Node bindings do not escape into the Lab; mock-handler `val`s stay local
+to their Dispatch. This adds no `val` declarations to `lab`, `simulation` or
+`scenario` bodies. Constants used only by the Lab never enter the production
+plan or hash; substituting the same scalar literals preserves scenario traces.
+Unit constant ordering, type and annotation limits are defined in
+[grammar.md, References](grammar.md#references--rastok-expressions-without-interpolation).
+
 A simulation is *"writing the graph's possible worlds, in the graph's
 language"*. Almost every simulation construct is an existing graph
 construct :

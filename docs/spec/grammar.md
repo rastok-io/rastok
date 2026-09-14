@@ -1101,6 +1101,26 @@ all project into the union forms in [types.md](types.md).
 
 The DSL has no `${…}` interpolation token.
 
+- **Unit constants**: a top-level `val name[: Type] = value` is an immutable
+  plan-time constant shared by the selected source files, the App and its Lab.
+  All top-level constants are checked before Graph and Lab consumers, even if
+  their file follows a consumer file. Initializers may refer to earlier unit
+  constants in compilation/source order; forward references and cycles refuse.
+  They cannot read an envelope, instance state, logical time, `env()` or
+  `secret()`. Duplicate names and local bindings or join aliases shadowing a
+  global refuse `E-DUP-BINDING`; `data`, `meta`, `instance`, `Loop` and `now`
+  cannot be global binding names. The expression/value grammar and declared-type
+  rules are unchanged. Annotated unit constants, including annotated aliases,
+  remain a named gate: use a Graph or Operator binding so data-policy metadata
+  cannot disappear through substitution.
+  A unit constant is folded once and substituted with its checked type before
+  production HIR; it creates no state cell or package field. Unused constants
+  and constants used only by Lab do not enter the graph identity. Replacing a
+  scalar literal with a constant holding that same literal preserves the plan
+  and hash. Computed/typed constants are not a general algebraic-equivalence
+  promise ([identity.md §1](identity.md#1-the-semantic-hash)).
+  Expression-valued Connector attributes accept visible constant names;
+  literal choices such as `codec = lines` retain their Contract meaning.
 - **Boot phase target** (unit/App boot `val`s and effective Connector settings
   whose selected evaluation site is boot) : the exact root reference forms
   **`env("VAR")`** and **`secret("path")`**. M1.8 A4 executes only

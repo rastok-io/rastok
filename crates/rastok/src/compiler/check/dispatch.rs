@@ -77,6 +77,11 @@ impl Checker<'_, '_> {
                         let mut ports = Vec::with_capacity(names.len());
                         let mut unique = BTreeSet::new();
                         for name in names {
+                            if self.unit_constants.contains_key(&name.text)
+                                && !self.bindable(name, node_signature)
+                            {
+                                return None;
+                            }
                             let Some(direction) = self.node_port_direction(node, &name.text) else {
                                 self.bag.push(
                                     Diagnostic::new(
@@ -188,7 +193,7 @@ impl Checker<'_, '_> {
         for clause in &decl.guards {
             match clause {
                 crate::compiler::syntax::Guard::Where(expr) if where_guard.is_none() => {
-                    let tree = self.expr(expr, &signature)?;
+                    let (tree, _) = self.expr_with_asset_policy(expr, &signature, false)?;
                     if !matches!(tree.ty, DataType::Bool | DataType::Variant) {
                         self.bag.push(
                             Diagnostic::new(E_EXPR, Phase::Check, "a where guard must be a bool")
@@ -301,6 +306,7 @@ impl Checker<'_, '_> {
             }
         }
         let is_join = matches!(&activation, node::HandlerActivation::Join { .. });
+        let guard_signature = signature.clone();
         if is_join && let Some(guard) = &where_guard {
             signature = signature.narrowed_by(&guard.root);
         }
@@ -338,6 +344,9 @@ impl Checker<'_, '_> {
             &activation,
             declared_data_type.as_ref(),
         )?;
+        // Narrow using authored paths before erasing immutable unit bindings.
+        let where_guard =
+            where_guard.map(|tree| self.inline_unit_constants(tree, &guard_signature));
         let admission_guard = if is_join {
             where_guard
         } else {
@@ -730,7 +739,7 @@ impl Checker<'_, '_> {
         activation: &node::HandlerActivation,
         declared_data_type: Option<&DataType>,
     ) -> Option<Dispatch> {
-        let scrutinee = self.expr(source, signature)?;
+        let (scrutinee, _) = self.expr_with_asset_policy(source, signature, false)?;
         let Some(domain) = closed_case_domain(&scrutinee.ty) else {
             self.bag.push(
                 Diagnostic::new(
@@ -897,7 +906,7 @@ impl Checker<'_, '_> {
         )?;
         Some(Dispatch::ClosedMatch {
             prefix,
-            scrutinee,
+            scrutinee: self.inline_unit_constants(scrutinee, signature),
             arms: checked,
         })
     }
@@ -958,7 +967,7 @@ impl Checker<'_, '_> {
                         );
                         return None;
                     }
-                    let predicate = self.expr(source, signature)?;
+                    let (predicate, _) = self.expr_with_asset_policy(source, signature, false)?;
                     if !matches!(predicate.ty, DataType::Bool | DataType::Variant) {
                         self.bag.push(
                             Diagnostic::new(
@@ -981,7 +990,7 @@ impl Checker<'_, '_> {
                         declared_data_type,
                     )?;
                     checked.push(OpenArm {
-                        predicate,
+                        predicate: self.inline_unit_constants(predicate, signature),
                         dispatch: Box::new(dispatch),
                     });
                 }

@@ -5,8 +5,9 @@
 //! formatting, file order, and declaration order — nodes, vals,
 //! attributes, vars, ports, and edges are sorted before hashing —
 //! sensitive to topology, statement order inside a handler, every Rastok expression
-//! as its canonical tree, and `var` defaults. Constants
+//! as its canonical tree, and `var` defaults. Owner constants
 //! hash as the expressions they were written as, before const-eval;
+//! unit-global constants have already been folded and substituted at check.
 //! spans never enter the bytes. The plan then ships the reduced
 //! values.
 
@@ -947,95 +948,22 @@ fn substitute_tree(
     consts: &std::collections::BTreeMap<String, crate::value::Value>,
 ) -> expr::Tree {
     expr::Tree {
-        root: substitute(&tree.root, consts),
-        ty: tree.ty.clone(),
-    }
-}
-
-fn substitute(
-    expr: &expr::Expr,
-    consts: &std::collections::BTreeMap<String, crate::value::Value>,
-) -> expr::Expr {
-    let recurse = |inner: &expr::Expr| Box::new(substitute(inner, consts));
-    match expr {
-        expr::Expr::Asset(_) => expr.clone(),
-        expr::Expr::Path(segments) => match consts.get(&segments[0]) {
-            None => expr.clone(),
-            Some(value) => {
-                let mut result = expr::Expr::Literal(value.clone());
-                for segment in &segments[1..] {
-                    result = expr::Expr::Index {
-                        base: Box::new(result),
-                        index: Box::new(expr::Expr::Literal(crate::value::Value::Text(
-                            segment.clone(),
-                        ))),
-                    };
-                }
-                result
+        root: super::constants::substitute(&tree.root, &|expression| {
+            let expr::Expr::Path(segments) = expression else {
+                return None;
+            };
+            let mut result = expr::Expr::Literal(consts.get(segments.first()?)?.clone());
+            for segment in &segments[1..] {
+                result = expr::Expr::Index {
+                    base: Box::new(result),
+                    index: Box::new(expr::Expr::Literal(crate::value::Value::Text(
+                        segment.clone(),
+                    ))),
+                };
             }
-        },
-        expr::Expr::Literal(_) => expr.clone(),
-        expr::Expr::Unary { op, expr } => expr::Expr::Unary {
-            op: *op,
-            expr: recurse(expr),
-        },
-        expr::Expr::Binary { op, left, right } => expr::Expr::Binary {
-            op: *op,
-            left: recurse(left),
-            right: recurse(right),
-        },
-        expr::Expr::Ternary {
-            cond,
-            then,
-            otherwise,
-        } => expr::Expr::Ternary {
-            cond: recurse(cond),
-            then: recurse(then),
-            otherwise: recurse(otherwise),
-        },
-        expr::Expr::Index { base, index } => expr::Expr::Index {
-            base: recurse(base),
-            index: recurse(index),
-        },
-        expr::Expr::Call { function, args } => expr::Expr::Call {
-            function: *function,
-            args: args.iter().map(|arg| substitute(arg, consts)).collect(),
-        },
-        expr::Expr::List(items) => {
-            expr::Expr::List(items.iter().map(|item| substitute(item, consts)).collect())
-        }
-        expr::Expr::MapLit(entries) => expr::Expr::MapLit(
-            entries
-                .iter()
-                .map(|(key, value)| (key.clone(), substitute(value, consts)))
-                .collect(),
-        ),
-        expr::Expr::Struct(fields) => expr::Expr::Struct(
-            fields
-                .iter()
-                .map(|(name, value)| (name.clone(), substitute(value, consts)))
-                .collect(),
-        ),
-        expr::Expr::Tagged {
-            union,
-            case,
-            fields,
-        } => expr::Expr::Tagged {
-            union: union.clone(),
-            case: case.clone(),
-            fields: fields
-                .iter()
-                .map(|(name, value)| (name.clone(), substitute(value, consts)))
-                .collect(),
-        },
-        expr::Expr::Is { expr, target } => expr::Expr::Is {
-            expr: recurse(expr),
-            target: target.clone(),
-        },
-        expr::Expr::As { expr, target } => expr::Expr::As {
-            expr: recurse(expr),
-            target: target.clone(),
-        },
+            Some(result)
+        }),
+        ty: tree.ty.clone(),
     }
 }
 

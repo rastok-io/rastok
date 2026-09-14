@@ -2232,7 +2232,7 @@ fn no_top_level_declaration_is_silently_ignored() {
         .map(|diagnostic| diagnostic.fields()[0].1.as_str())
         .collect();
     assert!(constructs.contains(&"a top-level graph outside the App"));
-    assert!(constructs.contains(&"a top-level val"));
+    assert_eq!(constructs, ["a top-level graph outside the App"]);
 }
 
 #[test]

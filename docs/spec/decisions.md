@@ -5,6 +5,34 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-09-14-2 — Resolve unit-global constants in the App and its Lab
+
+Yoann requested that repeated fixture identifiers use ordinary top-level
+`val`s, with more local declarations keeping their lexical scope. The parsed
+unit declaration now executes as a pure plan constant. It is checked before
+Graph/Lab consumers; initializers use earlier unit constants in selected-file
+and source order. No forward references, mutable global store, environment
+lookup or new Lab declaration form is introduced. All declared constants are
+checked, including unused ones; duplicates, shadowing and runtime dependencies
+refuse with existing source diagnostics.
+
+Constants substitute through the existing expression algebra before production
+HIR. Scalar-literal references preserve the identical literal tree; composites
+and computed values retain their checked types and lazy narrowing/read failures.
+Literal Contract choices are not captured by same-named constants. Annotated
+unit constants remain a named refusal, including through a type alias: policy
+must not vanish when a binding is erased. Graph/Operator annotated bindings
+remain the supported path.
+
+No package, Contract, journal or type tag changes. Unused and Lab-only constants
+do not affect production identity. Owner-local values retain their existing
+phase and identity rules. The agent gateway's session and thread identifiers
+move to unit constants; its goldens are checked unchanged, not re-blessed.
+
+Rejected: duplicating long IDs in each scenario, inventing fixture-only
+constants, implicitly shadowing an outer binding, and serializing a global
+constant table into every production plan.
+
 ## D-2026-09-08-1 — Loop extends the host terminal without contributing ports
 
 Loop contributes no port. Operator and Graph use their declared `out` and

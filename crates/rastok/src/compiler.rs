@@ -9,6 +9,7 @@
 //! [`grammar.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/grammar.md
 
 pub mod check;
+mod constants;
 pub mod hir;
 pub mod lexer;
 pub mod lower;

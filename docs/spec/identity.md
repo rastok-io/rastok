@@ -106,6 +106,15 @@ frontend/compiler/lowering profile, ABI and `GuestExecutor` identities.
 
 Rules :
 
+- Unit-global `val`s are plan constants, folded and substituted with their
+  checked type before production HIR (D-2026-09-14-2). They have no serialized
+  binding table. An unused or Lab-only constant contributes no bytes. A scalar
+  literal reference substitutes that same literal tree, so factoring it into a
+  global preserves hash, package and causal traces. Composite/computed constants
+  retain explicit type witnesses; this does not promise that arbitrary literal
+  rewrites or constant arithmetic share an identity. Owner `val`s keep their
+  existing expression/phase identity rules. Reordering accepted declarations
+  does not change identity; initializers must still follow their dependencies.
 - `env()` / `secret()` hash **as expressions** : the same source has the
   same identity in dev and prod ; values live in the deployment profile,
   never in the identity.
