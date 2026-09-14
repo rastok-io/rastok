@@ -256,6 +256,12 @@ meaning; disagreement is `E-DATA-ANNOTATION`, never a first-wins choice.
 Metadata has no data-policy schema in M1, so writing classified data into
 `meta.app` or `meta.ext` refuses rather than losing its policy.
 
+Short-circuit `&&` carries the left operand's proven type/case into the
+right operand's policy derivation, just as expression typing does. Both
+operands still contribute control taint; narrowing never declassifies the
+decision. The `short_circuit_and_projects_policy_through_the_proven_case`
+regression covers ordinary and join-qualified paths.
+
 Opaque guest execution remains a named gate. No guest form can execute around
 this judgement; a future guest boundary must use the same conservative
 security-taint rule and discard accounting meaning before admission.

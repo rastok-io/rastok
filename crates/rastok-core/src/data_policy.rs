@@ -263,6 +263,19 @@ fn derive(
         Expr::Unary { expr, .. } | Expr::Is { expr, .. } => {
             calculation([derive(expr, environment, signature)?.annotations])?
         }
+        Expr::Binary {
+            op: expr::BinaryOp::And,
+            left,
+            right,
+        } => {
+            // The right operand exists only under the left operand's proof,
+            // exactly as in expression typing. Keep both operands' taint.
+            let right_environment = environment.narrowed_by(left)?;
+            calculation([
+                derive(left, environment, signature)?.annotations,
+                derive(right, &right_environment, &right_environment.signature())?.annotations,
+            ])?
+        }
         Expr::Binary { left, right, .. } => calculation([
             derive(left, environment, signature)?.annotations,
             derive(right, environment, signature)?.annotations,
@@ -1086,6 +1099,46 @@ mod tests {
                 DataAnnotation::Secret,
             ]
         );
+    }
+
+    #[test]
+    fn short_circuit_and_projects_policy_through_the_proven_case() {
+        let ty = crate::boundary::http_client_exit_type()
+            .unwrap_or_else(|error| panic!("HTTP terminal type: {error}"));
+        let status = SchemaPath::root()
+            .child(SchemaPathSegment::TaggedUnionCase("Completed".into()))
+            .child(SchemaPathSegment::Field("status".into()));
+        for annotations in [
+            AnnotationTable::empty(),
+            table(
+                status,
+                DataAnnotation::Sensitive(SensitivityLevel::Confidential),
+            ),
+        ] {
+            for root in ["data", "reply.data"] {
+                let environment = Environment::new().with(root, ty.clone(), annotations.clone());
+                let predicate = expr::compile(
+                    &format!("{root} is Completed && {root}.status >= 200 && {root}.status < 300"),
+                    &environment.signature(),
+                )
+                .unwrap_or_else(|error| panic!("the guard is well typed: {error:?}"));
+                let policy = expression(&predicate, &environment)
+                    .unwrap_or_else(|error| panic!("a proven projection must derive: {error}"));
+                assert_eq!(
+                    policy,
+                    security_taint([annotations.clone()])
+                        .unwrap_or_else(|error| panic!("valid control taint: {error}"))
+                );
+                assert!(
+                    expr::compile(
+                        &format!("{root} is Completed || {root}.status >= 200"),
+                        &environment.signature(),
+                    )
+                    .is_err(),
+                    "OR does not prove the right-hand case"
+                );
+            }
+        }
     }
 
     #[test]
