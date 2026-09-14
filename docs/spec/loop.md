@@ -10,6 +10,13 @@
 > records the host checkpoint; [R9](../architecture/rework-r9-qualification.md)
 > records the final migration and qualification.
 
+> **Approved next refactor (2026-09-14):**
+> [D-2026-09-14-4](decisions.md#d-2026-09-14-4--separate-loop-retry-and-saga-over-one-recurrence-engine)
+> separates state iteration from protected repetition of one Call. Loop keeps
+> its state, commands and finitude contract. The current effect-safety coupling
+> in §§11–12 is to be superseded at the versioned cutover, not silently waived
+> in today's checker. See the [refactor contract](../architecture/retry-extension-refactor.md).
+
 `Loop` is a temporal Extension which applies one finite host application,
 then either terminates or re-enters the same host input. Recurrence is a
 journal-derived manager transition, never an edge in the spatial DAG.

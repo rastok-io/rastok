@@ -5,6 +5,69 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-09-14-4 — Separate Loop, Retry and Saga over one recurrence engine
+
+**Approved refactor contract; not an executable package amendment yet.**
+Yoann approved `Retry` as a distinct Extension, not a mode or alias of Loop,
+and approved publishing only the retained final attempt's result to the graph.
+The [refactor contract and staging ledger](../architecture/retry-extension-refactor.md)
+separate these settled semantics from the remaining transport and runtime work.
+
+A Loop advances a state; a Retry repeats an operation. Loop's body chooses
+Next/Again/Done and proves finite recurrence by fuel or measure. Retry retains
+the prepared operation, selects recurrence from a static terminal-case list,
+and proves repetition safety from the Contract's visibility facts and the
+operation's idempotence guarantee. Retry also has a finite attempt bound.
+It exposes no authored state, command, or port. Its retained request, attempt
+position and wake-up are internal journal-derived protocol state, not a
+`Retry.state` binding or a second mutable ledger.
+
+The vocabulary is `App`, `Loop`, `Retry`, `Saga`. Retry owns
+`Retry.attempts` (positive total, first attempt included), `Retry.delay`, and
+`Retry.on` (a static set of the host Contract's terminal cases). The first
+profile is a finite outbound Connector Call. Session, Event, inbound Call,
+Operator and whole-Graph retry are not implicitly admitted. No executable
+`Loop.mode`, `Retry.next`, retry handler, or result-payload predicate is added.
+
+Each attempt has a distinct Call identity. The same operation retains its
+prepared request, resolved invocation settings and any partner idempotency
+key across attempts. A key does not itself prove partner deduplication.
+Repetition after `before_effect` is safe; after `outcome_unknown` or
+`after_effect` it requires the explicit idempotence guarantee. Ordinary Calls
+need no Saga classification merely to execute once. Idempotence is separate
+from `behavior`; the global `effect` requirement is to be removed, and
+compensation/irreversibility belong to Saga's own future step contract.
+
+Only the attempt that ends Retry publishes ordinary host outputs and its
+terminal to downstream consumers. At exhaustion the last failure passes
+through unchanged: no `RetryExpired` wrapper or output is introduced. Every
+attempt's retained outcome remains available to replay, policy-controlled
+inspection and accounting; hidden intermediate graph outputs must not hide
+their consumption or double-count the final attempt.
+
+Loop and Retry share the recurrence manager, bounded scheduling, quiescence,
+generation fencing and journal fold. Their decision causes remain explicit:
+an authored Loop command is not an automatically selected Call terminal.
+Refactoring the common fact algebra must not invent `Loop.again` commands
+for Retry or reinterpret historical `rastok.loop.r2` facts. A Loop may contain
+Retry; Retry never contains an iteration. Any same-owner composition must
+preserve that nesting independent of Extension spelling order, and remains
+unadmitted until its complete protocol is qualified.
+
+This supersedes the selected D-2026-09-05-1 clauses coupling all Loop
+recurrence to `effect = none | idempotent`, and the global Connector effect
+gate, when the versioned cutover lands. Graph/Executor separation, the spatial
+DAG, Loop state/commands/fuel, Call close-once, journal-before-I/O, no-recall
+replay, and the separate Saga execution gate remain. The v18 implementation
+continues to be described as such until the cutover; this entry allocates no
+tag, changes no golden and authorizes no paid invocation or public release.
+
+Rejected: `Loop.mode = iterate | retry`; an authored `decide` Operator merely
+to implement a static retry list; classifying paid inference as idempotent to
+pass the existing gate; running a Driver retry without a retained attempt;
+exposing intermediate failures as final graph results; erasing those attempts
+from accounting; reusing an old tag with a different meaning.
+
 ## D-2026-09-14-3 — Test object-member presence without reading absent data
 
 Yoann authorized the minimal `has(...)` addition to complete the HTTP usage

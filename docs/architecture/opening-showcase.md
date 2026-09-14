@@ -8,6 +8,9 @@ D-2026-09-14-1 admits `process@3` inside unchanged v18; its
 gate. D-2026-09-14-3 separately authorizes minimal pure member-presence
 inspection, without a package-version or journal move. This ledger records
 delivery, not new semantic authority.
+The subsequent D-2026-09-14-4 approves the
+[Loop / Retry / Saga refactor](retry-extension-refactor.md); its implementation
+and versioned cutover are still ahead. Current executable packages remain v18.
 The [explicit instance-closure design](instance-stop-command.md) is now
 executed through bounded retained requests, with an explicitly versioned
 package and recording; its qualification ledger does not claim Process service.
@@ -42,6 +45,7 @@ dead when no handler emits on that port.
 | Readable golden divergence | Done | Expected/actual labels, first record and field, retained causal context; shared CLI/UI path; classified values hidden; byte/seal comparison unchanged |
 | `rastok new` | Done | One executable typed graph plus Lab; tests simulate it and prove no overwrite and path/name refusals |
 | Optional JSON member presence | Done | Approved `has(object.member)`, core evaluator, independent package validation, constant folding, classification and pinned CEL differential tests; absence is distinct from null and observed zero; no witness re-blessing |
+| Loop / Retry / Saga separation | Partial — contract approved, implementation not started | D-2026-09-14-4 distinguishes state iteration from protected attempts over one recurrence engine and removes the global effect gate at cutover. [C0–C4](retry-extension-refactor.md#8-implementation-order-and-exits) track algebra, identity, implementation and qualification; no format change is claimed yet |
 | `docs/site/README.md` schema | Done | Plain Markdown/YAML, exact requested fields; Rust validation rejects missing/unknown/duplicate fields and checks artifact references; no extra field introduced |
 | Editor grammar | Done for the executable v18 syntax | Data-only package, three lexical tests and two real TextMate/Oniguruma tests; all shipped examples, JSON quoting, raw readers, nested comments and instance commands. Future guest compilers and semantic tokens remain outside scope; no interactive historical-VS-Code certification |
 | echo page and comparison | Done | Three scenarios and gallery goldens; reproducible run/replay; `cli` versus `lab` provenance prevents a false claim of raw run/simulate seal equality |
@@ -50,7 +54,7 @@ dead when no handler emits on that port.
 | HttpServer ack source simulation | Done — qualification below | Decoded requests use the ordinary inbound binding and correlated ACK without a physical Driver or artificial App input; source observations come from INBOUND |
 | webhook-to-partner | Done — executable graph, audit profile, page and regression qualification | Six scenarios, including explicit HTTP 500 handling; deterministic journals, bounded Calls, attestation refusal, exact costs and snapshot/browser redaction pass. Visual assets are delivered below; malformed-wire refusal is qualified by real HTTP conformance, not decoded Lab injections |
 | sensor-alarm | Done | New graph/page, three scenarios/goldens: per-sensor hysteresis, missing heartbeat, virtual day; warm CLI measurement published with its limits |
-| agent-gateway | Partial — resident WebSocket bridge delivered; HTTP usage/credential adapter awaits effect classification | Native-JSON protocol scenarios, exact conversation ownership and independent resident children are qualified. Minimal `has` is now approved and implemented. The HTTP candidate stays outside the executable gallery until the meaning of a paid, tool-free inference under `effect = none` is decided; `irreversible` still refuses, and no idempotence is invented. See [evidence](agent-gateway-showcase.md) |
+| agent-gateway | Partial — resident WebSocket bridge delivered; HTTP usage/credential adapter awaits the approved refactor | Native-JSON protocol scenarios, exact conversation ownership and independent resident children are qualified. Minimal `has` is implemented. D-2026-09-14-4 resolves the design question: ordinary Calls need no Saga classification. The candidate still refuses under the current effect gate; implementing the cutover and qualifying the adapter remain required, with no invented idempotence. See [evidence](agent-gateway-showcase.md) |
 | Explicit conversation / child closure | Implemented — core/CLI qualification complete | `instance.stop` / `child.instance.stop`, exact generation, bounded queue, repeat-safe Closing, journal/recovery and recording v2. Package v18 is explicit; nonparticipating bodies/hashes/traces remain unchanged. Two-budget Session handoff follow-up: 1,356 tests passed, zero failed/ignored; three no_std targets and embedded heap rechecked. Missing/ambiguous targets refuse; an external input cannot guess a nested command's scope and refuses at check. This dated closure evidence is complemented by physical supervision in the resident-service ledger and local gateway browser tests. See [evidence](instance-stop-command.md#9-two-budget-session-shutdown--10-september) |
 | Gallery learning path | Done for six published chapters | Book-style index, graph-reading guides, transferable ideas and previous/next navigation. Chapter 6 now references the resident gateway and links the primer; its usage/credential limits remain prominent. No front-matter schema expansion |
 | Quickstart and README | Partial | One source block, exact-copy test, working `new` path and flagship/profile command; [two unaided trials](quickstart-trials.md) are prepared but not performed |
@@ -72,7 +76,9 @@ Three implementation changes are independently committed: pure member
 presence (`d0931ee`), real intermediate time-advance/debugger states
 (`672ac5b`), and alpha crate/distribution preparation (`29c88f6`). The HTTP
 candidate is retained in `docs/examples/`, not promoted into `examples/` or
-the executable gallery while its effect declaration remains undecided.
+the executable gallery. At this checkpoint its effect declaration was
+undecided; D-2026-09-14-4 subsequently chose to remove the global requirement
+through the refactor tracked above. That cutover is not part of these tests.
 
 Executed locally:
 
@@ -108,7 +114,7 @@ The two local macOS archives and checked `SHA256SUMS` are under `dist/` there.
 These are build artifacts, not public releases. A complete rerun against
 the prepared alpha manifests is recorded separately in `workspace-final.log`.
 
-Still required to close M1: the HTTP adapter's effect classification and
+Still required to close M1: the approved refactor and HTTP adapter's
 execution evidence, Linux build, independent browser retest, two unaided
 quickstart trials, the exact paid-wave identities/authorization, confirmed
 public repository URLs and the explicitly ordered release. None is inferred
@@ -132,9 +138,10 @@ existing HTTP-source batch/step test also passes.
 At this earlier checkpoint the HTTP one-model adapter was not closed because
 safe inspection of an optional JSON member was missing. Yoann subsequently
 authorized minimal `has(...)` under D-2026-09-14-3; the current delivery table
-records its implementation and the distinct remaining effect-classification
-question. Model costs remain unknown rather than fabricated from transport
-events. No permissive map-to-struct cast was introduced.
+records its implementation and the subsequently approved effect-separation
+refactor, whose implementation remains open. Model costs remain unknown rather
+than fabricated from transport events. No permissive map-to-struct cast was
+introduced.
 
 Documentation assets now have their reproducible capture command in
 [release-qualification.md](release-qualification.md#publication-assets--14-september).

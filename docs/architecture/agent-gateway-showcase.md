@@ -100,10 +100,12 @@ regression gate. No golden is blessed merely to cover a failure.
   The [candidate adapter](../examples/agent-http-candidate.rkg) distinguishes
   missing/null/invalid usage from reported zero. It deliberately remains outside
   the executable gallery: `effect = irreversible` is still refused in M1.
-  Classifying tool-free, non-storing paid inference as `none` with separately
-  accounted expenditure requires an explicit decision; calling it idempotent
-  merely to pass the checker would be dishonest. No paid invocation or adapter
-  execution is claimed. The proposed wire shape follows the
+  D-2026-09-14-4 resolves that design question through the
+  [Loop / Retry / Saga refactor](retry-extension-refactor.md): an ordinary
+  Call needs no Saga classification or fabricated idempotence guarantee.
+  Implementing that cutover and qualifying the adapter remain open; neither
+  paid invocation nor adapter execution is claimed. The proposed wire shape
+  follows the
   [official Responses request/response schema](https://developers.openai.com/api/reference/cli/resources/responses/methods/create),
   consulted on 14 September. Companion prices are fictional demonstration rates,
   never OpenAI tariffs.

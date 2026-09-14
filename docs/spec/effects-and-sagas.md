@@ -6,6 +6,16 @@
 > claim Saga semantics until the independent Saga decision closes every gate
 > in §5.
 
+> **Approved next refactor (2026-09-14):**
+> [D-2026-09-14-4](decisions.md#d-2026-09-14-4--separate-loop-retry-and-saga-over-one-recurrence-engine)
+> removes the global Connector `effect` requirement at cutover. An ordinary
+> Call needs no Saga classification; operation idempotence governs Retry
+> safety, while compensation and irreversibility belong to the future Saga
+> step contract. The classification and gates below describe the pre-cutover
+> implementation, not the approved target. The
+> [refactor ledger](../architecture/retry-extension-refactor.md) tracks their
+> replacement; Saga execution remains unimplemented.
+
 This document owns the static classification of external effects and the
 minimal direction reserved for the future Saga Extension. Loop repetition
 safety is specified in [loop.md](loop.md).

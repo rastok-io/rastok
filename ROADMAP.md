@@ -60,8 +60,15 @@ Session contract inside that unchanged package (D-2026-09-14-1); jobs stay
 `process@2`. See the [service ledger](docs/architecture/process-service.md).
 The minimal optional-member expression `has(object.member)` is separately
 approved by D-2026-09-14-3, with no package-version or journal change.
-Other semantics remain frozen. The remaining work is the six-example showcase and its
-qualification, tracked in the [opening ledger](docs/architecture/opening-showcase.md).
+The Loop / Retry / Saga separation is now approved by D-2026-09-14-4:
+one recurrence engine, distinct state-iteration and protected-Call protocols,
+and no global Saga effect classification for ordinary Calls. This is a
+new refactor, not delivered Retry support; current packages remain v18.
+Its [contract and staged gates](docs/architecture/retry-extension-refactor.md)
+require an identity inventory before any executable format cutover.
+Other semantics remain frozen. The remaining work includes the six-example
+showcase and its qualification, tracked in the
+[opening ledger](docs/architecture/opening-showcase.md).
 
 The 10 September opening brief separates the gates. The six-example gallery,
 measured quickstart, two CLI helpers, release binaries, editor grammar, captures

@@ -1,6 +1,6 @@
 // Candidate, not an executable gallery page. M1 refuses effect = irreversible.
-// Pending Yoann's decision: can stateless, tool-free paid inference be effect
-// = none with expenditure accounted separately? Do not relabel it idempotent.
+// D-2026-09-14-4 approves removing the global effect gate for ordinary Calls.
+// This pre-cutover draft still refuses; do not relabel it idempotent to pass.
 // One non-streaming Responses API call per job. The proposed Lab is offline.
 // Prices in the companion deployment are fictional, not OpenAI tariffs.
 val model_name = "gpt-6-astra"

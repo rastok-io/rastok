@@ -5,6 +5,14 @@
 > independent validation are qualified in [R9](../architecture/rework-r9-qualification.md).
 > Unsupported Extension profiles refuse by name before effects.
 
+> **Approved next refactor (2026-09-14):**
+> [D-2026-09-14-4](decisions.md#d-2026-09-14-4--separate-loop-retry-and-saga-over-one-recurrence-engine)
+> introduces Retry as a distinct protocol over the common recurrence manager.
+> The vocabulary and tables below describe the current v18 implementation;
+> Retry is not yet recognized or executable. Its
+> [contract and implementation gates](../architecture/retry-extension-refactor.md)
+> are recorded separately, without allocating a transport tag.
+
 This document owns Rastok's structural and extension taxonomy. Loop's temporal
 protocol lives in [loop.md](loop.md); Saga's future contract lives in
 [effects-and-sagas.md](effects-and-sagas.md).
