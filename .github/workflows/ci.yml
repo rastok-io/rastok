@@ -7,6 +7,34 @@ on:
   pull_request:
 
 jobs:
+  debugger:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: rustup toolchain install 1.97.1 --no-self-update
+      - run: cargo build -p rastok --locked --features hosted-ui
+      - name: install isolated browser test tools
+        run: |
+          npm install --prefix "$RUNNER_TEMP/rastok-browser" --no-save --ignore-scripts playwright@1.58.2
+          "$RUNNER_TEMP/rastok-browser/node_modules/.bin/playwright" install --with-deps chromium
+      - name: layout and editor lexical probes
+        run: node --test crates/rastok/src/ui/graph_layout.test.cjs editors/vscode/rastok-dsl/grammar.test.cjs
+      - name: debugger interaction and console probes
+        env:
+          RASTOK_PLAYWRIGHT: ${{ runner.temp }}/rastok-browser/node_modules/playwright
+          RASTOK_UI_CAPTURES: ${{ runner.temp }}/rastok-ui-captures
+        run: node --test crates/rastok/src/ui/browser.test.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: debugger-qualification
+          path: ${{ runner.temp }}/rastok-ui-captures
+          if-no-files-found: ignore
+          retention-days: 14
+
   gate:
     strategy:
       matrix:

@@ -1,0 +1,38 @@
+name: alpha-artifacts
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.97.1 --no-self-update
+      - run: rustup target add ${{ matrix.target }} --toolchain 1.97.1
+      - name: build without HTTP/3
+        run: cargo build --release --locked -p rastok --target ${{ matrix.target }} --features hosted-ui,hosted-websocket
+      - name: stage executable evidence
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/rastok" dist/rastok
+          cp LICENSE dist/LICENSE
+          tar -czf "rastok-${{ matrix.target }}.tar.gz" -C dist rastok LICENSE
+          shasum -a 256 "rastok-${{ matrix.target }}.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rastok-${{ matrix.target }}
+          path: rastok-${{ matrix.target }}.tar.gz
+          retention-days: 30
