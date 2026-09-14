@@ -58,6 +58,8 @@ named package exception to the opening freeze: v18, D-2026-09-10-1.
 The subsequently requested resident Process uses a distinct `process@3`
 Session contract inside that unchanged package (D-2026-09-14-1); jobs stay
 `process@2`. See the [service ledger](docs/architecture/process-service.md).
+The minimal optional-member expression `has(object.member)` is separately
+approved by D-2026-09-14-3, with no package-version or journal change.
 Other semantics remain frozen. The remaining work is the six-example showcase and its
 qualification, tracked in the [opening ledger](docs/architecture/opening-showcase.md).
 

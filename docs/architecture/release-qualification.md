@@ -125,6 +125,43 @@ without a process or model invocation. This is automated local evidence, not
 the separate independent audit. Its batch/step regression additionally compares
 complete canonical journals, including resident multi-frame replies.
 
+### Fine-grained stepping and local release preparation — 14 September
+
+The six remaining implementation/UX items from the 7 September audit now
+have local regression evidence: resumable logical-time advance, original
+App-output inspection, previously qualified graph spacing, folded envelope
+history and readable META keys, retained-route instance labels, and centred
+toolbar zoom with a fit-relative percentage. The **33-test** browser suite
+passes against the release binary, including console checks, keyboard paths,
+desktop/narrow layout, history and replay. The original grouped-time B21–B22
+positions are no longer authoritative: waiting is selected from the actual
+Loop fold. This does not claim an independent review of the corrected build.
+
+Publication assets were regenerated from the same real browser at 1352×760.
+The current flagship stills are at transitions **0, 23 and 39**; the GIF has
+**120** retained-prefix frames and **30.000 seconds**, verified with ffprobe.
+They replace the earlier 0/18/29 presentation, not any causal golden. The
+manifest records every displayed prefix. The three views were inspected
+locally; the independent visual gate above stays open.
+
+Both `0.1.0-alpha` crate archives build after extraction. Because core is not
+published yet, hosted-package verification uses the extracted core archive
+through a command-local Cargo patch, not a registry publication. A direct
+offline workspace package attempt correctly refuses that unpublished
+dependency. License files, readmes, starter source and embedded UI assets are
+included. Cargo still warns about missing public repository/documentation
+URLs; those must be supplied once the public destination is confirmed.
+`publish = false` remains in force; no release tag has been created.
+
+macOS arm64 and x86-64 optimized binaries are built with
+`hosted-ui,hosted-websocket`, excluding HTTP/3. Both create and simulate the
+starter graph. The Intel binary also passes echo under Rosetta; that is not
+a native Intel-host qualification. Archives and SHA-256 values are local
+evidence, not announced downloads. Linux cannot be qualified on this host
+without a target environment; the prepared manual build workflow has not
+been run remotely. The [two external quickstart trials](quickstart-trials.md)
+remain unperformed.
+
 ## Embedded code-size watch before Saga
 
 The 14 September resident Process pass retains **111,732 B** peak heap on
@@ -138,6 +175,13 @@ the core changes, not 64 resident children or arbitrary deployment workloads.
 The gateway ownership correction was remeasured on 14 September: the same
 **111,732 B** heap and **951,468 B** text/rodata, 67 records and echo hash.
 All three bare-metal compilation targets pass as well; no gate was raised.
+
+The `has` and resumable-time follow-up was remeasured on the same workload:
+**111,732 B** peak heap (unchanged), `.text` **882,204 B** plus `.rodata`
+**69,824 B** = **952,028 B**. Code grows **560 B**, leaving **96,548 B** below
+1 MiB; heap still has **19,340 B** below 128 KiB. `SPIKE_OK`, 67 records and
+the echo hash remain unchanged. The three no_std targets pass. No memory or
+code-size gate was increased.
 
 The [R9 Cortex-M33 measurement](spike-rp2350-emulated.md) retains **927,060 B**
 of `.text` plus `.rodata` against the unchanged **1,048,576 B (1 MiB)** gate:

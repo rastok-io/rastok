@@ -94,11 +94,19 @@ regression gate. No golden is blessed merely to cover a failure.
   correlation; Session ingress roots must not be relabelled as their request's
   `origin_id`. No per-job or per-session cost is invented from byte counts.
 - The one-model HTTP usage/credential adapter remains a separate open item.
-  `secret()` is supported on `HttpClient.auth_bearer`, but safe optional JSON
-  member inspection (such as an absent `usage`) is not in the current CEL
-  subset. `as struct` does not turn an open JSON map into a projection. Extending
-  that subset requires Yoann's arbitration; a typed mock alone would hide this
-  gap. No new `has(...)` or permissive cast is silently introduced here.
+  `secret()` is supported on `HttpClient.auth_bearer`. Yoann subsequently
+  authorized minimal `has(object.member)` presence inspection, implemented
+  under D-2026-09-14-3. It does not turn `as struct` into an open-map projection.
+  The [candidate adapter](../examples/agent-http-candidate.rkg) distinguishes
+  missing/null/invalid usage from reported zero. It deliberately remains outside
+  the executable gallery: `effect = irreversible` is still refused in M1.
+  Classifying tool-free, non-storing paid inference as `none` with separately
+  accounted expenditure requires an explicit decision; calling it idempotent
+  merely to pass the checker would be dishonest. No paid invocation or adapter
+  execution is claimed. The proposed wire shape follows the
+  [official Responses request/response schema](https://developers.openai.com/api/reference/cli/resources/responses/methods/create),
+  consulted on 14 September. Companion prices are fictional demonstration rates,
+  never OpenAI tariffs.
 
 ## Reproduce
 

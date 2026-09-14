@@ -5,7 +5,9 @@ amendment: exact-instance closure under D-2026-09-10-1. All other semantics
 remain frozen except for the subsequently requested resident Process Contract:
 D-2026-09-14-1 admits `process@3` inside unchanged v18; its
 [qualification ledger](process-service.md) supersedes the review's admission
-gate. This ledger records delivery, not new semantic authority.
+gate. D-2026-09-14-3 separately authorizes minimal pure member-presence
+inspection, without a package-version or journal move. This ledger records
+delivery, not new semantic authority.
 The [explicit instance-closure design](instance-stop-command.md) is now
 executed through bounded retained requests, with an explicitly versioned
 package and recording; its qualification ledger does not claim Process service.
@@ -39,6 +41,7 @@ dead when no handler emits on that port.
 | `run --record`, `replay [--ui]` | Done within the diagnostic contract | CLI and real-Chrome tests prove read-only prefix navigation and no Driver on replay; `@personal` and boot-dependent profiles still refuse persistence, as documented |
 | Readable golden divergence | Done | Expected/actual labels, first record and field, retained causal context; shared CLI/UI path; classified values hidden; byte/seal comparison unchanged |
 | `rastok new` | Done | One executable typed graph plus Lab; tests simulate it and prove no overwrite and path/name refusals |
+| Optional JSON member presence | Done | Approved `has(object.member)`, core evaluator, independent package validation, constant folding, classification and pinned CEL differential tests; absence is distinct from null and observed zero; no witness re-blessing |
 | `docs/site/README.md` schema | Done | Plain Markdown/YAML, exact requested fields; Rust validation rejects missing/unknown/duplicate fields and checks artifact references; no extra field introduced |
 | Editor grammar | Done for the executable v18 syntax | Data-only package, three lexical tests and two real TextMate/Oniguruma tests; all shipped examples, JSON quoting, raw readers, nested comments and instance commands. Future guest compilers and semantic tokens remain outside scope; no interactive historical-VS-Code certification |
 | echo page and comparison | Done | Three scenarios and gallery goldens; reproducible run/replay; `cli` versus `lab` provenance prevents a false claim of raw run/simulate seal equality |
@@ -47,23 +50,72 @@ dead when no handler emits on that port.
 | HttpServer ack source simulation | Done — qualification below | Decoded requests use the ordinary inbound binding and correlated ACK without a physical Driver or artificial App input; source observations come from INBOUND |
 | webhook-to-partner | Done — executable graph, audit profile, page and regression qualification | Six scenarios, including explicit HTTP 500 handling; deterministic journals, bounded Calls, attestation refusal, exact costs and snapshot/browser redaction pass. Visual assets are delivered below; malformed-wire refusal is qualified by real HTTP conformance, not decoded Lab injections |
 | sensor-alarm | Done | New graph/page, three scenarios/goldens: per-sensor hysteresis, missing heartbeat, virtual day; warm CLI measurement published with its limits |
-| agent-gateway | Partial — resident WebSocket bridge delivered; HTTP usage/credential adapter awaits arbitration | `agent-gateway.rkg`: two native-JSON protocol scenarios and initial goldens; two real sockets with harmless resident children prove reuse, independent return addresses and Bob continuing after Alice disconnects. The smaller dialogue primer remains available. Ownership, opening order and batch/step cadence have regressions. No paid model, public authentication or invented usage attribution; optional JSON member inspection needs a language decision before the HTTP adapter can close. See [evidence](agent-gateway-showcase.md) |
+| agent-gateway | Partial — resident WebSocket bridge delivered; HTTP usage/credential adapter awaits effect classification | Native-JSON protocol scenarios, exact conversation ownership and independent resident children are qualified. Minimal `has` is now approved and implemented. The HTTP candidate stays outside the executable gallery until the meaning of a paid, tool-free inference under `effect = none` is decided; `irreversible` still refuses, and no idempotence is invented. See [evidence](agent-gateway-showcase.md) |
 | Explicit conversation / child closure | Implemented — core/CLI qualification complete | `instance.stop` / `child.instance.stop`, exact generation, bounded queue, repeat-safe Closing, journal/recovery and recording v2. Package v18 is explicit; nonparticipating bodies/hashes/traces remain unchanged. Two-budget Session handoff follow-up: 1,356 tests passed, zero failed/ignored; three no_std targets and embedded heap rechecked. Missing/ambiguous targets refuse; an external input cannot guess a nested command's scope and refuses at check. This dated closure evidence is complemented by physical supervision in the resident-service ledger and local gateway browser tests. See [evidence](instance-stop-command.md#9-two-budget-session-shutdown--10-september) |
 | Gallery learning path | Done for six published chapters | Book-style index, graph-reading guides, transferable ideas and previous/next navigation. Chapter 6 now references the resident gateway and links the primer; its usage/credential limits remain prominent. No front-matter schema expansion |
-| Quickstart and README | Partial | One source block, exact-copy test, working `new` path and link to the flagship/profile command; release binaries and two unaided timed trials still missing |
-| Debugger CI | Partial | Current browser/layout/lexical suites wired into CI; locally 31 browser, 15 layout and 5 editor tests pass on 14 September. The two optional full-tokenizer tests reuse the site's installed highlighter, outside CI. Remote workflow not run |
-| Browser opening gate | Partial | Local automated regressions do not close the independent visual pass or the six remaining audit points |
-| Three flagship captures and 30-second GIF | Done — assets produced and locally inspected | `docs/site/assets/`: timeout/retry scenario at transitions 0, 18 and 29, 1352×760; GIF has 120 real retained-state frames and verified duration 30.000 s. Reproduction script and manifest supplied, PNG/GIF dimensions tested, README/chapter links added. Publication approval and independent browser audit remain separate |
-| Three release binaries | Partial | Manual build-only workflow prepared for macOS arm64/x86-64 and Linux x86-64; `hosted-ui,hosted-websocket`, no HTTP/3; cross-host builds not yet run |
-| CHANGELOG, crate metadata and release tag | Partial | CHANGELOG draft present; publishable manifests, package checks and authorized release still pending; no tag created |
-| Paid benchmark wave | Partial — existing dry harness only | No paid run started; three exact models/adapters, spending cap and publication manifest still need preparation and Yoann's execution order |
+| Quickstart and README | Partial | One source block, exact-copy test, working `new` path and flagship/profile command; [two unaided trials](quickstart-trials.md) are prepared but not performed |
+| Debugger CI | Partial | Current browser/layout/lexical suites wired into CI; locally 33 browser, 15 layout and 5 editor tests pass on 14 September. The two optional full-tokenizer tests reuse the site's installed highlighter, outside CI. Remote workflow not run |
+| Browser opening gate | Partial | The six reported implementation/UX points now have focused regressions, including real intermediate advance states. An independent visual retest is still required; local automation does not certify it |
+| Three flagship captures and 30-second GIF | Done — regenerated after fine-grained advance and locally inspected | `docs/site/assets/`: timeout/retry scenario at transitions 0, 23 and 39, 1352×760; GIF has 120 real retained-state frames and verified duration 30.000 s. Reproduction script and manifest supplied; publication approval and independent browser audit remain separate |
+| Three release binaries | Partial | macOS arm64/x86-64 release builds with `hosted-ui,hosted-websocket` succeed; Intel echo is exercised under Rosetta, not native Intel hardware. Linux and remote workflow remain unrun; no HTTP/3 in these artifacts |
+| CHANGELOG, crate metadata and release tag | Partial | `0.1.0-alpha` manifests, exact core dependency, license/readmes and CHANGELOG prepared. Both crate archives build outside the workspace using the packaged local core; publication stays disabled. Public repository URLs and the authorized tag/publication remain pending |
+| Paid benchmark wave | Partial — dry harness requalified | All twenty reference graphs satisfy their referees; the three canned attempts and four runner tests pass. Exact three model IDs/adapters, provider spending cap and publication manifest still require selection and execution order; no paid run started |
 | Optional concepts pages | Removed from this pass | No spare scope assumed; four short pages may follow the gallery |
 State vocabulary: Done = fait; Partial = partiel (including an explicitly
 unstarted or externally blocked item); Removed = retiré from this pass, not
 silently claimed complete. Six chapters are published in the checkout; the
 complete gateway demonstration remains partial as detailed above.
 
-## Gateway and documentation follow-up — 14 September
+## Local close-out qualification — 14 September
+
+Three implementation changes are independently committed: pure member
+presence (`d0931ee`), real intermediate time-advance/debugger states
+(`672ac5b`), and alpha crate/distribution preparation (`29c88f6`). The HTTP
+candidate is retained in `docs/examples/`, not promoted into `examples/` or
+the executable gallery while its effect declaration remains undecided.
+
+Executed locally:
+
+- Full all-feature workspace: **1,393 passed, 0 failed, 0 ignored**, 47 suite
+  results. The focused presence regression was first observed refusing the
+  unsupported macro; the advance regression first observed six transactions
+  hidden in one step. Both are now green. No causal golden was re-blessed.
+- Strict Clippy, formatting, rustdoc and all three no_std compile targets
+  pass. QEMU keeps 67 records and **111,732 B** heap; text plus rodata is
+  **952,028 B**, leaving **96,548 B** under the unchanged code-size gate.
+- Release-binary browser suite: **33 passed**, no console errors or skipped
+  cases; layout **15**, editor **5**. Both pointer and keyboard inspect
+  mailbox heads and original App outputs; a misleading DATA `tenant` field
+  cannot replace the retained instance key. A line-wrap regression was
+  observed failing before reserving space for ordinary META names.
+- Flagship captures/GIF regenerated at 1352×760, transitions **0/23/39**,
+  with **120 frames / 30.000 seconds**. This is real retained-state rendering
+  and local visual inspection, not a new independent audit.
+- Both crate archives verify after extraction using the packaged core as a
+  local dependency until registry publication. Both macOS binaries create
+  and simulate the starter; x86-64 is exercised under Rosetta. The first
+  smoke invocation raced file creation in the shell harness; after awaiting
+  creation, both sequential runs pass. Linux/remote CI are not run.
+- All twenty benchmark references satisfy their referees; the three canned
+  tasks pass and seventeen are explicitly unattempted by that canned author.
+  The four runner tests pass. This is not the paid three-model wave.
+
+Evidence directory: `/tmp/rastok-m1-close.buJbj0`, including
+`workspace.log`, `browser-release.log`, `layout-editor.log`, `tokenizer.log`,
+`clippy-final.log`, `doc.log`, `nostd-*.log`, `spike.log`, `spike-size.log`,
+the package verification logs, `bench-referees.log` and `bench-dry/`.
+The two local macOS archives and checked `SHA256SUMS` are under `dist/` there.
+These are build artifacts, not public releases. A complete rerun against
+the prepared alpha manifests is recorded separately in `workspace-final.log`.
+
+Still required to close M1: the HTTP adapter's effect classification and
+execution evidence, Linux build, independent browser retest, two unaided
+quickstart trials, the exact paid-wave identities/authorization, confirmed
+public repository URLs and the explicitly ordered release. None is inferred
+from passing local tests. No Fable/Claude invocation, paid model call, public
+push, tag or registry publication was performed by this pass.
+
+## Gateway and documentation follow-up — 14 September, before member presence
 
 Scope explicitly limited by Yoann to the gateway and documentation. The
 resident bridge now composes WebSocketServer with Process(service), preserving
@@ -77,11 +129,12 @@ aligns interactive scripted-world rounds with the batch runner: both gateway
 scenarios now retain the same complete canonical journal when stepped. The
 existing HTTP-source batch/step test also passes.
 
-The HTTP one-model adapter is **not closed**. Safe inspection of an optional
-JSON member is missing from the current expression subset. The question of
-adding `has(...)` has been put to Yoann; the slice introduces no language,
-Contract, format or permissive cast to work around it. Model costs remain
-unknown rather than fabricated from transport events.
+At this earlier checkpoint the HTTP one-model adapter was not closed because
+safe inspection of an optional JSON member was missing. Yoann subsequently
+authorized minimal `has(...)` under D-2026-09-14-3; the current delivery table
+records its implementation and the distinct remaining effect-classification
+question. Model costs remain unknown rather than fabricated from transport
+events. No permissive map-to-struct cast was introduced.
 
 Documentation assets now have their reproducible capture command in
 [release-qualification.md](release-qualification.md#publication-assets--14-september).

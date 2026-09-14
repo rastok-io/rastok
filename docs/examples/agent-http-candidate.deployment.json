@@ -1,0 +1,15 @@
+{
+  "environment": [
+    { "name": "MODEL_URL", "value": "https://api.openai.com/v1/responses" }
+  ],
+  "secrets": [
+    { "reference": "showcase/model/token", "environment": "RASTOK_SHOWCASE_MODEL_TOKEN", "version": "fixture-v1" }
+  ],
+  "cost_profile": {
+    "reference": "pricing/fictional-gallery-not-provider-tariffs@1",
+    "prices": [
+      { "connector": "model", "provider": "fictional-gallery", "model": "gpt-6-astra", "measure": "gen_ai.usage.input_tokens", "units": 1000, "amount": "1.00", "currency": "USD" },
+      { "connector": "model", "provider": "fictional-gallery", "model": "gpt-6-astra", "measure": "gen_ai.usage.output_tokens", "units": 1000, "amount": "2.00", "currency": "USD" }
+    ]
+  }
+}
