@@ -977,8 +977,16 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
         SessionConnectorBindings::session_events(self)
     }
 
-    fn forget_session(&mut self, session: SessionRef) {
-        SessionConnectorBindings::forget_session(self, session);
+    fn abort_session(
+        &mut self,
+        connector: &node::Path,
+        session: SessionRef,
+    ) -> Result<(), DriverRouteError> {
+        SessionConnectorBindings::abort_session(self, connector, session)
+    }
+
+    fn forget_session(&mut self, session: SessionRef) -> Result<(), DriverRouteError> {
+        SessionConnectorBindings::forget_session(self, session)
     }
 }
 
@@ -1003,9 +1011,10 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
     ) -> Result<crate::boundary::SessionStart, DriverRouteError> {
         let (id, driver) = self.session_driver(&intent.connector_path)?;
         let start = driver.open_session(intent, request);
-        if start == crate::boundary::SessionStart::Started {
-            self.sessions.insert(intent.session_ref, id);
-        }
+        // Ownership follows the journaled intent, even while local capacity
+        // keeps creation Pending. Closing must fence that resource reference
+        // without first starting the effect merely to establish correlation.
+        self.sessions.insert(intent.session_ref, id);
         Ok(start)
     }
 
@@ -1081,6 +1090,27 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
         Ok(driver.close_session(session))
     }
 
+    fn abort_session(
+        &mut self,
+        connector: &node::Path,
+        session: SessionRef,
+    ) -> Result<(), DriverRouteError> {
+        let actual = self.session_family(connector)?;
+        let Some(expected) = self.sessions.get(&session) else {
+            return Err(DriverRouteError::UncorrelatedSession(session));
+        };
+        if expected != &actual {
+            return Err(DriverRouteError::CrossFamilySession {
+                session,
+                expected: expected.clone(),
+                actual,
+            });
+        }
+        let (_, driver) = self.session_driver(connector)?;
+        driver.abort_session(session);
+        Ok(())
+    }
+
     fn session_events(&mut self) -> Result<Vec<SessionDriverEvent>, DriverRouteError> {
         let mut events = Vec::new();
         for (id, family) in &mut self.families {
@@ -1115,8 +1145,27 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
         Ok(events)
     }
 
-    fn forget_session(&mut self, session: SessionRef) {
+    fn forget_session(&mut self, session: SessionRef) -> Result<(), DriverRouteError> {
+        let Some(id) = self.sessions.get(&session) else {
+            return Ok(());
+        };
+        let family = self
+            .families
+            .get_mut(id)
+            .ok_or(DriverRouteError::UncorrelatedSession(session))?;
+        let path = family
+            .session_path
+            .as_ref()
+            .ok_or(DriverRouteError::UncorrelatedSession(session))?;
+        let driver = family
+            .driver
+            .outbound()
+            .ok_or_else(|| DriverRouteError::UnavailableOutbound(path.clone()))?
+            .session()
+            .ok_or_else(|| DriverRouteError::UnavailableSession(path.clone()))?;
+        driver.release_session(session);
         self.sessions.remove(&session);
+        Ok(())
     }
 }
 
@@ -1827,6 +1876,26 @@ graph inbound : App {
         fn session_events(&mut self) -> Vec<SessionDriverEvent> {
             core::mem::take(&mut self.events)
         }
+
+        fn abort_session(&mut self, session: SessionRef) {
+            if self.closed.insert(session) {
+                self.observations.lock().unwrap().push("abort");
+            }
+        }
+
+        fn release_session(&mut self, session: SessionRef) {
+            self.observations.lock().unwrap().push("release");
+            self.closed.remove(&session);
+            self.events.retain(|event| match event {
+                SessionDriverEvent::Opened(reference)
+                | SessionDriverEvent::WriteSettled {
+                    session: reference, ..
+                }
+                | SessionDriverEvent::Exited {
+                    session: reference, ..
+                } => *reference != session,
+            });
+        }
     }
 
     impl OutboundConnectorDriver for SessionDuplexDriver {
@@ -1972,6 +2041,45 @@ graph inbound : App {
             *observations.lock().unwrap(),
             ["inbound", "open", "open", "write", "write"]
         );
+
+        SessionConnectorBindings::abort_session(&mut bindings, &connector, first.session_ref)
+            .unwrap();
+        SessionConnectorBindings::abort_session(&mut bindings, &connector, first.session_ref)
+            .unwrap();
+        assert_eq!(
+            observations
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|observation| **observation == "abort")
+                .count(),
+            1
+        );
+        assert!(bindings.sessions.contains_key(&first.session_ref));
+        assert!(
+            SessionConnectorBindings::session_events(&mut bindings)
+                .unwrap()
+                .is_empty()
+        );
+        SessionConnectorBindings::forget_session(&mut bindings, first.session_ref).unwrap();
+        SessionConnectorBindings::forget_session(&mut bindings, first.session_ref).unwrap();
+        assert_eq!(
+            observations
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|observation| **observation == "release")
+                .count(),
+            1,
+            "the owning Driver releases a terminal resource once"
+        );
+        assert!(!bindings.sessions.contains_key(&first.session_ref));
+        assert!(bindings.sessions.contains_key(&second.session_ref));
+        assert!(matches!(
+            SessionConnectorBindings::abort_session(&mut bindings, &connector, first.session_ref),
+            Err(crate::boundary::DriverRouteError::UncorrelatedSession(reference)) if reference == first.session_ref
+        ));
+        SessionConnectorBindings::write_session(&mut bindings, &second_write, &request).unwrap();
     }
 
     #[test]

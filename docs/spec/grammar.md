@@ -91,10 +91,13 @@ There is **one** keyword for composite units. No `pipeline`, `flow`,
 `session`, `template` — and no `app`.
 
 The following is a **target-architecture composition sketch**, not a checked
-program: durable storage and Process service/correlation remain named gates,
+program: durable storage and the application-protocol adapter remain named gates,
 and a complete current program must also declare typed boundaries and dispose
 of every productible output. For an executable session boundary, use the
 [WebSocket gateway](../examples/codex-websocket-gateway.rkg).
+Protocol adaptation is omitted from this composition sketch: Process parses
+JSONL values, while Operators interpret their application meaning and
+correlation (D-2026-09-10-2).
 
 ```rastok
 graph teams_gateway : App {          // the DEPLOYMENT ENTRY POINT — exactly one per deployed unit
@@ -109,7 +112,7 @@ graph teams_gateway : App {          // the DEPLOYMENT ENTRY POINT — exactly o
     lifetime  = { kind = idle ; after = duration("2h") }
     closing   = { drain_for = duration("30s") ; settle_for = duration("5s") }
     connector codex : Process { mode = service ; command = "codex" ; args = ["app-server"]
-                                codec = jsonl ; correlate = data.id
+                                codec = jsonl
                                 effect = idempotent ; behavior = probabilistic }
     in -> codex.in
     codex.out -> out
@@ -315,6 +318,12 @@ mutable memory to child Nodes.
 A graph references another graph **by name, as a Node** — a structural Graph,
 not a special construct:
 
+This composition excerpt omits the application adapter and complete boundary
+types; the checked [resident dialogue](../../examples/agent-dialogue.rkg) is
+the executable reference. Process itself has no `protocol`, `init` or `kill`
+DSL attributes: an Operator interprets the protocol, and instance Closing
+controls system shutdown.
+
 ```rastok
 graph sessions {
   instance = { key = meta.app.session_key }
@@ -333,20 +342,15 @@ graph sessions {
     env = { "CODEX_HOME": codex_home }
 
     codec    = jsonl
-    protocol = "jsonrpc"
     effect   = idempotent
     behavior = probabilistic
-    // in / out / err / exit = stdin / stdout / stderr / invocation terminal (Process defaults)
-
-    init = {
-      message = { method = "initialize" }
-      timeout = duration("10s")
-    }
-    kill  = process_group
+    // in / out / err / exit = stdin / stdout / stderr / child terminal
   }
 
   in        -> codex.in
   codex.out -> out
+  codex.err -> nothing
+  codex.exit -> nothing
 }
 
 graph teams_inbound {

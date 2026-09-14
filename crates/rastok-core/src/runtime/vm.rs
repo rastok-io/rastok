@@ -1964,11 +1964,14 @@ impl<'plan> Vm<'plan> {
             self.prepare_routes(
                 journal,
                 &from,
-                // The source bundle is still a pure candidate, not an
-                // installed live instance. Re-selecting through the shared
-                // candidate map reuses every common owner reference without
-                // making VM state visible before the INBOUND commit.
-                None,
+                // A Session message already owns an installed source instance.
+                // Preserve its ancestor scope: its new external metadata is
+                // not another admission into a keyed containing Graph. Other
+                // source bundles are still pre-commit candidates and share the
+                // candidate map rather than consulting live state.
+                matches!(session_admission, Some(InboundSession::Message(_)))
+                    .then_some(source_instance)
+                    .flatten(),
                 inbound.envelope(),
                 &mut candidates,
             )?
@@ -2558,6 +2561,19 @@ impl<'plan> Vm<'plan> {
             .filter_map(|(reference, session)| {
                 (!session.opening_started
                     && session.open_intent.is_some()
+                    && self
+                        .instances
+                        .get(&session.instance)
+                        .is_some_and(|instance| {
+                            matches!(
+                                instance.phase,
+                                InstancePhase::Open
+                                    | InstancePhase::Closing {
+                                        stage: ClosingStage::Draining,
+                                        ..
+                                    }
+                            )
+                        })
                     && !self
                         .settled_sessions
                         .iter()
@@ -2596,7 +2612,20 @@ impl<'plan> Vm<'plan> {
         let writes = self
             .session_writes
             .iter()
-            .filter_map(|(reference, write)| (!write.started).then_some(*reference))
+            .filter_map(|(reference, write)| {
+                (!write.started
+                    && self.instances.get(&write.instance).is_some_and(|instance| {
+                        matches!(
+                            instance.phase,
+                            InstancePhase::Open
+                                | InstancePhase::Closing {
+                                    stage: ClosingStage::Draining,
+                                    ..
+                                }
+                        )
+                    }))
+                .then_some(*reference)
+            })
             .collect::<Vec<_>>();
         for reference in writes {
             let write = self
@@ -4055,6 +4084,13 @@ impl<'plan> Vm<'plan> {
                         )
                         .map_err(crate::boundary::DispatchError::Driver)
                         .map_err(VmError::Dispatch)?;
+                    // The committed Closing request sealed this deadline.
+                    // Forced cleanup must not wait for exit-route capacity or
+                    // terminal storage; it proves no successful outcome.
+                    bindings
+                        .abort_session(&connector, session_ref)
+                        .map_err(crate::boundary::DispatchError::Driver)
+                        .map_err(VmError::Dispatch)?;
                     self.settled_sessions.push_back(SettledSession {
                         session: session_ref,
                         completion,
@@ -4445,12 +4481,17 @@ impl<'plan> Vm<'plan> {
         journal.commit(outcome.record).map_err(VmError::Journal)?;
         self.settled_sessions.remove(index);
         self.sessions.remove(&settled.session);
-        bindings.forget_session(settled.session);
         self.scheduler
             .mailboxes
             .release(session.slot, &session.instance);
         self.route_emissions(session.slot, &session.instance, prepared);
         self.progress_closures();
+        // Local cleanup follows the retained winner. Even a broken binding
+        // cannot leave this committed transaction's deliveries unapplied.
+        bindings
+            .forget_session(settled.session)
+            .map_err(crate::boundary::DispatchError::Driver)
+            .map_err(VmError::Dispatch)?;
         Ok(())
     }
 
@@ -5083,6 +5124,11 @@ impl<'plan> Vm<'plan> {
         envelope: &Envelope,
         settings: &BTreeMap<String, crate::value::Value>,
     ) -> Result<Option<SessionRef>, VmError> {
+        // The resident child belongs to this exact Node instance. An upstream
+        // socket's session_id is provenance, not an address for this resource.
+        if spec.contract.as_str() == crate::connector::PROCESS_SERVICE_CONNECTOR_ID {
+            return Ok(None);
+        }
         if spec.attribute("correlate").is_some() {
             let Some(crate::value::Value::Text(value)) = settings.get("correlate") else {
                 return Err(VmError::PlanInvariant {

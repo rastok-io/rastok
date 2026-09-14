@@ -650,11 +650,13 @@ fn port_type_cycles_are_rejected_even_when_reached_through_a_tail() {
 fn same_as_and_profile_selected_ports_resolve_without_a_second_type_authority() {
     const PROFILES: &[Profile] = &[
         Profile {
+            protocol: None,
             word: "textual",
             support: ProfileSupport::Available,
             attributes: &[],
         },
         Profile {
+            protocol: None,
             word: "binary",
             support: ProfileSupport::Available,
             attributes: &[],
@@ -762,11 +764,13 @@ fn a_profile_local_attribute_cannot_ambiguously_select_a_port_type() {
             default: Some("a"),
             profiles: &[
                 Profile {
+                    protocol: None,
                     word: "a",
                     support: ProfileSupport::Available,
                     attributes: SHAPE_TEXT,
                 },
                 Profile {
+                    protocol: None,
                     word: "b",
                     support: ProfileSupport::Available,
                     attributes: SHAPE_BYTES,
@@ -1058,11 +1062,13 @@ fn a_duplicate_profile_is_a_sheet_defect() {
         default: Some("a"),
         profiles: &[
             Profile {
+                protocol: None,
                 word: "a",
                 support: ProfileSupport::Available,
                 attributes: &[],
             },
             Profile {
+                protocol: None,
                 word: "a",
                 support: ProfileSupport::Available,
                 attributes: &[],
@@ -1084,6 +1090,7 @@ fn an_unknown_default_profile_is_a_sheet_defect() {
         attribute: "mode",
         default: Some("ghost"),
         profiles: &[Profile {
+            protocol: None,
             word: "a",
             support: ProfileSupport::Available,
             attributes: &[],
@@ -1110,6 +1117,7 @@ fn a_selector_colliding_with_an_attribute_is_a_sheet_defect() {
         attribute: "mode",
         default: Some("a"),
         profiles: &[Profile {
+            protocol: None,
             word: "a",
             support: ProfileSupport::Available,
             attributes: &[],
@@ -1379,33 +1387,33 @@ fn on_timeout_bypass_says_fixed_to_kill() {
 
 #[test]
 fn a_service_attribute_on_a_job_names_the_owning_profile() {
-    let source = process_graph(&format!("{FULL}\n    restart = {{ max_attempts = 5 }}"));
+    let source = process_graph(&format!("{FULL}\n    max_frame = \"1MiB\""));
     refusal_with(
         &source,
         "E-CONTRACT-ATTR",
-        "`restart` belongs to `Process(mode = service)` and is not applicable to `Process(mode = job)`",
+        "`max_frame` belongs to `Process(mode = service)` and is not applicable to `Process(mode = job)`",
     );
 }
 
 #[test]
-fn mode_service_defers_before_validating_its_attributes() {
+fn mode_service_rejects_retired_rpc_attributes_by_name() {
     let source = process_graph(&format!(
         "    mode = service\n{FULL}\n    correlate = data.id"
     ));
-    let bag = compile_one(&source).expect_err("service defers");
+    let bag = compile_one(&source).expect_err("the retired correlate setting refuses");
     assert!(
         bag.diagnostics()
             .iter()
-            .any(|d| d.code().as_str() == "E-CHECK-DEFERRED"
-                && d.message().contains("the Process service mode")),
+            .any(|d| d.code().as_str() == "E-CONTRACT-ATTR"
+                && d.message().contains("`correlate` is retired for Process")),
         "{bag:?}"
     );
-    // The deferred profile's own attribute is NOT judged by a
-    // domain that does not exist yet.
+    // No whole-profile deferral hides the offending field.
     assert!(
         !bag.diagnostics()
             .iter()
-            .any(|d| d.code().as_str() == "E-CONTRACT-ATTR" && d.message().contains("correlate")),
+            .any(|d| d.code().as_str() == "E-CHECK-DEFERRED"
+                && d.message().contains("the Process service mode")),
         "{bag:?}"
     );
 }
@@ -2001,9 +2009,7 @@ fn constant_process_cwd_and_env_are_effective_plan_attributes() {
 }
 
 #[test]
-fn a_deferred_profile_still_owes_the_common_sheet() {
-    // `mode = service` alone: the deferral speaks AND the common
-    // Required attributes are still owed.
+fn the_service_profile_still_owes_the_common_sheet() {
     let source = process_graph("    mode = service");
     let bag = compile_one(&source).expect_err("must refuse");
     for name in ["`command`", "`codec`", "`effect`", "`behavior`"] {
@@ -2031,11 +2037,13 @@ fn sibling_profiles_may_share_an_attribute_name() {
         default: Some("a"),
         profiles: &[
             Profile {
+                protocol: None,
                 word: "a",
                 support: ProfileSupport::Available,
                 attributes: std::slice::from_ref(SHARED),
             },
             Profile {
+                protocol: None,
                 word: "b",
                 support: ProfileSupport::Available,
                 attributes: std::slice::from_ref(SHARED),
@@ -2094,6 +2102,7 @@ fn a_deferred_domain_carries_no_default() {
         attribute: "mode",
         default: Some("a"),
         profiles: &[Profile {
+            protocol: None,
             word: "a",
             support: ProfileSupport::Deferred("someday"),
             attributes: &[AttributeSpec {

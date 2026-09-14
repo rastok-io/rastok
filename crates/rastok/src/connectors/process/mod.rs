@@ -20,7 +20,10 @@ use std::io::Read;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-/// The job profile's RESOLVED settings — one pure conversion from
+mod service;
+pub use service::ProcessServiceFactory;
+
+/// The selected profile's RESOLVED settings — one pure conversion from
 /// the travelling spec, judged in full BEFORE any effect
 /// (D-2026-08-12-1, review rounds): the contract must be `Process`,
 /// every Defaulted attribute must be present (the checker injected
@@ -121,6 +124,15 @@ pub(crate) struct ProcessRequestBindings {
 }
 
 impl ProcessRequestBindings {
+    pub(crate) fn prepare_service(
+        &self,
+        connector: &crate::node::Path,
+        data: &Data,
+        settings: &std::collections::BTreeMap<String, Value>,
+        opening: bool,
+    ) -> RequestPreparation {
+        service::prepare(self, connector, data, settings, opening)
+    }
     pub(crate) fn try_bind(
         plan: &crate::plan::ValidatedExecutionPlan,
         nodes: &[crate::node::Path],
@@ -331,15 +343,20 @@ impl ProcessFailure {
 impl ProcessSettings {
     fn try_from(spec: &rastok_core::plan::ConnectorSpec) -> Result<Self, ProcessSettingsError> {
         use ProcessSettingsError as E;
-        if spec.contract.as_str() != crate::connector::PROCESS_CONNECTOR_ID {
+        if !matches!(
+            spec.contract.as_str(),
+            crate::connector::PROCESS_CONNECTOR_ID | crate::connector::PROCESS_SERVICE_CONNECTOR_ID
+        ) {
             return Err(E::NotProcess(spec.contract.clone()));
         }
+        let service = spec.contract.as_str() == crate::connector::PROCESS_SERVICE_CONNECTOR_ID;
         match spec.attribute("mode") {
-            Some(AttrSetting::Word(word)) if word == "job" => {}
+            Some(AttrSetting::Word(word)) if word == if service { "service" } else { "job" } => {}
             Some(AttrSetting::Word(word)) => return Err(E::UnknownMode(word.clone())),
             _ => return Err(E::Unresolved("mode")),
         }
         match spec.attribute("on_timeout") {
+            None if service => {}
             Some(AttrSetting::Word(word)) if word == "kill" => {}
             Some(_) => return Err(E::OnTimeoutNotKill),
             None => return Err(E::Unresolved("on_timeout")),
@@ -412,7 +429,8 @@ impl ProcessSettings {
             Some(AttrSetting::Word(word)) => return Err(E::UnknownCodec(word.clone())),
             _ => return Err(E::Unresolved("err_codec")),
         };
-        let max_output = match spec.attribute("max_output") {
+        let budget_name = if service { "max_frame" } else { "max_output" };
+        let max_output = match spec.attribute(budget_name) {
             Some(AttrSetting::Value(crate::value::Value::Text(text))) => {
                 match crate::contract::byte_size(text) {
                     Some(size) => {
@@ -432,7 +450,7 @@ impl ProcessSettings {
                     None => return Err(E::NotASize(text.clone())),
                 }
             }
-            _ => return Err(E::Unresolved("max_output")),
+            _ => return Err(E::Unresolved(budget_name)),
         };
         if let Some(setting) = spec.attribute("timeout")
             && !matches!(

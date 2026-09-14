@@ -51,6 +51,12 @@ pub fn hosted_registry(file_root: Option<&Path>) -> Result<DriverRegistry, Hoste
     let process = super::ProcessFactory::try_new()
         .map_err(|error| HostedAssemblyError::at("the Process Driver id is invalid", error))?;
     let mut registry = add(DriverRegistry::default(), process)?;
+    registry = add(
+        registry,
+        super::ProcessServiceFactory::try_new().map_err(|error| {
+            HostedAssemblyError::at("the resident Process Driver id is invalid", error)
+        })?,
+    )?;
 
     if let Some(root) = file_root {
         let file = super::FileFactory::try_new(root)
@@ -137,6 +143,7 @@ mod tests {
                 crate::connector::HTTP_CLIENT_CONNECTOR_ID,
                 crate::connector::HTTP_SERVER_CONNECTOR_ID,
                 crate::connector::PROCESS_CONNECTOR_ID,
+                crate::connector::PROCESS_SERVICE_CONNECTOR_ID,
                 crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID,
                 crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID,
             ]

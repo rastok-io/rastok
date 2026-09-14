@@ -1036,15 +1036,25 @@ impl Checker<'_, '_> {
                         );
                         continue;
                     }
-                    // A body with no actual output is the written silence and
-                    // intentionally leaves the call open. Any answer is one
-                    // whole completion: exactly one exit, last.
-                    if !dispatch::mock_completion_leaves_hold(&checked.dispatch) {
+                    // Calls answer atomically; a Session can stream without
+                    // ending its resource. Neither may emit after its exit.
+                    let session = matches!(
+                        &node.semantics,
+                        NodeSemantics::Connector {
+                            exchange: crate::connector::ConnectorExchange::Session,
+                            ..
+                        }
+                    );
+                    if !dispatch::mock_completion_leaves_hold(&checked.dispatch, session) {
                         self.bag.push(
                             Diagnostic::new(
                                 E_CONTRACT_REQUIRED,
                                 Phase::Check,
-                                "a mock answer requires exactly one final `exit` emission",
+                                if session {
+                                    "a Session mock permits at most one `exit`, after all frames"
+                                } else {
+                                    "a mock answer requires exactly one final `exit` emission"
+                                },
                             )
                             .with_span(handler.span)
                             .with_field("port", "exit"),
@@ -3355,6 +3365,19 @@ impl Checker<'_, '_> {
                 .map(|segment| segment.text.as_str())
                 .collect::<Vec<_>>()
                 .join(".");
+            if contract.id == crate::connector::PROCESS_CONNECTOR_ID
+                && matches!(name.as_str(), "correlate" | "restart")
+            {
+                refuse(
+                    self.bag,
+                    &name,
+                    attribute.span,
+                    format!(
+                        "`{name}` is retired for Process: application correlation belongs to Operators; child death never triggers automatic restart"
+                    ),
+                );
+                continue;
+            }
             if contract
                 .selector
                 .as_ref()
@@ -3587,6 +3610,46 @@ impl Checker<'_, '_> {
         }
         if let NodeSemantics::Connector { attributes, .. } = &mut node.semantics {
             attributes.extend(injected);
+        }
+        if let Some(protocol) = profile.and_then(|profile| profile.protocol) {
+            if let NodeSemantics::Connector {
+                contract,
+                roles,
+                exchange,
+                ..
+            } = &mut node.semantics
+            {
+                match crate::connector::ContractId::parse(protocol.id) {
+                    Ok(id) => *contract = id,
+                    Err(error) => {
+                        refuse(self.bag, "mode", decl.span, error.to_string());
+                        return;
+                    }
+                }
+                *roles = protocol.roles;
+                *exchange = protocol.exchange;
+            }
+            if protocol.id == crate::connector::PROCESS_SERVICE_CONNECTOR_ID {
+                for attribute in node.attributes() {
+                    let rejected = match attribute.name.as_str() {
+                        "codec" | "err_codec" => {
+                            matches!(&attribute.value, AttrValue::Word(w) if w == "bytes")
+                        }
+                        "timeout" => true,
+                        _ => false,
+                    };
+                    if rejected {
+                        refuse(
+                            self.bag,
+                            &attribute.name,
+                            span_of(&attribute.name),
+                            String::from(
+                                "Process(service) uses bounded lines/jsonl frames and instance lifetime/closing; raw bytes and per-request timeout are not defined",
+                            ),
+                        );
+                    }
+                }
+            }
         }
         let effective_words: BTreeMap<String, String> = node
             .attributes()

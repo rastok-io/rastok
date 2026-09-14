@@ -100,11 +100,8 @@ pub const MEDIA_TYPE_CATALOG: &[MediaTypeCatalogEntry] = &[
     },
 ];
 
-/// The `Process` sheet of `stdlib.md` §3.3 on the D-2026-08-12-1
-/// metamodel: the common attributes, and the `mode` selector picking
-/// `job` (default, available) or `service` (known to the contract,
-/// deferred by this build — its attribute NAMES are normative, their
-/// domains deferred-only).
+/// Profile selection resolves one exact Contract: a finite job Call or a
+/// resident service Session. Defaults and roles cannot leak between them.
 pub const PROCESS: ConnectorContract = ConnectorContract {
     id: PROCESS_CONNECTOR_ID,
     name: "Process",
@@ -232,14 +229,6 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
             latest_site: EvaluationSite::Plan,
         },
         AttributeSpec {
-            // A declared budget; absence means NO budget — a real
-            // Optional, not a hidden default.
-            name: "timeout",
-            presence: Presence::Optional,
-            domain: ValueDomain::Duration,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
             name: "env",
             presence: Presence::Optional,
             domain: ValueDomain::TextMap,
@@ -251,9 +240,16 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
         default: Some("job"),
         profiles: &[
             Profile {
+                protocol: None,
                 word: "job",
                 support: ProfileSupport::Available,
                 attributes: &[
+                    AttributeSpec {
+                        name: "timeout",
+                        presence: Presence::Optional,
+                        domain: ValueDomain::Duration,
+                        latest_site: EvaluationSite::Instance,
+                    },
                     AttributeSpec {
                         // Judged by `contract::byte_size` — the same
                         // parser the Driver enforces the budget
@@ -275,27 +271,19 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
                 ],
             },
             Profile {
+                protocol: Some(crate::contract::ProfileProtocol {
+                    id: crate::connector::PROCESS_SERVICE_CONNECTOR_ID,
+                    roles: ConnectorRoles::InboundAndOutbound,
+                    exchange: ConnectorExchange::Session,
+                }),
                 word: "service",
-                support: ProfileSupport::Deferred("the Process service mode"),
-                attributes: &[
-                    AttributeSpec {
-                        // `correlate = data.id` — an expression over
-                        // runtime data, not a boot-phase constant.
-                        name: "correlate",
-                        presence: Presence::Optional,
-                        domain: ValueDomain::ExprPath,
-                        latest_site: EvaluationSite::Invocation,
-                    },
-                    AttributeSpec {
-                        // The restart policy struct (`{ backoff = …,
-                        // max_attempts = … }`) — typed with the
-                        // service slice.
-                        name: "restart",
-                        presence: Presence::Optional,
-                        domain: ValueDomain::Struct,
-                        latest_site: EvaluationSite::Instance,
-                    },
-                ],
+                support: ProfileSupport::Available,
+                attributes: &[AttributeSpec {
+                    name: "max_frame",
+                    presence: Presence::Defaulted(DefaultValue::Expression(r#""1MiB""#)),
+                    domain: ValueDomain::ByteSize,
+                    latest_site: EvaluationSite::Plan,
+                }],
             },
         ],
     }),
@@ -383,6 +371,7 @@ pub const FILE: ConnectorContract = ConnectorContract {
         default: None,
         profiles: &[
             Profile {
+                protocol: None,
                 word: "read",
                 support: ProfileSupport::Available,
                 attributes: &[AttributeSpec {
@@ -393,11 +382,13 @@ pub const FILE: ConnectorContract = ConnectorContract {
                 }],
             },
             Profile {
+                protocol: None,
                 word: "replace",
                 support: ProfileSupport::Available,
                 attributes: &[],
             },
             Profile {
+                protocol: None,
                 word: "watch",
                 support: ProfileSupport::Deferred("the File watch profile"),
                 attributes: &[],
@@ -671,11 +662,13 @@ pub const HTTP_SERVER: ConnectorContract = ConnectorContract {
         default: Some("ack"),
         profiles: &[
             Profile {
+                protocol: None,
                 word: "ack",
                 support: ProfileSupport::Available,
                 attributes: &[],
             },
             Profile {
+                protocol: None,
                 word: "respond",
                 support: ProfileSupport::Available,
                 attributes: &[
@@ -1109,8 +1102,9 @@ mod tests {
         assert_eq!(effect.presence, Presence::Required);
         assert!(process.attribute(Some(job), "max_output").is_some());
         assert!(process.attribute(Some(job), "restart").is_none());
+        assert!(process.owning_profile("restart").is_none());
         assert_eq!(
-            process.owning_profile("restart").map(|p| p.word),
+            process.owning_profile("max_frame").map(|p| p.word),
             Some("service")
         );
         let ports = PROCESS

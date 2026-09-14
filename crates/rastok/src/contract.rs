@@ -241,6 +241,15 @@ pub struct ConnectorContract {
 }
 
 impl ConnectorContract {
+    fn protocol_ids(&self) -> impl Iterator<Item = &'static str> + '_ {
+        std::iter::once(self.id).chain(
+            self.selector
+                .iter()
+                .flat_map(|selector| selector.profiles)
+                .filter_map(|profile| profile.protocol.map(|protocol| protocol.id)),
+        )
+    }
+
     /// The spec of one attribute within the given resolved profile:
     /// the common sheet first, then the profile's own.
     #[must_use]
@@ -370,6 +379,9 @@ pub struct ProfileSelector {
 /// support for it, and its own attributes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Profile {
+    /// A profile may select a different exact exchange contract. Omission
+    /// preserves the sheet's contract, roles and exchange byte for byte.
+    pub protocol: Option<ProfileProtocol>,
     /// The selector word (`job`).
     pub word: &'static str,
     /// Whether THIS build executes the profile — distinct from the
@@ -379,6 +391,18 @@ pub struct Profile {
     /// another profile is simply ABSENT here — there is no
     /// `Forbidden` state (D-2026-08-12-1).
     pub attributes: &'static [AttributeSpec],
+}
+
+/// Resolved protocol of a profile whose resource lifecycle differs from the
+/// sheet's default (for example a resident Process versus a finite job).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProfileProtocol {
+    /// Exact versioned contract, not an alias for the default protocol.
+    pub id: &'static str,
+    /// Required Driver views.
+    pub roles: crate::connector::ConnectorRoles,
+    /// Interaction cardinality.
+    pub exchange: crate::connector::ConnectorExchange,
 }
 
 /// The build's relationship to a profile the contract knows.
@@ -962,7 +986,47 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
             return Err(SheetDefect::SelectorCollision(selector.attribute));
         }
         let mut words = std::collections::BTreeSet::new();
+        let mut identities = std::collections::BTreeSet::from([contract.id]);
         for profile in selector.profiles {
+            if let Some(protocol) = profile.protocol {
+                if !identities.insert(protocol.id) {
+                    return Err(SheetDefect::ConnectorIdCollision {
+                        id: protocol.id,
+                        existing: contract.name,
+                        incoming: profile.word,
+                    });
+                }
+                crate::connector::ContractId::parse(protocol.id).map_err(|reason| {
+                    SheetDefect::InvalidConnectorId {
+                        id: protocol.id,
+                        reason,
+                    }
+                })?;
+                let exits = contract
+                    .ports
+                    .iter()
+                    .filter(|p| p.name == "exit" && p.direction == crate::node::Direction::Output)
+                    .count();
+                if (protocol.exchange == crate::connector::ConnectorExchange::Event && exits != 0)
+                    || (protocol.exchange != crate::connector::ConnectorExchange::Event
+                        && exits != 1)
+                {
+                    return Err(SheetDefect::ExchangeTerminalMismatch {
+                        exchange: protocol.exchange,
+                        exits,
+                    });
+                }
+                if (protocol.exchange == crate::connector::ConnectorExchange::Event
+                    && protocol.roles != crate::connector::ConnectorRoles::Inbound)
+                    || (protocol.exchange == crate::connector::ConnectorExchange::Session
+                        && !protocol.roles.has_outbound())
+                {
+                    return Err(SheetDefect::ExchangeRoleMismatch {
+                        exchange: protocol.exchange,
+                        roles: protocol.roles,
+                    });
+                }
+            }
             if !expressible_name(profile.word) {
                 return Err(SheetDefect::InexpressibleName(profile.word));
             }
@@ -1173,14 +1237,17 @@ impl ContractCatalog {
                 reason,
             }
         })?;
-        if let Some(existing) = self.connectors.get(&id)
-            && existing.name != contract.name
-        {
-            return Err(SheetDefect::ConnectorIdCollision {
-                id: contract.id,
-                existing: existing.name,
-                incoming: contract.name,
-            });
+        for protocol_id in contract.protocol_ids() {
+            if let Some(existing) = self.connectors.values().find(|existing| {
+                existing.name != contract.name
+                    && existing.protocol_ids().any(|id| id == protocol_id)
+            }) {
+                return Err(SheetDefect::ConnectorIdCollision {
+                    id: protocol_id,
+                    existing: existing.name,
+                    incoming: contract.name,
+                });
+            }
         }
         self.connectors
             .retain(|_, existing| existing.name != contract.name);
@@ -1208,7 +1275,17 @@ impl ContractCatalog {
     /// Resolves the exact stable identity carried by a categorical plan.
     #[must_use]
     pub fn connector_by_id(&self, id: &crate::connector::ContractId) -> Option<&ConnectorContract> {
-        self.connectors.get(id)
+        self.connectors.get(id).or_else(|| {
+            self.connectors.values().find(|contract| {
+                contract.selector.as_ref().is_some_and(|selector| {
+                    selector.profiles.iter().any(|profile| {
+                        profile
+                            .protocol
+                            .is_some_and(|protocol| protocol.id == id.as_str())
+                    })
+                })
+            })
+        })
     }
 
     /// Extends the registry with a tagged frontend contract.  A repeated name

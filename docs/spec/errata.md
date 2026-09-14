@@ -19,6 +19,47 @@
   regression and the resident Lab's terminal expectations prove the fix.
   No type tag, source identity or serialized value representation changes.
 
+## E-2026-09-14-2 — nested Session frames lost their owner context — RESOLVED
+
+- **Where:** `runtime/vm.rs`, admission routing for an existing Session.
+- **Defect:** selecting downstream targets without the installed source
+  instance re-evaluated a keyed containing Graph from the child frame's new
+  metadata. A Process response could enter another conversation instead of
+  the one owning that Process, losing its socket-return state.
+- **Resolution:** preserve the installed source instance for Session messages;
+  new Session/Call/Event admissions still use their pre-commit candidate map.
+  The agent-gateway regression proves exactly two remembering/replying
+  instances and unchanged records across deterministic re-executions.
+  Corrected routes affect only the previously incorrect context; no plan,
+  journal format, Contract or non-Session witness changes.
+
+## E-2026-09-14-3 — first Process frame could overtake Session opening — RESOLVED
+
+- **Where:** the hosted resident Process Driver's inbound proposal path.
+- **Defect:** a fast child could queue `Opened` and a frame in one poll. The
+  frame was proposed before `Opened` reached the core, so the journal correctly
+  refused `SessionUnavailable` and the Driver terminated the resource.
+- **Resolution:** retain the frame while its opening event is awaiting handoff
+  to the core. A deterministic channel test fails before the fix and passes
+  after; the two-socket/real-child test exercises the composition. The scripted
+  Driver enforces the same handoff for the debugger's one-transition pump,
+  covered by stepping/batch comparison and the real-browser regression.
+  Publication remains bounded and never-block; no timestamp, acknowledgement
+  or journal fact is invented.
+
+## E-2026-09-14-4 — interactive Session mocks reached assertions too early — RESOLVED
+
+- **Where:** `lab.rs`, `ScenarioSession::step_transaction` and `poll_world`.
+- **Defect:** absence of ready VM work was mistaken for quiescence while a
+  just-opened scripted Session still had frames to offer. Later multi-frame
+  replies could also enter between transactions differently from batch runs.
+- **Resolution:** finish ready work before the next scripted world round,
+  retain outbound acknowledgements before its inbound frames, and require a
+  no-progress poll before declaring rest. No extra scenario action or journal
+  fact is introduced. The resident gateway's two scenarios compare full
+  canonical batch/step traces; the HTTP source keeps its existing same-record
+  regression. Batch goldens are not changed to hide the earlier discrepancy.
+
 ## E-2026-08-26-1 — pre-admission HTTP refusals cannot be Call exits — RESOLVED
 
 - **Where:** [stdlib.md §3.1](stdlib.md) publishes `MalformedRequest`,

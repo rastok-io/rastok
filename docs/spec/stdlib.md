@@ -45,7 +45,7 @@ contract identity.
 | 3 | **Ports** | `in`/`out`/`err`/`exit` conventions + extras, with types |
 | 4 | **`effect`** | pre-declared by the contract, or per-instance (dev-declared) |
 | 5 | **`behavior`** | deterministic / probabilistic — §2; pre-declared or per-instance |
-| 6 | **Attributes** | the config surface with a contract-declared latest evaluation site (plan, boot, instance, or invocation); checking chooses the earliest legal actual site and transports it; `env()`/`secret()` are boot-only, while `timeout`/`on_timeout`/`restart` apply where calls/instances exist |
+| 6 | **Attributes** | the config surface with a contract-declared latest evaluation site (plan, boot, instance, or invocation); checking chooses the earliest legal actual site and transports it; `env()`/`secret()` are boot-only, and timeout/shutdown settings belong only to the profiles that declare them |
 | 7 | **Correlator** | what one invocation or session is in its protocol, and how messages/answers find it (execution-model §6.1: the Connector matches) |
 | 8 | **Outcome coverage** | the finite typed cases each output may emit and the completion rule the future `rastok simulate --coverage` enumerates |
 | 9 | **Instances** | singleton / `instance.key` (each resource run may have a `run_id`) / per-invocation or per-session; Node-instance closing policy and each exchange's terminal exit |
@@ -190,7 +190,7 @@ There is no parallel `mime_type` spelling.
 | Outcome cases | `Completed { status: int }`, `RequestExpired`, `Overloaded`, `PeerDisconnected`, `OutcomeUnknown` |
 | Application profile | inbound Call, therefore not a Loop host; each admitted request produces exactly one decoded `out`, accepts zero or one response `in` according to mode, and produces exactly one terminal `exit`; a pre-admission refusal produces none of these |
 | Instances | singleton |
-| Journal / sim | two-phase INBOUND proposal; commit precedes 202/response; the H2 Lab binding is effectless and uses scenario injection rather than a fake socket |
+| Journal / sim | two-phase INBOUND proposal; commit precedes 202/response; Lab `listener.out = value` scripts a decoded request and successful fixed ACK, without a socket; source `respond` scripting remains deferred |
 
 - **`ack`** (webhook): 202 immediately after the accepting commit —
   "received", not "processed";
@@ -264,14 +264,14 @@ weaken verification or reinterpret the plan bytes.
 
 | Case | Contract |
 |---|---|
-| Stable identity | `rastok/process@2` (v16; `@1` is its v15 predecessor) |
-| Role / Direction | child process over stdio; target contract **both** (caller + source). The currently executable `job` profile requires only the outbound role; the inbound service profile remains deferred and cannot silently broaden a job plan's binding requirement. |
+| Stable identity | `job`: `rastok/process@2`; `service`: `rastok/process@3` (D-2026-09-14-1); both use package v18 |
+| Role / Direction | Job: outbound Call. Service: both roles, resident Session. Selecting a profile resolves its exact Contract before lowering. |
 | Ports | `in` → stdin; `out` ← decoded/framed stdout; `err` ← framed stderr data; `exit` ← `ProcessExit` |
 | effect / behavior | **per-instance, both mandatory** |
 | Attributes | the normative table below (D-2026-08-12-1, amended by D-2026-08-14-1) — every attribute is `name = value`, presence and defaults are the CONTRACT's, and the checker injects every omitted default into the effective HIR |
-| Correlator | see modes below |
-| Outcome cases | `ProcessExit` below; exactly one terminal exit per admitted job invocation. stderr never carries lifecycle data. |
-| Application profile | `job` is an outbound finite Call and Loop-admissible: exactly one request `in`, zero or more ordered `out`, zero or more ordered `err`, then exactly one terminal `exit`; `service` remains deferred and is not a Loop host; terminal visibility is the conservative `@2` table in [R1](../architecture/rework-r1-host-contracts.md#71-contracts-for-loop-admissible-connectors) |
+| Correlation | Job: the Call itself. Service: the exact Node instance selects its resource Session; application request/reply correlation belongs to Operators. An upstream socket's SessionRef cannot select a child process. |
+| Outcome cases | `ProcessExit` below; exactly one terminal per job invocation or resident child incarnation, never per service message. stderr never carries lifecycle data. |
+| Application profile | `job`: one request, ordered frames, one atomic terminal completion; Loop-admissible under [R1](../architecture/rework-r1-host-contracts.md#71-contracts-for-loop-admissible-connectors). `service`: first input opens a child, subsequent inputs reuse it, inbound frames stream while it lives; not a Loop host. |
 | Instances | see modes below |
 | Journal / sim | OUTBOUND records per call (job: per run); spontaneous emissions = INBOUND roots; mocked in scenarios |
 
@@ -297,17 +297,19 @@ R2 step, never a Driver fallback.
 | `err_codec` | common | choice `lines \| bytes` for stderr only | plan | Defaulted(`lines`) — diagnostics never inherit `jsonl` from `codec`; omission ≡ `lines` |
 | `effect` | common | choice, typed | plan | **Required** |
 | `behavior` | common | choice, typed | plan | **Required** |
-| `timeout` | common | Rastok expression → `duration` | instance | Optional — a true optional: no budget declared, no budget |
+| `timeout` | job | Rastok expression → `duration` | instance | Optional — a true optional: no budget declared, no budget; refused on service |
 | `env` | common | `map<text,text>` | instance | Optional; canonical spelling `env = { "K": v }`; written entries override inherited host entries and unspecified entries remain inherited |
 | `max_output` | job | byte size: `<digits><unit>`, unit ∈ `B \| KiB \| MiB \| GiB` (explicit, required), ASCII whitespace tolerated around and between, ≤ 4 GiB (syntax bound; the Driver binding additionally proves the budget is REPRESENTABLE on this host — at most `isize::MAX` — while actual allocation is judged chunk by chunk at intake via `try_reserve`, surfacing as the typed overflow, never an abort) — one parser (`contract::byte_size`) judges at check AND enforces at run | plan | Defaulted(`"8MiB"`) |
 | `on_timeout` | job | choice `kill` (one word — "fixed to `kill`") | plan | Defaulted(`kill`) |
-| `correlate` | service | Rastok expression path over invocation data | invocation | Optional |
-| `restart` | service | struct | instance | Optional |
+| `max_frame` | service | positive byte size, same parser and host-representability check as `max_output`; bytes excluding newline, per stdin/stdout/stderr frame | plan | Defaulted(`"1MiB"`) |
 
-`correlate` and `restart` do NOT exist on the job profile: writing
-one there refuses by NAME (« `restart` belongs to
-`Process(mode = service)` and is not applicable to
-`Process(mode = job)` ») — never a generic "forbidden".
+Service restricts `codec` to `lines | jsonl` and `err_codec` to `lines`.
+Raw `bytes` has no resident-frame delimiter and refuses. A service stdin write
+contains one frame: an embedded newline refuses before any write. `correlate`
+and `restart` are retired, not executable attributes. Request ids belong to
+Operators; fresh input may open a child after death, but never resends old
+writes. Service has no per-turn timeout: an application can express its own
+bounded rendezvous; instance lifetime and Closing bound resource lifetime.
 
 `ProcessExit` is an ordinary tagged union on the ordinary `exit`
 port:
@@ -351,9 +353,10 @@ keeps bounded on-exit publication: all ordered frame values and the one
 `exit` are committed as one completion, so a retry cannot expose a partial
 attempt. **On-exit does not aggregate frames**: line-framed stderr may yield
 two hundred `err` envelopes in that transaction. An explicit bounded
-collector may instead aggregate them. A future streaming profile may publish
-frames earlier, but must preserve call identity, emit no frame after that
-call's `exit`, and keep aggregation/backpressure bounded.
+collector may instead aggregate them. The resident Session profile
+publishes frames while the resource lives: it preserves Session identity,
+emits no frame after that resource's `exit`, and keeps intake/backpressure
+bounded. It does not change job completion or introduce per-message Calls.
 
 The frame boundaries are exact. For `lines`, a request is one `text` value;
 the Driver appends one `\n` when absent. On output, `\n` is removed from
@@ -423,22 +426,63 @@ the ordered completion, not to an artificial `array<variant>` wrapper.
 The checker and machine judge every emitted frame against that pin, so
 Lab and world see one shape.
 
-**`mode = service` (the declared resident)**: long-running. `codec` frames
-line by line. With `correlate = data.id`, **stdout splits**: lines whose id
-matches an open call are its response (OUTBOUND closed, emitted on `out`,
-trigger `p:in`, parent = the request); non-matching lines are **spontaneous
-events** — INBOUND roots (the Process is also a source: codex
-notifications). Without `correlate`: pure streams (in = stdin sink, out =
-stdout source, no calls, no per-call timeout). `instance.key` = one logical
-Node instance per canonical key (a codex per session), each with its `run_id`,
-terminal envelope and `restart` policy; without `instances` = the explicit
-shared singleton. Lazy
-spawn (first delivery).
+**`mode = service` (resident Session, D-2026-09-14-1).**
+D-2026-09-10-2 settles the responsibility boundary: Process is a generic
+duplex stdio resource. With `codec = jsonl`, a complete stdout JSON line
+becomes one `variant`; an Operator validates/narrows that value and interprets
+the application protocol. Syntax decoding belongs to Process; response ids,
+notifications, progress, business errors and turn completion belong to the
+graph. Valid JSON with an unexpected domain shape is not a Process framing
+failure. No hidden RPC table classifies stdout or matches it to the most
+recent stdin message. `correlate` is not part of this profile.
 
-When this deferred profile lands, it uses D-2026-08-25-1's generic `Session`
-exchange: one resident run carries many stdin/stdout messages and one terminal
-`ProcessExit`. It is not lowered as one Process job per line and needs no
-WebSocket-specific runtime path.
+The profile uses D-2026-08-25-1's generic `Session` exchange: the first input
+lazily opens a child for the exact Node instance; later inputs write to that
+live child. Several turns share one resource. stdout/stderr frames and the
+single resource `ProcessExit` carry its Session context. Local write settlement
+does not complete a turn, and `exit` ends the child resource, not one request.
+There is no fake Call or Process job per line, nor a WebSocket-specific runtime
+path. A websocket SessionRef is not the resident child's SessionRef.
+
+D-2026-09-10-3 fixes fresh opening after child death: retain the resource's
+typed `exit`, do not respawn automatically, and leave the Node instance alive
+unless its own lifecycle closes it. A new eligible input can open a fresh
+child in that still-open instance, with a new `SessionRef` and no change to
+the instance generation. Earlier writes are never replayed or retargeted;
+the child's private memory is not restored. Closing or stopped generations
+cannot be revived by this rule. Any successor follows ordinary Node-instance
+admission, independently of resource reopening.
+
+D-2026-09-10-4 separates application shutdown from instance closure. A protocol
+message such as `quit` is ordinary input, not a word interpreted by Process.
+Its write settlement proves neither application completion nor resource exit.
+If the child exits, Process publishes its terminal without implicitly stopping
+the Node instance. `instance.stop` separately bounds resource closure after
+admitted work drains. The resident Unix Driver's system fallback distinguishes
+`SIGTERM` from forced `SIGKILL`; EOF is not a universal shutdown request.
+At the drain deadline the service requests `SIGTERM`; at the settlement
+deadline it requests forced cleanup, with `OutcomeUnknown` unless a terminal
+was observed. There is no third grace period. Signal handoff runs on the OS
+worker, never the semantic path. Existing job cancellation is unchanged.
+
+The Unix Driver retains at most 64 resources per bound Driver, eight queued
+writes per resource, bounded eight-slot reader/publication queues and a
+reserved shutdown control slot. Full intake applies backpressure; it never
+drops a frame. Frames already admitted before a decode/overflow failure stay
+visible, followed by one typed exit. The same seven exit cases are retained;
+`TimeoutExpired` is not synthesized by a per-turn service timer. A failed
+spawn yields `SpawnFailed`, pipe failure `CaptureFailed`, invalid JSON/UTF-8
+`DecodeFailed`, and an exceeded frame bound `OutputOverflow`.
+
+The [implementation ledger](../architecture/process-service.md) links tests
+and the [resident dialogue](../../examples/agent-dialogue.rkg). The Lab runs
+`match` mocks without any physical Driver: each input may yield frames and an
+optional final exit. An authored `quit` response can terminate the mock
+resource; silence during system close yields `OutcomeUnknown`. Delayed or
+unsolicited scripted frames and system-close acknowledgements remain named
+Lab limits, as does `now()` in Session mocks. Physical unsolicited stdout is
+supported. Automatic restart, protocol-specific resume, Process credentials,
+and non-Unix physical supervision are not claimed.
 
 ### 3.4 `Timer` — one-shot or periodic time events
 
@@ -793,17 +837,42 @@ The surface reserves the following mapping:
 
 ## 9. Process service conformance obligations
 
-- A correlated request/reply round-trip closes its OUTBOUND call.
-- An uncorrelated service notification becomes a spontaneous INBOUND root.
-- A protocol failure is returned as a correlated typed exit/output case.
-- A reply after `TimeoutExpired` is discarded-and-counted, never delivered.
-- Process death emits `Exited` on `instance.exit`; the restart policy may respawn the
-  service and invoke its protocol-specific resume operation.
+D-2026-09-10-2 separates transport proof from gateway protocol proof.
+D-2026-09-14-1 admits the resident transport; these remain its conformance
+obligations, not a claim that a Codex-specific adapter is qualified:
 
-A Driver-owned resource may persist per activity rather than per creation, so
-an empty session can legitimately be unresumable. The recovery recipe for
-such resources is **resume-or-start-fresh, routed on the typed instance-exit
-case** — graph-side wiring, no new mechanism.
+- Several inputs to one live instance reuse its child; another keyed instance
+  owns another child. First-message writes are not duplicated by opening.
+- Every stdin write follows its retained intent; settlement proves local
+  acceptance only, without a per-message Call or `exit`.
+- A shutdown message such as `quit` follows the same write path. It neither
+  closes an instance nor publishes an exit before the resource reports one.
+  An ignored request remains ordinary data; a separately requested instance
+  close is bounded and cannot fabricate a successful resource termination.
+- Complete JSONL stdout frames become `variant` values under bounded intake.
+  Process does not inspect application request ids or message kinds.
+- An Operator adapter validates/classifies responses, notifications, progress
+  and business errors, and owns any request correlation or deadline policy.
+  Late-reply handling is explicit protocol logic, never a Process guess.
+- An observed child termination yields `Exited` on the ordinary `exit` port;
+  all resource terminals are close-once and prohibit later frames. Finishing
+  a turn emits neither a resource exit nor a Node stop by implication.
+- Exact-instance closure cannot terminate another conversation's child.
+  Repeated closure does not repeat cancellation or touch a successor.
+- Application shutdown, cooperative system termination and forced termination
+  have distinct qualification cases. A late terminal after `OutcomeUnknown`
+  cannot publish a second exit, and recovery never resends a shutdown message.
+- Child death without a new input causes no new opening, including after an
+  advance of logical time. A later input to the still-open instance may open
+  one fresh Session; old writes, events and child memory do not migrate to it.
+  A stopped generation stays stopped, and other instances keep their children.
+- Simulation uses the same exchange model without a physical child. Replay
+  never repeats a spawn or stdin write. Child-memory restoration and protocol
+  resume cannot be claimed without a separately qualified explicit policy.
+
+The [implementation ledger](../architecture/process-service.md) links the
+transport tests and named limits. The earlier [review](../architecture/process-contract-review.md)
+preserves the design inventory, including future Lab world actions.
 
 
 ## 10. Related docs

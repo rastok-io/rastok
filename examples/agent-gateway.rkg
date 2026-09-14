@@ -1,0 +1,147 @@
+// One local WebSocket conversation owns one resident JSONL process.
+// Clients speak the Codex app-server protocol: initialize, initialized,
+// thread/start, then turn/start. The Lab never launches Codex.
+val alice_session = "11111111111111111111111111111111"
+val bob_session = "22222222222222222222222222222222"
+val thread_id = "thread-1"
+
+type JsonObject = map<text,variant>
+type ChildExit = union {
+  Exited { exit_code: int, signal: int? }
+  SpawnFailed { message: text }
+  DecodeFailed { line: text?, message: text }
+  OutputOverflow { limit: uint, reason: enum { budget, capacity } }
+  CaptureFailed {}
+  TimeoutExpired {}
+  OutcomeUnknown {}
+}
+
+graph agent_gateway : App {
+  // Public fixture ingress; real clients enter through clients.out instead.
+  input peer: variant
+  input close: variant
+  output reply: variant
+  output process_exit: ChildExit
+  output session_exit: variant
+
+  connector clients : WebSocketServer {
+    listen = "127.0.0.1:8443"
+    path = "/agent"
+    codec = json
+    handshake_timeout = duration("5s")
+    max_message = "1MiB"
+    correlate = meta.ext.session_id
+    versions = ["http/1.1"]
+  }
+
+  graph conversation {
+    input in: variant
+    input close: variant
+    output out: variant
+    output exit: ChildExit
+    instance = { key = meta.ext.session_id }
+    lifetime = { kind = idle; after = duration("5m") }
+    closing = { drain_for = duration("1s"); settle_for = duration("1s") }
+
+    connector model : Process {
+      mode = service
+      command = "codex"
+      args = ["app-server", "--listen", "stdio://"]
+      codec = jsonl
+      max_frame = "1MiB"
+      effect = idempotent
+      behavior = probabilistic
+      closing = { drain_for = duration("1s"); settle_for = duration("1s") }
+    }
+
+    operator route_reply {
+      input remember: variant
+      input in: variant
+      output out: variant
+      var socket: text = ""
+      // Admission queues remember before child replies can be routed here.
+      // This state belongs to this conversation, not a global last-request slot.
+      on remember { socket = meta.ext.session_id as text }
+      on in { out = { data = data; meta.ext.session_id = socket } }
+    }
+
+    operator finish {
+      input in: variant
+      output out: variant
+      on in { out = . }
+    }
+
+    in -> model
+    in -> route_reply.remember
+    close -> finish
+    finish.out -> model.instance.stop
+    model.out -> route_reply -> out
+    model.err -> nothing
+    model.exit -> exit
+  }
+
+  clients.out -> conversation
+  peer -> conversation
+  close -> conversation.close
+  conversation.out -> { clients.in; reply }
+  conversation.exit -> process_exit
+  // Closing a socket is observable, not an implicit process cancellation.
+  // The idle lifetime bounds abandoned conversations independently.
+  clients.exit -> session_exit
+}
+
+lab agent_gateway {
+  simulation app_server on app {
+    mock conversation.model {
+      // Actual JSON objects are maps, not DSL struct literals.
+      // This fixture's client frames all have the protocol's method field.
+      on in where data is JsonObject {
+        match {
+          data.method == "initialize" => out = { "id": data.id, "result": { "userAgent": "scripted-codex" } }
+          data.method == "initialized" => nothing
+          data.method == "thread/start" => out = { "id": data.id, "result": { "thread": { "id": thread_id } } }
+          data.method == "turn/start" => {
+            val turn_id = "turn-1"
+            out = { "id": data.id, "result": { "turn": { "id": turn_id, "status": "inProgress" } } }
+            out = ({ "method": "item/agentMessage/delta", "params": { "threadId": thread_id, "turnId": turn_id, "itemId": "item-1", "delta": "Hello from the simulated agent." } })
+            out = ({ "method": "turn/completed", "params": { "threadId": thread_id, "turn": { "id": turn_id, "status": "completed" } } })
+          }
+          data.method == "turn/interrupt" => out = { "id": data.id, "result": {:} }
+          _ => out = { "id": data.id, "error": { "code": -32601, "message": "scripted method unavailable" } }
+        }
+      }
+      on in { out = nothing }
+    }
+
+    scenario two_conversations "same request ids, separate children and correctly addressed notifications" {
+      app.peer = { meta.ext.session_id = alice_session; data = { "id": 0, "method": "initialize", "params": { "clientInfo": { "name": "rastok_gallery", "version": "1" } } } }
+      expect app.reply count == 1 where meta.ext.session_id == alice_session
+      app.peer = { meta.ext.session_id = bob_session; data = { "id": 0, "method": "initialize", "params": { "clientInfo": { "name": "rastok_gallery", "version": "1" } } } }
+      expect app.reply count == 1 where meta.ext.session_id == bob_session
+      app.peer = { meta.ext.session_id = alice_session; data = { "method": "initialized" } }
+      expect nothing app.reply
+      app.peer = { meta.ext.session_id = bob_session; data = { "method": "initialized" } }
+      app.peer = { meta.ext.session_id = alice_session; data = { "id": 1, "method": "thread/start", "params": { "approvalPolicy": "never", "sandbox": "read-only" } } }
+      expect app.reply count == 1
+      app.peer = { meta.ext.session_id = bob_session; data = { "id": 1, "method": "thread/start", "params": { "approvalPolicy": "never", "sandbox": "read-only" } } }
+      expect app.reply count == 1
+      app.peer = { meta.ext.session_id = alice_session; data = { "id": 2, "method": "turn/start", "params": { "threadId": thread_id, "input": [{ "type": "text", "text": "Hello Alice" }] } } }
+      expect app.reply count == 3 where meta.ext.session_id == alice_session
+      expect nothing app.process_exit
+      app.peer = { meta.ext.session_id = bob_session; data = { "id": 2, "method": "turn/start", "params": { "threadId": thread_id, "input": [{ "type": "text", "text": "Hello Bob" }] } } }
+      expect app.reply count == 3 where meta.ext.session_id == bob_session
+      app.close = { meta.ext.session_id = alice_session; data = "operator requested shutdown" }
+      advance duration("2s")
+      expect app.process_exit count == 1 where data is OutcomeUnknown
+      app.peer = { meta.ext.session_id = bob_session; data = { "id": 3, "method": "turn/start", "params": { "threadId": thread_id, "input": [{ "type": "text", "text": "Still here?" }] } } }
+      expect app.reply count == 3 where meta.ext.session_id == bob_session
+      expect nothing app.process_exit
+    }
+
+    scenario unknown_method "a protocol error is data, not a Process terminal" {
+      app.peer = { meta.ext.session_id = alice_session; data = { "id": 0, "method": "fixture/unknown", "params": {:} } }
+      expect app.reply count == 1
+      expect nothing app.process_exit
+    }
+  }
+}

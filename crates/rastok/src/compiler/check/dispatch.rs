@@ -168,7 +168,19 @@ impl Checker<'_, '_> {
         // read. Only a firing handler owns one logical instant; plan, owner,
         // instance and invocation-setting expressions deliberately do not
         // receive this name.
-        let mut signature = node_signature.clone().with("now", DataType::TIMESTAMP);
+        let mut signature = if matches!(
+            &node.semantics,
+            NodeSemantics::Connector {
+                exchange: crate::connector::ConnectorExchange::Session,
+                ..
+            }
+        ) {
+            // A Session mock is a response to a message, not a transaction
+            // with a retained firing time. Its request may carry authored time.
+            node_signature.clone()
+        } else {
+            node_signature.clone().with("now", DataType::TIMESTAMP)
+        };
         match &activation {
             node::HandlerActivation::Join { ports, .. } => {
                 for port in ports {
@@ -1241,9 +1253,9 @@ impl Checker<'_, '_> {
     }
 }
 
-/// Each selected leaf is a whole reply or explicit silence. Counting exits
-/// across sibling arms would invent a completion no execution can produce.
-pub(super) fn mock_completion_leaves_hold(dispatch: &Dispatch) -> bool {
+/// Check each executed leaf's terminal cardinality, not the sum of mutually
+/// exclusive arms. Session frames need not end the resource.
+pub(super) fn mock_completion_leaves_hold(dispatch: &Dispatch, session: bool) -> bool {
     match dispatch {
         Dispatch::Linear(statements) => {
             let mut last = None;
@@ -1254,15 +1266,15 @@ pub(super) fn mock_completion_leaves_hold(dispatch: &Dispatch) -> bool {
                     last = Some(port);
                 }
             }
-            last.is_none_or(|port| port.name() == "exit" && exits == 1)
+            (session && exits == 0) || last.is_none_or(|port| port.name() == "exit" && exits == 1)
         }
         Dispatch::ClosedMatch { arms, .. } => arms
             .iter()
-            .all(|arm| mock_completion_leaves_hold(&arm.dispatch)),
+            .all(|arm| mock_completion_leaves_hold(&arm.dispatch, session)),
         Dispatch::OpenMatch { arms, fallback, .. } => {
             arms.iter()
-                .all(|arm| mock_completion_leaves_hold(&arm.dispatch))
-                && mock_completion_leaves_hold(fallback)
+                .all(|arm| mock_completion_leaves_hold(&arm.dispatch, session))
+                && mock_completion_leaves_hold(fallback, session)
         }
     }
 }

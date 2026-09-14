@@ -248,7 +248,10 @@ pub fn process_port_type(
     codec_word: Option<&str>,
     err_codec_word: Option<&str>,
 ) -> Option<DataType> {
-    if contract.as_str() != crate::connector::PROCESS_CONNECTOR_ID {
+    if !matches!(
+        contract.as_str(),
+        crate::connector::PROCESS_CONNECTOR_ID | crate::connector::PROCESS_SERVICE_CONNECTOR_ID
+    ) {
         return None;
     }
     match (port, codec_word) {
@@ -280,13 +283,15 @@ pub fn process_attribute_site(
 ) -> Option<crate::plan::EvaluationSite> {
     use crate::plan::EvaluationSite;
 
-    if contract.as_str() != crate::connector::PROCESS_CONNECTOR_ID {
+    if !matches!(
+        contract.as_str(),
+        crate::connector::PROCESS_CONNECTOR_ID | crate::connector::PROCESS_SERVICE_CONNECTOR_ID
+    ) {
         return None;
     }
     match attribute {
-        "mode" | "codec" | "err_codec" | "effect" | "behavior" | "max_output" | "on_timeout" => {
-            Some(EvaluationSite::Plan)
-        }
+        "mode" | "codec" | "err_codec" | "effect" | "behavior" | "max_output" | "max_frame"
+        | "on_timeout" => Some(EvaluationSite::Plan),
         "args" | "command" | "cwd" | "timeout" | "env" | "restart" => {
             Some(EvaluationSite::Instance)
         }
@@ -2221,6 +2226,29 @@ pub trait SessionConnectorDriver {
         SessionStart::Started
     }
 
+    /// Requests forced local shutdown at the retained Closing settlement
+    /// deadline. Unlike protocol close, this handoff cannot wait for peer
+    /// cooperation or a free message slot. It is idempotent for this exact
+    /// resource and may be repeated after recovery of the closing scope.
+    ///
+    /// This does not prove an exit or release journal correlation. A physical
+    /// Driver must retain its cleanup request without blocking the core; a
+    /// resource-free scripted world has nothing to stop.
+    fn abort_session(&mut self, session: SessionRef) {
+        let _ = session;
+    }
+
+    /// Releases local resources after the Session's terminal transaction
+    /// commits, including a scheduler-owned unknown outcome. This is not a
+    /// second protocol close and cannot publish another terminal or start a
+    /// grace period. The exact reference fences any successor resource.
+    ///
+    /// Handoff must not block on the peer or child. A physical Driver owns
+    /// any remaining cleanup; a resource-free scripted world has none.
+    fn release_session(&mut self, session: SessionRef) {
+        let _ = session;
+    }
+
     /// Session observations accumulated since the previous drain.
     fn session_events(&mut self) -> Vec<SessionDriverEvent>;
 }
@@ -2272,13 +2300,21 @@ pub trait SessionConnectorBindings {
         session: SessionRef,
     ) -> Result<SessionStart, DriverRouteError>;
 
+    /// Requests forced cleanup through the exact Session's owning Driver,
+    /// without forgetting its correlation before terminal commit.
+    fn abort_session(
+        &mut self,
+        connector: &node::Path,
+        session: SessionRef,
+    ) -> Result<(), DriverRouteError>;
+
     /// Collects Session observations from every bound Session family.
     fn session_events(&mut self) -> Result<Vec<SessionDriverEvent>, DriverRouteError>;
 
-    /// Releases the routing-table ownership after the terminal Session
-    /// transaction commits. Drivers learn termination through their own
-    /// protocol event; this operation only bounds registry correlation state.
-    fn forget_session(&mut self, session: SessionRef);
+    /// Notifies the owning Driver after the terminal transaction commits,
+    /// then releases routing-table ownership. An already forgotten reference
+    /// is inert; a missing bound Driver is an integrity fault.
+    fn forget_session(&mut self, session: SessionRef) -> Result<(), DriverRouteError>;
 }
 
 /// The verified outbound routing table consumed by the core VM.
@@ -2404,14 +2440,26 @@ pub trait OutboundConnectorBindings {
         Err(DriverRouteError::UnboundSession(connector.clone()))
     }
 
+    /// Requests forced local shutdown after a retained Closing deadline.
+    fn abort_session(
+        &mut self,
+        connector: &node::Path,
+        session: SessionRef,
+    ) -> Result<(), DriverRouteError> {
+        let _ = session;
+        Err(DriverRouteError::UnboundSession(connector.clone()))
+    }
+
     /// Collects Session observations from every bound family.
     fn session_events(&mut self) -> Result<Vec<SessionDriverEvent>, DriverRouteError> {
         Ok(Vec::new())
     }
 
-    /// Releases one terminal Session from binding-local routing state.
-    fn forget_session(&mut self, session: SessionRef) {
+    /// Releases one committed terminal Session's local resources and routing
+    /// state. It must not perform another protocol exchange.
+    fn forget_session(&mut self, session: SessionRef) -> Result<(), DriverRouteError> {
         let _ = session;
+        Ok(())
     }
 }
 

@@ -33,6 +33,8 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+mod process_service;
+
 type MockFaults = Rc<RefCell<Vec<String>>>;
 type SharedMocks = Rc<BTreeMap<node::Path, Rc<Mock>>>;
 
@@ -1064,6 +1066,12 @@ fn mock_bindings<'plan>(
     let faults = Rc::new(RefCell::new(Vec::new()));
     let mocks = share_mocks(mocks);
     let mut registry = DriverRegistry::default();
+    registry = registry
+        .try_with(Box::new(process_service::Factory::new(
+            Rc::clone(&mocks),
+            Rc::clone(&faults),
+        )?))
+        .map_err(|e| e.to_string())?;
     for (spelling, bind_protocol) in scripted_protocol_binders() {
         let id = ContractId::parse(spelling).map_err(|error| error.to_string())?;
         registry = registry
@@ -1111,11 +1119,26 @@ impl MockOutboundConnectorDriver {
     }
 
     fn answer(&mut self, intent: &Intent, request: &Envelope) -> Option<Completion> {
-        let Some(mock) = self.mocks.get(&intent.connector_path).cloned() else {
+        let outputs =
+            self.answer_outputs(&intent.connector_path, Some(intent.logical_time), request)?;
+        match Completion::try_new(outputs) {
+            Ok(completion) => Some(completion),
+            Err(error) => {
+                self.fault(format!("the mock completion is invalid: {error}"));
+                None
+            }
+        }
+    }
+
+    fn answer_outputs(
+        &mut self,
+        connector: &node::Path,
+        logical_time: Option<i64>,
+        request: &Envelope,
+    ) -> Option<Vec<PortOutput>> {
+        let Some(mock) = self.mocks.get(connector).cloned() else {
             self.fault(format!(
-                "an uncovered call reached `{}` (digest {:02x?}…); mock it or script silence",
-                intent.connector_path,
-                &intent.request_digest()[..4]
+                "an uncovered call reached `{connector}`; mock it or script silence"
             ));
             return None;
         };
@@ -1125,10 +1148,9 @@ impl MockOutboundConnectorDriver {
         // reply must never force an opaque request to decode. The
         // slot caches across branches — one decode at most.
         let mut env: BTreeMap<String, expr::EvalValue> = BTreeMap::new();
-        env.insert(
-            String::from("now"),
-            expr::EvalValue::Timestamp(intent.logical_time),
-        );
+        if let Some(time) = logical_time {
+            env.insert(String::from("now"), expr::EvalValue::Timestamp(time));
+        }
         env.insert(
             String::from("meta"),
             expr::EvalValue::from(runtime::meta_value(request.meta())),
@@ -1165,17 +1187,11 @@ impl MockOutboundConnectorDriver {
                         // of the scenario, never a silent
                         // fall-through to the next branch.
                         Ok(_) => {
-                            self.fault(format!(
-                                "a mock guard of `{}` is not a bool",
-                                intent.connector_path
-                            ));
+                            self.fault(format!("a mock guard of `{}` is not a bool", connector));
                             return None;
                         }
                         Err(error) => {
-                            self.fault(format!(
-                                "a mock guard of `{}` faulted: {error}",
-                                intent.connector_path
-                            ));
+                            self.fault(format!("a mock guard of `{}` faulted: {error}", connector));
                             return None;
                         }
                     }
@@ -1209,7 +1225,7 @@ impl MockOutboundConnectorDriver {
         }
         self.fault(format!(
             "no mock branch of `{}` matched the request; add a catch-all or script silence",
-            intent.connector_path
+            connector
         ));
         None
     }
@@ -1223,7 +1239,7 @@ impl MockOutboundConnectorDriver {
         request: &Envelope,
         mut env: BTreeMap<String, expr::EvalValue>,
         slot: &runtime::DataSlot<'_>,
-    ) -> Option<Completion> {
+    ) -> Option<Vec<PortOutput>> {
         use crate::compiler::hir::Statement;
         let mut outputs = Vec::new();
         for statement in body {
@@ -1272,13 +1288,7 @@ impl MockOutboundConnectorDriver {
         if outputs.is_empty() {
             return None;
         }
-        match Completion::try_new(outputs) {
-            Ok(completion) => Some(completion),
-            Err(error) => {
-                self.fault(format!("the mock completion is invalid: {error}"));
-                None
-            }
-        }
+        Some(outputs)
     }
 
     /// One lazily-bound evaluation; an unreadable request keeps its

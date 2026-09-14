@@ -3543,13 +3543,29 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     node: node.path.clone(),
                 });
             }
-            if spec.contract.as_str() == crate::connector::PROCESS_CONNECTOR_ID {
-                if spec.roles != crate::connector::ConnectorRoles::Outbound {
+            if matches!(
+                spec.contract.as_str(),
+                crate::connector::PROCESS_CONNECTOR_ID
+                    | crate::connector::PROCESS_SERVICE_CONNECTOR_ID
+            ) {
+                let service =
+                    spec.contract.as_str() == crate::connector::PROCESS_SERVICE_CONNECTOR_ID;
+                let roles = if service {
+                    crate::connector::ConnectorRoles::InboundAndOutbound
+                } else {
+                    crate::connector::ConnectorRoles::Outbound
+                };
+                let exchange = if service {
+                    crate::connector::ConnectorExchange::Session
+                } else {
+                    crate::connector::ConnectorExchange::Call
+                };
+                if spec.roles != roles {
                     return Err(PlanValidationError::ContractRoleMismatch {
                         node: node.path.clone(),
                     });
                 }
-                if spec.exchange != crate::connector::ConnectorExchange::Call {
+                if spec.exchange != exchange {
                     return Err(PlanValidationError::ContractExchangeMismatch {
                         node: node.path.clone(),
                     });
@@ -3561,7 +3577,8 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     });
                 }
                 match spec.attribute("mode") {
-                    Some(crate::plan::AttrSetting::Word(word)) if word == "job" => {}
+                    Some(crate::plan::AttrSetting::Word(word))
+                        if word == if service { "service" } else { "job" } => {}
                     Some(_) => {
                         return Err(PlanValidationError::ContractAttributeMismatch {
                             node: node.path.clone(),
@@ -3576,7 +3593,8 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     }
                 }
                 match spec.attribute("on_timeout") {
-                    Some(crate::plan::AttrSetting::Word(word)) if word == "kill" => {}
+                    None if service => {}
+                    Some(crate::plan::AttrSetting::Word(word)) if !service && word == "kill" => {}
                     Some(_) => {
                         return Err(PlanValidationError::ContractAttributeMismatch {
                             node: node.path.clone(),
@@ -3671,32 +3689,35 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                         }
                         _ => false,
                     };
-                    if !valid {
+                    if !valid || service {
                         return Err(PlanValidationError::ContractAttributeMismatch {
                             node: node.path.clone(),
                             attribute: String::from("timeout"),
                         });
                     }
                 }
-                match spec.attribute("max_output") {
+                let size_attribute = if service { "max_frame" } else { "max_output" };
+                match spec.attribute(size_attribute) {
                     Some(crate::plan::AttrSetting::Value(crate::value::Value::Text(value)))
-                        if crate::connector::byte_size(value).is_some() => {}
+                        if crate::connector::byte_size(value)
+                            .is_some_and(|size| !service || size > 0) => {}
                     Some(_) => {
                         return Err(PlanValidationError::ContractAttributeMismatch {
                             node: node.path.clone(),
-                            attribute: String::from("max_output"),
+                            attribute: String::from(size_attribute),
                         });
                     }
                     None => {
                         return Err(PlanValidationError::MissingContractAttribute {
                             node: node.path.clone(),
-                            attribute: "max_output",
+                            attribute: size_attribute,
                         });
                     }
                 }
                 let codec = match spec.attribute("codec") {
                     Some(crate::plan::AttrSetting::Word(word))
-                        if matches!(word.as_str(), "bytes" | "jsonl" | "lines") =>
+                        if matches!(word.as_str(), "bytes" | "jsonl" | "lines")
+                            && !(service && word == "bytes") =>
                     {
                         word.as_str()
                     }
@@ -3713,7 +3734,8 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 };
                 let err_codec = match spec.attribute("err_codec") {
                     Some(crate::plan::AttrSetting::Word(word))
-                        if matches!(word.as_str(), "bytes" | "lines") =>
+                        if matches!(word.as_str(), "bytes" | "lines")
+                            && !(service && word == "bytes") =>
                     {
                         word.as_str()
                     }
@@ -3740,8 +3762,12 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                             | "env"
                             | "mode"
                             | "max_output"
+                            | "max_frame"
                             | "on_timeout"
-                    ) {
+                    ) || (service
+                        && matches!(name.as_str(), "max_output" | "on_timeout" | "timeout"))
+                        || (!service && name == "max_frame")
+                    {
                         return Err(PlanValidationError::ContractAttributeMismatch {
                             node: node.path.clone(),
                             attribute: name.clone(),

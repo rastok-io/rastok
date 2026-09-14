@@ -3007,8 +3007,12 @@ impl CallConnectorDriver for ScriptedWorld {
 struct SessionWorld {
     events: Vec<SessionDriverEvent>,
     opened: Vec<SessionRef>,
+    close_requests: Vec<SessionRef>,
+    abort_requests: Vec<SessionRef>,
+    released: Vec<SessionRef>,
     pending_opens: bool,
     hold_writes: bool,
+    hold_closes: bool,
     writes: Vec<(SessionRef, SessionWriteRef)>,
 }
 
@@ -3142,13 +3146,607 @@ impl OutboundConnectorBindings for SessionWorld {
         _: &node::Path,
         session: SessionRef,
     ) -> Result<SessionStart, DriverRouteError> {
-        self.close(session);
+        self.close_requests.push(session);
+        if !self.hold_closes {
+            self.close(session);
+        }
         Ok(SessionStart::Started)
     }
 
     fn session_events(&mut self) -> Result<Vec<SessionDriverEvent>, DriverRouteError> {
         Ok(std::mem::take(&mut self.events))
     }
+
+    fn forget_session(&mut self, session: SessionRef) -> Result<(), DriverRouteError> {
+        self.released.push(session);
+        Ok(())
+    }
+
+    fn abort_session(
+        &mut self,
+        _: &node::Path,
+        session: SessionRef,
+    ) -> Result<(), DriverRouteError> {
+        if !self.abort_requests.contains(&session) {
+            self.abort_requests.push(session);
+        }
+        Ok(())
+    }
+}
+
+// Qualify the generic resource lifecycle through an executable Session
+// Contract; this fixture does not admit the deferred Process service profile.
+const KEYED_SESSION_LIFECYCLE: &str = r#"
+graph app : App {
+  input in: text
+  input close: text
+  output exit: variant
+  graph conversation {
+    input in: text
+    input close: text
+    output exit: variant
+    instance = { key = data }
+    connector socket : WebSocketClient {
+      url = "ws://example.test/socket"
+      handshake_timeout = duration("5s")
+      codec = text; effect = idempotent; behavior = deterministic
+      closing = { drain_for = duration("1s"); settle_for = duration("1s") }
+    }
+    operator close_request {
+      input in: text
+      output out: text
+      on in { out = data }
+    }
+    in -> socket
+    close -> close_request
+    close_request.out -> socket.instance.stop
+    socket.out -> nothing
+    socket.exit -> exit
+  }
+  in -> conversation
+  close -> conversation.close
+  conversation.exit -> exit
+}
+"#;
+
+#[test]
+fn a_new_input_reopens_only_its_ended_session_without_resending_old_writes() {
+    use rastok::journal::SessionStatus;
+    use rastok::runtime::vm::InstancePhaseInspection;
+
+    let compiled = compile(
+        &[KEYED_SESSION_LIFECYCLE],
+        &ContractCatalog::try_m0().unwrap(),
+    )
+    .unwrap();
+    let (plan, _) =
+        rastok::plan::decode(&rastok::plan::encode(&compiled.plan, &compiled.hash)).unwrap();
+    let mut expected_records = None;
+    for recover in [false, true] {
+        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let mut world = SessionWorld {
+            hold_writes: true,
+            ..SessionWorld::default()
+        };
+        for tenant in ["alice", "bob", "alice", "bob"] {
+            vm.inject(&mut journal, text_submission(tenant)).unwrap();
+            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+            vm.pump(&mut journal, &mut world).unwrap();
+        }
+        let [alice, bob] = world.opened.as_slice() else {
+            panic!("one resource per conversation, not per message");
+        };
+        let (alice, bob) = (*alice, *bob);
+        let alice_instance = vm
+            .inspection()
+            .sessions
+            .iter()
+            .find(|session| session.reference == alice)
+            .unwrap()
+            .instance
+            .clone();
+        assert_eq!(world.writes.len(), 2);
+        assert_eq!(world.writes[0].0, alice);
+        assert_eq!(world.writes[1].0, bob);
+        let original_writes = world.writes.clone();
+
+        world.close(alice);
+        vm.pump(&mut journal, &mut world).unwrap();
+        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        assert_eq!(journal.live_sessions(), vec![bob]);
+        assert_eq!(journal.open_session_writes().len(), 1);
+        assert_eq!(journal.open_session_writes()[0].session_ref, bob);
+        assert!(journal.records().iter().any(|record| matches!(record,
+            Record::Outbound(OutboundRecord::Session(record))
+                if record.session_ref == alice
+                    && record.status == SessionStatus::WriteAbandoned(original_writes[0].1))));
+        assert!(vm.inspection().instances.iter().any(|instance| {
+            instance.reference == alice_instance && instance.phase == InstancePhaseInspection::Open
+        }));
+        if recover {
+            let retained = journal.records().to_vec();
+            vm.recover_from_journal(&journal).unwrap();
+            assert_eq!(journal.records(), retained);
+        }
+        vm.advance(&mut journal, &mut world, 10_000_000_000)
+            .unwrap();
+        assert_eq!(world.opened, vec![alice, bob], "no timed respawn");
+        assert_eq!(world.writes, original_writes, "no recovery resend");
+
+        let fresh_input = vm.inject(&mut journal, text_submission("alice")).unwrap();
+        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.pump(&mut journal, &mut world).unwrap();
+        assert_eq!(world.opened.len(), 3);
+        let fresh_alice = world.opened[2];
+        assert_ne!(fresh_alice, alice);
+        assert_ne!(fresh_alice, bob);
+        assert_eq!(
+            world.writes, original_writes,
+            "old writes stay on the old resource"
+        );
+        assert!(vm.inspection().sessions.iter().any(|session| {
+            session.reference == fresh_alice && session.instance == alice_instance
+        }));
+        assert!(journal.records().iter().any(|record| matches!(record,
+            Record::Outbound(OutboundRecord::Session(record))
+                if record.session_ref == fresh_alice
+                    && matches!(&record.status, SessionStatus::Opening(intent)
+                        if intent.emitting_id == fresh_input))));
+
+        world.close(alice);
+        world.settle_write(0);
+        let retained = journal.records().to_vec();
+        let report = vm.pump(&mut journal, &mut world).unwrap();
+        assert_eq!(report.uncorrelated_sessions.len(), 2);
+        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        assert_eq!(
+            journal.records(),
+            retained,
+            "late facts cannot target a replacement"
+        );
+        assert_eq!(vm.outputs().len(), 1, "one terminal for the ended resource");
+
+        for (tenant, resource) in [("alice", fresh_alice), ("bob", bob)] {
+            vm.inject(&mut journal, text_submission(tenant)).unwrap();
+            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+            assert_eq!(world.writes.last().unwrap().0, resource);
+        }
+        assert_eq!(world.opened.len(), 3, "Bob was never reopened");
+        if let Some(expected) = &expected_records {
+            assert_eq!(
+                journal.records(),
+                expected,
+                "recovery changes no causal fact"
+            );
+        } else {
+            expected_records = Some(journal.records().to_vec());
+        }
+    }
+}
+
+#[test]
+fn repeated_child_stop_closes_only_the_exact_session_instance() {
+    let compiled = compile(
+        &[KEYED_SESSION_LIFECYCLE],
+        &ContractCatalog::try_m0().unwrap(),
+    )
+    .unwrap();
+    let (plan, _) =
+        rastok::plan::decode(&rastok::plan::encode(&compiled.plan, &compiled.hash)).unwrap();
+    let mut vm = Vm::boot(&plan, GraphVersion(1));
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut world = SessionWorld::default();
+    for tenant in ["alice", "bob"] {
+        vm.inject(&mut journal, text_submission(tenant)).unwrap();
+        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.pump(&mut journal, &mut world).unwrap();
+    }
+    let [alice, bob] = world.opened.as_slice() else {
+        panic!("one Session per keyed conversation");
+    };
+    let (alice, bob) = (*alice, *bob);
+    let alice_instance = vm
+        .inspection()
+        .sessions
+        .iter()
+        .find(|session| session.reference == alice)
+        .unwrap()
+        .instance
+        .clone();
+
+    for through in [500_000_000, 1_000_000_000] {
+        let mut close = text_submission("alice");
+        close.port = node::Port::new("close").unwrap();
+        vm.inject(&mut journal, close).unwrap();
+        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.advance(&mut journal, &mut world, through).unwrap();
+    }
+    assert_eq!(
+        world.close_requests,
+        vec![alice],
+        "no renewed drain or duplicate close"
+    );
+    vm.pump(&mut journal, &mut world).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.advance(&mut journal, &mut world, 3_000_000_000).unwrap();
+    assert_eq!(journal.live_sessions(), vec![bob]);
+    assert_eq!(world.opened, vec![alice, bob], "a stop does not respawn");
+    assert!(journal.records().iter().any(|record| matches!(record,
+        Record::Transaction(record)
+            if record.instance == alice_instance
+                && record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Stop))));
+
+    let mut repeated = text_submission("alice");
+    repeated.port = node::Port::new("close").unwrap();
+    vm.inject(&mut journal, repeated).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.inject(&mut journal, text_submission("bob")).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.pump(&mut journal, &mut world).unwrap();
+    assert_eq!(world.writes.last().unwrap().0, bob);
+    assert_eq!(world.close_requests, vec![alice]);
+    assert_eq!(world.opened, vec![alice, bob]);
+    assert_eq!(vm.outputs().len(), 1);
+    assert!(
+        !vm.inspection()
+            .instances
+            .iter()
+            .any(|instance| instance.reference == alice_instance)
+    );
+}
+
+#[test]
+fn a_protocol_quit_is_data_until_an_observed_exit_or_bounded_instance_close() {
+    use rastok::journal::SessionStatus;
+    use rastok::runtime::vm::InstancePhaseInspection;
+
+    let source = r#"
+type Message = struct { tenant: text, text: text }
+graph app : App {
+  input in: Message
+  input close: Message
+  output exit: variant
+  instance = { key = data.tenant }
+  operator encode {
+    input in: Message
+    output out: text
+    on in { out = data.text }
+  }
+  operator close_request {
+    input in: Message
+    output out: text
+    on in { out = data.text }
+  }
+  connector socket : WebSocketClient {
+    url = "ws://example.test/socket"
+    handshake_timeout = duration("5s")
+    codec = text; effect = idempotent; behavior = deterministic
+    closing = { drain_for = duration("1s"); settle_for = duration("1s") }
+  }
+  in -> encode -> socket
+  close -> close_request
+  close_request.out -> socket.instance.stop
+  socket.out -> nothing
+  socket.exit -> exit
+}
+"#;
+    let compilation = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let (plan, _) =
+        rastok::plan::decode(&rastok::plan::encode(&compilation.plan, &compilation.hash)).unwrap();
+    let message = |tenant: &str, text: &str, port: &str| {
+        let mut submission = text_submission(text);
+        submission.port = node::Port::new(port).unwrap();
+        submission.draft.data = Data::materialized(Value::Struct(vec![
+            (String::from("tenant"), Value::Text(tenant.into())),
+            (String::from("text"), Value::Text(text.into())),
+        ]));
+        submission
+    };
+
+    for responds_to_quit in [true, false] {
+        let mut expected = None;
+        for recover in [false, true] {
+            let mut vm = Vm::boot(&plan, GraphVersion(1));
+            let mut journal = MemJournal::new(GraphVersion(1));
+            let mut world = SessionWorld {
+                hold_writes: true,
+                hold_closes: true,
+                ..SessionWorld::default()
+            };
+            for tenant in ["alice", "bob"] {
+                vm.inject(&mut journal, message(tenant, "hello", "in"))
+                    .unwrap();
+                vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+                vm.pump(&mut journal, &mut world).unwrap();
+            }
+            let [alice, bob] = world.opened.as_slice() else {
+                panic!("one resource per keyed instance");
+            };
+            let (alice, bob) = (*alice, *bob);
+            let alice_instance = vm
+                .inspection()
+                .sessions
+                .iter()
+                .find(|session| session.reference == alice)
+                .unwrap()
+                .instance
+                .clone();
+
+            vm.inject(&mut journal, message("alice", "quit", "in"))
+                .unwrap();
+            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+            assert_eq!(world.writes.len(), 1);
+            assert_eq!(world.writes[0].0, alice);
+            let writes = journal.open_session_writes();
+            assert_eq!(writes.len(), 1);
+            assert_eq!(writes[0].prepared.bytes(), b"quit");
+            assert_eq!(writes[0].session_ref, alice);
+            let quit_write = writes[0].write_ref;
+            world.settle_write(0);
+            vm.pump(&mut journal, &mut world).unwrap();
+            assert!(journal.open_session_writes().is_empty());
+            assert!(vm.outputs().is_empty(), "writing quit is not an exit");
+            assert_eq!(journal.live_sessions().len(), 2);
+            assert!(world.close_requests.is_empty(), "quit is not instance.stop");
+
+            if recover {
+                vm.recover_from_journal(&journal).unwrap();
+            }
+            if responds_to_quit {
+                world.close(alice);
+                vm.pump(&mut journal, &mut world).unwrap();
+                vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+                assert_eq!(source_exit_cases(&vm), ["Closed"]);
+                assert!(world.close_requests.is_empty());
+                assert!(
+                    vm.inspection().instances.iter().any(|instance| {
+                        instance.reference == alice_instance
+                            && instance.phase == InstancePhaseInspection::Open
+                    }),
+                    "resource exit alone does not stop its Node instance"
+                );
+            } else {
+                vm.inject(&mut journal, message("alice", "stop", "close"))
+                    .unwrap();
+                vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+                assert!(world.close_requests.is_empty(), "admitted work can drain");
+                if recover {
+                    vm.recover_from_journal(&journal).unwrap();
+                }
+                vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
+                assert_eq!(world.close_requests, [alice]);
+                assert!(vm.outputs().is_empty(), "a close request proves no exit");
+                if recover {
+                    vm.recover_from_journal(&journal).unwrap();
+                }
+                vm.advance(&mut journal, &mut world, 2_000_000_000).unwrap();
+                vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+                assert_eq!(source_exit_cases(&vm), ["OutcomeUnknown"]);
+                assert!(
+                    !vm.inspection()
+                        .instances
+                        .iter()
+                        .any(|instance| { instance.reference == alice_instance })
+                );
+            }
+            assert_eq!(journal.live_sessions(), vec![bob]);
+            assert_eq!(world.released, [alice]);
+            let before_late_exit = journal.records().to_vec();
+            world.close(alice);
+            let report = vm.pump(&mut journal, &mut world).unwrap();
+            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+            assert!(matches!(report.uncorrelated_sessions.as_slice(),
+                [SessionDriverEvent::Exited { session, .. }] if *session == alice));
+            assert_eq!(journal.records(), before_late_exit);
+            assert_eq!(vm.outputs().len(), 1, "late exit cannot close twice");
+            assert_eq!(world.released, [alice], "late exit cannot clean up Bob");
+
+            vm.inject(&mut journal, message("bob", "still here", "in"))
+                .unwrap();
+            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+            assert_eq!(world.writes.last().unwrap().0, bob);
+            assert_eq!(world.opened, [alice, bob]);
+            assert_eq!(world.writes.len(), 2, "recovery never resends quit");
+            assert_eq!(
+                journal
+                    .records()
+                    .iter()
+                    .filter(|record| matches!(record,
+                        Record::Outbound(OutboundRecord::Session(record))
+                            if record.status == SessionStatus::WriteSettled(quit_write)
+                    ))
+                    .count(),
+                1
+            );
+            if let Some(expected) = &expected {
+                assert_eq!(journal.records(), expected);
+            } else {
+                expected = Some(journal.records().to_vec());
+            }
+        }
+    }
+}
+
+#[test]
+fn session_release_waits_for_the_committed_terminal_even_after_a_storage_failure() {
+    let compiled = compile(
+        &[KEYED_SESSION_LIFECYCLE],
+        &ContractCatalog::try_m0().unwrap(),
+    )
+    .unwrap();
+    for observed_exit in [false, true] {
+        for recover in [false, true] {
+            let mut vm = Vm::boot(&compiled.plan, GraphVersion(1));
+            let mut journal = FlakyJournal::healthy(GraphVersion(1));
+            let mut world = SessionWorld {
+                hold_closes: true,
+                ..SessionWorld::default()
+            };
+            for tenant in ["alice", "bob"] {
+                vm.inject(&mut journal, text_submission(tenant)).unwrap();
+                vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+                vm.pump(&mut journal, &mut world).unwrap();
+            }
+            let (alice, bob) = (world.opened[0], world.opened[1]);
+            let mut close = text_submission("alice");
+            close.port = node::Port::new("close").unwrap();
+            vm.inject(&mut journal, close).unwrap();
+            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+            vm.advance(&mut journal, &mut world, 999_999_999).unwrap();
+            assert!(world.close_requests.is_empty());
+            assert!(world.abort_requests.is_empty());
+            assert!(world.released.is_empty());
+            vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
+            assert_eq!(world.close_requests, [alice]);
+            assert!(
+                world.abort_requests.is_empty(),
+                "no forced stop during settlement"
+            );
+            assert!(
+                world.released.is_empty(),
+                "a close request is not a terminal"
+            );
+
+            if observed_exit {
+                world.close(alice);
+            }
+            journal.refuse_commits = true;
+            let retained = journal.inner.records().to_vec();
+            assert!(matches!(
+                vm.advance(&mut journal, &mut world, 2_000_000_000),
+                Err(VmError::Journal(_))
+            ));
+            assert_eq!(journal.inner.records(), retained);
+            assert!(
+                world.released.is_empty(),
+                "no cleanup before the terminal commit"
+            );
+            assert_eq!(journal.live_sessions().len(), 2);
+            assert!(vm.outputs().is_empty());
+            assert_eq!(
+                world.abort_requests,
+                if observed_exit { vec![] } else { vec![alice] },
+                "the retained deadline authorizes cleanup even if terminal storage fails"
+            );
+
+            journal.refuse_commits = false;
+            if recover {
+                vm.recover_from_journal(&journal).unwrap();
+                assert!(
+                    world.released.is_empty(),
+                    "reconstruction performs no cleanup"
+                );
+                // An observed but uncommitted terminal must be supplied again
+                // by its original world, not reconstructed from an invented exit.
+                if observed_exit {
+                    world.close(alice);
+                }
+            }
+            vm.advance(&mut journal, &mut world, 2_000_000_000).unwrap();
+            assert_eq!(world.released, [alice]);
+            assert_eq!(
+                world.abort_requests,
+                if observed_exit { vec![] } else { vec![alice] }
+            );
+            assert_eq!(journal.live_sessions(), [bob]);
+            assert_eq!(
+                source_exit_cases(&vm),
+                [if observed_exit {
+                    "Closed"
+                } else {
+                    "OutcomeUnknown"
+                }]
+            );
+            let retained = journal.inner.records().to_vec();
+            vm.recover_from_journal(&journal).unwrap();
+            vm.advance(&mut journal, &mut world, 3_000_000_000).unwrap();
+            assert_eq!(
+                world.released,
+                [alice],
+                "a retained terminal is not repeated"
+            );
+            assert_eq!(journal.inner.records(), retained);
+            vm.inject(&mut journal, text_submission("bob")).unwrap();
+            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+            assert_eq!(world.writes.last().unwrap().0, bob);
+        }
+    }
+}
+
+#[test]
+fn session_abort_does_not_wait_for_a_full_terminal_route() {
+    let source = r#"
+graph app : App {
+  input in: text
+  input close: text
+  input seed: variant
+  connector socket : WebSocketClient {
+    url = "ws://example.test/socket"
+    handshake_timeout = duration("5s")
+    codec = text; effect = idempotent; behavior = deterministic
+    closing = { drain_for = duration("1s"); settle_for = duration("1s") }
+  }
+  operator close_request {
+    input in: text
+    output out: text
+    on in { out = data }
+  }
+  operator hold {
+    input left: variant
+    input right: variant
+    on (left, right) { nothing }
+  }
+  in -> socket
+  close -> close_request
+  close_request.out -> socket.instance.stop
+  socket.out -> nothing
+  seed -> hold.left
+  socket.exit -> hold.left
+}
+"#;
+    let compilation = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut world = SessionWorld {
+        hold_closes: true,
+        ..SessionWorld::default()
+    };
+    // The current Worker has 1,024 slots. No right-hand partner arrives, so
+    // these real deliveries saturate the terminal's destination mailbox.
+    for _ in 0..1024 {
+        let mut seed = text_submission("waiting");
+        seed.port = node::Port::new("seed").unwrap();
+        vm.inject(&mut journal, seed).unwrap();
+        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    }
+    vm.inject(&mut journal, text_submission("open")).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.pump(&mut journal, &mut world).unwrap();
+    let session = world.opened[0];
+    let mut close = text_submission("stop");
+    close.port = node::Port::new("close").unwrap();
+    vm.inject(&mut journal, close).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
+    assert_eq!(world.close_requests, [session]);
+    assert!(world.abort_requests.is_empty());
+    let retained = journal.records().to_vec();
+    assert!(matches!(
+        vm.advance(&mut journal, &mut world, 2_000_000_000),
+        Err(VmError::MailboxFull { node }) if node == node::Path::new(["hold"]).unwrap()
+    ));
+    assert_eq!(
+        world.abort_requests,
+        [session],
+        "the stop handoff is not backpressured"
+    );
+    assert!(
+        world.released.is_empty(),
+        "terminal publication still needs capacity"
+    );
+    assert_eq!(journal.records(), retained);
+    assert_eq!(journal.live_sessions(), [session]);
 }
 
 #[test]

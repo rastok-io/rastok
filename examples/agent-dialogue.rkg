@@ -1,0 +1,119 @@
+// Chapter 6: resident processes, not one job per turn.
+// `cat` is the real generic transport probe. The Lab supplies imagined model
+// replies; these are not Codex's wire protocol or proof of model memory.
+type Turn = struct { tenant: text, prompt: text }
+type Reply = struct { tenant: text, answer: text }
+type ChildExit = union {
+  Exited { exit_code: int, signal: int? }
+  SpawnFailed { message: text }
+  DecodeFailed { line: text?, message: text }
+  OutputOverflow { limit: uint, reason: enum { budget, capacity } }
+  CaptureFailed {}
+  TimeoutExpired {}
+  OutcomeUnknown {}
+}
+
+graph dialogues : App {
+  input in: Turn
+  input close: Turn
+  output out: Reply
+  output invalid: text
+  output exit: ChildExit
+
+  graph conversation {
+    input in: Turn
+    input close: Turn
+    output out: Reply
+    output invalid: text
+    output exit: ChildExit
+    instance = { key = data.tenant }
+
+    operator request {
+      input in: Turn
+      output out: Turn
+      on in { out = data }
+    }
+
+    connector model : Process {
+      mode = service
+      command = "cat"
+      codec = jsonl
+      max_frame = "1MiB"
+      effect = idempotent
+      behavior = probabilistic
+      closing = { drain_for = duration("1s"); settle_for = duration("1s") }
+    }
+    operator decode {
+      input in: variant
+      output out: Reply
+      output invalid: text
+      on in match {
+        data is Reply => out = data as Reply
+        _ => invalid = "valid JSON, but not a Reply"
+      }
+    }
+    operator finish {
+      input in: Turn
+      output out: Turn
+      on in { out = data }
+    }
+    in -> request -> model
+    model.out -> decode
+    decode.out -> out
+    decode.invalid -> invalid
+    model.err -> nothing
+    model.exit -> exit
+    close -> finish
+    finish.out -> model.instance.stop
+  }
+  in -> conversation
+  close -> conversation.close
+  conversation.out -> out
+  conversation.invalid -> invalid
+  conversation.exit -> exit
+}
+
+lab dialogues {
+  simulation scripted_model on app {
+    mock conversation.model {
+      on in where data is Turn match {
+        data.prompt == "quit" => exit = Exited { exit_code = 0; signal = null }
+        data.prompt == "garden" => out = { tenant = data.tenant; answer = "Plant tomatoes." }
+        data.prompt == "water?" => out = { tenant = data.tenant; answer = "Water the tomatoes in the morning." }
+        data.prompt == "trip" => out = { tenant = data.tenant; answer = "Visit Kyoto." }
+        data.prompt == "how long?" => out = { tenant = data.tenant; answer = "Three days in Kyoto." }
+        _ => out = { tenant = data.tenant; answer = "I am still here." }
+      }
+    }
+    scenario alice_and_bob "two resident children, interleaved turns, Alice closes alone" {
+      app.in = { tenant = "alice"; prompt = "garden" }
+      expect app.out count == 1 where data.tenant == "alice" && data.answer == "Plant tomatoes."
+      expect nothing app.exit
+      app.in = { tenant = "bob"; prompt = "trip" }
+      expect app.out count == 1 where data.tenant == "bob"
+      app.in = { tenant = "alice"; prompt = "water?" }
+      expect app.out count == 1 where data.answer == "Water the tomatoes in the morning."
+      app.in = { tenant = "bob"; prompt = "how long?" }
+      expect app.out count == 1 where data.answer == "Three days in Kyoto."
+      app.close = { tenant = "alice"; prompt = "stop this child" }
+      advance duration("2s")
+      expect app.exit count == 1 where data is OutcomeUnknown
+      app.in = { tenant = "bob"; prompt = "still there?" }
+      expect app.out count == 1 where data.tenant == "bob" && data.answer == "I am still here."
+      app.in = { tenant = "bob"; prompt = "quit" }
+      expect app.exit count == 1 where data is Exited
+    }
+    scenario fresh_child "quit ends the resource; a new input opens a new child" {
+      app.in = { tenant = "alice"; prompt = "garden" }
+      expect app.out count == 1
+      app.in = { tenant = "alice"; prompt = "quit" }
+      expect app.exit count == 1 where data is Exited
+      advance duration("10s")
+      expect nothing app.out
+      app.in = { tenant = "alice"; prompt = "trip" }
+      expect app.out count == 1 where data.answer == "Visit Kyoto."
+      app.in = { tenant = "alice"; prompt = "quit" }
+      expect app.exit count == 1
+    }
+  }
+}

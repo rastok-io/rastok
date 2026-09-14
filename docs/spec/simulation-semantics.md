@@ -281,8 +281,10 @@ is `.` (`out = .`).
   `val` prefixes. Only the selected path evaluates; a fault does not try a
   later arm or mock clause. The canonical one-predicate/empty-fallback
   filter keeps the same first-matching-clause semantics as `where`.
-  Each possible leaf is either explicit silence or a complete response with
-  exactly one final `exit`; exits from different arms are never added
+  For a Call, each possible leaf is either explicit silence or a complete
+  response with exactly one final `exit`. A resident Process Session may
+  emit zero or more frames without ending the resource; an optional `exit`
+  is unique and last. Exits from different arms are never added
   together. This executable Lab syntax is not a v16 package feature: the Lab
   never enters the production plan or its identity. Multi-emission and Loop
   manager commands in mocks remain named deferrals.
@@ -301,6 +303,16 @@ is `.` (`out = .`).
   `meta.sys` counter. A per-mock invocation counter remains an open point,
   admitted only if a real case demands it.
 - Sources need no mock (the fixture injects) ; only calling Connectors do.
+
+`Process(service)` uses the same retained Session open/write/terminal fold as
+the real child. The initial input evaluates once and later inputs keep the
+resource. A pending terminal cannot overtake earlier frames. `now()` is not
+available in Session mock bodies: the write intent has no exact retained
+firing time, and an epoch or wall-clock substitute would invent a fact.
+Unsolicited/delayed service-world actions and system-close acknowledgement
+scripts remain named limits. An input such as `quit` can have an explicit
+mock `Exited` answer; otherwise a silent system close settles unknown under
+the authored Closing policy. See [Process service](../architecture/process-service.md).
 
 ### 5.2 Expectations
 

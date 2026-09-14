@@ -33,6 +33,176 @@ Rejected: duplicating long IDs in each scenario, inventing fixture-only
 constants, implicitly shadowing an outer binding, and serializing a global
 constant table into every production plan.
 
+## D-2026-09-14-1 — Execute resident Process through the existing Session contract
+
+Yoann requested the complete resident Process implementation after approving
+generic JSONL, Operator-owned protocol, input-driven fresh opening and
+exact-instance shutdown. This admits `Process(mode = service)` as
+`rastok/process@3`, both Driver roles, Session exchange. The unchanged default
+job remains `rastok/process@2`, outbound Call. Profile selection resolves the
+exact id, roles and exchange before lowering; core independently validates all
+three. Profile ids cannot alias another profile or catalogue entry.
+
+The service uses `lines` or `jsonl` on stdin/stdout and `lines` on stderr.
+`max_frame` is a positive byte-size, default `1MiB`, excluding the newline.
+There is no aggregate lifetime-output budget. `bytes`, job `timeout` and
+`max_output`, `correlate` and `restart` refuse by name. Physical intake and
+writes are bounded; reserved control remains available under backpressure.
+No new dependency, package field or journal tag is introduced: v18's existing
+Session intents seal the opening descriptor and subsequent writes. Old job,
+echo, JSONL and gauge identities are not re-blessed.
+
+One live child belongs to one exact Node instance, not to an upstream socket's
+SessionRef. Its first input is written once; later inputs reuse it. Frames
+enter through retained inbound proposals; one terminal follows the accepted
+frames. `quit` is data. A new input after an observed exit opens a fresh child,
+never resends old writes and never restores private process memory.
+
+On Unix the worker owns a process group. Instance Closing requests SIGTERM
+at the retained drain deadline and SIGKILL at settlement; an unobserved exit
+remains `OutcomeUnknown`. Cleanup cannot wait on a full publication queue.
+Non-Unix physical binding refuses before effects; effectless simulation
+remains available. The Lab executes the existing recursive mock Dispatch per
+input, with zero or more frames and an optional final resource exit, not a
+fake Call per turn. Session mocks cannot read `now()` without a retained
+message-firing time. Unsolicited/delayed service-world actions and authored
+system-close acknowledgement are named later work; silent close settles
+unknown rather than fabricating a signal result.
+
+This supersedes the service-deferral clauses of D-2026-09-10-2/-3/-4, not their
+responsibility boundaries. The [implementation ledger](../architecture/process-service.md)
+lists qualification and remaining gateway work. No Codex-specific protocol,
+credential binding or paid model is implied by a passing imagined dialogue.
+
+## D-2026-09-10-4 — Keep application shutdown messages separate from instance closure
+
+**Accepted responsibility boundary; service execution remains deferred.**
+Yoann confirmed that a child may exit because its application protocol receives
+an ordinary message such as `quit`, not only because of a system signal.
+The graph may send that message through `Process.in`, under the selected codec
+and the ordinary journal-before-write rule. Process does not recognize a magic
+word, inspect a protocol command, or turn that write into `instance.stop`.
+
+A write settlement proves acceptance of bytes, not that the child processed
+`quit` or terminated. Only an observed resource terminal publishes the sole
+`Process.exit`. That terminal does not by itself close the Node instance;
+D-2026-09-10-3's fresh-opening rule still applies. An adapter that wants to
+close the instance as well requests its explicit closure separately.
+
+`instance.stop` remains the bounded lifecycle operation, scoped to an exact
+generation. It must allow already admitted protocol work to drain. Emitting a
+shutdown message and a stop request in one transaction does not prove that the
+message was processed before the resource-close action. A protocol response
+and a resource exit are different observations, including during Closing.
+
+For the resident Unix Driver, system shutdown must distinguish the cooperative
+request (`SIGTERM`) from forced termination (`SIGKILL`), and a signal sent from
+an exit actually observed. EOF only closes stdin: it is neither a universal
+shutdown request nor an ordinary string to inject. The earlier suggestion to
+make stdin EOF the universal first close action is withdrawn. There is no new
+Process stop port, signal statement, magic `quit` attribute or application RPC
+state in the Driver.
+
+**Timing accepted:** keep the two existing Closing budgets. During `drain_for`,
+already admitted work may finish. At its deadline, request `SIGTERM` for the
+surviving resident resource. During `settle_for`, an observed terminal wins
+normally. At its deadline, request forced cleanup (`SIGKILL` on Unix) and
+publish `OutcomeUnknown` if no terminal was observed. The retained Closing
+request and its sealed deadline authorize that cleanup even if publication of
+the typed terminal is backpressured. A later OS exit cannot rewrite the winner.
+No third grace period or independent Driver clock is introduced.
+
+The common Session boundary separates cooperative close, forced-abort handoff
+and post-terminal resource release. These seams do not admit Process service
+or prove physical signal delivery; its Driver remains a gate in the
+[Process review](../architecture/process-contract-review.md#closing--application-request-and-system-fallback).
+Cross-platform
+resource ownership and termination also require qualification; Unix process-group
+support does not prove portable process-tree termination. The current job's
+forced cancellation is unchanged, as are all other Contracts, package v18 and
+existing identities/goldens. This decision does not claim a resident Driver.
+
+**Rejected:** recognizing `quit` in Process or core; equating EOF, a signal,
+local write settlement or a protocol acknowledgement with an observed exit;
+using `instance.stop` as an immediate unconditional kill; affecting another
+conversation; adding a second shutdown language to the DSL.
+
+## D-2026-09-10-3 — Reopen a resident Process only for a new message
+
+**Accepted service policy; execution remains deferred.** Yoann approved the
+distinction between automatic restart and a fresh opening driven by a later
+message. When a resident child terminates, Process retains its ordinary typed
+`exit`. It does not spawn a replacement on death, on a timer, or during replay.
+Child termination alone does not stop the owning Node instance.
+
+A new eligible input may open a fresh child if that exact Node instance is
+still open and owns no live child. The opening follows ordinary admission and
+journal-before-effect. It creates a new `SessionRef`, not a new Node instance
+generation. Subsequent messages reuse this new live resource. There is no
+claim that the previous child's physical memory survived.
+
+This is not a retry of earlier work: previous stdin writes are never resent
+or retargeted to the new child. A retained write or late event tied to the old
+Session remains tied to it. Any application-request retry or protocol resume
+must be authored explicitly above Process, under D-2026-09-10-2.
+
+Ordinary Closing wins. `instance.stop` or `child.instance.stop` closes its
+exact target generation and prevents this fresh-open rule from reviving it.
+A later Node generation may exist only through the existing instance admission
+rules; it is not a process restart, and stale references cannot select it.
+Other keyed instances and their children are unaffected.
+
+The service baseline therefore has no automatic `restart` policy. The old
+deferred spelling cannot silently enable one; any future restart policy needs
+a separate decision. This refines the remaining gates of D-2026-09-10-2,
+without changing jobs, current runtime behavior, a Contract id, plan format or
+golden. Framing/queue bounds, resource selection, termination action and Lab
+world actions still need qualification before service can execute.
+
+**Rejected:** immediate or timed respawn by default; implicit resend of a
+failed or unsettled request; treating a child exit as a Node stop; restoring
+child memory by assertion; reusing a dead SessionRef or reviving a stopped
+instance generation.
+
+## D-2026-09-10-2 — Keep Process generic; interpret the conversation in Operators
+
+**Accepted responsibility boundary; service execution remains deferred.**
+Yoann confirmed that Process supplies JSONL and an Operator interprets it.
+Process owns the child resource and its stdin/stdout/stderr framing, not the
+application protocol spoken by that child.
+
+With `codec = jsonl`, Process parses each complete stdout JSON line into the
+existing `variant` value. An Operator then validates and narrows that value
+into domain messages. Invalid JSON is a framing failure; valid JSON that does
+not satisfy the application's message schema is the adapter's concern.
+Protocol request ids, responses, notifications, progress, turn completion and
+per-request deadlines belong to explicit graph logic. Process neither guesses
+that the next stdout line answers the last stdin write nor creates an RPC Call
+for each message. A local write settlement is not an application reply.
+
+The resident profile uses the generic Session lifecycle from D-2026-08-25-1:
+several conversation turns may share a live child owned by one exact Node
+instance; `Process.exit` terminates that resource, never a conversation turn.
+The ordinary `out`, `err` and `exit` ports retain distinct roles. Protocol
+failure or a turn ending does not implicitly request `instance.stop`.
+
+This supersedes the unimplemented `Process(service).correlate` attribute and
+the RPC/automatic protocol-resume promises in stdlib §3.3 and §9. No unrelated
+Contract correlator changes. The gateway still has to implement and qualify
+its own protocol adapter; moving that responsibility out of Process is not
+permission to leave it unspecified or hidden in a physical Driver or mock.
+
+This decision does not admit service mode, change the current Process job,
+allocate a Contract/package version or alter a golden. Exact framing limits,
+resource selection, termination/restart policy and effectless Lab world
+actions remain gates in the [Process review](../architecture/process-contract-review.md).
+The implemented exact-instance closure from D-2026-09-10-1 is unchanged.
+
+**Rejected:** Process-owned conversation/RPC state; `correlate = data.id` as
+an implicit reply classifier; treating an unmatched or late reply as a new
+notification; one fake Process job or Call per service message; interpreting
+`Process.exit` as the completion of a model turn.
+
 ## D-2026-09-10-1 — Route explicit instance closure without restoring Graph handlers
 
 **Accepted design, executable package v18 amendment.** Yoann approved a command-shaped

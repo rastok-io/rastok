@@ -416,34 +416,23 @@ This call lifetime is nested inside, but distinct from, its owning Node
 instance's lifetime. `stop` closes that current instance; it is not a
 substitute for the `exit` of any call already admitted by that instance.
 
-### 6.4 The instance — `on_timeout`, orthogonal to `restart`
+### 6.4 Resource failure and Node-instance closure
 
-A call-level failure is not automatically a resource-level failure. Two knobs,
-one concern each :
+A call-level failure is not automatically a Node-instance failure. The
+Process job's `timeout` bounds its finite Call and `on_timeout = kill` is
+fixed by that profile; its terminal does not implicitly close the Node.
 
-```rastok
-connector codex : Process {
-  mode       = service
-  timeout    = duration("30s")
-  on_timeout = bypass               // the INSTANCE's fate on expiry : bypass (default) or kill
-  restart    = { … }                // respawn policy after any instance death (a struct — D-2026-08-12-1)
-}
-```
+A resident Process uses a Session, not one nested Call per message. Its
+application protocol belongs to Operators, including any request timeout.
+Service `timeout`, `on_timeout`, and `restart` are not admitted attributes.
+Closing the exact child instance uses `child.instance.stop`; Closing's
+retained drain/settlement budgets bound resource shutdown (§6.6).
 
-The fragment omits unrelated required `Process` attributes.
-
-- **`bypass` (default)** : the call fails (§6.2-6.3), the instance lives ;
-  later calls proceed. A timeout is a flow fact, not a death sentence.
-- **`kill`** : the supervision kills the instance → the **standard death
-  path** (WHITEPAPER §2.7 : terminal envelope with the outcome, the implicit
-  resident-resource `run_id` ends and its cleanup hook runs) → the `restart`
-  policy alone decides respawn.
-
-Compositions, not new mechanisms : *restart-on-timeout* =
-`on_timeout = kill` + `restart = { … }` ; *die-without-respawn* =
-`kill` with no restart policy. A wedged resident process that must restart
-uses `kill` (fresh `run_id` plus its protocol-specific resume operation);
-the conservative default stays `bypass`.
+An observed child `exit` ends that Session. It neither restores process memory
+nor stops the Node instance. A new input may open a fresh child in the same
+still-open instance, never by timer, never by resending an old write. A closed
+generation cannot be revived; successors follow ordinary instance admission.
+See D-2026-09-10-2/-3/-4 and the executable D-2026-09-14-1 profile.
 
 ### 6.5 Attribute-name collisions — the qualified form
 
@@ -501,6 +490,21 @@ write-settled, inbound-message and terminal facts. The terminal projects as
 `l:exit`, after which the fold accepts neither another message nor another
 exit. Handshake timeout uses timer kind 9 and is fenced by the logical
 `SessionRef`, never a socket or task handle.
+
+At the retained Closing settlement deadline, a Session without an observed
+terminal receives `abort_session`: an idempotent forced-cleanup handoff for
+that exact resource, not a second protocol close and not evidence of success.
+The committed close request and sealed deadline authorize it; neither terminal
+route backpressure nor a failed terminal commit extends the resource budget.
+Its `OutcomeUnknown` still follows the ordinary atomic terminal transaction.
+Only after that transaction commits does `release_session` relinquish local
+resource state and the registry forget its correlation. Both callbacks are
+nonblocking; resource-free Lab Drivers have nothing to clean up. Reconstructing
+the journal itself performs no cleanup. Subsequent execution can re-offer an
+unsettled expiry using its original reference and deadline, never a successor.
+The [resident Process qualification](../architecture/process-service.md) adds
+real Unix signal and bounded-cleanup tests. The common callback tests alone
+do not claim physical signal or WebSocket abort evidence.
 
 ### 6.7 Inbound Call supervision (generic H5 fold)
 

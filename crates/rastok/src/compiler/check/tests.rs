@@ -1174,9 +1174,7 @@ fn a_domain_violation_names_the_sheet() {
 }
 
 #[test]
-fn correlate_on_a_job_names_the_owning_profile() {
-    // D-2026-08-12-1: a field of another profile is ABSENT here,
-    // and the diagnostic names its owner — never "forbidden".
+fn process_correlation_is_retired_in_favor_of_an_operator_adapter() {
     let source = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; codec = lines\n    effect = idempotent ; behavior = deterministic\n    correlate = data.id\n  }\n  in -> c -> out\n}\n";
     let (_, bag) = check_source(source);
     let diagnostic = bag
@@ -1187,14 +1185,14 @@ fn correlate_on_a_job_names_the_owning_profile() {
     assert!(
         diagnostic
             .message()
-            .contains("belongs to `Process(mode = service)`"),
+            .contains("`correlate` is retired for Process"),
         "{}",
         diagnostic.message()
     );
     assert!(
         diagnostic
             .message()
-            .contains("not applicable to `Process(mode = job)`"),
+            .contains("application correlation belongs to Operators"),
         "{}",
         diagnostic.message()
     );

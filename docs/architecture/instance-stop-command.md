@@ -238,3 +238,157 @@ results**, including the final 19 public closure tests and eight protocol tests.
 logs for this pass are retained locally in
 `/tmp/rastok-instance-stop.ttKkGE/`; `workspace-final.log` records the earlier
 two failures, `workspace-verified.log` the final sequential run.
+
+## 7. Session lifecycle follow-up — 10 September
+
+The resident-Process preparation found a check/run mismatch in direct input
+forwarding: `App.close -> conversation.close -> socket.instance.stop` checked,
+but injection refused because the root emitter has no retained ancestry inside
+`conversation`. Neither a matching business key nor a singleton shortcut can
+supply that proof. Composition now refuses this source at check with
+`E-INSTANCE-COMMAND`; the package reader independently rejects the same forged
+boundary inventory. No target-selection rule, journal packet or version changes.
+The regression fails on the former checker accepting the program, not on an
+unrelated syntax or missing-output error. It covers singleton/keyed scopes and
+unconditional/case-routed requests.
+
+Two additional `machine_vm.rs` tests qualify the common Session machinery
+through an effectless WebSocket Contract, **not Process service**:
+
+- Alice and Bob reuse separate resources across repeated messages. Child
+  death leaves the Node instance open; time alone never respawns it. A new
+  input opens a fresh Session in that exact instance. Old writes are abandoned,
+  not resent; late events cannot settle or close the replacement. Recovery
+  produces exactly the same causal records.
+- An Operator inside Alice's conversation emits repeated child-stop requests.
+  Only Alice's resource is closed, exactly once and without renewing the drain
+  deadline. A request after closure remains redundant; Bob can still write to
+  his original Session. No stopped generation reopens.
+
+The focused closure suite has 21 passing tests; the VM suite has 76. This
+evidence does not admit service framing, physical Process termination or Lab
+Session scripts; those remain in the Process contract review.
+
+The repeated Cortex-M33 relay reports `SPIKE_OK`: peak heap **111,732 B**,
+67 records and the same echo semantic hash. Linked text plus read-only data
+is **951,020 B** (+240 B from §6); 97,556 B remain below 1 MiB. Relay
+avg/min/max stays 1,908 / 1,859 / 2,093 calibrated ticks. This remains a
+non-Loop relay measurement, not an embedded Session or saturation workload.
+Core also checks on Cortex-M3, Cortex-M33 and RISC-V32.
+
+The complete rerun, `cargo test --workspace --all-features --no-fail-fast --
+--test-threads=1`, passes **1,353 tests**, **zero failed**, **zero ignored**,
+across **43 suite results**. Fmt, strict all-target/all-feature Clippy,
+`cargo doc --workspace --no-deps` and `git diff --check` pass. No package,
+semantic-hash or causal golden was re-blessed for this correction. Logs are
+retained in `/tmp/rastok-session-lifecycle.wjG2Fe/`. No new browser or actual
+Process-service qualification is claimed.
+
+## 8. Application shutdown is data — 10 September
+
+D-2026-09-10-4 keeps `quit` and other application shutdown messages on the
+ordinary data path. They neither request instance closure implicitly nor prove
+resource termination when the local write settles. The Process review owns
+the separate, still-unimplemented signal escalation policy.
+
+The `machine_vm.rs` probe
+`a_protocol_quit_is_data_until_an_observed_exit_or_bounded_instance_close`
+executes two outcomes, each uninterrupted and with recovery:
+
+- Alice's exact Session receives a retained `quit` write. Settlement alone
+  leaves both resources live and emits no terminal. A later observed resource
+  exit closes only Alice's Session, leaving her Node instance open.
+- When the world ignores `quit`, a separately authored child-stop command
+  starts bounded Closing. It requests closure at the original drain deadline;
+  without an observed terminal it publishes `OutcomeUnknown` at the original
+  settlement deadline and closes that Node generation.
+
+In both cases, a late terminal cannot emit a second exit, Bob can still write
+to his original Session, and recovery produces the same complete causal
+records without resending `quit`. The probe checks the retained write bytes,
+not only the number of responses. Like §7, it uses an effectless WebSocket
+Contract to qualify the common Session machinery; it is not a physical
+Process service, OS-signal or JSONL-service qualification. No runtime, plan,
+Contract or golden changes are part of this follow-up.
+
+Qualification: `cargo test --workspace --all-features --no-fail-fast --
+--test-threads=1` passes **1,354 tests**, **zero failed**, **zero ignored**,
+across **43 suite results**. Fmt, strict all-target/all-feature Clippy,
+`cargo doc --workspace --no-deps` and `git diff --check` pass. The focused
+shutdown-message test also passes with `--no-default-features`, without a
+hosted network Driver. Evidence is
+retained in `/tmp/rastok-protocol-shutdown.LNuiCu/`. Browser, embedded memory
+and cross-target checks were not rerun: this pass changes tests and documents,
+not the runtime or Drivers. Physical service admission remains open.
+
+## 9. Two-budget Session shutdown — 10 September
+
+Yoann accepted D-2026-09-10-4's timing without a third budget: admitted work
+drains during `drain_for`, cooperative shutdown is requested at its deadline,
+and forced local cleanup is requested at the settlement deadline if no terminal
+was observed. A Unix resident Process will map those requests to `SIGTERM`
+and `SIGKILL`; this slice implements the common handoffs, not that physical
+Driver or service-profile admission.
+
+The common boundary now distinguishes:
+
+- `close_session`: the existing cooperative protocol request, retryable under
+  bounded handoff pressure during settlement;
+- `abort_session`: a nonblocking, repeat-safe local shutdown request, fenced
+  by the exact SessionRef and authorized by the committed Closing request and
+  its original deadline. It does not wait for the terminal output's mailbox;
+- `release_session`: post-terminal-commit notification, followed by removal
+  of the registry's correlation. Neither preparation nor a failed terminal
+  commit releases the resource's logical ownership.
+
+The registry regression first failed because forgetting a Session never
+notified its owning Driver. It now checks one release, idempotent abort, no
+terminal fabricated by abort, retention of correlation until release,
+rejection of a stale reference, and an independent second Session still able
+to write. Missing bound views surface a typed routing fault, not silent cleanup.
+
+Two focused VM tests cover the schedule and failure windows:
+
+- `session_release_waits_for_the_committed_terminal_even_after_a_storage_failure`
+  exercises an observed terminal and scheduler-owned `OutcomeUnknown`, each
+  with and without reconstruction from the committed prefix. Forced shutdown
+  follows the retained deadline even when terminal storage refuses; release
+  waits for commit. Reconstruction neither sends a signal nor invents an
+  uncommitted observed exit. Bob keeps his original resource.
+- `session_abort_does_not_wait_for_a_full_terminal_route` fills the recipient
+  with 1,024 actual unmatched join deliveries, the current Worker bound. A
+  blocked terminal cannot postpone the forced-stop handoff, but cannot commit
+  or release its correlation without capacity. The source edge-capacity block
+  is still deferred; this test does not claim to admit it.
+
+The existing accepted/ignored-`quit` probe also checks exact resource release
+and immunity to a late exit. These tests use effectless Session worlds: no
+Unix signal, hosted WebSocket abort, resident JSONL frame or Lab service script
+is qualified by them. Physical Drivers must implement and qualify the new
+handoffs before claiming physical cleanup. Hosted WebSocket still uses its
+existing protocol-close path and the new callbacks' no-op defaults; this pass
+does not add physical WebSocket abortion. The crash window between terminal
+commit and physical resource release also remains a service Driver qualification;
+no OS handle or PID is reconstructed from the journal.
+
+No new state counter, queue, timer, plan field, Contract ID, semantic domain or
+causal record is introduced. No golden is re-blessed. Existing Process job
+cancellation is unchanged. Generic reconstruction remains effect-free.
+
+Embedded qualification ran before the core edit and after it. Both runs report
+`SPIKE_OK`, 67 records, the same echo hash, a 111,732-byte heap watermark and
+1,908 average relay ticks. The 128 KiB heap gate retains 19,340 bytes of margin.
+Linked `.text + .rodata` is 951,060 bytes, up 40 bytes, with 97,516 bytes left
+below 1 MiB. These are measurements of the existing relay workload, not of a
+resident Process or a full Session queue. Core checks pass for
+`thumbv7m-none-eabi`, `thumbv8m.main-none-eabihf` and
+`riscv32imac-unknown-none-elf`.
+
+Final qualification: `cargo test --workspace --all-features --no-fail-fast --
+--test-threads=1` passes **1,356 tests**, **zero failed**, **zero ignored**,
+across **43 suite results**. `cargo fmt --all -- --check`, strict workspace
+all-target/all-feature Clippy, `cargo doc --workspace --no-deps` and
+`git diff --check` pass. Command logs are retained in
+`/tmp/rastok-session-cleanup.oCsdUO/`; the final complete run is
+`workspace-final.log`. Earlier exploratory runs are not the qualification
+result. No browser or physical-service run is claimed.
