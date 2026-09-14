@@ -1,6 +1,5 @@
 // An executable UI tour: two tenants enter one keyed finite Loop, traverse a
-// nested audit Graph, time out once at a mocked Process boundary, then retry
-// independently and complete with structured DATA.
+// nested audit Graph. Bob completes once; only Alice times out, waits and retries.
 
 type Attempt = struct {
   tenant: text
@@ -35,6 +34,8 @@ graph agent_retry : App + Loop {
   output failed: RetryFailure
 
   instance = { key = data.tenant }
+  lifetime = { kind = idle; after = duration("10s") }
+  closing = { drain_for = duration("1s"); settle_for = duration("1s") }
   Loop.fuel = 2
   Loop.terminal = [done, failed]
   Loop.expired = failed
@@ -101,7 +102,7 @@ graph agent_retry : App + Loop {
 lab agent_retry {
   simulation ui_tour on app {
     mock model {
-      on in where data is Attempt && data.attempt == 0 {
+      on in where data is Attempt && data.tenant == "alice" && data.attempt == 0 {
         out = nothing
       }
       on in {
@@ -111,19 +112,31 @@ lab agent_retry {
       }
     }
 
-    scenario two_tenants "two keyed retries progress independently" {
+    scenario two_tenants "Bob completes once; only Alice retries" {
       app.in = { tenant = "alice"; prompt = "Explain causal replay"; attempt = 0 }
       expect nothing app.done
 
       app.in = { tenant = "bob"; prompt = "Explain typed envelopes"; attempt = 0 }
-      expect nothing app.done
+      expect app.done count == 1 where data.tenant == "bob" && data.attempts == 1
 
       advance duration("1s")
       expect nothing app.done
+      expect nothing model.in
 
       advance duration("1s")
       expect app.done count == 1 where data.tenant == "alice" && data.attempts == 2
-      expect app.done count == 1 where data.tenant == "bob" && data.attempts == 2
+      expect nothing model.in where data is Attempt && data.tenant == "bob"
+      expect nothing app.done where data.tenant == "bob"
+      expect nothing app.failed
+    }
+
+    scenario lifetime "a quiet keyed instance closes and opens a fresh generation" {
+      app.in = { tenant = "bob"; prompt = "First generation"; attempt = 0 }
+      expect app.done count == 1 where data.attempts == 1
+      advance duration("10s")
+      expect nothing model.in
+      app.in = { tenant = "bob"; prompt = "Next generation"; attempt = 0 }
+      expect app.done count == 1 where data.prompt == "Next generation" && data.attempts == 1
       expect nothing app.failed
     }
   }

@@ -1,0 +1,79 @@
+// Hysteresis per sensor and a bounded probe/heartbeat rendezvous.
+// The Lab supplies clock advances, not a real periodic sensor Driver.
+type Reading = struct { sensor: text, value: int }
+type Sensor = struct { sensor: text }
+type Alarm = struct { sensor: text, state: text }
+type MissedHeartbeat = union { JoinExpired {} }
+
+graph sensor_alarm : App {
+  input reading: Reading
+  input probe: Sensor
+  input heartbeat: Sensor
+  output alarm: Alarm
+  output alive: text
+  output silent: MissedHeartbeat
+
+  operator hysteresis {
+    input in: Reading
+    output out: Alarm
+    instance = { key = data.sensor }
+    var tripped: bool = false
+    on in match {
+      !tripped && data.value > 120 => {
+        tripped = true
+        out = { sensor = data.sensor; state = "tripped" }
+      }
+      tripped && data.value < 80 => {
+        tripped = false
+        out = { sensor = data.sensor; state = "normal" }
+      }
+      _ => nothing
+    }
+  }
+  operator watchdog {
+    input probe: Sensor
+    input heartbeat: Sensor
+    output out: text
+    output expired: MissedHeartbeat
+    instance = { key = data.sensor }
+    on (probe, heartbeat) within duration("5m") {
+      out = probe.data.sensor
+    }
+  }
+
+  reading -> hysteresis -> alarm
+  probe -> watchdog.probe
+  heartbeat -> watchdog.heartbeat
+  watchdog.out -> alive
+  watchdog.expired -> silent
+}
+
+lab sensor_alarm {
+  simulation sensors on app {
+    scenario hysteresis "separate thresholds and separate sensor states" {
+      app.reading = { sensor = "pump-a"; value = 121 }
+      expect app.alarm count == 1 where data.sensor == "pump-a" && data.state == "tripped"
+      app.reading = { sensor = "pump-a"; value = 100 }
+      expect nothing app.alarm
+      app.reading = { sensor = "pump-b"; value = 100 }
+      expect nothing app.alarm
+      app.reading = { sensor = "pump-a"; value = 79 }
+      expect app.alarm count == 1 where data.state == "normal"
+    }
+    scenario silent_sensor "only the unanswered probe expires" {
+      app.probe = { sensor = "pump-a" }
+      app.probe = { sensor = "pump-b" }
+      app.heartbeat = { sensor = "pump-b" }
+      expect app.alive count == 1 where data == "pump-b"
+      advance duration("5m")
+      expect app.silent count == 1 where data is JoinExpired
+      expect nothing app.alive
+    }
+    scenario virtual_day "twenty-four hours without waiting twenty-four hours" {
+      app.probe = { sensor = "pump-a" }
+      advance duration("24h")
+      expect app.silent count == 1 where data is JoinExpired
+      expect nothing app.alarm
+    }
+  }
+}

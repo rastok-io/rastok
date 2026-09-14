@@ -1,0 +1,80 @@
+// Bounded File read, byte count and empty-file validation, atomic replacement.
+// The deployment root is supplied by --file-root; the Lab never opens a file.
+type FileExit = union {
+  Completed {}
+  NotFound {}
+  NotAFile {}
+  PermissionDenied {}
+  InvalidPath {}
+  ReadLimitExceeded { limit: uint }
+  AtomicReplaceUnavailable {}
+  IoFailed {}
+  TimeoutExpired {}
+  OutcomeUnknown {}
+}
+
+graph file_pipeline : App {
+  input in: text
+  output bytes_read: int
+  output empty: bool
+  output failed: FileExit
+
+  connector read_file : File {
+    mode = read
+    path = data as text
+    max_read = "64KiB"
+    timeout = duration("2s")
+  }
+  operator inspect {
+    input in: bytes
+    output accepted: bytes
+    output bytes_read: int
+    output empty: bool
+    on in match {
+      size(data) > 0 => { bytes_read = size(data); accepted = data }
+      _ => empty = true
+    }
+  }
+  connector write_file : File {
+    mode = replace
+    path = "copy.txt"
+    timeout = duration("2s")
+  }
+
+  in -> read_file -> inspect
+  inspect.accepted -> write_file
+  inspect.bytes_read -> bytes_read
+  inspect.empty -> empty
+  write_file.out -> nothing
+  read_file.exit -> match { Completed -> nothing; _ -> failed }
+  write_file.exit -> match { Completed -> nothing; _ -> failed }
+}
+
+lab file_pipeline {
+  simulation files on app {
+    mock read_file {
+      on in { out = base64! { YWxwaGEKYmV0YQo= }; exit = Completed {} }
+    }
+    mock write_file {
+      on in { exit = Completed {} }
+    }
+    scenario copy "two lines, eleven bytes, one atomic replacement" {
+      app.in = "input.txt"
+      expect app.bytes_read count == 1 where data == 11
+      expect write_file.in count == 1 where size(data) == 11
+      expect nothing app.failed
+    }
+    scenario empty "empty input never overwrites the target" {
+      mock read_file { on in { out = base64! {}; exit = Completed {} } }
+      app.in = "empty.txt"
+      expect app.empty count == 1
+      expect nothing write_file.in
+    }
+    scenario directory "a directory is refused by name" {
+      mock read_file { on in { exit = NotAFile {} } }
+      app.in = "directory"
+      expect app.failed count == 1 where data is NotAFile
+      expect nothing write_file.in
+    }
+  }
+}

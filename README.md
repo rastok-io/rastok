@@ -8,6 +8,37 @@ textual, typed, readable in code review, easy to version in Git, and
 constrained enough for an LLM to generate without hiding the result
 behind a visual low-code format.
 
+## Quickstart
+
+<!-- quickstart:start -->
+Build from the repository with Rust **1.97.1** while release binaries are being
+prepared. This installs HTTP/1.1–2, WebSocket and the debugger, not HTTP/3.
+
+```sh
+cargo install --path crates/rastok --locked --features hosted-ui,hosted-websocket
+rastok new hello
+rastok simulate hello.rkg --ui
+```
+
+Open the loopback URL printed by the last command, including its access token.
+The simulation starts paused. Choose **Next transition**, or **Finish** to
+reach `Hello, world`. The CLI reports `PASS smoke.roundtrip` when the scenario
+finishes. Close the viewer from its toolbar when done.
+<!-- quickstart:end -->
+
+The [public quickstart](docs/site/quickstart.md) owns this block. Continue with
+the [opening gallery](docs/site/index.md), starting with
+[echo](docs/site/gallery/01-echo.md), then
+[webhook to partner](docs/site/gallery/04-webhook-to-partner.md) for a
+simulated HTTP flow with typed validation, bounded retries and an audit profile.
+
+![A retained webhook timeout, backoff and successful retry in the debugger](docs/site/assets/webhook-tour.gif)
+
+Thirty seconds through the simulated flagship. The [chapter](docs/site/gallery/04-webhook-to-partner.md)
+explains the inputs, retained transitions and visible limits.
+
+## Model
+
 A Rastok graph connects existing services, models, tools, data, and
 business processes. In the current model, a Node is either
 a passive Graph scope or an Executor:
@@ -27,7 +58,7 @@ journal-owned manager; `Saga` remains a future Extension. A manager is neither
 a Node nor an edge, so temporal recurrence never creates a spatial cycle.
 Loop contributes no port: exhaustion is a `LoopExpired` case on the host's
 resolved failure terminal (`err`, a custom terminal, or a Call's `exit`).
-The categorical v17 package carries recursive Dispatch, case routing,
+The categorical v18 package carries recursive Dispatch, case routing,
 ordered multi-emission and command-based Operator, Graph and outbound Call
 Loops. Independent core validation re-derives their contracts, routes and
 proofs. Recovery reconstructs retained deliveries, state, commands, exchanges
@@ -37,7 +68,13 @@ are qualified within the [named Loop proof subset](docs/spec/loop.md#16-deferred
 The [R9 qualification ledger](docs/architecture/rework-r9-qualification.md)
 records the v16 rework; the subsequent
 [v17 ledger](docs/architecture/loop-host-terminal-v17.md) records the
-host-terminal amendment and its unchanged non-Loop witnesses.
+host-terminal amendment and its unchanged non-Loop witnesses. The
+[v18 closure ledger](docs/architecture/instance-stop-command.md) adds
+`instance.stop` and `child.instance.stop`: exact-generation lifecycle requests,
+not ports or spatial edges. The subsequent
+[resident Process contract](docs/architecture/process-service.md) uses those
+commands and the existing Session exchange: one child per instance, streamed
+lines/JSONL, and no automatic restart or protocol-specific RPC.
 
 This separation makes effects replaceable. In production, Connectors
 interact with real systems. In a simulation sandbox called the
@@ -69,11 +106,20 @@ surrounded by explicit effect handlers. Rastok does not expose monads
 or require a functional language; it preserves the useful engineering
 property.
 
-## Status
+## Status and known limits
 
 Rastok is at an early experimental stage. Its specification and
 implementation architecture are under active review, and the runtime
 does not yet make a production-readiness claim.
+
+Opening is planned for **15 October 2026**, on explicit release instruction.
+The independent HTTP/3 server test against ngtcp2, official Autobahn suite,
+and measurement of the work needed to add a Connector remain **open and
+non-blocking for that opening**. The debugger's final browser qualification
+is still blocking. None is implied by a green Rust test suite. M1 has no
+durable deployment journal, Kafka or SQL Connector; diagnostic recordings
+are not durable recovery or share-safe exports. See the
+[opening ledger](docs/architecture/opening-showcase.md).
 
 The current executable proof is one continuous path:
 
@@ -104,12 +150,18 @@ runs behind one bounded private pump using Hyper/Rustls, quiche/BoringSSL and
 Tungstenite; none of those dependencies enters `rastok-core` or a no-std
 build. Static feature presets compose reduced or full Driver registries
 without changing plan semantics. The executable
-[Codex WebSocket gateway](docs/examples/codex-websocket-gateway.rkg) and the
+[WebSocket-to-job example](docs/examples/codex-websocket-gateway.rkg) and the
 [M1.6 exit report](docs/architecture/m1.6-exit-report.md) record the complete
 proof. The single
 [release-qualification inventory](docs/architecture/release-qualification.md)
 records executed independent HTTP/WebSocket interop and the remaining
 ngtcp2/Autobahn qualifications without conflating them with workspace tests.
+
+The later [resident agent gateway](examples/agent-gateway.rkg) keeps one JSONL
+child per conversation. Its [gallery chapter](docs/site/gallery/06-agent-gateway.md)
+and [evidence](docs/architecture/agent-gateway-showcase.md) distinguish scripted
+protocol replies and real local composition tests from public authentication,
+live model qualification or per-job usage accounting.
 
 M1.7 is closed as historical v14/v15 evidence: it proved fuel-bounded and
 directly ranked temporal recurrence, logical delay, typed exhaustion,
@@ -126,7 +178,7 @@ The frozen [R0 algebra](docs/architecture/rework-r0-algebra.md),
 links that design to the executable host and recovery tests.
 
 M1.8 closed on categorical package v15; its contracts remain in the current
-v17 package. The source front end
+v18 package. The source front end
 recognizes the closed `@sensitive`/`@secret`/`@personal`/`@measure`/`@cost` family,
 resolves aliases into canonical schema paths and transports the sparse policy
 tables through checked HIR, package decode and Registry-free validation.
@@ -178,6 +230,24 @@ the UI does not claim that every transition is exactly one journal record.
 
 `run --ui` and `check --ui` refuse before effects. Editing, simulation
 branches and real-I/O experiment debugging remain separate future work.
+
+Record a real run, then inspect its retained facts without repeating effects:
+
+```sh
+printf 'hello\n' | rastok run examples/echo.rkg --record echo.rkrec
+rastok replay echo.rkrec
+rastok replay echo.rkrec --ui
+```
+
+Replay needs neither the source nor the files/processes used by the program.
+It reconstructs the recorded state; `simulate` is the command that executes
+the DSL against a Lab world. This bounded diagnostic file is not M2's durable
+deployment journal. The first slice refuses personal-data persistence and
+boot-dependent deployment profiles, never overwrites an existing recording,
+and makes no share-safe-export claim. See the
+[recording contract](docs/architecture/diagnostic-recording.md) for the exact
+format, read-only UI and limits.
+
 See [ui.md](docs/spec/ui.md) and the
 [M1.9 backlog](docs/architecture/m1.9-ui-backlog.md) for the presentation and
 external visual-qualification boundary.

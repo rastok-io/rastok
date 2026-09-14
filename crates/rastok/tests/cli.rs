@@ -28,7 +28,7 @@ fn example() -> PathBuf {
 
 #[cfg(feature = "hosted-ui")]
 fn keyed_retry_example() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/keyed-retry.rkg")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ui-two-retries.rkg")
 }
 
 fn rastok() -> Command {
@@ -861,6 +861,57 @@ fn a_recorded_file_run_replays_after_the_world_and_source_are_removed() {
         );
     }
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn the_gallery_file_pipeline_replaces_once_and_replay_does_not_touch_the_world() {
+    let root = std::env::temp_dir().join(format!("rastok-gallery-file-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let recording = root.join("copy.rkrec");
+    std::fs::write(root.join("input.txt"), b"alpha\nbeta\n").unwrap();
+    let mut child = rastok()
+        .arg("run")
+        .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/file-pipeline.rkg"))
+        .arg("--file-root")
+        .arg(&root)
+        .arg("--record")
+        .arg(&recording)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"input.txt\n")
+        .unwrap();
+    let original = child.wait_with_output().unwrap();
+    assert!(original.status.success(), "{original:?}");
+    assert_eq!(
+        std::fs::read(root.join("copy.txt")).unwrap(),
+        b"alpha\nbeta\n"
+    );
+    std::fs::write(root.join("input.txt"), b"changed world").unwrap();
+    std::fs::write(root.join("copy.txt"), b"do not overwrite").unwrap();
+    let replayed = rastok()
+        .arg("replay")
+        .arg(&recording)
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert!(replayed.status.success(), "{replayed:?}");
+    assert_eq!(original.stdout, replayed.stdout);
+    assert_eq!(
+        std::fs::read(root.join("input.txt")).unwrap(),
+        b"changed world"
+    );
+    assert_eq!(
+        std::fs::read(root.join("copy.txt")).unwrap(),
+        b"do not overwrite"
+    );
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

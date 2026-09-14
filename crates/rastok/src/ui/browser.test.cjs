@@ -74,6 +74,77 @@ test('the resident gateway explains independent Process Sessions without startin
   await page.locator('[data-command="pause"]').click();
 });
 
+test('the flagship keeps readable graph text clear of badges, ports and pipes', { timeout: 60000 }, async t => {
+  const page = await openTour(t, undefined, undefined, [
+    'simulate', 'examples/webhook-to-partner.rkg', '--ui',
+    '--deployment', 'examples/webhook-to-partner.deployment.json',
+  ], {
+    RASTOK_SHOWCASE_PARTNER_TOKEN: 'browser-fixture-not-a-real-credential',
+    RASTOK_SHOWCASE_PARTNER_TOKEN_VERSION: 'fixture-v1',
+  });
+  for (const transition of ['initial', 1, 'completed', 8, 'narrow']) {
+    if (transition === 1) {
+      await page.locator('#step').click();
+      await page.locator('#timeline-position').filter({ hasText: /transition 1$/ }).waitFor();
+    }
+    if (transition === 'completed') await finish(page);
+    if (transition === 8) await seek(page, 8);
+    if (transition === 'narrow') await page.setViewportSize({ width: 700, height: 760 });
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await capture(page, `webhook-geometry-${transition}`);
+    const collisions = await page.evaluate(() => {
+      const labels = [...document.querySelectorAll('.graph-svg text')].map(element => ({
+        text: element.firstChild?.textContent,
+        box: element.getBoundingClientRect(),
+      }));
+      const overlap = (a, b) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5
+        && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5;
+      const collisions = labels.flatMap((a, index) => labels.slice(index + 1)
+        .filter(b => overlap(a.box, b.box))
+        .map(b => `${a.text} overlaps ${b.text}`));
+      for (const node of document.querySelectorAll('.graph-node')) {
+        const title = node.querySelector('.graph-node-name');
+        if (!title) continue;
+        const body = node.querySelector('.graph-node-body').getBoundingClientRect();
+        const box = title.getBoundingClientRect();
+        if (box.left < body.left || box.right > body.right || box.top < body.top || box.bottom > body.bottom) {
+          collisions.push(`${title.firstChild.textContent} exceeds its box`);
+        }
+        const scale = title.getScreenCTM().a;
+        if (Math.abs(parseFloat(getComputedStyle(title).fontSize) * scale - 12) > 0.1) {
+          collisions.push(`${title.firstChild.textContent} is not at interface text size`);
+        }
+      }
+      for (const path of document.querySelectorAll('.graph-edge-path')) {
+        const transform = path.getScreenCTM();
+        const samples = [];
+        for (let distance = 0; distance <= path.getTotalLength(); distance += 2) {
+          samples.push(path.getPointAtLength(distance).matrixTransform(transform));
+        }
+        for (const label of document.querySelectorAll('.graph-scope-name, .graph-scope-type, .graph-node-name, .graph-node-type, .graph-node-port-label, .graph-scope-port-label')) {
+          const box = label.getBoundingClientRect();
+          if (samples.some(point => point.x > box.left && point.x < box.right && point.y > box.top && point.y < box.bottom)) {
+            collisions.push(`${path.closest('.graph-edge').dataset.route} crosses ${label.firstChild.textContent}`);
+          }
+        }
+      }
+      return collisions;
+    });
+    assert.deepEqual(collisions, [], String(transition));
+    if (transition !== 'narrow') {
+      const canvas = await page.locator('.graph-canvas').boundingBox();
+      const scope = await page.locator('.graph-scope.root .graph-scope-body').boundingBox();
+      assert.ok(scope.x >= canvas.x && scope.x + scope.width <= canvas.x + canvas.width, 'the complete flagship fits horizontally');
+      assert.ok(scope.y >= canvas.y && scope.y + scope.height <= canvas.y + canvas.height, 'the complete flagship fits vertically');
+    }
+    if (transition === 8) {
+      const badge = await page.locator('.history-watermark').boundingBox();
+      const controls = await page.locator('.graph-viewport-controls').boundingBox();
+      assert.ok(badge.x + badge.width < controls.x, 'HISTORY clears the zoom controls');
+    }
+  }
+});
+
 test('a decoded HttpServer source is inspectable without an artificial App input', { timeout: 60000 }, async t => {
   const page = await openTour(t, undefined, 'crates/rastok/tests/fixtures/lab-http-source.rkg');
   assert.match(await page.locator('.envelope-inspector').innerText(), /listener\.out/);
@@ -86,6 +157,57 @@ test('a decoded HttpServer source is inspectable without an artificial App input
   await finish(page);
   assert.deepEqual(await page.evaluate(() => currentSnapshot.scenario.current.failures), []);
   assert.equal(await page.evaluate(() => currentSnapshot.history.sources.length), 2);
+});
+
+test('the webhook gallery remains classified in LIVE, HISTORY and REPLAY with exact costs', { timeout: 120000 }, async t => {
+  const source = 'examples/webhook-to-partner.rkg';
+  const credential = 'browser-fixture-not-a-real-credential';
+  const page = await openTour(t, undefined, source, [
+    'simulate', source, '--ui', '--deployment', 'examples/webhook-to-partner.deployment.json',
+  ], {
+    RASTOK_SHOWCASE_PARTNER_TOKEN: credential,
+    RASTOK_SHOWCASE_PARTNER_TOKEN_VERSION: 'fixture-v1',
+  });
+  const assertClassified = async () => {
+    assert.doesNotMatch(await page.locator('body').innerText(), /alice@example\.test|browser-fixture-not-a-real-credential/);
+    const snapshot = await page.evaluate(() => JSON.stringify(currentSnapshot));
+    assert.ok(!snapshot.includes('alice@example.test'), 'no raw email in the browser snapshot');
+    assert.ok(!snapshot.includes(credential), 'the physical secret never reaches the browser');
+  };
+  await assertClassified();
+  await capture(page, 'webhook-B0');
+  await page.locator('#step').click();
+  await page.locator('#timeline-position').filter({ hasText: /transition 1$/ }).waitFor();
+  await assertClassified();
+  await capture(page, 'webhook-B1');
+  const scenarios = ['nominal', 'timeout_then_success', 'partner_dead', 'duplicate', 'invalid_payload', 'http_500'];
+  for (const [index, scenario] of scenarios.entries()) {
+    if (index) {
+      await page.locator('#return-live').click();
+      await page.locator('#scenario-select').selectOption(`webhook\u0000${scenario}`);
+      await page.locator('#select-scenario').click();
+      await page.locator('#timeline-position').filter({ hasText: new RegExp(`^LIVE · Session ${index} · transition 0$`) }).waitFor();
+    }
+    const head = Number(await finish(page));
+    assert.deepEqual(await page.evaluate(() => currentSnapshot.scenario.current.failures), [], scenario);
+    await assertClassified();
+    if (scenario === 'nominal' || scenario === 'http_500') {
+      assert.deepEqual(await page.evaluate(() => currentSnapshot.cost_report.costs.map(row => row.money)), [
+        { unscaled: scenario === 'nominal' ? '2' : '3', scale: 2, currency: 'USD' },
+      ]);
+    }
+    if (!index) {
+      await page.locator('#tab-envelope').click();
+      await capture(page, 'webhook-completed');
+    }
+    await seek(page, Math.min(8, head - 1));
+    await assertClassified();
+    if (!index) await capture(page, 'webhook-B8');
+    await page.locator('[data-command="resume"]').click();
+    await page.locator('#timeline-position').filter({ hasText: /^REPLAY/ }).waitFor();
+    await page.locator('[data-command="pause"]').click();
+    await assertClassified();
+  }
 });
 
 test('a real recording is navigable without any execution command or Driver', { timeout: 60000 }, async t => {
@@ -418,7 +540,7 @@ test('comparison aligns two keyed Loop instances and two read-only sessions at t
   assert.equal(await page.locator('.comparison-row.different').count(), 0);
 });
 
-for (const example of ['echo', 'jsonl', 'gauge', 'countdown', 'keyed-retry']) {
+for (const example of ['echo', 'jsonl', 'gauge', 'countdown', 'keyed-retry', 'file-pipeline', 'sensor-alarm']) {
   test(`${example}: live, history and replay have no visible full ids or browser exception`, { timeout: 60000 }, async t => {
     const page = await openTour(t, undefined, `examples/${example}.rkg`);
     const assertText = async () => {

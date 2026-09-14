@@ -1,0 +1,23 @@
+{
+  "environment": [
+    { "name": "PARTNER_URL", "value": "https://partner.example.test/events/upsert" }
+  ],
+  "secrets": [
+    {
+      "reference": "showcase/partner/token",
+      "environment": "RASTOK_SHOWCASE_PARTNER_TOKEN",
+      "version": "fixture-v1"
+    }
+  ],
+  "privacy": {
+    "reference": "privacy/showcase-webhook@1",
+    "processing_activity": "showcase/fictional-webhook",
+    "purposes": ["purpose/local-synthetic-demonstration"],
+    "legal_bases": ["basis/synthetic-fixture-not-production-authority"],
+    "special_category_condition": null,
+    "criminal_offence_authority": null,
+    "recipients": ["recipient/simulated-partner"],
+    "transfer_safeguards": [],
+    "retention": "run_scoped"
+  }
+}

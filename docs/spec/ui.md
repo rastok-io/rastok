@@ -196,6 +196,28 @@ The next source-authored injection is read-only. Its resolved type and
 materialized DATA may be displayed before admission; `meta.sys` is pending,
 not a fabricated id. To change it, edit the RKG on disk and restart the CLI.
 The App input pin is topology, not an Inject button.
+For a source-Connector fixture, the inspector names `listener.out`, not
+`App.out`, and uses that source's resolved type and policy. Once admitted,
+the root is inspected from INBOUND (`history.sources`), without pretending it
+was another VM delivery or emission transaction. Tests: the pending-injection
+projection test and the HttpServer source case in `browser.test.cjs`.
+If the plan contains classified data, the raw source DATA is withheld in both
+views: a generic Contract pin may precede the first classified schema. This is
+a conservative presentation policy, like scenario-source suppression, not
+backward propagation of annotations or journal redaction. The regression
+`a_source_copy_cannot_bypass_classification_further_inside_the_graph` covers
+the pending and admitted copies.
+The same conservative rule applies to mailbox and delivery views at a
+`variant` pin, or one without a resolved schema, in a classified plan: an
+untyped copy before validation is not evidence of public data. Typed pins
+keep their field-level redaction. The webhook showcase regression inspects
+every retained transition, including the mailbox before its first typed
+Operator, and refuses any visible email or physical credential.
+The browser test `the webhook gallery remains classified in LIVE, HISTORY
+and REPLAY with exact costs` covers all six flagship scenarios with a synthetic
+deployment profile, including the first admission, history and paused replay.
+The browser receives no raw email or physical bearer through the snapshot;
+the public cost report retains the exact nominal and HTTP-500 amounts.
 
 Committed DATA may be scalar or structured. A tree separates technical
 `kind`/`materialized` metadata from `content`. Encoded, unmaterialized DATA

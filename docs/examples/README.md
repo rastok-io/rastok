@@ -6,11 +6,21 @@ The current package format is **v17**. Author against the live
 hand-derived trace. Graphs wire; Operators execute DSL handlers; Connectors
 execute their Contracts. Loop contributes no port.
 
+For a guided introduction, read the [learning path](../site/index.md): each
+chapter adds a problem, explains the relevant graph, and asks you to change
+one behavior and inspect the golden. The catalogue below is the reference
+inventory, not the recommended reading order. The resident-process
+conversation chapter remains separate from the current WebSocket-to-job proof.
+
 ## Executable examples
 
-Checked and simulated on 2026-09-09: **8 programs, 13 passing scenarios**.
+Current opening catalogue: **12 programs, 28 scenarios**. The webhook page
+includes the required synthetic deployment profile in its CLI command; the
+other examples need none. The [opening ledger](../architecture/opening-showcase.md)
+tracks the six-page public gallery separately from these executable examples.
 The [documentation audit](../architecture/documentation-audit-2026-09-09.md)
-records commands, identities and the known timed-join diagnostic defect.
+retains the earlier checkpoint; its bounded-join destination finding is now
+corrected and regression-tested.
 
 | Example | Demonstrates | Scenarios |
 |---|---|---:|
@@ -19,9 +29,14 @@ records commands, identities and the known timed-join diagnostic defect.
 | [echo](../../examples/echo.rkg) | Process Call, success/timeout, explicit dispositions | 3 |
 | [JSONL](../../examples/jsonl.rkg) | Structured Process frames and deterministic replay | 1 |
 | [countdown](../../examples/countdown.rkg) | Operator Loop with a re-derived termination measure | 2 |
-| [keyed retry](../../examples/keyed-retry.rkg) | Graph Loop, two keyed instances, Call timeout and retry | 1 |
+| [keyed retry](../../examples/keyed-retry.rkg) | Bob completes once, Alice retries; keyed idle lifetime | 2 |
+| [webhook to partner](../../examples/webhook-to-partner.rkg) | HttpServer ACK, validation, explicit deduplication, finite HttpClient retry, privacy/secret/cost profile | 6 |
 | [WebSocket gateway](codex-websocket-gateway.rkg) | Session request/response boundary with a scripted Process job | 1 |
 | [expense approval](expense-approval.rkg) | Keyed two-input join, approval/rejection and timed expiry | 3 |
+| [File pipeline](../../examples/file-pipeline.rkg) | Bounded read, explicit empty/refusal paths, atomic replacement | 3 |
+| [sensor alarm](../../examples/sensor-alarm.rkg) | Per-sensor hysteresis, a missing heartbeat, a virtual day | 3 |
+| [resident dialogue](../../examples/agent-dialogue.rkg) | One JSONL Process per conversation, match mocks, exact child closure, fresh input after quit | 2 |
+| [resident agent gateway](../../examples/agent-gateway.rkg) | WebSocket → per-conversation Process, app-server JSON frames, exact child shutdown, independent sockets | 2 |
 
 From the repository root:
 
@@ -40,10 +55,10 @@ The CSV example counts physical lines excluding the header; it is not a general
 CSV parser for quoted multiline fields. Its [sample file](../../examples/csv-count.csv)
 is illustrative; simulation uses the scripted Process lines, not filesystem I/O.
 
-The expense example deliberately retains `decide.expired -> expired`. The
-current checker incorrectly calls that timed-join output impossible, although
-the timeout scenario proves `JoinExpired` is emitted. Do not remove the route
-to follow the warning; see the audit's open finding.
+The expense example deliberately retains `decide.expired -> expired`.
+`JoinExpired` is productible for a bounded join: removing its disposition now
+refuses with `E-UNWIRED-OUTPUT`. Explicit `-> nothing` remains a valid,
+deliberate discard.
 
 ## Historical and future designs — not passing fixtures
 

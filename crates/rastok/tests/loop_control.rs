@@ -366,7 +366,26 @@ fn the_keyed_retry_ui_tour_remains_executable() {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/keyed-retry.rkg");
     let source = std::fs::read_to_string(path).expect("the public UI tour is readable");
     let runs = run_lab(&source);
-    assert_eq!(runs.len(), 1);
+    assert_eq!(runs.len(), 2);
+    let lifecycle = runs
+        .iter()
+        .find(|r| r.report.scenario == "lifetime")
+        .expect("the lifetime scenario");
+    let generations: std::collections::BTreeSet<_> = lifecycle
+        .records
+        .iter()
+        .filter_map(|r| match r {
+            Record::Transaction(tx) if tx.owner_path.to_string().is_empty() => {
+                Some(tx.instance.generation())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        generations,
+        [0, 1].into_iter().collect(),
+        "idle expiry opens a fresh generation, not another Loop iteration"
+    );
 }
 
 #[test]
