@@ -6,21 +6,36 @@ use super::*;
 
 pub(crate) trait InstanceAdmissions {
     fn instance_ref_for_admission(&self, address: &InstanceAddress) -> Result<InstanceRef, Error>;
+    fn instance_commands(&self) -> Result<instance_stop::Fold, Error>;
 }
 
 impl<T: Journal + ?Sized> InstanceAdmissions for T {
     fn instance_ref_for_admission(&self, address: &InstanceAddress) -> Result<InstanceRef, Error> {
         Journal::instance_ref_for_admission(self, address)
     }
+    fn instance_commands(&self) -> Result<instance_stop::Fold, Error> {
+        Journal::instance_commands(self)
+    }
 }
 
 #[derive(Default)]
 pub(crate) struct AdmissionPrefix {
     lifecycles: BTreeMap<InstanceAddress, InstanceLifecycle>,
+    instance_commands: Option<Box<instance_stop::Fold>>,
 }
 
 impl AdmissionPrefix {
+    pub(crate) fn retaining_instance_commands(enabled: bool) -> Self {
+        Self {
+            instance_commands: enabled.then(|| Box::new(instance_stop::Fold::default())),
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn apply(&mut self, record: &Record) -> Result<(), Error> {
+        if let Some(fold) = self.instance_commands.as_deref_mut() {
+            fold.apply(record).map_err(Error::InvalidInstanceCommand)?;
+        }
         let Record::Transaction(record) = record else {
             return Ok(());
         };
@@ -86,6 +101,14 @@ impl AdmissionPrefix {
 }
 
 impl InstanceAdmissions for AdmissionPrefix {
+    fn instance_commands(&self) -> Result<instance_stop::Fold, Error> {
+        self.instance_commands
+            .as_deref()
+            .cloned()
+            .ok_or(Error::InvalidRetainedRecord(
+                "instance command prefix was not enabled",
+            ))
+    }
     fn instance_ref_for_admission(&self, address: &InstanceAddress) -> Result<InstanceRef, Error> {
         let Some(state) = self.lifecycles.get(address) else {
             return Ok(InstanceRef::new(address.clone(), 0));

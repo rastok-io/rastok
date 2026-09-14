@@ -612,6 +612,7 @@ mod tests {
             loop_record: Some(Box::new(packet)),
             logical_time: None,
             timer_schedule: None,
+            instance_commands: None,
             consumed: vec![],
             join_inputs: vec![],
             state_delta: vec![],

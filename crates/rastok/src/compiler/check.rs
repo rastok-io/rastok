@@ -158,6 +158,8 @@ pub const E_PORT_TYPE: Code = Code::new("E-PORT-TYPE");
 /// A Node's `instance` or `lifetime` attribute is malformed, duplicated, or
 /// has no canonical instance-key type.
 pub const E_INSTANCE: Code = Code::new("E-INSTANCE");
+/// A lifecycle disposition must name the wiring Graph or one direct child.
+pub const E_INSTANCE_COMMAND: Code = Code::new("E-INSTANCE-COMMAND");
 /// A Loop Extension attribute or finite-recursion contract is malformed.
 pub const E_LOOP: Code = Code::new("E-LOOP");
 /// A Loop body cannot prove one finite progress verdict on every traversal.

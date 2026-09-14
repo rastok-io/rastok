@@ -1,11 +1,13 @@
 # The plan package — the transportable, verifiable ExecutionPlan
 
-> **Categorical v17 (2026-09-08).** The reader accepts only v17. The current
+> **Categorical v18 (2026-09-10).** The reader accepts only v18. The current
 > tables below replace the previous format; no retired field or tag is
 > reinterpreted. [The v17 ledger](loop-host-terminal-v17.md) records the Loop
 > host-terminal amendment and its qualification. [R9](rework-r9-qualification.md)
 > retains the preceding v16 blessing and independently validated identities. Historical
-> format notes remain evidence, not alternative readable formats.
+> format notes remain evidence, not alternative readable formats. The
+> [v18 closure ledger](instance-stop-command.md) adds route destination tag 4
+> and requires lexical boundary proof for exact-instance commands.
 
 > Format note — the bytes follow this document, never precede it.
 > Specified 2026-08-06 (M0.5 item 4), after the delivery-reference
@@ -237,7 +239,7 @@ module carries it.
 package := magic "RKPB"                      4 raw bytes, sniffable
            ("Rastok Plan Binary" — the pinned meaning of the magic)
         ┌ canonical CBOR map ─────────────────────────────────┐
-        │ 1 : format_version   uint      (17)                 │
+        │ 1 : format_version   uint      (18)                 │
         │ 2 : semantic_hash    bytes(32) (the plan's identity)│
         │ 3 : body             bytes     (embedded, see below)│
         │ 4 : checksum         bytes(32) (see recipe below)   │
@@ -332,7 +334,7 @@ effective claim. A3 follows the canonical operation graph and requires that
 claim to equal its independent derivation exactly. It never rewrites the raw
 row or recovers meaning from payload strings.
 
-## Body tables (format v17)
+## Body tables (format v18)
 
 The body is one canonical CBOR value encoding the `ExecutionPlan`.
 Compound values use fixed-shape arrays with a leading numeric
@@ -575,12 +577,17 @@ selection  := [1, [destination+]]                 — all cases
             | [2, [[case_set, [destination+]]+]]  — closed case partition
 destination := [1, route_endpoint] | [2]          — port / explicit nothing
              | [3, route_owner, command_kind]    — manager, never PhysicalEdge
+             | [4, route_owner, route_owner]     — lexical Graph scope / exact-instance stop target owner
 route_endpoint := [route_owner, port (text)]
 route_owner := [1, node_path (text)] | [2, owner_path (text)]
 command_kind := uint: 1 next · 2 again · 3 done
               // Route rows use canonical encoded-byte order. Destination sets
               // use domain order, independent of source spelling. Same-case
               // duplicate destinations and nothing + real destination refuse.
+              // Tag 4 requires boundary_routes even for flat Graphs. Scope must
+              // be the wiring Graph; target is itself or one direct child.
+              // No instance, key or generation is encoded in the static plan:
+              // the producer seals the exact InstanceRef in causal key 57.
 
 tree       := [type, expr]
 type       := 1                                   — null

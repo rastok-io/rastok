@@ -99,7 +99,7 @@ graph app : App {
     let (decoded, decoded_hash) = plan::decode(&package).unwrap();
     assert_eq!(decoded, validated);
     assert_eq!(decoded_hash, hash);
-    assert_eq!(plan::FORMAT_VERSION, 17);
+    assert_eq!(plan::FORMAT_VERSION, 18);
 }
 
 #[test]

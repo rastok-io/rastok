@@ -6,7 +6,7 @@
 > journal records.
 >
 > The registry below retains the executable v7 value registry inside
-> categorical plan-package v17. V12 introduced the
+> categorical plan-package v18. V12 introduced the
 > open `media_type` scalar and its constructor, and specifies the M1.4 instance-address
 > extension under D-2026-08-18-1. V9 refuses the old unpublished v8
 > named-partition draft and carries the parent-linked owner tree, scoped edges,
@@ -519,6 +519,51 @@ the single fixture blessing separately from the historical v16 checkpoint.
 The complete pre-allocation register and re-bless protocol are in
 [rework-r0-identity.md](../architecture/rework-r0-identity.md).
 
+### 1.3 Plan v18 — exact-instance closure
+
+D-2026-09-10-1 is the explicit exception to the opening freeze: generic
+instance closure, not Process service. Package v18 allocates route destination
+tag 4 to `[4, lexical_graph_owner, target_owner]`. The lexical boundary routing
+inventory is mandatory even in a flat command-bearing Graph. Core independently
+checks the scope and exact direct-child authority. Tags 1–3, Contract IDs,
+ordinary `stop`, Loop r2 and all existing port identities keep their meaning.
+V17 packages refuse by version, not reinterpretation.
+
+Only command-bearing programs gain the framed routing contribution. The echo,
+JSONL and gauge package bodies, semantic hashes and causal traces must remain
+byte-identical. Their outer version and checksum, including the spike's echo
+copy, are the only witness updates authorized by this allocation.
+
+The new command identity domain `rastok.instance-stop.r1` uses byte `0x23`,
+framing source kind/port, exact source/scope/target addresses and generations,
+and the causal envelope ID. Command packets use causal key **57**, absent when
+unused. Packet key 1 carries strictly ID-sorted productions; key 2 carries the
+winning consumption, alone. The target-owned `l:closing` retains consumption;
+the producer's record retains only production. A competing retained closure
+settles redundant requests without fabricating another transaction.
+
+Diagnostic recording **v2** adds the lossless optional packet at the end of
+INBOUND and TRANSACTION rows. Older recordings refuse by version. No other
+record species, close-scope ownership, timer schedule or existing seal changes.
+The [implementation ledger](../architecture/instance-stop-command.md) records
+qualification separately from this allocation, before fixture re-blessing.
+
+### 1.4 Resident Process — Contract move without a package move
+
+D-2026-09-14-1 admits the service profile as `rastok/process@3`, with both
+roles and Session cardinality. The default job remains `rastok/process@2`.
+The resolved exact id, roles and exchange already travel in v18, so no
+package or journal allocation is needed. A profile id cannot alias the base
+contract or another catalogue entry.
+
+Existing job defaults, semantic streams, package bodies and causal witnesses
+remain unchanged. New resident programs carry their distinct Contract and
+`max_frame` setting; the gallery's dialogue traces are initial witnesses,
+not a re-blessing of echo, JSONL or gauge. The opening Session intent seals
+the resolved process descriptor and its first input; write intents seal later
+frames. All existing Session identity and close-once recipes retain their
+meaning. See the [service ledger](../architecture/process-service.md).
+
 ## 2. `graph_version` and the manifest
 
 `meta.sys.graph_version` is a small integer. It is a
@@ -575,8 +620,8 @@ a separate categorical transport change (D-2026-08-14-1).
 
 ## 3. The canonical record form
 
-These tables describe the current causal projection, established at v16 and
-unchanged by v17. Historical key 53
+These tables describe the current causal projection, established at v16,
+unchanged by v17, and extended sparsely at key 57 by v18. Historical key 53
 is retained in the registry solely to prevent reuse; active Loop state uses
 key 55. Required timer dates are retained separately at key 56 and are not
 part of the causal seal.
@@ -655,7 +700,7 @@ observe the transaction-fixed logical instant, key 54 seals that explicit
 input. Omitting it would allow two different control-flow inputs to share one
 causal record.
 
-**INBOUND** (kind 1 — an envelope entered) — keys `20–28` :
+**INBOUND** (kind 1 — an envelope entered) — keys `20–28` and sparse `57`:
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
@@ -668,11 +713,12 @@ causal record.
 | 26 | session_ingress | array | present only for Session ingress: `[1, session_ref (bytes16)]` opens a session and `[2, session_ref (bytes16)]` admits one message into an already-open session. Omitted for Event and Call facts, preserving every pre-H1 record byte. |
 | 27 | source_connector_path | array | lexical UTF-8 path segments of the inbound Connector whose output introduced this root. Omitted exactly for an explicit App-boundary injection. Derived from the proposal's single `InboundEnvelopeProvenance` authority at acceptance; its presence and structural spelling are the replay-routing fact. |
 | 28 | inbound_call | array | present exactly when this Connector-origin root opens an inbound Call: `[inbound_call_ref (bytes16), source_instance_ref]`. The reference is the root id behind a direction-specific type; the instance is selected and reserved before this same INBOUND commit. Omitted for Event, Session and App-boundary facts. |
+| 57 | instance_commands | map | Sparse exact-instance closure production, as defined below. Omitted without commands; never consumption on INBOUND. |
 
 **TRANSACTION** (kind 2 — one Executor/manager firing or one controller-owned
 Node lifecycle fact;
 the commit packet of
-execution-model §1) — keys `30–39`, `48–52` and `54–55`:
+execution-model §1) — keys `30–39`, `48–52`, `54–55` and sparse `57`:
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
@@ -693,6 +739,19 @@ execution-model §1) — keys `30–39`, `48–52` and `54–55`:
 | 53 | retired loop_fact | array | Historical r1 form, never emitted or reinterpreted by v16. |
 | 54 | logical_time | int | the signed nanosecond logical instant since the Unix epoch, present exactly when a checked firing handler can observe `now()`; fixed across guard selection and body evaluation, omitted otherwise. This is an explicit transaction input, not a scheduler due date or host `committed_at`. |
 | 55 | loop_protocol | map | Sparse r2 packet: 1 context, 2 routed contexts, 3 produced commands, 4 consumed commands, 5 manager facts. Exact forms below; absent for unrelated transactions. |
+| 57 | instance_commands | map | Production or winning target-owned consumption; exact shape below. Absent without commands; separate from Loop r2. |
+
+**Instance closure packet — key 57.** This is causal, unlike scheduler metadata
+at key 56. Exactly one field: `1: [command+]` for production, or
+`2: command_id` for consumption. Production rows are strictly ID-sorted:
+`[command_id, source_kind, source_port, source_instance_ref, scope_instance_ref,
+target_instance_ref, cause_id]`, with source kind 1 Graph / 2 Node. IDs are
+bytes16; refs use the existing `[address_bytes, generation]` framing. Empty,
+mixed, repeated or identity-inconsistent packets refuse. The prefix proves
+the exact parent-generation binding; the plan independently proves routing.
+Consumption follows pending production order, including across distinct targets.
+A prior closure settles redundant commands without an added record. Domain and
+version allocations are in §1.3; existing records omit the key entirely.
 
 **Loop r2 packet — key 55.** Empty subfields are omitted. Contexts are
 ordered outer-to-inner; outgoing contexts are sorted by delivery reference.

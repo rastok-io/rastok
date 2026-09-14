@@ -984,7 +984,7 @@ impl core::fmt::Display for PlanValidationError {
             ),
             Self::MissingClosingPolicy { connector, owner } => write!(
                 f,
-                "invalid plan: finite owner `{owner}` contains Process `{connector}` but declares no bounded Closing policy"
+                "invalid plan: stoppable owner `{owner}` contains outbound Connector `{connector}` but declares no bounded Closing policy"
             ),
             Self::RecursiveStop { node } => write!(
                 f,
@@ -3117,6 +3117,23 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     .dispatch
                     .steps()
                     .any(|step| matches!(step, DispatchStep::Stop))
+        }) || plan.routes.iter().any(|rule| {
+            let matches_target = |destination: &super::RouteDestination| {
+                let super::RouteDestination::InstanceStop(target) = destination else {
+                    return false;
+                };
+                match &target.owner {
+                    super::EndpointOwner::Graph(path) => path == &owner.path,
+                    super::EndpointOwner::Node(path) => path.segments() == owner.path.segments(),
+                }
+            };
+            match &rule.selection {
+                super::RouteSelection::All(set) => set.iter().any(matches_target),
+                super::RouteSelection::Cases(arms) => arms
+                    .iter()
+                    .flat_map(|arm| &arm.destinations)
+                    .any(matches_target),
+            }
         });
         if owner.instance.lifetime != InstanceLifetime::Persistent || explicitly_stoppable {
             for node in &plan.nodes {

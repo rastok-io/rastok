@@ -60,7 +60,11 @@ pub(super) fn validate(
 ) -> Result<(), super::PlanValidationError> {
     let needs_inventory = plan.owners.iter().any(|owner| {
         owner.kind == OwnerKind::Graph && (!owner.path.is_root() || owner.loop_spec().is_some())
-    });
+    }) || plan
+        .routes
+        .iter()
+        .flat_map(|rule| destinations(&rule.selection))
+        .any(|destination| matches!(destination, RouteDestination::InstanceStop(_)));
     if !needs_inventory {
         return if plan.boundary_routes.is_empty() {
             Ok(())
@@ -92,6 +96,21 @@ pub(super) fn validate(
             return Err(failure(&path, RouteErrorKind::UnknownEndpoint).into());
         }
         for destination in destinations(&rule.selection) {
+            if let RouteDestination::InstanceStop(target) = destination {
+                let lexical = match &rule.source.owner {
+                    EndpointOwner::Graph(path) if direction == Direction::Input => {
+                        Some(path.clone())
+                    }
+                    EndpointOwner::Graph(path) => path.parent(),
+                    EndpointOwner::Node(path) => super::OwnerPath::from(path).parent(),
+                };
+                if !super::routing_validation::valid_instance_stop_target(plan, target)
+                    || lexical.as_ref() != Some(&target.scope)
+                {
+                    return Err(failure(&path, RouteErrorKind::InvalidInstanceCommand).into());
+                }
+                continue;
+            }
             if let RouteDestination::LoopCommand(command) = destination {
                 let valid = match (&command.owner, &rule.source.owner) {
                     (EndpointOwner::Graph(owner), source) => {
@@ -339,7 +358,8 @@ fn check_crossings(
 ///
 /// # Errors
 /// A boundary cycle, duplicate selected destination, or a composed selection
-/// mixing `nothing` with another destination. No declarations are repaired.
+/// mixing `nothing` with another destination. Instance closure also requires
+/// the actual emitter to belong to its lexical scope. No declarations are repaired.
 pub fn compose_routing(rules: &[RouteRule]) -> Result<Vec<RouteRule>, Box<RouteCompositionError>> {
     let mut inventory = BTreeMap::<&Endpoint, Vec<&RouteSelection>>::new();
     for rule in rules {
@@ -416,6 +436,24 @@ pub fn compose_routing(rules: &[RouteRule]) -> Result<Vec<RouteRule>, Box<RouteC
                     kind,
                 })
             })?;
+            // Transparent inputs do not establish an emitting instance in the
+            // crossed Graph. Closure can only follow the emitter's retained
+            // ancestry, never select a descendant from this envelope's key.
+            let source_path = match &source.owner {
+                EndpointOwner::Graph(path) => path.segments(),
+                EndpointOwner::Node(path) => path.segments(),
+            };
+            if destinations.iter().any(|destination| {
+                matches!(destination,
+                RouteDestination::InstanceStop(target)
+                    if !source_path.starts_with(target.scope.segments()))
+            }) {
+                return Err(Box::new(RouteCompositionError {
+                    source: source.clone(),
+                    case,
+                    kind: RouteErrorKind::InstanceCommandScope,
+                }));
+            }
             if destinations.len() > 1 && destinations.contains(&RouteDestination::Discard) {
                 return Err(Box::new(RouteCompositionError {
                     source: source.clone(),

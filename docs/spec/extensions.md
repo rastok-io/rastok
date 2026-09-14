@@ -1,6 +1,6 @@
 # Node, Graph, Executor, Connector, and Extension
 
-> **Status (2026-09-08): normative categorical v17.** Loop's host-terminal
+> **Status (2026-09-10): normative categorical v18.** Loop's host-terminal
 > amendment is D-2026-09-08-1. The underlying execution model and
 > independent validation are qualified in [R9](../architecture/rework-r9-qualification.md).
 > Unsupported Extension profiles refuse by name before effects.
@@ -123,6 +123,18 @@ DAG and cannot be a source or destination of `PhysicalEdge`. An Extension port,
 when one exists, is an ordinary typed port and follows the same routing and
 explicit-destination rules as any other output.
 
+"No contributed port" does not mean "no contributed interface": Loop exposes
+typed commands as well as attributes and bindings. A command's destination-like
+spelling is sometimes described informally as a pseudo-port, but it creates
+neither a data port nor a control port in the effective port table.
+
+D-2026-09-10-1 applies the same distinction to the common-lifecycle
+commands `instance.stop` and `child.instance.stop`. They belong to Node
+instances, require no new Extension, and invoke the existing lifecycle
+controller rather than a Loop manager. They execute under package v18;
+[instances §7.3](instances.md#73-explicit-closure-commands)
+owns their scope. The Graph/Executor split and bare Operator `stop` are unchanged.
+
 ## 5. Extension admission test
 
 Extensions are intentionally scarce. A new proposal is admitted only if all
@@ -206,7 +218,7 @@ redefine an Extension contribution. The diagnostic names both contributors.
 
 ## 9. Transport and validation
 
-Plan v17 transports one closed `ExtensionSpec` list on every owner for which it
+Plan v18 transports one closed `ExtensionSpec` list on every owner for which it
 is non-empty. Registry-free validation re-derives:
 
 - structural owner compatibility;

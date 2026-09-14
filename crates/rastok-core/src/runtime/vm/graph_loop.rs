@@ -30,6 +30,7 @@ struct Selection {
     destinations: BTreeSet<Endpoint>,
     commands: Vec<LoopCommandTarget>,
     terminals: BTreeSet<OwnerSlot>,
+    instance_stops: Vec<crate::plan::InstanceStopTarget>,
 }
 
 impl Vm<'_> {
@@ -102,6 +103,7 @@ impl Vm<'_> {
             destinations: BTreeSet::new(),
             commands: Vec::new(),
             terminals: BTreeSet::new(),
+            instance_stops: Vec::new(),
         };
         let mut pending = vec![source.clone()];
         let mut visited = BTreeSet::new();
@@ -139,6 +141,9 @@ impl Vm<'_> {
                 };
                 for destination in destinations {
                     match destination {
+                        RouteDestination::InstanceStop(target) => {
+                            selected.instance_stops.push(*target.clone())
+                        }
                         RouteDestination::Discard => {}
                         RouteDestination::LoopCommand(command) => {
                             selected.commands.push(command.clone())
@@ -178,6 +183,14 @@ impl Vm<'_> {
             }
         }
         Ok(selected)
+    }
+
+    pub(super) fn graph_instance_stop_targets(
+        &self,
+        source: &Endpoint,
+        envelope: &Envelope,
+    ) -> Result<Vec<crate::plan::InstanceStopTarget>, VmError> {
+        Ok(self.select_graph_routes(source, envelope)?.instance_stops)
     }
 
     pub(super) fn prepare_graph_routes(
@@ -861,11 +874,18 @@ impl Vm<'_> {
     ) -> Result<PreparedEmissions, VmError> {
         let mut candidates = BTreeMap::new();
         let mut emissions = Vec::new();
+        let mut commands = Vec::new();
         for emission in &record.emissions {
             let source = Endpoint {
                 owner: EndpointOwner::Graph(self.plan.owners[owner.index()].path.clone()),
                 port: emission.port.clone(),
             };
+            commands.extend(self.prepare_instance_commands(
+                journal,
+                &source,
+                Some(instance),
+                &emission.envelope,
+            )?);
             emissions.push(PreparedEmission {
                 emission: emission.clone(),
                 routes: self.prepare_graph_routes(
@@ -879,7 +899,10 @@ impl Vm<'_> {
             });
         }
         self.check_room_for_routes(emissions.iter().map(|emission| emission.routes.as_slice()))?;
+        commands.sort_by_key(|command| command.id);
+        self.check_instance_command_room(journal, &commands)?;
         Ok(PreparedEmissions {
+            commands,
             contexts: self.graph_emission_contexts(record, &emissions),
             emissions,
             candidates,
@@ -892,6 +915,7 @@ impl Vm<'_> {
         instance: &InstanceRef,
         prepared: PreparedEmissions,
     ) {
+        self.enqueue_instance_commands(prepared.commands);
         for emission in prepared.emissions {
             if self.plan.owners[owner.index()].path.is_root() {
                 self.outputs.push(BoundaryOutput {
@@ -1210,6 +1234,7 @@ impl Vm<'_> {
                 let mut expected = self.routed_deliveries(&prepared);
                 expected.sort();
                 if expected != record.routes
+                    || record.instance_commands != Self::retained_command_packet(&prepared.commands)
                     || packet.routes != prepared.contexts
                     || (!matches!(fact, Fact::Expired { .. }) && !record.emissions.is_empty())
                 {

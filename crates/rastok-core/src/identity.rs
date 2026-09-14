@@ -227,6 +227,73 @@ impl InstanceAddress {
         self.bytes.as_ref()
     }
 
+    /// Reads the canonical address form and revalidates its typed key frames.
+    ///
+    /// # Errors
+    /// Malformed, non-canonical or structurally invalid address bytes.
+    pub fn decode(bytes: &[u8]) -> Result<Self, crate::canonical_cbor::DecodeError> {
+        use crate::canonical_cbor::DecodeError;
+        let malformed = || DecodeError::Malformed("instance address");
+        let (tree, used) = crate::canonical_cbor::decode(bytes)?;
+        if used != bytes.len() {
+            return Err(malformed());
+        }
+        let Cbor::Array(parts) = &tree else {
+            return Err(malformed());
+        };
+        let [owner, Cbor::Array(frames)] = parts.as_slice() else {
+            return Err(malformed());
+        };
+        let owner_from = |value: &Cbor| -> Result<OwnerPath, DecodeError> {
+            let Cbor::Array(segments) = value else {
+                return Err(malformed());
+            };
+            let names = segments
+                .iter()
+                .map(|segment| match segment {
+                    Cbor::Text(name) => Ok(name.clone()),
+                    _ => Err(malformed()),
+                })
+                .collect::<Result<alloc::vec::Vec<_>, _>>()?;
+            OwnerPath::new(names).map_err(|_| malformed())
+        };
+        let owner = owner_from(owner)?;
+        let mut decoded = alloc::vec::Vec::new();
+        for frame in frames {
+            let Cbor::Array(parts) = frame else {
+                return Err(malformed());
+            };
+            decoded.push(match parts.as_slice() {
+                [frame_owner, Cbor::Uint(1), Cbor::Array(key)] => {
+                    let [ty, value] = key.as_slice() else {
+                        return Err(malformed());
+                    };
+                    InstanceFrame::SelectedKey {
+                        owner: owner_from(frame_owner)?,
+                        ty: crate::plan::type_from(ty).map_err(|_| malformed())?,
+                        value: encoding::value_from_tagged(value)?,
+                    }
+                }
+                [frame_owner, Cbor::Uint(2), instant] => InstanceFrame::ProcessingTimeBox {
+                    owner: owner_from(frame_owner)?,
+                    start_ns: match instant {
+                        Cbor::Uint(value) => i64::try_from(*value).map_err(|_| malformed())?,
+                        Cbor::Negative(value) => {
+                            -1 - i64::try_from(*value).map_err(|_| malformed())?
+                        }
+                        _ => return Err(malformed()),
+                    },
+                },
+                _ => return Err(malformed()),
+            });
+        }
+        let address = Self::new(&owner, &decoded).map_err(|_| malformed())?;
+        if address.as_bytes() != bytes {
+            return Err(DecodeError::NonCanonical("instance address"));
+        }
+        Ok(address)
+    }
+
     /// Static owner sealed into these bytes. Kept crate-private because
     /// routing treats the address as opaque; the journal uses it only to
     /// enforce the structural parent field of lifecycle records.
@@ -334,6 +401,48 @@ fn signed(value: i64) -> Cbor {
 mod tests {
     use super::*;
     use crate::datatype::{DataType, DateUnit, EnumType, StructType, TemporalType, TypeField};
+
+    #[test]
+    fn retained_addresses_round_trip_and_refuse_forged_typed_keys() {
+        let owner = OwnerPath::new(["worker"]).unwrap();
+        let address = InstanceAddress::new(
+            &owner,
+            &[
+                InstanceFrame::SelectedKey {
+                    owner: owner.clone(),
+                    ty: DataType::Text,
+                    value: Value::Text("tenant".into()),
+                },
+                InstanceFrame::ProcessingTimeBox {
+                    owner: owner.clone(),
+                    start_ns: i64::MIN,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            InstanceAddress::decode(address.as_bytes()).unwrap(),
+            address
+        );
+        let mut trailing = address.as_bytes().to_vec();
+        trailing.push(0);
+        assert!(InstanceAddress::decode(&trailing).is_err());
+        let (mut tree, _) = crate::canonical_cbor::decode(address.as_bytes()).unwrap();
+        let Cbor::Array(parts) = &mut tree else {
+            panic!("address")
+        };
+        let Cbor::Array(frames) = &mut parts[1] else {
+            panic!("frames")
+        };
+        let Cbor::Array(frame) = &mut frames[0] else {
+            panic!("key frame")
+        };
+        let Cbor::Array(key) = &mut frame[2] else {
+            panic!("typed key")
+        };
+        key[1] = encoding::value_tagged(&Value::Int(7));
+        assert!(InstanceAddress::decode(&crate::canonical_cbor::encode(&tree)).is_err());
+    }
 
     #[test]
     fn address_containment_preserves_every_ancestor_key_and_time_box() {

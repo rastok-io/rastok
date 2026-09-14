@@ -2,7 +2,7 @@
 
 > **Status (2026-09-07): normative, including the implemented v16 model adopted by
 > D-2026-09-05-1.** The compiler
-> accepts and checks the R1 `instance` / `lifetime` surface. Plan-package v17
+> accepts and checks the R1 `instance` / `lifetime` surface. Plan-package v18
 > retains v9's categorical parent-linked owner table, scoped routes,
 > independent instance policy, immutable owner expressions, and phased
 > Connector settings. R3 routes every owner through canonical hierarchical
@@ -604,6 +604,78 @@ evidence, not merely a matching owner path. The R8 fixed/tumbling window probe
 tests both owner orders, a lazy intermediate Graph and recovery, as recorded
 in D-2026-09-07-4.
 
+### 7.3 Explicit closure commands
+
+D-2026-09-10-1 adds a v18 command destination for the common lifecycle.
+In a Graph body:
+
+```rastok
+decide.end_conversation -> instance.stop
+decide.end_process -> codex.instance.stop
+```
+
+The first targets the exact current Graph instance and its descendants. The
+second targets only its direct child `codex` in an unambiguously established
+instance context. The enclosing conversation, its siblings and another
+conversation's `codex` remain unaffected. Targeting a child Graph closes that
+child's subtree. Targeting a Connector closes the exchanges it owns, not an
+arbitrarily selected Call or Session inside it. Singleton owners are included;
+the command does not require an authored key.
+
+These destinations are commands, not ports or spatial edges. The routed
+envelope provides the cause, not a dynamic owner name or OS process id. The
+target's complete `InstanceRef` is sealed before producer commit; commands
+never create an instance or choose a newer generation. An ambiguous target
+refuses. Bare Operator `stop` retains §7's local meaning.
+
+A resource's application shutdown message, such as `quit` on Process stdin,
+is instead ordinary data. Neither its delivery nor local write settlement
+requests Node closure or proves resource termination. The graph may request
+instance closure separately; the resource's observed `exit` and the Node's
+`l:stop` remain distinct. See D-2026-09-10-4 and [Process](stdlib.md#33-process--child-processes-two-modes).
+
+The bounded command is retained with the producing transaction. The existing
+lifecycle controller commits the winning `l:closing` for its own target and
+performs §7.1's Closing sequence. It does not wait for the resource to end
+before requesting its closure. Recovery preserves pending commands and the
+disposition of redundant/stale ones. No Graph gains application execution,
+and Loop's command protocol is unchanged. The
+[implementation gates](../architecture/instance-stop-command.md) include exact
+child selection, hostile packages, races and the format/identity inventory.
+
+The source resolver rejects a deep target or use as a source/intermediate
+endpoint with `E-INSTANCE-COMMAND`. Core independently proves lexical scope
+from the retained boundary routing inventory, including flat Graphs.
+
+Selection walks exact parent-generation links to the wiring Graph. A producing
+child supplies its own reference when it is the target. Otherwise there must
+be exactly one live direct child; with none live, a single previously opened
+child remains an already-closed target. Multiple candidates refuse rather than
+choosing the latest generation or a matching business key. A never-opened child
+refuses before commit, without creation. Unkeyed children remain local to their
+parent Graph instance; child keys/lifetimes may introduce further instances.
+
+Transparent input forwarding alone does not establish that source ancestry.
+An input routed from outside the wiring Graph directly to a closure command
+refuses at check with `E-INSTANCE-COMMAND`, including an unkeyed Graph. Emit
+the request from an Operator inside that Graph so its retained instance
+supplies the context. Matching the incoming business key is not a substitute.
+Core re-derives this constraint from composed routes when reading a package;
+the runtime never guesses the target to compensate for an invalid source.
+
+Idempotence is per exact target reference for every Contract. A second request
+does not renew Closing deadlines, cancel twice or close a successor. Production
+is retained even for a redundant request; the fold settles it against the prior
+authoritative close. Pending capacity is 1,024 commands per Worker, checked with
+all other transaction products before commit. The controller consumes commands
+in retained record order, then canonical command ID order. An effectful target
+requires the existing bounded Closing policy. Closure does not undo an effect.
+
+A Loop Graph may request its own closure: the verdict is `Stopped`, not a Loop
+command. Child-only closure inside a Loop application remains a named refusal
+until lifecycle-dependent control proofs are qualified. Route such a request
+from the enclosing non-Loop Graph, or close the Loop scope itself.
+
 ## 8. Joins
 
 A join buffers and correlates inside the logical instance of the Operator
@@ -699,7 +771,7 @@ The plan/package and journal vocabulary has been rewritten from the draft
 `partition_key` / `target_partition` names to logical instance addresses and
 generation-bearing references without renumbering already reserved
 extend-only journal keys merely for spelling.
-Plan-package v17 retains v9's categorical owner/instance transport and
+Plan-package v18 retains v9's categorical owner/instance transport and
 refuses v16 and every older format, including the unpublished v8 draft, as
 input. The original v9
 package-only move left semantic hashes and causal traces unchanged at R2. R3

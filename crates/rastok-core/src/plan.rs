@@ -32,16 +32,16 @@ pub use dispatch::{
 pub use dispatch_validation::{DispatchErrorKind, DispatchValidationError, validate_dispatch};
 pub use emission::{Emission, FieldWrite};
 pub use routing::{
-    Endpoint, EndpointOwner, LoopCommandKind, LoopCommandTarget, RouteArm, RouteDestination,
-    RouteRule, RouteSelection,
+    Endpoint, EndpointOwner, InstanceStopTarget, LoopCommandKind, LoopCommandTarget, RouteArm,
+    RouteDestination, RouteRule, RouteSelection,
 };
 pub use routing_validation::{
     RouteConflict, RouteConflictKind, RouteErrorKind, RouteValidationError, route_conflict,
     validate_routing,
 };
 pub use serialization::fields;
-pub(crate) use serialization::type_tree;
 pub use serialization::{DecodeError, FORMAT_VERSION, MAGIC, decode, encode};
+pub(crate) use serialization::{type_from, type_tree};
 
 /// Standard `meta.ext` leaves known to every graph without travelling in the
 /// plan schema. They are protocol context, not fields owned by one Connector

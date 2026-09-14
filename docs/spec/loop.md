@@ -471,6 +471,12 @@ proof also refuses beyond 1,024 distinct outcome combinations; it never admits
 a program using approximate evidence. Joins and windows outside a Loop
 application are unaffected.
 
+The common lifecycle command `instance.stop` may close its own Loop Graph;
+the run ends with `Stopped` and pending wakeups remain generation-fenced.
+Child-only closure inside that application still requires the deferred
+lifecycle-dependent proof. Request it from an enclosing non-Loop Graph or
+close the Loop scope itself; no synthetic port or Loop command is introduced.
+
 ## 17. Related documents
 
 - [extensions.md](extensions.md)

@@ -49,6 +49,7 @@ use alloc::vec::Vec;
 mod call_completion;
 mod closing;
 mod graph_loop;
+mod instance_stop;
 mod loop_manager;
 mod recovery;
 mod timing;
@@ -107,6 +108,15 @@ pub enum VmError {
     },
     /// The journal refused an operation.
     Journal(crate::journal::Error),
+    /// Exact-instance closure cannot select a unique retained target.
+    InstanceCommand {
+        /// Static target which refused; no payload values enter the error.
+        owner: OwnerPath,
+        /// Missing, ambiguous, or inconsistent instance authority.
+        reason: crate::journal::instance_stop::Error,
+    },
+    /// Instance command capacity is checked with the other producer products.
+    InstanceCommandQueueFull,
     /// The dispatcher raised an integrity fault.
     Dispatch(crate::boundary::DispatchError),
     /// A target mailbox has no room for a transaction's deliveries —
@@ -261,6 +271,12 @@ impl fmt::Display for VmError {
             ),
             Self::Fault(fault) => fault.fmt(f),
             Self::Journal(error) => error.fmt(f),
+            Self::InstanceCommand { owner, reason } => {
+                write!(f, "instance command at `{owner}`: {reason}")
+            }
+            Self::InstanceCommandQueueFull => {
+                f.write_str("the bounded instance-command queue has no room before producer commit")
+            }
             Self::Dispatch(error) => error.fmt(f),
             Self::MailboxFull { node } => {
                 write!(f, "the mailbox of `{node}` is full")
@@ -567,6 +583,7 @@ struct PreparedEmissions {
     emissions: Vec<PreparedEmission>,
     candidates: BTreeMap<InstanceRef, InstanceCandidate>,
     contexts: Vec<crate::journal::loop_protocol::RoutedContext>,
+    commands: Vec<crate::journal::instance_stop::Command>,
 }
 
 /// One Operator activation selected without removing mailbox work. Join
@@ -979,6 +996,7 @@ pub struct Vm<'plan> {
     /// Whether command-based Loop work can exist. Non-Loop plans do not
     /// build or scan a manager fold.
     has_loops: bool,
+    instance_commands: Option<VecDeque<crate::journal::instance_stop::Command>>,
     graph_loops: Option<Box<graph_loop::GraphLoops>>,
     /// Persistent-only plans do not inspect owner lifetimes on each route.
     has_lifetime_deadlines: bool,
@@ -1360,6 +1378,21 @@ impl<'plan> Vm<'plan> {
                     .iter()
                     .any(|aspect| aspect.extension() == node::Extension::Loop)
             }),
+            instance_commands: plan
+                .routes
+                .iter()
+                .any(|rule| match &rule.selection {
+                    crate::plan::RouteSelection::All(set) => set.iter().any(|destination| {
+                        matches!(destination, crate::plan::RouteDestination::InstanceStop(_))
+                    }),
+                    crate::plan::RouteSelection::Cases(arms) => arms
+                        .iter()
+                        .flat_map(|arm| &arm.destinations)
+                        .any(|destination| {
+                            matches!(destination, crate::plan::RouteDestination::InstanceStop(_))
+                        }),
+                })
+                .then(VecDeque::new),
             graph_loops: plan
                 .owners
                 .iter()
@@ -1941,6 +1974,23 @@ impl<'plan> Vm<'plan> {
             )?
         };
         self.check_room_for_routes(core::iter::once(prepared.as_slice()))?;
+        let commands = if opening_only {
+            Vec::new()
+        } else {
+            self.prepare_instance_commands(
+                journal,
+                &self.graph_endpoint(&from),
+                source_instance,
+                inbound.envelope(),
+            )?
+        };
+        self.check_instance_command_room(journal, &commands)?;
+        if !commands.is_empty() {
+            inbound = inbound.with_instance_commands(crate::journal::instance_stop::Packet {
+                produced: commands.clone(),
+                consumed: None,
+            });
+        }
         let recorded_routes = self.inbound_route_targets(&prepared);
         let mut activity = BTreeMap::new();
         let mut arms = Vec::new();
@@ -1980,6 +2030,7 @@ impl<'plan> Vm<'plan> {
         let committed = journal
             .commit_inbound(inbound, recorded_routes)
             .map_err(VmError::Journal)?;
+        self.enqueue_instance_commands(commands);
         let id = committed.envelope.meta().sys().id();
         let exchange = committed
             .record
@@ -2079,11 +2130,14 @@ impl<'plan> Vm<'plan> {
         bindings: &mut B,
     ) -> Result<bool, VmError> {
         self.preflight(journal)?;
+        if self.step_instance_commands(journal)? {
+            return Ok(true);
+        }
         if let Some((instance, cause)) = self
             .single_pass_close()
             .map(|(reference, cause)| (reference.clone(), cause.clone()))
         {
-            self.request_close(journal, &instance, cause)?;
+            self.request_close(journal, &instance, cause, None)?;
             return Ok(true);
         }
         self.progress_closures();
@@ -3188,7 +3242,7 @@ impl<'plan> Vm<'plan> {
         }) else {
             return Ok(());
         };
-        self.request_close(journal, &reference, cause)?;
+        self.request_close(journal, &reference, cause, None)?;
         self.progress_closures();
         Ok(())
     }
@@ -3364,6 +3418,7 @@ impl<'plan> Vm<'plan> {
     #[must_use]
     pub fn is_stable(&self) -> bool {
         if !self.lifecycle.is_empty()
+            || self.instance_command_ready()
             || self.single_pass_close().is_some()
             || self.loop_manager_ready()
             || !self.settled.is_empty()
@@ -3430,6 +3485,7 @@ impl<'plan> Vm<'plan> {
     #[must_use]
     pub fn has_ready_transaction(&self) -> bool {
         if !self.lifecycle.is_empty()
+            || self.instance_command_ready()
             || self.single_pass_close().is_some()
             || self.loop_manager_ready()
             || self.settled_inbound_calls.iter().any(|event| {
@@ -3660,6 +3716,7 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         reference: &InstanceRef,
         cause: Envelope,
+        command: Option<Id>,
     ) -> Result<(), VmError> {
         if !self
             .instances
@@ -3678,6 +3735,12 @@ impl<'plan> Vm<'plan> {
             loop_record: None,
             logical_time: None,
             timer_schedule: None,
+            instance_commands: command.map(|id| {
+                Box::new(crate::journal::instance_stop::Packet {
+                    produced: Vec::new(),
+                    consumed: Some(id),
+                })
+            }),
             trigger: node::Trigger::Lifecycle(node::Lifecycle::Closing),
             cause: Some(cause.meta().sys().id()),
             consumed: vec![],
@@ -3738,6 +3801,13 @@ impl<'plan> Vm<'plan> {
                     InstancePhase::Closing { .. } | InstancePhase::Stopping { .. } => {}
                 }
             }
+        }
+        if let Some(queue) = self.instance_commands.as_mut() {
+            queue.retain(|command| {
+                self.instances
+                    .get(&command.target)
+                    .is_some_and(|instance| matches!(instance.phase, InstancePhase::Open))
+            });
         }
     }
 
@@ -4040,6 +4110,7 @@ impl<'plan> Vm<'plan> {
                     loop_record: None,
                     logical_time: None,
                     timer_schedule: None,
+                    instance_commands: None,
                     trigger: node::Trigger::Lifecycle(work.lifecycle),
                     cause: Some(work.cause.meta().sys().id()),
                     consumed: vec![],
@@ -4126,7 +4197,7 @@ impl<'plan> Vm<'plan> {
                 );
             }
             if matches!(owner.instance.lifetime, InstanceLifetime::SinglePass) {
-                self.request_close(journal, &work.instance, work.cause.clone())?;
+                self.request_close(journal, &work.instance, work.cause.clone(), None)?;
             }
         }
         if let (Some(slot), Some(prepared)) = (node_slot, prepared) {
@@ -4886,6 +4957,7 @@ impl<'plan> Vm<'plan> {
             loop_record: None,
             logical_time: None,
             timer_schedule: None,
+            instance_commands: None,
             consumed: vec![crate::journal::ConsumedPosition {
                 edge: delivery.edge.clone(),
                 source: delivery.source_instance.clone(),
@@ -5408,6 +5480,7 @@ impl<'plan> Vm<'plan> {
         record: &crate::runtime::TransactionRecord,
     ) -> Result<PreparedEmissions, VmError> {
         let mut prepared = Vec::with_capacity(record.emissions.len());
+        let mut commands = Vec::new();
         // One producer transaction is one admission linearization point. If
         // several emissions select the same not-yet-live instance, the first
         // canonical route binds its immutable bundle and every sibling route
@@ -5429,6 +5502,12 @@ impl<'plan> Vm<'plan> {
                 node: Some(slot),
                 port: emission.port.clone(),
             };
+            commands.extend(self.prepare_instance_commands(
+                journal,
+                &self.graph_endpoint(&from),
+                Some(source_instance),
+                &emission.envelope,
+            )?);
             prepared.push(PreparedEmission {
                 emission: emission.clone(),
                 routes: self.prepare_routes(
@@ -5441,7 +5520,10 @@ impl<'plan> Vm<'plan> {
             });
         }
         self.check_room_for_routes(prepared.iter().map(|emission| emission.routes.as_slice()))?;
+        commands.sort_by_key(|command| command.id);
+        self.check_instance_command_room(journal, &commands)?;
         Ok(PreparedEmissions {
+            commands,
             contexts: if self.graph_loops.is_some() {
                 self.graph_emission_contexts(record, &prepared)
             } else {
@@ -6425,7 +6507,9 @@ impl<'plan> Vm<'plan> {
             emissions,
             candidates,
             contexts,
+            commands,
         } = prepared;
+        self.enqueue_instance_commands(commands);
         for PreparedEmission { emission, routes } in emissions {
             // The emission itself is observable at its source port —
             // `expect relay.out` watches departures, not arrivals.

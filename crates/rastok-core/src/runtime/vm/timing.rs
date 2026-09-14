@@ -233,6 +233,7 @@ impl Vm<'_> {
         prepared: &PreparedEmissions,
     ) -> Result<(), VmError> {
         record.routes = self.routed_deliveries(prepared);
+        record.instance_commands = Self::retained_command_packet(&prepared.commands);
         if let Some(packet) = record.loop_record.as_deref_mut() {
             packet.routes = prepared.contexts.clone();
         }

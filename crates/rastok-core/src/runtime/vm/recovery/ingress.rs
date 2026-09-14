@@ -221,6 +221,23 @@ impl Vm<'_> {
             ));
         }
         self.check_room_for_routes(core::iter::once(routes.as_slice()))?;
+        let commands = if opening {
+            Vec::new()
+        } else {
+            self.prepare_instance_commands(
+                admissions,
+                &self.graph_endpoint(&from),
+                target.as_ref().map(|(_, target)| &target.reference),
+                &inbound.envelope,
+            )?
+        };
+        self.check_instance_command_room(admissions, &commands)?;
+        if inbound.instance_commands != Self::retained_command_packet(&commands) {
+            return Err(invalid(
+                index,
+                "inbound instance commands contradict the exact accepting prefix",
+            ));
+        }
         let mut arms = Vec::new();
         let mut activity = BTreeMap::new();
         if let Some((_, target)) = &target

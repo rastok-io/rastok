@@ -318,6 +318,7 @@ fn key_name(key: u64) -> String {
         53 => "loop_fact",
         54 => "logical_time",
         55 => "loop_protocol",
+        57 => "instance_commands",
         _ => return format!("key {key}"),
     };
     format!("{name}({key})")
@@ -508,6 +509,9 @@ fn record_tree(record: &Record) -> Cbor {
                 (22, Cbor::Uint(inbound.seq)),
                 (23, Cbor::Uint(inbound.provenance.replica())),
             ]);
+            if let Some(packet) = inbound.instance_commands.as_deref() {
+                pairs.insert(crate::journal::instance_stop::CAUSAL_KEY, packet.tree());
+            }
             // Key 24: the source port — boundary input without key 27,
             // Connector output with it. Conventional `in` remains omitted,
             // so every existing boundary trace stays byte-identical.
@@ -615,6 +619,9 @@ fn record_tree(record: &Record) -> Cbor {
             }
             if let Some(packet) = transaction.loop_protocol() {
                 pairs.insert(55, loop_packet_tree(packet));
+            }
+            if let Some(packet) = transaction.instance_commands.as_deref() {
+                pairs.insert(crate::journal::instance_stop::CAUSAL_KEY, packet.tree());
             }
             if let Some(cause) = transaction.cause {
                 pairs.insert(39, Cbor::Bytes(cause.as_bytes().to_vec()));
@@ -928,6 +935,7 @@ mod tests {
             })),
             logical_time: None,
             timer_schedule: None,
+            instance_commands: None,
             consumed: Vec::new(),
             join_inputs: Vec::new(),
             state_delta: Vec::new(),
@@ -1010,6 +1018,7 @@ mod tests {
         let id = crate::envelope::Id::from_bytes([7; 16]);
         let record = Record::Inbound(Box::new(crate::journal::InboundRecord {
             timer_schedule: None,
+            instance_commands: None,
             provenance: crate::boundary::InboundEnvelopeProvenance::single(source.clone()),
             port: crate::node::Port::new("out").unwrap(),
             connector_path: Some(source),

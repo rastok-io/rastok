@@ -55,7 +55,7 @@ pub const MAGIC: [u8; 4] = *b"RKPB";
 /// selections, explicit Extensions and dispositions, and Connector Contracts
 /// `@2`, with Loop exhaustion resolved onto a host terminal. Earlier packages
 /// refuse; their fields are never silently reinterpreted.
-pub const FORMAT_VERSION: u32 = 17;
+pub const FORMAT_VERSION: u32 = 18;
 
 /// The checksum domain — fixed-width framing, so the covered fields
 /// cannot slide into one another.
@@ -1255,6 +1255,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                         super::RouteDestination::Port(_) => 4,
                         super::RouteDestination::Discard => 2,
                         super::RouteDestination::LoopCommand(_) => 3,
+                        super::RouteDestination::InstanceStop(_) => 3,
                     },
             );
         }
@@ -2433,7 +2434,7 @@ fn tree_from(tree: &Cbor) -> Result<expr::Tree, DecodeError> {
     }
 }
 
-fn type_from(tree: &Cbor) -> Result<DataType, DecodeError> {
+pub(crate) fn type_from(tree: &Cbor) -> Result<DataType, DecodeError> {
     match tree {
         Cbor::Uint(1) => Ok(DataType::Null),
         Cbor::Uint(2) => Ok(DataType::Bool),
@@ -2750,139 +2751,8 @@ fn binop_from(code: u64) -> Result<expr::BinaryOp, DecodeError> {
     })
 }
 
-/// Reads a `tagged_value` back into the core value domain — the inverse of the
-/// canon's `value_tagged`, over the tags the plan can carry.
 fn value_from(tree: &Cbor) -> Result<Value, DecodeError> {
-    match array_of(tree, "tagged value")? {
-        [Cbor::Uint(1), Cbor::Bool(v)] => Ok(Value::Bool(*v)),
-        [Cbor::Uint(2), value] | [Cbor::Uint(3), value] => {
-            // Tags 2 (int) and 3 (long) are both the signed domain —
-            // the registry keeps them distinct so the seal shows the
-            // honest width; the decoded value is one i64 either way.
-            Ok(Value::Int(int_from(value)?))
-        }
-        [Cbor::Uint(5), Cbor::Double(v)] => Ok(Value::Double(v.value())),
-        [Cbor::Uint(7), Cbor::Bytes(v)] => Ok(Value::Bytes(v.clone())),
-        [Cbor::Uint(8), Cbor::Text(v)] => Ok(Value::Text(v.clone())),
-        [Cbor::Uint(9), Cbor::Null] => Ok(Value::Null),
-        [Cbor::Uint(23), Cbor::Uint(v)] => Ok(Value::Uint(*v)),
-        [Cbor::Uint(10), payload] => match array_of(payload, "decimal")? {
-            [Cbor::Bytes(unscaled), scale] => {
-                if unscaled.is_empty() || unscaled.len() > 16 {
-                    return Err(err("decimal coefficient"));
-                }
-                let mut wide = if unscaled[0] & 0x80 != 0 {
-                    [0xFF_u8; 16]
-                } else {
-                    [0x00_u8; 16]
-                };
-                wide[16 - unscaled.len()..].copy_from_slice(unscaled);
-                let value = i128::from_be_bytes(wide);
-                let scale_wide = int_from(scale)?;
-                // The value registry carries the decimal128 domain. Whether
-                // the value is a declared-scale decimal or a schema-less
-                // number is decided by its transported DataType, not by a
-                // second decoder-local fold.
-                let scale = i32::try_from(scale_wide).map_err(|_| err("decimal scale"))?;
-                if !crate::datatype::decimal_in_domain(value, scale) {
-                    return Err(err("decimal form"));
-                }
-                Ok(Value::Decimal {
-                    unscaled: value,
-                    scale,
-                })
-            }
-            _ => Err(err("decimal")),
-        },
-        [Cbor::Uint(12), value] => Ok(Value::Timestamp(int_from(value)?)),
-        [Cbor::Uint(11), value] => Ok(Value::Date(int_from(value)?)),
-        [Cbor::Uint(13), value] => Ok(Value::TimestampNtz(int_from(value)?)),
-        [Cbor::Uint(14), value] => Ok(Value::Time(int_from(value)?)),
-        [Cbor::Uint(15), Cbor::Bytes(value)] => Ok(Value::Uuid(
-            value
-                .as_slice()
-                .try_into()
-                .map_err(|_| err("uuid length"))?,
-        )),
-        [Cbor::Uint(16), value] => Ok(Value::Duration(int_from(value)?)),
-        [Cbor::Uint(17), Cbor::Array(pairs)] => {
-            // The struct literal — bare text keys, declaration order AS
-            // SEALED (sorted). Its surrounding DataType supplies the closed
-            // field contract; validation checks conformance before encoding.
-            let mut fields = alloc::vec::Vec::new();
-            for pair in pairs {
-                match array_of(pair, "struct field")? {
-                    [Cbor::Text(name), value] => {
-                        fields.push((name.clone(), value_from(value)?));
-                    }
-                    _ => return Err(err("struct field")),
-                }
-            }
-            Ok(Value::Struct(fields))
-        }
-        [Cbor::Uint(18), Cbor::Array(pairs)] => map_value_from(pairs),
-        [Cbor::Uint(19), Cbor::Array(items)] => Ok(Value::Array(
-            items
-                .iter()
-                .map(value_from)
-                .collect::<Result<Vec<_>, _>>()?,
-        )),
-        [Cbor::Uint(20), Cbor::Text(symbol)] => Ok(Value::Enum(symbol.clone())),
-        [Cbor::Uint(21), payload] => match array_of(payload, "union value")? {
-            [Cbor::Uint(branch), value] => Ok(Value::StructuralUnion {
-                branch: u16::try_from(*branch).map_err(|_| err("union branch"))?,
-                value: alloc::boxed::Box::new(value_from(value)?),
-            }),
-            [Cbor::Text(case), value] => {
-                let Value::Struct(payload) = value_from(value)? else {
-                    return Err(err("tagged-union payload"));
-                };
-                Ok(Value::TaggedUnion(alloc::boxed::Box::new(
-                    crate::value::TaggedUnionValue {
-                        case: case.clone(),
-                        payload,
-                    },
-                )))
-            }
-            _ => Err(err("union value")),
-        },
-        [Cbor::Uint(24), payload] => match array_of(payload, "interval")? {
-            [months, days, nanoseconds] => Ok(Value::Interval {
-                months: int_from(months)?,
-                days: int_from(days)?,
-                nanoseconds: int_from(nanoseconds)?,
-            }),
-            _ => Err(err("interval")),
-        },
-        _ => Err(err("tagged value")),
-    }
-}
-
-fn map_value_from(pairs: &[Cbor]) -> Result<Value, DecodeError> {
-    let mut decoded = Vec::with_capacity(pairs.len());
-    let mut all_text = true;
-    for pair in pairs {
-        let [key, value] = array_of(pair, "map entry")? else {
-            return Err(err("map entry"));
-        };
-        let key = value_from(key)?;
-        all_text &= matches!(key, Value::Text(_));
-        decoded.push((key, value_from(value)?));
-    }
-    if all_text {
-        let mut map = BTreeMap::new();
-        for (key, value) in decoded {
-            let Value::Text(key) = key else {
-                return Err(err("text map key"));
-            };
-            if map.insert(key, value).is_some() {
-                return Err(err("duplicate map key"));
-            }
-        }
-        Ok(Value::Map(map))
-    } else {
-        Ok(Value::KeyedMap(decoded))
-    }
+    crate::identity::encoding::value_from_tagged(tree).map_err(DecodeError::Read)
 }
 
 fn signed_tree(value: i64) -> Cbor {

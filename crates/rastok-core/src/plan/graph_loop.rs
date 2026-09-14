@@ -290,6 +290,15 @@ pub(super) fn validate(plan: &ExecutionPlan, owner: &Owner) -> Result<(), PlanVa
                         let mut arm = empty();
                         for destination in destinations {
                             let next = match destination {
+                                RouteDestination::InstanceStop(target)
+                                    if target.owner == EndpointOwner::Graph(owner.path.clone()) => {
+                                    BTreeSet::from([Outcome { terminal: false, other: 1, recurs: false,
+                                        unsafe_effect: false, joins: BTreeMap::new(), retries: BTreeSet::new() }])
+                                }
+                                RouteDestination::InstanceStop(_) => return Err(error(
+                                    "routing".into(),
+                                    "a child-only closure inside a Loop application requires the deferred lifecycle-dependent control proof; close the Loop scope or route closure from its enclosing Graph",
+                                )),
                                 RouteDestination::Discard => empty(),
                                 RouteDestination::LoopCommand(command)
                                     if command.owner == EndpointOwner::Graph(owner.path.clone()) =>

@@ -349,8 +349,8 @@ pub enum EdgeTarget {
 }
 
 pub use crate::plan::{
-    Endpoint, EndpointOwner, LoopCommandKind, LoopCommandTarget, RouteArm, RouteDestination,
-    RouteRule, RouteSelection,
+    Endpoint, EndpointOwner, InstanceStopTarget, LoopCommandKind, LoopCommandTarget, RouteArm,
+    RouteDestination, RouteRule, RouteSelection,
 };
 
 /// One checked lab: the simulation corpus bound to the App sharing

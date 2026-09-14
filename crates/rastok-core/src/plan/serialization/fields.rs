@@ -13,9 +13,9 @@ use core::fmt;
 use super::{Cbor, array_of, emission_from, err, step_from, step_tree, tree_from, tree_tree};
 use crate::plan::{
     ClosedArm, DecodeError, Dispatch, DispatchStep, DispatchValidationError, Endpoint,
-    EndpointOwner, LoopCommand, LoopCommandKind, LoopCommandTarget, MAX_DISPATCH_DEPTH,
-    MultiEmitValues, OpenArm, OwnerPath, RouteArm, RouteDestination, RouteRule, RouteSelection,
-    RouteValidationError, validate_dispatch, validate_routing,
+    EndpointOwner, InstanceStopTarget, LoopCommand, LoopCommandKind, LoopCommandTarget,
+    MAX_DISPATCH_DEPTH, MultiEmitValues, OpenArm, OwnerPath, RouteArm, RouteDestination, RouteRule,
+    RouteSelection, RouteValidationError, validate_dispatch, validate_routing,
 };
 use crate::{canonical_cbor, datatype::DataType, expr, node};
 
@@ -353,6 +353,11 @@ fn destinations_tree(destinations: &[RouteDestination]) -> Cbor {
                     owner_tree(&command.owner),
                     Cbor::Uint(u64::from(command.kind.tag())),
                 ]),
+                RouteDestination::InstanceStop(target) => Cbor::Array(vec![
+                    Cbor::Uint(4),
+                    owner_tree(&EndpointOwner::Graph(target.scope.clone())),
+                    owner_tree(&target.owner),
+                ]),
             })
             .collect(),
     )
@@ -444,6 +449,17 @@ fn destinations_from(tree: &Cbor) -> Result<Vec<RouteDestination>, DecodeError> 
                         owner: owner_from(owner)?,
                         kind: command_kind_from(*kind)?,
                     }))
+                }
+                [Cbor::Uint(4), scope, owner] => {
+                    let EndpointOwner::Graph(scope) = owner_from(scope)? else {
+                        return Err(err("instance closure requires a Graph wiring scope"));
+                    };
+                    Ok(RouteDestination::InstanceStop(Box::new(
+                        InstanceStopTarget {
+                            scope,
+                            owner: owner_from(owner)?,
+                        },
+                    )))
                 }
                 _ => Err(err("route destination")),
             },

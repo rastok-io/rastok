@@ -1,5 +1,6 @@
 //! Static routing decisions, distinct from physical delivery edges.
 
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -113,6 +114,20 @@ pub enum RouteDestination {
     /// A durable command to a temporal Extension manager. This is never a
     /// spatial edge and therefore cannot make a cycle in the DAG.
     LoopCommand(LoopCommandTarget),
+    /// Request closure of an exact instance in the lexical wiring scope.
+    /// This disposition has no spatial edge and never creates its target.
+    /// The scope/target pair is boxed so ordinary routes and their error
+    /// payloads do not grow to carry an unused lifecycle authority.
+    InstanceStop(Box<InstanceStopTarget>),
+}
+
+/// Static authority for an instance closure, preserved through flattening.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct InstanceStopTarget {
+    /// Graph in which the command was authored.
+    pub scope: super::OwnerPath,
+    /// That Graph or one of its direct children; never an arbitrary path.
+    pub owner: EndpointOwner,
 }
 
 /// Addressed Loop-manager command used as a wiring destination.

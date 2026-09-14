@@ -4,6 +4,7 @@
 //! byte discipline. Golden traces and the plan package both seal
 //! through here — one registry, everywhere.
 
+use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -147,6 +148,169 @@ pub fn meta_tagged(value: &crate::envelope::MetaValue) -> Cbor {
                 Cbor::Array(pairs.into_iter().map(|(_, pair)| pair).collect()),
             ])
         }
+    }
+}
+
+/// Reads a `tagged_value` back into the core value domain — the inverse of the
+/// canon's `value_tagged`, shared by plan and diagnostic-recording readers.
+///
+/// # Errors
+/// A malformed tagged value. The enclosing format checks canonical re-encoding.
+pub fn value_from_tagged(tree: &Cbor) -> Result<Value, crate::canonical_cbor::DecodeError> {
+    match tagged_array(tree, "tagged value")? {
+        [Cbor::Uint(1), Cbor::Bool(v)] => Ok(Value::Bool(*v)),
+        [Cbor::Uint(2), value] | [Cbor::Uint(3), value] => {
+            // Tags 2 (int) and 3 (long) are both the signed domain —
+            // the registry keeps them distinct so the seal shows the
+            // honest width; the decoded value is one i64 either way.
+            Ok(Value::Int(tagged_integer(value)?))
+        }
+        [Cbor::Uint(5), Cbor::Double(v)] => Ok(Value::Double(v.value())),
+        [Cbor::Uint(7), Cbor::Bytes(v)] => Ok(Value::Bytes(v.clone())),
+        [Cbor::Uint(8), Cbor::Text(v)] => Ok(Value::Text(v.clone())),
+        [Cbor::Uint(9), Cbor::Null] => Ok(Value::Null),
+        [Cbor::Uint(23), Cbor::Uint(v)] => Ok(Value::Uint(*v)),
+        [Cbor::Uint(10), payload] => match tagged_array(payload, "decimal")? {
+            [Cbor::Bytes(unscaled), scale] => {
+                if unscaled.is_empty() || unscaled.len() > 16 {
+                    return Err(value_decode_error("decimal coefficient"));
+                }
+                let mut wide = if unscaled[0] & 0x80 != 0 {
+                    [0xFF_u8; 16]
+                } else {
+                    [0x00_u8; 16]
+                };
+                wide[16 - unscaled.len()..].copy_from_slice(unscaled);
+                let value = i128::from_be_bytes(wide);
+                let scale_wide = tagged_integer(scale)?;
+                // The value registry carries the decimal128 domain. Whether
+                // the value is a declared-scale decimal or a schema-less
+                // number is decided by its transported DataType, not by a
+                // second decoder-local fold.
+                let scale =
+                    i32::try_from(scale_wide).map_err(|_| value_decode_error("decimal scale"))?;
+                if !crate::datatype::decimal_in_domain(value, scale) {
+                    return Err(value_decode_error("decimal form"));
+                }
+                Ok(Value::Decimal {
+                    unscaled: value,
+                    scale,
+                })
+            }
+            _ => Err(value_decode_error("decimal")),
+        },
+        [Cbor::Uint(12), value] => Ok(Value::Timestamp(tagged_integer(value)?)),
+        [Cbor::Uint(11), value] => Ok(Value::Date(tagged_integer(value)?)),
+        [Cbor::Uint(13), value] => Ok(Value::TimestampNtz(tagged_integer(value)?)),
+        [Cbor::Uint(14), value] => Ok(Value::Time(tagged_integer(value)?)),
+        [Cbor::Uint(15), Cbor::Bytes(value)] => Ok(Value::Uuid(
+            value
+                .as_slice()
+                .try_into()
+                .map_err(|_| value_decode_error("uuid length"))?,
+        )),
+        [Cbor::Uint(16), value] => Ok(Value::Duration(tagged_integer(value)?)),
+        [Cbor::Uint(17), Cbor::Array(pairs)] => {
+            // The struct literal — bare text keys, declaration order AS
+            // SEALED (sorted). Its surrounding DataType supplies the closed
+            // field contract; validation checks conformance before encoding.
+            let mut fields = alloc::vec::Vec::new();
+            for pair in pairs {
+                match tagged_array(pair, "struct field")? {
+                    [Cbor::Text(name), value] => {
+                        fields.push((name.clone(), value_from_tagged(value)?));
+                    }
+                    _ => return Err(value_decode_error("struct field")),
+                }
+            }
+            Ok(Value::Struct(fields))
+        }
+        [Cbor::Uint(18), Cbor::Array(pairs)] => map_value_from_tagged(pairs),
+        [Cbor::Uint(19), Cbor::Array(items)] => Ok(Value::Array(
+            items
+                .iter()
+                .map(value_from_tagged)
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        [Cbor::Uint(20), Cbor::Text(symbol)] => Ok(Value::Enum(symbol.clone())),
+        [Cbor::Uint(21), payload] => match tagged_array(payload, "union value")? {
+            [Cbor::Uint(branch), value] => Ok(Value::StructuralUnion {
+                branch: u16::try_from(*branch).map_err(|_| value_decode_error("union branch"))?,
+                value: alloc::boxed::Box::new(value_from_tagged(value)?),
+            }),
+            [Cbor::Text(case), value] => {
+                let Value::Struct(payload) = value_from_tagged(value)? else {
+                    return Err(value_decode_error("tagged-union payload"));
+                };
+                Ok(Value::TaggedUnion(alloc::boxed::Box::new(
+                    crate::value::TaggedUnionValue {
+                        case: case.clone(),
+                        payload,
+                    },
+                )))
+            }
+            _ => Err(value_decode_error("union value")),
+        },
+        [Cbor::Uint(24), payload] => match tagged_array(payload, "interval")? {
+            [months, days, nanoseconds] => Ok(Value::Interval {
+                months: tagged_integer(months)?,
+                days: tagged_integer(days)?,
+                nanoseconds: tagged_integer(nanoseconds)?,
+            }),
+            _ => Err(value_decode_error("interval")),
+        },
+        _ => Err(value_decode_error("tagged value")),
+    }
+}
+
+fn map_value_from_tagged(pairs: &[Cbor]) -> Result<Value, crate::canonical_cbor::DecodeError> {
+    let mut decoded = Vec::with_capacity(pairs.len());
+    let mut all_text = true;
+    for pair in pairs {
+        let [key, value] = tagged_array(pair, "map entry")? else {
+            return Err(value_decode_error("map entry"));
+        };
+        let key = value_from_tagged(key)?;
+        all_text &= matches!(key, Value::Text(_));
+        decoded.push((key, value_from_tagged(value)?));
+    }
+    if all_text {
+        let mut map = BTreeMap::new();
+        for (key, value) in decoded {
+            let Value::Text(key) = key else {
+                return Err(value_decode_error("text map key"));
+            };
+            if map.insert(key, value).is_some() {
+                return Err(value_decode_error("duplicate map key"));
+            }
+        }
+        Ok(Value::Map(map))
+    } else {
+        Ok(Value::KeyedMap(decoded))
+    }
+}
+
+fn value_decode_error(what: &'static str) -> crate::canonical_cbor::DecodeError {
+    crate::canonical_cbor::DecodeError::Malformed(what)
+}
+
+fn tagged_array<'a>(
+    tree: &'a Cbor,
+    what: &'static str,
+) -> Result<&'a [Cbor], crate::canonical_cbor::DecodeError> {
+    match tree {
+        Cbor::Array(values) => Ok(values),
+        _ => Err(value_decode_error(what)),
+    }
+}
+
+fn tagged_integer(tree: &Cbor) -> Result<i64, crate::canonical_cbor::DecodeError> {
+    match tree {
+        Cbor::Uint(value) => i64::try_from(*value).map_err(|_| value_decode_error("integer range")),
+        Cbor::Negative(value) => i64::try_from(*value)
+            .map(|value| -1 - value)
+            .map_err(|_| value_decode_error("integer range")),
+        _ => Err(value_decode_error("integer")),
     }
 }
 

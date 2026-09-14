@@ -675,6 +675,15 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         .iter()
         .any(|owner| owner.kind == OwnerKind::Graph && !owner.path.is_root())
         || hir.app.loop_spec.is_some()
+        || plan.routes.iter().any(|rule| match &rule.selection {
+            RouteSelection::All(set) => set
+                .iter()
+                .any(|destination| matches!(destination, RouteDestination::InstanceStop(_))),
+            RouteSelection::Cases(arms) => arms
+                .iter()
+                .flat_map(|arm| &arm.destinations)
+                .any(|destination| matches!(destination, RouteDestination::InstanceStop(_))),
+        })
     {
         plan.boundary_routes = routing::inventory(&hir.app);
     }
@@ -1137,9 +1146,12 @@ impl Writer<'_> {
         sources.retain(|_, selections| {
             selections.iter().any(|selection| match selection {
                 RouteSelection::Cases(_) => true,
-                RouteSelection::All(destinations) => destinations
-                    .iter()
-                    .any(|destination| matches!(destination, RouteDestination::LoopCommand(_))),
+                RouteSelection::All(destinations) => destinations.iter().any(|destination| {
+                    matches!(
+                        destination,
+                        RouteDestination::LoopCommand(_) | RouteDestination::InstanceStop(_)
+                    )
+                }),
             })
         });
         if sources.is_empty() {
@@ -1187,6 +1199,11 @@ impl Writer<'_> {
                     self.endpoint(endpoint);
                 }
                 RouteDestination::Discard => self.tag(2),
+                RouteDestination::InstanceStop(target) => {
+                    self.tag(4);
+                    self.endpoint_owner(&EndpointOwner::Graph(target.scope.clone()));
+                    self.endpoint_owner(&target.owner);
+                }
                 RouteDestination::LoopCommand(command) => {
                     self.tag(3);
                     self.endpoint_owner(&command.owner);

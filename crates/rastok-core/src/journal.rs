@@ -38,6 +38,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 pub(crate) mod admission;
+pub mod instance_stop;
 pub mod loop_protocol;
 pub mod timing;
 
@@ -526,6 +527,8 @@ pub(crate) fn observations_for_records_from(
 /// `(connector_path, replica, seq)`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InboundRecord {
+    /// Exact-instance commands retained atomically with this root (key 57).
+    pub instance_commands: Option<Box<instance_stop::Packet>>,
     /// Retained arm instants and deadlines (key 56), atomically accepted with
     /// this ingress. Omitted when this record arms no retained schedule.
     pub timer_schedule: Option<Box<timing::TimerSchedule>>,
@@ -659,6 +662,8 @@ impl fmt::Display for LoopRunRef {
 /// given.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TransactionRecord {
+    /// Exact-instance command production or winning consumption (key 57).
+    pub instance_commands: Option<Box<instance_stop::Packet>>,
     /// Retained arm instants and deadlines (key 56), outside causal identity.
     /// Absence is not evidence from which recovery may invent a deadline.
     pub timer_schedule: Option<Box<timing::TimerSchedule>>,
@@ -840,6 +845,7 @@ pub struct CommittedInbound {
 /// succeeds. [`Journal::commit_inbound`] revalidates the sequence atomically.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedInbound {
+    instance_commands: Option<Box<instance_stop::Packet>>,
     submission: InboundSubmission,
     connector_path: Option<node::Path>,
     seq: u64,
@@ -849,6 +855,12 @@ pub struct PreparedInbound {
 }
 
 impl PreparedInbound {
+    /// Retain commands with their accepting root, never in a Worker-only queue.
+    #[must_use]
+    pub fn with_instance_commands(mut self, packet: instance_stop::Packet) -> Self {
+        self.instance_commands = Some(Box::new(packet));
+        self
+    }
     /// Attach validated timing evidence before committing the accepting fact.
     /// A durable Journal stores it atomically with the root and its routes.
     #[must_use]
@@ -903,6 +915,8 @@ impl PreparedInbound {
 /// A journal fault.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
+    /// A retained prefix cannot be reconstructed through the accepting operations.
+    InvalidRetainedRecord(&'static str),
     /// An explicit submission sequence does not match the expected
     /// next number — a fixture diverged from the journal.
     SequenceMismatch {
@@ -974,6 +988,8 @@ pub enum Error {
     },
     /// An r2 command packet contradicts the replay-derived protocol.
     InvalidLoopProtocol(loop_protocol::Error),
+    /// An exact-instance command contradicts its source, target or close fact.
+    InvalidInstanceCommand(instance_stop::Error),
     /// Retained scheduler evidence contradicts the accepted obligations.
     InvalidTimerSchedule(crate::canonical_cbor::DecodeError),
     /// A call ref matching no journaled call.
@@ -1022,6 +1038,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidRetainedRecord(reason) => write!(f, "invalid retained record: {reason}"),
             Self::SequenceMismatch { expected, got } => {
                 write!(f, "expected inbound seq {expected}, got {got}")
             }
@@ -1078,6 +1095,7 @@ impl fmt::Display for Error {
                 instance.address().owner()
             ),
             Self::InvalidLoopProtocol(error) => error.fmt(f),
+            Self::InvalidInstanceCommand(error) => error.fmt(f),
             Self::InvalidTimerSchedule(error) => write!(f, "invalid timer schedule: {error}"),
             Self::UnknownCall => f.write_str("no outbound record for this call"),
             Self::CorruptInboundCall => {
@@ -1254,6 +1272,22 @@ pub trait Journal {
     /// # Errors
     /// A contradictory r2 history. No Worker state contributes to this fold.
     fn loop_protocol(&self) -> Result<loop_protocol::Fold, Error>;
+
+    /// Reconstruct exact-instance commands from one retained prefix.
+    ///
+    /// # Errors
+    /// An unreadable prefix or a contradictory command/lifecycle fact.
+    fn instance_commands(&self) -> Result<instance_stop::Fold, Error> {
+        let mut fold = instance_stop::Fold::default();
+        let mut result = Ok(());
+        self.visit_records(&mut |record| {
+            if result.is_ok() {
+                result = fold.apply(record);
+            }
+        })?;
+        result.map_err(Error::InvalidInstanceCommand)?;
+        Ok(fold)
+    }
 
     /// Commits one atomic transaction record, canonicalizing its
     /// sorted collections. Durable-before-delivered: a failed commit
@@ -1444,6 +1478,121 @@ impl MemJournal {
     #[must_use]
     pub fn records(&self) -> &[Record] {
         &self.records
+    }
+
+    /// Deployment version stamped on this journal's admitted envelopes.
+    #[must_use]
+    pub fn graph_version(&self) -> GraphVersion {
+        self.graph_version
+    }
+
+    /// Rebuilds a retained prefix through the journal's accepting operations.
+    /// No producer or Driver executes. The caller must separately validate
+    /// the prefix against its plan with VM recovery before exposing it.
+    ///
+    /// # Errors
+    /// Invalid roots, sequences, lifecycle, exchange or Loop transitions.
+    /// An error never returns a partially reconstructed journal.
+    pub fn from_records(
+        graph_version: GraphVersion,
+        attestation: Option<crate::deployment::DeploymentAttestation>,
+        records: &[Record],
+    ) -> Result<Self, Error> {
+        let mut journal = attestation.map_or_else(
+            || Self::new(graph_version),
+            |header| Self::new_with_deployment(graph_version, header),
+        );
+        for record in records {
+            let previous = journal.records.len();
+            match record {
+                Record::Inbound(inbound) => {
+                    let submission = InboundSubmission {
+                        provenance: inbound.provenance.clone(),
+                        port: inbound.port.clone(),
+                        draft: crate::boundary::Draft {
+                            data: inbound.envelope.data().clone(),
+                            ext: inbound.envelope.meta().ext().clone(),
+                        },
+                        sequence: SubmissionSequence::Explicit(inbound.seq),
+                    };
+                    let session = match inbound.exchange.as_deref() {
+                        Some(InboundExchangeRecord::Session(SessionIngressRecord::Open(_))) => {
+                            Some(InboundSession::Open)
+                        }
+                        Some(InboundExchangeRecord::Session(SessionIngressRecord::Message(
+                            reference,
+                        ))) => Some(InboundSession::Message(*reference)),
+                        _ => None,
+                    };
+                    let mut prepared = journal.prepare_inbound_fact(
+                        submission,
+                        session,
+                        inbound.connector_path.clone(),
+                    )?;
+                    if let Some(InboundExchangeRecord::Call(call)) = inbound.exchange.as_deref() {
+                        prepared =
+                            prepared.into_call(call.instance.clone(), call.timers.clone())?;
+                    }
+                    let metadata_equal = prepared.envelope.meta().app().is_empty()
+                        && inbound.envelope.meta().app().is_empty()
+                        && prepared
+                            .envelope
+                            .meta()
+                            .ext()
+                            .iter()
+                            .map(|(name, value)| {
+                                (name, crate::identity::encoding::meta_tagged(value))
+                            })
+                            .eq(inbound.envelope.meta().ext().iter().map(|(name, value)| {
+                                (name, crate::identity::encoding::meta_tagged(value))
+                            }));
+                    if !metadata_equal
+                        || prepared.envelope.meta().sys() != inbound.envelope.meta().sys()
+                        || prepared.exchange.as_ref() != inbound.exchange.as_deref()
+                    {
+                        return Err(Error::InvalidRetainedRecord("ingress identity or exchange"));
+                    }
+                    if let Some(schedule) = inbound.timer_schedule.as_deref() {
+                        prepared = prepared.with_timer_schedule(schedule.clone());
+                    }
+                    if let Some(packet) = inbound.instance_commands.as_deref() {
+                        prepared = prepared.with_instance_commands(packet.clone());
+                    }
+                    journal.commit_inbound(prepared, inbound.routes.clone())?;
+                }
+                Record::Transaction(transaction) => journal.commit(*transaction.clone())?,
+                Record::Outbound(OutboundRecord::Call(call)) => match &call.status {
+                    OutboundStatus::Open => journal.open_outbound(call.intent.clone())?,
+                    OutboundStatus::Closed(closure) => {
+                        journal.close_outbound(&call.intent.call_ref, closure.clone())?;
+                    }
+                    OutboundStatus::Abandoned => {
+                        journal.abandon_outbound(&call.intent.call_ref)?;
+                    }
+                },
+                Record::Outbound(OutboundRecord::Session(session)) => match &session.status {
+                    SessionStatus::Opening(intent) => {
+                        journal.open_outbound_session(intent.clone())?
+                    }
+                    SessionStatus::Opened => {
+                        journal.confirm_session_open(&session.session_ref)?;
+                    }
+                    SessionStatus::WriteOpen(intent) => {
+                        journal.open_session_write(intent.clone())?
+                    }
+                    SessionStatus::WriteSettled(reference) => {
+                        journal.settle_session_write(reference, false)?;
+                    }
+                    SessionStatus::WriteAbandoned(reference) => {
+                        journal.settle_session_write(reference, true)?;
+                    }
+                },
+            }
+            if journal.records.len() != previous + 1 {
+                return Err(Error::InvalidRetainedRecord("duplicate settled fact"));
+            }
+        }
+        Ok(journal)
     }
 
     fn statuses_of(&self, call_ref: &CallRef) -> impl Iterator<Item = &OutboundStatus> {
@@ -1689,6 +1838,7 @@ impl MemJournal {
             envelope,
             exchange: resolved_exchange,
             timer_schedule: None,
+            instance_commands: None,
         })
     }
 }
@@ -1708,6 +1858,9 @@ impl Journal for MemJournal {
                 loop_protocol::Fold::from_records(&self.records).map_err(Error::InvalidLoopProtocol)
             }
         }
+    }
+    fn instance_commands(&self) -> Result<instance_stop::Fold, Error> {
+        instance_stop::Fold::from_records(&self.records).map_err(Error::InvalidInstanceCommand)
     }
     fn deployment_attestation(&self) -> Option<&crate::deployment::DeploymentAttestation> {
         self.deployment_attestation.as_ref()
@@ -1819,6 +1972,7 @@ impl Journal for MemJournal {
         }
         routes.sort();
         let record = InboundRecord {
+            instance_commands: prepared.instance_commands,
             timer_schedule: prepared.timer_schedule,
             provenance: prepared.submission.provenance.clone(),
             port: prepared.submission.port,
@@ -1831,6 +1985,11 @@ impl Journal for MemJournal {
             // embedded journal.
             exchange: prepared.exchange.clone().map(Box::new),
         };
+        if record.instance_commands.is_some() {
+            self.instance_commands()?
+                .apply(&Record::Inbound(Box::new(record.clone())))
+                .map_err(Error::InvalidInstanceCommand)?;
+        }
         match prepared.exchange {
             Some(InboundExchangeRecord::Session(SessionIngressRecord::Open(reference))) => {
                 self.sessions.insert(
@@ -1867,6 +2026,11 @@ impl Journal for MemJournal {
 
     fn commit(&mut self, mut transaction: TransactionRecord) -> Result<(), Error> {
         timing::validate_transaction(&transaction).map_err(Error::InvalidTimerSchedule)?;
+        if transaction.instance_commands.is_some() {
+            self.instance_commands()?
+                .apply(&Record::Transaction(Box::new(transaction.clone())))
+                .map_err(Error::InvalidInstanceCommand)?;
+        }
         let command_loops = if transaction.loop_protocol().is_some()
             || (self.command_loops.is_some()
                 && matches!(
@@ -2561,6 +2725,7 @@ mod tests {
             loop_record: None,
             logical_time: None,
             timer_schedule: None,
+            instance_commands: None,
             trigger: node::Trigger::Lifecycle(lifecycle),
             cause: None,
             consumed: vec![],
@@ -3312,6 +3477,7 @@ mod tests {
                 loop_record: None,
                 logical_time: None,
                 timer_schedule: None,
+                instance_commands: None,
                 trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
                 cause: None,
                 consumed: vec![
@@ -3365,6 +3531,7 @@ mod tests {
                 loop_record: None,
                 logical_time: None,
                 timer_schedule: None,
+                instance_commands: None,
                 trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
                 cause: None,
                 consumed: vec![ConsumedPosition {

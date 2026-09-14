@@ -50,7 +50,10 @@ impl Vm<'_> {
         let mut result = Ok(());
         let mut index = 0;
         let mut last_retained = None;
-        let mut admissions = crate::journal::admission::AdmissionPrefix::default();
+        let mut admissions =
+            crate::journal::admission::AdmissionPrefix::retaining_instance_commands(
+                self.instance_commands.is_some(),
+            );
         journal
             .visit_records(&mut |record| {
                 if result.is_ok() {
@@ -100,6 +103,17 @@ impl Vm<'_> {
             })
             .map_err(VmError::Journal)?;
         result?;
+        if candidate.instance_commands.is_some() {
+            let fold = admissions.instance_commands().map_err(VmError::Journal)?;
+            candidate.instance_commands = Some(
+                fold.commands()
+                    .filter(|(_, state)| {
+                        *state == crate::journal::instance_stop::Disposition::Pending
+                    })
+                    .map(|(command, _)| command.clone())
+                    .collect(),
+            );
+        }
         candidate.retain_recovered_responses()?;
         candidate.dispatcher = Dispatcher::resume(journal);
         candidate.now = resume_at;
@@ -116,6 +130,18 @@ impl Vm<'_> {
         record: &Record,
         resume_at: i64,
     ) -> Result<(), VmError> {
+        if self.instance_commands.is_none()
+            && match record {
+                Record::Inbound(record) => record.instance_commands.is_some(),
+                Record::Transaction(record) => record.instance_commands.is_some(),
+                Record::Outbound(_) => false,
+            }
+        {
+            return Err(invalid(
+                index,
+                "instance closure commands are absent from this plan",
+            ));
+        }
         match record {
             Record::Inbound(inbound) => self.restore_ingress(admissions, index, inbound),
             Record::Transaction(transaction) => {
@@ -369,6 +395,18 @@ impl Vm<'_> {
 
         let prepared =
             self.validate_and_prepare_emissions(admissions, slot, &record.instance, record)?;
+        if record
+            .instance_commands
+            .as_deref()
+            .map(|packet| packet.produced.as_slice())
+            .unwrap_or_default()
+            != prepared.commands
+        {
+            return Err(invalid(
+                index,
+                "instance commands differ from the emitted values and exact prefix targets",
+            ));
+        }
         let mut expected_contexts = prepared.contexts.clone();
         let mut expected_arms = self.emission_timer_arms(&prepared);
         let mut expected = self.routed_deliveries(&prepared);

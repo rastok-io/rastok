@@ -1,6 +1,7 @@
 //! Static endpoint resolution, case routes and destination validation.
 
 use super::*;
+use crate::plan::InstanceStopTarget;
 
 impl Checker<'_, '_> {
     pub(super) fn verify_composed_routing(&mut self, graph: &Graph, span: Span) {
@@ -23,6 +24,7 @@ impl Checker<'_, '_> {
             ),
             RouteErrorKind::BoundaryCycle => (E_GRAPH_CYCLE, "Graph boundary composition contains a routing cycle".to_owned()),
             RouteErrorKind::EmptyDestinations => (E_UNWIRED_OUTPUT, "a case loses its written destination at a Graph boundary".to_owned()),
+            RouteErrorKind::InstanceCommandScope => (E_INSTANCE_COMMAND, error.to_string()),
             _ => (crate::compiler::E_INTERNAL_PLAN, error.to_string()),
         };
         self.bag.push(
@@ -562,6 +564,11 @@ impl Checker<'_, '_> {
         reference: &PortRef,
         graph: &Graph,
     ) -> Option<RouteDestination> {
+        if is_instance_stop_ref(reference) {
+            return self
+                .instance_stop_target(reference, graph)
+                .map(|target| RouteDestination::InstanceStop(Box::new(target)));
+        }
         if reference
             .segments
             .iter()
@@ -573,6 +580,56 @@ impl Checker<'_, '_> {
         }
         self.port_ref(reference, graph, false)
             .map(RouteDestination::Port)
+    }
+
+    fn instance_stop_target(
+        &mut self,
+        reference: &PortRef,
+        graph: &Graph,
+    ) -> Option<InstanceStopTarget> {
+        let child = match reference.segments.as_slice() {
+            [instance, command] if instance.text == "instance" && command.text == "stop" => None,
+            [child, instance, command] if instance.text == "instance" && command.text == "stop" => {
+                Some(child)
+            }
+            _ => {
+                self.bag.push(Diagnostic::new(E_INSTANCE_COMMAND, Phase::Check,
+                    "an instance closure destination is `instance.stop` or `child.instance.stop`, for one direct child")
+                    .with_span(reference.span));
+                return None;
+            }
+        };
+        let owner = match child {
+            None => EndpointOwner::Graph(graph.path.clone()),
+            Some(child) => {
+                if let Some(target) = graph
+                    .nodes
+                    .iter()
+                    .find(|node| node.path.segments().last() == Some(&child.text))
+                {
+                    EndpointOwner::Node(target.path.clone())
+                } else if let Some(target) =
+                    graph.graphs.iter().find(|node| node.name == child.text)
+                {
+                    EndpointOwner::Graph(target.path.clone())
+                } else {
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_RESOLVE_UNKNOWN,
+                            Phase::Resolve,
+                            format!("`{}` names no direct child of this Graph", child.text),
+                        )
+                        .with_span(child.span)
+                        .with_field("name", child.text.clone()),
+                    );
+                    return None;
+                }
+            }
+        };
+        Some(InstanceStopTarget {
+            scope: graph.path.clone(),
+            owner,
+        })
     }
 
     pub(super) fn loop_command_target(
@@ -821,7 +878,9 @@ impl Checker<'_, '_> {
                 RouteDestination::LoopCommand(target) if target.kind == LoopCommandKind::Next => {
                     loop_owner_entry_type(&target.owner, graph)
                 }
-                RouteDestination::Discard | RouteDestination::LoopCommand(_) => None,
+                RouteDestination::Discard
+                | RouteDestination::LoopCommand(_)
+                | RouteDestination::InstanceStop(_) => None,
             };
             if let (Some(source_ty), Some(target_ty)) = (&selected_ty, target_ty)
                 && !source_ty.is_assignable_to(&target_ty)
@@ -860,6 +919,12 @@ impl Checker<'_, '_> {
         graph: &Graph,
         is_source: bool,
     ) -> Option<Endpoint> {
+        if is_instance_stop_ref(reference) {
+            self.bag.push(Diagnostic::new(E_INSTANCE_COMMAND, Phase::Check,
+                "an instance closure command is a destination, never a source port or an intermediate endpoint")
+                .with_span(reference.span));
+            return None;
+        }
         if reference.boundary {
             let replacement = reference
                 .segments
@@ -1139,6 +1204,15 @@ pub(super) fn endpoint_pinned_type(endpoint: &Endpoint, graph: &Graph) -> Option
 /// Stable human spelling for checked endpoints. Diagnostics use the checked
 /// owner rather than reconstructing source sugar, so a default port and its
 /// explicit spelling report the same location.
+fn is_instance_stop_ref(reference: &PortRef) -> bool {
+    reference.segments.len() >= 2
+        && reference.segments[reference.segments.len() - 2].text == "instance"
+        && reference
+            .segments
+            .last()
+            .is_some_and(|segment| segment.text == "stop")
+}
+
 pub(super) fn endpoint_display(endpoint: &Endpoint) -> String {
     match &endpoint.owner {
         EndpointOwner::Node(path) => format!("{path}.{}", endpoint.port),
@@ -1151,6 +1225,11 @@ pub(super) fn route_destination_display(destination: &RouteDestination) -> Strin
     match destination {
         RouteDestination::Port(endpoint) => endpoint_display(endpoint),
         RouteDestination::Discard => String::from("nothing"),
+        RouteDestination::InstanceStop(target) => match &target.owner {
+            EndpointOwner::Graph(owner) if owner == &target.scope => "instance.stop".to_owned(),
+            EndpointOwner::Graph(owner) => format!("{owner}.instance.stop"),
+            EndpointOwner::Node(owner) => format!("{owner}.instance.stop"),
+        },
         RouteDestination::LoopCommand(target) => {
             let owner = match &target.owner {
                 EndpointOwner::Node(path) => format!("{path}."),
@@ -1176,7 +1255,9 @@ pub(super) fn physical_edges(source: &Endpoint, destinations: &[RouteDestination
             let to = match destination {
                 RouteDestination::Port(endpoint) => EdgeTarget::Port(endpoint.clone()),
                 RouteDestination::Discard => EdgeTarget::Discard,
-                RouteDestination::LoopCommand(_) => return None,
+                RouteDestination::LoopCommand(_) | RouteDestination::InstanceStop(_) => {
+                    return None;
+                }
             };
             Some(Edge {
                 from: source.clone(),

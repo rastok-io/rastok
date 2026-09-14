@@ -33,6 +33,77 @@ Rejected: duplicating long IDs in each scenario, inventing fixture-only
 constants, implicitly shadowing an outer binding, and serializing a global
 constant table into every production plan.
 
+## D-2026-09-10-1 — Route explicit instance closure without restoring Graph handlers
+
+**Accepted design, executable package v18 amendment.** Yoann approved a command-shaped
+entry to the existing instance lifecycle, including closing only a child
+Process while its enclosing conversation remains alive, then approved execution
+of the existing-target path with idempotence per instance for every Contract.
+This is the named exception to the v17 opening freeze. The implementation and identity audit is
+in [instance-stop-command.md](../architecture/instance-stop-command.md).
+
+In a Graph's wiring, `instance.stop` requests closure of that exact Graph
+instance. `child.instance.stop` requests closure of one direct child's exact
+instance, not the parent, its siblings or every instance at that child path.
+A child Graph closes its own subtree; a child Connector closes its owned
+exchanges through its Contract. This is a lifecycle command, not a new port,
+PhysicalEdge, Connector, Extension or Graph handler. Unkeyed singleton owners
+use the same rule. Bare `stop` in an Operator remains local and unchanged.
+
+The static owner target is resolved in the plan; the generation-bearing
+`InstanceRef` must be fixed before the producing transaction commits, from
+retained instance context. A path, business key or `origin_id` alone is not
+that reference. There is no global key lookup, wildcard, implicit child
+creation or retargeting to a successor. Ambiguous instance selection refuses.
+A socket-close cause needs an exact retained conversation binding; matching
+the text of a user key does not confer that binding.
+
+The producer atomically retains a bounded closure command with its other
+products. The lifecycle controller consumes it and commits the target's
+ordinary `l:closing`; the existing invariant that a closing record belongs to
+its own instance remains. Pending commands survive recovery without rerunning
+their producer. Repeated or superseded requests cannot close twice or touch a
+successor. Their disposition must remain reconstructible. The command starts
+Closing without waiting for Loop-style application quiescence; bounded drain,
+settlement, exchange exits, inner-first stop and generation fencing are the
+existing protocol, not a new one.
+
+This completes the explicit request surface left open when D-2026-09-05-1
+removed Graph handlers. It does not restore D-2026-08-18-1's retired remote
+`stop <partition>`, alter Loop r2, make a Process exit a Node stop, or decide
+whether a gateway should end a conversation when a socket disconnects.
+Closure ends a generation, not the right to open a later generation at the
+same address, and it does not itself restart a Process.
+
+Commands are interface contributions, even though they are not ports. The
+informal term "pseudo-port" describes their destination-like spelling only;
+neither data nor control ports are fabricated. Existing Loop commands retain
+their own typing and protocol. `instance.stop` belongs to common Node
+lifecycle, not to an added Extension.
+
+The [v18 identity ledger](identity.md#13-plan-v18--exact-instance-closure)
+allocates destination tag 4, command ID domain `0x23`, sparse causal key 57 and
+diagnostic recording v2 before blessing. Blessed v17 is not reinterpreted.
+Process service/RPC decisions remain separate. Programs not using the addition
+must retain semantic hashes and causal traces, with package-version movement
+accounted for separately.
+
+Selection walks retained exact parent-generation links: source self when it
+is the target, otherwise the unique direct child in that scope. With no live
+child, exactly one previously opened child is a redundant target; several
+historical candidates refuse rather than selecting the latest. A never-opened
+target refuses before producer commit. Closing or stopped targets do not
+renew deadlines or cancellation. Commands are serviced in producer record
+order, then canonical command ID order; a prior authoritative closure settles
+requests for that target or its descendants. The bounded queue holds at most
+1,024 pending requests per Worker, checked atomically with ordinary routes.
+
+**Rejected:** targeted stop statements inside an Operator; restoring Graph or
+Connector handlers; synthetic stop ports; arbitrary cross-scope control;
+closing a freshly created instance to satisfy a missing target; using Loop's
+run protocol as the instance lifecycle; a runtime-only pending-command queue;
+weakening journal ownership checks to let one Executor close another directly.
+
 ## D-2026-09-09-1 — Bound-generated JoinExpired requires a destination
 
 The opening-showcase audit exposed a disagreement with explicit destinations:

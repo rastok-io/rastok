@@ -31,9 +31,12 @@ pub(super) fn inventory(graph: &Graph) -> Vec<RouteRule> {
 pub(super) fn flatten(graph: &Graph) -> Result<Vec<RouteRule>, Box<RouteCompositionError>> {
     let mut rules = crate::plan::compose_routing(&inventory(graph))?;
     rules.retain(|rule| match &rule.selection {
-        RouteSelection::All(destinations) => destinations
-            .iter()
-            .any(|destination| matches!(destination, RouteDestination::LoopCommand(_))),
+        RouteSelection::All(destinations) => destinations.iter().any(|destination| {
+            matches!(
+                destination,
+                RouteDestination::LoopCommand(_) | RouteDestination::InstanceStop(_)
+            )
+        }),
         RouteSelection::Cases(_) => true,
     });
     Ok(rules)

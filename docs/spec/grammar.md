@@ -1,6 +1,6 @@
 # Rastok DSL — Grammar notes
 
-> **Status (2026-09-08): normative v17 under D-2026-09-05-1 and D-2026-09-08-1.**
+> **Status (2026-09-10): normative v18 under D-2026-09-05-1, D-2026-09-08-1 and D-2026-09-10-1.**
 > The implemented subset and migration evidence are recorded in
 > [R9](../architecture/rework-r9-qualification.md). Unsupported forms refuse
 > by name at check. V16 preserves Node-owned `instance`, `lifetime`, `closing`,
@@ -1868,6 +1868,10 @@ edge_config       ::= "{" struct_body "}"                            // applied 
 // match, or `nothing` terminal. A resolved manager command must also terminate
 // the declaration; only an ordinary port path may continue a chain. A
 // source_set cannot start a chain.
+// instance.stop / child.instance.stop also resolve as command destinations,
+// never ports or PhysicalEdges. Scope is this Graph or one direct child;
+// source/intermediate/deep-target use refuses with E-INSTANCE-COMMAND.
+// The exact target instance is bound before producer commit; see instances §7.3.
 
 // ============ SIMULATION GRAMMAR ============
 // A simulation = a named SET of scenarios sharing a world (mocks, prelude).

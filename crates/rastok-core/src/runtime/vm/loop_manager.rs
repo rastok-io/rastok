@@ -848,6 +848,7 @@ pub(super) fn manager_record(
         loop_record: Some(Box::new(packet)),
         logical_time: None,
         timer_schedule: None,
+        instance_commands: None,
         trigger: node::Trigger::Lifecycle(node::Lifecycle::Next),
         cause: Some(cause),
         consumed: vec![],

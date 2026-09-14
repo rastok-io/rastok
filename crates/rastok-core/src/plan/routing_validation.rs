@@ -48,6 +48,10 @@ pub enum RouteErrorKind {
     PhysicalEdgeMismatch,
     /// The command has no compatible owner or causal scope.
     InvalidManagerCommand,
+    /// A closure target is not the wiring Graph or one of its direct children.
+    InvalidInstanceCommand,
+    /// The actual emitter cannot supply the lexical Graph's instance ancestry.
+    InstanceCommandScope,
     /// There is no independently resolved type for a case-routed source.
     UnresolvedCaseSource,
     /// A case table contradicts the resolved source type or canonical order.
@@ -101,6 +105,12 @@ impl fmt::Display for RouteValidationError {
             }
             RouteErrorKind::InvalidManagerCommand => {
                 f.write_str("Loop manager command has no compatible owner or causal scope")
+            }
+            RouteErrorKind::InvalidInstanceCommand => {
+                f.write_str("instance closure must target its lexical Graph or an exact direct child of that Graph")
+            }
+            RouteErrorKind::InstanceCommandScope => {
+                f.write_str("instance closure needs a source already inside its lexical Graph instance; emit the request from an Operator inside that Graph")
             }
             RouteErrorKind::CasePartition(error) => fmt::Display::fmt(error, f),
             RouteErrorKind::EmptyDestinations => {
@@ -178,6 +188,16 @@ pub(super) fn validate_plan_routing(
                 .iter()
                 .map(move |destination| (cases, destination))
         }) {
+            if let RouteDestination::InstanceStop(target) = destination {
+                if !valid_instance_stop_target(plan, target) || plan.boundary_routes.is_empty() {
+                    return Err(RouteValidationError::at(
+                        &path,
+                        RouteErrorKind::InvalidInstanceCommand,
+                    )
+                    .into());
+                }
+                continue;
+            }
             if let RouteDestination::LoopCommand(command) = destination {
                 // Boundary composition validates the real command source.
                 // Its flattened source can precede the Graph run admission.
@@ -275,6 +295,29 @@ pub(super) fn validate_plan_routing(
         )?;
     }
     Ok(())
+}
+
+pub(super) fn valid_instance_stop_target(
+    plan: &super::ExecutionPlan,
+    target: &super::InstanceStopTarget,
+) -> bool {
+    let Some((scope, _)) = plan
+        .owners
+        .iter()
+        .enumerate()
+        .find(|(_, owner)| owner.path == target.scope && owner.kind == super::OwnerKind::Graph)
+    else {
+        return false;
+    };
+    let (path, graph) = match &target.owner {
+        super::EndpointOwner::Graph(path) => (path.clone(), true),
+        super::EndpointOwner::Node(path) => (super::OwnerPath::from(path), false),
+    };
+    plan.owners.iter().enumerate().any(|(index, owner)| {
+        owner.path == path
+            && (owner.kind == super::OwnerKind::Graph) == graph
+            && (index == scope || owner.parent == Some(super::OwnerSlot::new(scope as u32)))
+    })
 }
 
 impl core::error::Error for RouteValidationError {}

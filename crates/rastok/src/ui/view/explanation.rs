@@ -122,6 +122,10 @@ fn destination(value: &RouteDestination) -> String {
             display_owner(&endpoint_owner(&endpoint.owner)),
             endpoint.port
         ),
+        RouteDestination::InstanceStop(target) => format!(
+            "⇢ {}.instance.stop",
+            display_owner(&endpoint_owner(&target.owner)),
+        ),
         RouteDestination::LoopCommand(command) => format!(
             "⇢ {}.Loop.{}",
             display_owner(&endpoint_owner(&command.owner)),
