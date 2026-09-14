@@ -402,11 +402,10 @@ pub struct Scenario {
 /// One checked scenario step.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScenarioStep {
-    /// The world sends: an injection at the App boundary.
+    /// The world sends through an App input or a modeled inbound Connector.
     Inject {
-        /// The graph input the draft enters — `in` or a declared
-        /// boundary input, resolved and direction-checked.
-        port: node::Port,
+        /// Resolved, direction-checked ingress; never an arbitrary Node port.
+        target: InjectionTarget,
         /// The draft content, in emission vocabulary.
         value: EmitValue,
         /// The explicit inbound sequence, when written.
@@ -419,6 +418,39 @@ pub enum ScenarioStep {
     },
     /// A pure observation of the current window.
     Expect(Expectation),
+}
+
+/// The two root-producing seams admitted by a checked scenario.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InjectionTarget {
+    /// An input of the App's public boundary.
+    Boundary(node::Port),
+    /// A decoded arrival at a source Connector, admitted by its Lab Driver.
+    Connector {
+        /// Exact source Node; also the root's Connector provenance.
+        path: node::Path,
+        /// Source output selected by the resolved Contract.
+        port: node::Port,
+    },
+}
+
+impl InjectionTarget {
+    /// Port at which the world-authored value enters the graph.
+    #[must_use]
+    pub fn port(&self) -> &node::Port {
+        match self {
+            Self::Boundary(port) | Self::Connector { port, .. } => port,
+        }
+    }
+
+    /// Source Connector, absent for the separate App-input API.
+    #[must_use]
+    pub fn connector(&self) -> Option<&node::Path> {
+        match self {
+            Self::Boundary(_) => None,
+            Self::Connector { path, .. } => Some(path),
+        }
+    }
 }
 
 /// One checked expectation.

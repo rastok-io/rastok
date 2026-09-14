@@ -1179,7 +1179,7 @@ fn simulation_view(
     golden_failures: &[String],
 ) -> serde_json::Value {
     let next_injection = match session.next_injection_draft() {
-        Ok(Some(draft)) => rastok::ui::scenario_injection_json(&draft),
+        Ok(Some(draft)) => rastok::ui::scenario_injection_json(&compilation.plan, &draft),
         Ok(None) => serde_json::Value::Null,
         Err(error) => serde_json::json!({ "error": error }),
     };

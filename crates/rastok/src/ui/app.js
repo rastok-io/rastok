@@ -1410,7 +1410,10 @@ function envelopePanel(snapshot) {
   panel.setAttribute("aria-label", "Selected envelope");
   const nextInjection = snapshot?.scenario?.current?.next_injection;
   const deliveries = snapshot?.history?.deliveries || [];
-  const delivery = selectedEnvelopeId ? deliveries.find(row => row.envelope_id === selectedEnvelopeId) : deliveries.at(-1);
+  const sources = snapshot?.history?.sources || [];
+  const delivery = selectedEnvelopeId
+    ? deliveries.find(row => row.envelope_id === selectedEnvelopeId) || sources.find(row => row.envelope_id === selectedEnvelopeId)
+    : deliveries.at(-1) || sources.at(-1);
   const heading = document.createElement("div");
   heading.className = "envelope-heading";
   const identity = document.createElement("div");
@@ -1431,9 +1434,9 @@ function envelopePanel(snapshot) {
     return panel;
   }
 
-  if (!selectedEnvelopeId && nextInjection?.position === "before-app-input") {
+  if (!selectedEnvelopeId && ["before-app-input", "before-source-output"].includes(nextInjection?.position)) {
     position.textContent = "Next authored input";
-    title.textContent = `App.${nextInjection.port}`;
+    title.textContent = `${nextInjection.connector || "App"}.${nextInjection.port}`;
     const badges = document.createElement("div");
     badges.className = "envelope-badges";
     const type = document.createElement("span");

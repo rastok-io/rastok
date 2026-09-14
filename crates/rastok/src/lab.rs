@@ -8,20 +8,21 @@
 //! test double.
 
 use crate::boundary::{
-    CallConnectorDriver, CallStart, Completion, Draft, InboundEnvelopeProvenance,
+    CallConnectorDriver, CallStart, Completion, Draft, InboundAdmission, InboundEnvelopeProvenance,
     InboundSubmission, Intent, OutboundConnectorDriver, PortOutput, RequestPreparation, Response,
     SchedulerCompletion, SubmissionSequence,
 };
 use crate::compiler::hir::{
-    Cmp, EmitValue, ExpectTarget, Expectation, Lab, Mock, Quantifier, Scenario, ScenarioStep,
+    Cmp, EmitValue, ExpectTarget, Expectation, InjectionTarget, Lab, Mock, Quantifier, Scenario,
+    ScenarioStep,
 };
 use crate::connector::{ConnectorRoles, ContractId};
 #[cfg(test)]
 use crate::connectors::ProcessRequestBindings;
 use crate::connectors::{
     BoundConnectorDriver, ConnectorDriverFactory, DriverFactoryError, DriverRegistry,
-    RuntimeBindings, ScriptedConnectorProtocol, ScriptedProtocolBinder, passive_lab_factories,
-    scripted_protocol_binders,
+    HttpServerLabInput, RuntimeBindings, ScriptedConnectorProtocol, ScriptedProtocolBinder,
+    inbound_lab_factories, scripted_protocol_binders,
 };
 use crate::envelope::{Data, Envelope, Namespace, Value, WriteTarget};
 use crate::journal::{MemJournal, Record};
@@ -99,13 +100,13 @@ pub enum ScenarioStepError {
     Boundary(String),
 }
 
-/// Editable world-authored input which has not crossed the App boundary yet.
-///
-/// The UI may replace `data` while this draft is pending. Admission still
-/// mints the immutable envelope and remains the only path into the VM.
+/// World-authored input which has not been admitted yet. The debugger presents
+/// it read-only; admission alone mints the immutable envelope.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScenarioInjectionDraft {
-    /// App input port selected by the authored scenario action.
+    /// Source Connector, absent for a public App input.
+    pub connector: Option<node::Path>,
+    /// Source output or App input selected by the authored scenario action.
     pub port: node::Port,
     /// Effective logical type which the edited value must inhabit.
     pub ty: crate::datatype::DataType,
@@ -147,10 +148,12 @@ pub struct ScenarioSession<'plan, 'scenario> {
     vm: Vm<'plan>,
     journal: MemJournal,
     driver: RuntimeBindings<'plan>,
+    source_input: Rc<RefCell<HttpServerLabInput>>,
     faults: MockFaults,
     failures: Vec<String>,
     window_start: usize,
     output_window_start: usize,
+    record_window_start: usize,
     next_action: usize,
     quiescent: bool,
     last_action: Option<ScenarioActionKind>,
@@ -180,6 +183,19 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
         for mock in &scenario.mocks {
             mocks.insert(mock.connector.clone(), mock.clone());
         }
+        for step in &scenario.steps {
+            if let ScenarioStep::Inject { target, .. } = step {
+                injection_port(plan, target)?;
+            }
+        }
+        let source_input = Rc::new(RefCell::new(HttpServerLabInput::default()));
+        let empty_boot = crate::deployment::BootBindings::empty();
+        let (driver, faults) = mock_bindings(
+            plan,
+            mocks,
+            boot.unwrap_or(&empty_boot),
+            Rc::clone(&source_input),
+        )?;
         let journal = boot.map_or_else(
             || MemJournal::new(graph_version),
             |boot| MemJournal::new_with_deployment(graph_version, boot.attestation().clone()),
@@ -188,8 +204,6 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
             || Vm::boot(plan, graph_version),
             |boot| Vm::boot_with_deployment(plan, graph_version, boot),
         );
-        let empty_boot = crate::deployment::BootBindings::empty();
-        let (driver, faults) = mock_bindings(plan, mocks, boot.unwrap_or(&empty_boot))?;
         Ok(Self {
             plan,
             simulation: String::from(simulation),
@@ -197,10 +211,12 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
             vm,
             journal,
             driver,
+            source_input,
             faults,
             failures: Vec::new(),
             window_start: 0,
             output_window_start: 0,
+            record_window_start: 0,
             next_action: 0,
             quiescent: true,
             last_action: None,
@@ -268,22 +284,17 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
         };
         let window = &self.vm.observations()[self.window_start..];
         let outputs = &self.vm.outputs()[self.output_window_start..];
-        let envelopes = match &expectation.target {
-            ExpectTarget::Boundary(port) => outputs
-                .iter()
-                .filter(|output| output.port == *port)
-                .map(|output| &output.envelope)
-                .collect(),
-            ExpectTarget::Node { path, port } => window
-                .iter()
-                .filter(|observed| observed.node.as_ref() == Some(path) && observed.port == *port)
-                .map(|observed| &observed.envelope)
-                .collect(),
-        };
+        let envelopes = expectation_envelopes(
+            expectation,
+            window,
+            outputs,
+            &self.journal.records()[self.record_window_start..],
+        );
+        let failure = check_expectation(expectation, &envelopes);
         Some(ExpectationInspection {
             expectation,
             envelopes,
-            failure: check_expectation(expectation, window, outputs),
+            failure,
         })
     }
 
@@ -296,7 +307,9 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
     /// Whether every authored action has been applied and ready work settled.
     #[must_use]
     pub fn is_complete(&self) -> bool {
-        self.next_action == self.scenario.steps.len() && self.quiescent
+        self.next_action == self.scenario.steps.len()
+            && self.quiescent
+            && !self.source_input.borrow().is_pending()
     }
 
     /// Failures accumulated in occurrence order.
@@ -305,37 +318,30 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
         &self.failures
     }
 
-    /// Returns the next authored injection as an editable pre-admission
-    /// draft. Other action kinds expose no draft.
+    /// Returns the next authored injection as a pre-admission draft for
+    /// inspection. Other action kinds expose no draft.
     ///
     /// # Errors
     ///
-    /// An invalid authored injection or a missing resolved App input refuses
+    /// An invalid authored injection or a missing resolved ingress refuses
     /// the projection instead of inventing a type in the browser.
     pub fn next_injection_draft(&self) -> Result<Option<ScenarioInjectionDraft>, String> {
         if !self.quiescent {
             return Ok(None);
         }
-        let Some(ScenarioStep::Inject { port, value, .. }) =
+        let Some(ScenarioStep::Inject { target, value, .. }) =
             self.scenario.steps.get(self.next_action)
         else {
             return Ok(None);
         };
-        let resolved = self
-            .plan
-            .resolved_ports()
-            .boundary()
-            .iter()
-            .find(|resolved| {
-                resolved.port() == port && resolved.direction() == node::Direction::Input
-            })
-            .ok_or_else(|| format!("the next injection has no resolved App input `{port}`"))?;
+        let resolved = injection_port(self.plan, target)?;
         let (draft, edited) = self.next_injection_override.as_ref().map_or_else(
             || draft(value).map(|draft| (draft, false)),
             |draft| Ok((draft.clone(), true)),
         )?;
         Ok(Some(ScenarioInjectionDraft {
-            port: port.clone(),
+            connector: target.connector().cloned(),
+            port: target.port().clone(),
             ty: resolved.ty().clone(),
             annotations: resolved.annotations().clone(),
             data: draft.data,
@@ -351,7 +357,7 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
     /// # Errors
     ///
     /// Refuses outside a quiescent injection boundary or when the value does
-    /// not inhabit the resolved App input type.
+    /// not inhabit the resolved ingress type.
     pub fn replace_next_injection_data(&mut self, value: Value) -> Result<(), String> {
         if !self.quiescent {
             return Err(String::from(
@@ -359,22 +365,15 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
             ));
         }
         let Some(ScenarioStep::Inject {
-            port,
+            target,
             value: authored,
             ..
         }) = self.scenario.steps.get(self.next_action)
         else {
             return Err(String::from("the next scenario action is not an injection"));
         };
-        let resolved = self
-            .plan
-            .resolved_ports()
-            .boundary()
-            .iter()
-            .find(|resolved| {
-                resolved.port() == port && resolved.direction() == node::Direction::Input
-            })
-            .ok_or_else(|| format!("the next injection has no resolved App input `{port}`"))?;
+        let resolved = injection_port(self.plan, target)?;
+        let port = target.port();
         if let Some(violation) = resolved.ty().violation("edited input data", &value) {
             return Err(format!(
                 "the edited input does not match `{port}`: {violation}"
@@ -418,6 +417,11 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
     ///
     /// A caller must finish ready work from the preceding action first.
     pub fn next_action(&mut self) -> Result<Option<ScenarioActionKind>, String> {
+        if self.source_input.borrow().is_pending() {
+            return Err(String::from(
+                "the current source injection is pending admission under mailbox pressure",
+            ));
+        }
         if !self.quiescent {
             return Err(String::from(
                 "the current scenario action still has ready VM transactions",
@@ -427,9 +431,10 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
             return Ok(None);
         };
         let kind = match step {
-            ScenarioStep::Inject { port, value, seq } => {
+            ScenarioStep::Inject { target, value, seq } => {
                 self.window_start = self.vm.observations().len();
                 self.output_window_start = self.vm.outputs().len();
+                self.record_window_start = self.journal.records().len();
                 let candidate = self
                     .next_injection_override
                     .take()
@@ -438,17 +443,36 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
                     Ok(draft) => {
                         let submission = InboundSubmission {
                             provenance: InboundEnvelopeProvenance::single(
-                                node::Path::new(["lab"])
-                                    .unwrap_or_else(|_| unreachable!("`lab` is a valid path")),
+                                target.connector().cloned().unwrap_or_else(|| {
+                                    node::Path::new(["lab"])
+                                        .unwrap_or_else(|_| unreachable!("`lab` is a valid path"))
+                                }),
                             ),
-                            port: port.clone(),
+                            port: target.port().clone(),
                             draft,
                             sequence: match seq {
                                 Some(seq) => SubmissionSequence::Explicit(*seq),
                                 None => SubmissionSequence::Next,
                             },
                         };
-                        if let Err(error) = self.vm.inject(&mut self.journal, submission) {
+                        if target.connector().is_some() {
+                            let offered = u64::try_from(self.next_action)
+                                .map_err(|_| String::from("the source action index exceeds u64"))
+                                .and_then(|action| {
+                                    self.source_input.borrow_mut().offer(submission, action)
+                                });
+                            if let Err(error) = offered.and_then(|()| {
+                                pump_inbound_world(
+                                    &mut self.driver,
+                                    &mut self.vm,
+                                    &mut self.journal,
+                                )
+                                .map(|_| ())
+                            }) {
+                                self.failures
+                                    .push(format!("the source injection was refused: {error}"));
+                            }
+                        } else if let Err(error) = self.vm.inject(&mut self.journal, submission) {
                             self.failures
                                 .push(format!("the injection was refused: {error}"));
                         }
@@ -461,6 +485,7 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
             ScenarioStep::Advance { nanos } => {
                 self.window_start = self.vm.observations().len();
                 self.output_window_start = self.vm.outputs().len();
+                self.record_window_start = self.journal.records().len();
                 let target = self.vm.now().saturating_add(*nanos);
                 if let Err(error) = self.vm.advance(&mut self.journal, &mut self.driver, target) {
                     self.failures.push(format!("the advance faulted: {error}"));
@@ -470,11 +495,13 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
                 ScenarioActionKind::Advance
             }
             ScenarioStep::Expect(expectation) => {
-                if let Some(message) = check_expectation(
+                let envelopes = expectation_envelopes(
                     expectation,
                     &self.vm.observations()[self.window_start..],
                     &self.vm.outputs()[self.output_window_start..],
-                ) {
+                    &self.journal.records()[self.record_window_start..],
+                );
+                if let Some(message) = check_expectation(expectation, &envelopes) {
                     self.failures.push(message);
                 }
                 self.quiescent = true;
@@ -486,20 +513,27 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
         Ok(Some(kind))
     }
 
-    /// Executes at most one ready VM transaction and polls the scripted world
-    /// around it. Driver polling itself is not a graph transaction.
+    /// Executes at most one ready VM transaction, then polls the scripted
+    /// world only after ready work drains, as the batch Lab does. Driver
+    /// polling itself is not a graph transaction.
     ///
     /// # Errors
     ///
     /// A faulting transaction commits nothing and remains reserved for retry.
     pub fn step_transaction(&mut self) -> Result<bool, ScenarioStepError> {
-        self.pump_driver().map_err(ScenarioStepError::Boundary)?;
         let ran = self
             .vm
             .step_with_bindings(&mut self.journal, &mut self.driver)
             .map_err(|error| ScenarioStepError::Transaction(format!("a step faulted: {error}")))?;
-        self.pump_driver().map_err(ScenarioStepError::Boundary)?;
-        self.quiescent = !self.vm.has_ready_transaction();
+        let progressed = if self.vm.has_ready_transaction() {
+            false
+        } else {
+            self.pump_driver().map_err(ScenarioStepError::Boundary)?
+        };
+        // A retained opening or write acknowledgement can make the next
+        // scripted frame admissible without queuing an Executor transaction.
+        // Confirm that the world is also at rest before advancing the script.
+        self.quiescent = !progressed && !self.vm.has_ready_transaction();
         Ok(ran)
     }
 
@@ -509,7 +543,7 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
     /// but its handler cannot run until an explicit transaction step.
     pub fn poll_world(&mut self) -> Result<bool, String> {
         let progressed = self.pump_driver()?;
-        self.quiescent = !self.vm.has_ready_transaction();
+        self.quiescent = !progressed && !self.vm.has_ready_transaction();
         Ok(progressed)
     }
 
@@ -522,7 +556,11 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
             &self.faults,
             &mut self.failures,
         );
+        self.collect_driver_faults();
         self.quiescent = true;
+        if self.source_input.borrow().is_pending() {
+            self.failures.push(String::from("the source injection remains pending under mailbox pressure; the sequential scenario cannot reach its next action"));
+        }
     }
 
     /// Applies every remaining action under the batch runner's established
@@ -531,10 +569,16 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
         while self.next_action < self.scenario.steps.len() {
             if self.next_action().is_err() {
                 self.settle_current_action();
+                if self.source_input.borrow().is_pending() {
+                    break;
+                }
                 continue;
             }
             if !self.quiescent {
                 self.settle_current_action();
+                if self.source_input.borrow().is_pending() {
+                    break;
+                }
             }
         }
     }
@@ -558,6 +602,10 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
             .vm
             .pump(&mut self.journal, &mut self.driver)
             .map_err(|error| format!("the boundary round faulted: {error}"))?;
+        // Finish the preceding batch round before offering the next inbound
+        // frame. In particular WriteSettled must not move behind that frame
+        // merely because the caller selected the interactive stepping path.
+        let inbound = pump_inbound_world(&mut self.driver, &mut self.vm, &mut self.journal)?;
         self.collect_driver_faults();
         for (response, reason) in &report.rejected {
             self.failures.push(format!(
@@ -565,11 +613,22 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
                 response.call_ref
             ));
         }
-        Ok(report.settled > 0 || !report.rejected.is_empty())
+        let progressed = inbound || report.settled > 0 || !report.rejected.is_empty();
+        if !progressed
+            && !self.vm.has_ready_transaction()
+            && self.source_input.borrow().is_pending()
+        {
+            return Err(String::from(
+                "the source injection remains pending under mailbox pressure; no VM work is ready",
+            ));
+        }
+        Ok(progressed)
     }
 
     fn collect_driver_faults(&mut self) {
         self.failures.extend(self.faults.borrow_mut().drain(..));
+        self.failures
+            .extend(self.source_input.borrow_mut().take_fault());
     }
 }
 
@@ -655,15 +714,22 @@ fn run_scenario(
 /// Drives the machine to rest after an action step: drain, let the
 /// mocks answer, drain again — until nothing settles. Uncovered
 /// calls and mock faults surface as failures.
-fn settle(
-    vm: &mut Vm<'_>,
+fn settle<'plan>(
+    vm: &mut Vm<'plan>,
     journal: &mut MemJournal,
-    driver: &mut RuntimeBindings<'_>,
+    driver: &mut RuntimeBindings<'plan>,
     faults: &MockFaults,
     failures: &mut Vec<String>,
 ) {
     let mut rested = false;
     for _ in 0..64 {
+        let inbound = match pump_inbound_world(driver, vm, journal) {
+            Ok(progressed) => progressed,
+            Err(error) => {
+                failures.push(error);
+                return;
+            }
+        };
         if let Err(error) = vm.drain_with_bindings(journal, driver) {
             failures.push(format!("a step faulted: {error}"));
             return;
@@ -682,7 +748,7 @@ fn settle(
                 response.call_ref
             ));
         }
-        if report.settled == 0 {
+        if report.settled == 0 && !inbound {
             rested = true;
             break;
         }
@@ -699,29 +765,124 @@ fn settle(
     }
 }
 
-fn check_expectation(
+/// Offers world facts through the same binding, admission and terminal queue
+/// as a hosted source. This performs no graph transaction and mints no ids.
+fn pump_inbound_world<'plan>(
+    driver: &mut RuntimeBindings<'plan>,
+    vm: &mut Vm<'plan>,
+    journal: &mut MemJournal,
+) -> Result<bool, String> {
+    let admitted = match driver
+        .pump_inbound(vm, journal)
+        .map_err(|error| error.to_string())?
+    {
+        Some(InboundAdmission::Accepted(_)) => true,
+        Some(InboundAdmission::Rejected(reason)) => {
+            return Err(format!(
+                "the source proposal was refused before admission: {reason:?}"
+            ));
+        }
+        Some(InboundAdmission::Pending) | None => false,
+    };
+    let report = driver
+        .pump_inbound_call_events(vm)
+        .map_err(|error| error.to_string())?;
+    if !report.uncorrelated.is_empty() || !report.discarded.is_empty() {
+        return Err(String::from(
+            "the Lab source reported an uncorrelated or duplicate terminal",
+        ));
+    }
+    if let Some((_, reason)) = report.rejected.first() {
+        return Err(format!(
+            "the source terminal violates its Contract: {reason}"
+        ));
+    }
+    Ok(admitted || report.queued > 0)
+}
+
+fn injection_port<'plan>(
+    plan: &'plan ValidatedExecutionPlan,
+    target: &InjectionTarget,
+) -> Result<&'plan crate::plan::ResolvedPort, String> {
+    let (ports, direction) = match target {
+        InjectionTarget::Boundary(_) => (plan.resolved_ports().boundary(), node::Direction::Input),
+        InjectionTarget::Connector { path, port } => {
+            let (index, node) = plan
+                .plan()
+                .nodes
+                .iter()
+                .enumerate()
+                .find(|(_, node)| &node.path == path)
+                .ok_or_else(|| format!("the injection names no source Connector `{path}`"))?;
+            let supported = node.connector().is_some_and(|spec| {
+                spec.contract.as_str() == crate::connector::HTTP_SERVER_CONNECTOR_ID
+                    && matches!(spec.attribute("mode"), Some(crate::plan::AttrSetting::Word(mode)) if mode == "ack")
+                    && port.name() == "out"
+            });
+            if !supported {
+                return Err(format!(
+                    "the injection `{path}.{port}` requires the HttpServer ack Lab ingress model"
+                ));
+            }
+            let slot = crate::plan::Slot::new(
+                u32::try_from(index).map_err(|_| String::from("source slot exceeds u32"))?,
+            );
+            (
+                plan.resolved_ports()
+                    .node(slot)
+                    .ok_or_else(|| format!("source `{path}` has no resolved ports"))?,
+                node::Direction::Output,
+            )
+        }
+    };
+    ports
+        .iter()
+        .find(|port| port.port() == target.port() && port.direction() == direction)
+        .ok_or_else(|| format!("the injection has no resolved ingress `{target:?}`"))
+}
+
+fn expectation_envelopes<'a>(
     expectation: &Expectation,
-    window: &[Observed],
-    boundary: &[crate::runtime::vm::BoundaryOutput],
-) -> Option<String> {
-    let deliveries: Vec<&crate::envelope::Envelope> = match &expectation.target {
+    window: &'a [Observed],
+    boundary: &'a [crate::runtime::vm::BoundaryOutput],
+    records: &'a [Record],
+) -> Vec<&'a Envelope> {
+    match &expectation.target {
         ExpectTarget::Boundary(port) => boundary
             .iter()
             .filter(|output| output.port == *port)
             .map(|output| &output.envelope)
             .collect(),
-        ExpectTarget::Node { path, port } => window
+        // An inbound source is an INBOUND fact, not a synthetic emission
+        // transaction. Read it directly, once, in this action's journal window.
+        ExpectTarget::Node { path, port } => records
             .iter()
-            .filter(|observed| observed.node.as_ref() == Some(path) && observed.port == *port)
-            .map(|observed| &observed.envelope)
+            .filter_map(|record| {
+                let Record::Inbound(root) = record else {
+                    return None;
+                };
+                (root.connector_path.as_ref() == Some(path) && root.port == *port)
+                    .then_some(&root.envelope)
+            })
+            .chain(
+                window
+                    .iter()
+                    .filter(|observed| {
+                        observed.node.as_ref() == Some(path) && observed.port == *port
+                    })
+                    .map(|observed| &observed.envelope),
+            )
             .collect(),
-    };
+    }
+}
+
+fn check_expectation(expectation: &Expectation, deliveries: &[&Envelope]) -> Option<String> {
     let name = expectation
         .label
         .clone()
         .unwrap_or_else(|| format!("{:?}", expectation.target));
     let mut matches = 0usize;
-    for observed in &deliveries {
+    for observed in deliveries {
         match &expectation.predicate {
             None => matches += 1,
             Some(tree) => {
@@ -780,14 +941,14 @@ fn check_expectation(
     } else {
         Some(format!(
             "expect {name}: {matches} match(es) in a window of {} deliveries",
-            window.len()
+            deliveries.len()
         ))
     }
 }
 
 /// Builds a world-authored draft from an injection value: `data`
-/// writes shape the payload, `meta.app.*` writes fill the writable
-/// namespace. There is no input — a draft inherits nothing.
+/// writes shape the payload, `meta.ext.*` supplies world context. The graph's
+/// `meta.app` is not writable here. A draft inherits nothing.
 fn draft(value: &EmitValue) -> Result<Draft, String> {
     let empty = BTreeMap::new();
     match value {
@@ -898,6 +1059,7 @@ fn mock_bindings<'plan>(
     plan: &'plan ValidatedExecutionPlan,
     mocks: BTreeMap<node::Path, Mock>,
     boot: &crate::deployment::BootBindings,
+    source_input: Rc<RefCell<HttpServerLabInput>>,
 ) -> Result<(RuntimeBindings<'plan>, MockFaults), String> {
     let faults = Rc::new(RefCell::new(Vec::new()));
     let mocks = share_mocks(mocks);
@@ -913,7 +1075,7 @@ fn mock_bindings<'plan>(
             }))
             .map_err(|error| error.to_string())?;
     }
-    for factory in passive_lab_factories().map_err(|error| error.to_string())? {
+    for factory in inbound_lab_factories(source_input).map_err(|error| error.to_string())? {
         registry = registry
             .try_with(factory)
             .map_err(|error| error.to_string())?;
@@ -1704,6 +1866,7 @@ graph websocket_server_source : App {
                 &compilation.plan,
                 BTreeMap::new(),
                 &crate::deployment::BootBindings::empty(),
+                Rc::new(RefCell::new(HttpServerLabInput::default())),
             )
             .unwrap_or_else(|error| panic!("the family-owned Lab twin must bind: {error}"));
         }

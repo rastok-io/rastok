@@ -1,0 +1,30 @@
+// The production graph has no artificial App input. No socket opens in simulate.
+graph webhook : App {
+  output out: text
+  connector listener : HttpServer {
+    listen = "127.0.0.1:8080"
+    codec = text
+  }
+  operator label {
+    input in: text
+    output out: text
+    on in { out = "received: " + data }
+  }
+  listener -> label -> out
+  listener.exit -> nothing
+}
+
+lab webhook {
+  simulation requests on app {
+    scenario two_requests {
+      listener.out = { data = "first" ; meta.ext.http_method = "POST" }
+      expect listener.out count == 1 where data == "first"
+      expect listener.exit count == 1 where data is Completed && data.status == 202
+      expect app.out count == 1 where data == "received: first"
+      listener.out = "second"
+      expect listener.out count == 1 where data == "second"
+      expect listener.exit count == 1 where data is Completed && data.status == 202
+      expect app.out count == 1 where data == "received: second"
+    }
+  }
+}

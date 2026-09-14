@@ -1,17 +1,18 @@
 //! HttpServer contract binding and effectless Lab Driver.
 //!
-//! Scenario injections enter through the ordinary Lab boundary. The hosted
-//! listener uses the same plan rows without sharing a source module with
-//! HttpClient.
+//! Decoded scenario requests use the same two-phase admission as the hosted
+//! listener. The effectless model needs no listener or networking dependency.
 
+use std::cell::RefCell;
 #[cfg(feature = "hosted-http12")]
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::rc::Rc;
 
 use crate::boundary::{
-    InboundCallConnectorDriver, InboundCallEvent, InboundCallResponse, InboundCallResponseStart,
-    InboundCallTimeout, InboundCallTimeoutStart, InboundConnectorDriver, InboundDecision,
-    InboundProposal, InboundProposalRef,
+    Completion, HttpServerExit, InboundCallConnectorDriver, InboundCallEvent, InboundCallResponse,
+    InboundCallResponseStart, InboundCallTimeout, InboundCallTimeoutStart, InboundConnectorDriver,
+    InboundDecision, InboundExchangeRef, InboundProposal, InboundProposalRef, InboundSubmission,
 };
 use crate::connector::{ConnectorRoles, ContractId};
 use crate::plan::ValidatedExecutionPlan;
@@ -249,22 +250,93 @@ pub(crate) fn bind_routes(
     Ok(routes)
 }
 
-#[derive(Default)]
-struct PassiveInbound;
+/// One authored arrival and one post-admission acknowledgement, both bounded.
+/// The scenario and the bound Lab Driver share this world-side slot; it never
+/// owns envelopes, sequence allocation or journal records.
+#[derive(Debug, Default)]
+pub(crate) struct HttpServerLabInput {
+    pending: Option<InboundProposal>,
+    terminal: Option<InboundCallEvent>,
+    fault: Option<String>,
+}
 
-impl InboundConnectorDriver for PassiveInbound {
-    fn proposal(&mut self) -> Option<InboundProposal> {
-        None
+impl HttpServerLabInput {
+    pub(crate) fn offer(
+        &mut self,
+        submission: InboundSubmission,
+        action: u64,
+    ) -> Result<(), String> {
+        if self.pending.is_some() || self.terminal.is_some() {
+            return Err(String::from(
+                "the preceding HttpServer Lab request has not settled",
+            ));
+        }
+        self.pending = Some(InboundProposal {
+            reference: InboundProposalRef::new(action),
+            submission,
+            session: None,
+        });
+        Ok(())
     }
 
-    fn decide(&mut self, _: InboundProposalRef, _: InboundDecision) {}
+    pub(crate) fn is_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    pub(crate) fn take_fault(&mut self) -> Option<String> {
+        self.fault.take()
+    }
+}
+
+struct HttpServerLabDriver {
+    input: Rc<RefCell<HttpServerLabInput>>,
+}
+
+impl InboundConnectorDriver for HttpServerLabDriver {
+    fn proposal(&mut self) -> Option<InboundProposal> {
+        self.input.borrow().pending.clone()
+    }
+
+    fn decide(&mut self, reference: InboundProposalRef, decision: InboundDecision) {
+        let mut input = self.input.borrow_mut();
+        if input
+            .pending
+            .as_ref()
+            .is_none_or(|proposal| proposal.reference != reference)
+        {
+            input.fault = Some(String::from(
+                "the HttpServer Lab received an unmatched admission decision",
+            ));
+            return;
+        }
+        input.pending = None;
+        if let InboundDecision::Accepted(accepted) = decision {
+            match accepted.exchange {
+                Some(InboundExchangeRef::Call(call_ref)) if input.terminal.is_none() => {
+                    // A fixture scripts a decoded request and successful fixed
+                    // ACK. Only the accepting commit supplies its Call identity.
+                    input.terminal = Some(InboundCallEvent {
+                        call_ref,
+                        completion: Completion::http_server_exit(HttpServerExit::Completed {
+                            status: 202,
+                        }),
+                    });
+                }
+                _ => {
+                    input.fault = Some(String::from(
+                        "the HttpServer Lab acknowledgement has no admitted Call or free terminal slot",
+                    ))
+                }
+            }
+        }
+    }
 
     fn call(&mut self) -> Option<&mut dyn InboundCallConnectorDriver> {
         Some(self)
     }
 }
 
-impl InboundCallConnectorDriver for PassiveInbound {
+impl InboundCallConnectorDriver for HttpServerLabDriver {
     fn start_response(&mut self, _: &InboundCallResponse) -> InboundCallResponseStart {
         InboundCallResponseStart::Pending
     }
@@ -274,12 +346,18 @@ impl InboundCallConnectorDriver for PassiveInbound {
     }
 
     fn events(&mut self) -> Vec<InboundCallEvent> {
-        Vec::new()
+        self.input
+            .borrow_mut()
+            .terminal
+            .take()
+            .into_iter()
+            .collect()
     }
 }
 
 struct HttpServerLabFactory {
     id: ContractId,
+    input: Rc<RefCell<HttpServerLabInput>>,
 }
 
 impl super::ConnectorDriverFactory for HttpServerLabFactory {
@@ -310,14 +388,16 @@ impl super::ConnectorDriverFactory for HttpServerLabFactory {
             .collect();
         if expected != actual {
             return Err(super::DriverFactoryError::new(
-                "the HttpServer Lab binder received an incomplete family",
+                "the HttpServer Lab binder received an incomplete Connector set",
             ));
         }
-        Ok(Box::new(PassiveInbound))
+        Ok(Box::new(HttpServerLabDriver {
+            input: Rc::clone(&self.input),
+        }))
     }
 }
 
-impl super::BoundConnectorDriver for PassiveInbound {
+impl super::BoundConnectorDriver for HttpServerLabDriver {
     fn inbound(&mut self) -> Option<&mut dyn InboundConnectorDriver> {
         Some(self)
     }
@@ -327,9 +407,180 @@ impl super::BoundConnectorDriver for PassiveInbound {
     }
 }
 
-pub(crate) fn lab_factory()
--> Result<Box<dyn super::ConnectorDriverFactory>, super::DriverFactoryError> {
+pub(crate) fn lab_factory(
+    input: Rc<RefCell<HttpServerLabInput>>,
+) -> Result<Box<dyn super::ConnectorDriverFactory>, super::DriverFactoryError> {
     let id = ContractId::parse(crate::connector::HTTP_SERVER_CONNECTOR_ID)
         .map_err(|error| super::DriverFactoryError::new(error.to_string()))?;
-    Ok(Box::new(HttpServerLabFactory { id }))
+    Ok(Box::new(HttpServerLabFactory { id, input }))
+}
+
+#[cfg(test)]
+mod lab_tests {
+    use super::*;
+    use crate::boundary::{
+        Draft, InboundAdmission, InboundEnvelopeProvenance, InboundRejection, SubmissionSequence,
+    };
+    use crate::connectors::{DriverRegistry, RuntimeBindings};
+    use crate::envelope::{Data, Value};
+    use crate::journal::{Journal, MemJournal, Record};
+    use crate::plan::GraphVersion;
+    use crate::runtime::vm::Vm;
+
+    fn submission(value: Value) -> InboundSubmission {
+        InboundSubmission {
+            provenance: InboundEnvelopeProvenance::single(
+                crate::node::Path::new(["listener"]).unwrap(),
+            ),
+            port: crate::node::Port::new("out").unwrap(),
+            draft: Draft {
+                data: Data::materialized(value),
+                ext: Default::default(),
+            },
+            sequence: SubmissionSequence::Next,
+        }
+    }
+
+    fn compile_source() -> crate::compiler::Compilation {
+        crate::compiler::compile(
+            &[include_str!("../../tests/fixtures/lab-http-source.rkg")],
+            &crate::contract::ContractCatalog::try_m0().unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn the_lab_source_never_acknowledges_before_commit_or_after_rejection() {
+        let compilation = compile_source();
+        let input = Rc::new(RefCell::new(HttpServerLabInput::default()));
+        let registry = DriverRegistry::default()
+            .try_with(lab_factory(Rc::clone(&input)).unwrap())
+            .unwrap();
+        let mut bindings = RuntimeBindings::try_new(&compilation.plan, &registry).unwrap();
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        let mut journal = MemJournal::new(GraphVersion(1));
+        input
+            .borrow_mut()
+            .offer(submission(Value::Int(17)), 0)
+            .unwrap();
+        assert_eq!(
+            bindings.pump_inbound_call_events(&mut vm).unwrap().queued,
+            0
+        );
+        assert_eq!(
+            bindings.pump_inbound(&mut vm, &mut journal).unwrap(),
+            Some(InboundAdmission::Rejected(InboundRejection::InvalidPayload))
+        );
+        assert!(journal.records().is_empty());
+        assert!(!input.borrow().is_pending());
+        assert_eq!(
+            bindings.pump_inbound_call_events(&mut vm).unwrap().queued,
+            0
+        );
+
+        input
+            .borrow_mut()
+            .offer(submission(Value::Text("accepted".into())), 1)
+            .unwrap();
+        let proposed = bindings.next_inbound().unwrap().unwrap();
+        assert_eq!(
+            bindings.next_inbound().unwrap().unwrap().proposal(),
+            proposed.proposal()
+        );
+        assert!(journal.records().is_empty());
+        assert_eq!(
+            bindings.pump_inbound_call_events(&mut vm).unwrap().queued,
+            0
+        );
+        let Some(InboundAdmission::Accepted(accepted)) =
+            bindings.pump_inbound(&mut vm, &mut journal).unwrap()
+        else {
+            panic!("accepted source")
+        };
+        assert!(journal.find_envelope(accepted.envelope).is_some());
+        assert!(matches!(journal.records()[0], Record::Inbound(_)));
+        assert!(
+            input
+                .borrow_mut()
+                .offer(submission(Value::Text("cannot overwrite an ACK".into())), 2)
+                .is_err()
+        );
+        assert_eq!(
+            bindings.pump_inbound_call_events(&mut vm).unwrap().queued,
+            1
+        );
+        assert_eq!(
+            bindings.pump_inbound_call_events(&mut vm).unwrap().queued,
+            0,
+            "one ACK only"
+        );
+        vm.drain_with_bindings(&mut journal, &mut bindings).unwrap();
+        assert!(journal.open_inbound_calls().is_empty());
+        assert!(input.borrow_mut().take_fault().is_none());
+    }
+
+    #[test]
+    fn a_full_mailbox_retains_the_same_source_proposal_without_an_ack() {
+        let compilation = compile_source();
+        let input = Rc::new(RefCell::new(HttpServerLabInput::default()));
+        let registry = DriverRegistry::default()
+            .try_with(lab_factory(Rc::clone(&input)).unwrap())
+            .unwrap();
+        let mut bindings = RuntimeBindings::try_new(&compilation.plan, &registry).unwrap();
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let capacity = vm.inspection().mailbox_capacity;
+        for action in 0..capacity {
+            input
+                .borrow_mut()
+                .offer(submission(Value::Text("queued".into())), action as u64)
+                .unwrap();
+            assert!(matches!(
+                bindings.pump_inbound(&mut vm, &mut journal).unwrap(),
+                Some(InboundAdmission::Accepted(_))
+            ));
+            assert_eq!(
+                bindings.pump_inbound_call_events(&mut vm).unwrap().queued,
+                1
+            );
+        }
+        input
+            .borrow_mut()
+            .offer(submission(Value::Text("waiting".into())), capacity as u64)
+            .unwrap();
+        let records_before = journal.records().len();
+        let retained = bindings.next_inbound().unwrap().unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                bindings.pump_inbound(&mut vm, &mut journal).unwrap(),
+                Some(InboundAdmission::Pending)
+            );
+            assert_eq!(journal.records().len(), records_before);
+            assert_eq!(
+                bindings.next_inbound().unwrap().unwrap().proposal(),
+                retained.proposal()
+            );
+            assert_eq!(
+                bindings.pump_inbound_call_events(&mut vm).unwrap().queued,
+                0
+            );
+        }
+        assert!(
+            input
+                .borrow_mut()
+                .offer(submission(Value::Text("replacement".into())), 9999)
+                .is_err()
+        );
+        vm.drain_with_bindings(&mut journal, &mut bindings).unwrap();
+        assert!(matches!(
+            bindings.pump_inbound(&mut vm, &mut journal).unwrap(),
+            Some(InboundAdmission::Accepted(_))
+        ));
+        assert_eq!(
+            bindings.pump_inbound_call_events(&mut vm).unwrap().queued,
+            1
+        );
+        assert!(!input.borrow().is_pending());
+        assert!(input.borrow_mut().take_fault().is_none());
+    }
 }

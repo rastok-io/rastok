@@ -117,6 +117,41 @@ Yoann approved the correction before implementation. It tightens acceptance
 to the existing rule; runtime outcomes, v17 shapes, hashes of valid programs
 and causal goldens do not change. No implicit discard or re-blessing is needed.
 
+## D-2026-09-09-3 — Simulate the Contract without its physical Driver
+
+Yoann confirmed the separation: an executable Connector Contract is required
+to check and simulate a graph; its physical Driver is required only for real
+execution. The Lab substitutes the external world, not types, pure request
+framing, admission, reservations, exchange correlation or journal commits.
+Pure Contract rules remain available without the networking Cargo features.
+A port declaration alone is not an executable model of an exchange.
+
+The existing source-injection syntax now connects `HttpServer` in `ack` mode
+to the Lab: `listener.out = value` scripts a decoded request and a successful
+fixed acknowledgement. It proposes a draft through the ordinary bound inbound
+Driver interface; only committed acceptance supplies the Call reference for
+`Completed { status: 202 }`. Pending admission retains the exact proposal and
+withholds the acknowledgement. A sequential scenario unable to admit its
+current request fails visibly rather than skipping it or reporting success.
+`meta.ext` is authored fixture context, never inferred from a fake listener.
+The source observation is the retained INBOUND, not a synthetic transaction.
+
+Decoded-request simulation is graph evidence under those assumptions, not
+evidence about wire decoding, authentication, body limits or delivery of a real
+202. Those remain Driver conformance tests, including refusals before admission.
+Source injection for `respond` and Session exchanges remains a named check-time
+deferral until its scripted protocol is implemented. Unknown Contracts still
+refuse; a missing physical Driver does not block an available Lab model.
+
+This completes an existing Lab seam, outside the deployed graph. No artificial
+App input, grammar addition, Contract id, plan-v17 movement, causal recipe or
+existing golden change is required.
+
+**Rejected:** making simulation depend on a live listener; pretending an
+arbitrary mock payload defines a Contract; minting roots or terminals in a
+fixture; changing the production graph solely to feed its tests; treating a
+successful Lab scenario as qualification of the physical HTTP Driver.
+
 ## D-2026-09-08-1 — Loop extends the host terminal without contributing ports
 
 Loop contributes no port. Operator and Graph use their declared `out` and

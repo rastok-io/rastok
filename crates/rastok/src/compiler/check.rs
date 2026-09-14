@@ -135,7 +135,7 @@ pub const E_CHECK_DEFERRED: Code = Code::new("E-CHECK-DEFERRED");
 /// Diagnostic for a structural annotation or Extension that is unknown, ordered
 /// incorrectly, duplicated, or incompatible with the declaration kind.
 pub const E_NODE_ANNOTATION: Code = Code::new("E-NODE-ANNOTATION");
-/// Diagnostic for a connector type without a Driver in this build.
+/// Diagnostic for a Connector type without an executable Contract in the catalogue.
 pub const E_CONNECTOR_UNAVAILABLE: Code = Code::new("E-CONNECTOR-UNAVAILABLE");
 /// Diagnostic for an attribute violating its contract sheet.
 pub const E_CONTRACT_ATTR: Code = Code::new("E-CONTRACT-ATTR");
@@ -1081,6 +1081,140 @@ impl Checker<'_, '_> {
         mocks
     }
 
+    fn injection_target(
+        &mut self,
+        target: &crate::compiler::syntax::LValue,
+        app: &Graph,
+    ) -> Option<(crate::compiler::hir::InjectionTarget, Option<DataType>)> {
+        use crate::compiler::hir::InjectionTarget;
+        let (name, owner) = target.segments.split_last()?;
+        if owner.len() == 1 && owner[0].text == "app" {
+            let declaration = app
+                .boundary
+                .iter()
+                .find(|port| port.port.name() == name.text);
+            let port = match name.text.as_str() {
+                "in" => node::Port::new("in").ok()?,
+                "out" | "err" => {
+                    self.wrong_direction(
+                        target.span,
+                        &name.text,
+                        Direction::Output,
+                        "an injection enters through a graph input",
+                    );
+                    return None;
+                }
+                _ => match declaration {
+                    Some(port) if port.direction == Direction::Input => port.port.clone(),
+                    Some(_) => {
+                        self.wrong_direction(
+                            target.span,
+                            &name.text,
+                            Direction::Output,
+                            "an injection enters through a graph input",
+                        );
+                        return None;
+                    }
+                    None => {
+                        self.bag.push(
+                            Diagnostic::new(
+                                E_PORT_UNKNOWN,
+                                Phase::Check,
+                                format!("the App boundary exposes no input named `{}`", name.text),
+                            )
+                            .with_span(target.span)
+                            .with_field("port", name.text.clone()),
+                        );
+                        return None;
+                    }
+                },
+            };
+            return Some((
+                InjectionTarget::Boundary(port),
+                declaration.and_then(|port| port.ty.clone()),
+            ));
+        }
+
+        let Ok(path) = node::Path::new(owner.iter().map(|segment| segment.text.clone())) else {
+            self.deferred("an injection without an explicit source port", target.span);
+            return None;
+        };
+        let Some(node) = node_at_path(app, &path) else {
+            self.bag.push(
+                Diagnostic::new(
+                    E_RESOLVE_UNKNOWN,
+                    Phase::Resolve,
+                    format!("`{path}` names no source Connector of the App"),
+                )
+                .with_span(target.span)
+                .with_field("name", path.to_string()),
+            );
+            return None;
+        };
+        let Some(contract) = node.connector_contract_id() else {
+            self.deferred(
+                "an injection into an Operator (use an App input or a source Connector)",
+                target.span,
+            );
+            return None;
+        };
+        if contract.as_str() != crate::connector::HTTP_SERVER_CONNECTOR_ID {
+            self.deferred(
+                "source injection without a Lab ingress model (currently HttpServer ack only)",
+                target.span,
+            );
+            return None;
+        }
+        if !node.attributes().iter().any(|attribute| {
+            attribute.name == "mode"
+                && matches!(&attribute.value, AttrValue::Word(mode) if mode == "ack")
+        }) {
+            self.deferred(
+                "an HttpServer respond injection (the Lab ingress model supports ack only)",
+                target.span,
+            );
+            return None;
+        }
+        let Some(declaration) = node.ports.iter().find(|port| port.port.name() == name.text) else {
+            self.bag.push(
+                Diagnostic::new(
+                    E_PORT_UNKNOWN,
+                    Phase::Check,
+                    format!(
+                        "source Connector `{path}` exposes no port named `{}`",
+                        name.text
+                    ),
+                )
+                .with_span(target.span)
+                .with_field("port", name.text.clone()),
+            );
+            return None;
+        };
+        if declaration.direction != Direction::Output {
+            self.wrong_direction(
+                target.span,
+                &name.text,
+                declaration.direction,
+                "a source injection supplies a decoded request on the Contract output",
+            );
+            return None;
+        }
+        if name.text != "out" {
+            self.deferred(
+                "an injection into a Connector terminal (inject the decoded request on out)",
+                target.span,
+            );
+            return None;
+        }
+        Some((
+            InjectionTarget::Connector {
+                path,
+                port: declaration.port.clone(),
+            },
+            declaration.ty.clone(),
+        ))
+    }
+
     fn scenario(
         &mut self,
         decl: &crate::compiler::syntax::ScenarioDecl,
@@ -1116,65 +1250,13 @@ impl Checker<'_, '_> {
                     mocks.extend(self.mocks(std::slice::from_ref(mock), app));
                 }
                 ScenarioItem::Injection { target, value, seq } => {
-                    let segments: Vec<&str> = target
-                        .segments
-                        .iter()
-                        .map(|segment| segment.text.as_str())
-                        .collect();
-                    // The injection target is a graph INPUT of the App.
-                    // Source syntax predeclares conventional `in`; the
-                    // checker materializes every used boundary row before
-                    // HIR leaves. Source-Connector injection still joins with
-                    // the source Drivers.
-                    let ["app", name] = segments.as_slice() else {
-                        self.deferred("an injection outside the app boundary", target.span);
+                    let Some((ingress, expected)) = self.injection_target(target, app) else {
                         continue;
                     };
-                    let port = match *name {
-                        "in" => node::Port::new("in")
-                            .unwrap_or_else(|_| unreachable!("`in` is a valid port")),
-                        "out" | "err" => {
-                            self.wrong_direction(
-                                target.span,
-                                name,
-                                Direction::Output,
-                                "an injection enters through a graph input",
-                            );
-                            continue;
-                        }
-                        _ => match app.boundary.iter().find(|decl| decl.port.name() == *name) {
-                            Some(decl) if decl.direction == Direction::Input => decl.port.clone(),
-                            Some(_) => {
-                                self.wrong_direction(
-                                    target.span,
-                                    name,
-                                    Direction::Output,
-                                    "an injection enters through a graph input",
-                                );
-                                continue;
-                            }
-                            None => {
-                                self.bag.push(
-                                    Diagnostic::new(
-                                        E_PORT_UNKNOWN,
-                                        Phase::Check,
-                                        format!("the App boundary exposes no input named `{name}`"),
-                                    )
-                                    .with_span(target.span)
-                                    .with_field("port", (*name).to_string()),
-                                );
-                                continue;
-                            }
-                        },
-                    };
+                    let port = ingress.port();
                     // A draft is world-authored: it is built from
                     // constants, with no input to read.
                     let signature = expr::Signature::new();
-                    let expected = app
-                        .boundary
-                        .iter()
-                        .find(|decl| decl.port == port)
-                        .and_then(|decl| decl.ty.clone());
                     let Some(value) = self.emit_value(
                         value,
                         &signature,
@@ -1241,7 +1323,11 @@ impl Checker<'_, '_> {
                             }
                         },
                     };
-                    steps.push(ScenarioStep::Inject { port, value, seq });
+                    steps.push(ScenarioStep::Inject {
+                        target: ingress,
+                        value,
+                        seq,
+                    });
                 }
                 ScenarioItem::Advance { expr, span } => {
                     let signature = expr::Signature::new();

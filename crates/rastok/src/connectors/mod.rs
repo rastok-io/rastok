@@ -27,6 +27,7 @@ pub use assembly::{HostedAssemblyError, hosted_registry};
 pub use file::{File, FileBindError, FileFactory, FileSettingsError};
 #[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
 pub use http_client::{HttpClientConfig, HttpClientFactory};
+pub(crate) use http_server::HttpServerLabInput;
 #[cfg(feature = "hosted-http12")]
 pub use http_server::{HttpServerConfig, HttpServerFactory};
 pub use manifest::{DriverManifest, DriverManifestEntry, DriverManifestError};
@@ -86,11 +87,11 @@ pub(crate) fn scripted_protocol_binders() -> [(&'static str, ScriptedProtocolBin
     ]
 }
 
-/// Family-owned effectless Drivers required to bind inbound and session
-/// network contracts in the Lab before hosted socket implementations land.
-pub(crate) fn passive_lab_factories()
--> Result<Vec<Box<dyn ConnectorDriverFactory>>, DriverFactoryError> {
-    let mut factories = vec![http_server::lab_factory()?];
+/// Effectless inbound and Session models, independent of physical transports.
+pub(crate) fn inbound_lab_factories(
+    input: std::rc::Rc<std::cell::RefCell<HttpServerLabInput>>,
+) -> Result<Vec<Box<dyn ConnectorDriverFactory>>, DriverFactoryError> {
+    let mut factories = vec![http_server::lab_factory(input)?];
     factories.push(websocket_client::lab_factory()?);
     factories.push(websocket_server::lab_factory()?);
     Ok(factories)

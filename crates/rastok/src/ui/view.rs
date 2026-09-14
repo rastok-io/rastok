@@ -773,7 +773,6 @@ fn mailbox_contents(
     let mut contents = BTreeMap::<String, Vec<JsonValue>>::new();
     for mailbox in &inspection.mailboxes {
         for (position, delivery) in mailbox.deliveries.iter().enumerate() {
-            let annotations = node_port_annotations(plan, &mailbox.node, &delivery.port);
             contents
                 .entry(delivery.edge.clone())
                 .or_default()
@@ -788,7 +787,7 @@ fn mailbox_contents(
                     "envelope_id": delivery.envelope.meta().sys().id().to_string(),
                     "origin_id": delivery.envelope.meta().sys().origin_id().to_string(),
                     "meta": meta_json(delivery.envelope.meta()),
-                    "data": data_json(delivery.envelope.data(), annotations),
+                    "data": port_data_json(plan, Some(&mailbox.node), &delivery.port, delivery.envelope.data()),
                 }));
         }
     }
@@ -954,7 +953,6 @@ fn history(plan: &ValidatedExecutionPlan, vm: &Vm<'_>, journal: &MemJournal) -> 
         .iter()
         .enumerate()
         .map(|(index, observed)| {
-            let annotations = observation_annotations(plan, observed);
             json!({
                 "index": index,
                 "node": observed.node.as_ref().map(ToString::to_string),
@@ -962,11 +960,35 @@ fn history(plan: &ValidatedExecutionPlan, vm: &Vm<'_>, journal: &MemJournal) -> 
                 "envelope_id": observed.envelope.meta().sys().id().to_string(),
                 "origin_id": observed.envelope.meta().sys().origin_id().to_string(),
                 "meta": meta_json(observed.envelope.meta()),
-                "data": data_json(observed.envelope.data(), annotations),
+                "data": port_data_json(plan, observed.node.as_ref(), &observed.port, observed.envelope.data()),
             })
         })
         .collect::<Vec<_>>();
-    json!({ "records": records, "deliveries": deliveries, "envelopes": explanation.envelopes, "commands": explanation.commands })
+    let sources = journal
+        .records()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| {
+            let Record::Inbound(root) = record else {
+                return None;
+            };
+            let path = root.connector_path.as_ref()?;
+            Some(json!({
+                "record_index": index,
+                "node": path.to_string(),
+                "port": root.port.name(),
+                "envelope_id": root.envelope.meta().sys().id().to_string(),
+                "origin_id": root.envelope.meta().sys().origin_id().to_string(),
+                "meta": meta_json(root.envelope.meta()),
+                "data": if explanation::classified(plan) {
+                    json!({ "redacted": true })
+                } else {
+                    data_json(root.envelope.data(), node_port_annotations(plan, path, &root.port))
+                },
+            }))
+        })
+        .collect::<Vec<_>>();
+    json!({ "records": records, "deliveries": deliveries, "sources": sources, "envelopes": explanation.envelopes, "commands": explanation.commands })
 }
 
 fn history_record_description(record: &Record) -> (&'static str, Option<String>, String) {
@@ -1086,19 +1108,46 @@ fn transaction_summary(transaction: &crate::journal::TransactionRecord) -> Strin
     }
 }
 
-fn observation_annotations<'a>(
+fn port_schema<'a>(
     plan: &'a ValidatedExecutionPlan,
-    observed: &crate::runtime::vm::Observed,
-) -> &'a AnnotationTable {
-    match &observed.node {
-        Some(path) => node_port_annotations(plan, path, &observed.port),
-        None => plan
-            .resolved_ports()
-            .boundary()
-            .iter()
-            .find(|port| port.port() == &observed.port)
-            .map(crate::plan::ResolvedPort::annotations)
-            .unwrap_or(&EMPTY_ANNOTATIONS),
+    path: Option<&crate::node::Path>,
+    port: &crate::node::Port,
+) -> Option<&'a crate::plan::ResolvedPort> {
+    let ports = match path {
+        Some(path) => {
+            let index = plan
+                .plan()
+                .nodes
+                .iter()
+                .position(|node| &node.path == path)?;
+            plan.resolved_ports()
+                .node(Slot::new(u32::try_from(index).ok()?))?
+        }
+        None => plan.resolved_ports().boundary(),
+    };
+    ports.iter().find(|resolved| resolved.port() == port)
+}
+
+fn port_data_json(
+    plan: &ValidatedExecutionPlan,
+    path: Option<&crate::node::Path>,
+    port: &crate::node::Port,
+    data: &Data,
+) -> JsonValue {
+    let schema = port_schema(plan, path, port);
+    // A dynamic copy before typed validation has no field-policy proof. In a
+    // classified graph, absence of that proof must not expose the raw request.
+    if explanation::classified(plan)
+        && schema.is_none_or(|schema| matches!(schema.ty(), crate::datatype::DataType::Variant))
+    {
+        json!({ "redacted": true })
+    } else {
+        data_json(
+            data,
+            schema
+                .map(crate::plan::ResolvedPort::annotations)
+                .unwrap_or(&EMPTY_ANNOTATIONS),
+        )
     }
 }
 
@@ -1107,15 +1156,7 @@ fn node_port_annotations<'a>(
     path: &crate::node::Path,
     port: &crate::node::Port,
 ) -> &'a AnnotationTable {
-    plan.plan()
-        .nodes
-        .iter()
-        .position(|node| &node.path == path)
-        .and_then(|index| {
-            plan.resolved_ports()
-                .node(Slot::new(u32::try_from(index).unwrap_or(u32::MAX)))
-        })
-        .and_then(|ports| ports.iter().find(|resolved| resolved.port() == port))
+    port_schema(plan, Some(path), port)
         .map(crate::plan::ResolvedPort::annotations)
         .unwrap_or(&EMPTY_ANNOTATIONS)
 }
@@ -1413,13 +1454,24 @@ fn data_json(data: &Data, annotations: &AnnotationTable) -> JsonValue {
 /// The value still comes from the checked scenario on disk. The UI has no
 /// command that can replace it.
 #[must_use]
-pub fn scenario_injection_json(injection: &crate::lab::ScenarioInjectionDraft) -> JsonValue {
+pub fn scenario_injection_json(
+    plan: &ValidatedExecutionPlan,
+    injection: &crate::lab::ScenarioInjectionDraft,
+) -> JsonValue {
+    // A generic source pin may precede the first classified schema. As with
+    // scenario source text, hide that raw copy rather than imply backward taint.
+    let data = if injection.connector.is_some() && explanation::classified(plan) {
+        json!({ "redacted": true })
+    } else {
+        data_json(&injection.data, &injection.annotations)
+    };
     json!({
-        "position": "before-app-input",
+        "position": if injection.connector.is_some() { "before-source-output" } else { "before-app-input" },
+        "connector": injection.connector.as_ref().map(ToString::to_string),
         "port": injection.port.name(),
         "type": injection.ty.to_string(),
         "meta": draft_meta_json(&injection.ext),
-        "data": data_json(&injection.data, &injection.annotations),
+        "data": data,
     })
 }
 
@@ -1935,6 +1987,11 @@ graph inspected : App {
 
     #[test]
     fn a_pending_injection_is_a_read_only_projection_of_the_authored_scenario() {
+        let compilation = crate::compiler::compile(
+            &["graph app : App { input in: text; output out: text; in -> out }"],
+            &crate::contract::ContractCatalog::try_m0().unwrap(),
+        )
+        .unwrap();
         let ty = crate::datatype::DataType::Struct(
             crate::datatype::StructType::new(vec![
                 crate::datatype::TypeField::new("count", crate::datatype::DataType::INT),
@@ -1942,7 +1999,8 @@ graph inspected : App {
             ])
             .expect("two fields"),
         );
-        let draft = crate::lab::ScenarioInjectionDraft {
+        let mut draft = crate::lab::ScenarioInjectionDraft {
+            connector: None,
             port: crate::node::Port::new("in").expect("conventional port"),
             ty,
             annotations: AnnotationTable::empty(),
@@ -1953,7 +2011,7 @@ graph inspected : App {
             ext: Namespace::new(),
             edited: false,
         };
-        let rendered = scenario_injection_json(&draft);
+        let rendered = scenario_injection_json(&compilation.plan, &draft);
         assert_eq!(rendered["position"], "before-app-input");
         assert_eq!(rendered["meta"]["sys"]["pending"], "minted on admission");
         assert_eq!(rendered["type"], "struct");
@@ -1961,10 +2019,22 @@ graph inspected : App {
         assert_eq!(rendered["data"]["content"]["count"], 3);
         assert_eq!(rendered["data"]["content"]["name"], "alice");
         assert!(rendered.get("editable").is_none());
+        draft.connector = Some(crate::node::Path::new(["listener"]).expect("source path"));
+        draft.port = crate::node::Port::new("out").expect("source port");
+        let rendered = scenario_injection_json(&compilation.plan, &draft);
+        assert_eq!(rendered["position"], "before-source-output");
+        assert_eq!(rendered["connector"], "listener");
+        assert_eq!(rendered["port"], "out");
+        assert_eq!(rendered["meta"]["sys"]["pending"], "minted on admission");
     }
 
     #[test]
     fn a_classified_pending_scenario_value_is_redacted() {
+        let compilation = crate::compiler::compile(
+            &["graph app : App { input in: text; output out: text; in -> out }"],
+            &crate::contract::ContractCatalog::try_m0().unwrap(),
+        )
+        .unwrap();
         let annotations = AnnotationTable::new(vec![(
             SchemaPath::root(),
             AnnotationSet::new(vec![DataAnnotation::Sensitive(
@@ -1974,6 +2044,7 @@ graph inspected : App {
         )])
         .expect("one canonical path");
         let draft = crate::lab::ScenarioInjectionDraft {
+            connector: None,
             port: crate::node::Port::new("in").expect("conventional port"),
             ty: crate::datatype::DataType::Struct(
                 crate::datatype::StructType::new(vec![crate::datatype::TypeField::new(
@@ -1990,9 +2061,58 @@ graph inspected : App {
             ext: Namespace::new(),
             edited: false,
         };
-        let rendered = scenario_injection_json(&draft);
+        let rendered = scenario_injection_json(&compilation.plan, &draft);
         assert!(!rendered.to_string().contains("alice"));
         assert!(rendered.to_string().contains("redacted"));
         assert!(rendered.get("editable").is_none());
+    }
+
+    #[test]
+    fn a_source_copy_cannot_bypass_classification_further_inside_the_graph() {
+        let source = r#"
+type Protected = struct { name: text @sensitive(level = restricted) }
+graph webhook : App {
+  output out: Protected
+  connector listener : HttpServer { listen = "127.0.0.1:8080"; codec = text }
+  operator classify {
+    input in: text
+    output out: Protected
+    on in { out = { name = data } }
+  }
+  listener -> classify -> out
+  listener.exit -> nothing
+}
+lab webhook { simulation requests on app { scenario classified {
+  listener.out = "private-source-literal"
+} } }
+"#;
+        let compilation = crate::compiler::compile(
+            &[source],
+            &crate::contract::ContractCatalog::try_m0().unwrap(),
+        )
+        .unwrap();
+        let simulation = &compilation.labs[0].simulations[0];
+        let mut session = crate::lab::ScenarioSession::try_new(
+            &compilation.plan,
+            crate::plan::GraphVersion(1),
+            &simulation.name,
+            &simulation.mocks,
+            &simulation.scenarios[0],
+            None,
+        )
+        .unwrap();
+        let pending = session.next_injection_draft().unwrap().unwrap();
+        let rendered = scenario_injection_json(&compilation.plan, &pending);
+        assert!(!rendered.to_string().contains("private-source-literal"));
+        assert_eq!(rendered["data"]["redacted"], true);
+
+        session.next_action().unwrap();
+        let rendered = history(&compilation.plan, session.vm(), session.journal());
+        assert!(
+            !rendered["sources"]
+                .to_string()
+                .contains("private-source-literal")
+        );
+        assert_eq!(rendered["sources"][0]["data"]["redacted"], true);
     }
 }

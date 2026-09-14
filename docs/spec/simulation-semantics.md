@@ -99,29 +99,35 @@ production the world-half is *recorded* ; in simulation there is no world —
 Mock composition uses the same categorical boundary as production. The Lab
 registers one mock factory for each exact Connector contract id used by the
 plan, proves its required roles through `RuntimeBindings`, and reuses that
-family's pure plan-bound request framing and scheduler-terminal projection.
-Only the external effect after the OUTBOUND open is replaced. Consequently a
+Contract's pure plan-bound request framing and scheduler-terminal projection.
+Only the external interaction is replaced. Consequently a
 mock cannot change contract identity, skip binding, choose a different request
 digest, weaken a port type, mint an envelope, or write a journal record. One
 simulation may mock several Connectors with different Contracts; this does not create a second
 machine or a second plan.
 
-At M1.6 H2, all four HTTP/WebSocket Contracts already walk this exact binding
-door without a live socket. HttpClient's mock seals the resolved method, URL,
-lossless headers, body and idempotency material before the ordinary OUTBOUND
-open. The server and session factories are effectless role/exchange twins;
-scenario injection still enters through the production VM admission path.
-H3's private hosted-engine adoption changes none of these simulation rules.
-H4 proves the real HttpClient against the same Call battery and request binder;
-H5.1 proves real HTTP/1.1–2 server `ack` against the same two-phase inbound
-Call fold. H5.2's family fake also proves that a transformed direct-lineage
-response seals the exact keyed opening instance before commit, may remain
-pending without protocol bytes, and closes by consuming its real delivery.
-Final H5 applies that fold to `ack`/`respond` over H1/H2/H3. H6 runs the same
-generic Session battery against both WebSocket family fakes and then proves
-their wire bindings independently. The Lab still replaces the listener or
-peer rather than opening a fake socket, while retaining the same SessionRefs,
-write obligations and sole terminal exit as production.
+**Executable Contract, not physical Driver** (D-2026-09-09-3). Checking needs
+the Contract's types and rules; simulation additionally needs an effectless
+exchange model; real execution needs a physical Driver. Pure framing and
+deterministic protocol rules belong to the shared Contract implementation,
+not to a socket dependency. A missing physical Driver must not block an
+available Lab model. Conversely, a bag of mocked outputs cannot make an
+unknown Contract or unsupported exchange profile executable.
+
+All four HTTP/WebSocket Contracts have effectless role bindings. Binding alone
+does not prove a complete scripted protocol: outgoing Process, File and
+HttpClient Calls execute their mocks; `HttpServer` **ack** executes decoded
+source injections; source `respond` and Session scripting remain named gates.
+HttpClient's mock seals the resolved method, URL, lossless headers, body and
+idempotency material before the ordinary OUTBOUND open. HttpServer's Lab
+proposes an inbound draft and returns a terminal only after committed acceptance.
+Neither needs the physical networking features.
+
+Driver conformance is separate evidence. The inbound Call/Session batteries
+and real H1/H2/H3/WebSocket tests qualify correlation, decoding, authentication,
+bounded transport and acknowledgements. A decoded Lab injection bypasses the
+wire decoder; it cannot demonstrate that malformed JSON, failed authentication
+or an excessive HTTP body was refused before admission.
 
 Two-mode equivalence, stated journal-relative : *same world-half and logical
 timeline in → byte-identical **causal cores** out*
@@ -152,11 +158,45 @@ compare them to the bridge-generated scenario's.
   outputs (`orders.out = …`) — born through the root recipe, clean lineage.
   Mid-graph injection is a **compile error** (it would fabricate an envelope
   with no lineage and no id recipe). To unit-test one operator, wrap it in a
-  three-line app with a `Memory`/`HttpServer` source.
+  small App with a declared public input or a modeled source Connector.
+  App input injections (`app.in = …`) use the separate public-input seam.
 - **Observation anywhere** : `expect` may target any port, read-only.
 - **Steps run sequentially, each drains to a stable state**
   (execution-model §8) — an expectation never reads an in-between.
+  Interactive stepping preserves the batch world's order: drain ready VM
+  transactions, retain outbound acknowledgements, then offer the next scripted
+  ingress. A Session with a just-retained opening or frame is not yet at rest
+  just because no Operator is ready; confirm a no-progress world poll before
+  advancing to the next authored action. Pausing does not offer frames by itself.
 
+### 2.1 Executable source model — HttpServer ack
+
+`listener.out = value` supplies a **decoded** request, type-checked against
+the resolved `out` pin (`text`, `bytes` or `variant` for JSON). It scripts a
+successful fixed ACK, not a physical socket write. No `mock listener` is
+needed. The fixture may supply `meta.ext` explicitly; absent HTTP metadata is
+not invented. `meta.app` and `meta.sys` remain forbidden fixture writes.
+
+The source path and sequence enter the ordinary `InboundSubmission`.
+`RuntimeBindings` proves ownership; VM admission reserves every destination
+and commits INBOUND before the Lab receives the `InboundCallRef`. The Lab
+then reports `Completed { status: 202 }`; the core commits the ordinary
+correlated `l:reply` transaction and `exit`. `expect listener.out` reads the
+INBOUND root once, including when the explicit disposition is `nothing`.
+No OUTBOUND Call or extra root is manufactured for the acknowledgement.
+
+There is one retained world-side proposal and one terminal slot. Under
+pressure, neither changes identity nor acknowledges. If the current injection
+cannot settle, the sequential scenario reports pending admission and does not
+skip to the next authored action. A refused proposal produces no source
+observation or terminal. Source `exit` cannot be injected directly; Operator
+ports, outgoing Connector outputs and unmodeled source profiles refuse at check.
+
+The fixture [lab-http-source.rkg](../../crates/rastok/tests/fixtures/lab-http-source.rkg)
+executes without network features and without any App input. Its Lab changes
+neither the production package nor its semantic hash. The separate real
+HttpServer conformance tests exercise pre-admission protocol refusals; no
+`expect refused` syntax or raw HTTP injection is introduced here.
 
 ## 3. Syntax — the graph's own grammar, mirrored
 
