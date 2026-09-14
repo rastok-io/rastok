@@ -1,0 +1,36 @@
+"use strict";
+// Lexical smoke tests only, not a substitute for VS Code's TextMate tokenizer.
+const { test } = require("node:test");
+const assert = require("node:assert/strict");
+const grammar = require("./syntaxes/rkg.tmLanguage.json");
+
+test("every TextMate regular expression compiles in the shared regex subset", () => {
+  function visit(value) {
+    if (value && typeof value === "object") {
+      for (const [key, child] of Object.entries(value)) {
+        if (["match", "begin", "end"].includes(key)) new RegExp(child);
+        else visit(child);
+      }
+    }
+  }
+  visit(grammar);
+});
+
+test("v18 manager commands, annotations and spatial arrows have distinct scopes", () => {
+  const matches = (word, scope) => grammar.patterns.some(rule => rule.match && rule.name === scope && new RegExp(rule.match).test(word));
+  for (const word of ["Loop.next", "Loop.again", "Loop.done", "Loop.expired", "Loop.state"]) assert.ok(matches(word, "support.variable.loop.rkg"));
+  for (const word of ["model.instance.stop", "conversation.model.instance.stop"]) assert.ok(matches(word, "support.function.instance-command.rkg"));
+  for (const word of ["@personal", "@secret", "@sensitive", "@measure", "@cost"]) assert.ok(matches(word, "storage.modifier.annotation.rkg"));
+  for (const arrow of ["->", "=>", "<->"]) assert.ok(matches(arrow, "keyword.operator.rkg"));
+  assert.equal(matches("when", "keyword.control.rkg"), false, "removed wiring guard is not an executable keyword");
+  assert.match("operator decide", new RegExp(grammar.repository.declarations.match));
+  assert.equal(new RegExp(grammar.repository.declarations.match).exec("connector model")[2], "model");
+});
+
+test("comments, strings and readers precede keyword matching", () => {
+  assert.deepEqual(grammar.patterns.slice(0, 3).map(rule => rule.include), ["#comments", "#strings", "#readers"]);
+  assert.match("// Loop.again is prose", new RegExp(grammar.repository.comments.patterns[0].begin));
+  assert.match('base64! { YQ== }', new RegExp(grammar.repository['raw-reader'].begin));
+  assert.match('base64!("text/plain") { YQ== }', new RegExp(grammar.repository['raw-reader'].begin));
+  assert.match('\\"', new RegExp(grammar.repository.strings.patterns[0].match));
+});

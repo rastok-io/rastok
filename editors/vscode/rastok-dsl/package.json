@@ -1,0 +1,23 @@
+{
+  "name": "rastok-dsl",
+  "displayName": "Rastok DSL",
+  "description": "Syntax highlighting for Rastok v18 graphs and Lab scenarios.",
+  "version": "0.0.1",
+  "publisher": "rastok",
+  "license": "Apache-2.0",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [{
+      "id": "rkg",
+      "aliases": ["Rastok", "rkg"],
+      "extensions": [".rkg"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "rkg",
+      "scopeName": "source.rkg",
+      "path": "./syntaxes/rkg.tmLanguage.json"
+    }]
+  }
+}

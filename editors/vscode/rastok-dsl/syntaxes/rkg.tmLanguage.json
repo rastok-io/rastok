@@ -1,0 +1,86 @@
+{
+  "name": "Rastok",
+  "scopeName": "source.rkg",
+  "fileTypes": ["rkg"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#readers" },
+    { "include": "#declarations" },
+    { "name": "storage.modifier.annotation.rkg", "match": "@(sensitive|secret|personal|measure|cost)\\b" },
+    { "name": "support.variable.loop.rkg", "match": "\\bLoop\\.(next|again|done|state|fuel|delay|measure|entry|terminal|expired)\\b" },
+    { "name": "support.function.instance-command.rkg", "match": "\\b(?:[A-Za-z_][A-Za-z0-9_]*\\.)*instance\\.stop\\b" },
+    { "name": "entity.other.inherited-class.rkg", "match": "\\b(App|Loop|Saga)\\b" },
+    { "name": "support.class.connector.rkg", "match": "\\b(Process|File|HttpClient|HttpServer|WebSocketClient|WebSocketServer)\\b" },
+    { "name": "keyword.control.rkg", "match": "\\b(on|where|within|last|match|nothing|stop|expect|count|advance|crash|after|restart|origin|is|as|in)\\b" },
+    { "name": "storage.type.rkg", "match": "\\b(struct|union|enum|map|array|list|tuple|bool|int|uint|float|decimal|text|bytes|variant|timestamp|duration|media_type)\\b" },
+    { "name": "constant.language.rkg", "match": "\\b(true|false|null)\\b" },
+    { "name": "support.function.rkg", "match": "\\b(env|secret|asset|duration|timestamp|decimal|media_type|size)\\s*(?=\\()" },
+    { "name": "variable.language.rkg", "match": "\\b(data|meta|instance|lifetime|closing|behavior|effect)\\b" },
+    { "name": "constant.numeric.rkg", "match": "\\b(?:0x[0-9a-fA-F]+|[0-9]+(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)\\b" },
+    { "name": "keyword.operator.rkg", "match": "<->|->|=>|==|!=|<=|>=|&&|\\|\\||[=+*/%!?<>|.-]" },
+    { "name": "punctuation.separator.rkg", "match": "[,:;]" },
+    { "name": "punctuation.section.rkg", "match": "[{}()\\[\\]]" }
+  ],
+  "repository": {
+    "comments": { "patterns": [
+      { "name": "comment.line.double-slash.rkg", "begin": "//", "end": "$" },
+      { "name": "comment.block.rkg", "begin": "/\\*", "end": "\\*/", "patterns": [{ "include": "#comments" }] }
+    ] },
+    "strings": {
+      "name": "string.quoted.double.rkg",
+      "begin": "\"", "end": "\"",
+      "patterns": [{ "name": "constant.character.escape.rkg", "match": "\\\\(?:[\\\"\\\\/bfnrt]|u[0-9a-fA-F]{4})" }]
+    },
+    "readers": { "patterns": [
+      { "include": "#raw-reader" },
+      {
+        "name": "meta.reader.json.rkg",
+        "begin": "\\b(json)(!)\\s*(\\{)", "end": "\\}",
+        "beginCaptures": { "1": { "name": "support.function.reader.rkg" }, "2": { "name": "punctuation.definition.reader.rkg" } },
+        "patterns": [{ "include": "#json-values" }]
+      },
+      {
+        "name": "meta.reader.json.rkg",
+        "begin": "\\b(json)(!)\\s*(\\[)", "end": "\\]",
+        "beginCaptures": { "1": { "name": "support.function.reader.rkg" }, "2": { "name": "punctuation.definition.reader.rkg" } },
+        "patterns": [{ "include": "#json-values" }]
+      },
+      {
+        "name": "meta.reader.json.rkg",
+        "match": "\\b(json)(!)\\s*(\"(?:\\\\.|[^\"\\\\])*\"|true\\b|false\\b|null\\b|-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)",
+        "captures": { "1": { "name": "support.function.reader.rkg" }, "2": { "name": "punctuation.definition.reader.rkg" }, "3": { "name": "constant.other.json.rkg" } }
+      }
+    ] },
+    "json-values": { "patterns": [
+      { "include": "#strings" },
+      { "begin": "\\{", "end": "\\}", "patterns": [{ "include": "#json-values" }] },
+      { "begin": "\\[", "end": "\\]", "patterns": [{ "include": "#json-values" }] },
+      { "name": "constant.language.json.rkg", "match": "\\b(true|false|null)\\b" },
+      { "name": "constant.numeric.json.rkg", "match": "-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?" },
+      { "name": "punctuation.separator.json.rkg", "match": "[,:]" }
+    ] },
+    "raw-reader": {
+      "name": "meta.reader.rkg",
+      "begin": "\\b(text|base64)(!)(?:\\s*\\(\\s*\"(?:\\\\.|[^\"\\\\])*\"\\s*\\))?\\s*(\\{)", "end": "\\}",
+      "beginCaptures": {
+        "1": { "name": "support.function.reader.rkg" },
+        "2": { "name": "punctuation.definition.reader.rkg" },
+        "3": { "name": "punctuation.section.block.begin.rkg" }
+      },
+      "contentName": "string.unquoted.reader.rkg",
+      "patterns": [{ "include": "#reader-braces" }]
+    },
+    "reader-braces": {
+      "begin": "\\{", "end": "\\}",
+      "patterns": [{ "include": "#reader-braces" }]
+    },
+    "declarations": {
+      "match": "\\b(graph|operator|connector|lab|simulation|scenario|mock|type|input|output|val|var)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "storage.type.declaration.rkg" },
+        "2": { "name": "entity.name.type.rkg" }
+      }
+    }
+  }
+}
