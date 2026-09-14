@@ -20,7 +20,9 @@ before(async () => {
 });
 after(async () => { await browser?.close(); });
 
-async function openTour(t, viewport = { width: 1352, height: 760 }, source = "examples/keyed-retry.rkg", commandArgs, environment = {}) {
+// The two-simultaneous-retries fixture pins intermediate transition regressions;
+// the public asymmetric gallery example is also exercised in the example matrix.
+async function openTour(t, viewport = { width: 1352, height: 760 }, source = "crates/rastok/tests/fixtures/ui-two-retries.rkg", commandArgs, environment = {}) {
   const child = spawn(rastok, commandArgs || ["simulate", source, "--ui"], { cwd: root, env: { ...process.env, ...environment } });
   let context;
   const errors = [];

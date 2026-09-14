@@ -172,7 +172,11 @@ Envelope / Mailbox / Definition / Instances / History / Assertion / Compare tabs
 Tabs wrap without overlapping their panel. Instances includes
 exchanges, injection history and the public CostReport. The canvas pans/zooms;
 a splitter resizes the inspector. Initial fit uses the available space.
-Graph text stays at interface text size. Theme follows the system.
+Graph text stays at interface text size. Automatic fit has a readability floor;
+larger drawings remain pannable instead of shrinking their boxes below the space
+reserved for text. Separate vertical scope bands reuse horizontal rank columns.
+Node sizes reserve title and instance-badge space before admission; opening an
+instance does not move the graph. Theme follows the system.
 
 Ports slide and reorder to reduce crossings. Smooth cubic paths have horizontal
 port tangents; deterministic lane/label placement separates overlapping paths.
@@ -300,11 +304,13 @@ Every item has a browser or projection regression; browser tests are in
 | Folded ids across five examples and three viewing states | `echo/jsonl/gauge/countdown/keyed-retry: live, history and replay…` |
 | Dial and waiting at B21–B22, stable selected-prefix values | `transitions have explicit transport names…`; `Loop dials follow historical admissions…` |
 | Every graph hover, mailbox head preview by pointer and keyboard without navigation, exact future timeout and cancellation | `explanatory hovers expose types…` |
+| Readable compound layout at 1352×760 and narrow width; text/curve clearance; HISTORY clears zoom; four-digit mailbox badges | `the flagship keeps readable graph text…`; `vertically stacked scopes reuse horizontal ranks…`; `a four-digit mailbox count fits…` |
 | Closed/open decisions, selected route case, prestate and joined inputs | `Operator decisions highlight…`; `open_match_explains_only_evaluated_predicates_using_prestate`; `join_decisions_use_named_inputs_and_the_retained_completing_port` |
 | Causal links without forward leakage | `causal selection links opening admission…`; `decisions_use_consumed_envelopes_and_the_selected_prefix` |
 | Scenario/action links, `a` and `n` on a fresh LIVE session, keyboard navigation | `scenario actions select their retained transition…`; `the explanatory path is reachable with Tab and keyboard alone`; `keyboard node selection retains focus…` |
 | Assertion diff, expect-nothing offender and redaction | `failed expect shows…`; `failure_explanation_uses_the_exact_assertion_window_and_field`; `classified_predicates_and_assertion_values_are_not_explanation_channels` |
 | Aligned comparisons, separate read-only sessions | `comparison aligns two keyed Loop instances…` |
+| Resident Process gateway, no child in simulation, correct scripted reply counts in LIVE/HISTORY/REPLAY | `the resident gateway explains independent Process Sessions…`; `resident_gateway_steps_deliver_opening_before_frames_like_the_batch_lab` compares the complete batch/step trace |
 
 The browser harness checks both uncaught exceptions and console errors on every
 page. SVG sizing uses the CSSOM rather than a blocked inline style attribute;

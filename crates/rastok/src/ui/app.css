@@ -141,14 +141,14 @@ main { display: flex; height: calc(100vh - 61px); min-height: 0; flex-direction:
 .graph-canvas { position: relative; width: 100%; min-height: 0; flex: 1 1 auto; overflow: hidden; background-color: color-mix(in srgb, var(--surface) 60%, transparent); background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px); background-size: 16px 16px; cursor: grab; touch-action: none; }
 .graph-canvas.panning { cursor: grabbing; user-select: none; }
 .graph-pan-layer { position: absolute; inset: 0; transform-origin: 0 0; will-change: transform; }
-.graph-svg { display: block; width: calc(100% - 48px); min-width: 0; max-width: var(--graph-fit-width); height: auto; margin: 24px; overflow: visible; --graph-title-font-size: 12px; --graph-mono-font-size: 10px; --graph-small-font-size: 9px; --graph-text-halo-width: 3px; }
+.graph-svg { display: block; width: calc(100% - 48px); min-width: var(--graph-readable-width); max-width: var(--graph-fit-width); height: auto; margin: 24px; overflow: visible; --graph-title-font-size: 12px; --graph-mono-font-size: 10px; --graph-small-font-size: 9px; --graph-text-halo-width: 3px; }
 .graph-viewport-controls { position: absolute; z-index: 10; top: 8px; right: 8px; display: flex; height: 24px; border: 1px solid var(--hairline-strong); background: var(--surface); }
 .graph-viewport-controls button { display: grid; width: 26px; min-height: 22px; padding: 0; place-items: center; border-width: 0 1px 0 0; background: transparent; color: var(--muted); }
 .graph-viewport-controls button:last-of-type { border-right: 0; }
 .graph-viewport-controls button:hover { color: var(--text); }
 .graph-viewport-controls svg { width: 12px; height: 12px; fill: currentColor; }
 .graph-zoom-value { display: grid; min-width: 42px; padding: 0 4px; place-items: center; border-left: 1px solid var(--hairline); color: var(--muted); font: 10px var(--mono); }
-.history-watermark { display: none; position: absolute; z-index: 8; top: 8px; right: 8px; padding: 2px 5px; border: 1px solid color-mix(in srgb, var(--history) 55%, var(--hairline)); background: var(--surface); color: var(--history); font: 700 10px var(--mono); pointer-events: none; }
+.history-watermark { display: none; position: absolute; z-index: 8; top: 8px; right: 144px; padding: 2px 5px; border: 1px solid color-mix(in srgb, var(--history) 55%, var(--hairline)); background: var(--surface); color: var(--history); font: 700 10px var(--mono); pointer-events: none; }
 body.historical-view .history-watermark { display: block; }
 .graph-legend { display: flex; min-height: 20px; flex: 0 0 20px; align-items: center; gap: 12px; padding: 0 8px; border-top: 1px solid var(--hairline); color: var(--muted); font-size: 10px; }
 .graph-legend > span:not(.legend-evidence)::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 4px; border: 1px solid; vertical-align: 0; }

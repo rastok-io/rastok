@@ -1048,8 +1048,8 @@ mod tests {
         assert!(GRAPH_LAYOUT_JS.contains("curveLabelCollisionScore("));
         assert!(GRAPH_LAYOUT_JS.contains("curvedCorridorSegments("));
         assert!(GRAPH_LAYOUT_JS.contains("candidate.portals.map"));
-        assert!(GRAPH_LAYOUT_JS.contains("ROOT_OUTPUT_GUTTER = 140"));
-        assert!(GRAPH_LAYOUT_JS.contains("ROOT_CONTENT_GUTTER = 108"));
+        assert!(APP_CSS.contains("min-width: var(--graph-readable-width)"));
+        assert!(APP_JS.contains("layout.width * graphLayout.minimumReadableScale"));
         assert!(APP_CSS.contains("max-width: var(--graph-fit-width)"));
         assert!(APP_JS.contains("Math.ceil(layout.width * 1.5)"));
         assert!(APP_JS.contains("keepGraphTextAtInterfaceSize(svg, layout.width)"));

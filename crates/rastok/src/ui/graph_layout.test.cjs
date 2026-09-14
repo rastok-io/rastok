@@ -77,6 +77,52 @@ test("barycentric sweeps untangle crossed adjacent layers deterministically", ()
   assert.equal(stableProjection(first), stableProjection(second));
 });
 
+test("vertically stacked scopes reuse horizontal ranks and reserve instance-title space", () => {
+  const ports = [{ name: "in", direction: "input" }, { name: "out", direction: "output" }];
+  const topology = {
+    owners: [owner("owner:0", null), owner("owner:1", "owner:0", ports)],
+    nodes: [
+      operator("listener", "owner:0", ports),
+      operator("validate", "owner:0", ports),
+      operator("deduplicate", "owner:0", ports),
+      operator("request", "owner:1", ports),
+      operator("partner", "owner:1", ports),
+      operator("accounting", "owner:1", ports),
+    ],
+    edges: [
+      edge(0, "listener", "out", "validate", "in"),
+      edge(1, "validate", "out", "deduplicate", "in"),
+      edge(2, "deduplicate", "out", "request", "in"),
+      edge(3, "request", "out", "partner", "in"),
+      edge(4, "partner", "out", "accounting", "in"),
+    ],
+  };
+  const before = JSON.stringify(topology);
+  const initial = render(topology);
+  assert.equal(initial.layout.positions.get("listener").x, initial.layout.positions.get("request").x);
+  assert.ok(initial.layout.positions.get("request").y > initial.layout.positions.get("deduplicate").y);
+  assert.ok(initial.layout.positions.get("deduplicate").width >= 140, "the full name and instance badge have separate space");
+  assert.equal(JSON.stringify(topology), before, "layout does not change validated topology");
+  const opened = render({ ...topology, nodes: topology.nodes.map(node => ({ ...node, instances: [{}] })) });
+  assert.equal(stableProjection(initial), stableProjection(opened), "opening an instance does not move the graph");
+});
+
+test("a four-digit mailbox count fits the routed badge without changing the edge", () => {
+  const topology = {
+    owners: [owner("owner:0", null)],
+    nodes: [
+      operator("a", "owner:0", [{ name: "out", direction: "output" }]),
+      operator("b", "owner:0", [{ name: "in", direction: "input" }]),
+    ],
+    edges: [edge(0, "a", "out", "b", "in")],
+  };
+  const empty = render(topology);
+  const full = render({ ...topology, edges: [{ ...topology.edges[0], queued_count: "1024" }] });
+  assert.deepEqual(full.routes.get(0).presentationPoints, empty.routes.get(0).presentationPoints);
+  assert.ok(full.routes.get(0).label.box.width > empty.routes.get(0).label.box.width);
+  assert.ok(full.routes.get(0).label.box.width * layoutEngine.minimumReadableScale >= 40);
+});
+
 test("Graph-side ports slide to their neighbours instead of retaining declaration order", () => {
   const topology = {
     owners: [owner("owner:0", null, [

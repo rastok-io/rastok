@@ -719,7 +719,7 @@ mod tests {
     #[test]
     fn decisions_use_consumed_envelopes_and_the_selected_prefix() {
         let compilation = crate::compiler::compile(
-            &[include_str!("../../../../../examples/keyed-retry.rkg")],
+            &[include_str!("../../../tests/fixtures/ui-two-retries.rkg")],
             &crate::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();

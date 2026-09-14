@@ -870,6 +870,7 @@ function renderTopology(topology, animateBoundary = false) {
     "aria-label": "Validated Rastok graph with current mailbox occupancy",
   });
   svg.style.setProperty("--graph-fit-width", `${Math.ceil(layout.width * 1.5)}px`);
+  svg.style.setProperty("--graph-readable-width", `${layout.width * graphLayout.minimumReadableScale}px`);
   svg.classList.add("graph-svg");
   const definitions = svgElement("defs");
   const marker = svgElement("marker", {
@@ -1073,9 +1074,10 @@ function renderTopology(topology, animateBoundary = false) {
     }
 
     if (mailbox) {
+      const counterWidth = route.label.box.width;
       const badge = svgElement("g", {
         class: "edge-counter",
-        transform: `translate(${route.label.x - 18} ${route.label.y - 9})`,
+        transform: `translate(${route.label.x - counterWidth / 2} ${route.label.y - 9})`,
         role: "button",
         tabindex: "0",
         "aria-label": `Open mailbox ${destination.path || destination.label}.${edge.target.port}, ${edge.queued_count || "0"} messages waiting`,
@@ -1083,8 +1085,8 @@ function renderTopology(topology, animateBoundary = false) {
       badge.dataset.focusKey = `mailbox:${edge.route}`;
       const counterTitle = svgElement("title");
       counterTitle.textContent = `Mailbox ${destination.path || destination.label}.${edge.target.port}: ${edge.queued_count || "0"} messages waiting`;
-      badge.append(svgElement("rect", { width: "36", height: "18", rx: "2" }));
-      const queued = svgElement("text", { x: "18", y: "13", "text-anchor": "middle" });
+      badge.append(svgElement("rect", { width: counterWidth, height: "18", rx: "2" }));
+      const queued = svgElement("text", { x: counterWidth / 2, y: "13", "text-anchor": "middle" });
       queued.textContent = `≡ ${edge.queued_count || "0"}`;
       badge.append(counterTitle, queued);
       const preview = document.createElement("div");

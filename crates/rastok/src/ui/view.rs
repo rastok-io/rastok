@@ -1800,7 +1800,7 @@ graph inspected : App {
 
     #[test]
     fn loop_commands_and_run_dependencies_do_not_invent_ports_or_expose_state_data() {
-        let source = include_str!("../../../../examples/keyed-retry.rkg");
+        let source = include_str!("../../tests/fixtures/ui-two-retries.rkg");
         let compilation = crate::compiler::compile(
             &[source],
             &crate::contract::ContractCatalog::try_m0().unwrap(),
