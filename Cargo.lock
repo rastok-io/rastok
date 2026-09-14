@@ -826,7 +826,7 @@ checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
 name = "rastok"
-version = "0.0.0"
+version = "0.1.0-alpha"
 dependencies = [
  "blake3",
  "boring",
@@ -853,7 +853,7 @@ dependencies = [
 
 [[package]]
 name = "rastok-core"
-version = "0.0.0"
+version = "0.1.0-alpha"
 dependencies = [
  "blake3",
  "cel-interpreter",

@@ -3,9 +3,13 @@ name = "rastok"
 description = "Typed graph runtime for stateful, effectful integrations"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 publish.workspace = true
+readme = "README.md"
+keywords = ["workflow", "integration", "simulation", "dataflow"]
+categories = ["command-line-utilities", "development-tools"]
 
 [lib]
 path = "src/lib.rs"
@@ -86,7 +90,7 @@ hosted-websocket = [
 
 [dependencies]
 blake3 = { workspace = true, features = ["std"] }
-rastok-core = { path = "../rastok-core" }
+rastok-core = { path = "../rastok-core", version = "=0.1.0-alpha" }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.151"
 serde_yaml_ng = "=0.10.0"

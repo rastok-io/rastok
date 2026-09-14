@@ -3,9 +3,13 @@ name = "rastok-core"
 description = "The no_std-ready Rastok kernel: vocabulary, envelope, expressions, plan, journal, boundary, and deterministic machine"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 publish.workspace = true
+readme = "README.md"
+keywords = ["workflow", "simulation", "dataflow", "no-std"]
+categories = ["no-std", "development-tools"]
 
 [lib]
 path = "src/lib.rs"

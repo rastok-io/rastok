@@ -28,11 +28,15 @@ jobs:
         run: |
           mkdir -p dist
           cp "target/${{ matrix.target }}/release/rastok" dist/rastok
-          cp LICENSE dist/LICENSE
-          tar -czf "rastok-${{ matrix.target }}.tar.gz" -C dist rastok LICENSE
-          shasum -a 256 "rastok-${{ matrix.target }}.tar.gz"
+          cp LICENSE README.md CHANGELOG.md dist/
+          version=$(cargo pkgid -p rastok | cut -d '#' -f 2)
+          archive="rastok-${version}-${{ matrix.target }}.tar.gz"
+          tar -czf "$archive" -C dist rastok LICENSE README.md CHANGELOG.md
+          shasum -a 256 "$archive" > "$archive.sha256"
       - uses: actions/upload-artifact@v4
         with:
           name: rastok-${{ matrix.target }}
-          path: rastok-${{ matrix.target }}.tar.gz
+          path: |
+            rastok-*-${{ matrix.target }}.tar.gz
+            rastok-*-${{ matrix.target }}.tar.gz.sha256
           retention-days: 30
