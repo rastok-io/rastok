@@ -115,6 +115,12 @@ async function refreshSnapshot() {
     commandOrigin = null;
   }
   if (!currentSnapshot) {
+    if (liveSnapshot.mode === "replay") {
+      replayPaused = true;
+      await showBoundary(liveSnapshot.timeline.session, 0);
+      setCommandStatus("Recorded run · read-only replay · no Driver I/O");
+      return;
+    }
     currentSnapshot = liveSnapshot;
     renderSnapshot(currentSnapshot);
     return;
@@ -144,7 +150,7 @@ function renderSnapshot(snapshot) {
   text("logical-time", formatLogicalTime(execution.logical_time_ns));
   document.querySelector("#logical-time").title = execution.logical_time_ns === undefined
     ? ""
-    : `${execution.logical_time_ns} ns`;
+    : `${execution.logical_time_ns} ns${snapshot.mode === "replay" ? " · checkpoint observation, not a record commit timestamp" : ""}`;
   text("awaiting-calls", String(execution.awaiting_outbound_calls || 0));
 
   const simulation = snapshot.mode === "simulate";
@@ -177,13 +183,14 @@ function renderExecutionState(snapshot) {
   const liveState = liveSnapshot?.execution?.state || state;
   const atLive = sameTimelinePoint(snapshot, liveSnapshot);
   const pill = document.querySelector("#execution-state");
-  pill.title = `Engine ${liveState}; ${atLive ? "viewing the live head" : "viewing a retained transition"}`;
+  const recording = snapshot?.mode === "replay";
+  pill.title = recording ? "Read-only recording; no execution engine is running" : `Engine ${liveState}; ${atLive ? "viewing the live head" : "viewing a retained transition"}`;
   if (!atLive && (bufferedPlayback || replayPaused)) {
     text("execution-state", replayPaused ? "replay paused" : "replaying");
     pill.className = `execution-state state-${replayPaused ? "paused" : "running"}`;
     return;
   }
-  text("execution-state", atLive ? state : "history");
+  text("execution-state", recording && atLive ? (state === "completed" ? "recorded end" : "incomplete recording") : atLive ? state : "history");
   pill.className = `execution-state state-${atLive ? liveState : "history"}`;
 }
 
@@ -310,21 +317,22 @@ function renderTimeline() {
   slider.disabled = frames.length < 2;
   const atLive = session === liveSession && boundary === liveBoundary;
   document.body.classList.toggle("historical-view", !atLive);
+  const recording = liveSnapshot?.mode === "replay";
   const view = atLive
-    ? "LIVE"
+    ? (recording ? "RECORDED" : "LIVE")
     : bufferedPlayback
       ? "REPLAY"
       : replayPaused
         ? "REPLAY PAUSED"
         : "HISTORY";
   text("timeline-position", `${view} · ${sessionName(session)} · transition ${boundary}`);
-  const engine = bufferedPlayback
+  const engine = recording ? "recording · " : bufferedPlayback
     ? (liveSnapshot?.execution?.state === "completed" ? "engine completed · replay in progress · " : "engine finishing, then replay · ")
     : atLive ? "" : `engine ${liveSnapshot?.execution?.state || "paused"} · `;
   text("timeline-head", `${engine}head ${liveBoundary}`);
   const returnLive = document.querySelector("#return-live");
   returnLive.hidden = atLive;
-  const returnLabel = `Return to live ${sessionName(liveSession)} · transition ${liveBoundary}`;
+  const returnLabel = `${recording ? "Return to recorded end" : "Return to live"} ${sessionName(liveSession)} · transition ${liveBoundary}`;
   returnLive.querySelector("span").textContent = returnLabel;
   returnLive.title = returnLabel;
   returnLive.setAttribute("aria-label", returnLabel);
@@ -590,7 +598,8 @@ function updateControls() {
     const command = button.dataset.command;
     const replayPlay = button.dataset.command === "resume" && !atLive && canReplayForward;
     const replayPause = button.dataset.command === "pause" && bufferedPlayback;
-    const localReplayControl = replayPlay || replayPause;
+    const recordingNavigation = liveSnapshot?.mode === "replay" && canReplayForward && (command === "step" || command === "run-to-completion");
+    const localReplayControl = replayPlay || replayPause || recordingNavigation;
     const physicalControl = button.dataset.command === "pause" || button.dataset.command === "close";
     button.disabled = pendingCommandRevision !== null
       || (!localReplayControl && !controls)
@@ -599,6 +608,7 @@ function updateControls() {
     let reason = "";
     if (button.disabled) {
       if (pendingCommandRevision !== null) reason = "the previous command is still being retained";
+      else if (liveSnapshot?.mode === "replay" && command !== "close") reason = "recordings are read-only; only retained timeline navigation is available";
       else if (!controls) reason = "this browser is an observer; take control first";
       else if (!atLive && !physicalControl) {
         reason = "available in LIVE only; select Return live";
@@ -2320,6 +2330,14 @@ for (const button of document.querySelectorAll("button[data-command]")) {
     const boundary = Number(currentSnapshot?.timeline?.boundary || 0);
     const hasReplayAhead = timelineFrames(session)
       .some((frame) => Number(frame.boundary) > boundary);
+    if (liveSnapshot?.mode === "replay" && hasReplayAhead && (command === "step" || command === "run-to-completion")) {
+      pauseBufferedPlayback();
+      const next = command === "step"
+        ? timelineFrames(session).find(frame => Number(frame.boundary) > boundary).boundary
+        : liveSnapshot.timeline.boundary;
+      await showBoundary(session, next);
+      return;
+    }
     if (command === "resume" && !sameTimelinePoint(currentSnapshot, liveSnapshot) && hasReplayAhead) {
       startBufferedPlayback();
       return;

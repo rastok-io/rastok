@@ -592,6 +592,15 @@ lab app {{
         };
         assert_ne!(call_instance(calls[0]), call_instance(calls[1]));
         assert_eq!(&command.target, call_instance(calls[0]));
+        let captured =
+            rastok::recording::Recording::capture(&compiled, &journal, 100_000_000_000).unwrap();
+        let decoded = rastok::recording::Recording::decode(&captured.encode().unwrap()).unwrap();
+        assert_eq!(decoded.records(), run.records);
+        for through in 0..=run.records.len() {
+            decoded
+                .inspect(through)
+                .unwrap_or_else(|error| panic!("{contract} prefix {through}: {error}"));
+        }
     }
 }
 

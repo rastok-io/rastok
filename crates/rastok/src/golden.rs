@@ -239,7 +239,110 @@ fn explain(a: &Cbor, b: &Cbor, path: String) -> (String, String, String) {
             }
             (path, render(a), render(b))
         }
+        (Cbor::Bytes(left), Cbor::Bytes(right)) if path.ends_with("data(8)[1]") => {
+            // Golden DATA retains bytes, not the materialized/encoded distinction.
+            // Label this an interpretation of a recognized canonical value, never
+            // pretend that an arbitrary raw byte payload had a retained text type.
+            if let (Ok((left_tree, left_used)), Ok((right_tree, right_used))) =
+                (decode(left), decode(right))
+                && left_used == left.len()
+                && right_used == right.len()
+                && rastok_core::identity::encoding::value_from_tagged(&left_tree).is_ok()
+                && rastok_core::identity::encoding::value_from_tagged(&right_tree).is_ok()
+            {
+                return explain(
+                    &left_tree,
+                    &right_tree,
+                    format!("{path} (canonical tagged-value view)"),
+                );
+            }
+            (path, render(a), render(b))
+        }
         _ => (path, render(a), render(b)),
+    }
+}
+
+/// Renders a first divergence for a user: expected, actual and retained causal
+/// context. Policy-bearing plans hide values conservatively because a stored
+/// golden has no independent schema-policy table. This never changes the seal.
+#[must_use]
+pub fn explain_diff(
+    actual: &Trace,
+    expected: &Trace,
+    plan: &crate::plan::ValidatedExecutionPlan,
+) -> Option<String> {
+    let difference = diff(actual, expected)?;
+    let classified = crate::data_policy::requires_redaction;
+    let redact = plan.resolved_ports().boundary().iter().any(|p| classified(p.annotations()))
+        || plan.nodes.iter().enumerate().any(|(index, node)| {
+            plan.resolved_ports().node(crate::plan::Slot::new(index as u32))
+                .is_some_and(|ports| ports.iter().any(|p| classified(p.annotations())))
+                || node.vars.iter().any(|v| classified(&v.annotations))
+        })
+        || plan.owners.iter().any(|owner| {
+            owner.ports.iter().any(|p| classified(&p.annotations))
+                || owner.vals.iter().any(|v| classified(&v.annotations))
+        })
+        || plan.handlers.iter().any(|h| h.dispatch.steps().any(|step| {
+            matches!(step, crate::plan::DispatchStep::Let { annotations, .. } if classified(annotations))
+        }));
+    let cause = actual
+        .records
+        .get(difference.record)
+        .or_else(|| expected.records.get(difference.record))
+        .map(|record| record_context(&record.tree))
+        .unwrap_or_else(|| String::from("end of retained trace"));
+    Some(format!(
+        "record {}: {} — expected {}; got {}; cause: {}",
+        difference.record,
+        difference.path,
+        if redact {
+            "[REDACTED]"
+        } else {
+            &difference.right
+        },
+        if redact {
+            "[REDACTED]"
+        } else {
+            &difference.left
+        },
+        if redact { "[REDACTED]" } else { &cause },
+    ))
+}
+
+fn record_context(tree: &Cbor) -> String {
+    let Cbor::Map(fields) = tree else {
+        return String::from("unrecognized retained record");
+    };
+    let field = |key| {
+        fields
+            .get(&key)
+            .map(render)
+            .unwrap_or_else(|| String::from("absent"))
+    };
+    match fields.get(&10) {
+        Some(Cbor::Uint(1)) => format!(
+            "INBOUND {} · port {} · sequence {}",
+            field(21),
+            fields
+                .get(&24)
+                .map(render)
+                .unwrap_or_else(|| String::from("in")),
+            field(22),
+        ),
+        Some(Cbor::Uint(2)) => format!(
+            "TRANSACTION {} · trigger {} · cause_id {}",
+            field(30),
+            field(32),
+            field(39),
+        ),
+        Some(Cbor::Uint(3)) => format!(
+            "OUTBOUND {} · emitting_id {} · call_key {}",
+            field(41),
+            field(40),
+            field(42),
+        ),
+        _ => String::from("unrecognized retained record"),
     }
 }
 

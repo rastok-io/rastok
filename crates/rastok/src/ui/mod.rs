@@ -85,6 +85,7 @@ pub struct UiSnapshot {
     summary: String,
     record_through: Option<u64>,
     action: Option<u64>,
+    recording: bool,
 }
 
 impl UiSnapshot {
@@ -128,6 +129,7 @@ impl UiSnapshot {
             summary,
             record_through,
             action,
+            recording: value.get("mode").and_then(JsonValue::as_str) == Some("replay"),
         })
     }
 
@@ -135,6 +137,11 @@ impl UiSnapshot {
     #[must_use]
     pub const fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// Physical history-retention cost, not a semantic size or quota.
+    pub(crate) fn encoded_len(&self) -> usize {
+        self.json.len()
     }
 }
 
@@ -666,6 +673,13 @@ async fn command(
             "unknown command",
         );
     };
+    if command != UiCommand::Close && context.snapshot.read().await.recording {
+        return response(
+            StatusCode::CONFLICT,
+            "text/plain; charset=utf-8",
+            "a recording is read-only; navigate its retained timeline",
+        );
+    }
     match context.command_tx.try_send(command) {
         Ok(()) => response(
             StatusCode::ACCEPTED,
@@ -963,6 +977,35 @@ mod tests {
         assert_eq!(server.try_command(), Some(UiCommand::Step));
         assert!(post("/api/command/next-scenario-action", "second").starts_with("HTTP/1.1 202"));
         assert_eq!(server.try_command(), Some(UiCommand::NextScenarioAction));
+    }
+
+    #[test]
+    fn a_recording_refuses_execution_commands_even_from_its_controller() {
+        let initial = UiSnapshot::new(0, &json!({"mode": "replay", "execution": {"state": "completed", "legal_commands": ["close"]}})).unwrap();
+        let server = UiServer::start(None, initial).unwrap();
+        let post = |path: &str| {
+            request(
+                server.address,
+                &format!(
+                    "POST {path}?token={} HTTP/1.1\r\nHost: {}\r\nOrigin: http://{}\r\nX-Rastok-Controller: reader\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    server.capability, server.address, server.address
+                ),
+            )
+        };
+        assert!(post("/api/control/claim").starts_with("HTTP/1.1 200"));
+        for command in [
+            "resume",
+            "step",
+            "retry-step",
+            "run-to-completion",
+            "reset-scenario",
+            "next-scenario-action",
+        ] {
+            assert!(post(&format!("/api/command/{command}")).starts_with("HTTP/1.1 409"));
+            assert_eq!(server.try_command(), None);
+        }
+        assert!(post("/api/command/close").starts_with("HTTP/1.1 202"));
+        assert_eq!(server.try_command(), Some(UiCommand::Close));
     }
 
     #[test]

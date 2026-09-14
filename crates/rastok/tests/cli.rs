@@ -36,6 +36,50 @@ fn rastok() -> Command {
 }
 
 #[test]
+fn new_creates_one_executable_graph_with_a_lab_without_overwriting() {
+    let dir = std::env::temp_dir().join(format!("rastok-new-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temporary directory");
+    let path = dir.join("hello-world.rkg");
+    let _ = std::fs::remove_file(&path);
+    let created = rastok()
+        .current_dir(&dir)
+        .args(["new", "hello-world"])
+        .output()
+        .unwrap();
+    assert!(created.status.success(), "{created:?}");
+    let source = std::fs::read_to_string(&path).unwrap();
+    assert!(source.contains("graph hello_world : App"));
+    assert!(source.contains("lab hello_world"));
+    let simulated = rastok().arg("simulate").arg(&path).output().unwrap();
+    assert!(simulated.status.success(), "{simulated:?}");
+    assert!(String::from_utf8_lossy(&simulated.stdout).contains("PASS smoke.roundtrip"));
+    let repeated = rastok()
+        .current_dir(&dir)
+        .args(["new", "hello-world"])
+        .output()
+        .unwrap();
+    assert!(!repeated.status.success());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+    for name in [
+        "../escape",
+        "bad/name",
+        "-flag",
+        "1name",
+        "a\nb",
+        "hello.rkg",
+    ] {
+        let refused = rastok()
+            .current_dir(&dir)
+            .args(["new", name])
+            .output()
+            .unwrap();
+        assert_eq!(refused.status.code(), Some(2), "{name:?}: {refused:?}");
+    }
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_dir(dir).unwrap();
+}
+
+#[test]
 fn check_accepts_the_example_and_prints_its_hash() {
     let output = rastok()
         .arg("check")
@@ -736,6 +780,114 @@ fn run_can_bind_the_real_file_driver_with_an_explicit_root() {
     std::fs::remove_dir_all(root).expect("the File root is removable");
 }
 
+#[test]
+fn a_recorded_file_run_replays_after_the_world_and_source_are_removed() {
+    let root =
+        std::env::temp_dir().join(format!("rastok-cli-recorded-file-{}", std::process::id()));
+    std::fs::create_dir(&root).expect("unique recording fixture");
+    let source = root.join("file.rkg");
+    let artifact = root.join("input.bin");
+    let recording = root.join("run.rkrec");
+    std::fs::write(&artifact, b"original world\n").unwrap();
+    std::fs::write(
+        &source,
+        r#"graph file_read : App {
+  input in: variant
+  output out: bytes
+  connector file : File { mode = read ; path = "input.bin" }
+  in -> file -> out
+  file.exit -> nothing
+}"#,
+    )
+    .unwrap();
+    let mut child = rastok()
+        .arg("run")
+        .arg(&source)
+        .arg("--file-root")
+        .arg(&root)
+        .arg("--record")
+        .arg(&recording)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"read\n").unwrap();
+    let original = child.wait_with_output().unwrap();
+    assert!(
+        original.status.success(),
+        "{}",
+        String::from_utf8_lossy(&original.stderr)
+    );
+    let original_bytes = std::fs::read(&recording).unwrap();
+    let rejected = rastok()
+        .arg("run")
+        .arg(&source)
+        .arg("--record")
+        .arg(&recording)
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    assert_eq!(
+        std::fs::read(&recording).unwrap(),
+        original_bytes,
+        "existing evidence is never overwritten"
+    );
+    std::fs::remove_file(&source).unwrap();
+    std::fs::remove_file(&artifact).unwrap();
+    let replay = rastok()
+        .arg("replay")
+        .arg(&recording)
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert!(
+        replay.status.success(),
+        "{}",
+        String::from_utf8_lossy(&replay.stderr)
+    );
+    assert_eq!(replay.stdout, original.stdout);
+    let captured = rastok::recording::Recording::read(&recording).unwrap();
+    assert!(captured.finished());
+    let seal = rastok::golden::project(captured.records()).seal_hex();
+    assert!(String::from_utf8_lossy(&original.stderr).contains(&seal));
+    assert!(String::from_utf8_lossy(&replay.stderr).contains(&seal));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_eq!(
+            std::fs::metadata(&recording).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn recording_personal_data_refuses_before_creating_a_file() {
+    let root =
+        std::env::temp_dir().join(format!("rastok-cli-record-personal-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let source = root.join("personal.rkg");
+    let recording = root.join("forbidden.rkrec");
+    std::fs::write(
+        &source,
+        "graph g : App { input in: text @personal ; output out: text @personal ; in -> out }",
+    )
+    .unwrap();
+    let output = rastok()
+        .arg("run")
+        .arg(&source)
+        .arg("--record")
+        .arg(&recording)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("persistent retention/erasure"));
+    assert!(!recording.exists());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[cfg(feature = "hosted-http12")]
 #[test]
 fn run_polls_an_inbound_http_server_without_a_stdin_submission() {
@@ -1086,9 +1238,31 @@ fn simulate_blesses_then_verifies_a_golden_directory() {
     assert!(stdout.contains("FAIL smoke.roundtrip"), "{stdout}");
     assert!(stdout.contains("golden divergence"), "{stdout}");
     assert!(
+        stdout.contains("expected \"autre\"; got \"salut\""),
+        "{stdout}"
+    );
+    assert!(stdout.contains("cause: INBOUND"), "{stdout}");
+    assert!(stdout.contains("sequence 0"), "{stdout}");
+    assert!(
         stdout.contains("data(8)"),
         "the diff names the key: {stdout}"
     );
+    for malformed in ["a\n", "€1\n", "zz\n"] {
+        std::fs::write(&path, malformed).expect("malformed golden probe");
+        let output = rastok()
+            .arg("simulate")
+            .arg(example())
+            .arg("--golden")
+            .arg(&dir)
+            .output()
+            .expect("the binary runs");
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stdout)
+                .contains("the stored golden is unreadable by this build"),
+            "malformed hexadecimal refuses without a parsing panic: {output:?}"
+        );
+    }
 }
 
 #[test]

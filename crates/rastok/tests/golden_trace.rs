@@ -279,3 +279,50 @@ fn identical_runs_share_one_seal() {
     assert_eq!(once.seal(), twice.seal());
     assert!(diff(&once, &twice).is_none());
 }
+
+#[test]
+fn the_readable_diff_labels_expected_actual_and_the_causal_trigger() {
+    let plan = compile(&[M0_PROBE], &ContractCatalog::try_m0().unwrap())
+        .unwrap()
+        .plan;
+    let expected = project(&run(M0_PROBE));
+    let actual = project(&run(
+        &M0_PROBE.replace("count = count + 1", "count = count + 2")
+    ));
+    let message = rastok::golden::explain_diff(&actual, &expected, &plan).unwrap();
+    assert!(message.contains("expected 1; got 2"), "{message}");
+    assert!(
+        message.contains("cause: TRANSACTION \"shout\" · trigger \"p:in\""),
+        "{message}"
+    );
+    assert!(message.contains("cause_id"));
+    let empty = Trace::from_stored(&[]).unwrap();
+    let missing = rastok::golden::explain_diff(&empty, &expected, &plan).unwrap();
+    assert!(
+        missing.contains("record count")
+            && missing.contains("got 0")
+            && missing.contains("cause: INBOUND"),
+        "{missing}"
+    );
+}
+
+#[test]
+fn readable_golden_values_do_not_bypass_classified_data_policy() {
+    let source = M0_PROBE.replace("text: text", "text: text @sensitive(level = confidential)");
+    let plan = compile(&[&source], &ContractCatalog::try_m0().unwrap())
+        .unwrap()
+        .plan;
+    let expected = project(&run(M0_PROBE));
+    let actual = project(&run(
+        &M0_PROBE.replace("count = count + 1", "count = count + 2")
+    ));
+    let message = rastok::golden::explain_diff(&actual, &expected, &plan).unwrap();
+    assert!(
+        message.contains("expected [REDACTED]; got [REDACTED]; cause: [REDACTED]"),
+        "{message}"
+    );
+    assert!(
+        message.contains("state_delta"),
+        "the structural location stays useful"
+    );
+}

@@ -287,6 +287,30 @@ Yoann approved the correction before implementation. It tightens acceptance
 to the existing rule; runtime outcomes, v17 shapes, hashes of valid programs
 and causal goldens do not change. No implicit discard or re-blessing is needed.
 
+## D-2026-09-09-2 — Record diagnostic facts without creating a durable runtime
+
+`run --record` persists a bounded diagnostic capture and `replay [--ui]`
+reconstructs its retained state without handlers or physical Drivers. The
+[recording contract](../architecture/diagnostic-recording.md) owns the separate
+format-1 framing, full-record retention, integrity checks, resource bounds and
+first-slice capability refusals. Neither plan v17 nor the causal projection
+changes. Read-only file inspection extends the UI scope; `run --ui`, branches,
+editing and production-to-Lab extraction remain unavailable.
+
+Checkpoint time is an observation instant, never manufactured commit time.
+The writer promises neither write-before-effect nor automatic recovery after
+a crash. A complete prefix without a completion footer is explicitly incomplete.
+The durable deployment Journal remains M2. `@personal` persistence refuses
+until effective retention/erasure is qualified; an in-memory attestation is
+not a persistent-storage capability. Profiles requiring nonempty attestations
+or `env()`/`secret()` bindings refuse until reference-only offline binding is
+qualified. Recordings never resolve a physical credential during replay.
+
+**Rejected:** treating golden rows as a lossless journal codec; claiming that
+inspection re-executes the program; calling checksums signatures; silent
+overwrite; interpreting UI masking as erasure; treating a retention setting
+without enforcement as permission to persist personal data.
+
 ## D-2026-09-09-3 — Simulate the Contract without its physical Driver
 
 Yoann confirmed the separation: an executable Connector Contract is required

@@ -3,13 +3,16 @@
 // Optional real-browser qualification, not a frontend/runtime dependency.
 // Build `cargo build -p rastok --features hosted-ui` first. Point
 // RASTOK_PLAYWRIGHT at an installed Playwright and RASTOK_CHROME at Chrome.
+// RASTOK_BIN can pin an isolated binary while other feature builds run.
 const assert = require("node:assert/strict");
 const { test, before, after } = require("node:test");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs/promises");
+const os = require("node:os");
 const { chromium } = require(process.env.RASTOK_PLAYWRIGHT || "playwright");
 const root = path.resolve(__dirname, "../../../..");
+const rastok = process.env.RASTOK_BIN || path.join(root, "target/debug/rastok");
 let browser;
 
 before(async () => {
@@ -17,8 +20,8 @@ before(async () => {
 });
 after(async () => { await browser?.close(); });
 
-async function openTour(t, viewport = { width: 1352, height: 760 }, source = "examples/keyed-retry.rkg") {
-  const child = spawn(path.join(root, "target/debug/rastok"), ["simulate", source, "--ui"], { cwd: root });
+async function openTour(t, viewport = { width: 1352, height: 760 }, source = "examples/keyed-retry.rkg", commandArgs, environment = {}) {
+  const child = spawn(rastok, commandArgs || ["simulate", source, "--ui"], { cwd: root, env: { ...process.env, ...environment } });
   let context;
   const errors = [];
   t.after(async () => {
@@ -54,6 +57,78 @@ async function finish(page) {
   await page.locator("#execution-state").filter({ hasText: /^completed$/ }).waitFor();
   return page.locator("#timeline").inputValue();
 }
+
+test('the resident gateway explains independent Process Sessions without starting a child', { timeout: 60000 }, async t => {
+  const page = await openTour(t, undefined, 'examples/agent-gateway.rkg');
+  await finish(page);
+  assert.deepEqual(await page.evaluate(() => currentSnapshot.scenario.current.failures), []);
+  await page.locator('#tab-instances').click();
+  assert.match(await page.locator('#panel-instances').innerText(), /conversation/);
+  assert.match(await page.locator('#timeline-position').innerText(), /^LIVE/);
+  await seek(page, 1);
+  assert.match(await page.locator('#timeline-position').innerText(), /^HISTORY/);
+  await page.locator('[data-command="resume"]').click();
+  await page.locator('#timeline-position').filter({ hasText: /^REPLAY/ }).waitFor();
+  await page.locator('[data-command="pause"]').click();
+});
+
+test('a decoded HttpServer source is inspectable without an artificial App input', { timeout: 60000 }, async t => {
+  const page = await openTour(t, undefined, 'crates/rastok/tests/fixtures/lab-http-source.rkg');
+  assert.match(await page.locator('.envelope-inspector').innerText(), /listener\.out/);
+  assert.match(await page.locator('.envelope-inspector').innerText(), /first/);
+  assert.equal(await page.evaluate(() => currentSnapshot.scenario.current.next_injection.position), 'before-source-output');
+  await page.locator('#step').click();
+  await page.waitForFunction(() => currentSnapshot.history.sources?.length === 1);
+  assert.equal(await page.evaluate(() => currentSnapshot.history.sources[0].node), 'listener');
+  assert.equal(await page.evaluate(() => currentSnapshot.history.sources[0].data.content), 'first');
+  await finish(page);
+  assert.deepEqual(await page.evaluate(() => currentSnapshot.scenario.current.failures), []);
+  assert.equal(await page.evaluate(() => currentSnapshot.history.sources.length), 2);
+});
+
+test('a real recording is navigable without any execution command or Driver', { timeout: 60000 }, async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rastok-recording-browser-'));
+  t.after(() => fs.rm(directory, { recursive: true }));
+  const recording = path.join(directory, 'echo.rkrec');
+  const run = spawn(rastok, ['run', 'examples/echo.rkg', '--record', recording], { cwd: root });
+  let stderr = '';
+  run.stderr.on('data', chunk => { stderr += chunk; });
+  run.stdout.resume();
+  const ended = new Promise((resolve, reject) => { run.on('error', reject); run.on('exit', resolve); });
+  run.stdin.end('retained hello\n');
+  assert.equal(await ended, 0, stderr);
+  const page = await openTour(t, undefined, undefined, ['replay', recording, '--ui']);
+  const commands = [];
+  page.on('request', request => { if (request.url().includes('/api/command/')) commands.push(request.url()); });
+  assert.equal(await page.evaluate(() => currentSnapshot.mode), 'replay');
+  assert.match(await page.locator('#command-status').innerText(), /Recorded run.*read-only/);
+  assert.equal(await page.locator('#timeline').inputValue(), '0');
+  for (const command of ['reset-scenario', 'next-scenario-action', 'run-until-expect', 'retry-step']) {
+    const button = page.locator(`[data-command="${command}"]`);
+    if (await button.count()) assert.equal(await button.isDisabled(), true);
+  }
+  await page.locator('#step').click();
+  await page.locator('#timeline-position').filter({ hasText: /transition 1$/ }).waitFor();
+  await page.keyboard.press('ArrowLeft');
+  await page.locator('#timeline-position').filter({ hasText: /transition 0$/ }).waitFor();
+  await page.locator('[data-command="resume"]').click();
+  await page.locator('#timeline-position').filter({ hasText: /^REPLAY/ }).waitFor();
+  await page.locator('[data-command="pause"]').click();
+  assert.match(await page.locator('#execution-state').innerText(), /replay paused/);
+  const paused = await page.locator('#timeline').inputValue();
+  await page.waitForTimeout(1200);
+  assert.equal(await page.locator('#timeline').inputValue(), paused);
+  const head = await page.evaluate(() => liveSnapshot.timeline.boundary);
+  await page.locator('[data-command="run-to-completion"]').click();
+  await page.locator('#timeline-position').filter({ hasText: new RegExp(`^RECORDED · Main · transition ${head}$`) }).waitFor();
+  assert.equal(await page.locator('#execution-state').innerText(), 'recorded end');
+  await page.locator('#tab-envelope').click();
+  assert.match(await page.locator('#envelope').innerText(), /shell.exit.*Exited/s);
+  await page.locator('#tab-history').click();
+  await page.locator('#history summary').filter({ hasText: /Observed envelopes/ }).click();
+  assert.match(await page.locator('#history').innerText(), /retained hello/);
+  assert.deepEqual(commands, [], 'navigation must not ask the server to execute');
+});
 
 async function seek(page, transition) {
   await page.locator('#timeline').fill(String(transition));

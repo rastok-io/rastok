@@ -25,6 +25,7 @@ pub mod golden;
 pub mod lab;
 pub mod observability;
 pub mod openapi;
+pub mod recording;
 pub mod render;
 pub mod schema_projection;
 pub mod stdlib;

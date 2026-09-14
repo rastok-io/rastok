@@ -453,8 +453,22 @@ index leave no fingerprint.
    reproduce them byte-for-byte. This gives the specification executable
    teeth. Regulatory corollary : the trace is
    auditable evidence, and every intended behavior change is an explicit,
-   reviewed **`--bless`** (regenerate + commit ; the git diff is a behavior
-   diff). Never a silent regeneration.
+reviewed **`--bless`** (regenerate + commit ; the git diff is a behavior
+diff). Never a silent regeneration.
+
+The M1 opening CLI labels the two sides as **expected** (stored) and **got**
+(current), then prints the retained record kind, input sequence or transaction/
+Call correlation. It reports evidence, never guesses which source edit caused
+it. Recognized canonical tagged DATA can be displayed as an explicitly named
+decoded view; raw bytes remain raw when no such view is available. Classified
+programs hide diagnostic values and causal details conservatively because the
+stored golden carries no independent annotation table. Comparison still uses
+the complete canonical bytes. Text rendering does not change any trace seal.
+
+`rastok new <name>` creates a single `<name>.rkg` containing an ordinary typed
+Operator and one Lab scenario. It adds no language construct and never
+overwrites an existing file. Hyphens in the filename become underscores in the
+Graph/Lab name; directory paths and explicit file extensions are refused.
 
 
 ## 7. The outcome-space checklist — enumerable, therefore checkable
@@ -520,6 +534,12 @@ Examples` ↔ parameterized scenarios, `Tags` ↔
 
 
 ## 9. The prod → fixture bridge
+
+The M1 CLI's `run --record` / `replay [--ui]` preserves and reconstructs
+retained facts without the world; it does **not** implement the scenario
+extraction described below or re-execute the DSL. Its independent diagnostic
+format and privacy limits are specified in
+[diagnostic-recording.md](../architecture/diagnostic-recording.md).
 
 Because the fixture is the journal's world-half (§2), replaying a production
 incident is a **mechanical projection**, not inference :

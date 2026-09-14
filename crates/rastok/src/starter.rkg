@@ -1,0 +1,21 @@
+graph starter : App {
+  input in: text
+  output out: text
+
+  operator greet {
+    input in: text
+    output out: text
+    on in { out = "Hello, " + data }
+  }
+
+  in -> greet -> out
+}
+
+lab starter {
+  simulation smoke on app {
+    scenario roundtrip "a typed message becomes a greeting" {
+      app.in = "world"
+      expect app.out count == 1 where data == "Hello, world"
+    }
+  }
+}

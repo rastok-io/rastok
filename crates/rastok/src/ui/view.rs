@@ -323,6 +323,9 @@ fn legal_commands(
     fault: Option<&FaultView>,
     scenario: Option<&JsonValue>,
 ) -> Vec<&'static str> {
+    if mode == "replay" {
+        return vec!["close"];
+    }
     let mut commands = match state {
         ExecutionState::Running => vec!["pause"],
         ExecutionState::PauseRequested => vec!["resume"],

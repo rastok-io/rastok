@@ -23,7 +23,7 @@ use rastok::{connectors, lab, node};
 use std::io::{BufRead, Write as _};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: rastok check <file.rkg>...\n       rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs]\n       rastok simulate <file.rkg>... [--deployment <profile.json>] [--golden <dir>] [--bless] [--ui [--ui-port <port>]]\n       rastok --resolve-open-api <project-dir> [--check]";
+const USAGE: &str = "usage: rastok new <name>\n       rastok check <file.rkg>...\n       rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs] [--record <file.rkrec>]\n       rastok replay <file.rkrec> [--ui [--ui-port <port>]]\n       rastok simulate <file.rkg>... [--deployment <profile.json>] [--golden <dir>] [--bless] [--ui [--ui-port <port>]]\n       rastok --resolve-open-api <project-dir> [--check]";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct UiOptions {
@@ -76,13 +76,15 @@ fn main() -> ExitCode {
         }
     };
     match command {
+        "new" => new_graph(paths),
+        "replay" => replay(paths),
         "--resolve-open-api" => resolve_open_api(paths),
         "check" => {
             if paths
                 .iter()
                 .any(|argument| matches!(argument.as_str(), "--ui" | "--ui-port"))
             {
-                eprintln!("error: --ui is available only for `simulate`");
+                eprintln!("error: --ui is available only for `simulate` and recorded `replay`");
                 return ExitCode::from(2);
             }
             check(paths)
@@ -92,9 +94,19 @@ fn main() -> ExitCode {
             let mut file_root: Option<std::path::PathBuf> = None;
             let mut deployment: Option<std::path::PathBuf> = None;
             let mut json_logs = false;
+            let mut record = None;
             let mut rest = paths.iter();
             while let Some(argument) = rest.next() {
                 match argument.as_str() {
+                    "--record" => match rest.next() {
+                        Some(path) if record.is_none() && !path.starts_with('-') => {
+                            record = Some(std::path::PathBuf::from(path))
+                        }
+                        _ => {
+                            eprintln!("error: --record requires one unique output path");
+                            return ExitCode::from(2);
+                        }
+                    },
                     "--file-root" => match rest.next() {
                         Some(dir) => file_root = Some(std::path::PathBuf::from(dir)),
                         None => {
@@ -118,7 +130,7 @@ fn main() -> ExitCode {
                     }
                     "--ui" | "--ui-port" => {
                         eprintln!(
-                            "error: --ui is available only for `simulate`; real-I/O experiments are not yet available in the visual debugger"
+                            "error: --ui is available only for `simulate` and recorded `replay`; real-I/O experiments are not yet available in the visual debugger"
                         );
                         return ExitCode::from(2);
                     }
@@ -137,7 +149,13 @@ fn main() -> ExitCode {
                 }
                 None => None,
             };
-            run(&files, file_root.as_deref(), boot.as_ref(), json_logs)
+            run(
+                &files,
+                file_root.as_deref(),
+                boot.as_ref(),
+                json_logs,
+                record.as_deref(),
+            )
         }
         "simulate" => {
             let mut files = Vec::new();
@@ -204,6 +222,44 @@ fn main() -> ExitCode {
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
+        }
+    }
+}
+
+fn new_graph(arguments: &[String]) -> ExitCode {
+    let [name] = arguments else {
+        eprintln!("error: new requires one name, without a path or extension");
+        return ExitCode::from(2);
+    };
+    if !name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        || !name
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-'))
+    {
+        eprintln!(
+            "error: new requires a name starting with a letter or underscore, followed by letters, digits, underscores or hyphens; omit .rkg"
+        );
+        return ExitCode::from(2);
+    }
+    let source = include_str!("starter.rkg").replace("starter", &name.replace('-', "_"));
+    let path = format!("{name}.rkg");
+    let result = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .and_then(|mut file| file.write_all(source.as_bytes()));
+    match result {
+        Ok(()) => {
+            println!(
+                "Created {path}\nNext: rastok simulate {path}\nDebug: rastok simulate {path} --ui"
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!(
+                "error: cannot create {path:?} (existing files are never overwritten): {error}"
+            );
+            ExitCode::FAILURE
         }
     }
 }
@@ -343,9 +399,20 @@ fn run(
     file_root: Option<&std::path::Path>,
     boot: Option<&rastok::deployment::BootBindings>,
     json_logs: bool,
+    record: Option<&std::path::Path>,
 ) -> ExitCode {
     let Ok((compilation, _)) = load(paths) else {
         return ExitCode::FAILURE;
+    };
+    let mut recorder = match record
+        .map(|path| rastok::recording::Recorder::create(path, &compilation, GraphVersion(1), boot))
+        .transpose()
+    {
+        Ok(recorder) => recorder,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
     };
     let registry = match connectors::hosted_registry(file_root) {
         Ok(registry) => registry,
@@ -413,6 +480,10 @@ fn run(
         || Vm::boot_at(&compilation.plan, version, time.logical_now()),
         |boot| Vm::boot_at_with_deployment(&compilation.plan, version, time.logical_now(), boot),
     );
+    if let Err(error) = recording_checkpoint(&mut recorder, &journal, vm.now()) {
+        eprintln!("error: {error}");
+        return ExitCode::FAILURE;
+    }
     let inbound_path = match node::Path::new(["cli"]) {
         Ok(path) => path,
         Err(_) => return ExitCode::FAILURE,
@@ -462,9 +533,16 @@ fn run(
         match drive_boundary(&mut vm, &mut journal, &mut world) {
             Ok(boundary_progress) => progressed |= boundary_progress,
             Err(error) => {
+                if let Err(record_error) = recording_checkpoint(&mut recorder, &journal, vm.now()) {
+                    eprintln!("error: {record_error}");
+                }
                 eprintln!("error: {error}");
                 return ExitCode::FAILURE;
             }
+        }
+        if let Err(error) = recording_checkpoint(&mut recorder, &journal, vm.now()) {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
         }
         if let Some(projector) = &mut log_projector {
             let _ = projector.project_journal(&journal);
@@ -481,7 +559,104 @@ fn run(
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
     }
+    if let Some(recorder) = recorder {
+        match recorder.finish(&compilation, &journal, vm.now()) {
+            Ok(()) => eprintln!(
+                "recorded: {} causal records · seal {}",
+                journal.records().len(),
+                rastok::golden::project(journal.records()).seal_hex()
+            ),
+            Err(error) => {
+                eprintln!("error: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
     ExitCode::SUCCESS
+}
+
+fn recording_checkpoint(
+    recorder: &mut Option<rastok::recording::Recorder>,
+    journal: &MemJournal,
+    now: i64,
+) -> Result<(), rastok::recording::Error> {
+    if let Some(recorder) = recorder {
+        recorder.checkpoint(journal, now)?;
+    }
+    Ok(())
+}
+
+fn replay(arguments: &[String]) -> ExitCode {
+    let mut path = None;
+    let mut ui = UiOptions::default();
+    let mut rest = arguments.iter();
+    while let Some(argument) = rest.next() {
+        let result = match argument.as_str() {
+            "--ui" => ui.enable(),
+            "--ui-port" => ui.set_port(rest.next().map(String::as_str)),
+            value if !value.starts_with('-') && path.is_none() => {
+                path = Some(std::path::PathBuf::from(value));
+                Ok(())
+            }
+            _ => Err(String::from(
+                "replay requires one recording path and only --ui / --ui-port options",
+            )),
+        };
+        if let Err(error) = result {
+            eprintln!("error: {error}");
+            return ExitCode::from(2);
+        }
+    }
+    let Some(path) = path else {
+        eprintln!("{USAGE}");
+        return ExitCode::from(2);
+    };
+    let ui = match ui.validate() {
+        Ok(ui) => ui,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let recording = match rastok::recording::Recording::read(&path) {
+        Ok(recording) => recording,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    eprintln!(
+        "replay: {} causal records · seal {} · {} · no Driver I/O",
+        recording.records().len(),
+        rastok::golden::project(recording.records()).seal_hex(),
+        if recording.finished() {
+            "completed recording"
+        } else {
+            "incomplete run; retained prefix only"
+        }
+    );
+    #[cfg(feature = "hosted-ui")]
+    if ui.enabled {
+        return match rastok::recording::serve_ui(&recording, ui.port) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("error: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    #[cfg(not(feature = "hosted-ui"))]
+    let _ = ui;
+    match recording.inspect(recording.records().len()) {
+        Ok((_, vm)) => {
+            print_new_outputs(&vm, &mut 0);
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("error: {error}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn drive_boundary<'plan>(
@@ -619,41 +794,8 @@ fn simulate(
         for run in runs {
             let report = &run.report;
             total += 1;
-            // The golden seam: a completed run projects to its
-            // canonical trace, compared against — or blessing — the
-            // stored one.
-            let mut golden_failures = Vec::new();
-            if let Some(dir) = golden_dir {
-                let trace = rastok::golden::project(&run.records);
-                let rendered = render_trace(&trace);
-                let path = dir.join(format!("{}.{}.trace", report.simulation, report.scenario));
-                if bless {
-                    if let Err(error) =
-                        std::fs::create_dir_all(dir).and_then(|()| std::fs::write(&path, &rendered))
-                    {
-                        eprintln!("error: cannot bless `{}`: {error}", path.display());
-                        return ExitCode::FAILURE;
-                    }
-                } else {
-                    match std::fs::read_to_string(&path) {
-                        Err(_) => golden_failures.push(format!(
-                            "no golden at `{}`; bless with --bless",
-                            path.display()
-                        )),
-                        Ok(stored) if stored != rendered => {
-                            let divergence = parse_stored(&stored)
-                                .and_then(|stored| rastok::golden::diff(&trace, &stored));
-                            golden_failures.push(match divergence {
-                                Some(divergence) => format!("golden divergence: {divergence}"),
-                                None => {
-                                    String::from("the stored golden is unreadable by this build")
-                                }
-                            });
-                        }
-                        Ok(_) => {}
-                    }
-                }
-            }
+            let golden_failures =
+                check_or_bless_golden(report, &run.records, golden_dir, bless, &compilation.plan);
             let passed = report.passed() && golden_failures.is_empty();
             let verdict = if passed { "PASS" } else { "FAIL" };
             match &report.label {
@@ -1096,8 +1238,13 @@ fn simulate_with_ui(
 
         if state == ExecutionState::Completed && !reported {
             let report = session.report();
-            golden_failures =
-                check_or_bless_golden(&report, session.journal().records(), golden_dir, bless);
+            golden_failures = check_or_bless_golden(
+                &report,
+                session.journal().records(),
+                golden_dir,
+                bless,
+                &compilation.plan,
+            );
             let passed = report.passed() && golden_failures.is_empty();
             any_failed |= !passed;
             print_scenario_verdict(&report, &golden_failures);
@@ -1227,12 +1374,12 @@ const fn scenario_action_name(action: lab::ScenarioActionKind) -> &'static str {
     }
 }
 
-#[cfg(feature = "hosted-ui")]
 fn check_or_bless_golden(
     report: &lab::ScenarioReport,
     records: &[rastok::journal::Record],
     golden_dir: Option<&std::path::Path>,
     bless: bool,
+    plan: &rastok::plan::ValidatedExecutionPlan,
 ) -> Vec<String> {
     let Some(dir) = golden_dir else {
         return Vec::new();
@@ -1253,8 +1400,8 @@ fn check_or_bless_golden(
             path.display()
         )],
         Ok(stored) if stored != rendered => {
-            let divergence =
-                parse_stored(&stored).and_then(|stored| rastok::golden::diff(&trace, &stored));
+            let divergence = parse_stored(&stored)
+                .and_then(|stored| rastok::golden::explain_diff(&trace, &stored, plan));
             vec![match divergence {
                 Some(divergence) => format!("golden divergence: {divergence}"),
                 None => String::from("the stored golden is unreadable by this build"),
@@ -1307,12 +1454,14 @@ fn parse_stored(rendered: &str) -> Option<rastok::golden::Trace> {
         if line.starts_with("seal ") || line.is_empty() {
             continue;
         }
-        let mut bytes = Vec::new();
-        let mut at = 0;
-        while at + 2 <= line.len() {
-            bytes.push(u8::from_str_radix(&line[at..at + 2], 16).ok()?);
-            at += 2;
+        if !line.len().is_multiple_of(2) || !line.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
         }
+        let bytes = line
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
+            .collect::<Option<Vec<_>>>()?;
         records.push(bytes);
     }
     rastok::golden::Trace::from_stored(&records)

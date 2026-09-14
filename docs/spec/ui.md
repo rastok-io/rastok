@@ -1,6 +1,6 @@
 # Visual simulation debugger
 
-> **Status (2026-09-08): v17 projection under D-2026-09-07-8 and D-2026-09-08-1.**
+> **Status (2026-09-10): v18 projection under D-2026-09-07-8, D-2026-09-08-1 and D-2026-09-10-1.**
 > [R9 qualification](../architecture/rework-r9-qualification.md) records code
 > and protocol evidence. Real-browser/keyboard qualification is tracked in
 > [release qualification](../architecture/release-qualification.md).
@@ -9,6 +9,8 @@
 
 The debugger observes and controls the checked Lab simulation. It is not an
 editor, a second runtime, a durable monitor or an alternative ingress.
+`replay capture.rkrec --ui` additionally inspects a recorded run read-only
+under D-2026-09-09-2; it cannot execute the embedded program.
 
 ## 1. Capability and CLI
 
@@ -25,6 +27,17 @@ prints its capability-bearing URL and does not open a browser automatically.
 The page is embedded HTML/CSS/JS: no frontend dependency, asset filesystem
 lookup or build service. `run --ui` and `check --ui` refuse before effects.
 A build without the capability refuses by name.
+
+For a diagnostic recording, `rastok replay capture.rkrec --ui [--ui-port PORT]`
+opens at the empty prefix. Each subsequent transition selects one more retained
+record. Next transition/Finish navigate locally; Replay/Pause, Back and the
+slider inspect the recorded timeline. Reset, retry, scenario actions and all
+server execution commands refuse. The reader never constructs a physical
+Driver. Checkpoint observation times are not exact record-commit timestamps.
+The [recording contract](../architecture/diagnostic-recording.md) specifies
+incomplete runs, privacy gates and the bounded snapshot history.
+Tests: `recording::ui`, the UI protocol's read-only-command regression and
+`browser.test.cjs`'s real-recording navigation/paused-playback case.
 
 Every request, including assets, snapshots, timeline, SSE and controls,
 requires the unpredictable per-process capability. The page removes it from
