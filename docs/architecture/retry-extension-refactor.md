@@ -5,6 +5,8 @@
 owns the decision. This document records the repository contact, implementation
 order and acceptance evidence still required, including the pre-C1 review
 amendments. Current packages remain v18.
+The original-plan idempotence authority was settled on 15 September by
+[D-2026-09-15-1](../spec/decisions.md#d-2026-09-15-1--keep-idempotence-in-the-original-validated-plan).
 
 > A Loop advances a state; a Retry repeats an operation. The first proves
 > finite iteration; the second proves safe repetition.
@@ -310,21 +312,29 @@ manager order is permitted. C1 must make that Contract rule available to the
 generic VM before removing the overloaded effect checks. No new public trait
 or new user-facing setting is required by this constraint.
 
-### 7.2 Intent guarantee and exact Contract versions — C1 decisions
+### 7.2 Plan-owned idempotence and exact Contract versions
 
-Before producing the identity inventory, C1 must explicitly choose between a
-retained resolved `idempotent` boolean replacing `Intent.effect`, and removal
-of that redundant field with the guarantee re-derived from the exact retained
-validated plan/Contract. Either choice must bind every attempt to the original
-operation guarantee and reject contradictory retained material. It must never
-turn an old effect word or missing field into permission to repeat.
+**Option B selected, D-2026-09-15-1.** Remove `Intent.effect` without adding
+`Intent.idempotent`. The resolved guarantee belongs to the original validated
+Connector plan/Contract. In this first profile it is immutable and
+plan-constant, not a per-invocation expression. Every attempt stays bound to
+that original authority; a changed source file, environment or newer Contract
+cannot revise the guarantee during recovery.
+
+The current [recording](../../crates/rastok/src/recording/mod.rs) already embeds
+and validates its plan package. Recovery must reject missing or contradictory
+original plan/Contract binding, never infer permission from an old effect word
+or missing field. It does not need a duplicate guarantee in each Intent.
+Per-invocation guarantees are outside this profile; admitting them later would
+require an explicit retained binding, not a silent extension of this rule.
 
 The current diagnostic [recording codec](../../crates/rastok/src/recording/codec.rs)
 serializes the effect word; [Call recovery](../../crates/rastok-core/src/runtime/vm/recovery/calls.rs)
-checks it against the plan. The choice must cover recording decode, recovery,
-plan identity and the separately defined causal projection together, without
-pretending that every in-memory field is already a causal key. The decision
-cannot be deferred past the inventory or handled as a mechanical field rename.
+checks it against the plan. C1 must inventory removal from recording decode
+and recovery alongside the plan-owned guarantee and separately defined causal
+projection, without pretending that every in-memory field is already a causal
+key. The representation choice is closed; its versioned implementation is
+still required and is not a mechanical field rename.
 
 Contract majors are allocated per exact profile, not by a blanket "all @3"
 rule: [`connector.rs`](../../crates/rastok-core/src/connector.rs) already gives
@@ -337,7 +347,7 @@ inventoried individually. No existing id may acquire another meaning.
 | Slice | Required result | Status |
 |---|---|---|
 | C0 — contract and contact | approved semantic distinction, output publication, audit and migration inventory | recorded here; exact encoding still unallocated |
-| C1 — operation and recurrence algebra | pinned operation, retained attempt disposition/consumption, closure-based deadlines, exact Session opening rule, Intent guarantee choice, shared fold, identity register and crash traces | not started; all choices precede the inventory |
+| C1 — operation and recurrence algebra | pinned operation, retained attempt disposition/consumption, closure-based deadlines, exact Session opening rule, plan-owned guarantee and Intent field removal, shared fold, identity register and crash traces | not started; option B settled by D-2026-09-15-1; remaining representation details precede the inventory |
 | C2 — source and validated plan | Retry settings, idempotence, Loop warning, typed HTTP 5xx/cardinality, removal of global effect, full registry-free checks, one declared format cutover | not started |
 | C3 — runtime and accounting | qualified Call attempts, final publication, shared scheduling/recovery, exact per-attempt report input | not started |
 | C4 — migration and qualification | examples, goldens with reasons, UI, docs, no_std and memory/code-size gates | not started |
@@ -374,8 +384,10 @@ and status/case contradictions; a 5xx with decode failure; retained body usage
 on both HTTP response cases; delay unchanged after a crash before consumption;
 Loop `again` warning for a non-idempotent sibling and no warning on a proven
 before-effect-only path; server orphan writes never opening clients; client
-and Process-service local opening preserved; contradictory Intent guarantee
-refused under the selected new recording representation.
+and Process-service local opening preserved; missing or contradictory original
+plan/Contract binding refused; changing current source cannot change a retained
+operation's guarantee. No per-attempt guarantee field survives in the target
+Intent/recording representation.
 
 No implementation, runtime qualification, benchmark call, paid model invocation,
 release tag or public push is claimed by this preparatory slice.

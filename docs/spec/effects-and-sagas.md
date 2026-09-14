@@ -15,6 +15,9 @@
 > implementation, not the approved target. The
 > [refactor ledger](../architecture/retry-extension-refactor.md) tracks their
 > replacement; Saga execution remains unimplemented.
+> [D-2026-09-15-1](decisions.md#d-2026-09-15-1--keep-idempotence-in-the-original-validated-plan)
+> fixes the target guarantee in the original validated plan/Contract:
+> `Intent.effect` is removed without a duplicated `Intent.idempotent`.
 
 This document owns the static classification of external effects and the
 minimal direction reserved for the future Saga Extension. Loop repetition

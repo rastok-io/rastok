@@ -5,6 +5,38 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-09-15-1 — Keep idempotence in the original validated plan
+
+**Approved refactor target; not an executable v18 amendment.** Yoann selected
+option B for the Intent representation left open by D-2026-09-14-4:
+remove `Intent.effect` at cutover, without introducing `Intent.idempotent`.
+
+The resolved Connector guarantee is an immutable plan property, derived from
+its exact Contract and any admitted plan-constant declaration. It is not an
+invocation expression and does not change between attempts. The journal's
+operation/Call references bind execution to that original validated plan and
+Contract, not to the current source file, deployment configuration or newest
+Contract implementation. Missing or contradictory original authority refuses;
+an old effect word or absent record field cannot manufacture a guarantee.
+
+Replay already requires the plan, and diagnostic recordings embed its package.
+Copying the same guarantee into every Intent would add a second representation
+and equality check without making a Call record independently executable.
+Recovery instead validates the record's binding to its original plan/Contract
+and reads the guarantee there. Requests, keys, attempts, outcomes and deadlines
+remain retained facts. Idempotence alone still authorizes neither replay I/O
+nor an automatic retry; the explicit recurrence policy remains required.
+
+C1 must inventory the removal from Intent, recording codec and recovery,
+and the plan-owned replacement of the old effect axis, before allocating the
+versioned cutover. No package, Contract id, recording format or golden changes
+in this documentary decision. Per-invocation guarantees remain outside the
+first profile and would require their own retained binding if later admitted.
+
+Rejected: a duplicated `Intent.idempotent` boolean; consulting current source
+or environment during recovery; reinterpreting an old effect tag; mistaking
+Session opening roles or `behavior` for an idempotence guarantee.
+
 ## D-2026-09-14-4 — Separate Loop, Retry and Saga over one recurrence engine
 
 **Approved refactor contract; not an executable package amendment yet.**
@@ -100,6 +132,7 @@ must retain the original closure instant and deadline, preserve historical
 Loop-reference meaning, resolve the replacement/removal of `Intent.effect`,
 and enumerate Contract versions per profile before its identity inventory.
 Process service already occupies `process@3`; there is no blanket @3 move.
+The Intent representation question was subsequently settled by D-2026-09-15-1.
 
 Removing effect requires preserving exact Contract opening rules. Roles and
 exchange distinguish Calls but not Session initiators: both WebSocket profiles
