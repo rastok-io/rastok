@@ -125,8 +125,8 @@ fn forged_packages_cannot_omit_the_lexical_scope_proof() {
     }
     assert_eq!(
         plan::FORMAT_VERSION,
-        18,
-        "explicit closure uses one categorical package move"
+        19,
+        "Retry retains the existing exact-instance closure proof"
     );
 }
 
@@ -487,11 +487,11 @@ fn file_http_and_process_use_the_same_instance_local_closing_protocol() {
         ("File", "mode = read; path = \"input.txt\""),
         (
             "HttpClient",
-            "url = \"https://partner.invalid\"; codec = json; effect = idempotent; behavior = probabilistic",
+            "url = \"https://partner.invalid\"; codec = json; idempotent = true; behavior = probabilistic",
         ),
         (
             "Process",
-            "command = \"cat\"; codec = jsonl; effect = idempotent; behavior = deterministic",
+            "command = \"cat\"; codec = jsonl; idempotent = true; behavior = deterministic",
         ),
     ] {
         let source = format!(
@@ -647,7 +647,7 @@ fn an_effectful_target_requires_bounded_closing_in_source_and_foreign_plans() {
       input close: int
       connector client : Process {
         command = "cat"; codec = lines
-        effect = idempotent; behavior = deterministic
+        idempotent = true; behavior = deterministic
         closing = { drain_for = duration("1s"); settle_for = duration("1s") }
       }
       in -> client

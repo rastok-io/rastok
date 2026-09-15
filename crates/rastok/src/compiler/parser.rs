@@ -3490,7 +3490,7 @@ mod tests {
         for (label, source) in [
             (
                 "attribute",
-                "graph g : App {\n  connector shell : Process {\n    command = \"oops\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  in -> shell -> out\n}\n",
+                "graph g : App {\n  connector shell : Process {\n    command = \"oops\n    codec = lines\n    idempotent = true ; behavior = deterministic\n  }\n  in -> shell -> out\n}\n",
             ),
             (
                 "guard",
@@ -3655,7 +3655,7 @@ graph m0_probe : App {
   connector echo : Process {
     mode = job ; command = "cat"
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   operator shout {
@@ -3702,7 +3702,7 @@ graph m0_probe : App {
                 other => panic!("expected an attribute, got {other:?}"),
             })
             .collect();
-        assert_eq!(keys, ["mode", "command", "codec", "effect", "behavior"]);
+        assert_eq!(keys, ["mode", "command", "codec", "idempotent", "behavior"]);
         let OperatorItem::Attribute(command) = &echo.body[1] else {
             panic!("expected an attribute");
         };
@@ -3929,7 +3929,7 @@ graph m0_probe : App {
   connector echo : Process {
     mode = job ; command = "cat"
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   operator shout {

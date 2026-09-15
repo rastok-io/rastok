@@ -10,8 +10,9 @@ inspection, without a package-version or journal move. This ledger records
 delivery, not new semantic authority.
 The subsequent D-2026-09-14-4 approves the
 [Loop / Retry / Saga refactor](retry-extension-refactor.md); C2 implementation
-is in progress and the versioned cutover remains ahead. Current executable
-packages remain v18.
+is in progress. `rework/retry` carries the unblessed v19/recording-v3
+candidate; v18 is the last fully qualified baseline. Retry still refuses at
+the named manager execution gate; no release or golden blessing is claimed.
 The [explicit instance-closure design](instance-stop-command.md) is now
 executed through bounded retained requests, with an explicitly versioned
 package and recording; its qualification ledger does not claim Process service.
@@ -46,7 +47,7 @@ dead when no handler emits on that port.
 | Readable golden divergence | Done | Expected/actual labels, first record and field, retained causal context; shared CLI/UI path; classified values hidden; byte/seal comparison unchanged |
 | `rastok new` | Done | One executable typed graph plus Lab; tests simulate it and prove no overwrite and path/name refusals |
 | Optional JSON member presence | Done | Approved `has(object.member)`, core evaluator, independent package validation, constant folding, classification and pinned CEL differential tests; absence is distinct from null and observed zero; no witness re-blessing |
-| Loop / Retry / Saga separation | Partial — C2 implementation in progress, no executable Retry yet | [C2 evidence](retry-c2-implementation.md) records exact Session opening, Contract frame sets, fail-closed source policy checking and the retained attempt algebra/codecs. [C1 inventory](retry-c1-identity.md) owns the remaining v19/v3 cutover; [C0–C4](retry-extension-refactor.md#8-implementation-order-and-exits) still require complete carrier validation, manager/recovery/accounting and migration. No format/golden change is claimed yet |
+| Loop / Retry / Saga separation | Partial — v19/v3 candidate, no executable Retry yet | [C2 evidence](retry-c2-implementation.md) records Session authority, original-plan idempotence, ServerError, HIR/transport validation, the Loop warning and retained attempt/closure evidence. [C1 inventory](retry-c1-identity.md) owns this unblessed cutover; [C0–C4](retry-extension-refactor.md#8-implementation-order-and-exits) still require full original-prefix binding, manager/recovery/accounting and migration. No golden has changed |
 | `docs/site/README.md` schema | Done | Plain Markdown/YAML, exact requested fields; Rust validation rejects missing/unknown/duplicate fields and checks artifact references; no extra field introduced |
 | Editor grammar | Done for the executable v18 syntax | Data-only package, three lexical tests and two real TextMate/Oniguruma tests; all shipped examples, JSON quoting, raw readers, nested comments and instance commands. Future guest compilers and semantic tokens remain outside scope; no interactive historical-VS-Code certification |
 | echo page and comparison | Done | Three scenarios and gallery goldens; reproducible run/replay; `cli` versus `lab` provenance prevents a false claim of raw run/simulate seal equality |

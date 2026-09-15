@@ -126,6 +126,7 @@ fn serve(mut stream: TcpStream) {
         "/authenticated" => (401, 0, "text/plain", b"unauthorized"),
         "/large" => (200, 0, "text/plain", b"too-large"),
         "/bad-json" => (200, 0, "application/json", b"not-json"),
+        "/server-error" => (503, 0, "text/plain", b"temporarily-unavailable"),
         "/first" => (200, 40, "text/plain", b"first-result"),
         "/second" => (200, 1, "text/plain", b"second-result"),
         "/mute" => {
@@ -172,7 +173,7 @@ graph {name} : App {{
     codec = {codec}
     versions = ["http/1.1"]
     max_body = "{max_body}"
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }}
 {route}}}
 "#,
@@ -186,12 +187,12 @@ graph pair : App {{
   connector left : HttpClient {{
     url = "{}" ; timeout = duration("1s")
     codec = text ; versions = ["http/1.1"]
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }}
   connector right : HttpClient {{
     url = "{}" ; timeout = duration("1s")
     codec = text ; versions = ["http/1.1"]
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }}
   operator a {{
     input in: struct {{ a: text, b: text }}
@@ -287,7 +288,7 @@ graph authenticated : App {
     timeout = duration("1s")
     codec = text
     versions = ["http/1.1"]
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
   in -> client -> out
   client.exit -> nothing
@@ -370,6 +371,17 @@ fn http_client_passes_the_connector_neutral_call_battery() {
         happy_exit_case: "Completed",
         provocations: vec![
             Provocation {
+                exit_case: "ServerError",
+                source: probe(
+                    "server_error",
+                    &server.url("/server-error"),
+                    "text",
+                    "1s",
+                    "1KiB",
+                ),
+                input: "request",
+            },
+            Provocation {
                 exit_case: "ConnectFailed",
                 source: probe(
                     "connect_failed",
@@ -445,6 +457,7 @@ fn http_client_passes_the_connector_neutral_call_battery() {
         report.proven_cases,
         [
             "Completed",
+            "ServerError",
             "ConnectFailed",
             "TlsFailed",
             "ProtocolFailed",

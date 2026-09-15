@@ -19,7 +19,7 @@ graph process_only : App {
     mode = job
     command = "cat"
     codec = lines
-    effect = idempotent
+    idempotent = true
     behavior = deterministic
   }
 
@@ -55,7 +55,7 @@ graph mixed : App {
     mode = job
     command = "cat"
     codec = lines
-    effect = idempotent
+    idempotent = true
     behavior = deterministic
   }
 
@@ -240,7 +240,7 @@ graph websocket_only : App {
     url = "ws://example.test/socket"
     codec = text
     handshake_timeout = duration("5s")
-    effect = idempotent ; behavior = deterministic
+     behavior = deterministic
     versions = ["http/1.1"]
   }
   in -> socket
@@ -253,7 +253,7 @@ graph websocket_only : App {
         panic!("a Process-only image cannot create bindings for WebSocketClient")
     };
     assert!(
-        error.to_string().contains("rastok/websocket-client@2"),
+        error.to_string().contains("rastok/websocket-client@3"),
         "the omitted semantic capability is named before any VM exists: {error}"
     );
 }

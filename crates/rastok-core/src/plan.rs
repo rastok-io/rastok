@@ -16,6 +16,7 @@ mod dispatch_validation;
 mod emission;
 mod graph_loop;
 mod productibility;
+mod retry;
 mod routing;
 mod routing_validation;
 mod serialization;
@@ -31,6 +32,7 @@ pub use dispatch::{
 };
 pub use dispatch_validation::{DispatchErrorKind, DispatchValidationError, validate_dispatch};
 pub use emission::{Emission, FieldWrite};
+pub use retry::LoopRepeatWarning;
 pub use routing::{
     Endpoint, EndpointOwner, InstanceStopTarget, LoopCommandKind, LoopCommandTarget, RouteArm,
     RouteDestination, RouteRule, RouteSelection,
@@ -758,6 +760,8 @@ pub enum ExtensionSpec {
     App,
     /// Finite temporal recursion over the owner's entry interface.
     Loop(Box<LoopSpec>),
+    /// Bounded repetition of one pinned outbound Call operation.
+    Retry(Box<RetrySpec>),
 }
 
 impl ExtensionSpec {
@@ -767,6 +771,7 @@ impl ExtensionSpec {
         match self {
             Self::App => node::Extension::App,
             Self::Loop(_) => node::Extension::Loop,
+            Self::Retry(_) => node::Extension::Retry,
         }
     }
 }
@@ -779,7 +784,18 @@ impl Owner {
             .iter()
             .find_map(|extension| match extension {
                 ExtensionSpec::Loop(spec) => Some(spec.as_ref()),
-                ExtensionSpec::App => None,
+                ExtensionSpec::App | ExtensionSpec::Retry(_) => None,
+            })
+    }
+
+    /// The configured pinned-operation policy, when this owner is a Call.
+    #[must_use]
+    pub fn retry_spec(&self) -> Option<&RetrySpec> {
+        self.extensions
+            .iter()
+            .find_map(|extension| match extension {
+                ExtensionSpec::Retry(spec) => Some(spec.as_ref()),
+                ExtensionSpec::App | ExtensionSpec::Loop(_) => None,
             })
     }
 }
@@ -792,6 +808,21 @@ pub struct PlanConstant {
     pub expr: expr::Tree,
     /// Claimed reduction, re-evaluated Registry-free after decode.
     pub resolved: Value,
+}
+
+/// Complete Contract-checked policy for one pinned outbound Call operation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetrySpec {
+    /// Positive total bound, first attempt included.
+    pub attempts: PlanConstant,
+    /// Nonduplicated canonical terminal names, never runtime predicates.
+    pub cases: Vec<String>,
+    /// Original closure-based delay between attempts.
+    pub delay: Option<LoopDelay>,
+    /// Resolved Contract request input.
+    pub entry: node::Port,
+    /// Resolved Contract terminal, with no contributed output or wrapper.
+    pub terminal: node::Port,
 }
 
 /// Complete first-gate Loop transport.
@@ -956,15 +987,15 @@ pub struct OwnerValue {
 /// A connector's planned configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConnectorSpec {
-    /// Stable semantic contract identity (`rastok/process@2`).
+    /// Stable semantic contract identity (`rastok/process@4`).
     pub contract: crate::connector::ContractId,
     /// Inbound/outbound runtime roles required by the contract.
     pub roles: crate::connector::ConnectorRoles,
     /// Cardinality and terminal lifecycle required by the contract.
     pub exchange: crate::connector::ConnectorExchange,
-    /// The declared effect — typed at the HIR/plan frontier, where
-    /// distinctions become irrevocable.
-    pub effect: node::Effect,
+    /// Original plan-owned Call guarantee. Non-Call profiles have none.
+    /// It is never copied into an Intent or inferred from a partner key.
+    pub idempotent: Option<PlanConstant>,
     /// The declared behavior, likewise typed.
     pub behavior: node::Behavior,
     /// The remaining effective attributes, either reduced or carrying their
@@ -973,6 +1004,14 @@ pub struct ConnectorSpec {
 }
 
 impl ConnectorSpec {
+    /// Only a validated true constant grants repeat-safety.
+    #[must_use]
+    pub fn is_idempotent(&self) -> bool {
+        self.idempotent
+            .as_ref()
+            .is_some_and(|constant| constant.resolved == Value::Bool(true))
+    }
+
     /// Closed Call guarantees derived from the exact Contract and profile.
     #[must_use]
     pub(crate) fn call_semantics(&self) -> Option<crate::connector::CallSemantics> {

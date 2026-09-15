@@ -13,7 +13,7 @@ graph csv_count : App {
     command = "cat"
     args = ["examples/csv-count.csv"]
     codec = lines
-    effect = idempotent
+    idempotent = true
     behavior = deterministic
     timeout = duration("5s")
   }

@@ -489,7 +489,7 @@ graph app : App {
   connector worker : Process + Loop {
     command = "cat"
     codec = lines
-    effect = idempotent
+    idempotent = true
     behavior = probabilistic
     timeout = duration("1s")
     Loop.fuel = 2
@@ -874,7 +874,7 @@ fn call_terminals_close_naturally_without_turning_frames_into_verdicts() {
     for (contract, settings, outputs, terminal, frame_count, extra_routes) in [
         (
             "Process",
-            "command = \"cat\"; codec = lines; effect = idempotent; behavior = deterministic",
+            "command = \"cat\"; codec = lines; idempotent = true; behavior = deterministic",
             "out = \"first\"; out = \"second\"",
             "Exited { exit_code = 0; signal = null }",
             2,
@@ -890,7 +890,7 @@ fn call_terminals_close_naturally_without_turning_frames_into_verdicts() {
         ),
         (
             "HttpClient",
-            "url = \"https://example.invalid\"; codec = text; effect = idempotent; behavior = probabilistic",
+            "url = \"https://example.invalid\"; codec = text; idempotent = true; behavior = probabilistic",
             "out = \"reply\"",
             "Completed { status = 200 }",
             1,
@@ -960,7 +960,7 @@ graph app : App {
   connector worker : HttpClient + Loop {
     url = "https://example.invalid"
     codec = json
-    effect = idempotent
+    idempotent = true
     behavior = probabilistic
     timeout = duration("1s")
     Loop.fuel = 2
@@ -1246,7 +1246,7 @@ fn a_package_cannot_replace_the_measured_decrease_with_a_claim() {
                 .iter_mut()
                 .find_map(|extension| match extension {
                     plan::ExtensionSpec::Loop(spec) => spec.proof.as_mut(),
-                    plan::ExtensionSpec::App => None,
+                    plan::ExtensionSpec::App | plan::ExtensionSpec::Retry(_) => None,
                 })
         })
         .unwrap();

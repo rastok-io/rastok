@@ -2,8 +2,10 @@
 
 15 September 2026. **In progress; Retry is not executable.** The
 [C1 inventory](retry-c1-identity.md) owns the proposed v19/v3 cutover.
-Preparatory changes below preserve executable v18 and recording v2; no
-Contract major, journal tag or golden has moved.
+The preparatory checkpoints (§1–§5) preserved executable v18/recording v2.
+The current `rework/retry` worktree carries the **v19/v3 candidate**, not yet
+blessed or qualified for release. §7 distinguishes that cutover from the
+earlier green checkpoints. No golden has been re-blessed.
 
 ## 1. Exact Session opening authority
 
@@ -144,7 +146,7 @@ No package version, recording version, Contract major, hash pin or causal
 golden was changed. Browser/JavaScript and independent protocol campaigns were
 not rerun; no UI or physical Driver implementation changed in this checkpoint.
 
-## 5. Retained attempt algebra and shared codecs
+## 5. Retained attempt algebra and shared codecs at `a574895`
 
 The core now has typed Retry operations and a pure protocol fold, together
 with the candidate key-58 retention and causal projections from C1. This is
@@ -198,7 +200,7 @@ zero must not silently change. The new regression initially failed at the
 first admission with `AdmissionIdentity`; the fold compares canonical
 metadata and leaves the metadata value/evaluator semantics unchanged.
 
-## 6. Remaining C2 gates
+## 6. C2 acceptance checklist
 
 - HTTP ServerError and its declared Contract/type cutover, including decoded
   status boundaries and frame cardinality in Driver, Lab and core validation.
@@ -213,3 +215,80 @@ metadata and leaves the metadata value/evaluator semantics unchanged.
 
 Runtime attempt publication, shared recurrence/recovery and accounting are
 C3. Example/golden/UI migration and final qualification remain C4.
+
+## 7. v19/v3 candidate — not blessed
+
+The candidate now removes `Effect` from core and `Intent`, moves the exact
+Contract majors declared in C1, and carries the original plan-constant
+idempotence guarantee under Connector key 8. Non-Call profiles have no such
+guarantee. The independent validator re-evaluates its closed expression and
+checks its agreement with the effective attribute; File cannot override true.
+
+Retry is checked through the normal Node/HIR/lowering pipeline, not a separate
+partial source checker. Its owner-ordered `rastok.retry.r1` contribution and
+tag-4 transport carry attempts, canonical cases, delay, entry and terminal.
+Public compilation still refuses at the named manager execution gate, and a
+raw validated Retry plan also refuses before VM mutation. This is intentional
+staging until C3, not executable Retry support.
+
+Call closures retain their original logical instant uniformly, including
+timeout and abandonment. Openings cannot carry it; missing/backdated clocks,
+changed attempt context, and an arm for the wrong next admission refuse.
+Recovery reads the retained closure instant. Recording v3 drops the old Intent
+effect word and retains these fields; v2 is not an alias. The causal projection
+adds only sparse Retry context/facts (58) and arm identity (37), not the
+retention clock/deadline (59/56). Manager/producer carrier checks reject empty
+packets, torn atomic shapes, mixed operations, hidden application state, and
+a Held batch that also claims spatial delivery. Full original-plan/prefix
+binding and publication remain C3 obligations.
+
+HttpClient publishes `ServerError` only for a usable decoded 500–599 response.
+Both response cases require one out frame; decoding failure stays prior to
+status classification. Source fixtures with explicit HTTP terminal unions must
+add this case. Loop's advisory `W-LOOP-REPEAT` uses the original guarantee,
+including sibling effects; it is not Retry's hard safety rule.
+
+Focused evidence: **355 core tests pass**; eleven source-policy, six raw/HIR
+Retry-plan, eight causal-golden and two HTTP conformance tests pass. A further
+VM/package/Graph-Call run passes 81 + 11 + 22 + 9 tests; its sole failure is
+the deliberately unblessed echo package. The Loop warning names the exact
+owner, Again source and repeated Connector in canonical order. The nine
+Graph-Call tests also pass with this richer diagnostic evidence.
+
+The latest hosted library run passes **379 tests**, with two expected
+unblessed pins: the M0 compiler hash and the v3 retained-row encoding.
+Strict workspace clippy, fmt, rustdoc and all three no_std checks pass.
+The full binary matrix is still being collected; it is not called green.
+A parallel real-gateway probe failed its 30-second listener startup bound
+with no child output and must be rerun separately, not have its bound raised.
+No test is ignored and no golden has changed. The byte-neutral codec
+checkpoint in §5 is not the v3 tuple, which intentionally changes.
+
+Candidate package audit (not a blessing):
+
+| Witness | v18 body | v19 body | Identity |
+|---|---:|---:|---|
+| echo | 939 B | 964 B | Contract/guarantee movement; candidate hash `878a34b7…` |
+| JSONL | 983 B | 1,008 B | same movement; candidate hash `3f1b40ec…` |
+| gauge | 249 B | 249 B | body, `0d3ad43d…` semantic hash and causal trace byte-identical |
+
+The package audit runs all five witness scenarios successfully; the existing
+causal-golden tests remain green. All container versions/checksums move as
+declared. The sparse Retry causal tests independently verify key 58 context
+and key 37 arm identity; changed key 59/56 retention time does not change the
+causal seal.
+
+The Cortex-M33 spike was rebuilt using a separately generated candidate echo
+package (`RASTOK_SPIKE_PACKAGE`); the tracked fixture remains untouched.
+Its final measured candidate result is:
+
+| Measurement | Candidate | Remaining gate margin |
+|---|---:|---:|
+| peak heap | 112,656 B | 18,416 B below 128 KiB |
+| `.text` + `.rodata` | 904,316 + 71,220 = 975,536 B | 73,040 B below 1 MiB |
+| Record / Inbound / Transaction / Outbound | 8 / 216 / 224 / 8 B | unchanged layouts; owned retention still costs memory |
+| relay average / minimum / maximum ticks | 1,913 / 1,862 / 2,095 | 67 records, `SPIKE_OK` |
+
+Heap grew 924 B from §5. This remains the **non-Retry echo workload**, not a
+claim about held batches or recovery peaks. C3's Process capture/retention
+matrix remains required. No dependency or embedded gate was changed.

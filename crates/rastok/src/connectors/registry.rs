@@ -1552,11 +1552,11 @@ graph mixed : App {
   output out: text
   connector first : Process {
     mode = job ; command = "cat" ; codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
   connector second : Process {
     mode = job ; command = "cat" ; codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
   in -> first -> second -> out
   first.err -> nothing ; first.exit -> nothing
@@ -1582,6 +1582,8 @@ graph mixed : App {
                 other => panic!("unexpected probe node `{other}`"),
             })
             .unwrap();
+            spec.idempotent = None;
+            spec.attributes.retain(|(name, _)| name != "idempotent");
             if planned.path.to_string() == "first" {
                 spec.roles = first_roles;
             }
@@ -1615,7 +1617,7 @@ graph inbound : App {
   output out: text
   connector source : Process {
     mode = job ; command = "cat" ; codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
   operator relay { input in: text ; on in { out = data } }
   in -> nothing
@@ -1638,6 +1640,8 @@ graph inbound : App {
             panic!("the source node is a connector")
         };
         spec.contract = ContractId::parse("test/event-source@1").unwrap();
+        spec.idempotent = None;
+        spec.attributes.retain(|(name, _)| name != "idempotent");
         spec.roles = ConnectorRoles::Inbound;
         spec.exchange = ConnectorExchange::Event;
         source.ports.retain(|port| port.port.name() != "exit");

@@ -80,18 +80,10 @@ pub(super) fn validate(
                         "a Call command must target its own Loop context",
                     ));
                 }
-                if let Err(refused) = call.validate_command(
-                    rule.source.port.name(),
-                    cases,
-                    command.kind,
-                    connector.effect,
-                ) {
+                if let Err(refused) = call.validate_command(rule.source.port.name(), cases) {
                     let detail = match refused {
                         CallCommandError::RepeatedFrames => {
                             "a streamed port cannot issue a single Loop verdict"
-                        }
-                        CallCommandError::UnsafeRecurrence { .. } => {
-                            "recurrence after possible visibility requires effect = none or idempotent"
                         }
                         CallCommandError::UnknownPort | CallCommandError::UnknownCase(_) => {
                             "the command source is outside the Contract's Call guarantees"

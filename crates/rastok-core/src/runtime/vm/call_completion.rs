@@ -29,20 +29,14 @@ impl Vm<'_> {
         if terminals.next().is_some() {
             return Err(violation("a Call completion has more than one terminal"));
         }
-        let Data::Materialized(crate::value::Value::TaggedUnion(value)) = terminal.envelope.data()
-        else {
+        let Data::Materialized(value) = terminal.envelope.data() else {
             return Err(violation(
                 "the Call terminal is not its closed tagged union",
             ));
         };
-        let terminal_case = value.case.as_str();
-        if !call
-            .terminal_cases()
-            .iter()
-            .any(|(case, _)| *case == terminal_case)
-        {
-            return Err(violation("the Call terminal is outside its Contract"));
-        }
+        let terminal_case = call
+            .terminal_case(value)
+            .ok_or_else(|| violation("the Call terminal is outside its Contract"))?;
         for port in &node.ports {
             let Some(production) = call.frame_production(port.port.name()) else {
                 continue;

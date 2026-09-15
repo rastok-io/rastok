@@ -124,7 +124,7 @@ graph m0_probe : App {
   connector echo : Process {
 mode = job ; command = "cat"
 codec = lines
-effect = idempotent ; behavior = deterministic
+idempotent = true; behavior = deterministic
   }
 
   operator shout {
@@ -411,7 +411,7 @@ Loop.fuel = 3
 command = "echo"
 args = ["ok"]
 codec = lines
-effect = idempotent
+idempotent = true
 behavior = deterministic
   }
   c.out -> nothing
@@ -679,7 +679,7 @@ graph g : App {
 mode = job
 command = "cat"
 codec = lines
-effect = idempotent
+idempotent = true
 behavior = deterministic
 Loop.fuel = 3
 timeout = duration("1s")
@@ -1150,20 +1150,20 @@ fn expression_faults_map_back_to_source_spans() {
 }
 
 #[test]
-fn a_missing_mandatory_axis_violates_the_sheet() {
-    let source = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; codec = lines\n    behavior = deterministic\n  }\n  in -> c -> out\n}\n";
+fn a_missing_behavior_violates_the_sheet() {
+    let source = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; codec = lines\n\n  }\n  in -> c -> out\n}\n";
     let (_, bag) = check_source(source);
     let diagnostic = bag
         .diagnostics()
         .iter()
         .find(|diagnostic| diagnostic.code() == E_CONTRACT_REQUIRED)
-        .expect("the missing-effect refusal");
-    assert_eq!(diagnostic.fields()[0].1, "effect");
+        .expect("the missing-behavior refusal");
+    assert_eq!(diagnostic.fields()[0].1, "behavior");
 }
 
 #[test]
 fn a_domain_violation_names_the_sheet() {
-    let source = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; codec = utf16\n    effect = idempotent ; behavior = deterministic\n  }\n  in -> c -> out\n}\n";
+    let source = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; codec = utf16\n    idempotent = true; behavior = deterministic\n  }\n  in -> c -> out\n}\n";
     let (_, bag) = check_source(source);
     let diagnostic = bag
         .diagnostics()
@@ -1175,7 +1175,7 @@ fn a_domain_violation_names_the_sheet() {
 
 #[test]
 fn process_correlation_is_retired_in_favor_of_an_operator_adapter() {
-    let source = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; codec = lines\n    effect = idempotent ; behavior = deterministic\n    correlate = data.id\n  }\n  in -> c -> out\n}\n";
+    let source = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; codec = lines\n    idempotent = true; behavior = deterministic\n    correlate = data.id\n  }\n  in -> c -> out\n}\n";
     let (_, bag) = check_source(source);
     let diagnostic = bag
         .diagnostics()
@@ -1296,22 +1296,28 @@ fn the_removed_struct_spelling_is_gone_from_the_grammar() {
 }
 
 #[test]
-fn non_idempotent_effects_are_deferred_until_their_invariants_run() {
-    // `compensable` demands an executable `on compensate` and
-    // `irreversible` an idempotency key; neither companion exists
-    // in this subset, so the words refuse instead of lying.
-    for word in ["compensable", "irreversible"] {
+fn saga_effect_words_are_not_ordinary_call_attributes() {
+    for word in ["none", "idempotent", "compensable", "irreversible"] {
         let source = format!(
-            "graph g : App {{\n  connector c : Process {{\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = {word} ; behavior = deterministic\n  }}\n  in -> c -> out\n}}\n"
+            r#"
+graph g : App {{
+  connector c : Process {{
+    command = "cat"; codec = lines
+    effect = {word}; behavior = deterministic
+  }}
+  in -> c -> out
+  c.err -> nothing
+  c.exit -> nothing
+}}
+"#
         );
         let (_, bag) = check_source(&source);
         assert!(
-            bag.diagnostics().iter().any(|diagnostic| {
-                diagnostic.code() == E_CHECK_DEFERRED
-                    && diagnostic.fields()[0].1 == "compensable and irreversible effects"
-            }),
-            "`effect = {word}` must refuse: {:#?}",
             bag.diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code() == E_CONTRACT_ATTR
+                    && diagnostic.fields()[0].1 == "effect"),
+            "{word}: {bag:#?}"
         );
     }
 }
@@ -1821,7 +1827,7 @@ graph g : App {
 mode = job
 command = "cat"
 codec = lines
-effect = idempotent
+idempotent = true
 behavior = deterministic
 Loop.fuel = 3
   }
@@ -1849,7 +1855,7 @@ graph g : App {
   connector server : HttpServer + Loop {
 bind = "127.0.0.1:0"
 codec = json
-effect = none
+
 behavior = probabilistic
 Loop.fuel = 3
   }
@@ -1866,26 +1872,20 @@ Loop.fuel = 3
 }
 
 #[test]
-fn connector_loop_routes_refuse_unsafe_repetition_and_unbounded_verdicts() {
-    for (routes, expected) in [
-        (
-            "call.out -> nothing; call.exit -> match { TimeoutExpired -> call.Loop.again; _ -> nothing }",
-            Code::new("E-LOOP-EFFECT"),
-        ),
-        (
-            "call.out -> call.Loop.done; call.exit -> nothing",
-            Code::new("E-LOOP-CARDINALITY"),
-        ),
-    ] {
-        let source = format!(
-            r#"
+fn connector_loop_routes_refuse_unbounded_verdicts() {
+    let (routes, expected) = (
+        "call.out -> call.Loop.done; call.exit -> nothing",
+        Code::new("E-LOOP-CARDINALITY"),
+    );
+    let source = format!(
+        r#"
 graph g : App {{
   input in: text
   connector call : Process + Loop {{
     mode = job
     command = "cat"
     codec = lines
-    effect = irreversible
+    idempotent = false
     behavior = deterministic
     Loop.fuel = 3
   }}
@@ -1894,41 +1894,36 @@ graph g : App {{
   {routes}
 }}
 "#
-        );
-        let (_, bag) = check_source(&source);
-        assert!(
-            diagnostic_codes(&bag).contains(&expected),
-            "{expected} must be diagnosed before packaging: {:#?}",
-            bag.diagnostics()
-        );
-    }
+    );
+    let (_, bag) = check_source(&source);
+    assert!(
+        diagnostic_codes(&bag).contains(&expected),
+        "{expected} must be diagnosed before packaging: {:#?}",
+        bag.diagnostics()
+    );
 }
 
 #[test]
-fn a_before_effect_retry_does_not_weaken_the_existing_effect_execution_gate() {
+fn loop_checks_sources_without_imposing_retry_guarantees() {
     let source = r#"
 graph g : App {
   connector call : Process + Loop {
     command = "cat"
     codec = lines
-    effect = irreversible
+    idempotent = false
     behavior = deterministic
     Loop.fuel = 3
+    timeout = duration("1s")
   }
   call.out -> nothing
   call.err -> nothing
   call.exit -> match { SpawnFailed -> call.Loop.again; _ -> nothing }
 }
 "#;
-    let (_, bag) = check_source(source);
-    assert!(!diagnostic_codes(&bag).contains(&E_LOOP_EFFECT));
-    assert!(!diagnostic_codes(&bag).contains(&E_LOOP_HOST));
-    assert!(
-        diagnostic_codes(&bag).contains(&E_CHECK_DEFERRED),
-        "repeat safety does not admit a globally deferred effect class"
-    );
-    let (_, repeated) = check_source(&source.replace("SpawnFailed ->", "Exited ->"));
-    assert!(diagnostic_codes(&repeated).contains(&E_LOOP_EFFECT));
+    for case in ["SpawnFailed", "Exited"] {
+        let (_, bag) = check_source(&source.replace("SpawnFailed ->", &format!("{case} ->")));
+        assert!(!bag.has_errors(), "{:?}", bag.diagnostics());
+    }
 }
 
 #[test]
@@ -1940,7 +1935,7 @@ graph g : App {
     url = "https://example.test"
     codec = bytes
     timeout = duration("1s")
-    effect = idempotent
+    idempotent = true
     behavior = probabilistic
     Loop.fuel = 3
   }
@@ -2023,7 +2018,7 @@ fn graph_and_connector_reject_dsl_state_by_name() {
             Code::new("E-GRAPH-STATE"),
         ),
         (
-            "graph g : App { connector process : Process { command = \"cat\" ; effect = idempotent ; behavior = deterministic ; var count: int = 0 } }",
+            "graph g : App { connector process : Process { command = \"cat\" ; idempotent = true; behavior = deterministic ; var count: int = 0 } }",
             Code::new("E-CONNECTOR-STATE"),
         ),
     ] {
@@ -2052,7 +2047,7 @@ fn removed_execution_and_wiring_forms_name_their_replacement() {
             "Operator",
         ),
         (
-            "graph g : App { connector p : Process { command = \"cat\" ; effect = idempotent ; behavior = deterministic ; on in { out = data } } }",
+            "graph g : App { connector p : Process { command = \"cat\" ; idempotent = true; behavior = deterministic ; on in { out = data } } }",
             E_CONNECTOR_HANDLER,
             "Contract",
         ),
@@ -2110,7 +2105,7 @@ fn unrepresentable_emissions_refuse_at_check_not_at_runtime() {
 fn the_jsonl_codec_compiles() {
     // M1 item 2 (D-2026-08-11-1): the JSON chain exists — the
     // deferral lifted with it.
-    let source = "graph g : App {\n  connector c : Process {\n    mode = job ; command = \"cat\"\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n  }\n  in -> c -> out\n}\n";
+    let source = "graph g : App {\n  connector c : Process {\n    mode = job ; command = \"cat\"\n    codec = jsonl\n    idempotent = true; behavior = deterministic\n  }\n  in -> c -> out\n}\n";
     let (_, bag) = check_source(source);
     assert!(
         !bag.diagnostics()
@@ -2194,7 +2189,7 @@ fn a_duplicated_edge_refuses_whatever_its_spelling() {
 
 #[test]
 fn duplicate_mocks_refuse_at_both_levels() {
-    let base = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  operator o {\n    input in: struct { text: text }\n    on in { out = data.text }\n  }\n  in -> o -> shell -> out\n}\n\nlab g {\n  simulation s on app {\nBODY  }\n}\n";
+    let base = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    idempotent = true; behavior = deterministic\n  }\n  operator o {\n    input in: struct { text: text }\n    on in { out = data.text }\n  }\n  in -> o -> shell -> out\n}\n\nlab g {\n  simulation s on app {\nBODY  }\n}\n";
     let simulation_level = base.replace(
         "BODY",
         "    mock shell { on in { out = . } }\n    mock shell { on in { out = . } }\n",
@@ -2483,7 +2478,7 @@ auth_bearer = secret("providers/openai/token")
 method = "POST"
 timeout = duration("2s")
 codec = json
-effect = idempotent
+idempotent = true
 behavior = deterministic
   }
   client.out -> nothing
@@ -2542,7 +2537,7 @@ url = "https://example.test"
 method = "GET"
 timeout = duration("2s")
 codec = json
-effect = idempotent
+idempotent = true
 behavior = deterministic
 {attribute} = {value}
   }}
@@ -2826,7 +2821,7 @@ fn conflicting_port_roles_are_refused() {
 
 #[test]
 fn a_connector_never_declares_ports() {
-    let source = "graph g : App {\n  connector c : Process {\n    input extra\n    command = \"cat\" ; codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  in -> c -> out\n}\n";
+    let source = "graph g : App {\n  connector c : Process {\n    input extra\n    command = \"cat\" ; codec = lines\n    idempotent = true; behavior = deterministic\n  }\n  in -> c -> out\n}\n";
     let (_, bag) = check_source(source);
     let diagnostic = bag
         .diagnostics()
@@ -2936,7 +2931,7 @@ handshake_timeout = duration("5s")
 
 #[test]
 fn repeated_attributes_and_port_declarations_are_refused() {
-    let repeated_attr = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; command = \"false\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  in -> c -> out\n}\n";
+    let repeated_attr = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; command = \"false\"\n    codec = lines\n    idempotent = true; behavior = deterministic\n  }\n  in -> c -> out\n}\n";
     let (_, bag) = check_source(repeated_attr);
     assert!(
         bag.diagnostics()
@@ -3022,7 +3017,7 @@ instance = { key = data }
 lifetime = { kind = idle ; after = duration("5m") }
 command = "cat"
 codec = lines
-effect = idempotent
+idempotent = true
 behavior = deterministic
   }
   in -> shell -> out
@@ -3258,7 +3253,7 @@ fn superseded_instance_spellings_have_exactly_one_migration_diagnostic() {
         ),
         (
             "Connector per",
-            "graph g : App { connector p : Process per p { command = \"cat\" ; codec = lines ; effect = idempotent ; behavior = deterministic } in -> p -> out }",
+            "graph g : App { connector p : Process per p { command = \"cat\" ; codec = lines ; idempotent = true; behavior = deterministic } in -> p -> out }",
             "`per`",
         ),
         (

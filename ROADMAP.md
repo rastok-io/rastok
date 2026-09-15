@@ -63,11 +63,12 @@ approved by D-2026-09-14-3, with no package-version or journal change.
 The Loop / Retry / Saga separation is now approved by D-2026-09-14-4:
 one recurrence engine, distinct state-iteration and protected-Call protocols,
 and no global Saga effect classification for ordinary Calls. This is a
-new refactor, not delivered Retry support; current packages remain v18.
+new refactor, not delivered Retry support. `rework/retry` now carries the
+unblessed v19/recording-v3 candidate; the last qualified release baseline is v18.
 Its [contract and staged gates](docs/architecture/retry-extension-refactor.md)
 require an identity inventory before any executable format cutover.
 The 15 September C1 design handoff now supplies the operation algebra, crash
-traces and proposed v19/v3 inventory; stopping during Retry backoff publishes
+traces and the v19/v3 inventory; stopping during Retry backoff publishes
 no new output (D-2026-09-15-2). C2–C4 implementation/qualification remain open.
 Other semantics remain frozen. The remaining work includes the six-example
 showcase and its qualification, tracked in the

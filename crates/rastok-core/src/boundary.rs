@@ -290,8 +290,12 @@ pub fn process_attribute_site(
         return None;
     }
     match attribute {
-        "mode" | "codec" | "err_codec" | "effect" | "behavior" | "max_output" | "max_frame"
-        | "on_timeout" => Some(EvaluationSite::Plan),
+        "idempotent" if contract.as_str() == crate::connector::PROCESS_CONNECTOR_ID => {
+            Some(EvaluationSite::Plan)
+        }
+        "mode" | "codec" | "err_codec" | "behavior" | "max_output" | "max_frame" | "on_timeout" => {
+            Some(EvaluationSite::Plan)
+        }
         "args" | "command" | "cwd" | "timeout" | "env" | "restart" => {
             Some(EvaluationSite::Instance)
         }
@@ -335,7 +339,7 @@ pub fn file_attribute_site(
         return None;
     }
     match attribute {
-        "mode" | "effect" | "behavior" | "max_read" => Some(EvaluationSite::Plan),
+        "mode" | "idempotent" | "behavior" | "max_read" => Some(EvaluationSite::Plan),
         "timeout" => Some(EvaluationSite::Instance),
         "path" => Some(EvaluationSite::Invocation),
         _ => None,
@@ -382,7 +386,9 @@ pub fn network_attribute_site(
 
     match contract.as_str() {
         crate::connector::HTTP_CLIENT_CONNECTOR_ID => match attribute {
-            "behavior" | "codec" | "effect" | "max_body" | "versions" | "zero_rtt" => Some(Plan),
+            "behavior" | "codec" | "idempotent" | "max_body" | "versions" | "zero_rtt" => {
+                Some(Plan)
+            }
             "timeout" | "tls_ca" | "tls_certificate" | "tls_private_key" => Some(Instance),
             "auth_bearer" | "custom_headers" | "headers" | "idempotency_key" | "method" | "url" => {
                 Some(Invocation)
@@ -390,23 +396,22 @@ pub fn network_attribute_site(
             _ => None,
         },
         crate::connector::HTTP_SERVER_CONNECTOR_ID => match attribute {
-            "behavior" | "codec" | "effect" | "max_body" | "mode" | "path" | "versions"
-            | "zero_rtt" => Some(Plan),
+            "behavior" | "codec" | "max_body" | "mode" | "path" | "versions" | "zero_rtt" => {
+                Some(Plan)
+            }
             "auth_bearer" | "custom_headers" | "headers" | "listen" | "timeout"
             | "tls_certificate" | "tls_private_key" => Some(Instance),
             "correlate" => Some(Invocation),
             _ => None,
         },
         crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID => match attribute {
-            "behavior" | "codec" | "effect" | "max_message" | "versions" | "zero_rtt" => Some(Plan),
+            "behavior" | "codec" | "max_message" | "versions" | "zero_rtt" => Some(Plan),
             "auth_bearer" | "custom_headers" | "handshake_timeout" | "headers" | "subprotocols"
             | "tls_ca" | "tls_certificate" | "tls_private_key" | "url" => Some(Instance),
             _ => None,
         },
         crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID => match attribute {
-            "behavior" | "codec" | "effect" | "max_message" | "path" | "versions" | "zero_rtt" => {
-                Some(Plan)
-            }
+            "behavior" | "codec" | "max_message" | "path" | "versions" | "zero_rtt" => Some(Plan),
             "allowed_origins" | "auth_bearer" | "custom_headers" | "handshake_timeout"
             | "headers" | "listen" | "subprotocols" | "tls_certificate" | "tls_private_key" => {
                 Some(Instance)
@@ -591,6 +596,10 @@ pub fn http_client_exit_type() -> Result<DataType, TypeError> {
     )?;
     Ok(DataType::TaggedUnion(TaggedUnionType::new(alloc::vec![
         completed,
+        TaggedCase::new(
+            "ServerError",
+            StructType::new(alloc::vec![TypeField::new("status", protocol_code_type())])?
+        )?,
         empty_case("DnsFailed")?,
         empty_case("ConnectFailed")?,
         empty_case("TlsFailed")?,
@@ -729,9 +738,14 @@ pub enum FileExit {
 /// Portable terminal facts of one outbound HTTP call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HttpClientExit {
-    /// A complete HTTP response was observed. Every status is usable data.
+    /// A usable response outside 500–599. Non-2xx is not a transport failure.
     Completed {
         /// Three-digit HTTP status code.
+        status: u16,
+    },
+    /// A usable decoded HTTP 500–599 response, after external visibility.
+    ServerError {
+        /// The observed HTTP status, retained unchanged.
         status: u16,
     },
     /// Name resolution failed before request bytes became visible.
@@ -819,6 +833,17 @@ fn tagged_value(case: &str, payload: Vec<(String, crate::value::Value)>) -> crat
 }
 
 impl HttpClientExit {
+    /// Classifies an already admitted and decoded response. Decode failure
+    /// must be selected before this function, even for a server-error status.
+    #[must_use]
+    pub const fn response(status: u16) -> Self {
+        if status >= 500 && status <= 599 {
+            Self::ServerError { status }
+        } else {
+            Self::Completed { status }
+        }
+    }
+
     /// Projects the Driver fact into the ordinary canonical tagged value.
     #[must_use]
     pub fn into_value(self) -> crate::value::Value {
@@ -826,6 +851,10 @@ impl HttpClientExit {
         match self {
             Self::Completed { status } => tagged_value(
                 "Completed",
+                alloc::vec![(String::from("status"), Value::Int(i64::from(status)))],
+            ),
+            Self::ServerError { status } => tagged_value(
+                "ServerError",
                 alloc::vec![(String::from("status"), Value::Int(i64::from(status)))],
             ),
             Self::DnsFailed => tagged_value("DnsFailed", Vec::new()),
@@ -1200,11 +1229,9 @@ pub struct Intent {
     /// 43); the bytes ride along for the driver and are never
     /// themselves record material.
     pub prepared: PreparedRequest,
-    /// Names the business operation; stable across retries. `None`
-    /// only for `compensable` without a key.
+    /// Optional partner business-operation key, stable across attempts.
+    /// Its presence is not an idempotence guarantee.
     pub idempotency_key: Option<String>,
-    /// The declared effect class of the call.
-    pub effect: node::EffectClass,
     /// Effective non-plan Connector attributes resolved for this exact call.
     /// Instance rows are reused from the immutable instance bundle;
     /// invocation rows are evaluated against the admitted envelope before
@@ -2574,9 +2601,8 @@ impl core::error::Error for DispatchError {}
 /// transaction builds the output envelopes; the dispatcher never
 /// mints one. Mocks replace the driver, never this bookkeeping.
 ///
-/// Restart discipline: re-calling a driver is a recovery decision
-/// (idempotent or keyed calls may be re-called, a compensable call
-/// without a key may not — that triage belongs to the recovery fold).
+/// Restart discipline: an old Call is never executed again by recovery.
+/// A later Retry admission is a new, independently authorized Call.
 /// A dispatcher over an existing journal is therefore built with
 /// [`Dispatcher::resume`], which treats every already-open call as
 /// started and re-calls nothing.
@@ -2619,6 +2645,7 @@ impl Dispatcher {
         journal: &mut dyn Journal,
         bindings: &mut B,
         gate: &dyn CompletionGate,
+        now: i64,
     ) -> Result<PumpBatch, DispatchError> {
         // A timeout or abandonment can close a call outside this response
         // loop. Keep the local start cache equal to the journal's open fold,
@@ -2665,7 +2692,7 @@ impl Dispatcher {
             }
             let closure = Closure::Response(response.completion.clone());
             match journal
-                .close_outbound(&response.call_ref, closure)
+                .close_outbound(&response.call_ref, closure, now, None)
                 .map_err(DispatchError::Journal)?
             {
                 CloseVerdict::Won => {
@@ -2907,11 +2934,10 @@ mod tests {
             connector_path,
             prepared,
             idempotency_key: None,
-            effect: node::EffectClass::Idempotent,
             resolved_settings: alloc::collections::BTreeMap::new(),
             logical_time: 0,
         };
-        journal.open_outbound(intent.clone()).unwrap();
+        journal.open_outbound(intent.clone(), None).unwrap();
         (journal, intent)
     }
 
@@ -2921,13 +2947,13 @@ mod tests {
         let mut driver = Scripted::default();
         let mut dispatcher = Dispatcher::new();
         dispatcher
-            .pump(&mut journal, &mut driver, &OpenGate)
+            .pump(&mut journal, &mut driver, &OpenGate, 0)
             .unwrap();
         assert_eq!(driver.started.len(), 1);
         assert_eq!(driver.started[0].0.call_ref, intent.call_ref);
         // A second pump never re-starts an already-started call.
         dispatcher
-            .pump(&mut journal, &mut driver, &OpenGate)
+            .pump(&mut journal, &mut driver, &OpenGate, 0)
             .unwrap();
         assert_eq!(driver.started.len(), 1);
     }
@@ -2943,13 +2969,13 @@ mod tests {
         let mut dispatcher = Dispatcher::new();
 
         assert!(matches!(
-            dispatcher.pump(&mut journal, &mut bindings, &OpenGate),
+            dispatcher.pump(&mut journal, &mut bindings, &OpenGate, 0),
             Err(DispatchError::Driver(DriverRouteError::UnboundOutbound(_)))
         ));
         assert_eq!(bindings.attempts, 1);
         bindings.refuse = false;
         dispatcher
-            .pump(&mut journal, &mut bindings, &OpenGate)
+            .pump(&mut journal, &mut bindings, &OpenGate, 0)
             .unwrap();
         assert_eq!(bindings.attempts, 2, "the open call was retried");
     }
@@ -2965,18 +2991,18 @@ mod tests {
         let mut dispatcher = Dispatcher::new();
 
         dispatcher
-            .pump(&mut journal, &mut bindings, &OpenGate)
+            .pump(&mut journal, &mut bindings, &OpenGate, 0)
             .unwrap();
         assert_eq!(bindings.attempts, 1);
         assert_eq!(journal.open_calls().len(), 1);
 
         bindings.pending = false;
         dispatcher
-            .pump(&mut journal, &mut bindings, &OpenGate)
+            .pump(&mut journal, &mut bindings, &OpenGate, 0)
             .unwrap();
         assert_eq!(bindings.attempts, 2, "capacity recovery retries the call");
         dispatcher
-            .pump(&mut journal, &mut bindings, &OpenGate)
+            .pump(&mut journal, &mut bindings, &OpenGate, 0)
             .unwrap();
         assert_eq!(bindings.attempts, 2, "a started call is never duplicated");
     }
@@ -2989,7 +3015,7 @@ mod tests {
         // started; re-calls are the recovery fold's decision.
         let mut dispatcher = Dispatcher::resume(&journal);
         dispatcher
-            .pump(&mut journal, &mut driver, &OpenGate)
+            .pump(&mut journal, &mut driver, &OpenGate, 0)
             .unwrap();
         assert!(driver.started.is_empty());
     }
@@ -3000,15 +3026,15 @@ mod tests {
         let mut driver = Scripted::default();
         let mut dispatcher = Dispatcher::new();
         dispatcher
-            .pump(&mut journal, &mut driver, &OpenGate)
+            .pump(&mut journal, &mut driver, &OpenGate, 0)
             .unwrap();
         assert!(dispatcher.started.contains(&intent.call_ref));
         journal
-            .close_outbound(&intent.call_ref, Closure::Timeout)
+            .close_outbound(&intent.call_ref, Closure::Timeout, 0, None)
             .unwrap();
 
         dispatcher
-            .pump(&mut journal, &mut driver, &OpenGate)
+            .pump(&mut journal, &mut driver, &OpenGate, 0)
             .unwrap();
         assert!(dispatcher.started.is_empty());
     }
@@ -3019,7 +3045,7 @@ mod tests {
         let mut driver = Scripted::default();
         let mut dispatcher = Dispatcher::new();
         dispatcher
-            .pump(&mut journal, &mut driver, &OpenGate)
+            .pump(&mut journal, &mut driver, &OpenGate, 0)
             .unwrap();
         driver.replies = vec![
             Response {
@@ -3047,7 +3073,7 @@ mod tests {
             },
         ];
         let batch = dispatcher
-            .pump(&mut journal, &mut driver, &OpenGate)
+            .pump(&mut journal, &mut driver, &OpenGate, 0)
             .unwrap();
         assert_eq!(batch.events.len(), 1, "only the won closure feeds the VM");
         assert_eq!(batch.discarded.len(), 1, "the loser stays visible");
@@ -3076,7 +3102,7 @@ mod tests {
         let mut driver = Scripted::default();
         let mut dispatcher = Dispatcher::new();
         dispatcher
-            .pump(&mut journal, &mut driver, &OpenGate)
+            .pump(&mut journal, &mut driver, &OpenGate, 0)
             .unwrap();
         driver.replies = vec![Response {
             call_ref: intent.call_ref,
@@ -3090,7 +3116,7 @@ mod tests {
             ),
         }];
         let batch = dispatcher
-            .pump(&mut journal, &mut driver, &OpenGate)
+            .pump(&mut journal, &mut driver, &OpenGate, 0)
             .unwrap();
         assert_eq!(batch.events.len(), 1);
         let outputs = batch.events[0].completion.outputs();
@@ -3115,7 +3141,7 @@ mod tests {
             }),
         }];
         let batch = dispatcher
-            .pump(&mut journal, &mut driver, &OpenGate)
+            .pump(&mut journal, &mut driver, &OpenGate, 0)
             .unwrap();
         assert!(batch.events.is_empty());
         assert_eq!(batch.uncorrelated.len(), 1, "correlation faults surface");

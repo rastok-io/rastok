@@ -9,7 +9,7 @@ use crate::journal::{
     Emission, ids,
     timing::{TimerArm, TimerSchedule},
 };
-use crate::node::{EffectClass, Path};
+use crate::node::Path;
 use crate::plan::{OwnerPath, PlanConstant};
 use alloc::boxed::Box;
 use alloc::string::ToString;
@@ -176,7 +176,6 @@ impl Fixture {
             connector_path: Path::new(["pay"]).unwrap(),
             prepared: self.pin.prepared.clone(),
             idempotency_key: self.pin.key.clone(),
-            effect: EffectClass::Idempotent,
             resolved_settings: self.pin.settings.clone(),
             logical_time: self.pin.opened_at,
         }
@@ -271,6 +270,112 @@ fn manager(facts: Vec<Fact>) -> Packet {
         context: None,
         facts,
     }
+}
+
+fn carrier(
+    f: &Fixture,
+    packet: Packet,
+    emissions: Vec<Emission>,
+    manager: bool,
+) -> crate::journal::TransactionRecord {
+    crate::journal::TransactionRecord {
+        owner_path: f.instance.address().owner().clone(),
+        instance: f.instance.clone(),
+        parent_instance: None,
+        close_scope: None,
+        trigger: if manager {
+            crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Retry)
+        } else {
+            crate::node::Trigger::Port(f.entry.clone())
+        },
+        cause: manager.then_some(f.envelope.meta().sys().id()),
+        exchange_exit: None,
+        loop_record: None,
+        instance_commands: None,
+        retry_record: Some(Box::new(packet)),
+        timer_schedule: None,
+        logical_time: manager.then_some(0),
+        consumed: if manager {
+            vec![]
+        } else {
+            vec![crate::journal::ConsumedPosition {
+                edge: "App.in -> pay.in".into(),
+                source: f.instance.clone(),
+                seq: 0,
+            }]
+        },
+        join_inputs: vec![],
+        state_delta: vec![],
+        emissions,
+        routes: vec![],
+        timers: vec![],
+    }
+}
+
+#[test]
+fn retained_retry_carriers_cannot_hide_dispositions_or_application_work() {
+    let f = Fixture::new(3);
+    let mut fold = f.start();
+    let (_, emissions, batch) = f.settle(&mut fold, 1, "TimeoutExpired", 10, false);
+    let producer = carrier(&f, held(&batch), emissions, false);
+    validate_transaction(&producer).unwrap();
+    let opened = carrier(
+        &f,
+        manager(vec![f.opened(), f.admitted(1, None)]),
+        vec![],
+        true,
+    );
+    validate_transaction(&opened).unwrap();
+    for mutation in 0..6 {
+        let mut forged = producer.clone();
+        match mutation {
+            0 => forged.retry_record.as_mut().unwrap().facts.clear(),
+            1 => forged.trigger = crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Retry),
+            2 => forged.emissions.swap(0, 1),
+            3 => forged.routes.push(crate::journal::RoutedDelivery {
+                delivery: batch.emissions[0],
+                edge: "pay.out -> sink.in".into(),
+                target: f.instance.clone(),
+            }),
+            4 => forged.state_delta.push(("hidden".into(), Value::Int(1))),
+            _ => forged.retry_record.as_mut().unwrap().context = None,
+        }
+        assert!(
+            validate_transaction(&forged).is_err(),
+            "mutation {mutation}"
+        );
+        let mut journal = crate::journal::MemJournal::new(crate::plan::GraphVersion(1));
+        assert!(matches!(
+            crate::journal::Journal::commit(&mut journal, forged),
+            Err(crate::journal::Error::InvalidRetryProtocol(_))
+        ));
+        assert!(journal.records().is_empty());
+    }
+    let mut orphan = opened;
+    orphan.retry_record = None;
+    assert_eq!(validate_transaction(&orphan), Err(Error::PacketShape));
+    assert!(
+        crate::journal::retention::Reader::default()
+            .record(&crate::journal::retention::record(
+                &crate::journal::Record::Transaction(Box::new(orphan))
+            ))
+            .is_err()
+    );
+}
+
+#[test]
+fn retry_admissions_are_resolved_as_retained_envelopes_without_port_emissions() {
+    let f = Fixture::new(3);
+    let record = crate::journal::Record::Transaction(Box::new(carrier(
+        &f,
+        manager(vec![f.opened(), f.admitted(1, None)]),
+        vec![],
+        true,
+    )));
+    assert_eq!(
+        crate::journal::recorded_envelope(&[record], f.envelope.meta().sys().id()),
+        Some(&f.envelope)
+    );
 }
 fn held(batch: &Batch) -> Packet {
     Packet {

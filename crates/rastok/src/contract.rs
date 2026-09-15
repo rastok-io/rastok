@@ -467,6 +467,8 @@ pub enum DefaultValue {
 /// holds that line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValueDomain {
+    /// A plan-constant boolean guarantee, not a choice word.
+    Boolean,
     /// One of a closed set of bare words.
     Choice(&'static [&'static str]),
     /// A constant text value.
@@ -508,7 +510,8 @@ impl ValueDomain {
     pub fn implemented(&self) -> bool {
         matches!(
             self,
-            Self::Choice(_)
+            Self::Boolean
+                | Self::Choice(_)
                 | Self::Text
                 | Self::Bytes
                 | Self::TextList
@@ -528,6 +531,7 @@ impl ValueDomain {
     #[must_use]
     pub fn expression_type(&self) -> Option<crate::datatype::DataType> {
         match self {
+            Self::Boolean => Some(crate::datatype::DataType::Bool),
             Self::Text | Self::ByteSize => Some(crate::datatype::DataType::Text),
             Self::Bytes => Some(crate::datatype::DataType::BYTES),
             Self::TextList => Some(crate::datatype::DataType::array(
@@ -564,6 +568,7 @@ impl ValueDomain {
     #[must_use]
     pub fn admits(&self, value: &crate::value::Value) -> bool {
         match self {
+            Self::Boolean => matches!(value, crate::value::Value::Bool(_)),
             Self::Choice(_) | Self::ExprPath | Self::Struct | Self::Map => false,
             Self::Text => matches!(value, crate::value::Value::Text(_)),
             Self::Bytes => matches!(value, crate::value::Value::Bytes(_)),

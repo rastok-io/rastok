@@ -29,7 +29,7 @@ graph happy : App {
   connector echo : Process {
     mode = job ; command = "cat"
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   operator shout {
@@ -51,7 +51,7 @@ graph failing : App {
     mode = job ; command = "sh"
     args = ["-c", "echo broken >&2; exit 3"]
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   operator shout {
@@ -70,7 +70,7 @@ graph missing : App {
   connector ghost : Process {
     mode = job ; command = "/nonexistent/rastok-no-such-binary"
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   operator shout {
@@ -90,7 +90,7 @@ graph garbling : App {
     mode = job ; command = "perl"
     args = ["-e", "print chr(255)"]
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   operator shout {
@@ -110,7 +110,7 @@ graph flooding : App {
     mode = job ; command = "sh"
     args = ["-c", "head -c 51 /dev/zero; sleep 30"]
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
     max_output = "50B"
     timeout = duration("15s")
   }
@@ -132,7 +132,7 @@ graph mute : App {
     mode = job ; command = "sh"
     args = ["-c", "sleep 30"]
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
     timeout = duration("200ms")
   }
 
@@ -152,13 +152,13 @@ graph pair : App {
   connector left : Process {
     mode = job ; command = "cat"
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   connector right : Process {
     mode = job ; command = "cat"
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   operator ra {

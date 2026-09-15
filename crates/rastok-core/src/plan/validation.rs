@@ -92,11 +92,12 @@ pub enum PlanValidationError {
         /// Closed proof obligation that failed.
         detail: &'static str,
     },
-    /// One recurrent application can repeat an unsafe visible effect,
-    /// including work on a sibling route which did not issue the command.
-    UnsafeLoopEffect {
-        /// Static path of the Loop whose application would repeat the effect.
+    /// A Retry policy contradicts the exact Call Contract or its constants.
+    InvalidRetryPolicy {
+        /// Static path of the Retry owner.
         owner: String,
+        /// Failed independent obligation.
+        detail: String,
     },
     /// An edge's lexical scope is absent or is not a Graph owner.
     InvalidEdgeScope {
@@ -231,13 +232,6 @@ pub enum PlanValidationError {
     },
     /// A `Process` connector's stderr framing is outside `lines | bytes`.
     UnknownErrCodec {
-        /// The declaring node.
-        node: node::Path,
-    },
-    /// An outbound connector some edge delivers to declares `Effect::None` —
-    /// opening an external call requires an effect class. An inbound-only
-    /// Call response sink remains honestly effectless.
-    EffectlessCallee {
         /// The declaring node.
         node: node::Path,
     },
@@ -664,10 +658,9 @@ impl core::fmt::Display for PlanValidationError {
                 f,
                 "invalid plan: cannot prove that Loop `{owner}` always terminates at `{path}`: {detail}"
             ),
-            Self::UnsafeLoopEffect { owner } => write!(
-                f,
-                "invalid plan: Loop `{owner}` can repeat a visible or ambiguous effect; use effect = none or idempotent"
-            ),
+            Self::InvalidRetryPolicy { owner, detail } => {
+                write!(f, "invalid Retry `{owner}`: {detail}")
+            }
             Self::InvalidEdgeScope { owner } => write!(
                 f,
                 "invalid plan: edge scope {} is not a Graph owner shared by both endpoints",
@@ -783,12 +776,6 @@ impl core::fmt::Display for PlanValidationError {
                 f,
                 "invalid plan: `{node}` carries `err_codec` outside lines | bytes"
             ),
-            Self::EffectlessCallee { node } => {
-                write!(
-                    f,
-                    "invalid plan: outbound connector `{node}` receives deliveries but declares no effect class — a call cannot open without one"
-                )
-            }
             Self::CallableConnectorWithoutOutboundRole { node } => write!(
                 f,
                 "invalid plan: `{node}` receives deliveries but its contract exposes neither an outbound call nor an inbound-Call response sink"
@@ -1089,6 +1076,7 @@ impl ValidatedExecutionPlan {
         key_mode: InstanceKeyTypeMode,
     ) -> Result<Self, PlanValidationError> {
         validate(&plan)?;
+        super::retry::validate(&plan)?;
         let declared_ports = super::type_resolution::resolve(&plan)?;
         super::routing_validation::validate_plan_routing(&plan, &declared_ports)?;
         super::composition::validate(&plan, &declared_ports)?;
@@ -1833,6 +1821,10 @@ fn setting_has_type(setting: &crate::plan::AttrSetting, ty: &DataType) -> bool {
 
 fn network_setting_holds(name: &str, setting: &crate::plan::AttrSetting) -> bool {
     match name {
+        "idempotent" => matches!(
+            setting,
+            crate::plan::AttrSetting::Value(crate::value::Value::Bool(_))
+        ),
         "codec" => matches!(
             setting,
             crate::plan::AttrSetting::Word(word)
@@ -1955,6 +1947,7 @@ fn validate_network_connector(
                 "codec",
                 "custom_headers",
                 "headers",
+                "idempotent",
                 "idempotency_key",
                 "max_body",
                 "method",
@@ -2083,14 +2076,14 @@ fn validate_network_connector(
     let axes_hold = match contract {
         crate::connector::HTTP_SERVER_CONNECTOR_ID
         | crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID => {
-            spec.effect == node::Effect::None && spec.behavior == node::Behavior::Deterministic
+            spec.behavior == node::Behavior::Deterministic
         }
-        _ => matches!(spec.effect, node::Effect::Class(_)),
+        _ => true,
     };
     if !axes_hold {
         return Err(PlanValidationError::ContractAttributeMismatch {
             node: node.path.clone(),
-            attribute: String::from("effect/behavior"),
+            attribute: String::from("behavior"),
         });
     }
 
@@ -2478,6 +2471,32 @@ fn expression_site(
     }
 }
 
+/// A transported plan constant must be canonical, closed over the plan's
+/// assets, and equal to its independent reduction. No invocation environment
+/// may turn a repetition guarantee or delay into a runtime policy.
+pub(super) fn plan_constant_holds(
+    plan: &ExecutionPlan,
+    constant: &crate::plan::PlanConstant,
+    expected: &DataType,
+) -> Result<bool, PlanValidationError> {
+    expr_canonical(&constant.expr.root)?;
+    asset_indexes_bound(plan, &constant.expr.root)?;
+    value_expressible(&constant.resolved)?;
+    let Some(derived) = expr::rederive_type(&constant.expr.root, &expr::Signature::new()) else {
+        return Ok(false);
+    };
+    if derived != constant.expr.ty || !derived.is_assignable_to(expected) {
+        return Ok(false);
+    }
+    let bindings = PlanValueBindings {
+        values: &BTreeMap::new(),
+        assets: &plan.assets,
+    };
+    Ok(expr::eval(&constant.expr, &bindings)
+        .and_then(expr::EvalValue::into_value)
+        .is_ok_and(|actual| actual == constant.resolved && expected.accepts(&actual)))
+}
+
 fn owner_value_site(
     index: usize,
     owner: &crate::plan::Owner,
@@ -2647,7 +2666,6 @@ fn owner_values_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationEr
 }
 
 fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
-    let no_values = BTreeMap::new();
     for (owner_index, owner) in plan.owners.iter().enumerate() {
         let owner_slot = OwnerSlot::new(u32::try_from(owner_index).unwrap_or(u32::MAX));
         let Some(spec) = owner.loop_spec() else {
@@ -2752,47 +2770,16 @@ fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
             });
         }
 
-        // Lowering substitutes every lexical plan constant before transport.
-        // Requiring an empty value environment here makes that canonical form
-        // a validation invariant instead of admitting an equivalent second
-        // spelling that a forged package could exploit.
-        let constant_signature = expr::Signature::new();
-        let bindings = PlanValueBindings {
-            values: &no_values,
-            assets: &plan.assets,
-        };
-        let validate_constant = |constant: &crate::plan::PlanConstant,
-                                 expected: &DataType,
-                                 detail: &'static str|
-         -> Result<(), PlanValidationError> {
-            expr_canonical(&constant.expr.root)?;
-            asset_indexes_bound(plan, &constant.expr.root)?;
-            value_expressible(&constant.resolved)?;
-            let derived = expr::rederive_type(&constant.expr.root, &constant_signature)
-                .ok_or_else(|| PlanValidationError::InvalidGraphContract {
-                    owner: owner_name.clone(),
-                    detail,
-                })?;
-            if derived != constant.expr.ty || !derived.is_assignable_to(expected) {
-                return Err(PlanValidationError::InvalidGraphContract {
-                    owner: owner_name.clone(),
-                    detail,
-                });
-            }
-            let actual = expr::eval(&constant.expr, &bindings)
-                .and_then(expr::EvalValue::into_value)
-                .map_err(|_| PlanValidationError::InvalidGraphContract {
-                    owner: owner_name.clone(),
-                    detail,
-                })?;
-            if actual != constant.resolved || !expected.accepts(&actual) {
-                return Err(PlanValidationError::InvalidGraphContract {
-                    owner: owner_name.clone(),
-                    detail,
-                });
-            }
-            Ok(())
-        };
+        let validate_constant =
+            |constant: &crate::plan::PlanConstant, expected: &DataType, detail: &'static str| {
+                if !plan_constant_holds(plan, constant, expected)? {
+                    return Err(PlanValidationError::InvalidGraphContract {
+                        owner: owner_name.clone(),
+                        detail,
+                    });
+                }
+                Ok(())
+            };
         if spec.fuel.is_none() && spec.proof.is_none() {
             return Err(PlanValidationError::InvalidGraphContract {
                 owner: owner_name.clone(),
@@ -3497,11 +3484,8 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             // ValidatedExecutionPlan and quietly run as `lines`
             // (D-2026-08-11-1, second amendment). Another sheet
             // spelling its own `codec` vocabulary is untouched.
-            // A delivery into an outbound Connector opens an effectful Call.
-            // A delivery into an inbound-only Call Connector is instead an
-            // already-journaled response to its retained external request;
-            // it must stay effectless and never masquerade as an outbound
-            // Call merely because both use an input port.
+            // The Contract roles distinguish an outgoing request from a
+            // retained inbound Call response delivered on an input port.
             let slot = crate::plan::Slot::new(u32::try_from(node_index).unwrap_or(u32::MAX));
             let receives = plan
                 .edges
@@ -3513,15 +3497,6 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 && spec.exchange == crate::connector::ConnectorExchange::Call;
             if receives && !spec.roles.has_outbound() && !receives_inbound_call_response {
                 return Err(PlanValidationError::CallableConnectorWithoutOutboundRole {
-                    node: node.path.clone(),
-                });
-            }
-            if receives
-                && spec.roles.has_outbound()
-                && spec.exchange == crate::connector::ConnectorExchange::Call
-                && spec.effect == node::Effect::None
-            {
-                return Err(PlanValidationError::EffectlessCallee {
                     node: node.path.clone(),
                 });
             }
@@ -3568,12 +3543,6 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 if spec.exchange != exchange {
                     return Err(PlanValidationError::ContractExchangeMismatch {
                         node: node.path.clone(),
-                    });
-                }
-                if !matches!(spec.effect, node::Effect::Class(_)) {
-                    return Err(PlanValidationError::ContractAttributeMismatch {
-                        node: node.path.clone(),
-                        attribute: String::from("effect"),
                     });
                 }
                 match spec.attribute("mode") {
@@ -3764,8 +3733,12 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                             | "max_output"
                             | "max_frame"
                             | "on_timeout"
+                            | "idempotent"
                     ) || (service
-                        && matches!(name.as_str(), "max_output" | "on_timeout" | "timeout"))
+                        && matches!(
+                            name.as_str(),
+                            "max_output" | "on_timeout" | "timeout" | "idempotent"
+                        ))
                         || (!service && name == "max_frame")
                     {
                         return Err(PlanValidationError::ContractAttributeMismatch {
@@ -3827,12 +3800,10 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                         node: node.path.clone(),
                     });
                 }
-                if spec.effect != node::Effect::Class(crate::node::EffectClass::Idempotent)
-                    || spec.behavior != node::Behavior::Deterministic
-                {
+                if spec.behavior != node::Behavior::Deterministic {
                     return Err(PlanValidationError::ContractAttributeMismatch {
                         node: node.path.clone(),
-                        attribute: String::from("effect/behavior"),
+                        attribute: String::from("behavior"),
                     });
                 }
                 let mode = match spec.attribute("mode") {
@@ -3909,8 +3880,9 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     }
                 }
                 for (name, _) in &spec.attributes {
-                    let allowed = matches!(name.as_str(), "mode" | "path" | "timeout")
-                        || (mode == "read" && name == "max_read");
+                    let allowed =
+                        matches!(name.as_str(), "mode" | "path" | "timeout" | "idempotent")
+                            || (mode == "read" && name == "max_read");
                     if !allowed {
                         return Err(PlanValidationError::ContractAttributeMismatch {
                             node: node.path.clone(),

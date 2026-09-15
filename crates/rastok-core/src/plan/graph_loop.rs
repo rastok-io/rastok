@@ -11,8 +11,8 @@ use alloc::{format, vec};
 struct Outcome {
     terminal: bool,
     other: u8,
-    recurs: bool,
-    unsafe_effect: bool,
+    again: BTreeSet<Endpoint>,
+    visible_calls: BTreeSet<node::Path>,
     joins: BTreeMap<Endpoint, u8>,
     retries: BTreeSet<OwnerPath>,
 }
@@ -35,8 +35,8 @@ fn empty() -> Outcomes {
     BTreeSet::from([Outcome {
         terminal: false,
         other: 0,
-        recurs: false,
-        unsafe_effect: false,
+        again: BTreeSet::new(),
+        visible_calls: BTreeSet::new(),
         joins: BTreeMap::new(),
         retries: BTreeSet::new(),
     }])
@@ -53,8 +53,12 @@ fn combine(left: &Outcomes, right: &Outcomes) -> Option<Outcomes> {
             combined.insert(Outcome {
                 terminal: left.terminal || right.terminal,
                 other: left.other.saturating_add(right.other).min(2),
-                recurs: left.recurs || right.recurs,
-                unsafe_effect: left.unsafe_effect || right.unsafe_effect,
+                again: left.again.union(&right.again).cloned().collect(),
+                visible_calls: left
+                    .visible_calls
+                    .union(&right.visible_calls)
+                    .cloned()
+                    .collect(),
                 joins,
                 retries: left.retries.union(&right.retries).cloned().collect(),
             });
@@ -72,14 +76,17 @@ enum Work {
     Input(Endpoint),
 }
 
-pub(super) fn validate(plan: &ExecutionPlan, owner: &Owner) -> Result<(), PlanValidationError> {
+pub(super) fn validate(
+    plan: &ExecutionPlan,
+    owner: &Owner,
+) -> Result<Vec<LoopRepeatWarning>, PlanValidationError> {
     let error = |path, detail| PlanValidationError::InvalidLoopControl {
         owner: owner.path.to_string(),
         path,
         detail,
     };
     let Some(spec) = owner.loop_spec() else {
-        return Ok(());
+        return Ok(Vec::new());
     };
     if plan
         .handlers
@@ -292,8 +299,8 @@ pub(super) fn validate(plan: &ExecutionPlan, owner: &Owner) -> Result<(), PlanVa
                             let next = match destination {
                                 RouteDestination::InstanceStop(target)
                                     if target.owner == EndpointOwner::Graph(owner.path.clone()) => {
-                                    BTreeSet::from([Outcome { terminal: false, other: 1, recurs: false,
-                                        unsafe_effect: false, joins: BTreeMap::new(), retries: BTreeSet::new() }])
+                                    BTreeSet::from([Outcome { terminal: false, other: 1, again: BTreeSet::new(),
+                                        visible_calls: BTreeSet::new(), joins: BTreeMap::new(), retries: BTreeSet::new() }])
                                 }
                                 RouteDestination::InstanceStop(_) => return Err(error(
                                     "routing".into(),
@@ -305,8 +312,8 @@ pub(super) fn validate(plan: &ExecutionPlan, owner: &Owner) -> Result<(), PlanVa
                                 {
                                     BTreeSet::from([Outcome {
                                         terminal: false, other: 1,
-                                        recurs: command.kind != LoopCommandKind::Done,
-                                        unsafe_effect: false,
+                                        again: if command.kind == LoopCommandKind::Again { BTreeSet::from([source.clone()]) } else { BTreeSet::new() },
+                                        visible_calls: BTreeSet::new(),
                                         joins: BTreeMap::new(),
                                         retries: BTreeSet::new(),
                                     }])
@@ -336,8 +343,8 @@ pub(super) fn validate(plan: &ExecutionPlan, owner: &Owner) -> Result<(), PlanVa
                                     BTreeSet::from([Outcome {
                                         terminal: spec.terminals.contains(&target.port),
                                         other: 0,
-                                        recurs: false,
-                                        unsafe_effect: false,
+                                        again: BTreeSet::new(),
+                                        visible_calls: BTreeSet::new(),
                                         joins: BTreeMap::new(),
                                         retries: BTreeSet::new(),
                                     }])
@@ -463,15 +470,6 @@ pub(super) fn validate(plan: &ExecutionPlan, owner: &Owner) -> Result<(), PlanVa
         visiting.remove(&work);
         cache.insert(work, outcomes);
     }
-    if cache.get(&root).is_some_and(|outcomes| {
-        outcomes
-            .iter()
-            .any(|outcome| outcome.recurs && outcome.unsafe_effect)
-    }) {
-        return Err(PlanValidationError::UnsafeLoopEffect {
-            owner: owner.path.to_string(),
-        });
-    }
     if cache.get(&root).is_none_or(|outcomes| {
         outcomes.is_empty()
             || outcomes
@@ -505,7 +503,19 @@ pub(super) fn validate(plan: &ExecutionPlan, owner: &Owner) -> Result<(), PlanVa
             }
         }
     }
-    Ok(())
+    let mut warnings = BTreeSet::new();
+    for outcome in cache.get(&root).into_iter().flatten() {
+        for source in &outcome.again {
+            for connector in &outcome.visible_calls {
+                warnings.insert(LoopRepeatWarning {
+                    owner: owner.path.clone(),
+                    source: source.clone(),
+                    connector: connector.clone(),
+                });
+            }
+        }
+    }
+    Ok(warnings.into_iter().collect())
 }
 
 fn sets(selection: &RouteSelection) -> Vec<&[RouteDestination]> {
@@ -598,11 +608,15 @@ fn call_outcomes(
         }
         // These Contracts publish the frames and terminal in one atomic
         // Connector transaction. Only its own boundary crossings coalesce.
-        alternatives.extend(total.into_iter().map(|outcome| Outcome {
-            terminal: false,
-            other: (outcome.other + u8::from(outcome.terminal)).min(2),
-            unsafe_effect: outcome.unsafe_effect || !visibility.allows_recurrence(connector.effect),
-            ..outcome
+        alternatives.extend(total.into_iter().map(|mut outcome| {
+            if !visibility.allows_repetition(connector.is_idempotent()) {
+                outcome.visible_calls.insert(node.path.clone());
+            }
+            Outcome {
+                terminal: false,
+                other: (outcome.other + u8::from(outcome.terminal)).min(2),
+                ..outcome
+            }
         }));
         if alternatives.len() > MAX_GRAPH_LOOP_OUTCOMES {
             return None;

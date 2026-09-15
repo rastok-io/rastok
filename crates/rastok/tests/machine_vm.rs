@@ -70,7 +70,7 @@ graph m0_probe : App {
   connector echo : Process {
 mode = job ; command = "cat"
 codec = lines
-effect = idempotent ; behavior = deterministic
+idempotent = true; behavior = deterministic
   }
 
   operator shout {
@@ -223,7 +223,7 @@ graph bounded_closing : App {
     mode = job
     command = "cat"
     codec = lines
-    effect = idempotent
+    idempotent = true
     behavior = deterministic
   }
 
@@ -1399,7 +1399,7 @@ graph dynamic_binding : App {
     mode = job
     command = "cat"
     codec = lines
-    effect = idempotent
+    idempotent = true
     behavior = deterministic
   }
 
@@ -1848,7 +1848,7 @@ graph nested_lifetimes : App {
     command = "cat"
     codec = lines
     timeout = duration("10s")
-    effect = idempotent
+    idempotent = true
     behavior = deterministic
   }
 
@@ -1930,7 +1930,7 @@ graph draining : App {
     command = "cat"
     codec = lines
     timeout = duration("10s")
-    effect = idempotent
+    idempotent = true
     behavior = deterministic
   }
   operator collect {
@@ -2283,11 +2283,11 @@ graph two_calls : App {
 
   connector a : Process {
     mode = job ; command = "cat" ; codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
   connector b : Process {
     mode = job ; command = "cat" ; codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   in -> a
@@ -3189,7 +3189,7 @@ graph app : App {
     connector socket : WebSocketClient {
       url = "ws://example.test/socket"
       handshake_timeout = duration("5s")
-      codec = text; effect = idempotent; behavior = deterministic
+      codec = text;  behavior = deterministic
       closing = { drain_for = duration("1s"); settle_for = duration("1s") }
     }
     operator close_request {
@@ -3421,7 +3421,7 @@ graph app : App {
   connector socket : WebSocketClient {
     url = "ws://example.test/socket"
     handshake_timeout = duration("5s")
-    codec = text; effect = idempotent; behavior = deterministic
+    codec = text;  behavior = deterministic
     closing = { drain_for = duration("1s"); settle_for = duration("1s") }
   }
   in -> encode -> socket
@@ -3684,7 +3684,7 @@ graph app : App {
   connector socket : WebSocketClient {
     url = "ws://example.test/socket"
     handshake_timeout = duration("5s")
-    codec = text; effect = idempotent; behavior = deterministic
+    codec = text;  behavior = deterministic
     closing = { drain_for = duration("1s"); settle_for = duration("1s") }
   }
   operator close_request {
@@ -3759,7 +3759,7 @@ graph app : App {
   connector socket : WebSocketClient {
     url = "ws://example.test/socket"
     handshake_timeout = duration("5s")
-    codec = text; effect = idempotent; behavior = deterministic
+    codec = text;  behavior = deterministic
   }
   in -> socket
   socket.out -> out
@@ -3832,7 +3832,7 @@ graph app : App {
   output exit: variant
   connector socket : WebSocketClient {
     url = "ws://example.test/socket"; handshake_timeout = duration("5s")
-    codec = text; effect = idempotent; behavior = deterministic
+    codec = text;  behavior = deterministic
   }
   in -> socket
   socket.out -> nothing
@@ -3920,7 +3920,7 @@ graph app : App {{
   input in: text
   connector socket : {contract} {{
     {settings}
-    effect = idempotent; behavior = deterministic
+    behavior = deterministic
   }}
   in -> socket
   socket.out -> nothing
@@ -4076,7 +4076,7 @@ graph websocket : App {
     url = "ws://example.test/socket"
     handshake_timeout = duration("5s")
     codec = text
-    effect = idempotent ; behavior = deterministic
+     behavior = deterministic
   }
   in -> socket -> out
   socket.exit -> nothing
@@ -4138,7 +4138,7 @@ graph websocket : App {
     url = "ws://example.test/socket"
     handshake_timeout = duration("5s")
     codec = text
-    effect = idempotent ; behavior = deterministic
+     behavior = deterministic
   }
   in -> socket -> out
   socket.exit -> nothing
@@ -4190,7 +4190,7 @@ graph websocket : App {
     url = "ws://example.test/socket"
     handshake_timeout = duration("5s")
     codec = text
-    effect = idempotent ; behavior = deterministic
+     behavior = deterministic
   }
   in -> socket -> out
   socket.exit -> nothing
@@ -4453,11 +4453,15 @@ impl Journal for FlakyJournal {
         }
         self.inner.commit(transaction)
     }
-    fn open_outbound(&mut self, intent: Intent) -> Result<(), rastok::journal::Error> {
+    fn open_outbound(
+        &mut self,
+        intent: Intent,
+        attempt: Option<rastok::journal::retry_protocol::AttemptRef>,
+    ) -> Result<(), rastok::journal::Error> {
         if self.refuse_opens {
             return Err(rastok::journal::Error::Storage(String::from("scripted")));
         }
-        self.inner.open_outbound(intent)
+        self.inner.open_outbound(intent, attempt)
     }
     fn open_outbound_session(
         &mut self,
@@ -4488,20 +4492,24 @@ impl Journal for FlakyJournal {
         &mut self,
         call_ref: &rastok::boundary::CallRef,
         closure: rastok::journal::Closure,
+        closed_at: i64,
+        schedule: Option<Box<rastok::journal::timing::TimerSchedule>>,
     ) -> Result<rastok::journal::CloseVerdict, rastok::journal::Error> {
         if self.refuse_closes {
             return Err(rastok::journal::Error::Storage(String::from("scripted")));
         }
-        self.inner.close_outbound(call_ref, closure)
+        self.inner
+            .close_outbound(call_ref, closure, closed_at, schedule)
     }
     fn abandon_outbound(
         &mut self,
         call_ref: &rastok::boundary::CallRef,
+        closed_at: i64,
     ) -> Result<rastok::journal::CloseVerdict, rastok::journal::Error> {
         if self.refuse_closes {
             return Err(rastok::journal::Error::Storage(String::from("scripted")));
         }
-        self.inner.abandon_outbound(call_ref)
+        self.inner.abandon_outbound(call_ref, closed_at)
     }
     fn find_envelope(&self, id: rastok::envelope::Id) -> Option<Envelope> {
         self.inner.find_envelope(id)
@@ -4758,7 +4766,7 @@ graph app : App {
     operator decide { input in: text; output out: text; on in { out = data } }
     connector worker : Process {
       command = "cat"; codec = lines
-      effect = idempotent; behavior = deterministic
+      idempotent = true; behavior = deterministic
       timeout = duration("5s")
     }
     operator audit { input in: text; on in { nothing } }
@@ -5002,7 +5010,7 @@ graph app : App {
   input in: text
   connector call : Process + Loop {
     command = "cat"; codec = lines
-    effect = idempotent; behavior = deterministic
+    idempotent = true; behavior = deterministic
     timeout = duration("5s")
     Loop.fuel = 2
   }
@@ -5103,7 +5111,7 @@ graph app : App {
   input in: text
   connector call : Process {
     command = "cat"; codec = lines
-    effect = idempotent; behavior = deterministic
+    idempotent = true; behavior = deterministic
     timeout = duration("5s")
   }
   in -> call
@@ -5133,6 +5141,8 @@ graph app : App {
                     signal: None,
                 },
             )),
+            0,
+            None,
         )
         .unwrap();
     let original = journal.inner.records().to_vec();
@@ -5198,7 +5208,7 @@ graph timed : App {
   connector echo : Process {
 mode = job ; command = "cat"
 codec = lines
-effect = idempotent ; behavior = deterministic
+idempotent = true; behavior = deterministic
 timeout = duration("5s")
   }
 
@@ -5522,14 +5532,14 @@ graph fanout : App {
   connector alpha : Process {
 mode = job ; command = "cat"
 codec = lines
-effect = idempotent ; behavior = deterministic
+idempotent = true; behavior = deterministic
 timeout = duration("500ms")
   }
 
   connector beta : Process {
 mode = job ; command = "cat"
 codec = lines
-effect = idempotent ; behavior = deterministic
+idempotent = true; behavior = deterministic
 timeout = duration("100ms")
   }
 
@@ -5705,7 +5715,7 @@ fn a_refused_commit_on_a_queued_expiry_loses_nothing() {
     // Case: the queued delivery expires and the timeout
     // transaction's commit is refused — the delivery must stay.
     let compilation = compile(
-        &["graph g : App {\n  connector echo : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  operator wrap {\n    on in { out = . }\n  }\n  in -> wrap -> echo -> nothing\n  echo.err -> nothing\n  echo.exit -> nothing\n}\n"],
+        &["graph g : App {\n  connector echo : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    idempotent = true; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  operator wrap {\n    on in { out = . }\n  }\n  in -> wrap -> echo -> nothing\n  echo.err -> nothing\n  echo.exit -> nothing\n}\n"],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
@@ -6094,7 +6104,7 @@ graph retry : App + Loop {
     mode = job
     command = "cat"
     codec = lines
-    effect = idempotent
+    idempotent = true
     behavior = deterministic
     timeout = duration("1s")
     max_output = "1 MiB"
@@ -6188,7 +6198,7 @@ graph retry : App + Loop {
     mode = job
     command = "cat"
     codec = lines
-    effect = idempotent
+    idempotent = true
     behavior = deterministic
     timeout = duration("1s")
     max_output = "1 MiB"

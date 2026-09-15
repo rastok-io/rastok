@@ -30,7 +30,7 @@ graph probe : App {
   connector shell : Process {
     mode = job ; command = "cat"
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   operator relay {

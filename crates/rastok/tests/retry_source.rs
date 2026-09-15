@@ -15,8 +15,30 @@ fn refuse(source: &str) -> Bag {
 }
 
 fn graph(contract: &str, attributes: &str) -> String {
+    let mut settings = attributes.to_owned();
+    let finite = contract.starts_with("Process") || contract == "HttpClient" || contract == "File";
+    if finite && !attributes.contains("behavior") {
+        settings.push_str("\nbehavior = deterministic");
+    }
+    if contract.starts_with("Process") && !attributes.contains("command") {
+        settings.push_str("\ncommand = \"cat\"");
+    }
+    if contract.starts_with("Process") && !attributes.contains("codec") {
+        settings.push_str("\ncodec = lines");
+    }
+    if contract == "HttpClient" {
+        settings.push_str("\nurl = \"https://example.invalid\"\ncodec = text");
+    }
+    if contract == "File" {
+        settings.push_str("\npath = \"input.txt\"");
+    }
+    let stderr = if contract.starts_with("Process") {
+        "call.err -> nothing"
+    } else {
+        ""
+    };
     format!(
-        "graph app : App {{\nconnector call : {contract} + Retry {{\n{attributes}\n}}\nin -> call\ncall.out -> nothing\ncall.err -> nothing\ncall.exit -> nothing\n}}"
+        "graph app : App {{\nconnector call : {contract} + Retry {{\n{settings}\n}}\nin -> call\ncall.out -> nothing\n{stderr}\ncall.exit -> nothing\n}}"
     )
 }
 
@@ -31,7 +53,7 @@ fn assert_code(bag: &Bag, code: &str, fragment: &str) {
 
 fn only_execution_gate(source: &str) {
     let bag = refuse(source);
-    assert_code(&bag, "E-CHECK-DEFERRED", "cutover");
+    assert_code(&bag, "E-CHECK-DEFERRED", "manager");
     assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
 }
 
@@ -165,6 +187,7 @@ graph app : App {
   val gap = duration("10ms")
   graph inner {
     connector call : Process + Retry {
+      command = "cat"; codec = lines; behavior = deterministic
       val extra = 1
       idempotent = safe
       Retry.attempts = limit + extra
@@ -172,7 +195,10 @@ graph app : App {
       Retry.delay = { kind = exponential; first = gap; ceiling = duration("20ms") }
       timeout = duration("1s")
     }
+    in -> call -> out
+    call.err -> nothing; call.exit -> nothing
   }
+  in -> inner -> out
 }
 "#,
     );
@@ -243,7 +269,7 @@ fn retry_distinguishes_absent_false_true_and_fixed_idempotence() {
 }
 
 #[test]
-fn retry_does_not_change_the_http_contract_before_its_major_cutover() {
+fn retry_selects_server_errors_from_the_versioned_http_contract() {
     only_execution_gate(&graph(
         "HttpClient",
         "Retry.attempts = 2; Retry.on = [ConnectFailed, DnsFailed, TlsFailed]; timeout = duration(\"1s\")",
@@ -252,7 +278,7 @@ fn retry_does_not_change_the_http_contract_before_its_major_cutover() {
         "HttpClient",
         "idempotent = true; Retry.attempts = 3; Retry.on = [ServerError]; timeout = duration(\"1s\")",
     ));
-    assert_code(&bag, "E-CHECK-DEFERRED", "versioned HttpClient ServerError");
+    assert_code(&bag, "E-CHECK-DEFERRED", "Retry");
     assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
     let bag = refuse(&graph(
         "Process",
@@ -388,15 +414,22 @@ fn retry_bounds_and_delays_use_the_closed_positive_domains() {
 #[test]
 fn idempotence_without_retry_is_not_lowered_as_an_effect_alias() {
     for guarantee in ["true", "false"] {
-        only_execution_gate(&format!(
-            "graph app : App {{ connector call : Process {{ idempotent = {guarantee} }} }}"
-        ));
+        let source = graph(
+            "Process",
+            &format!("idempotent = {guarantee}; Retry.attempts = 1; Retry.on = []"),
+        )
+        .replace(" + Retry", "")
+        .replace("Retry.attempts = 1; Retry.on = []", "");
+        let compilation = compile(&[&source], &ContractCatalog::try_m0().expect("catalogue"))
+            .expect("ordinary Call");
+        assert_eq!(
+            compilation.plan.nodes[0]
+                .connector()
+                .expect("Call")
+                .is_idempotent(),
+            guarantee == "true"
+        );
     }
-    assert_code(
-        &refuse(
-            "graph app : App { connector call : Process { mode = service; idempotent = true } }",
-        ),
-        "E-RETRY-HOST",
-        "Session",
-    );
+    let source = "graph app : App { connector call : Process { mode = service; command = \"cat\"; codec = lines; behavior = deterministic; idempotent = true } }";
+    assert_code(&refuse(source), "E-CONTRACT-ATTR", "idempotent");
 }

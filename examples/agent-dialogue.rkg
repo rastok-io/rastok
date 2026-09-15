@@ -39,7 +39,7 @@ graph dialogues : App {
       command = "cat"
       codec = jsonl
       max_frame = "1MiB"
-      effect = idempotent
+
       behavior = probabilistic
       closing = { drain_for = duration("1s"); settle_for = duration("1s") }
     }

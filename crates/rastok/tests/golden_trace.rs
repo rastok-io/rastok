@@ -29,7 +29,7 @@ graph m0_probe : App {
   connector echo : Process {
     mode = job ; command = "cat"
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   operator shout {
@@ -123,6 +123,114 @@ fn run(source: &str) -> Vec<Record> {
     vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     assert!(vm.is_stable());
     journal.records().to_vec()
+}
+
+#[test]
+fn retained_call_time_is_unsealed_but_retry_context_and_arm_identity_are_causal() {
+    use rastok::canonical_cbor::{self, Value as Cbor};
+    use rastok::journal::{
+        OutboundRecord, OutboundStatus, retry_protocol as retry, timer_kind,
+        timing::{TimerArm, TimerSchedule},
+    };
+    let original = run(M0_PROBE);
+    let index = original.iter().position(|record| matches!(record,
+        Record::Outbound(OutboundRecord::Call(call)) if matches!(call.status, OutboundStatus::Closed(_)))).unwrap();
+    let mut changed = original.clone();
+    let Record::Outbound(OutboundRecord::Call(call)) = &mut changed[index] else {
+        unreachable!()
+    };
+    call.closed_at = Some(99);
+    assert_eq!(
+        project(&original),
+        project(&changed),
+        "wall-independent causal facts do not seal a closure instant"
+    );
+    assert_ne!(
+        rastok::journal::retention::record(&original[index]),
+        rastok::journal::retention::record(&changed[index])
+    );
+
+    let Record::Outbound(OutboundRecord::Call(call)) = &mut changed[index] else {
+        unreachable!()
+    };
+    let operation = retry::OperationRef::from_id(rastok::envelope::Id::from_bytes([7; 16]));
+    let context = retry::AttemptRef {
+        operation,
+        ordinal: 1,
+    };
+    call.retry_record = Some(Box::new(retry::Packet {
+        context: Some(context),
+        facts: vec![],
+    }));
+    let reference = retry::admission_ref(operation, 2, call.intent.call_ref);
+    call.timer_schedule = Some(Box::new(
+        TimerSchedule::try_new(
+            99,
+            vec![TimerArm {
+                kind: timer_kind::LOOP_DELAY,
+                reference,
+                due_at: 199,
+            }],
+        )
+        .unwrap(),
+    ));
+    let sealed = project(&changed);
+    let (Cbor::Map(keys), _) = canonical_cbor::decode(sealed.record_bytes(index).unwrap()).unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        keys.get(&58),
+        Some(
+            &retry::Packet {
+                context: Some(context),
+                facts: vec![]
+            }
+            .tree()
+        )
+    );
+    assert_eq!(
+        keys.get(&37),
+        Some(&Cbor::Array(vec![Cbor::Array(vec![
+            Cbor::Uint(u64::from(timer_kind::LOOP_DELAY)),
+            Cbor::Bytes(reference.as_bytes().to_vec())
+        ])]))
+    );
+    assert!(!keys.contains_key(&56) && !keys.contains_key(&59));
+    let Record::Outbound(OutboundRecord::Call(call)) = &mut changed[index] else {
+        unreachable!()
+    };
+    call.timer_schedule = Some(Box::new(
+        TimerSchedule::try_new(
+            99,
+            vec![TimerArm {
+                kind: timer_kind::LOOP_DELAY,
+                reference,
+                due_at: 299,
+            }],
+        )
+        .unwrap(),
+    ));
+    assert_eq!(
+        sealed,
+        project(&changed),
+        "retained due time is not a causal timestamp"
+    );
+    let Record::Outbound(OutboundRecord::Call(call)) = &mut changed[index] else {
+        unreachable!()
+    };
+    call.retry_record
+        .as_mut()
+        .unwrap()
+        .context
+        .as_mut()
+        .unwrap()
+        .ordinal = 2;
+    assert_ne!(
+        sealed,
+        project(&changed),
+        "the attempted operation is causal identity"
+    );
 }
 
 /// Renders a trace for the golden file: one hex line per canonical

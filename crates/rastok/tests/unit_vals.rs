@@ -24,7 +24,7 @@ graph constants : App {
     connector echo : Process {
       command = "cat"
       codec = lines
-      effect = idempotent
+      idempotent = true
       behavior = deterministic
     }
     in -> prepare -> echo -> out

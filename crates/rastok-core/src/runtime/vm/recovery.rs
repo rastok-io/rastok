@@ -62,10 +62,8 @@ impl Vm<'_> {
                         .map(|schedule| schedule.armed_at())
                         .or_else(|| match record {
                             Record::Transaction(record) => record.logical_time,
-                            Record::Outbound(crate::journal::OutboundRecord::Call(record))
-                                if record.status == crate::journal::OutboundStatus::Open =>
-                            {
-                                Some(record.intent.logical_time)
+                            Record::Outbound(crate::journal::OutboundRecord::Call(record)) => {
+                                record.closed_at.or(Some(record.intent.logical_time))
                             }
                             _ => None,
                         });

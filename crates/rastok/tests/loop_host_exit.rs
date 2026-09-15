@@ -98,7 +98,7 @@ graph app : App {
   connector job : Process + Loop {
     command = "cat"
     codec = lines
-    effect = idempotent
+    idempotent = true
     behavior = deterministic
     timeout = duration("1s")
     Loop.fuel = 2

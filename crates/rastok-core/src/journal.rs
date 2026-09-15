@@ -292,6 +292,7 @@ impl Record {
         match self {
             Self::Inbound(record) => record.timer_schedule.as_deref(),
             Self::Transaction(record) => record.timer_schedule.as_deref(),
+            Self::Outbound(OutboundRecord::Call(record)) => record.timer_schedule.as_deref(),
             Self::Outbound(_) => None,
         }
     }
@@ -309,6 +310,13 @@ pub(crate) fn recorded_envelope(records: &[Record], id: Id) -> Option<&Envelope>
             .find(|envelope| envelope.meta().sys().id() == id)
             .or_else(|| {
                 transaction.loop_protocol().and_then(|packet| {
+                    packet
+                        .envelopes()
+                        .find(|envelope| envelope.meta().sys().id() == id)
+                })
+            })
+            .or_else(|| {
+                transaction.retry_record.as_deref().and_then(|packet| {
                     packet
                         .envelopes()
                         .find(|envelope| envelope.meta().sys().id() == id)
@@ -664,6 +672,8 @@ impl fmt::Display for LoopRunRef {
 /// given.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TransactionRecord {
+    /// Sparse pinned-operation facts/correlation (causal key 58).
+    pub retry_record: Option<Box<retry_protocol::Packet>>,
     /// Exact-instance command production or winning consumption (key 57).
     pub instance_commands: Option<Box<instance_stop::Packet>>,
     /// Retained arm instants and deadlines (key 56), outside causal identity.
@@ -760,6 +770,12 @@ pub enum OutboundRecord {
 /// its closure — two records, never one rewritten.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CallRecord {
+    /// Attempt correlation (causal key 58), absent outside Retry.
+    pub retry_record: Option<Box<retry_protocol::Packet>>,
+    /// Winning logical closure instant (retained key 59); absent only on Open.
+    pub closed_at: Option<i64>,
+    /// Original closure-based recurrence arm (retained 56, causal presence 37).
+    pub timer_schedule: Option<Box<timing::TimerSchedule>>,
     /// The canonical call fields.
     pub intent: Intent,
     /// Which fact this record states.
@@ -990,10 +1006,14 @@ pub enum Error {
     },
     /// An r2 command packet contradicts the replay-derived protocol.
     InvalidLoopProtocol(loop_protocol::Error),
+    /// Retry facts must have their exact manager or producer carrier.
+    InvalidRetryProtocol(retry_protocol::Error),
     /// An exact-instance command contradicts its source, target or close fact.
     InvalidInstanceCommand(instance_stop::Error),
     /// Retained scheduler evidence contradicts the accepted obligations.
     InvalidTimerSchedule(crate::canonical_cbor::DecodeError),
+    /// A Call carrier contradicts its closure time or Retry correlation.
+    InvalidCallRetention(crate::canonical_cbor::DecodeError),
     /// A call ref matching no journaled call.
     UnknownCall,
     /// An inbound Call marker contradicts its root or source instance.
@@ -1097,8 +1117,10 @@ impl fmt::Display for Error {
                 instance.address().owner()
             ),
             Self::InvalidLoopProtocol(error) => error.fmt(f),
+            Self::InvalidRetryProtocol(error) => error.fmt(f),
             Self::InvalidInstanceCommand(error) => error.fmt(f),
             Self::InvalidTimerSchedule(error) => write!(f, "invalid timer schedule: {error}"),
+            Self::InvalidCallRetention(error) => write!(f, "invalid Call retention: {error}"),
             Self::UnknownCall => f.write_str("no outbound record for this call"),
             Self::CorruptInboundCall => {
                 f.write_str("the inbound Call marker contradicts its committed root or source")
@@ -1308,7 +1330,11 @@ pub trait Journal {
     /// [`Error::DuplicateOpen`] when the call is already journaled;
     /// [`Error::CorruptIntent`] when the call ref does not derive from
     /// the intent's own canonical fields.
-    fn open_outbound(&mut self, intent: Intent) -> Result<(), Error>;
+    fn open_outbound(
+        &mut self,
+        intent: Intent,
+        attempt: Option<retry_protocol::AttemptRef>,
+    ) -> Result<(), Error>;
 
     /// Journals one outbound session opening before the Driver acts.
     ///
@@ -1356,12 +1382,18 @@ pub trait Journal {
         &mut self,
         call_ref: &CallRef,
         closure: Closure,
+        closed_at: i64,
+        schedule: Option<Box<timing::TimerSchedule>>,
     ) -> Result<CloseVerdict, Error>;
 
     /// Declares that bounded Closing could not establish an observed
     /// terminal outcome. This participates in the same close-once race as a
     /// response or timeout and appends an `abandoned` fact on success.
-    fn abandon_outbound(&mut self, call_ref: &CallRef) -> Result<CloseVerdict, Error>;
+    fn abandon_outbound(
+        &mut self,
+        call_ref: &CallRef,
+        closed_at: i64,
+    ) -> Result<CloseVerdict, Error>;
 
     /// The envelope carrying `id`, wherever the history recorded it.
     fn find_envelope(&self, id: Id) -> Option<Envelope>;
@@ -1563,15 +1595,63 @@ impl MemJournal {
                     journal.commit_inbound(prepared, inbound.routes.clone())?;
                 }
                 Record::Transaction(transaction) => journal.commit(*transaction.clone())?,
-                Record::Outbound(OutboundRecord::Call(call)) => match &call.status {
-                    OutboundStatus::Open => journal.open_outbound(call.intent.clone())?,
-                    OutboundStatus::Closed(closure) => {
-                        journal.close_outbound(&call.intent.call_ref, closure.clone())?;
+                Record::Outbound(OutboundRecord::Call(call)) => {
+                    timing::validate_call(call).map_err(Error::InvalidCallRetention)?;
+                    if call.status != OutboundStatus::Open {
+                        let Some(original) =
+                            journal.records.iter().find_map(|record| match record {
+                                Record::Outbound(OutboundRecord::Call(open))
+                                    if open.intent.call_ref == call.intent.call_ref =>
+                                {
+                                    Some(open)
+                                }
+                                _ => None,
+                            })
+                        else {
+                            return Err(Error::UnknownCall);
+                        };
+                        if original.intent != call.intent
+                            || original.retry_record != call.retry_record
+                        {
+                            return Err(Error::InvalidRetainedRecord(
+                                "a Call closure changed its original intent or attempt",
+                            ));
+                        }
                     }
-                    OutboundStatus::Abandoned => {
-                        journal.abandon_outbound(&call.intent.call_ref)?;
+                    match &call.status {
+                        OutboundStatus::Open => journal.open_outbound(
+                            call.intent.clone(),
+                            call.retry_record
+                                .as_deref()
+                                .and_then(|packet| packet.context),
+                        )?,
+                        OutboundStatus::Closed(closure) => {
+                            let at = call.closed_at.ok_or({
+                                Error::InvalidCallRetention(
+                                    crate::canonical_cbor::DecodeError::Malformed(
+                                        "missing Call closure instant",
+                                    ),
+                                )
+                            })?;
+                            journal.close_outbound(
+                                &call.intent.call_ref,
+                                closure.clone(),
+                                at,
+                                call.timer_schedule.clone(),
+                            )?;
+                        }
+                        OutboundStatus::Abandoned => {
+                            let at = call.closed_at.ok_or({
+                                Error::InvalidCallRetention(
+                                    crate::canonical_cbor::DecodeError::Malformed(
+                                        "missing Call closure instant",
+                                    ),
+                                )
+                            })?;
+                            journal.abandon_outbound(&call.intent.call_ref, at)?;
+                        }
                     }
-                },
+                }
                 Record::Outbound(OutboundRecord::Session(session)) => match &session.status {
                     SessionStatus::Opening(intent) => {
                         journal.open_outbound_session(intent.clone())?
@@ -2027,6 +2107,7 @@ impl Journal for MemJournal {
     }
 
     fn commit(&mut self, mut transaction: TransactionRecord) -> Result<(), Error> {
+        retry_protocol::validate_transaction(&transaction).map_err(Error::InvalidRetryProtocol)?;
         timing::validate_transaction(&transaction).map_err(Error::InvalidTimerSchedule)?;
         if transaction.instance_commands.is_some() {
             self.instance_commands()?
@@ -2326,7 +2407,11 @@ impl Journal for MemJournal {
         Ok(InstanceRef::new(address.clone(), generation))
     }
 
-    fn open_outbound(&mut self, intent: Intent) -> Result<(), Error> {
+    fn open_outbound(
+        &mut self,
+        intent: Intent,
+        attempt: Option<retry_protocol::AttemptRef>,
+    ) -> Result<(), Error> {
         // The autonomy check: the call identity must recompute from
         // the fields this record seals (keys 40, 43, 47).
         let derived = ids::call_ref(
@@ -2339,13 +2424,21 @@ impl Journal for MemJournal {
         if self.statuses_of(&intent.call_ref).next().is_some() {
             return Err(Error::DuplicateOpen);
         }
+        let record = CallRecord {
+            intent,
+            status: OutboundStatus::Open,
+            closed_at: None,
+            timer_schedule: None,
+            retry_record: attempt.map(|context| {
+                Box::new(retry_protocol::Packet {
+                    context: Some(context),
+                    facts: Vec::new(),
+                })
+            }),
+        };
+        timing::validate_call(&record).map_err(Error::InvalidCallRetention)?;
         self.records
-            .push(Record::Outbound(OutboundRecord::Call(Box::new(
-                CallRecord {
-                    intent,
-                    status: OutboundStatus::Open,
-                },
-            ))));
+            .push(Record::Outbound(OutboundRecord::Call(Box::new(record))));
         Ok(())
     }
 
@@ -2472,6 +2565,8 @@ impl Journal for MemJournal {
         &mut self,
         call_ref: &CallRef,
         closure: Closure,
+        closed_at: i64,
+        schedule: Option<Box<timing::TimerSchedule>>,
     ) -> Result<CloseVerdict, Error> {
         let mut intent = None;
         for record in &self.records {
@@ -2482,28 +2577,37 @@ impl Journal for MemJournal {
                 continue;
             }
             match outbound.status {
-                OutboundStatus::Open => intent = Some(outbound.intent.clone()),
+                OutboundStatus::Open => {
+                    intent = Some((outbound.intent.clone(), outbound.retry_record.clone()))
+                }
                 OutboundStatus::Closed(_) | OutboundStatus::Abandoned => {
                     return Ok(CloseVerdict::AlreadyClosed);
                 }
             }
         }
-        let Some(intent) = intent else {
+        let Some((intent, retry_record)) = intent else {
             return Err(Error::UnknownCall);
         };
         // Append the closure as a new fact; the open fact stays
         // byte-identical — the attempt trace survives.
+        let record = CallRecord {
+            intent,
+            status: OutboundStatus::Closed(closure),
+            closed_at: Some(closed_at),
+            timer_schedule: schedule,
+            retry_record,
+        };
+        timing::validate_call(&record).map_err(Error::InvalidCallRetention)?;
         self.records
-            .push(Record::Outbound(OutboundRecord::Call(Box::new(
-                CallRecord {
-                    intent,
-                    status: OutboundStatus::Closed(closure),
-                },
-            ))));
+            .push(Record::Outbound(OutboundRecord::Call(Box::new(record))));
         Ok(CloseVerdict::Won)
     }
 
-    fn abandon_outbound(&mut self, call_ref: &CallRef) -> Result<CloseVerdict, Error> {
+    fn abandon_outbound(
+        &mut self,
+        call_ref: &CallRef,
+        closed_at: i64,
+    ) -> Result<CloseVerdict, Error> {
         let mut intent = None;
         for record in &self.records {
             let Record::Outbound(OutboundRecord::Call(outbound)) = record else {
@@ -2513,22 +2617,27 @@ impl Journal for MemJournal {
                 continue;
             }
             match outbound.status {
-                OutboundStatus::Open => intent = Some(outbound.intent.clone()),
+                OutboundStatus::Open => {
+                    intent = Some((outbound.intent.clone(), outbound.retry_record.clone()))
+                }
                 OutboundStatus::Closed(_) | OutboundStatus::Abandoned => {
                     return Ok(CloseVerdict::AlreadyClosed);
                 }
             }
         }
-        let Some(intent) = intent else {
+        let Some((intent, retry_record)) = intent else {
             return Err(Error::UnknownCall);
         };
+        let record = CallRecord {
+            intent,
+            status: OutboundStatus::Abandoned,
+            closed_at: Some(closed_at),
+            timer_schedule: None,
+            retry_record,
+        };
+        timing::validate_call(&record).map_err(Error::InvalidCallRetention)?;
         self.records
-            .push(Record::Outbound(OutboundRecord::Call(Box::new(
-                CallRecord {
-                    intent,
-                    status: OutboundStatus::Abandoned,
-                },
-            ))));
+            .push(Record::Outbound(OutboundRecord::Call(Box::new(record))));
         Ok(CloseVerdict::Won)
     }
 
@@ -2675,9 +2784,144 @@ mod tests {
             connector_path,
             prepared,
             idempotency_key: Some(String::from("op-1")),
-            effect: node::EffectClass::Idempotent,
             resolved_settings: BTreeMap::new(),
             logical_time: 0,
+        }
+    }
+
+    #[test]
+    fn every_winning_call_closure_retains_its_time_without_retry() {
+        for abandoned in [false, true] {
+            let mut journal = MemJournal::new(GraphVersion(1));
+            let original = intent("clocked", 3);
+            let call = original.call_ref;
+            journal.open_outbound(original, None).unwrap();
+            let open = journal.records()[0].clone();
+            if abandoned {
+                journal.abandon_outbound(&call, 17).unwrap();
+            } else {
+                journal
+                    .close_outbound(&call, Closure::Timeout, 17, None)
+                    .unwrap();
+            }
+            assert_eq!(journal.records()[0], open);
+            let Record::Outbound(OutboundRecord::Call(closed)) = &journal.records()[1] else {
+                unreachable!()
+            };
+            assert_eq!(closed.closed_at, Some(17));
+            assert!(closed.retry_record.is_none());
+            assert!(closed.timer_schedule.is_none());
+            assert_eq!(
+                journal
+                    .close_outbound(&call, Closure::Timeout, 29, None)
+                    .unwrap(),
+                CloseVerdict::AlreadyClosed
+            );
+            let recovered =
+                MemJournal::from_records(GraphVersion(1), None, journal.records()).unwrap();
+            assert_eq!(recovered.records(), journal.records());
+            let mut reader = retention::Reader::default();
+            for record in journal.records() {
+                assert_eq!(reader.record(&retention::record(record)).unwrap(), *record);
+            }
+        }
+    }
+
+    #[test]
+    fn call_retention_refuses_missing_backdated_or_recorrelated_closures() {
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let mut original = intent("clocked", 4);
+        original.logical_time = 11;
+        let call = original.call_ref;
+        journal.open_outbound(original, None).unwrap();
+        assert!(matches!(
+            journal.close_outbound(&call, Closure::Timeout, 10, None),
+            Err(Error::InvalidCallRetention(_))
+        ));
+        assert_eq!(journal.records().len(), 1);
+        journal
+            .close_outbound(&call, Closure::Timeout, 11, None)
+            .unwrap();
+        for mutation in 0..3 {
+            let mut records = journal.records().to_vec();
+            let Record::Outbound(OutboundRecord::Call(closed)) = &mut records[1] else {
+                unreachable!()
+            };
+            match mutation {
+                0 => closed.closed_at = None,
+                1 => closed.intent.idempotency_key = Some("changed".into()),
+                _ => {
+                    closed.retry_record = Some(Box::new(retry_protocol::Packet {
+                        context: Some(retry_protocol::AttemptRef {
+                            operation: retry_protocol::OperationRef::from_id(Id::from_bytes(
+                                [3; 16],
+                            )),
+                            ordinal: 1,
+                        }),
+                        facts: vec![],
+                    }))
+                }
+            }
+            assert!(MemJournal::from_records(GraphVersion(1), None, &records).is_err());
+        }
+        let mut encoded = retention::record(&journal.records()[1]);
+        let crate::canonical_cbor::Value::Array(fields) = &mut encoded else {
+            unreachable!()
+        };
+        fields[3] = crate::canonical_cbor::Value::Null;
+        assert!(retention::Reader::default().record(&encoded).is_err());
+    }
+
+    #[test]
+    fn retry_call_carriers_retain_only_their_own_next_admission_timer() {
+        let original = intent("retrying", 5);
+        let call = original.call_ref;
+        let operation = retry_protocol::OperationRef::from_id(Id::from_bytes([7; 16]));
+        let attempt = retry_protocol::AttemptRef {
+            operation,
+            ordinal: 1,
+        };
+        let arm = timing::TimerArm {
+            kind: timer_kind::LOOP_DELAY,
+            reference: retry_protocol::admission_ref(operation, 2, call),
+            due_at: 110,
+        };
+        let schedule = timing::TimerSchedule::try_new(10, vec![arm]).unwrap();
+        let mut journal = MemJournal::new(GraphVersion(1));
+        journal.open_outbound(original.clone(), None).unwrap();
+        assert!(matches!(
+            journal.close_outbound(
+                &call,
+                Closure::Timeout,
+                10,
+                Some(Box::new(schedule.clone()))
+            ),
+            Err(Error::InvalidCallRetention(_))
+        ));
+        let mut journal = MemJournal::new(GraphVersion(1));
+        journal.open_outbound(original, Some(attempt)).unwrap();
+        for mutation in 0..2 {
+            let mut wrong = arm;
+            if mutation == 0 {
+                wrong.reference = Id::from_bytes([9; 16]);
+            } else {
+                wrong.kind = timer_kind::CALL_TIMEOUT;
+            }
+            let wrong = timing::TimerSchedule::try_new(10, vec![wrong]).unwrap();
+            assert!(
+                journal
+                    .close_outbound(&call, Closure::Timeout, 10, Some(Box::new(wrong)))
+                    .is_err()
+            );
+        }
+        journal
+            .close_outbound(&call, Closure::Timeout, 10, Some(Box::new(schedule)))
+            .unwrap();
+        let recovered = MemJournal::from_records(GraphVersion(1), None, journal.records()).unwrap();
+        assert_eq!(recovered.records(), journal.records());
+        let mut reader = retention::Reader::default();
+        for record in journal.records() {
+            assert_eq!(reader.record(&retention::record(record)).unwrap(), *record);
         }
     }
 
@@ -2724,6 +2968,7 @@ mod tests {
             parent_instance,
             close_scope: None,
             exchange_exit: None,
+            retry_record: None,
             loop_record: None,
             logical_time: None,
             timer_schedule: None,
@@ -2910,20 +3155,22 @@ mod tests {
             prepared.digest(),
         );
         journal
-            .open_outbound(Intent {
-                call_ref,
-                emitting_id: inbound.envelope.meta().sys().id(),
-                edge,
-                connector_path: connector_path.clone(),
-                prepared,
-                idempotency_key: None,
-                effect: node::EffectClass::Idempotent,
-                resolved_settings: BTreeMap::new(),
-                logical_time: 0,
-            })
+            .open_outbound(
+                Intent {
+                    call_ref,
+                    emitting_id: inbound.envelope.meta().sys().id(),
+                    edge,
+                    connector_path: connector_path.clone(),
+                    prepared,
+                    idempotency_key: None,
+                    resolved_settings: BTreeMap::new(),
+                    logical_time: 0,
+                },
+                None,
+            )
             .expect("the Call opens");
         journal
-            .abandon_outbound(&call_ref)
+            .abandon_outbound(&call_ref, 0)
             .expect("the Call closes abandoned");
 
         let prepared = crate::boundary::PreparedRequest::seal(vec![4, 5, 6]);
@@ -3389,10 +3636,12 @@ mod tests {
         let mut journal = MemJournal::new(GraphVersion(1));
         let echo_intent = intent("echo", 7);
         let call = echo_intent.call_ref;
-        journal.open_outbound(echo_intent.clone()).unwrap();
+        journal.open_outbound(echo_intent.clone(), None).unwrap();
         let open_before = journal.records()[0].clone();
         assert_eq!(
-            journal.close_outbound(&call, Closure::Timeout).unwrap(),
+            journal
+                .close_outbound(&call, Closure::Timeout, 0, None)
+                .unwrap(),
             CloseVerdict::Won
         );
         // The normative sequence: two consecutive facts, open first,
@@ -3412,7 +3661,9 @@ mod tests {
         assert!(journal.open_calls().is_empty());
         // The race: every later closure loses and appends nothing.
         assert_eq!(
-            journal.close_outbound(&call, Closure::Timeout).unwrap(),
+            journal
+                .close_outbound(&call, Closure::Timeout, 0, None)
+                .unwrap(),
             CloseVerdict::AlreadyClosed
         );
         assert_eq!(journal.records().len(), 2);
@@ -3422,26 +3673,26 @@ mod tests {
             &[0; 32],
         );
         assert_eq!(
-            journal.close_outbound(&ghost, Closure::Timeout),
+            journal.close_outbound(&ghost, Closure::Timeout, 0, None),
             Err(Error::UnknownCall)
         );
 
         let abandoned_intent = intent("slow", 8);
         let abandoned = abandoned_intent.call_ref;
-        journal.open_outbound(abandoned_intent).unwrap();
+        journal.open_outbound(abandoned_intent, None).unwrap();
         assert_eq!(
-            journal.abandon_outbound(&abandoned).unwrap(),
+            journal.abandon_outbound(&abandoned, 0).unwrap(),
             CloseVerdict::Won
         );
         assert_eq!(
             journal
-                .close_outbound(&abandoned, Closure::Timeout)
+                .close_outbound(&abandoned, Closure::Timeout, 0, None)
                 .unwrap(),
             CloseVerdict::AlreadyClosed,
             "an observed response or timeout cannot supersede abandonment"
         );
         assert_eq!(
-            journal.abandon_outbound(&abandoned).unwrap(),
+            journal.abandon_outbound(&abandoned, 0).unwrap(),
             CloseVerdict::AlreadyClosed
         );
         assert!(matches!(
@@ -3460,7 +3711,7 @@ mod tests {
             &[1; 32],
         );
         assert_eq!(
-            journal.open_outbound(forged).unwrap_err(),
+            journal.open_outbound(forged, None).unwrap_err(),
             Error::CorruptIntent
         );
     }
@@ -3476,6 +3727,7 @@ mod tests {
                 parent_instance: None,
                 close_scope: None,
                 exchange_exit: None,
+                retry_record: None,
                 loop_record: None,
                 logical_time: None,
                 timer_schedule: None,
@@ -3530,6 +3782,7 @@ mod tests {
                 parent_instance: None,
                 close_scope: None,
                 exchange_exit: None,
+                retry_record: None,
                 loop_record: None,
                 logical_time: None,
                 timer_schedule: None,
@@ -3552,7 +3805,7 @@ mod tests {
                 timers: vec![],
             })
             .unwrap();
-        journal.open_outbound(intent("echo", 1)).unwrap();
+        journal.open_outbound(intent("echo", 1), None).unwrap();
         let kinds: Vec<u8> = journal
             .records()
             .iter()

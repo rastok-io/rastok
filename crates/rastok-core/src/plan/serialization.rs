@@ -55,7 +55,7 @@ pub const MAGIC: [u8; 4] = *b"RKPB";
 /// selections, explicit Extensions and dispositions, and Connector Contracts
 /// `@2`, with Loop exhaustion resolved onto a host terminal. Earlier packages
 /// refuse; their fields are never silently reinterpreted.
-pub const FORMAT_VERSION: u32 = 18;
+pub const FORMAT_VERSION: u32 = 19;
 
 /// The checksum domain — fixed-width framing, so the covered fields
 /// cannot slide into one another.
@@ -448,7 +448,24 @@ fn extension_spec_tree(extension: &ExtensionSpec) -> Cbor {
     match extension {
         ExtensionSpec::App => Cbor::Array(vec![Cbor::Uint(2)]),
         ExtensionSpec::Loop(spec) => Cbor::Array(vec![Cbor::Uint(3), loop_spec_tree(spec)]),
+        ExtensionSpec::Retry(spec) => Cbor::Array(vec![Cbor::Uint(4), retry_spec_tree(spec)]),
     }
+}
+
+fn retry_spec_tree(spec: &super::RetrySpec) -> Cbor {
+    let mut fields = BTreeMap::from([
+        (1, plan_constant_tree(&spec.attempts)),
+        (
+            2,
+            Cbor::Array(spec.cases.iter().cloned().map(Cbor::Text).collect()),
+        ),
+        (4, Cbor::Text(spec.entry.name().into())),
+        (5, Cbor::Text(spec.terminal.name().into())),
+    ]);
+    if let Some(delay) = &spec.delay {
+        fields.insert(3, loop_delay_tree(delay));
+    }
+    Cbor::Map(fields)
 }
 
 fn loop_spec_tree(spec: &LoopSpec) -> Cbor {
@@ -569,24 +586,12 @@ fn owner_value_tree(value: &OwnerValue) -> Cbor {
 }
 
 fn spec_tree(spec: &ConnectorSpec) -> Cbor {
-    let effect = match spec.effect {
-        node::Effect::None => Cbor::Uint(0),
-        node::Effect::Class(class) => Cbor::Array(vec![
-            Cbor::Uint(1),
-            Cbor::Uint(match class {
-                node::EffectClass::Idempotent => 1,
-                node::EffectClass::Compensable => 2,
-                node::EffectClass::Irreversible => 3,
-            }),
-        ]),
-    };
     let behavior = Cbor::Uint(match spec.behavior {
         node::Behavior::Deterministic => 1,
         node::Behavior::Probabilistic => 2,
     });
-    Cbor::Map(BTreeMap::from([
+    let mut fields = BTreeMap::from([
         (1, Cbor::Text(spec.contract.as_str().into())),
-        (2, effect),
         (3, behavior),
         (
             4,
@@ -601,7 +606,11 @@ fn spec_tree(spec: &ConnectorSpec) -> Cbor {
         ),
         (6, Cbor::Uint(u64::from(spec.roles.tag()))),
         (7, Cbor::Uint(u64::from(spec.exchange.tag()))),
-    ]))
+    ]);
+    if let Some(guarantee) = &spec.idempotent {
+        fields.insert(8, plan_constant_tree(guarantee));
+    }
+    Cbor::Map(fields)
 }
 
 fn attr_tree(setting: &AttrSetting) -> Cbor {
@@ -718,6 +727,7 @@ const fn lifecycle_tag(lifecycle: node::Lifecycle) -> u64 {
         node::Lifecycle::Closing => 8,
         node::Lifecycle::Reply => 9,
         node::Lifecycle::Exit => 10,
+        node::Lifecycle::Retry => 11,
     }
 }
 
@@ -1267,8 +1277,8 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
         if let NodeExecution::Connector(spec) = &node.execution {
             // kind array at 3, spec map at 4, its fields at 5.
             max = max.max(5);
-            if matches!(spec.effect, node::Effect::Class(_)) {
-                max = max.max(6);
+            if let Some(guarantee) = &spec.idempotent {
+                plan_constant(guarantee, 5, &mut max, &mut stack);
             }
             for (_, setting) in &spec.attributes {
                 // entry array at 6, name and attr_tree at 7, the
@@ -1324,39 +1334,43 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
             }
             annotations(&decl.annotations, 5, &mut max);
         }
-        for aspect in &owner.extensions {
-            let ExtensionSpec::Loop(spec) = aspect else {
-                max = max.max(5);
-                continue;
-            };
-            max = max.max(if spec.terminals.is_empty() { 6 } else { 7 });
-            if let Some(expired) = &spec.expired {
-                // Target array at 6, complete host-terminal type at 7.
-                stack.push(Item::Ty(&expired.ty, 7));
-            }
-            // extensions array at 3, tagged Extension at 4, Loop map at 5.
-            // An optional fuel constant starts at 6; a delay's tagged policy
-            // starts at 6 and nests each constant one level further at 7.
-            if let Some(fuel) = &spec.fuel {
-                plan_constant(fuel, 6, &mut max, &mut stack);
-            }
-            match &spec.delay {
-                None => {}
-                Some(LoopDelay::Fixed { after }) => {
-                    plan_constant(after, 7, &mut max, &mut stack);
+        for extension in &owner.extensions {
+            // Extension array at 3, tagged payload at 4, policy map at 5.
+            let delay = match extension {
+                ExtensionSpec::App => {
+                    max = max.max(5);
+                    continue;
                 }
+                ExtensionSpec::Retry(spec) => {
+                    max = max.max(if spec.cases.is_empty() { 6 } else { 7 });
+                    plan_constant(&spec.attempts, 6, &mut max, &mut stack);
+                    &spec.delay
+                }
+                ExtensionSpec::Loop(spec) => {
+                    max = max.max(if spec.terminals.is_empty() { 6 } else { 7 });
+                    if let Some(expired) = &spec.expired {
+                        stack.push(Item::Ty(&expired.ty, 7));
+                    }
+                    if let Some(fuel) = &spec.fuel {
+                        plan_constant(fuel, 6, &mut max, &mut stack);
+                    }
+                    if let Some(proof) = &spec.proof {
+                        tree(&proof.measure, 7, &mut stack);
+                        if let Some(invariant) = &proof.invariant {
+                            tree(invariant, 7, &mut stack);
+                        }
+                        max = max.max(7);
+                    }
+                    &spec.delay
+                }
+            };
+            match delay {
+                None => {}
+                Some(LoopDelay::Fixed { after }) => plan_constant(after, 7, &mut max, &mut stack),
                 Some(LoopDelay::Exponential { first, ceiling }) => {
                     plan_constant(first, 7, &mut max, &mut stack);
                     plan_constant(ceiling, 7, &mut max, &mut stack);
                 }
-            }
-            if let Some(proof) = &spec.proof {
-                // Proof map at 6, tree roots and witness array at 7.
-                tree(&proof.measure, 7, &mut stack);
-                if let Some(invariant) = &proof.invariant {
-                    tree(invariant, 7, &mut stack);
-                }
-                max = max.max(7);
             }
         }
     }
@@ -1927,8 +1941,31 @@ fn extension_spec_from(tree: &Cbor) -> Result<ExtensionSpec, DecodeError> {
     match array_of(tree, "Extension specification")? {
         [Cbor::Uint(2)] => Ok(ExtensionSpec::App),
         [Cbor::Uint(3), spec] => Ok(ExtensionSpec::Loop(Box::new(loop_spec_from(spec)?))),
+        [Cbor::Uint(4), spec] => Ok(ExtensionSpec::Retry(Box::new(retry_spec_from(spec)?))),
         _ => Err(err("Extension specification")),
     }
+}
+
+fn retry_spec_from(tree: &Cbor) -> Result<super::RetrySpec, DecodeError> {
+    let fields = map_of(tree, "Retry specification")?;
+    if fields.keys().any(|key| !matches!(key, 1..=5)) {
+        return Err(err("unknown Retry field"));
+    }
+    Ok(super::RetrySpec {
+        attempts: plan_constant_from(get(fields, 1, "Retry attempts")?)?,
+        cases: array_of(get(fields, 2, "Retry cases")?, "Retry cases")?
+            .iter()
+            .map(|value| text_of(value, "Retry case").map(ToString::to_string))
+            .collect::<Result<_, _>>()?,
+        delay: find(fields, 3).map(loop_delay_from).transpose()?,
+        entry: node::Port::new(text_of(get(fields, 4, "Retry entry")?, "Retry entry")?)
+            .map_err(|_| err("Retry entry"))?,
+        terminal: node::Port::new(text_of(
+            get(fields, 5, "Retry terminal")?,
+            "Retry terminal",
+        )?)
+        .map_err(|_| err("Retry terminal"))?,
+    })
 }
 
 fn loop_spec_from(tree: &Cbor) -> Result<LoopSpec, DecodeError> {
@@ -2138,22 +2175,12 @@ fn owner_value_from(tree: &Cbor) -> Result<OwnerValue, DecodeError> {
 
 fn spec_from(tree: &Cbor) -> Result<ConnectorSpec, DecodeError> {
     let pairs = map_of(tree, "connector spec")?;
+    if find(pairs, 2).is_some() {
+        return Err(err("retired Connector effect field"));
+    }
     let contract =
         crate::connector::ContractId::parse(text_of(get(pairs, 1, "contract")?, "contract")?)
             .map_err(|reason| DecodeError::Malformed(format!("invalid connector id: {reason}")))?;
-    let effect = match get(pairs, 2, "effect")? {
-        Cbor::Uint(0) => node::Effect::None,
-        Cbor::Array(parts) => match parts.as_slice() {
-            [Cbor::Uint(1), Cbor::Uint(class)] => node::Effect::Class(match class {
-                1 => node::EffectClass::Idempotent,
-                2 => node::EffectClass::Compensable,
-                3 => node::EffectClass::Irreversible,
-                _ => return Err(err("effect class")),
-            }),
-            _ => return Err(err("effect")),
-        },
-        _ => return Err(err("effect")),
-    };
     let behavior = match get(pairs, 3, "behavior")? {
         Cbor::Uint(1) => node::Behavior::Deterministic,
         Cbor::Uint(2) => node::Behavior::Probabilistic,
@@ -2188,7 +2215,7 @@ fn spec_from(tree: &Cbor) -> Result<ConnectorSpec, DecodeError> {
         contract,
         roles,
         exchange,
-        effect,
+        idempotent: find(pairs, 8).map(plan_constant_from).transpose()?,
         behavior,
         attributes,
     })
@@ -2323,6 +2350,7 @@ fn handler_from(tree: &Cbor) -> Result<Handler, DecodeError> {
                 8 => node::Lifecycle::Closing,
                 9 => node::Lifecycle::Reply,
                 10 => node::Lifecycle::Exit,
+                11 => node::Lifecycle::Retry,
                 _ => return Err(err("activation lifecycle")),
             })
         }
@@ -3721,7 +3749,10 @@ mod tests {
                         .unwrap(),
                         roles: crate::connector::ConnectorRoles::Outbound,
                         exchange: crate::connector::ConnectorExchange::Call,
-                        effect: node::Effect::Class(node::EffectClass::Idempotent),
+                        idempotent: Some(PlanConstant {
+                            expr: expr::compile("true", &expr::Signature::new()).unwrap(),
+                            resolved: Value::Bool(true),
+                        }),
                         behavior: node::Behavior::Deterministic,
                         attributes: vec![
                             (text("cmd"), AttrSetting::Value(map_value)),

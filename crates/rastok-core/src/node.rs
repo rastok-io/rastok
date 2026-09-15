@@ -1,12 +1,12 @@
 //! Shared graph and execution vocabulary.
 //!
 //! Governing rules: [`grammar.md`] for the node and port vocabulary,
-//! [`effects-and-sagas.md`] §2.2 for the effect classes, [`stdlib.md`] §2
+//! [`extensions.md`] for owner contributions, [`stdlib.md`] §2
 //! for the `behavior` attribute, and [`envelope.md`] §3 for the trigger
 //! namespaces.
 //!
 //! [`grammar.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/grammar.md
-//! [`effects-and-sagas.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/effects-and-sagas.md
+//! [`extensions.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/extensions.md
 //! [`stdlib.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/stdlib.md
 //! [`envelope.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/envelope.md
 
@@ -199,6 +199,8 @@ pub enum Extension {
     App,
     /// Finite temporal recursion over an admissible Node's entry interface.
     Loop,
+    /// Bounded protected repetition of one outbound Call operation.
+    Retry,
     /// Journal-folded compensation workflow.
     Saga,
 }
@@ -210,6 +212,7 @@ impl Extension {
         match name.as_bytes() {
             b"App" => Some(Self::App),
             b"Loop" => Some(Self::Loop),
+            b"Retry" => Some(Self::Retry),
             b"Saga" => Some(Self::Saga),
             _ => None,
         }
@@ -221,6 +224,7 @@ impl Extension {
         match self {
             Self::App => "App",
             Self::Loop => "Loop",
+            Self::Retry => "Retry",
             Self::Saga => "Saga",
         }
     }
@@ -249,46 +253,6 @@ mod taxonomy_tests {
     }
 }
 
-/// External-effect risk category of a connector.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum EffectClass {
-    /// Safe to repeat: replaying the call cannot change the outcome.
-    Idempotent,
-    /// Repeatable only through an explicit compensation.
-    Compensable,
-    /// Neither repeatable nor compensable.
-    Irreversible,
-}
-
-impl fmt::Display for EffectClass {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Idempotent => "idempotent",
-            Self::Compensable => "compensable",
-            Self::Irreversible => "irreversible",
-        })
-    }
-}
-
-/// Declared effect of a connector: an explicit absence, or one of the
-/// three classes. The three classes stay three; `none` is not a fourth.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Effect {
-    /// Explicitly declared absence of external effect.
-    None,
-    /// Declared external effect of the given class.
-    Class(EffectClass),
-}
-
-impl fmt::Display for Effect {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::None => f.write_str("none"),
-            Self::Class(class) => class.fmt(f),
-        }
-    }
-}
-
 /// Behavior declared by the DSL attribute `behavior`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Behavior {
@@ -313,6 +277,8 @@ impl fmt::Display for Behavior {
 /// [`envelope.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/envelope.md
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Lifecycle {
+    /// Internal Retry manager fact; never an authored handler activation.
+    Retry,
     /// Instance start.
     Start,
     /// Instance stop.
@@ -341,6 +307,7 @@ pub enum Lifecycle {
 impl fmt::Display for Lifecycle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            Self::Retry => "retry",
             Self::Start => "start",
             Self::Stop => "stop",
             Self::Closing => "closing",
@@ -580,11 +547,6 @@ mod tests {
     #[test]
     fn declared_vocabulary_spellings_are_normative() {
         assert_eq!(Kind::Connector.to_string(), "connector");
-        assert_eq!(Effect::None.to_string(), "none");
-        assert_eq!(
-            Effect::Class(EffectClass::Compensable).to_string(),
-            "compensable"
-        );
         assert_eq!(Behavior::Probabilistic.to_string(), "probabilistic");
     }
 

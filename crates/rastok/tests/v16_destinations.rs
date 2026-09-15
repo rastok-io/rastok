@@ -409,7 +409,7 @@ fn a_contract_cardinality_violation_is_not_published_even_without_loop() {
       connector request : HttpClient {
         url = "https://example.test/"
         codec = json
-        effect = idempotent
+        idempotent = true
         behavior = probabilistic
         timeout = duration("1s")
       }

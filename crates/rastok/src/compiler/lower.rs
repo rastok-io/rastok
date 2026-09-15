@@ -138,6 +138,25 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
             writer.loop_spec(spec);
         }
     }
+    let retry_owners: Vec<_> = sorted_nodes(hir)
+        .into_iter()
+        .filter_map(|node| node.retry_spec.as_ref().map(|spec| (node, spec)))
+        .collect();
+    if !retry_owners.is_empty() {
+        writer.str("rastok.retry.r1");
+        writer.count(retry_owners.len());
+        for (node, spec) in retry_owners {
+            writer.endpoint_owner(&EndpointOwner::Node(node.path.clone()));
+            writer.tree(&spec.attempts.tree);
+            writer.count(spec.cases.len());
+            for case in &spec.cases {
+                writer.str(case);
+            }
+            writer.delay(spec.delay.as_ref());
+            writer.str(spec.entry.name());
+            writer.str(spec.terminal.name());
+        }
+    }
     // Extend identity only when the new source declares non-default instance
     // semantics. The persistent singleton still feeds the exact M1.3 stream.
     let configured: Vec<_> = sorted_nodes(hir)
@@ -407,11 +426,13 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
     }
     for node in &nodes {
         if !node.extensions.is_empty()
-            && (node.extensions.as_slice() != [node::Extension::Loop] || node.loop_spec.is_none())
+            && !(node.extensions.as_slice() == [node::Extension::Loop] && node.loop_spec.is_some()
+                || node.extensions.as_slice() == [node::Extension::Retry]
+                    && node.retry_spec.is_some())
         {
             return Err(LowerError {
                 owner: node.path.to_string(),
-                detail: "this Loop host requires the R7 execution protocol",
+                detail: "the Extension needs a complete, admitted host policy",
             });
         }
     }
@@ -523,14 +544,24 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                 (
                     OwnerKind::Node(slot),
                     Vec::new(),
-                    node.loop_spec
-                        .as_ref()
-                        .map(|spec| {
-                            vec![ExtensionSpec::Loop(Box::new(lower_loop_spec(
-                                spec, &constants,
-                            )))]
-                        })
-                        .unwrap_or_default(),
+                    if let Some(spec) = &node.loop_spec {
+                        vec![ExtensionSpec::Loop(Box::new(lower_loop_spec(
+                            spec, &constants,
+                        )))]
+                    } else if let Some(spec) = &node.retry_spec {
+                        vec![ExtensionSpec::Retry(Box::new(crate::plan::RetrySpec {
+                            attempts: PlanConstant {
+                                expr: substitute_tree(&spec.attempts.tree, &constants),
+                                resolved: spec.attempts.value.clone(),
+                            },
+                            cases: spec.cases.clone(),
+                            delay: lower_delay(spec.delay.as_ref(), &constants),
+                            entry: spec.entry.clone(),
+                            terminal: spec.terminal.clone(),
+                        }))]
+                    } else {
+                        Vec::new()
+                    },
                     lower_instance(node.instance.as_ref(), &constants, &node.path.to_string())?,
                     lower_owner_values(&node.vals),
                 )
@@ -576,7 +607,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         let mut attributes: Vec<_> = hir_node
             .attributes()
             .iter()
-            .filter(|attribute| !matches!(attribute.name.as_str(), "effect" | "behavior"))
+            .filter(|attribute| attribute.name != "behavior")
             .map(|attribute| {
                 let setting = match &attribute.value {
                     AttrValue::Word(word) => AttrSetting::Word(word.clone()),
@@ -615,7 +646,18 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                     contract: contract.clone(),
                     roles: *roles,
                     exchange: *exchange,
-                    effect: typed_effect(hir_node),
+                    idempotent: hir_node.attributes().iter().find_map(|attribute| {
+                        if attribute.name != "idempotent" {
+                            return None;
+                        }
+                        let AttrValue::Const(constant) = &attribute.value else {
+                            return None;
+                        };
+                        Some(PlanConstant {
+                            expr: substitute_tree(&constant.tree, &constants),
+                            resolved: constant.value.clone(),
+                        })
+                    }),
                     behavior: typed_behavior(hir_node),
                     attributes,
                 }),
@@ -753,19 +795,30 @@ fn lower_loop_spec(
         terminals: spec.terminals.clone(),
         expired: spec.expired.clone(),
         fuel: spec.fuel.as_ref().map(constant),
-        delay: spec.delay.as_ref().map(|delay| match delay {
-            crate::compiler::hir::LoopDelay::Fixed { after } => PlanLoopDelay::Fixed {
-                after: constant(after),
-            },
-            crate::compiler::hir::LoopDelay::Exponential { first, ceiling } => {
-                PlanLoopDelay::Exponential {
-                    first: constant(first),
-                    ceiling: constant(ceiling),
-                }
-            }
-        }),
+        delay: lower_delay(spec.delay.as_ref(), constants),
         proof: spec.proof.clone(),
     }
+}
+
+fn lower_delay(
+    delay: Option<&crate::compiler::hir::LoopDelay>,
+    constants: &std::collections::BTreeMap<String, crate::value::Value>,
+) -> Option<PlanLoopDelay> {
+    let constant = |value: &crate::compiler::hir::Const| PlanConstant {
+        expr: substitute_tree(&value.tree, constants),
+        resolved: value.value.clone(),
+    };
+    delay.map(|delay| match delay {
+        crate::compiler::hir::LoopDelay::Fixed { after } => PlanLoopDelay::Fixed {
+            after: constant(after),
+        },
+        crate::compiler::hir::LoopDelay::Exponential { first, ceiling } => {
+            PlanLoopDelay::Exponential {
+                first: constant(first),
+                ceiling: constant(ceiling),
+            }
+        }
+    })
 }
 
 fn lower_statement(
@@ -1072,19 +1125,6 @@ fn graph_runtime_constant_environment(
     values
 }
 
-/// The checker guarantees the mandatory axes exist with valid words
-/// before any plan is built; the plan makes them irrevocable types.
-fn typed_effect(node: &HirNode) -> node::Effect {
-    let word = attribute_word(node, "effect");
-    match word {
-        "none" => node::Effect::None,
-        "idempotent" => node::Effect::Class(node::EffectClass::Idempotent),
-        "compensable" => node::Effect::Class(node::EffectClass::Compensable),
-        "irreversible" => node::Effect::Class(node::EffectClass::Irreversible),
-        other => unreachable!("the contract sheet admitted `{other}`"),
-    }
-}
-
 fn typed_behavior(node: &HirNode) -> node::Behavior {
     match attribute_word(node, "behavior") {
         "deterministic" => node::Behavior::Deterministic,
@@ -1252,18 +1292,7 @@ impl Writer<'_> {
                 self.tree(&fuel.tree);
             }
         }
-        match &spec.delay {
-            None => self.tag(0),
-            Some(crate::compiler::hir::LoopDelay::Fixed { after }) => {
-                self.tag(1);
-                self.tree(&after.tree);
-            }
-            Some(crate::compiler::hir::LoopDelay::Exponential { first, ceiling }) => {
-                self.tag(2);
-                self.tree(&first.tree);
-                self.tree(&ceiling.tree);
-            }
-        }
+        self.delay(spec.delay.as_ref());
         match &spec.proof {
             None => self.tag(0),
             Some(proof) => {
@@ -1276,6 +1305,21 @@ impl Writer<'_> {
                         self.tree(invariant);
                     }
                 }
+            }
+        }
+    }
+
+    fn delay(&mut self, delay: Option<&crate::compiler::hir::LoopDelay>) {
+        match delay {
+            None => self.tag(0),
+            Some(crate::compiler::hir::LoopDelay::Fixed { after }) => {
+                self.tag(1);
+                self.tree(&after.tree);
+            }
+            Some(crate::compiler::hir::LoopDelay::Exponential { first, ceiling }) => {
+                self.tag(2);
+                self.tree(&first.tree);
+                self.tree(&ceiling.tree);
             }
         }
     }
@@ -2200,7 +2244,7 @@ graph m0_probe : App {
   connector echo : Process {
     mode = job ; command = "cat"
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   operator shout {
@@ -2913,7 +2957,7 @@ graph app : App {
     method = "POST"
     timeout = duration("1s")
     codec = text
-    effect = idempotent
+    idempotent = true
     behavior = deterministic
   }
   in -> model -> out
@@ -2979,7 +3023,7 @@ graph app : App {
     method = "POST"
     timeout = duration("2s")
     codec = json
-    effect = idempotent
+    idempotent = true
     behavior = deterministic
   }
   client.out -> nothing
@@ -3064,19 +3108,20 @@ graph app : App {
     }
 
     #[test]
-    fn the_mandatory_axes_ship_typed() {
+    fn the_call_guarantee_ships_with_its_original_plan() {
         let compilation = compile(
             &[M0_PROBE],
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap();
         let spec = compilation.plan.nodes[1].connector().unwrap();
+        assert!(spec.is_idempotent());
         assert_eq!(
-            spec.effect,
-            crate::node::Effect::Class(crate::node::EffectClass::Idempotent)
+            spec.attribute("idempotent"),
+            Some(&AttrSetting::Value(crate::value::Value::Bool(true)))
         );
         assert_eq!(spec.behavior, crate::node::Behavior::Deterministic);
-        // The typed axes are not repeated in the attribute bag.
+        // There is no global effect attribute or duplicated behavior word.
         assert!(spec.attribute("effect").is_none());
         assert!(spec.attribute("behavior").is_none());
     }
@@ -3112,7 +3157,7 @@ graph m0_probe : App {
     mode  =  job
     command = "cat"
     codec = lines
-    effect = idempotent
+    idempotent = true
     behavior = deterministic
   }
 
@@ -3235,12 +3280,12 @@ graph m0_probe : App {
             )
         };
         let one = compile(
-            &[with_attrs("    command = \"cat\" ; codec = lines\n    effect = idempotent ; behavior = deterministic\n").as_str()],
+            &[with_attrs("    command = \"cat\" ; codec = lines\n    idempotent = true ; behavior = deterministic\n").as_str()],
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap();
         let two = compile(
-            &[with_attrs("    behavior = deterministic ; effect = idempotent\n    codec = lines ; command = \"cat\"\n").as_str()],
+            &[with_attrs("    behavior = deterministic ; idempotent = true\n    codec = lines ; command = \"cat\"\n").as_str()],
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap();

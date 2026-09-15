@@ -5,6 +5,7 @@ use crate::connector::{
     WEBSOCKET_CLIENT_CONNECTOR_ID, WEBSOCKET_SERVER_CONNECTOR_ID,
 };
 use crate::datatype::{DataType, TypeError};
+use alloc::string::ToString;
 use alloc::vec::Vec;
 
 fn contract(id: &str, mode: Option<&str>) -> CallSemantics {
@@ -65,11 +66,20 @@ fn retry_never_trusts_unknown_or_noncanonical_case_sets() {
         profile.validate_retry_cases(&["RetryExpired".into()], true),
         Err(RetryCaseError::Unknown("RetryExpired".into()))
     );
-    // The new HTTP response case is not silently grafted onto the current @2.
+    // The new case belongs only to the new Contract, never an old-id alias.
+    assert!(
+        outbound_call_semantics(
+            &ContractId::parse("rastok/http-client@2").unwrap(),
+            ConnectorRoles::Outbound,
+            ConnectorExchange::Call,
+            None
+        )
+        .is_none()
+    );
     assert_eq!(
         contract(HTTP_CLIENT_CONNECTOR_ID, None)
             .validate_retry_cases(&["ServerError".into()], true),
-        Err(RetryCaseError::Unknown("ServerError".into()))
+        Ok(())
     );
 }
 
@@ -190,7 +200,7 @@ fn ambiguous_failure_names_never_become_before_effect_guarantees() {
             HTTP_CLIENT_CONNECTOR_ID,
             None,
             &["ConnectFailed", "DnsFailed", "TlsFailed"][..],
-            &["Completed"][..],
+            &["Completed", "ServerError"][..],
         ),
     ] {
         for (case, actual) in contract(id, mode).terminal_cases() {
@@ -207,73 +217,37 @@ fn ambiguous_failure_names_never_become_before_effect_guarantees() {
 }
 
 #[test]
-fn repetition_safety_is_the_full_visibility_by_effect_matrix() {
+fn repetition_safety_is_the_full_visibility_by_guarantee_matrix() {
     for visibility in [
         TerminalVisibility::BeforeEffect,
         TerminalVisibility::OutcomeUnknown,
         TerminalVisibility::AfterEffect,
     ] {
-        for effect in [
-            Effect::None,
-            Effect::Class(EffectClass::Idempotent),
-            Effect::Class(EffectClass::Compensable),
-            Effect::Class(EffectClass::Irreversible),
-        ] {
-            let expected = visibility == TerminalVisibility::BeforeEffect
-                || effect == Effect::None
-                || effect == Effect::Class(EffectClass::Idempotent);
-            assert_eq!(visibility.allows_recurrence(effect), expected);
+        for idempotent in [false, true] {
+            assert_eq!(
+                visibility.allows_repetition(idempotent),
+                visibility == TerminalVisibility::BeforeEffect || idempotent
+            );
         }
     }
 }
 
 #[test]
-fn terminal_case_selection_controls_recurrence_but_done_never_repeats() {
+fn loop_command_sources_are_checked_without_claiming_retry_safety() {
     let profile = contract(PROCESS_CONNECTOR_ID, Some("job"));
-    let unsafe_effect = Effect::Class(EffectClass::Irreversible);
-    for command in [LoopCommandKind::Next, LoopCommandKind::Again] {
+    for case in ["SpawnFailed", "TimeoutExpired", "Exited"] {
         assert_eq!(
-            profile.validate_command(
-                "exit",
-                Some(&["SpawnFailed".into()]),
-                command,
-                unsafe_effect
-            ),
+            profile.validate_command("exit", Some(&[case.into()])),
             Ok(())
         );
-        assert_eq!(
-            profile.validate_command(
-                "exit",
-                Some(&["TimeoutExpired".into()]),
-                command,
-                unsafe_effect
-            ),
-            Err(CallCommandError::UnsafeRecurrence {
-                case: "TimeoutExpired".into(),
-                visibility: TerminalVisibility::OutcomeUnknown
-            })
-        );
-        assert!(
-            profile
-                .validate_command("exit", None, command, unsafe_effect)
-                .is_err()
-        );
     }
+    assert_eq!(profile.validate_command("exit", None), Ok(()));
     assert_eq!(
-        profile.validate_command("exit", None, LoopCommandKind::Done, unsafe_effect),
-        Ok(())
-    );
-    assert_eq!(
-        profile.validate_command(
-            "exit",
-            Some(&["Ghost".into()]),
-            LoopCommandKind::Done,
-            Effect::None
-        ),
+        profile.validate_command("exit", Some(&["Ghost".into()])),
         Err(CallCommandError::UnknownCase("Ghost".into()))
     );
     assert_eq!(
-        profile.validate_command("in", None, LoopCommandKind::Done, Effect::None),
+        profile.validate_command("in", None),
         Err(CallCommandError::UnknownPort)
     );
 }
@@ -286,21 +260,10 @@ fn stream_frames_cannot_issue_an_unbounded_number_of_any_verdict() {
             profile.frame_production(port),
             Some(FrameProduction::ZeroOrMore)
         );
-        for command in [
-            LoopCommandKind::Next,
-            LoopCommandKind::Again,
-            LoopCommandKind::Done,
-        ] {
-            assert_eq!(
-                profile.validate_command(
-                    port,
-                    None,
-                    command,
-                    Effect::Class(EffectClass::Idempotent)
-                ),
-                Err(CallCommandError::RepeatedFrames)
-            );
-        }
+        assert_eq!(
+            profile.validate_command(port, None),
+            Err(CallCommandError::RepeatedFrames)
+        );
     }
 }
 
@@ -349,91 +312,72 @@ fn frame_case_sets_are_nonempty_canonical_and_owned_by_the_contract() {
 }
 
 #[test]
-fn single_response_frames_prove_visibility_and_replace_has_no_frame() {
-    for (id, mode) in [
-        (FILE_CONNECTOR_ID, Some("read")),
-        (HTTP_CLIENT_CONNECTOR_ID, None),
+fn single_response_frames_follow_both_http_response_cases_and_replace_has_no_frame() {
+    for (id, mode, cases) in [
+        (FILE_CONNECTOR_ID, Some("read"), &["Completed"][..]),
+        (
+            HTTP_CLIENT_CONNECTOR_ID,
+            None,
+            &["Completed", "ServerError"][..],
+        ),
     ] {
         let profile = contract(id, mode);
         assert_eq!(
             profile.frame_production("out"),
-            Some(FrameProduction::ExactlyOneOn(&["Completed"]))
+            Some(FrameProduction::ExactlyOneOn(cases))
         );
         assert_eq!(profile.frame_production("err"), None);
-        assert_eq!(
-            profile.validate_command(
-                "out",
-                None,
-                LoopCommandKind::Again,
-                Effect::Class(EffectClass::Compensable)
-            ),
-            Err(CallCommandError::UnsafeRecurrence {
-                case: "Completed".into(),
-                visibility: TerminalVisibility::AfterEffect
-            })
-        );
-        assert_eq!(
-            profile.validate_command(
-                "out",
-                None,
-                LoopCommandKind::Again,
-                Effect::Class(EffectClass::Idempotent)
-            ),
-            Ok(())
-        );
+        assert_eq!(profile.validate_command("out", None), Ok(()));
     }
     let replace = contract(FILE_CONNECTOR_ID, Some("replace"));
     assert_eq!(
         replace.frame_production("out"),
         Some(FrameProduction::Never)
     );
-    assert_eq!(
-        replace.validate_command(
-            "out",
-            None,
-            LoopCommandKind::Again,
-            Effect::Class(EffectClass::Irreversible)
-        ),
-        Ok(())
-    );
+    assert_eq!(replace.validate_command("out", None), Ok(()));
 }
 
 #[test]
-fn each_terminal_case_is_checked_for_each_effect_and_command() {
-    for (id, mode) in [
-        (PROCESS_CONNECTOR_ID, Some("job")),
-        (FILE_CONNECTOR_ID, Some("read")),
-        (FILE_CONNECTOR_ID, Some("replace")),
-        (HTTP_CLIENT_CONNECTOR_ID, None),
-    ] {
-        let profile = contract(id, mode);
-        for (case, visibility) in profile.terminal_cases() {
-            for effect in [
-                Effect::None,
-                Effect::Class(EffectClass::Idempotent),
-                Effect::Class(EffectClass::Compensable),
-                Effect::Class(EffectClass::Irreversible),
-            ] {
-                for command in [
-                    LoopCommandKind::Next,
-                    LoopCommandKind::Again,
-                    LoopCommandKind::Done,
-                ] {
-                    let allowed = command == LoopCommandKind::Done
-                        || *visibility == TerminalVisibility::BeforeEffect
-                        || matches!(
-                            effect,
-                            Effect::None | Effect::Class(EffectClass::Idempotent)
-                        );
-                    assert_eq!(
-                        profile
-                            .validate_command("exit", Some(&[(*case).into()]), command, effect)
-                            .is_ok(),
-                        allowed,
-                        "{id} {case} {command:?} {effect}"
-                    );
-                }
-            }
-        }
+fn http_status_classification_is_contract_checked_not_just_a_tag() {
+    use crate::boundary::HttpClientExit;
+    let profile = contract(HTTP_CLIENT_CONNECTOR_ID, None);
+    for status in [499, 500, 599, 600] {
+        let expected = if (500..=599).contains(&status) {
+            "ServerError"
+        } else {
+            "Completed"
+        };
+        let value = HttpClientExit::response(status).into_value();
+        assert_eq!(profile.terminal_case(&value), Some(expected));
+        let forged = if expected == "Completed" {
+            HttpClientExit::ServerError { status }
+        } else {
+            HttpClientExit::Completed { status }
+        };
+        assert_eq!(profile.terminal_case(&forged.into_value()), None);
+        assert!(
+            profile
+                .frame_production("out")
+                .unwrap()
+                .accepts_count(expected, 1)
+        );
+        assert!(
+            !profile
+                .frame_production("out")
+                .unwrap()
+                .accepts_count(expected, 0)
+        );
+        assert!(
+            !profile
+                .frame_production("out")
+                .unwrap()
+                .accepts_count(expected, 2)
+        );
+    }
+    for status in [0, 99, 1000, u16::MAX] {
+        assert_eq!(
+            profile.terminal_case(&HttpClientExit::response(status).into_value()),
+            None
+        );
     }
 }

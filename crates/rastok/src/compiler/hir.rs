@@ -155,6 +155,21 @@ pub enum NodeSemantics {
     },
 }
 
+/// A checked Retry policy, disjoint from Loop's authored state protocol.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetrySpec {
+    /// Total attempt bound, including the first invocation.
+    pub attempts: Const,
+    /// Canonically sorted terminal names, checked against the Contract.
+    pub cases: Vec<String>,
+    /// Backoff starts at the winning retained Call closure.
+    pub delay: Option<LoopDelay>,
+    /// Resolved Call request port.
+    pub entry: node::Port,
+    /// Resolved Call terminal port; Retry does not add one.
+    pub terminal: node::Port,
+}
+
 /// One checked node declaration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Node {
@@ -163,8 +178,9 @@ pub struct Node {
     /// Canonically sorted Extensions attached to this Executor.
     pub extensions: Vec<node::Extension>,
     /// Checked Loop source contract when this Executor owns `+ Loop`.
-    /// Categorical transport is deliberately deferred to the single v16 bump.
     pub loop_spec: Option<LoopSpec>,
+    /// A pinned-operation policy, without a port or authored command.
+    pub retry_spec: Option<RetrySpec>,
     /// Operator or Connector semantics.
     pub semantics: NodeSemantics,
     /// Node-local constant bindings — identity material, substituted

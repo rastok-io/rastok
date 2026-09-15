@@ -649,7 +649,7 @@ fn a_resolved_contract_port_table_enters_the_validated_plan_complete() {
         .expect("the standard catalogue holds")
         .try_with(PROBE_SHEET)
         .expect("a valid sheet enters");
-    let source = "graph g : App {\n  connector probe : Probe {\n    effect = idempotent ; behavior = deterministic\n  }\n\n  operator relay {\n    on in { out = data }\n  }\n\n  in -> relay -> probe -> out\n  probe.err -> nothing\n  probe.exit -> nothing\n}\n";
+    let source = "graph g : App {\n  connector probe : Probe {\n    behavior = deterministic\n  }\n\n  operator relay {\n    on in { out = data }\n  }\n\n  in -> relay -> probe -> out\n  probe.err -> nothing\n  probe.exit -> nothing\n}\n";
     let compilation = compile(&[source], &registry).expect("the sheet resolves every port type");
     let probe = compilation
         .plan
@@ -734,7 +734,7 @@ fn a_named_connector_edge_defers_by_name() {
     // The OutboundConnectorDriver seam does not speak named connector ports yet:
     // wiring one refuses BY NAME instead of compiling into an
     // execution that silently answers on `out`.
-    let source = "graph g : App {\n  connector probe : Probe {\n    effect = idempotent ; behavior = deterministic\n  }\n\n  operator relay {\n    on in { out = data }\n  }\n\n  in -> relay\n  relay.out -> probe.request\n  probe.response -> out\n}\n";
+    let source = "graph g : App {\n  connector probe : Probe {\n    behavior = deterministic\n  }\n\n  operator relay {\n    on in { out = data }\n  }\n\n  in -> relay\n  relay.out -> probe.request\n  probe.response -> out\n}\n";
     let bag = compile(&[source], &registry).expect_err("not yet executable");
     assert!(
         bag.diagnostics()
@@ -1543,7 +1543,7 @@ graph g : App {
   connector shell : Process {
     mode = job ; command = "cat"
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   operator gauge {
@@ -1793,7 +1793,7 @@ graph g : App {
   connector shell : Process {
     mode = job ; command = "cat"
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   operator sink {
@@ -1948,7 +1948,7 @@ graph g : App {
   connector shell : Process {
     mode = job ; command = "cat"
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   operator relay {
@@ -2024,7 +2024,7 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
     use rastok::datatype::DataType;
     use rastok::node::Direction;
     use rastok::plan::{Edge, EndpointRef, PortDecl, Slot, ValidatedExecutionPlan};
-    let source = "graph g : App {\n  input in: text\n  output out: text\n  connector probe : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  in -> probe -> out\n  probe.err -> nothing\n  probe.exit -> nothing\n}\n";
+    let source = "graph g : App {\n  input in: text\n  output out: text\n  connector probe : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    idempotent = true; behavior = deterministic\n  }\n  in -> probe -> out\n  probe.err -> nothing\n  probe.exit -> nothing\n}\n";
     let mut plan = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -2172,7 +2172,7 @@ graph g : App {
   connector shell : Process {
     mode = job ; command = "cat"
     codec = jsonl
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   operator relay {
@@ -2274,7 +2274,7 @@ fn a_spawn_failure_cannot_cross_a_pin() {
     // The exact failure kind is irrelevant to the graph type: the
     // variant error port cannot enter an int input without narrowing.
 
-    let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"/definitely/not/a/binary\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n\n  operator sink {\n    input evt : int\n    on evt { out = data }\n  }\n\n  in -> shell\n  shell.err -> sink.evt\n  shell.out -> out\n  sink -> out\n}\n";
+    let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"/definitely/not/a/binary\"\n    codec = lines\n    idempotent = true; behavior = deterministic\n  }\n\n  operator sink {\n    input evt : int\n    on evt { out = data }\n  }\n\n  in -> shell\n  shell.err -> sink.evt\n  shell.out -> out\n  sink -> out\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -2297,7 +2297,7 @@ graph g : App {
     mode = job ; command = "cat"
     codec = lines
     timeout = duration("50ms")
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   operator sink {

@@ -40,7 +40,7 @@ fn network_graph(kind: &str, body: &str, wiring: &str) -> String {
 }
 
 const FULL: &str =
-    "    command = \"cat\" ; codec = lines\n    effect = idempotent ; behavior = deterministic";
+    "    command = \"cat\" ; codec = lines\n    idempotent = true ; behavior = deterministic";
 
 fn refusal_with(source: &str, code: &str, needle: &str) {
     let bag = compile_one(source).expect_err("must refuse");
@@ -57,7 +57,7 @@ fn all_four_network_contracts_cross_the_source_to_validated_plan_boundary() {
     let cases = [
         (
             "HttpClient",
-            "    url = \"https://example.test/v1\"\n    headers = { content_type = media_type(\"application/octet-stream\") }\n    custom_headers = { \"X-Trace-Id\": [\"one\"] }\n    tls_certificate = base64! { Y2VydA== }\n    tls_private_key = base64! { a2V5 }\n    timeout = duration(\"5s\")\n    codec = bytes\n    effect = idempotent ; behavior = deterministic",
+            "    url = \"https://example.test/v1\"\n    headers = { content_type = media_type(\"application/octet-stream\") }\n    custom_headers = { \"X-Trace-Id\": [\"one\"] }\n    tls_certificate = base64! { Y2VydA== }\n    tls_private_key = base64! { a2V5 }\n    timeout = duration(\"5s\")\n    codec = bytes\n    idempotent = true ; behavior = deterministic",
             "  in -> network -> out",
             rastok::connector::HTTP_CLIENT_CONNECTOR_ID,
             rastok::connector::ConnectorExchange::Call,
@@ -73,7 +73,7 @@ fn all_four_network_contracts_cross_the_source_to_validated_plan_boundary() {
         ),
         (
             "WebSocketClient",
-            "    url = \"wss://example.test/socket\"\n    handshake_timeout = duration(\"5s\")\n    codec = text\n    effect = idempotent ; behavior = deterministic",
+            "    url = \"wss://example.test/socket\"\n    handshake_timeout = duration(\"5s\")\n    codec = text\n    behavior = deterministic",
             "  in -> network -> out",
             rastok::connector::WEBSOCKET_CLIENT_CONNECTOR_ID,
             rastok::connector::ConnectorExchange::Session,
@@ -127,28 +127,28 @@ fn all_four_network_contracts_cross_the_source_to_validated_plan_boundary() {
 fn typed_http_headers_keep_known_fields_precise_and_extensions_open() {
     let source = network_graph(
         "HttpClient",
-        "    url = \"https://example.test/v1\"\n    headers = { content_type = media_type(\"Application/Problem+JSON; Charset=UTF-8\") }\n    custom_headers = { \"X-Trace-ID\": [\"one\", \"two\"] }\n    timeout = duration(\"5s\")\n    codec = bytes\n    effect = idempotent ; behavior = deterministic",
+        "    url = \"https://example.test/v1\"\n    headers = { content_type = media_type(\"Application/Problem+JSON; Charset=UTF-8\") }\n    custom_headers = { \"X-Trace-ID\": [\"one\", \"two\"] }\n    timeout = duration(\"5s\")\n    codec = bytes\n    idempotent = true ; behavior = deterministic",
         "  in -> network -> out",
     );
     compile_one(&source).expect("typed and extension request fields compile together");
 
     let wrong_known = network_graph(
         "HttpClient",
-        "    url = \"https://example.test/v1\"\n    headers = { content_type = \"not/a media type with spaces\" }\n    timeout = duration(\"5s\")\n    codec = bytes\n    effect = idempotent ; behavior = deterministic",
+        "    url = \"https://example.test/v1\"\n    headers = { content_type = \"not/a media type with spaces\" }\n    timeout = duration(\"5s\")\n    codec = bytes\n    idempotent = true ; behavior = deterministic",
         "  in -> network -> out",
     );
     refusal_with(&wrong_known, "E-CONTRACT-ATTR", "TypedHttpHeaders");
 
     let managed_custom = network_graph(
         "HttpClient",
-        "    url = \"https://example.test/v1\"\n    custom_headers = { \"Content-Type\": [\"application/json\"] }\n    timeout = duration(\"5s\")\n    codec = bytes\n    effect = idempotent ; behavior = deterministic",
+        "    url = \"https://example.test/v1\"\n    custom_headers = { \"Content-Type\": [\"application/json\"] }\n    timeout = duration(\"5s\")\n    codec = bytes\n    idempotent = true ; behavior = deterministic",
         "  in -> network -> out",
     );
     refusal_with(&managed_custom, "E-CONTRACT-ATTR", "CustomHttpHeaders");
 
     let colliding_custom = network_graph(
         "HttpClient",
-        "    url = \"https://example.test/v1\"\n    custom_headers = { \"X-Trace\": [\"one\"], \"x-trace\": [\"two\"] }\n    timeout = duration(\"5s\")\n    codec = bytes\n    effect = idempotent ; behavior = deterministic",
+        "    url = \"https://example.test/v1\"\n    custom_headers = { \"X-Trace\": [\"one\"], \"x-trace\": [\"two\"] }\n    timeout = duration(\"5s\")\n    codec = bytes\n    idempotent = true ; behavior = deterministic",
         "  in -> network -> out",
     );
     refusal_with(&colliding_custom, "E-CONTRACT-ATTR", "CustomHttpHeaders");
@@ -158,12 +158,12 @@ fn typed_http_headers_keep_known_fields_precise_and_extensions_open() {
 fn network_defaults_are_effective_before_identity() {
     let omitted = network_graph(
         "HttpClient",
-        "    url = \"https://example.test/v1\"\n    timeout = duration(\"5s\")\n    codec = json\n    effect = idempotent ; behavior = deterministic",
+        "    url = \"https://example.test/v1\"\n    timeout = duration(\"5s\")\n    codec = json\n    idempotent = true ; behavior = deterministic",
         "  in -> network -> out",
     );
     let explicit = network_graph(
         "HttpClient",
-        "    url = \"https://example.test/v1\"\n    method = \"GET\"\n    timeout = duration(\"5s\")\n    codec = json\n    max_body = \"8MiB\"\n    versions = [\"http/3\", \"http/2\", \"http/1.1\"]\n    zero_rtt = disabled\n    effect = idempotent ; behavior = deterministic",
+        "    url = \"https://example.test/v1\"\n    method = \"GET\"\n    timeout = duration(\"5s\")\n    codec = json\n    max_body = \"8MiB\"\n    versions = [\"http/3\", \"http/2\", \"http/1.1\"]\n    zero_rtt = disabled\n    idempotent = true ; behavior = deterministic",
         "  in -> network -> out",
     );
     let omitted = compile_one(&omitted).expect("the omitted defaults compile");
@@ -197,7 +197,7 @@ graph g : App {
 
     let bad_tls = network_graph(
         "HttpClient",
-        "    url = \"https://example.test\"\n    timeout = duration(\"5s\")\n    codec = bytes\n    effect = idempotent ; behavior = deterministic\n    tls_certificate = base64! { Y2VydA== }",
+        "    url = \"https://example.test\"\n    timeout = duration(\"5s\")\n    codec = bytes\n    idempotent = true ; behavior = deterministic\n    tls_certificate = base64! { Y2VydA== }",
         "  in -> network -> out",
     );
     refusal_with(
@@ -208,14 +208,14 @@ graph g : App {
 
     let bad_version = network_graph(
         "HttpClient",
-        "    url = \"https://example.test\"\n    timeout = duration(\"5s\")\n    codec = bytes\n    effect = idempotent ; behavior = deterministic\n    versions = [\"http/4\"]",
+        "    url = \"https://example.test\"\n    timeout = duration(\"5s\")\n    codec = bytes\n    idempotent = true ; behavior = deterministic\n    versions = [\"http/4\"]",
         "  in -> network -> out",
     );
     refusal_with(&bad_version, "E-CONTRACT-ATTR", "ChoiceList");
 
     let early_data = network_graph(
         "WebSocketClient",
-        "    url = \"wss://example.test/socket\"\n    handshake_timeout = duration(\"5s\")\n    codec = text\n    effect = idempotent ; behavior = deterministic\n    zero_rtt = enabled",
+        "    url = \"wss://example.test/socket\"\n    handshake_timeout = duration(\"5s\")\n    codec = text\n    behavior = deterministic\n    zero_rtt = enabled",
         "  in -> network -> out",
     );
     refusal_with(&early_data, "E-CONTRACT-ATTR", "fixed to `disabled`");
@@ -294,7 +294,7 @@ fn forged_http_client_error(
 ) -> rastok::plan::PlanValidationError {
     let source = network_graph(
         "HttpClient",
-        "    url = \"https://example.test/v1\"\n    timeout = duration(\"5s\")\n    codec = json\n    effect = idempotent ; behavior = deterministic",
+        "    url = \"https://example.test/v1\"\n    timeout = duration(\"5s\")\n    codec = json\n    idempotent = true ; behavior = deterministic",
         "  in -> network -> out",
     );
     let compilation = compile_one(&source).expect("the HttpClient sheet checks");
@@ -1332,7 +1332,7 @@ fn args_null_refuses_as_a_type() {
 #[test]
 fn codec_stays_required() {
     let source =
-        process_graph("    command = \"cat\"\n    effect = idempotent ; behavior = deterministic");
+        process_graph("    command = \"cat\"\n    idempotent = true ; behavior = deterministic");
     let bag = compile_one(&source).expect_err("must refuse");
     assert!(
         bag.diagnostics()
@@ -1347,7 +1347,7 @@ fn bytes_framing_is_contract_valid_and_binds_in_b7() {
     for (attribute, body) in [
         (
             "codec",
-            "    command = \"cat\" ; codec = bytes\n    effect = idempotent ; behavior = deterministic"
+            "    command = \"cat\" ; codec = bytes\n    idempotent = true ; behavior = deterministic"
                 .to_string(),
         ),
         ("err_codec", format!("{FULL}\n    err_codec = bytes")),
@@ -1362,7 +1362,7 @@ fn bytes_framing_is_contract_valid_and_binds_in_b7() {
 #[test]
 fn a_choice_written_as_expression_text_names_the_bare_word() {
     let source = process_graph(
-        "    mode = \"job\"\n    command = \"cat\" ; codec = lines\n    effect = idempotent ; behavior = deterministic",
+        "    mode = \"job\"\n    command = \"cat\" ; codec = lines\n    idempotent = true ; behavior = deterministic",
     );
     refusal_with(&source, "E-CONTRACT-ATTR", "bare word");
 }
@@ -1370,7 +1370,7 @@ fn a_choice_written_as_expression_text_names_the_bare_word() {
 #[test]
 fn an_expression_domain_refuses_a_bare_word() {
     let source = process_graph(
-        "    command = cat ; codec = lines\n    effect = idempotent ; behavior = deterministic",
+        "    command = cat ; codec = lines\n    idempotent = true ; behavior = deterministic",
     );
     refusal_with(&source, "E-CONTRACT-ATTR", "`cat` is a bare word");
 }
@@ -1562,6 +1562,8 @@ fn the_global_binder_requires_callable_connectors_but_skips_pure_outbound_source
     for node in &mut plan.nodes {
         if let rastok::plan::NodeExecution::Connector(spec) = &mut node.execution {
             spec.contract = rastok::connector::ContractId::parse("test/custom@1").unwrap();
+            spec.idempotent = None;
+            spec.attributes.retain(|(name, _)| name != "idempotent");
             node.ports = vec![
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("in").expect("a conventional port"),
@@ -1653,23 +1655,20 @@ fn the_global_binder_requires_callable_connectors_but_skips_pure_outbound_source
 }
 
 #[test]
-fn an_effectless_callee_never_validates() {
-    // The review's blocker: a delivery-reachable connector with
-    // Effect::None would hit the machine's dispatch — the validator
-    // refuses it, and the VM keeps a typed belt, never a panic.
+fn a_call_without_its_plan_owned_guarantee_never_validates() {
     let compilation = compile_one(&process_graph(FULL)).expect("valid");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
         if let rastok::plan::NodeExecution::Connector(spec) = &mut node.execution {
-            spec.effect = rastok::node::Effect::None;
+            spec.idempotent = None;
         }
     }
     assert!(
         matches!(
             rastok::plan::ValidatedExecutionPlan::try_from(plan),
-            Err(rastok::plan::PlanValidationError::EffectlessCallee { .. })
+            Err(rastok::plan::PlanValidationError::ContractAttributeMismatch { .. })
         ),
-        "a callee needs an effect class"
+        "a Call needs its re-derived original plan guarantee"
     );
 }
 
@@ -1823,7 +1822,7 @@ fn a_bare_tag_word_is_judged_by_the_contract() {
     // choice for the contract to judge — it must never eat the next
     // line as a JSON value.
     let source = process_graph(
-        "    command = \"cat\" ; codec = json\n    effect = idempotent ; behavior = deterministic",
+        "    command = \"cat\" ; codec = json\n    idempotent = true ; behavior = deterministic",
     );
     refusal_with(
         &source,
@@ -1844,12 +1843,6 @@ fn tag_words_serve_as_choice_words_on_another_sheet() {
             latest_site: EvaluationSite::Plan,
         },
         AttributeSpec {
-            name: "effect",
-            presence: Presence::Required,
-            domain: ValueDomain::Choice(&["idempotent"]),
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
             name: "framing",
             presence: Presence::Required,
             domain: ValueDomain::Choice(&["text", "json", "unbounded"]),
@@ -1862,7 +1855,7 @@ fn tag_words_serve_as_choice_words_on_another_sheet() {
         .expect("a valid sheet");
     for word in ["text", "json", "unbounded"] {
         let source = format!(
-            "graph g : App {{\n  input in: variant\n  output out: variant\n  connector p : Probe {{\n    framing = {word}\n    effect = idempotent ; behavior = deterministic\n  }}\n  in -> p -> out\n  p.err -> nothing\n  p.exit -> nothing\n}}\n"
+            "graph g : App {{\n  input in: variant\n  output out: variant\n  connector p : Probe {{\n    framing = {word}\n    behavior = deterministic\n  }}\n  in -> p -> out\n  p.err -> nothing\n  p.exit -> nothing\n}}\n"
         );
         let result = compile(&[source.as_str()], &registry);
         assert!(result.is_ok(), "`framing = {word}` compiles: {result:?}");
@@ -1892,7 +1885,7 @@ fn process_declares_the_phase_ceiling_of_every_setting() {
     for name in [
         "codec",
         "err_codec",
-        "effect",
+        "idempotent",
         "behavior",
         "max_output",
         "on_timeout",
@@ -2012,7 +2005,7 @@ fn constant_process_cwd_and_env_are_effective_plan_attributes() {
 fn the_service_profile_still_owes_the_common_sheet() {
     let source = process_graph("    mode = service");
     let bag = compile_one(&source).expect_err("must refuse");
-    for name in ["`command`", "`codec`", "`effect`", "`behavior`"] {
+    for name in ["`command`", "`codec`", "`behavior`"] {
         assert!(
             bag.diagnostics()
                 .iter()
@@ -2517,7 +2510,7 @@ fn an_invalid_selector_selects_no_implicit_profile() {
     // `mode =` is PresentInvalid — the compiler never pretends
     // `mode = job` about a mode the author wrote and got wrong: one
     // parser voice, no belongs-to-job claim.
-    let source = "graph g : App {\n  connector shell : Process {\n    mode =\n    restart = whatever\n    command = \"printf\"\n    codec = lines\n    effect = idempotent\n    behavior = deterministic\n  }\n  in -> shell -> out\n}\n";
+    let source = "graph g : App {\n  connector shell : Process {\n    mode =\n    restart = whatever\n    command = \"printf\"\n    codec = lines\n    idempotent = true\n    behavior = deterministic\n  }\n  in -> shell -> out\n}\n";
     let bag = compile_one(source).expect_err("must refuse");
     assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
     assert_eq!(bag.diagnostics()[0].code().as_str(), "E-PARSE-EXPECTED");
@@ -2527,7 +2520,7 @@ fn an_invalid_selector_selects_no_implicit_profile() {
 fn a_duplicate_attribute_is_syntactic() {
     // `command =` then `command = "ok"`: the first value failed, the
     // NAME was still written — the duplicate refuses.
-    let source = "graph g : App {\n  connector shell : Process {\n    command =\n    command = \"printf\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  in -> shell -> out\n}\n";
+    let source = "graph g : App {\n  connector shell : Process {\n    command =\n    command = \"printf\"\n    codec = lines\n    idempotent = true; behavior = deterministic\n  }\n  in -> shell -> out\n}\n";
     let bag = compile_one(source).expect_err("must refuse");
     assert!(
         bag.diagnostics()
@@ -2543,7 +2536,7 @@ fn an_omitted_value_never_absorbs_the_next_line() {
     // at the empty position, and the NEXT attribute must survive —
     // written-but-invalid is neither "missing" nor defaultable, so
     // no Required cascade and no MissingCodec artifact.
-    let source = "graph g : App {\n  connector shell : Process {\n    command =\n    codec = lines\n    effect = idempotent\n    behavior = deterministic\n  }\n  in -> shell -> out\n}\n";
+    let source = "graph g : App {\n  connector shell : Process {\n    command =\n    codec = lines\n    idempotent = true\n    behavior = deterministic\n  }\n  in -> shell -> out\n}\n";
     let bag = compile_one(source).expect_err("must refuse");
     assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
     let diagnostic = &bag.diagnostics()[0];
@@ -2596,7 +2589,7 @@ fn an_omitted_expression_always_diagnoses() {
         ),
         (
             "attribute without a value",
-            "graph g : App {\n  connector shell : Process {\n    command =\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  in -> shell -> out\n}\n",
+            "graph g : App {\n  connector shell : Process {\n    command =\n    codec = lines\n    idempotent = true; behavior = deterministic\n  }\n  in -> shell -> out\n}\n",
         ),
         (
             "guard without an expression",

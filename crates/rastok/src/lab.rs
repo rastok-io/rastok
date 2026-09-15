@@ -1459,7 +1459,7 @@ mod tests {
     /// pre-scan of every handler would fail both cases below.
     fn opaque_answer(mock_body: &str) -> (Option<Completion>, Vec<String>) {
         let source = format!(
-            "graph g : App {{\n  connector echo : Process {{\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }}\n  in -> echo -> out\n  echo.err -> nothing\n  echo.exit -> nothing\n}}\n\nlab g {{\n  simulation probing on app {{\n    mock echo {{\n{mock_body}\n    }}\n    scenario s \"unused\" {{\n      app.in = {{v = 1}}\n    }}\n  }}\n}}\n"
+            "graph g : App {{\n  connector echo : Process {{\n    mode = job ; command = \"cat\"\n    codec = lines\n    idempotent = true; behavior = deterministic\n  }}\n  in -> echo -> out\n  echo.err -> nothing\n  echo.exit -> nothing\n}}\n\nlab g {{\n  simulation probing on app {{\n    mock echo {{\n{mock_body}\n    }}\n    scenario s \"unused\" {{\n      app.in = {{v = 1}}\n    }}\n  }}\n}}\n"
         );
         let compilation = compile(
             &[source.as_str()],
@@ -1497,7 +1497,6 @@ mod tests {
             connector_path: path,
             prepared,
             idempotency_key: None,
-            effect: node::EffectClass::Idempotent,
             resolved_settings: BTreeMap::new(),
             logical_time: 0,
         };
@@ -1629,7 +1628,7 @@ graph m0_probe : App {
   connector echo : Process {
     mode = job ; command = "cat"
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
     timeout = duration("5s")
   }
 
@@ -1862,7 +1861,7 @@ graph network_call : App {
     url = "https://example.test/v1"
     timeout = duration("5s")
     codec = json
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
   in -> network -> out
   network.exit -> nothing
@@ -1884,7 +1883,7 @@ graph websocket_client_source : App {
     url = "wss://example.test/socket"
     handshake_timeout = duration("5s")
     codec = json
-    effect = idempotent ; behavior = deterministic
+     behavior = deterministic
   }
   network -> out
   network.exit -> nothing
@@ -1927,7 +1926,7 @@ graph h2_http : App {
     method = "POST"
     timeout = duration("5s")
     codec = json
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
   in -> client -> out
   client.exit -> nothing
@@ -2075,7 +2074,7 @@ graph m0_probe : App {
   connector echo : Process {
     mode = job ; command = "cat"
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   operator shout {

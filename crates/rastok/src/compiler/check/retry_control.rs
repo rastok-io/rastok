@@ -1,11 +1,10 @@
-//! Retry policy checking before the complete package/manager admission gate.
+//! Plan-constant Retry policies resolved against the exact outbound Call Contract.
 
 use super::*;
 
 /// The exact Contract/profile cannot host Retry or Call idempotence.
-const E_RETRY_HOST: Code = Code::new("E-RETRY-HOST");
+pub(super) const E_RETRY_HOST: Code = Code::new("E-RETRY-HOST");
 /// A policy attribute is unknown, duplicated, missing or outside its domain.
-const E_RETRY_ATTRIBUTE: Code = Code::new("E-RETRY-ATTRIBUTE");
 /// The selected terminal set is malformed, duplicated or outside the Contract.
 const E_RETRY_CASES: Code = Code::new("E-RETRY-CASES");
 /// A selected terminal cannot justify repetition without idempotence.
@@ -13,12 +12,12 @@ const E_RETRY_EFFECT: Code = Code::new("E-RETRY-EFFECT");
 /// Extension contributions have no admitted same-owner composition.
 const E_EXTENSION_CONFLICT: Code = Code::new("E-EXTENSION-CONFLICT");
 
-fn retry_attribute(attribute: &SynAttribute) -> bool {
+pub(super) fn retry_attribute(attribute: &SynAttribute) -> bool {
     attribute
         .target
         .segments
         .first()
-        .is_some_and(|name| name.text == "Retry" || name.text == "idempotent")
+        .is_some_and(|name| name.text == "Retry")
 }
 
 fn retry_symbols(symbols: &[Name]) -> bool {
@@ -31,84 +30,7 @@ fn body_has_retry(body: &[OperatorItem]) -> bool {
     )
 }
 
-pub(super) fn has_retry_surface(graph: &GraphDecl) -> bool {
-    graph
-        .annotation
-        .as_ref()
-        .is_some_and(|a| retry_symbols(&a.symbols))
-        || graph.body.iter().any(|item| match item {
-            GraphItem::Graph(child) => has_retry_surface(child),
-            GraphItem::Connector(child) => {
-                retry_symbols(&child.annotation.symbols) || body_has_retry(&child.body)
-            }
-            GraphItem::Operator(child) => {
-                child
-                    .annotation
-                    .as_ref()
-                    .is_some_and(|a| retry_symbols(&a.symbols))
-                    || body_has_retry(&child.body)
-            }
-            GraphItem::Attribute(attribute) => retry_attribute(attribute),
-            _ => false,
-        })
-}
-
 impl Checker<'_, '_> {
-    pub(super) fn check_retry_surface(
-        &mut self,
-        graph: &GraphDecl,
-        path: &crate::plan::OwnerPath,
-        inherited_signature: &expr::Signature,
-        inherited_consts: &BTreeMap<String, crate::value::Value>,
-    ) {
-        if graph.annotation.as_ref().is_some_and(|a| retry_symbols(&a.symbols))
-            || graph.body.iter().any(|item| matches!(item, GraphItem::Attribute(attribute) if retry_attribute(attribute)))
-        {
-            self.retry_refusal(E_RETRY_HOST, graph.name.span, "Retry/idempotence requires a finite outbound Call Connector, not a Graph");
-        }
-        let mut signature = inherited_signature.clone();
-        let mut consts = inherited_consts.clone();
-        // Graph vals are collected before children, as in graph_at. Node vals
-        // below are evaluated in their declaration order, as in node_body.
-        for item in &graph.body {
-            if let GraphItem::Val(val) = item {
-                self.retry_val(val, &mut signature, &mut consts);
-            }
-        }
-        for item in &graph.body {
-            match item {
-                GraphItem::Graph(child) if has_retry_surface(child) => {
-                    if let Some(child_path) =
-                        crate::compiler::child_owner_path(path, &child.name.text)
-                    {
-                        self.check_retry_surface(child, &child_path, &signature, &consts);
-                    } else {
-                        self.node_annotation_refusal(&child.name, "invalid Retry owner path");
-                    }
-                }
-                GraphItem::Connector(child)
-                    if retry_symbols(&child.annotation.symbols) || body_has_retry(&child.body) =>
-                {
-                    if let Some(child_path) =
-                        self.node_path(path, &child.name.text, child.name.span)
-                    {
-                        self.retry_connector(child, &child_path, &signature, &consts);
-                    }
-                }
-                GraphItem::Operator(child)
-                    if child
-                        .annotation
-                        .as_ref()
-                        .is_some_and(|a| retry_symbols(&a.symbols))
-                        || body_has_retry(&child.body) =>
-                {
-                    self.retry_refusal(E_RETRY_HOST, child.name.span, "Retry/idempotence requires a finite outbound Call Connector, not an Operator");
-                }
-                _ => {}
-            }
-        }
-    }
-
     fn retry_val(
         &mut self,
         val: &ValDecl,
@@ -124,13 +46,19 @@ impl Checker<'_, '_> {
         }
     }
 
-    fn retry_connector(
+    pub(super) fn retry_connector(
         &mut self,
         decl: &ConnectorDecl,
         path: &node::Path,
         inherited_signature: &expr::Signature,
         inherited_consts: &BTreeMap<String, crate::value::Value>,
-    ) {
+    ) -> Option<crate::compiler::hir::RetrySpec> {
+        if !retry_symbols(&decl.annotation.symbols) && !body_has_retry(&decl.body) {
+            return None;
+        }
+        let mut attempts = None;
+        let mut delay = None;
+        let mut selected = None;
         let before = self.bag.diagnostics().len();
         let symbols = &decl.annotation.symbols;
         let owns_retry = retry_symbols(symbols);
@@ -160,18 +88,16 @@ impl Checker<'_, '_> {
                     .with_field("right", "Retry")
                     .with_field("detail", detail),
             );
-            return;
+            return None;
         }
-        let Some(symbol) = symbols.first() else {
-            return;
-        };
+        let symbol = symbols.first()?;
         let contract::Availability::Available(sheet) = self.registry.connector(&symbol.text) else {
             self.retry_refusal(
                 E_RETRY_HOST,
                 symbol.span,
                 "Retry/idempotence requires an available exact outbound Call Contract",
             );
-            return;
+            return None;
         };
         let mut attributes = BTreeMap::new();
         for item in &decl.body {
@@ -201,7 +127,7 @@ impl Checker<'_, '_> {
                         attribute.span,
                         "the Call profile must be a bare selector word",
                     );
-                    return;
+                    return None;
                 };
                 Some(source.text.as_str())
             } else {
@@ -222,12 +148,12 @@ impl Checker<'_, '_> {
                 symbol.span,
                 "invalid exact Call Contract identity",
             );
-            return;
+            return None;
         };
         let Some(call) = crate::connector::outbound_call_semantics(&id, roles, exchange, mode)
         else {
             self.retry_refusal(E_RETRY_HOST, decl.name.span, "Retry/idempotence requires a finite outbound Call: Process job, File read/replace or HttpClient; no Event, Session or inbound Call");
-            return;
+            return None;
         };
         let fixed_guarantee = id.as_str() == crate::connector::FILE_CONNECTOR_ID;
         let mut idempotent = fixed_guarantee;
@@ -260,20 +186,20 @@ impl Checker<'_, '_> {
                     }
                 }
                 "Retry.attempts" if owns_retry => {
-                    if let Some(value) = self.retry_constant(attribute, &signature, &consts)
-                        && !matches!(value.value, crate::value::Value::Int(n) if n > 0)
-                        && !matches!(value.value, crate::value::Value::Uint(n) if n > 0)
-                    {
-                        self.retry_refusal(
-                            E_RETRY_ATTRIBUTE,
-                            attribute.span,
-                            "`Retry.attempts` must be a positive integer, first attempt included",
-                        );
+                    if let Some(value) = self.retry_constant(attribute, &signature, &consts) {
+                        if matches!(value.value, crate::value::Value::Int(n) if n > 0)
+                            || matches!(value.value, crate::value::Value::Uint(n) if n > 0)
+                        {
+                            attempts = Some(value);
+                        } else {
+                            self.retry_refusal(E_RETRY_ATTRIBUTE, attribute.span,
+                                "`Retry.attempts` must be a positive integer, first attempt included");
+                        }
                     }
                 }
                 "Retry.on" if owns_retry => {}
                 "Retry.delay" if owns_retry => {
-                    self.extension_delay(
+                    delay = self.extension_delay(
                         attribute,
                         &signature,
                         &consts,
@@ -318,27 +244,36 @@ impl Checker<'_, '_> {
                 }
             }
             if let Some(attribute) = attributes.get("Retry.on")
-                && let Some(cases) = self.retry_case_names(attribute, call, &id)
-                && let Err(error) = call.validate_retry_cases(&cases, idempotent)
+                && let Some(cases) = self.retry_case_names(attribute, call)
             {
-                if let crate::connector::RetryCaseError::Unsafe { case, visibility } = &error {
-                    self.bag.push(
-                        Diagnostic::new(E_RETRY_EFFECT, Phase::Check, error.to_string())
-                            .with_span(attribute.span)
-                            .with_field("owner", path.to_string())
-                            .with_field("case", case)
-                            .with_field("visibility", visibility.to_string())
-                            .with_field("idempotent", idempotent.to_string())
-                            .with_field("detail", error.to_string()),
-                    );
-                } else {
-                    self.retry_refusal(E_RETRY_CASES, attribute.span, &error.to_string());
+                if let Err(error) = call.validate_retry_cases(&cases, idempotent) {
+                    if let crate::connector::RetryCaseError::Unsafe { case, visibility } = &error {
+                        self.bag.push(
+                            Diagnostic::new(E_RETRY_EFFECT, Phase::Check, error.to_string())
+                                .with_span(attribute.span)
+                                .with_field("owner", path.to_string())
+                                .with_field("case", case)
+                                .with_field("visibility", visibility.to_string())
+                                .with_field("idempotent", idempotent.to_string())
+                                .with_field("detail", error.to_string()),
+                        );
+                    } else {
+                        self.retry_refusal(E_RETRY_CASES, attribute.span, &error.to_string());
+                    }
                 }
+                selected = Some(cases);
             }
         }
-        if self.bag.diagnostics().len() == before {
-            self.deferred("Retry / plan-owned idempotence requires the complete v19 Contract, retained-operation and manager cutover", decl.span);
+        if self.bag.diagnostics().len() != before {
+            return None;
         }
+        Some(crate::compiler::hir::RetrySpec {
+            attempts: attempts?,
+            cases: selected?,
+            delay,
+            entry: node::Port::new(call.request()).ok()?,
+            terminal: node::Port::new(call.terminal()).ok()?,
+        })
     }
 
     fn retry_constant(
@@ -361,7 +296,6 @@ impl Checker<'_, '_> {
         &mut self,
         attribute: &SynAttribute,
         call: crate::connector::CallSemantics,
-        id: &crate::connector::ContractId,
     ) -> Option<Vec<String>> {
         let SynValue::Expr(source) = &attribute.value else {
             self.retry_refusal(
@@ -374,9 +308,6 @@ impl Checker<'_, '_> {
         let mut signature = expr::Signature::new();
         for (case, _) in call.terminal_cases() {
             signature = signature.with(*case, DataType::Text);
-        }
-        if id.as_str() == crate::connector::HTTP_CLIENT_CONNECTOR_ID {
-            signature = signature.with("ServerError", DataType::Text);
         }
         let tree = match expr::compile(&source.text, &signature) {
             Ok(tree) => tree,
@@ -429,14 +360,10 @@ impl Checker<'_, '_> {
                 return None;
             }
         }
-        if cases.contains("ServerError") {
-            self.deferred("Retry.on ServerError requires the versioned HttpClient ServerError Contract; current HTTP 5xx is still Completed", attribute.span);
-            return None;
-        }
         Some(cases.into_iter().collect())
     }
 
-    fn retry_refusal(&mut self, code: Code, span: Span, detail: &str) {
+    pub(super) fn retry_refusal(&mut self, code: Code, span: Span, detail: &str) {
         self.bag.push(
             Diagnostic::new(code, Phase::Check, detail)
                 .with_span(span)

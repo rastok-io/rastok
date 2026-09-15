@@ -174,8 +174,10 @@ pub const E_LOOP_ENTRY: Code = Code::new("E-LOOP-ENTRY");
 pub const E_LOOP_TERMINAL: Code = Code::new("E-LOOP-TERMINAL");
 /// A Call route could issue several verdicts in one Loop application.
 pub const E_LOOP_CARDINALITY: Code = Code::new("E-LOOP-CARDINALITY");
-/// Recurrence could repeat an effect without a repeat-safety guarantee.
-pub const E_LOOP_EFFECT: Code = Code::new("E-LOOP-EFFECT");
+/// An authored Again can repeat a visible Call without an idempotence guarantee.
+pub const W_LOOP_REPEAT: Code = Code::new("W-LOOP-REPEAT");
+/// A Retry policy value or contribution contradicts its Contract.
+pub const E_RETRY_ATTRIBUTE: Code = Code::new("E-RETRY-ATTRIBUTE");
 /// A second Operator handler names the same activation.
 pub const E_HANDLER_DUPLICATE: Code = Code::new("E-HANDLER-DUPLICATE");
 /// A Graph body tries to own application code; move it into an Operator.
@@ -368,18 +370,6 @@ pub fn check(
     checker.collapse_alias_chains();
     checker.resolve_expression_types(&valid_type_names);
     checker.check_unit_constants(unit);
-    // The candidate protocol cannot fall through to an effect-based v18
-    // Contract or produce an executable package before the complete cutover.
-    if retry_control::has_retry_surface(app) {
-        let signature = checker.unit_signature(&expr::Signature::new());
-        checker.check_retry_surface(
-            app,
-            &crate::plan::OwnerPath::root(),
-            &signature,
-            &BTreeMap::new(),
-        );
-        return None;
-    }
     let mut checked_app = checker.graph(app);
     // The production schema seals HERE — from the deployed graph's
     // writes alone. Everything the Lab compiles below is checked
@@ -1824,7 +1814,11 @@ impl Checker<'_, '_> {
                 ),
                 GraphItem::Defaults(_) => self.deferred("a defaults block", decl.span),
                 GraphItem::Attribute(attribute) => {
-                    if !is_common_node_attribute(attribute) && !is_loop_attribute(attribute) {
+                    if retry_control::retry_attribute(attribute) {
+                        self.retry_refusal(retry_control::E_RETRY_HOST, attribute.span,
+                            "Retry attributes require a finite outbound Call Connector, not a Graph");
+                    }
+                    if !is_common_node_attribute(attribute) && !is_loop_attribute(attribute) && !retry_control::retry_attribute(attribute) {
                         self.deferred("a graph attribute", attribute.span);
                     }
                 }
@@ -3004,6 +2998,7 @@ impl Checker<'_, '_> {
             extensions,
             loop_spec: None,
             semantics: NodeSemantics::Operator,
+            retry_spec: None,
             vals: Vec::new(),
             vars: Vec::new(),
             ports: Vec::new(),
@@ -3121,10 +3116,12 @@ impl Checker<'_, '_> {
         };
         let extensions = self.connector_extensions(symbols.as_slice());
         let path = self.node_path(owner, &decl.name.text, decl.name.span)?;
+        let retry_spec = self.retry_connector(decl, &path, graph_signature, graph_consts);
         let mut node = Node {
             path,
             extensions,
             loop_spec: None,
+            retry_spec,
             semantics: NodeSemantics::Connector {
                 contract: contract_id,
                 roles,
@@ -3260,7 +3257,9 @@ impl Checker<'_, '_> {
             .iter()
             .filter_map(|item| match item {
                 OperatorItem::Attribute(attribute)
-                    if !is_common_node_attribute(attribute) && !is_loop_attribute(attribute) =>
+                    if !is_common_node_attribute(attribute)
+                        && !is_loop_attribute(attribute)
+                        && !retry_control::retry_attribute(attribute) =>
                 {
                     Some(
                         attribute
@@ -3368,7 +3367,10 @@ impl Checker<'_, '_> {
             let OperatorItem::Attribute(attribute) = item else {
                 continue;
             };
-            if is_common_node_attribute(attribute) || is_loop_attribute(attribute) {
+            if is_common_node_attribute(attribute)
+                || is_loop_attribute(attribute)
+                || retry_control::retry_attribute(attribute)
+            {
                 continue;
             }
             let name = attribute
@@ -3454,14 +3456,6 @@ impl Checker<'_, '_> {
             let fault: Option<String> = match (&spec.domain, &attribute.value) {
                 (contract::ValueDomain::Choice(words), AttrValue::Word(word)) => {
                     if words.contains(&word.as_str()) {
-                        // Accepting an effect word must not imply support for
-                        // its execution protocol. Only the repeat-safe classes
-                        // have an executable contract in this build.
-                        if attribute.name == "effect"
-                            && !matches!(word.as_str(), "none" | "idempotent")
-                        {
-                            self.deferred("compensable and irreversible effects", span);
-                        }
                         None
                     } else if let [only] = words {
                         let current = profile.map_or("?", |profile| profile.word);
@@ -3494,7 +3488,8 @@ impl Checker<'_, '_> {
                     Some(format!("expected one of {words:?} as a bare word"))
                 }
                 (
-                    contract::ValueDomain::Text
+                    contract::ValueDomain::Boolean
+                    | contract::ValueDomain::Text
                     | contract::ValueDomain::Bytes
                     | contract::ValueDomain::TextList
                     | contract::ValueDomain::ChoiceList(_)
@@ -3508,7 +3503,14 @@ impl Checker<'_, '_> {
                     spec.domain
                 )),
                 (domain, AttrValue::Const(constant)) if domain.implemented() => {
-                    if domain.admits(&constant.value) {
+                    if attribute.name == "idempotent"
+                        && contract.id == crate::connector::FILE_CONNECTOR_ID
+                        && constant.value == crate::value::Value::Bool(false)
+                    {
+                        Some(String::from(
+                            "File fixes idempotent = true for read and atomic replace",
+                        ))
+                    } else if domain.admits(&constant.value) {
                         None
                     } else {
                         Some(format!("the value does not fit the {domain:?} domain"))
@@ -3880,7 +3882,16 @@ impl Checker<'_, '_> {
                     }
                 }
                 OperatorItem::Attribute(attribute) => {
-                    if is_common_node_attribute(attribute) || is_loop_attribute(attribute) {
+                    if node.kind() == node::Kind::Operator
+                        && retry_control::retry_attribute(attribute)
+                    {
+                        self.retry_refusal(retry_control::E_RETRY_HOST, attribute.span,
+                            "Retry attributes require a finite outbound Call Connector, not an Operator");
+                    }
+                    if is_common_node_attribute(attribute)
+                        || is_loop_attribute(attribute)
+                        || retry_control::retry_attribute(attribute)
+                    {
                         continue;
                     }
                     let name = attribute

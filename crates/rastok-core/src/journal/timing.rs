@@ -11,6 +11,59 @@ use alloc::vec::Vec;
 /// Extend-only record-retention key, not a canonical causal-record field.
 pub const TIMER_SCHEDULE_KEY: u64 = 56;
 
+/// Every winning outbound Call closure retains its original logical instant.
+/// This field, like the due instant, is not part of the causal seal.
+pub const CALL_CLOSED_AT_KEY: u64 = 59;
+
+pub(crate) fn validate_call(record: &super::CallRecord) -> Result<(), DecodeError> {
+    let context = if let Some(packet) = record.retry_record.as_deref() {
+        let Some(context) = packet.context else {
+            return Err(DecodeError::Malformed(
+                "a Retry Call requires an attempt context",
+            ));
+        };
+        if context.ordinal == 0 || !packet.facts.is_empty() {
+            return Err(DecodeError::Malformed(
+                "a Call carries only a positive Retry context",
+            ));
+        }
+        Some(context)
+    } else {
+        None
+    };
+    match (&record.status, record.closed_at) {
+        (super::OutboundStatus::Open, None) => {}
+        (super::OutboundStatus::Closed(_) | super::OutboundStatus::Abandoned, Some(at))
+            if at >= record.intent.logical_time => {}
+        _ => {
+            return Err(DecodeError::Malformed(
+                "a winning Call closure requires its original instant, no earlier than its opening",
+            ));
+        }
+    }
+    if let Some(schedule) = record.timer_schedule.as_deref() {
+        let Some(context) = context else {
+            return Err(DecodeError::Malformed(
+                "only a Retry closure can arm a recurrence",
+            ));
+        };
+        let Some(next) = context.ordinal.checked_add(1) else {
+            return Err(DecodeError::Malformed("Retry admission ordinal overflows"));
+        };
+        let reference =
+            super::retry_protocol::admission_ref(context.operation, next, record.intent.call_ref);
+        if !matches!(record.status, super::OutboundStatus::Closed(_))
+            || record.closed_at != Some(schedule.armed_at())
+            || !matches!(schedule.arms(), [arm] if arm.kind == super::timer_kind::LOOP_DELAY && arm.reference == reference)
+        {
+            return Err(DecodeError::Malformed(
+                "the Retry arm must belong to this winning closure and next admission",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// One dated obligation, in the existing timer-kind/reference namespace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimerArm {

@@ -41,6 +41,7 @@ fn transaction(instance: &InstanceRef, trigger: Trigger) -> TransactionRecord {
         trigger,
         cause: None,
         exchange_exit: None,
+        retry_record: None,
         loop_record: None,
         logical_time: None,
         consumed: vec![],

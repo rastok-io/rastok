@@ -16,7 +16,7 @@ graph resident : App {
   output exit: ChildExit
   connector child : Process {
     mode = service ; command = "cat" ; codec = lines
-    effect = idempotent ; behavior = deterministic
+     behavior = deterministic
     closing = { drain_for = duration("1s"); settle_for = duration("1s") }
   }
   in -> child -> out

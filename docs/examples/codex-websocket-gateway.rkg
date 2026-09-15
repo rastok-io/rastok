@@ -21,7 +21,7 @@ graph codex_websocket_gateway : App {
     codec = jsonl
     timeout = duration("120s")
     max_output = "8MiB"
-    effect = idempotent
+    idempotent = true
     behavior = probabilistic
   }
 

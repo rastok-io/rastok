@@ -269,7 +269,7 @@ pub fn compile_with_assets(
             | PlanValidationError::AmbiguousInboundCallCorrelation { .. }
             | PlanValidationError::InvalidAnnotationPropagation { .. }
             | PlanValidationError::InvalidLoopControl { .. }
-            | PlanValidationError::UnsafeLoopEffect { .. }
+            | PlanValidationError::InvalidRetryPolicy { .. }
             | PlanValidationError::WiringCycle { .. }),
         ) => {
             bag.push(type_resolution_diagnostic(&error));
@@ -280,6 +280,42 @@ pub fn compile_with_assets(
             return Err(bag);
         }
     };
+    if let Some(owner) = plan
+        .owners
+        .iter()
+        .find(|owner| owner.retry_spec().is_some())
+    {
+        bag.push(
+            Diagnostic::new(
+                check::E_CHECK_DEFERRED,
+                Phase::Check,
+                "Retry requires the complete retained-operation manager before execution",
+            )
+            .with_field("construct", "Retry manager")
+            .with_field("owner", owner.path.to_string()),
+        );
+        return Err(bag);
+    }
+    match plan.loop_repeat_warnings() {
+        Ok(warnings) => {
+            for warning in warnings {
+                let source_owner = match &warning.source.owner {
+                    crate::plan::EndpointOwner::Graph(path) => path.to_string(),
+                    crate::plan::EndpointOwner::Node(path) => path.to_string(),
+                };
+                let source = format!("{source_owner}.{}", warning.source.port);
+                bag.push(Diagnostic::new(check::W_LOOP_REPEAT, Phase::Check,
+                format!("Loop `{}` can repeat visible Call `{}` through `{source} -> Loop.again` without an idempotence guarantee; review the operation or use Retry for a checked repetition policy", warning.owner, warning.connector))
+                .with_field("owner", warning.owner.to_string())
+                .with_field("source", source)
+                .with_field("connector", warning.connector.to_string()));
+            }
+        }
+        Err(error) => {
+            bag.push(internal_plan_diagnostic(&error));
+            return Err(bag);
+        }
+    }
     Ok(Compilation {
         plan,
         symbols,
@@ -689,13 +725,9 @@ fn type_resolution_diagnostic(error: &PlanValidationError) -> Diagnostic {
             .with_field("path", location)
             .with_field("detail", reason.to_string())
         }
-        PlanValidationError::UnsafeLoopEffect { owner } => Diagnostic::new(
-            check::E_LOOP_EFFECT,
-            Phase::Check,
-            format!("Loop `{owner}` can repeat a visible or ambiguous effect; use effect = none or idempotent"),
-        )
-        .with_field("owner", owner)
-        .with_field("path", "application"),
+        PlanValidationError::InvalidRetryPolicy { owner, detail } => Diagnostic::new(
+            check::E_RETRY_ATTRIBUTE, Phase::Check, format!("invalid Retry `{owner}`: {detail}"),
+        ).with_field("owner", owner).with_field("detail", detail),
         PlanValidationError::InvalidLoopControl {
             owner,
             path,
@@ -870,7 +902,7 @@ graph g : App {
     lifetime = { kind = idle ; after = duration("1s") }
     command = "cat"
     codec = lines
-    effect = idempotent
+    idempotent = true
     behavior = deterministic
   }
   in -> shell -> nothing

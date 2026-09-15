@@ -1045,7 +1045,7 @@ fn run_composes_a_live_websocket_gateway_with_process() {
     codec = lines
     timeout = duration("5s")
     max_output = "1MiB"
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }}
   connector socket : WebSocketServer {{
     listen = "{address}"
@@ -1174,7 +1174,7 @@ fn simulate_resolves_boot_refs_from_a_profile_without_cli_secret_values() {
     method = "POST"
     timeout = duration("1s")
     codec = text
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
   in -> client -> out
   client.exit -> nothing
@@ -1342,7 +1342,7 @@ fn resolve_openapi_updates_and_checks_one_generated_project_source() {
     method = "POST"
     timeout = duration("1s")
     codec = json
-    effect = idempotent
+    idempotent = true
     behavior = deterministic
   }
 }"#,

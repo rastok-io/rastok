@@ -729,6 +729,9 @@ fn record_tree(record: &Record) -> Cbor {
             if let Some(packet) = transaction.instance_commands.as_deref() {
                 pairs.insert(crate::journal::instance_stop::CAUSAL_KEY, packet.tree());
             }
+            if let Some(packet) = transaction.retry_record.as_deref() {
+                pairs.insert(58, packet.tree());
+            }
             if let Some(cause) = transaction.cause {
                 pairs.insert(39, Cbor::Bytes(cause.as_bytes().to_vec()));
             }
@@ -867,6 +870,26 @@ fn record_tree(record: &Record) -> Cbor {
             // key 40 the record reconstructs delivery_ref and hence
             // call_ref, autonomously (identity.md §3).
             pairs.insert(47, Cbor::Text(outbound.intent.edge.clone()));
+            if let Some(packet) = outbound.retry_record.as_deref() {
+                pairs.insert(58, packet.tree());
+            }
+            if let Some(schedule) = outbound.timer_schedule.as_deref() {
+                pairs.insert(
+                    37,
+                    Cbor::Array(
+                        schedule
+                            .arms()
+                            .iter()
+                            .map(|arm| {
+                                Cbor::Array(vec![
+                                    Cbor::Uint(u64::from(arm.kind)),
+                                    Cbor::Bytes(arm.reference.as_bytes().to_vec()),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                );
+            }
             Cbor::Map(pairs)
         }
         Record::Outbound(OutboundRecord::Session(session)) => {
@@ -960,6 +983,7 @@ mod tests {
             trigger: crate::node::Trigger::Port(crate::node::Port::new("in").unwrap()),
             cause: Some(root),
             exchange_exit: None,
+            retry_record: None,
             loop_record: Some(Box::new(Packet {
                 facts: vec![Fact::Open {
                     run,

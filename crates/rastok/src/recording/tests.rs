@@ -69,8 +69,8 @@ fn incomplete_corrupt_and_wrong_version_files_refuse() {
     let Cbor::Array(fields) = &mut tree else {
         panic!("capture row");
     };
-    assert_eq!(fields[0], Cbor::Uint(2));
-    for version in [1, 999] {
+    assert_eq!(fields[0], Cbor::Uint(3));
+    for version in [1, 2, 999] {
         let mut tree = tree.clone();
         let Cbor::Array(fields) = &mut tree else {
             panic!("capture row");
@@ -105,7 +105,7 @@ fn boot_dependent_recording_refuses_instead_of_copying_resolved_values() {
         auth_bearer = secret("providers/http/token")
         codec = text
         timeout = duration("1s")
-        effect = idempotent
+        idempotent = true
         behavior = deterministic
       }
       in -> client -> out

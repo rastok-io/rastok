@@ -131,7 +131,7 @@ graph priced_call : App {
     mode = job
     command = "cat"
     codec = jsonl
-    effect = idempotent
+    idempotent = true
     behavior = deterministic
     timeout = duration("5s")
   }

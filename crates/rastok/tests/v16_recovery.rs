@@ -43,7 +43,7 @@ graph app : App {
   closing = { drain_for = duration("1s"); settle_for = duration("1s") }
   connector call : Process {
     command = "cat"; codec = jsonl
-    effect = idempotent; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
   in -> call
   call.out -> nothing
@@ -132,7 +132,7 @@ graph app : App {
   connector call : Process {
     command = "cat"
     codec = jsonl
-    effect = idempotent
+    idempotent = true
     behavior = deterministic
     timeout = duration("3s")
   }
@@ -198,7 +198,7 @@ graph app : App + Loop {
   Loop.terminal = [out, exhausted, err]
   connector call : Process + Loop {
     command = "cat"; codec = jsonl
-    effect = idempotent; behavior = deterministic
+    idempotent = true; behavior = deterministic
     timeout = duration("3s")
     Loop.fuel = 2
     Loop.delay = { kind = fixed; after = duration("1s") }
@@ -285,7 +285,7 @@ graph app : App {
   connector call : Process + Loop {
     command = "cat"
     codec = jsonl
-    effect = idempotent
+    idempotent = true
     behavior = deterministic
     timeout = duration("3s")
     Loop.fuel = 2
@@ -317,7 +317,7 @@ graph app : App {
     connector call : Process {
       command = "cat"
       codec = jsonl
-      effect = idempotent
+      idempotent = true
       behavior = deterministic
       timeout = duration("3s")
     }
@@ -768,10 +768,10 @@ fn scheduler_closed_calls_recover_through_pure_contract_projection_only() {
         vm.drain_with_bindings(&mut journal, &mut world).unwrap();
         let call = journal.open_calls()[0].call_ref;
         if abandoned {
-            journal.abandon_outbound(&call).unwrap();
+            journal.abandon_outbound(&call, 0).unwrap();
         } else {
             journal
-                .close_outbound(&call, rastok::journal::Closure::Timeout)
+                .close_outbound(&call, rastok::journal::Closure::Timeout, 0, None)
                 .unwrap();
         }
         let before = journal.records().to_vec();

@@ -110,7 +110,7 @@ impl fmt::Display for HttpClientConfigError {
 
 impl std::error::Error for HttpClientConfigError {}
 
-/// Statically linked hosted implementation of `rastok/http-client@2`.
+/// Statically linked hosted implementation of `rastok/http-client@3`.
 #[derive(Debug)]
 pub struct HttpClientFactory {
     id: crate::connector::ContractId,
@@ -727,7 +727,7 @@ fn completion_for(result: CallResult, request: &HttpRequest) -> Option<(Completi
                 MetaValue::Scalar(Scalar::Text(String::from(version.observation()))),
             );
             Some((
-                Completion::http_client(data, ext, HttpClientExit::Completed { status }),
+                Completion::http_client(data, ext, HttpClientExit::response(status)),
                 observed_bytes,
             ))
         }
@@ -1748,7 +1748,7 @@ graph bounded_request : App {
     codec = bytes
     max_body = "4B"
     versions = ["VERSION"]
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
   in -> client -> out
   client.exit -> nothing
@@ -1786,6 +1786,42 @@ graph bounded_request : App {
                 HttpClientExit::BodyTooLarge { limit: 4 },
             )),
         );
+    }
+
+    #[test]
+    fn decoded_status_selects_the_terminal_but_decode_failure_wins() {
+        let mut request = request(String::from("https://example.test"), b"request");
+        request.codec = String::from("json");
+        for (status, case) in [
+            (499, "Completed"),
+            (500, "ServerError"),
+            (599, "ServerError"),
+            (600, "Completed"),
+        ] {
+            for (body, expected, frames) in [
+                (b"{}".as_slice(), case, 1),
+                (b"not-json".as_slice(), "DecodeFailed", 0),
+            ] {
+                let completion = completion_for(
+                    CallResult::Response {
+                        status,
+                        version: HttpVersion::Http1,
+                        headers: BTreeMap::new(),
+                        body: body.to_vec(),
+                    },
+                    &request,
+                )
+                .expect("a retained response")
+                .0;
+                let outputs = completion.into_outputs();
+                assert_eq!(outputs.len(), frames + 1, "status {status}");
+                let terminal = outputs.last().expect("one terminal");
+                assert!(
+                    matches!(terminal.data.materialized_value(), Some(Value::TaggedUnion(value)) if value.case == expected),
+                    "status {status}: {terminal:?}"
+                );
+            }
+        }
     }
 
     #[test]

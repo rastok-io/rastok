@@ -17,7 +17,7 @@ graph app : App + Loop {
   connector request : HttpClient {
     url = "https://example.invalid"
     codec = text
-    effect = idempotent
+    idempotent = true
     behavior = probabilistic
     timeout = duration("1s")
   }
@@ -32,7 +32,7 @@ graph app : App + Loop {
   }
   in -> request
   request.out -> judge
-  request.exit -> match { Completed -> nothing; _ -> Loop.again }
+  request.exit -> match { Completed | ServerError -> nothing; _ -> Loop.again }
   judge.accepted -> out
   judge.revised -> Loop.next
 }
@@ -112,7 +112,10 @@ lab app {{
 
 #[test]
 fn a_graph_call_cannot_compete_with_its_response_verdict() {
-    let source = HTTP_GRAPH.replace("Completed -> nothing", "Completed -> Loop.done");
+    let source = HTTP_GRAPH.replace(
+        "Completed | ServerError -> nothing",
+        "Completed | ServerError -> Loop.done",
+    );
     let error = compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap_err();
     assert!(
         format!("{error:?}").contains("exactly one verdict"),
@@ -126,7 +129,7 @@ fn a_streamed_graph_response_cannot_decide_once_per_frame() {
         .replace("HttpClient", "Process")
         .replace("url = \"https://example.invalid\"", "command = \"cat\"")
         .replace("codec = text", "codec = lines")
-        .replace("Completed -> nothing", "Exited -> nothing")
+        .replace("Completed | ServerError -> nothing", "Exited -> nothing")
         .replace(
             "request.out -> judge",
             "request.out -> judge\n  request.err -> nothing",
@@ -213,7 +216,7 @@ fn a_graph_call_needs_a_bounded_application() {
         .replace("HttpClient", "Process")
         .replace("url = \"https://example.invalid\"", "command = \"cat\"")
         .replace("codec = text", "codec = lines")
-        .replace("Completed -> nothing", "Exited -> nothing")
+        .replace("Completed | ServerError -> nothing", "Exited -> nothing")
         .replace(
             "request.out -> judge",
             "request.err -> nothing\n    request.out -> judge",
@@ -227,7 +230,7 @@ fn a_graph_call_needs_a_bounded_application() {
 }
 
 #[test]
-fn graph_effect_safety_includes_sibling_calls_not_only_the_command_source() {
+fn loop_repeat_warning_includes_sibling_calls_not_only_the_command_source() {
     let source = r#"
 graph app : App + Loop {
   input in: text
@@ -240,7 +243,7 @@ graph app : App + Loop {
   }
   connector call : Process {
     command = "cat"; codec = lines
-    effect = idempotent; behavior = deterministic
+    idempotent = true; behavior = deterministic
     timeout = duration("1s")
   }
   in -> { decide; call }
@@ -250,30 +253,51 @@ graph app : App + Loop {
   call.exit -> nothing
 }
 "#;
-    let compiled = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
-    for effect in [
-        rastok::node::EffectClass::Irreversible,
-        rastok::node::EffectClass::Compensable,
+    for (guarantee, command, warns) in [
+        ("false", "Loop.again", true),
+        ("true", "Loop.again", false),
+        ("false", "Loop.next", false),
     ] {
-        let mut forged = compiled.plan.plan().clone();
-        let call = forged
-            .nodes
-            .iter_mut()
-            .find_map(|node| match &mut node.execution {
-                plan::NodeExecution::Connector(call) => Some(call),
-                _ => None,
-            })
-            .unwrap();
-        call.effect = rastok::node::Effect::Class(effect);
-        assert!(matches!(
-            plan::ValidatedExecutionPlan::try_new(forged),
-            Err(plan::PlanValidationError::UnsafeLoopEffect { .. })
-        ));
+        let source = source
+            .replace("idempotent = true", &format!("idempotent = {guarantee}"))
+            .replace(
+                "decide.out -> Loop.again",
+                &format!("decide.out -> {command}"),
+            );
+        let compiled = compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
+        assert_eq!(
+            compiled
+                .warnings
+                .iter()
+                .any(|diagnostic| diagnostic.code().as_str() == "W-LOOP-REPEAT"),
+            warns
+        );
+        assert_eq!(
+            !compiled.plan.loop_repeat_warnings().unwrap().is_empty(),
+            warns
+        );
+        if warns {
+            let evidence = compiled.plan.loop_repeat_warnings().unwrap();
+            assert_eq!(evidence.len(), 1);
+            assert_eq!(evidence[0].connector.to_string(), "call");
+            assert_eq!(evidence[0].source.port.name(), "out");
+            assert_eq!(
+                evidence[0].source.owner,
+                plan::EndpointOwner::Node(rastok::node::Path::new(["decide"]).unwrap())
+            );
+            let diagnostic = compiled
+                .warnings
+                .iter()
+                .find(|item| item.code().as_str() == "W-LOOP-REPEAT")
+                .unwrap();
+            assert!(diagnostic.message().contains("decide.out -> Loop.again"));
+            assert!(diagnostic.message().contains("Call `call`"));
+        }
     }
 }
 
 #[test]
-fn graph_effect_safety_keeps_terminal_case_correlation() {
+fn loop_repeat_warning_keeps_terminal_case_correlation() {
     let source = r#"
 graph app : App + Loop {
   input in: text
@@ -281,7 +305,7 @@ graph app : App + Loop {
   Loop.fuel = 2
   connector call : Process {
     command = "cat"; codec = lines
-    effect = idempotent; behavior = deterministic
+    idempotent = true; behavior = deterministic
     timeout = duration("1s")
   }
   in -> call
@@ -295,24 +319,21 @@ graph app : App + Loop {
         ("TimeoutExpired", false),
         ("Exited", false),
     ] {
-        let source = source.replace("SpawnFailed", terminal);
+        let source = source
+            .replace("SpawnFailed", terminal)
+            .replace("idempotent = true", "idempotent = false");
         let compiled = compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
-        let mut plan = compiled.plan.plan().clone();
-        let plan::NodeExecution::Connector(call) = &mut plan.nodes[0].execution else {
-            panic!("Call");
-        };
-        call.effect = rastok::node::Effect::Class(rastok::node::EffectClass::Irreversible);
-        let result = plan::ValidatedExecutionPlan::try_new(plan);
-        if allowed {
-            result.unwrap(); // Contract proves no effect began; no execution is claimed.
-        } else {
-            assert!(
-                matches!(
-                    result,
-                    Err(plan::PlanValidationError::UnsafeLoopEffect { .. })
-                ),
-                "{terminal}: {result:?}"
-            );
-        }
+        assert_eq!(
+            compiled
+                .warnings
+                .iter()
+                .any(|diagnostic| diagnostic.code().as_str() == "W-LOOP-REPEAT"),
+            !allowed,
+            "{terminal}"
+        );
+        assert_eq!(
+            !compiled.plan.loop_repeat_warnings().unwrap().is_empty(),
+            !allowed
+        );
     }
 }

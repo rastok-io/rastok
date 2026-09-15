@@ -56,6 +56,11 @@ impl Checker<'_, '_> {
                     continue;
                 }
                 node::Extension::Saga => self.deferred("the Saga Extension", symbol.span),
+                node::Extension::Retry => self.retry_refusal(
+                    retry_control::E_RETRY_HOST,
+                    symbol.span,
+                    "Retry requires an outbound Call Connector",
+                ),
                 node::Extension::App | node::Extension::Loop => {}
             }
             extensions.push(extension);
@@ -109,6 +114,11 @@ impl Checker<'_, '_> {
             seen.push(extension);
             match extension {
                 node::Extension::Loop => {}
+                node::Extension::Retry => self.retry_refusal(
+                    retry_control::E_RETRY_HOST,
+                    symbol.span,
+                    "Retry requires an outbound Call Connector",
+                ),
                 node::Extension::App => self.node_annotation_refusal(
                     symbol,
                     "the `App` Extension belongs only to the root Graph",
@@ -144,6 +154,7 @@ impl Checker<'_, '_> {
             seen.push(extension);
             match extension {
                 node::Extension::Loop => {}
+                node::Extension::Retry => {}
                 node::Extension::App => self.node_annotation_refusal(
                     symbol,
                     "the `App` Extension belongs only to the root Graph",
@@ -154,7 +165,9 @@ impl Checker<'_, '_> {
                 ),
             }
         }
-        seen.retain(|extension| *extension == node::Extension::Loop);
+        seen.retain(|extension| {
+            matches!(extension, node::Extension::Loop | node::Extension::Retry)
+        });
         seen.sort();
         seen
     }

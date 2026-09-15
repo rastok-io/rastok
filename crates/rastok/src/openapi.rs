@@ -907,7 +907,7 @@ mod tests {
                 method = "POST"
                 timeout = duration("1s")
                 codec = json
-                effect = idempotent
+                idempotent = true
                 behavior = deterministic
               }
             }"#,

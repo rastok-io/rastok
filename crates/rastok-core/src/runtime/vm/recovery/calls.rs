@@ -24,16 +24,15 @@ impl Vm<'_> {
             .connector()
             .filter(|spec| spec.call_semantics().is_some())
             .ok_or_else(|| invalid(index, "a retained Call contradicts its Connector profile"))?;
-        if spec.effect != node::Effect::Class(intent.effect)
-            || intent.call_ref
-                != ids::call_ref(
-                    ids::delivery_ref(&intent.edge, intent.emitting_id),
-                    intent.prepared.digest(),
-                )
+        if intent.call_ref
+            != ids::call_ref(
+                ids::delivery_ref(&intent.edge, intent.emitting_id),
+                intent.prepared.digest(),
+            )
         {
             return Err(invalid(
                 index,
-                "a retained Call contradicts its effect or identity",
+                "a retained Call contradicts its request identity",
             ));
         }
         if record.status == OutboundStatus::Open {

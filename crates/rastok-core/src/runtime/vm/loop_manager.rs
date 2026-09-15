@@ -845,6 +845,7 @@ pub(super) fn manager_record(
         parent_instance: None,
         close_scope: None,
         exchange_exit: None,
+        retry_record: None,
         loop_record: Some(Box::new(packet)),
         logical_time: None,
         timer_schedule: None,

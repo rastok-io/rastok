@@ -669,7 +669,7 @@ enum Chunk {
     ReadFailed,
 }
 
-/// Statically linked factory for `rastok/process@2`.
+/// Statically linked factory for `rastok/process@4`.
 #[derive(Debug)]
 pub struct ProcessFactory {
     id: crate::connector::ContractId,
@@ -1176,7 +1176,7 @@ graph real : App {
   connector echo : Process {
     mode = job ; command = "cat"
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   operator shout {
@@ -1317,7 +1317,7 @@ graph binary : App {
   connector echo : Process {
     mode = job ; command = "cat"
     codec = bytes
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
   in -> echo -> out
   echo.err -> nothing
@@ -1343,7 +1343,7 @@ graph lines : App {
     mode = job ; command = "printf"
     args = ["first\nsecond\n"]
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
   in -> child -> out
   child.err -> nothing
@@ -1377,7 +1377,7 @@ graph configured : App {
     cwd = "/"
     env = { "RASTOK_PROCESS_PROBE": "bound" }
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
   in -> child -> out
   child.err -> nothing
@@ -1405,7 +1405,7 @@ graph binary_err : App {
     args = ["-c", "printf raw >&2"]
     codec = lines
     err_codec = bytes
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
   in -> child
   child.out -> nothing
@@ -1442,7 +1442,7 @@ graph failing : App {
     mode = job ; command = "sh"
     args = ["-c", "echo broken >&2; exit 3"]
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   operator shout {
@@ -1473,7 +1473,7 @@ graph missing : App {
   connector ghost : Process {
     mode = job ; command = "/nonexistent/rastok-no-such-binary"
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   operator shout {
@@ -1503,7 +1503,7 @@ graph mute : App {
     mode = job ; command = "sh"
     args = ["-c", "sleep 30"]
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
     timeout = duration("200ms")
   }
 
@@ -1546,7 +1546,7 @@ graph closing : App {
     mode = job ; command = "sh"
     args = ["-c", "sleep 30"]
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   operator shout {
@@ -1594,7 +1594,7 @@ graph orphaning : App {
     mode = job ; command = "sh"
     args = ["-c", "echo done; sleep 30 & exit 0"]
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   operator shout {
@@ -1632,7 +1632,7 @@ graph wedge : App {
     mode = job ; command = "sh"
     args = ["-c", "head -c 51 /dev/zero; sleep 30"]
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
     max_output = "50B"
     timeout = duration("15s")
   }
@@ -1668,7 +1668,7 @@ graph flood : App {
     mode = job ; command = "sh"
     args = ["-c", "head -c 200000 /dev/zero >&2; echo done"]
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
     timeout = duration("30s")
   }
 
@@ -1699,7 +1699,7 @@ graph capped : App {
     mode = job ; command = "sh"
     args = ["-c", "head -c 100 /dev/zero"]
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
     max_output = "50B"
   }
 
@@ -1731,7 +1731,7 @@ graph hoarse : App {
     mode = job ; command = "sh"
     args = ["-c", "head -c 100 /dev/zero >&2; echo done"]
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
     max_output = "50B"
     timeout = duration("15s")
   }
@@ -1775,7 +1775,7 @@ graph unframeable : App {
   connector echo : Process {
     mode = job ; command = "cat"
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
   }
 
   operator shout {

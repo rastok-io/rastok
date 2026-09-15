@@ -35,7 +35,7 @@ graph expense_approval : App {
     timeout = duration("10s")
     // Required service contract: repeating a request_id cannot create a second entry.
     // The mock exercises that boundary shape, not a real service's guarantee.
-    effect = idempotent
+    idempotent = true
     behavior = deterministic
   }
 

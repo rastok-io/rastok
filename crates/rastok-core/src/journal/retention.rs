@@ -292,7 +292,6 @@ fn intent(value: &Intent) -> Cbor {
         word(&value.connector_path),
         Cbor::Bytes(value.prepared.bytes().to_vec()),
         optional(value.idempotency_key.as_ref(), |value| word(value)),
-        word(value.effect),
         list(
             value
                 .resolved_settings
@@ -303,17 +302,7 @@ fn intent(value: &Intent) -> Cbor {
     ])
 }
 fn read_intent(value: &Cbor) -> Result<Intent, Error> {
-    let [
-        call,
-        emitting,
-        edge,
-        path,
-        prepared,
-        key,
-        effect,
-        settings,
-        at,
-    ] = array(value)?;
+    let [call, emitting, edge, path, prepared, key, settings, at] = array(value)?;
     let mut resolved_settings = BTreeMap::new();
     for setting in items(settings)? {
         let [name, value] = array(setting)?;
@@ -334,12 +323,6 @@ fn read_intent(value: &Cbor) -> Result<Intent, Error> {
         connector_path: read_path(path)?,
         prepared: PreparedRequest::seal(bytes(prepared)?.to_vec()),
         idempotency_key: read_optional(key, |value| Ok(text(value)?.to_owned()))?,
-        effect: match text(effect)? {
-            "idempotent" => node::EffectClass::Idempotent,
-            "compensable" => node::EffectClass::Compensable,
-            "irreversible" => node::EffectClass::Irreversible,
-            _ => return Err(Error::Invalid("effect class")),
-        },
         resolved_settings,
         logical_time: signed(at)?,
     })
@@ -434,6 +417,7 @@ pub fn record(value: &Record) -> Cbor {
                     value.instance_commands.as_deref(),
                     journal::instance_stop::Packet::tree,
                 ),
+                optional(value.retry_record.as_deref(), retry_packet),
             ])
         }
         Record::Outbound(journal::OutboundRecord::Call(value)) => list([
@@ -447,6 +431,9 @@ pub fn record(value: &Record) -> Cbor {
                 journal::OutboundStatus::Closed(journal::Closure::Timeout) => list([Cbor::Uint(3)]),
                 journal::OutboundStatus::Abandoned => list([Cbor::Uint(4)]),
             },
+            optional(value.closed_at.as_ref(), |value| integer(*value)),
+            schedule(value.timer_schedule.as_deref()),
+            optional(value.retry_record.as_deref(), retry_packet),
         ]),
         Record::Outbound(journal::OutboundRecord::Session(value)) => list([
             Cbor::Uint(4),
@@ -650,13 +637,18 @@ impl Reader {
     /// Unknown/malformed rows, missing parents/producers, contradictory repeated
     /// envelopes or invalid typed values. No physical Driver is reachable.
     pub fn record(&mut self, value: &Cbor) -> Result<Record, Error> {
-        match items(value)?.first().map(uint).transpose()? {
+        let record = match items(value)?.first().map(uint).transpose()? {
             Some(1) => self.inbound(value),
             Some(2) => self.transaction(value),
             Some(3) => self.call(value),
             Some(4) => self.session(value),
             _ => Err(Error::Invalid("record kind")),
+        }?;
+        if let Record::Transaction(record) = &record {
+            journal::retry_protocol::validate_transaction(record)
+                .map_err(|_| Error::Invalid("Retry transaction carrier"))?;
         }
+        Ok(record)
     }
     fn inbound(&mut self, value: &Cbor) -> Result<Record, Error> {
         let [
@@ -741,6 +733,7 @@ impl Reader {
             timers,
             schedule,
             instance_commands,
+            retry,
         ] = array(value)?;
         let emissions = items(emitted)?
             .iter()
@@ -769,10 +762,12 @@ impl Reader {
                 "l:timeout" => Lifecycle::Timeout,
                 "l:evict" => Lifecycle::Evict,
                 "l:recover" => Lifecycle::Recover,
+                "l:retry" => Lifecycle::Retry,
                 _ => return Err(Error::Invalid("transaction trigger")),
             })
         };
         Ok(Record::Transaction(Box::new(journal::TransactionRecord {
+            retry_record: read_optional(retry, |value| self.retry_packet(value).map(Box::new))?,
             owner_path: read_owner(owner)?,
             instance: instance(instance_ref)?,
             parent_instance: read_optional(parent, instance)?,
@@ -840,7 +835,7 @@ impl Reader {
         })))
     }
     fn call(&mut self, value: &Cbor) -> Result<Record, Error> {
-        let [_, intent, status] = array(value)?;
+        let [_, intent, status, closed_at, schedule, retry] = array(value)?;
         let status = match items(status)? {
             [Cbor::Uint(1)] => journal::OutboundStatus::Open,
             [Cbor::Uint(2), completion] => journal::OutboundStatus::Closed(
@@ -850,11 +845,16 @@ impl Reader {
             [Cbor::Uint(4)] => journal::OutboundStatus::Abandoned,
             _ => return Err(Error::Invalid("Call status")),
         };
+        let record = journal::CallRecord {
+            intent: read_intent(intent)?,
+            status,
+            closed_at: read_optional(closed_at, signed)?,
+            timer_schedule: read_schedule(schedule)?,
+            retry_record: read_optional(retry, |value| self.retry_packet(value).map(Box::new))?,
+        };
+        journal::timing::validate_call(&record).map_err(Error::Read)?;
         Ok(Record::Outbound(journal::OutboundRecord::Call(Box::new(
-            journal::CallRecord {
-                intent: read_intent(intent)?,
-                status,
-            },
+            record,
         ))))
     }
     fn session(&mut self, value: &Cbor) -> Result<Record, Error> {

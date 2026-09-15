@@ -223,12 +223,6 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
             latest_site: EvaluationSite::Instance,
         },
         AttributeSpec {
-            name: "effect",
-            presence: Presence::Required,
-            domain: ValueDomain::Choice(&["idempotent", "compensable", "irreversible"]),
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
             name: "env",
             presence: Presence::Optional,
             domain: ValueDomain::TextMap,
@@ -244,6 +238,12 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
                 word: "job",
                 support: ProfileSupport::Available,
                 attributes: &[
+                    AttributeSpec {
+                        name: "idempotent",
+                        presence: Presence::Defaulted(DefaultValue::Expression("false")),
+                        domain: ValueDomain::Boolean,
+                        latest_site: EvaluationSite::Plan,
+                    },
                     AttributeSpec {
                         name: "timeout",
                         presence: Presence::Optional,
@@ -344,11 +344,9 @@ pub const FILE: ConnectorContract = ConnectorContract {
             latest_site: EvaluationSite::Invocation,
         },
         AttributeSpec {
-            // Read and atomic replace are idempotent for the same sealed
-            // request. Append and directory mutation are not this contract.
-            name: "effect",
-            presence: Presence::Defaulted(DefaultValue::Choice("idempotent")),
-            domain: ValueDomain::Choice(&["idempotent"]),
+            name: "idempotent",
+            presence: Presence::Defaulted(DefaultValue::Expression("true")),
+            domain: ValueDomain::Boolean,
             latest_site: EvaluationSite::Plan,
         },
         AttributeSpec {
@@ -465,9 +463,9 @@ pub const HTTP_CLIENT: ConnectorContract = ConnectorContract {
             latest_site: EvaluationSite::Plan,
         },
         AttributeSpec {
-            name: "effect",
-            presence: Presence::Required,
-            domain: ValueDomain::Choice(&["idempotent", "compensable", "irreversible"]),
+            name: "idempotent",
+            presence: Presence::Defaulted(DefaultValue::Expression("false")),
+            domain: ValueDomain::Boolean,
             latest_site: EvaluationSite::Plan,
         },
         AttributeSpec {
@@ -594,12 +592,6 @@ pub const HTTP_SERVER: ConnectorContract = ConnectorContract {
             name: "codec",
             presence: Presence::Required,
             domain: ValueDomain::Choice(&["bytes", "json", "text"]),
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "effect",
-            presence: Presence::Defaulted(DefaultValue::Choice("none")),
-            domain: ValueDomain::Choice(&["none"]),
             latest_site: EvaluationSite::Plan,
         },
         AttributeSpec {
@@ -740,12 +732,6 @@ pub const WEBSOCKET_CLIENT: ConnectorContract = ConnectorContract {
             latest_site: EvaluationSite::Plan,
         },
         AttributeSpec {
-            name: "effect",
-            presence: Presence::Required,
-            domain: ValueDomain::Choice(&["idempotent", "compensable", "irreversible"]),
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
             name: "handshake_timeout",
             presence: Presence::Required,
             domain: ValueDomain::Duration,
@@ -876,12 +862,6 @@ pub const WEBSOCKET_SERVER: ConnectorContract = ConnectorContract {
             presence: Presence::Optional,
             domain: ValueDomain::Text,
             latest_site: EvaluationSite::Invocation,
-        },
-        AttributeSpec {
-            name: "effect",
-            presence: Presence::Defaulted(DefaultValue::Choice("none")),
-            domain: ValueDomain::Choice(&["none"]),
-            latest_site: EvaluationSite::Plan,
         },
         AttributeSpec {
             name: "handshake_timeout",
@@ -1098,8 +1078,17 @@ mod tests {
         assert!(crate::contract::validate_sheet(&PROCESS).is_ok());
         let process = PROCESS;
         let job = process.profile("job").unwrap();
-        let effect = process.attribute(Some(job), "effect").unwrap();
-        assert_eq!(effect.presence, Presence::Required);
+        let guarantee = process.attribute(Some(job), "idempotent").unwrap();
+        assert_eq!(
+            guarantee.presence,
+            Presence::Defaulted(DefaultValue::Expression("false"))
+        );
+        assert!(process.attribute(Some(job), "effect").is_none());
+        assert!(
+            process
+                .attribute(process.profile("service"), "idempotent")
+                .is_none()
+        );
         assert!(process.attribute(Some(job), "max_output").is_some());
         assert!(process.attribute(Some(job), "restart").is_none());
         assert!(process.owning_profile("restart").is_none());
@@ -1297,6 +1286,7 @@ mod tests {
                 "DnsFailed",
                 "OutcomeUnknown",
                 "ProtocolFailed",
+                "ServerError",
                 "TimeoutExpired",
                 "TlsFailed",
             ]

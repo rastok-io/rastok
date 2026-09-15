@@ -1042,6 +1042,7 @@ fn history_record_description(record: &Record) -> (&'static str, Option<String>,
                     "instance-closing"
                 }
                 crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Next) => "loop-next",
+                crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Retry) => "retry-manager",
                 crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Reply) => "call-reply",
                 crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Exit) => "session-exit",
                 crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Timeout) => "timeout",
@@ -1115,6 +1116,7 @@ fn transaction_summary(transaction: &crate::journal::TransactionRecord) -> Strin
                 crate::node::Lifecycle::Stop => "Instance stopped",
                 crate::node::Lifecycle::Closing => "Instance closing",
                 crate::node::Lifecycle::Next => "Loop continued",
+                crate::node::Lifecycle::Retry => "Retry manager",
                 crate::node::Lifecycle::Reply => "Call reply",
                 crate::node::Lifecycle::Exit => "Session exit",
                 crate::node::Lifecycle::Timeout => "Timeout",

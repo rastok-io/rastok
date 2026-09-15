@@ -688,7 +688,7 @@ impl crate::boundary::CompletionGate for PlanGate<'_> {
         else {
             return Err(format!("`{connector}` is absent from the validated plan"));
         };
-        let Some(_) = planned.connector() else {
+        let Some(spec) = planned.connector() else {
             return Err(format!("`{connector}` is not a connector"));
         };
         let slot =
@@ -728,6 +728,17 @@ impl crate::boundary::CompletionGate for PlanGate<'_> {
                 return Err(format!(
                     "`{connector}.{}` refuses the completion value: {violation}",
                     output.port.name()
+                ));
+            }
+            if let Some(call) = spec.call_semantics()
+                && output.port.name() == call.terminal()
+                && !output
+                    .data
+                    .materialized_value()
+                    .is_some_and(|value| call.terminal_case(value).is_some())
+            {
+                return Err(format!(
+                    "`{connector}` returned a terminal outside its Contract"
                 ));
             }
             if let Data::Materialized(value) = &output.data {
@@ -1253,6 +1264,9 @@ impl<'plan> Vm<'plan> {
             });
         }
         self.plan.owners.iter().find_map(|owner| {
+            if owner.retry_spec().is_some() {
+                return Some(VmError::UnsupportedExtension { owner: owner.path.clone(), extension: node::Extension::Retry });
+            }
             let spec = owner.loop_spec()?;
             let supported = (owner.kind == OwnerKind::Graph || matches!(owner.kind, crate::plan::OwnerKind::Node(slot)
                     if matches!(self.plan.nodes[slot.index()].execution, NodeExecution::Operator)
@@ -2346,7 +2360,7 @@ impl<'plan> Vm<'plan> {
         let gate = PlanGate { plan: self.plan };
         let batch = self
             .dispatcher
-            .pump(journal, bindings, &gate)
+            .pump(journal, bindings, &gate, self.now)
             .map_err(VmError::Dispatch)?;
         self.retry_session_actions(bindings)?;
         self.retry_session_closes(bindings)?;
@@ -2811,7 +2825,7 @@ impl<'plan> Vm<'plan> {
                 .map_err(crate::boundary::DispatchError::Driver)
                 .map_err(VmError::Dispatch)?;
             match journal
-                .close_outbound(&call_ref, crate::journal::Closure::Timeout)
+                .close_outbound(&call_ref, crate::journal::Closure::Timeout, self.now, None)
                 .map_err(VmError::Journal)?
             {
                 crate::journal::CloseVerdict::AlreadyClosed => return Ok(()),
@@ -2851,15 +2865,12 @@ impl<'plan> Vm<'plan> {
             let NodeExecution::Connector(spec) = &planned.execution else {
                 unreachable!("budgets arm connectors only")
             };
-            // Validation refuses an effectless callee
-            // (`EffectlessCallee`); this is the typed belt behind
-            // that door, never a panic.
-            let node::Effect::Class(effect) = spec.effect else {
+            if !spec.roles.has_outbound() || spec.exchange != ConnectorExchange::Call {
                 return Err(VmError::PlanInvariant {
                     node: planned.path.clone(),
-                    reason: "a delivery opened a call on a connector without an effect class",
+                    reason: "a request requires an outbound Call Contract",
                 });
-            };
+            }
             let resolved_settings =
                 self.resolve_invocation_settings(&instance, spec, &planned.path, &queued.envelope)?;
             match bindings
@@ -2880,7 +2891,6 @@ impl<'plan> Vm<'plan> {
                         connector_path: planned.path.clone(),
                         prepared,
                         idempotency_key: None,
-                        effect,
                         resolved_settings,
                         logical_time: self.now,
                     })
@@ -2947,10 +2957,12 @@ impl<'plan> Vm<'plan> {
                 // Idempotent open: a replay after a refused close
                 // finds its own open fact and proceeds to close it.
                 if journal.find_call(&call_ref).is_none() {
-                    journal.open_outbound(intent).map_err(VmError::Journal)?;
+                    journal
+                        .open_outbound(intent, None)
+                        .map_err(VmError::Journal)?;
                 }
                 match journal
-                    .close_outbound(&call_ref, crate::journal::Closure::Timeout)
+                    .close_outbound(&call_ref, crate::journal::Closure::Timeout, self.now, None)
                     .map_err(VmError::Journal)?
                 {
                     crate::journal::CloseVerdict::Won => {}
@@ -3666,6 +3678,7 @@ impl<'plan> Vm<'plan> {
             parent_instance: None,
             close_scope: Some(reference.clone()),
             exchange_exit: None,
+            retry_record: None,
             loop_record: None,
             logical_time: None,
             timer_schedule: None,
@@ -3925,7 +3938,7 @@ impl<'plan> Vm<'plan> {
                         .map_err(crate::boundary::DispatchError::Driver)
                         .map_err(VmError::Dispatch)?;
                     match journal
-                        .abandon_outbound(&call_ref)
+                        .abandon_outbound(&call_ref, self.now)
                         .map_err(VmError::Journal)?
                     {
                         crate::journal::CloseVerdict::AlreadyClosed => {}
@@ -4048,6 +4061,7 @@ impl<'plan> Vm<'plan> {
                     parent_instance: parent_instance.cloned(),
                     close_scope: None,
                     exchange_exit: None,
+                    retry_record: None,
                     loop_record: None,
                     logical_time: None,
                     timer_schedule: None,
@@ -4900,6 +4914,7 @@ impl<'plan> Vm<'plan> {
             trigger: node::Trigger::Port(delivery.port.clone()),
             cause: Some(delivery.envelope.meta().sys().id()),
             exchange_exit: None,
+            retry_record: None,
             loop_record: None,
             logical_time: None,
             timer_schedule: None,
@@ -5325,14 +5340,12 @@ impl<'plan> Vm<'plan> {
         let NodeExecution::Connector(spec) = &planned.execution else {
             unreachable!("routed here by kind");
         };
-        // The typed belt behind the validator's `EffectlessCallee`
-        // door — never a panic.
-        let node::Effect::Class(effect) = spec.effect else {
+        if !spec.roles.has_outbound() || spec.exchange != ConnectorExchange::Call {
             return Err(VmError::PlanInvariant {
                 node: planned.path.clone(),
-                reason: "a delivery opened a call on a connector without an effect class",
+                reason: "a request requires an outbound Call Contract",
             });
-        };
+        }
         let emitting_id = delivery.envelope.meta().sys().id();
         // The machine prepares ONCE, in the boundary vocabulary: the
         // sealed digest and the bytes the driver will receive are
@@ -5381,15 +5394,14 @@ impl<'plan> Vm<'plan> {
             edge: delivery.edge.clone(),
             connector_path: planned.path.clone(),
             prepared,
-            // The checker admits only `idempotent` in this subset; a
-            // keyed irreversible intent arrives with its invariants.
             idempotency_key: None,
-            effect,
             resolved_settings,
             logical_time: self.now,
         };
         let call_ref = intent.call_ref;
-        journal.open_outbound(intent).map_err(VmError::Journal)?;
+        journal
+            .open_outbound(intent, None)
+            .map_err(VmError::Journal)?;
         let delivery = self
             .scheduler
             .mailboxes

@@ -842,6 +842,7 @@ impl<'plan> HandlerExecutor<'plan> {
                 parent_instance: None,
                 close_scope: None,
                 exchange_exit: None,
+                retry_record: None,
                 loop_record: None,
                 logical_time: None,
                 timer_schedule: None,
@@ -942,6 +943,7 @@ impl<'plan> HandlerExecutor<'plan> {
                     parent_instance: parent_instance.cloned(),
                     close_scope: None,
                     exchange_exit: None,
+                    retry_record: None,
                     loop_record: None,
                     logical_time: None,
                     timer_schedule: None,
@@ -1015,6 +1017,7 @@ impl<'plan> HandlerExecutor<'plan> {
                             parent_instance: parent_instance.cloned(),
                             close_scope: None,
                             exchange_exit: None,
+                            retry_record: None,
                             loop_record: None,
                             logical_time: guard_logical_time,
                             timer_schedule: None,
@@ -1259,6 +1262,7 @@ impl<'plan> HandlerExecutor<'plan> {
                 parent_instance: parent_instance.cloned(),
                 close_scope: close_requested.then(|| instance.clone()),
                 exchange_exit: None,
+                retry_record: None,
                 loop_record: application.map(|application| {
                     Box::new(crate::journal::loop_protocol::Packet {
                         context: vec![application.run],
@@ -1391,6 +1395,7 @@ impl<'plan> HandlerExecutor<'plan> {
                 parent_instance: None,
                 close_scope: None,
                 exchange_exit: None,
+                retry_record: None,
                 loop_record: None,
                 logical_time: None,
                 timer_schedule: None,
@@ -1440,6 +1445,7 @@ impl<'plan> HandlerExecutor<'plan> {
                 exchange_exit: Some(Box::new(crate::journal::InboundExchangeExitRecord::Call(
                     call_ref,
                 ))),
+                retry_record: None,
                 loop_record: None,
                 logical_time: None,
                 timer_schedule: None,
@@ -1525,6 +1531,7 @@ impl<'plan> HandlerExecutor<'plan> {
                 exchange_exit: Some(Box::new(
                     crate::journal::InboundExchangeExitRecord::Session(session_ref),
                 )),
+                retry_record: None,
                 loop_record: None,
                 logical_time: None,
                 timer_schedule: None,

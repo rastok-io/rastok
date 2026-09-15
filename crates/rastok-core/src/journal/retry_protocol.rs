@@ -15,7 +15,9 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+mod carriers;
 pub(crate) mod encoding;
+pub(crate) use carriers::validate_transaction;
 mod fold;
 pub use fold::{Error, Fold, Opening, Operation, Phase, Settlement};
 
@@ -227,6 +229,14 @@ pub struct Packet {
 }
 
 impl Packet {
+    /// Admissions are retained envelopes even though managers emit no port.
+    pub fn envelopes(&self) -> impl Iterator<Item = &Envelope> {
+        self.facts.iter().filter_map(|fact| match fact {
+            Fact::Admitted { envelope, .. } => Some(envelope),
+            _ => None,
+        })
+    }
+
     /// Canonical causal key 58 payload. Request bytes and original logical time
     /// belong to retention; the seal commits to the prepared digest instead.
     #[must_use]

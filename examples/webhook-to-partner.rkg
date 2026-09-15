@@ -14,6 +14,7 @@ type Failure = union {
 }
 type PartnerExit = union {
   Completed { status: int }
+  ServerError { status: int }
   DnsFailed {}
   ConnectFailed {}
   TlsFailed {}
@@ -103,7 +104,7 @@ graph webhook_to_partner : App {
       idempotency_key = meta.app.event_id
       // Required partner contract: honour this key; attempt is audit-only.
       // This declaration does not prove that a real service honours that contract.
-      effect = idempotent
+      idempotent = true
       behavior = deterministic
     }
 
@@ -130,7 +131,7 @@ graph webhook_to_partner : App {
           attempts = Loop.state.data.attempt + 1
           status = data.status
         }
-        data is Completed && data.status >= 500 => retry = {
+        data is ServerError => retry = {
           event = Loop.state.data.event
           attempt = Loop.state.data.attempt + 1
         }
@@ -172,7 +173,7 @@ lab webhook_to_partner {
       }
       on in where data is Attempt && data.event.event_id == "http-500" && data.attempt == 0 {
         out = { charge = decimal("0.01") }
-        exit = Completed { status = 500 }
+        exit = ServerError { status = 500 }
       }
       on in {
         out = { charge = decimal("0.02") }
@@ -241,7 +242,7 @@ lab webhook_to_partner {
 
     scenario http_500 "500 is a response; the graph explicitly chooses to retry" {
       listener.out = { event_id = "http-500"; email = "alice@example.test"; amount = 12 }
-      expect deliver.partner.exit count == 1 where data is Completed && data.status == 500
+      expect deliver.partner.exit count == 1 where data is ServerError && data.status == 500
       expect nothing app.done
       advance duration("1s")
       expect app.done count == 1 where data.attempts == 2 && data.status == 201

@@ -197,7 +197,7 @@ graph keyed_retry : App + Loop {
     mode = job
     command = "cat"
     codec = jsonl
-    effect = idempotent
+    idempotent = true
     behavior = probabilistic
     timeout = duration("1s")
     max_output = "1 MiB"
@@ -728,7 +728,7 @@ graph finite : App + Loop {
     mode = job
     command = "cat"
     codec = lines
-    effect = idempotent
+    idempotent = true
     behavior = deterministic
     timeout = duration("1s")
     max_output = "1 MiB"
@@ -782,7 +782,7 @@ graph finite : App + Loop {{
     mode = job
     command = "cat"
     codec = lines
-    effect = idempotent
+    idempotent = true
     behavior = deterministic
     timeout = duration("1s")
     max_output = "1 MiB"

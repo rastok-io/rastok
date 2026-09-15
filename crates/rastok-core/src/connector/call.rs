@@ -1,11 +1,9 @@
 //! Contract-derived Call completion, frame production and repetition safety.
 
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use core::fmt;
 
 use super::{ConnectorExchange, ConnectorRoles, ContractId};
-use crate::node::{Effect, EffectClass};
-use crate::plan::LoopCommandKind;
 
 #[cfg(test)]
 mod tests;
@@ -27,15 +25,6 @@ impl TerminalVisibility {
     #[must_use]
     pub const fn allows_repetition(self, idempotent: bool) -> bool {
         matches!(self, Self::BeforeEffect) || idempotent
-    }
-
-    /// Compensation is an undo protocol, not permission to repeat the operation.
-    #[must_use]
-    pub const fn allows_recurrence(self, effect: Effect) -> bool {
-        self.allows_repetition(matches!(
-            effect,
-            Effect::None | Effect::Class(EffectClass::Idempotent)
-        ))
     }
 }
 
@@ -84,6 +73,13 @@ pub struct CallSemantics {
     terminal: &'static str,
     frames: &'static [(&'static str, FrameProduction)],
     cases: &'static [(&'static str, TerminalVisibility)],
+    terminal_data: TerminalData,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalData {
+    UnionCase,
+    HttpStatus,
 }
 
 impl CallSemantics {
@@ -105,12 +101,48 @@ impl CallSemantics {
         self.cases
     }
 
+    /// Re-derives the terminal case, including Contract-owned refinements
+    /// such as the HTTP server-error range. An in-range union tag alone is
+    /// not permission to misclassify a response for Retry selection.
+    #[must_use]
+    pub fn terminal_case(self, value: &crate::value::Value) -> Option<&str> {
+        let crate::value::Value::TaggedUnion(value) = value else {
+            return None;
+        };
+        let case = value.case.as_str();
+        if !self.cases.iter().any(|(known, _)| *known == case) {
+            return None;
+        }
+        if self.terminal_data == TerminalData::HttpStatus
+            && matches!(case, "Completed" | "ServerError")
+        {
+            let [(name, crate::value::Value::Int(status))] = value.payload.as_slice() else {
+                return None;
+            };
+            if name != "status" {
+                return None;
+            }
+            if !(100..=999).contains(status)
+                || (case == "ServerError") != (500..=599).contains(status)
+            {
+                return None;
+            }
+        }
+        Some(case)
+    }
+
     /// Production on a non-terminal output; absent means not a frame port.
     #[must_use]
     pub fn frame_production(self, port: &str) -> Option<FrameProduction> {
         self.frames
             .iter()
             .find_map(|(name, production)| (*name == port).then_some(*production))
+    }
+
+    /// Complete frame inventory, including ports absent from a given batch.
+    #[must_use]
+    pub const fn frame_ports(self) -> &'static [(&'static str, FrameProduction)] {
+        self.frames
     }
 
     /// Validates a canonical Retry selection against this exact Call profile.
@@ -145,37 +177,24 @@ impl CallSemantics {
         Ok(())
     }
 
-    /// Proves that a direct command from this Call's own output is bounded and
-    /// that recurrence is repeat-safe. A frame cannot bypass the terminal exit.
-    ///
-    /// The caller must separately prove routing closure, command uniqueness
-    /// across ports, exact run context, Next's type, and a finite Call timeout.
-    /// No command is produced by this validation operation.
+    /// Proves a bounded verdict source. Loop's authored recurrence does not
+    /// claim Retry's repetition guarantee; a streamed port still cannot issue
+    /// an at-most-one verdict.
     ///
     /// # Errors
     ///
-    /// Refuses an unknown port/case, a potentially repeated frame verdict, or
-    /// an unsafe recurrence. `None` selects every possible terminal case.
+    /// Unknown ports/cases and potentially repeated frame verdicts refuse.
     pub fn validate_command(
         self,
         port: &str,
         cases: Option<&[String]>,
-        command: LoopCommandKind,
-        effect: Effect,
     ) -> Result<(), CallCommandError> {
         if port == self.terminal {
             if let Some(cases) = cases {
                 for case in cases {
-                    let (_, visibility) = self
-                        .cases
-                        .iter()
-                        .find(|(name, _)| *name == case)
-                        .ok_or_else(|| CallCommandError::UnknownCase(case.clone()))?;
-                    check_recurrence(*visibility, command, effect, case)?;
-                }
-            } else {
-                for (case, visibility) in self.cases {
-                    check_recurrence(*visibility, command, effect, case)?;
+                    if !self.cases.iter().any(|(name, _)| *name == case) {
+                        return Err(CallCommandError::UnknownCase(case.clone()));
+                    }
                 }
             }
             return Ok(());
@@ -184,33 +203,10 @@ impl CallSemantics {
             .frame_production(port)
             .ok_or(CallCommandError::UnknownPort)?
         {
-            FrameProduction::Never => Ok(()),
             FrameProduction::ZeroOrMore => Err(CallCommandError::RepeatedFrames),
-            FrameProduction::ExactlyOneOn(cases) => {
-                for case in cases {
-                    check_recurrence(TerminalVisibility::AfterEffect, command, effect, case)?;
-                }
-                Ok(())
-            }
+            FrameProduction::Never | FrameProduction::ExactlyOneOn(_) => Ok(()),
         }
     }
-}
-
-fn check_recurrence(
-    visibility: TerminalVisibility,
-    command: LoopCommandKind,
-    effect: Effect,
-    case: &str,
-) -> Result<(), CallCommandError> {
-    if matches!(command, LoopCommandKind::Next | LoopCommandKind::Again)
-        && !visibility.allows_recurrence(effect)
-    {
-        return Err(CallCommandError::UnsafeRecurrence {
-            case: case.to_string(),
-            visibility,
-        });
-    }
-    Ok(())
 }
 
 /// A direct Call-to-manager route contradicts the Contract's guarantees.
@@ -222,13 +218,6 @@ pub enum CallCommandError {
     UnknownCase(String),
     /// More than one frame could issue the command in one application.
     RepeatedFrames,
-    /// The effect class cannot justify repeating after this visibility stage.
-    UnsafeRecurrence {
-        /// Terminal case establishing the stage.
-        case: String,
-        /// Conservative external visibility classification.
-        visibility: TerminalVisibility,
-    },
 }
 
 impl fmt::Display for CallCommandError {
@@ -237,9 +226,6 @@ impl fmt::Display for CallCommandError {
             Self::UnknownPort => f.write_str("the Contract declares no such Call output"),
             Self::UnknownCase(case) => write!(f, "the Contract declares no terminal case `{case}`"),
             Self::RepeatedFrames => f.write_str("this Contract may produce several frames on the port; a Loop application needs exactly one verdict"),
-            Self::UnsafeRecurrence { case, visibility } => {
-                write!(f, "repeating after `{case}` ({visibility}) requires effect = none or idempotent")
-            }
         }
     }
 }
@@ -328,7 +314,7 @@ pub fn outbound_call_semantics(
             ],
         ),
         (super::HTTP_CLIENT_CONNECTOR_ID, None) => (
-            &[("out", ExactlyOneOn(&["Completed"]))],
+            &[("out", ExactlyOneOn(&["Completed", "ServerError"]))],
             &[
                 ("BodyTooLarge", OutcomeUnknown),
                 ("Completed", AfterEffect),
@@ -337,6 +323,7 @@ pub fn outbound_call_semantics(
                 ("DnsFailed", BeforeEffect),
                 ("OutcomeUnknown", OutcomeUnknown),
                 ("ProtocolFailed", OutcomeUnknown),
+                ("ServerError", AfterEffect),
                 ("TimeoutExpired", OutcomeUnknown),
                 ("TlsFailed", BeforeEffect),
             ],
@@ -348,5 +335,10 @@ pub fn outbound_call_semantics(
         terminal: "exit",
         frames,
         cases,
+        terminal_data: if contract.as_str() == super::HTTP_CLIENT_CONNECTOR_ID {
+            TerminalData::HttpStatus
+        } else {
+            TerminalData::UnionCase
+        },
     })
 }

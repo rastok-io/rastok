@@ -1142,27 +1142,9 @@ impl Checker<'_, '_> {
             if target.owner != source.owner {
                 continue;
             }
-            let effect = node.attributes().iter().find_map(|attribute| {
-                if attribute.name != "effect" {
-                    return None;
-                }
-                let AttrValue::Word(word) = &attribute.value else {
-                    return None;
-                };
-                match word.as_str() {
-                    "none" => Some(node::Effect::None),
-                    "idempotent" => Some(node::Effect::Class(node::EffectClass::Idempotent)),
-                    "compensable" => Some(node::Effect::Class(node::EffectClass::Compensable)),
-                    "irreversible" => Some(node::Effect::Class(node::EffectClass::Irreversible)),
-                    _ => None,
-                }
-            })?;
-            if let Err(error) =
-                contract.validate_command(source.port.name(), cases, target.kind, effect)
-            {
+            if let Err(error) = contract.validate_command(source.port.name(), cases) {
                 let code = match &error {
                     CallCommandError::RepeatedFrames => E_LOOP_CARDINALITY,
-                    CallCommandError::UnsafeRecurrence { .. } => E_LOOP_EFFECT,
                     CallCommandError::UnknownPort | CallCommandError::UnknownCase(_) => {
                         crate::compiler::E_INTERNAL_PLAN
                     }
@@ -1171,8 +1153,7 @@ impl Checker<'_, '_> {
                     Diagnostic::new(code, Phase::Check, error.to_string())
                         .with_span(span)
                         .with_field("source", endpoint_display(source))
-                        .with_field("destination", route_destination_display(destination))
-                        .with_field("effect", effect.to_string()),
+                        .with_field("destination", route_destination_display(destination)),
                 );
                 return None;
             }

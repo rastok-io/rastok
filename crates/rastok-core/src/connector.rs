@@ -16,24 +16,24 @@ pub use call::{
 };
 
 /// The standard Process contract's stable major-version identity.
-pub const PROCESS_CONNECTOR_ID: &str = "rastok/process@2";
-/// Resident stdio Session. The finite job contract keeps its original identity.
-pub const PROCESS_SERVICE_CONNECTOR_ID: &str = "rastok/process@3";
+pub const PROCESS_CONNECTOR_ID: &str = "rastok/process@4";
+/// Resident stdio Session, distinct from the finite job Contract.
+pub const PROCESS_SERVICE_CONNECTOR_ID: &str = "rastok/process@5";
 
 /// The standard single-file contract's stable major-version identity.
-pub const FILE_CONNECTOR_ID: &str = "rastok/file@2";
+pub const FILE_CONNECTOR_ID: &str = "rastok/file@3";
 
 /// The standard outbound HTTP call contract's stable identity.
-pub const HTTP_CLIENT_CONNECTOR_ID: &str = "rastok/http-client@2";
+pub const HTTP_CLIENT_CONNECTOR_ID: &str = "rastok/http-client@3";
 
 /// The standard inbound HTTP request contract's stable identity.
-pub const HTTP_SERVER_CONNECTOR_ID: &str = "rastok/http-server@2";
+pub const HTTP_SERVER_CONNECTOR_ID: &str = "rastok/http-server@3";
 
 /// The standard outbound WebSocket session contract's stable identity.
-pub const WEBSOCKET_CLIENT_CONNECTOR_ID: &str = "rastok/websocket-client@2";
+pub const WEBSOCKET_CLIENT_CONNECTOR_ID: &str = "rastok/websocket-client@3";
 
 /// The standard accepted WebSocket session contract's stable identity.
-pub const WEBSOCKET_SERVER_CONNECTOR_ID: &str = "rastok/websocket-server@2";
+pub const WEBSOCKET_SERVER_CONNECTOR_ID: &str = "rastok/websocket-server@3";
 
 /// Portable upper bound of one declared byte budget: 4 GiB inclusive.
 pub const MAX_BYTE_SIZE: u64 = 4 * 1024 * 1024 * 1024;

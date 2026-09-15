@@ -607,7 +607,36 @@ impl Fold {
             || emissions[..emissions.len() - 1]
                 .iter()
                 .any(|emission| emission.port.name() == state.policy.call.terminal())
-            || !matches!(terminal.envelope.data().materialized_value(), Some(Value::TaggedUnion(tagged)) if Some(&tagged.case) == state.terminal.as_ref())
+            || terminal
+                .envelope
+                .data()
+                .materialized_value()
+                .and_then(|value| state.policy.call.terminal_case(value))
+                != state.terminal.as_deref()
+        {
+            return Err(Error::Batch);
+        }
+        let frames = &emissions[..emissions.len() - 1];
+        if frames.iter().any(|frame| {
+            state
+                .policy
+                .call
+                .frame_production(frame.port.name())
+                .is_none()
+        }) || state
+            .policy
+            .call
+            .frame_ports()
+            .iter()
+            .any(|(port, production)| {
+                !production.accepts_count(
+                    state.terminal.as_deref().unwrap_or(""),
+                    frames
+                        .iter()
+                        .filter(|frame| frame.port.name() == *port)
+                        .count(),
+                )
+            })
         {
             return Err(Error::Batch);
         }

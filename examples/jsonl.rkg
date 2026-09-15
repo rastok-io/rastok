@@ -4,7 +4,7 @@ graph relay : App {
   connector shell : Process {
     mode = job ; command = "cat"
     codec = jsonl
-    effect = idempotent ; behavior = deterministic
+    idempotent = true; behavior = deterministic
     timeout = duration("5s")
   }
 
