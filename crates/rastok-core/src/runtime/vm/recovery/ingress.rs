@@ -121,7 +121,8 @@ impl Vm<'_> {
             ) => {
                 if self.plan.nodes[slot.index()]
                     .connector()
-                    .is_none_or(|spec| spec.effect != node::Effect::None)
+                    .and_then(|spec| session_opening(&spec.contract, spec.roles, spec.exchange))
+                    != Some(SessionOpening::Peer)
                     || *reference
                         != ids::inbound_session_ref(
                             &inbound.provenance,

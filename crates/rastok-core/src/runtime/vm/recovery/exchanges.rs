@@ -18,11 +18,12 @@ impl Vm<'_> {
             .ok_or_else(|| invalid(index, "a Session fact has no planned Connector"))?;
         let spec = self.plan.nodes[slot.index()]
             .connector()
-            .filter(|spec| spec.exchange == ConnectorExchange::Session && spec.roles.has_outbound())
             .ok_or_else(|| invalid(index, "a Session fact contradicts its Contract profile"))?;
+        let opening = session_opening(&spec.contract, spec.roles, spec.exchange)
+            .ok_or_else(|| invalid(index, "the Contract has no Session opening rule"))?;
         match &record.status {
             SessionStatus::Opening(intent) => {
-                if !matches!(spec.effect, node::Effect::Class(_))
+                if opening != SessionOpening::Local
                     || self.sessions.contains_key(&record.session_ref)
                     || intent.connector_path != record.connector_path
                     || intent.session_ref != record.session_ref
@@ -120,7 +121,7 @@ impl Vm<'_> {
                 let selected = self.select_session_ref(spec, &delivery.envelope, &settings)?;
                 if session.instance != instance
                     || selected.is_some_and(|selected| selected != record.session_ref)
-                    || (selected.is_none() && spec.effect == node::Effect::None)
+                    || (selected.is_none() && opening == SessionOpening::Peer)
                 {
                     return Err(invalid(
                         index,

@@ -1,6 +1,6 @@
 # Loop, Retry, Call and Saga — refactor contract
 
-14 September 2026. **Semantic direction approved; implementation not started.**
+14 September 2026. **Semantic direction approved; C2 implementation in progress.**
 [D-2026-09-14-4](../spec/decisions.md#d-2026-09-14-4--separate-loop-retry-and-saga-over-one-recurrence-engine)
 owns the decision. This document records the repository contact, implementation
 order and acceptance evidence still required, including the pre-C1 review
@@ -364,7 +364,7 @@ inventoried individually. No existing id may acquire another meaning.
 |---|---|---|
 | C0 — contract and contact | approved semantic distinction, output publication, audit and migration inventory | recorded here; exact encoding still unallocated |
 | C1 — operation and recurrence algebra | pinned operation, retained attempt disposition/consumption, closure-based deadlines, exact Session opening rule, plan-owned guarantee and Intent field removal, shared fold, identity register and crash traces | reviewed on 15 September: [algebra](retry-c1-algebra.md), [traces](retry-c1-traces.md), [inventory](retry-c1-identity.md); warning restored to C2 checklist, uniform closure time settled, pending capacity separated from journal retention; no runtime/format changes |
-| C2 — source and validated plan | Retry settings, idempotence, `W-LOOP-REPEAT` with focused tests, typed HTTP 5xx/cardinality, removal of global effect, full registry-free checks, one declared format cutover | preflight embedded baseline measured ([C1 §12](retry-c1-algebra.md#12-review-follow-up-and-pre-c2-measurement)); implementation not started |
+| C2 — source and validated plan | Retry settings, idempotence, `W-LOOP-REPEAT` with focused tests, typed HTTP 5xx/cardinality, removal of global effect, full registry-free checks, one declared format cutover | [implementation in progress](retry-c2-implementation.md): exact Session opening separated from effect; v18/v2 still unchanged; preflight measurement in [C1 §12](retry-c1-algebra.md#12-review-follow-up-and-pre-c2-measurement) |
 | C3 — runtime and accounting | qualified Call attempts, final publication, shared scheduling/recovery, exact per-attempt report input | not started |
 | C4 — migration and qualification | examples, goldens with reasons, UI, docs, no_std and memory/code-size gates | not started |
 

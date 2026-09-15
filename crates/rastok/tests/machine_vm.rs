@@ -3901,6 +3901,114 @@ graph app : App {
 }
 
 #[test]
+fn local_session_contracts_refuse_peer_roots_before_journaling() {
+    for (contract, settings, stderr) in [
+        (
+            "WebSocketClient",
+            "url = \"ws://example.test/socket\"; handshake_timeout = duration(\"5s\"); codec = text",
+            "",
+        ),
+        (
+            "Process",
+            "mode = service; command = \"cat\"; codec = lines",
+            "socket.err -> nothing",
+        ),
+    ] {
+        let source = format!(
+            r#"
+graph app : App {{
+  input in: text
+  connector socket : {contract} {{
+    {settings}
+    effect = idempotent; behavior = deterministic
+  }}
+  in -> socket
+  socket.out -> nothing
+  socket.exit -> nothing
+  {stderr}
+}}
+"#
+        );
+        let compiled = compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
+        let mut vm = Vm::boot(&compiled.plan, GraphVersion(1));
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let before = vm.inspection();
+        assert!(matches!(
+            vm.admit_inbound(
+                &mut journal,
+                &websocket_proposal(1, "", InboundSession::Open),
+            ),
+            Err(VmError::PlanInvariant {
+                reason: "this Contract does not admit peer Session openings",
+                ..
+            })
+        ));
+        assert!(
+            journal.records().is_empty(),
+            "{contract}: no forged peer root"
+        );
+        assert_eq!(vm.inspection(), before, "{contract}: no partial admission");
+    }
+}
+
+#[test]
+fn server_orphan_writes_cannot_open_or_guess_a_session_after_recovery() {
+    let source = r#"
+graph app : App {
+  input in: text
+  connector socket : WebSocketServer {
+    listen = "127.0.0.1:0"; handshake_timeout = duration("5s"); codec = text
+  }
+  in -> socket
+  socket.out -> nothing
+  socket.exit -> nothing
+}
+"#;
+    let compiled = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let mut expected_records = None;
+    for recover in [false, true] {
+        let mut vm = Vm::boot(&compiled.plan, GraphVersion(1));
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let mut world = SessionWorld::default();
+        for live_peers in [0, 1] {
+            if live_peers == 1 {
+                assert!(matches!(
+                    vm.admit_inbound(
+                        &mut journal,
+                        &websocket_proposal(1, "", InboundSession::Open),
+                    )
+                    .unwrap(),
+                    InboundAdmission::Accepted(_)
+                ));
+            }
+            vm.inject(&mut journal, text_submission("uncorrelated"))
+                .unwrap();
+            if recover {
+                vm.recover_from_journal(&journal).unwrap();
+            }
+            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+            assert_eq!(journal.live_sessions().len(), live_peers);
+            assert!(world.opened.is_empty(), "an orphan cannot open a client");
+            assert!(world.writes.is_empty(), "one live peer is not a correlator");
+            if recover {
+                let retained = journal.records().to_vec();
+                vm.recover_from_journal(&journal).unwrap();
+                assert_eq!(journal.records(), retained);
+            }
+        }
+        if let Some(expected) = &expected_records {
+            assert_eq!(
+                journal.records(),
+                expected,
+                "recovery changes no dispositions"
+            );
+        } else {
+            expected_records = Some(journal.records().to_vec());
+        }
+    }
+}
+
+#[test]
 fn inbound_sessions_recover_peer_messages_without_crossing_two_openings() {
     let source = r#"
 graph app : App {

@@ -410,6 +410,13 @@ lineage. When lineage roots mix or a message is stored, an explicit contract
 correlator supplies the logical session token; arrival order is never a
 correlator.
 
+The exact Contract owns opening authority: WebSocketServer admits peer
+openings; WebSocketClient and Process service open locally on input. All
+three have duplex roles, so roles alone cannot select the opener. Execution
+and recovery use this same Contract fact, independently of the effect
+classification. A server's uncorrelated write never becomes a client opening
+or a guessed write to its only live peer.
+
 An outbound message has a durable write obligation but **not** a graph-visible
 call exit. Local write settlement means only that the Driver accepted
 the bytes under the session protocol; it does not claim that the peer

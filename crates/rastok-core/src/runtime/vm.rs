@@ -25,7 +25,7 @@ use crate::boundary::{
     SchedulerCompletion, SessionDriverEvent, SessionOpenIntent, SessionRef, SessionStart,
     SessionWriteIntent, SessionWriteRef,
 };
-use crate::connector::ConnectorExchange;
+use crate::connector::{ConnectorExchange, SessionOpening, session_opening};
 use crate::envelope::{Data, Envelope, Id, Meta, MetaSys};
 use crate::identity::{InstanceAddress, InstanceFrame, InstanceRef};
 use crate::journal::admission::InstanceAdmissions;
@@ -1859,15 +1859,14 @@ impl<'plan> Vm<'plan> {
         // instead of re-evaluating a key from mutable metadata.
         let session_target = match (inbound_source, session_admission) {
             (Some((source, ConnectorExchange::Session)), Some(InboundSession::Open)) => {
-                if !matches!(
-                    self.plan.nodes[source.index()]
-                        .connector()
-                        .map(|spec| spec.effect),
-                    Some(node::Effect::None)
-                ) {
+                if self.plan.nodes[source.index()]
+                    .connector()
+                    .and_then(|spec| session_opening(&spec.contract, spec.roles, spec.exchange))
+                    != Some(SessionOpening::Peer)
+                {
                     return Err(VmError::PlanInvariant {
                         node: self.plan.nodes[source.index()].path.clone(),
-                        reason: "an effectful Session Connector cannot accept a peer opening",
+                        reason: "this Contract does not admit peer Session openings",
                     });
                 }
                 let owner = self.plan.nodes[source.index()].owner;
@@ -4986,6 +4985,13 @@ impl<'plan> Vm<'plan> {
                 reason: "a Session delivery reached a Connector without an outbound Session role",
             });
         }
+        let opening =
+            session_opening(&spec.contract, spec.roles, spec.exchange).ok_or_else(|| {
+                VmError::PlanInvariant {
+                    node: planned.path.clone(),
+                    reason: "the Contract has no Session opening rule",
+                }
+            })?;
         let settings =
             self.resolve_invocation_settings(instance, spec, &planned.path, &delivery.envelope)?;
         let selected = self.select_session_ref(spec, &delivery.envelope, &settings)?;
@@ -5015,7 +5021,7 @@ impl<'plan> Vm<'plan> {
             .filter(|(_, session)| session.slot == slot && session.instance == *instance)
             .map(|(reference, _)| *reference)
             .collect();
-        if matches!(spec.effect, node::Effect::None) {
+        if opening == SessionOpening::Peer {
             // A server never guesses which peer to address. The ordinary
             // consume-only discard is observable and prevents an orphan from
             // becoming a new client opening by accident.

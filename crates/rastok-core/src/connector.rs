@@ -283,9 +283,74 @@ impl fmt::Display for ConnectorRoles {
     }
 }
 
+/// Which side may create the resource, independently of message direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionOpening {
+    Local,
+    Peer,
+}
+
+/// Duplex roles alone cannot distinguish a listener from a client or child.
+/// Unknown Contracts acquire no opening authority by resemblance.
+pub(crate) fn session_opening(
+    contract: &ContractId,
+    roles: ConnectorRoles,
+    exchange: ConnectorExchange,
+) -> Option<SessionOpening> {
+    if roles != ConnectorRoles::InboundAndOutbound || exchange != ConnectorExchange::Session {
+        return None;
+    }
+    match contract.as_str() {
+        WEBSOCKET_SERVER_CONNECTOR_ID => Some(SessionOpening::Peer),
+        WEBSOCKET_CLIENT_CONNECTOR_ID | PROCESS_SERVICE_CONNECTOR_ID => Some(SessionOpening::Local),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ConnectorExchange, ConnectorIdError, ConnectorRoles, ContractId};
+    use super::*;
+
+    #[test]
+    fn session_opening_comes_from_the_exact_contract_not_duplex_roles() {
+        for (id, opening) in [
+            (WEBSOCKET_SERVER_CONNECTOR_ID, Some(SessionOpening::Peer)),
+            (WEBSOCKET_CLIENT_CONNECTOR_ID, Some(SessionOpening::Local)),
+            (PROCESS_SERVICE_CONNECTOR_ID, Some(SessionOpening::Local)),
+            (PROCESS_CONNECTOR_ID, None),
+            (HTTP_CLIENT_CONNECTOR_ID, None),
+            (HTTP_SERVER_CONNECTOR_ID, None),
+            (FILE_CONNECTOR_ID, None),
+            ("rastok/websocket-server@99", None),
+            ("third-party/websocket-server@2", None),
+        ] {
+            let contract = ContractId::parse(id).unwrap();
+            for roles in [
+                ConnectorRoles::Inbound,
+                ConnectorRoles::Outbound,
+                ConnectorRoles::InboundAndOutbound,
+            ] {
+                for exchange in [
+                    ConnectorExchange::Event,
+                    ConnectorExchange::Call,
+                    ConnectorExchange::Session,
+                ] {
+                    let expected = if roles == ConnectorRoles::InboundAndOutbound
+                        && exchange == ConnectorExchange::Session
+                    {
+                        opening
+                    } else {
+                        None
+                    };
+                    assert_eq!(
+                        session_opening(&contract, roles, exchange),
+                        expected,
+                        "{id}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn connector_ids_accept_one_canonical_spelling_only() {
