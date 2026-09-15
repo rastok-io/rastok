@@ -40,6 +40,8 @@ use core::fmt;
 pub(crate) mod admission;
 pub mod instance_stop;
 pub mod loop_protocol;
+pub mod retention;
+pub mod retry_protocol;
 pub mod timing;
 
 /// Deterministic identity recipes — the injective blake3 framing of

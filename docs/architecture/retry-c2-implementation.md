@@ -144,7 +144,61 @@ No package version, recording version, Contract major, hash pin or causal
 golden was changed. Browser/JavaScript and independent protocol campaigns were
 not rerun; no UI or physical Driver implementation changed in this checkpoint.
 
-## 5. Remaining C2 gates
+## 5. Retained attempt algebra and shared codecs
+
+The core now has typed Retry operations and a pure protocol fold, together
+with the candidate key-58 retention and causal projections from C1. This is
+**not journal carrier admission, spatial recovery or executable Retry**. No
+v18 record writes a Retry packet and no v2 recording accepts a new row shape.
+The current source gate still refuses an otherwise valid Retry policy before
+HIR/package emission. The implementation work continues on `rework/retry`.
+
+The fold binds an opening to the exact delivery, instance generation, original
+plan, Contract, admitted envelope and Contract-checked policy. Later Calls
+keep the original prepared bytes, reduced settings, partner key and logical
+opening time. They use new admission and Call identities; DATA and travelling
+metadata are retained, with the previous terminal as parent. It checks the
+winning closure and the original arm before any late manager receipt can
+advance. An active Closing generation suppresses further admission; a held
+batch is consumed without publication when stopped in backoff.
+
+`Held`, `Consumed + Advance`, `Published + Close` and `Consumed + Close(stopped)`
+are distinct atomic shapes. Producer emission validation checks the entire
+ordered batch and its unique terminal; manager receipt must match the pending
+batch exactly. The fold retains only the current pending batch, not one batch
+per configured attempt. This does not replace the C3 measurement of raw
+capture, typed emissions and retained journal history.
+
+Lossless record encoding moved from hosted `recording/codec.rs` to core
+`journal/retention.rs`. The hosted layer still owns file framing, versions,
+checksums, source/package attachment and persistence policy. It reuses this
+reader instead of maintaining another journal interpretation. Envelope/data
+causal projections likewise moved intact to `identity/encoding.rs`; the
+golden writer and Retry packet use the same value/spine registry. No new
+dependency, clock or I/O enters core.
+
+The byte-neutral move was checked against the **old hosted implementation**:
+the canonical retained echo record rows hash to
+`e0688e724608dd1d9686e86d09148da3fdc3caaf40eeca32d26c9010af5234fa`
+before and after the move. That is a retention regression, not a causal
+golden or a recording-file checksum. The declared v19/v3 cutover will change
+the Call/Intent row shape; that future change must explain this pin too.
+
+Focused evidence at this point: twelve protocol tests and five codec tests
+pass, including malformed packets, exact effect preparation, original
+deadlines, whole-batch order and reconstruction of every algebra prefix.
+All ten existing/new diagnostic recording tests pass. The prefix test supplies
+explicit typed events; it is **not** a full decoded-journal RecoveryFold or
+Driver replay proof. Record-carrier/plan checks and runtime scheduling remain
+required below.
+
+Travelling metadata uses the existing canonical identity rule, not IEEE
+scalar equality: unchanged NaN metadata must remain admissible and signed
+zero must not silently change. The new regression initially failed at the
+first admission with `AdmissionIdentity`; the fold compares canonical
+metadata and leaves the metadata value/evaluator semantics unchanged.
+
+## 6. Remaining C2 gates
 
 - HTTP ServerError and its declared Contract/type cutover, including decoded
   status boundaries and frame cardinality in Driver, Lab and core validation.

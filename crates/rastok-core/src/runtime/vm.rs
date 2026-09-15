@@ -1229,49 +1229,16 @@ impl<'plan> Vm<'plan> {
                 reason: "the Loop manager lost its validated Extension specification",
             });
         };
-        let duration = |constant: &crate::plan::PlanConstant| match constant.resolved {
-            crate::value::Value::Duration(value) if value > 0 => Some(value),
-            _ => None,
+        let Some(delay) = &spec.delay else {
+            return Ok(None);
         };
-        match &spec.delay {
-            None => Ok(None),
-            Some(crate::plan::LoopDelay::Fixed { after }) => {
-                duration(after)
-                    .map(Some)
-                    .ok_or(VmError::InvalidLoopDecision {
-                        owner: path,
-                        reason: "the fixed Loop delay is not a positive duration",
-                    })
-            }
-            Some(crate::plan::LoopDelay::Exponential { first, ceiling }) => {
-                let Some(first) = duration(first) else {
-                    return Err(VmError::InvalidLoopDecision {
-                        owner: path,
-                        reason: "the first exponential Loop delay is not positive",
-                    });
-                };
-                let Some(ceiling) = duration(ceiling) else {
-                    return Err(VmError::InvalidLoopDecision {
-                        owner: path,
-                        reason: "the exponential Loop delay ceiling is not positive",
-                    });
-                };
-                if first > ceiling || iteration == 0 {
-                    return Err(VmError::InvalidLoopDecision {
-                        owner: path,
-                        reason: "the exponential Loop delay contradicts its validated bounds",
-                    });
-                }
-                let shift = iteration - 1;
-                let scaled = u32::try_from(shift)
-                    .ok()
-                    .filter(|shift| *shift < i64::BITS - 1)
-                    .and_then(|shift| 1_i64.checked_shl(shift))
-                    .and_then(|factor| first.checked_mul(factor))
-                    .unwrap_or(ceiling);
-                Ok(Some(scaled.min(ceiling)))
-            }
-        }
+        let Some(duration) = delay.duration_after(iteration) else {
+            return Err(VmError::InvalidLoopDecision {
+                owner: path,
+                reason: "the Loop delay contradicts its positive bounds or application ordinal",
+            });
+        };
+        Ok(Some(duration))
     }
 
     fn unsupported_feature(&self) -> Option<VmError> {

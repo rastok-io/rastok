@@ -838,6 +838,39 @@ pub enum LoopDelay {
     },
 }
 
+impl LoopDelay {
+    /// Positive delay after a one-based application/attempt ordinal, shared
+    /// by recurrence policies. Saturation precedes multiplication overflow.
+    /// `None` denotes malformed resolved bounds, never a zero-delay policy.
+    #[must_use]
+    pub fn duration_after(&self, ordinal: u64) -> Option<i64> {
+        if ordinal == 0 {
+            return None;
+        }
+        let duration = |constant: &PlanConstant| match constant.resolved {
+            Value::Duration(value) if value > 0 => Some(value),
+            _ => None,
+        };
+        match self {
+            Self::Fixed { after } => duration(after),
+            Self::Exponential { first, ceiling } => {
+                let first = duration(first)?;
+                let ceiling = duration(ceiling)?;
+                if first > ceiling {
+                    return None;
+                }
+                let scaled = u32::try_from(ordinal - 1)
+                    .ok()
+                    .filter(|shift| *shift < i64::BITS - 1)
+                    .and_then(|shift| 1_i64.checked_shl(shift))
+                    .and_then(|factor| first.checked_mul(factor))
+                    .unwrap_or(ceiling);
+                Some(scaled.min(ceiling))
+            }
+        }
+    }
+}
+
 /// One owner's logical instance policy. A missing key selects the singleton
 /// address inside the parent instance; persistent remains an explicit value
 /// in the categorical plan even when its source spelling was omitted.

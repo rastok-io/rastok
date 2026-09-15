@@ -7,6 +7,22 @@ fn compile(source: &str) -> Compilation {
 }
 
 #[test]
+fn echo_retention_bytes_are_pinned_independently_of_the_codec_location() {
+    let compilation = compile(include_str!("../../../../examples/echo.rkg"));
+    let bytes = canonical_cbor::encode(&codec::list(compilation.labs.iter().flat_map(|world| {
+        lab::run(&compilation.plan, GraphVersion(1), world)
+            .into_iter()
+            .map(|run| codec::list(run.records.iter().map(codec::record)))
+    })));
+    // Captured with diagnostic v2's hosted codec before the no_std relocation.
+    // The v19/v3 inventory must separately explain its eventual tuple movement.
+    assert_eq!(
+        blake3::hash(&bytes).to_hex().as_str(),
+        "e0688e724608dd1d9686e86d09148da3fdc3caaf40eeca32d26c9010af5234fa"
+    );
+}
+
+#[test]
 fn the_echo_recording_reconstructs_every_prefix_without_the_world() {
     let compilation = compile(include_str!("../../../../examples/echo.rkg"));
     let runs = compilation
@@ -229,7 +245,7 @@ fn repeated_envelope_ids_cannot_change_their_content() {
         crate::envelope::Data::Materialized(crate::value::Value::Text("forged".into())),
     );
     assert!(matches!(
-        reader.record(&codec::record(&changed)),
+        reader.record(&codec::record(&changed)).map_err(Error::from),
         Err(Error::Invalid("inconsistent repeated envelope"))
     ));
 }

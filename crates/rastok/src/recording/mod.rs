@@ -76,6 +76,15 @@ impl fmt::Display for Error {
 }
 impl std::error::Error for Error {}
 
+impl From<crate::journal::retention::Error> for Error {
+    fn from(error: crate::journal::retention::Error) -> Self {
+        match error {
+            crate::journal::retention::Error::Invalid(reason) => Self::Invalid(reason),
+            crate::journal::retention::Error::Read(error) => Self::Read(error),
+        }
+    }
+}
+
 /// Exact retained facts with their independently validated plan and source view.
 pub struct Recording {
     plan: ValidatedExecutionPlan,

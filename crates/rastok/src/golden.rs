@@ -41,12 +41,15 @@
 //! the bytes were canonical (`Trace::from_stored` reads goldens
 //! through it too) — and it changes only when the spec does.
 
-use crate::envelope::{Data, Encoding, Envelope, Role};
+#[cfg(test)]
+use crate::envelope::{Data, Envelope};
 use crate::journal::{
     Closure, OutboundRecord, OutboundStatus, Record, SessionIngressRecord, SessionStatus,
 };
 use rastok_core::canonical_cbor::{Value as Cbor, decode, encode};
-use rastok_core::identity::encoding::{meta_tagged, value_tagged};
+use rastok_core::identity::encoding::{
+    data_spine as data_form, envelope_spine as spine, value_tagged,
+};
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -903,74 +906,6 @@ fn record_tree(record: &Record) -> Cbor {
             };
             Cbor::Map(BTreeMap::from([(10, Cbor::Uint(3)), (51, fact)]))
         }
-    }
-}
-
-/// The envelope spine, keys 1–9. Absent fields are omitted keys,
-/// never nulls.
-fn spine(envelope: &Envelope) -> Cbor {
-    let sys = envelope.meta().sys();
-    let mut pairs = BTreeMap::from([(1, Cbor::Bytes(sys.id().as_bytes().to_vec()))]);
-    if let Some(parent) = sys.parent_id() {
-        pairs.insert(2, Cbor::Bytes(parent.as_bytes().to_vec()));
-    }
-    pairs.insert(3, Cbor::Bytes(sys.origin_id().as_bytes().to_vec()));
-    if sys.role() != Role::Default {
-        pairs.insert(4, Cbor::Text(sys.role().to_string()));
-    }
-    pairs.insert(5, Cbor::Uint(sys.graph_version()));
-    // Spine key 6 is RETIRED (extend-only): the content type moved
-    // to the ext zone, sealed in key 9 (D-2026-08-10-4).
-    pairs.insert(8, data_form(envelope.data()));
-    let mut app_meta = Vec::new();
-    for (field, value) in envelope.meta().app() {
-        app_meta.push((String::from("app"), field.clone(), value));
-    }
-    for (field, value) in envelope.meta().ext() {
-        app_meta.push((String::from("ext"), field.clone(), value));
-    }
-    if !app_meta.is_empty() {
-        app_meta.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
-        pairs.insert(
-            9,
-            Cbor::Array(
-                app_meta
-                    .into_iter()
-                    .map(|(namespace, field, value)| {
-                        Cbor::Array(vec![
-                            Cbor::Text(namespace),
-                            Cbor::Text(field),
-                            meta_tagged(value),
-                        ])
-                    })
-                    .collect(),
-            ),
-        );
-    }
-    Cbor::Map(pairs)
-}
-
-/// `data` (spine key 8): `[encoding_tag, bytes]`. Encoded payloads
-/// seal their original bytes, never re-encoded. A materialized value
-/// has no storage bytes, so its canonical bytes are its own
-/// `tagged_value` CBOR under `raw` — deterministic and injective,
-/// this build's materialization rule.
-fn data_form(data: &Data) -> Cbor {
-    match data {
-        Data::Encoded {
-            encoding, bytes, ..
-        } => Cbor::Array(vec![
-            Cbor::Uint(match encoding {
-                Encoding::Raw => 1,
-                Encoding::Avro => 2,
-                Encoding::ArrowIpc => 3,
-            }),
-            Cbor::Bytes(bytes.clone()),
-        ]),
-        Data::Materialized(value) => Cbor::Array(vec![
-            Cbor::Uint(1),
-            Cbor::Bytes(encode(&value_tagged(value))),
-        ]),
     }
 }
 

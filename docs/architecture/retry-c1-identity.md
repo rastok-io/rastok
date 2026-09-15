@@ -169,6 +169,21 @@ with existing `@loop` or physical cursors is allowed. C2 must pin the canonical
 framing/endianness and independently constructed reference vectors before any
 golden is blessed. No counters or Worker-slot numbers enter these recipes.
 
+The C2 algebra fixes that framing as existing `Id::derive` framing: domain
+byte, then each component prefixed by its byte length as little-endian u32.
+Operation components are the canonical instance-address bytes, generation
+u64 little-endian, entry UTF-8 and opening DeliveryRef bytes. Admission
+components are operation bytes, next ordinal u64 little-endian and the
+previous CallRef bytes. The internal cursor text is
+`@retry:<operation-id>:<entry>`; the following DeliveryRef uses the ordinary
+delivery recipe with that cursor and the new admission envelope id. Tests
+construct the operation framing independently. None of these candidate
+fields is admitted into current v18/v2 carriers; the single cutover remains
+outstanding. The independently framed `pay` singleton-generation-0 fixture
+pins operation `d6c4216ebd85518c3497d7410c2707eb` and its second admission
+`e9b37274b55fddbac02eee26f3fd4849` in `journal/retry_protocol/tests.rs`;
+the fixture specifies the exact opening delivery and predecessor Call bytes.
+
 **Timing movements are part of this same cutover:**
 
 - New retained-only **key 59**: the original logical closure instant (signed
