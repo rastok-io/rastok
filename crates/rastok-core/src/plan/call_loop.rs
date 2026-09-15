@@ -126,7 +126,7 @@ pub(super) fn validate(
             let terminal = rule.source.port.name() == call.terminal();
             let produces = terminal
                 || matches!(call.frame_production(rule.source.port.name()),
-                Some(FrameProduction::ExactlyOneOnExit(on)) if on == *case);
+                Some(FrameProduction::ExactlyOneOn(cases)) if cases.contains(case));
             if !produces {
                 continue;
             }

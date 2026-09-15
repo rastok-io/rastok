@@ -44,7 +44,6 @@ impl Vm<'_> {
             return Err(violation("the Call terminal is outside its Contract"));
         }
         for port in &node.ports {
-            use crate::connector::FrameProduction;
             let Some(production) = call.frame_production(port.port.name()) else {
                 continue;
             };
@@ -53,14 +52,7 @@ impl Vm<'_> {
                 .iter()
                 .filter(|emission| emission.port == port.port)
                 .count();
-            let valid = match production {
-                FrameProduction::Never => count == 0,
-                FrameProduction::ZeroOrMore => true,
-                FrameProduction::ExactlyOneOnExit(case) => {
-                    count == usize::from(case == terminal_case)
-                }
-            };
-            if !valid {
+            if !production.accepts_count(terminal_case, count) {
                 return Err(violation(
                     "Call frames contradict the Contract's terminal cardinality",
                 ));

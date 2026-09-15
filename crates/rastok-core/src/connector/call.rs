@@ -50,8 +50,21 @@ pub enum FrameProduction {
     Never,
     /// An ordered stream, without an at-most-one guarantee.
     ZeroOrMore,
-    /// Exactly one frame iff the terminal exit is this case; otherwise none.
-    ExactlyOneOnExit(&'static str),
+    /// Exactly one frame iff the terminal is in this canonical case set;
+    /// otherwise none. The Contract owns this nonempty, sorted, unique set.
+    ExactlyOneOn(&'static [&'static str]),
+}
+
+impl FrameProduction {
+    /// Checks the frame count after the terminal itself has been validated.
+    #[must_use]
+    pub fn accepts_count(self, terminal: &str, count: usize) -> bool {
+        match self {
+            Self::Never => count == 0,
+            Self::ZeroOrMore => true,
+            Self::ExactlyOneOn(cases) => count == usize::from(cases.contains(&terminal)),
+        }
+    }
 }
 
 /// Closed facts derived from an exact Contract and its selected profile.
@@ -135,8 +148,11 @@ impl CallSemantics {
         {
             FrameProduction::Never => Ok(()),
             FrameProduction::ZeroOrMore => Err(CallCommandError::RepeatedFrames),
-            FrameProduction::ExactlyOneOnExit(case) => {
-                check_recurrence(TerminalVisibility::AfterEffect, command, effect, case)
+            FrameProduction::ExactlyOneOn(cases) => {
+                for case in cases {
+                    check_recurrence(TerminalVisibility::AfterEffect, command, effect, case)?;
+                }
+                Ok(())
             }
         }
     }
@@ -204,7 +220,7 @@ pub fn outbound_call_semantics(
     exchange: ConnectorExchange,
     mode: Option<&str>,
 ) -> Option<CallSemantics> {
-    use FrameProduction::{ExactlyOneOnExit, Never, ZeroOrMore};
+    use FrameProduction::{ExactlyOneOn, Never, ZeroOrMore};
     use TerminalVisibility::{AfterEffect, BeforeEffect, OutcomeUnknown};
 
     if roles != ConnectorRoles::Outbound || exchange != ConnectorExchange::Call {
@@ -225,7 +241,7 @@ pub fn outbound_call_semantics(
         ),
         (super::FILE_CONNECTOR_ID, Some("read" | "replace")) => (
             if mode == Some("read") {
-                &[("out", ExactlyOneOnExit("Completed"))]
+                &[("out", ExactlyOneOn(&["Completed"]))]
             } else {
                 &[("out", Never)]
             },
@@ -243,7 +259,7 @@ pub fn outbound_call_semantics(
             ],
         ),
         (super::HTTP_CLIENT_CONNECTOR_ID, None) => (
-            &[("out", ExactlyOneOnExit("Completed"))],
+            &[("out", ExactlyOneOn(&["Completed"]))],
             &[
                 ("BodyTooLarge", OutcomeUnknown),
                 ("Completed", AfterEffect),

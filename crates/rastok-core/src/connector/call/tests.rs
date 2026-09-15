@@ -249,6 +249,50 @@ fn stream_frames_cannot_issue_an_unbounded_number_of_any_verdict() {
 }
 
 #[test]
+fn frame_counts_follow_membership_in_the_whole_terminal_case_set() {
+    let production = FrameProduction::ExactlyOneOn(&["Accepted", "Warning"]);
+    for case in ["Accepted", "Failed", "Warning"] {
+        for count in [0, 1, 2, usize::MAX] {
+            assert_eq!(
+                production.accepts_count(case, count),
+                count == usize::from(case != "Failed"),
+                "{case} / {count}"
+            );
+            assert_eq!(
+                FrameProduction::Never.accepts_count(case, count),
+                count == 0
+            );
+            assert!(FrameProduction::ZeroOrMore.accepts_count(case, count));
+        }
+    }
+}
+
+#[test]
+fn frame_case_sets_are_nonempty_canonical_and_owned_by_the_contract() {
+    for (id, mode) in [
+        (PROCESS_CONNECTOR_ID, Some("job")),
+        (FILE_CONNECTOR_ID, Some("read")),
+        (FILE_CONNECTOR_ID, Some("replace")),
+        (HTTP_CLIENT_CONNECTOR_ID, None),
+    ] {
+        let profile = contract(id, mode);
+        for (_, production) in profile.frames {
+            if let FrameProduction::ExactlyOneOn(cases) = production {
+                assert!(!cases.is_empty());
+                assert!(cases.windows(2).all(|pair| pair[0] < pair[1]));
+                for case in *cases {
+                    assert!(
+                        profile
+                            .terminal_cases()
+                            .contains(&(case, TerminalVisibility::AfterEffect))
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn single_response_frames_prove_visibility_and_replace_has_no_frame() {
     for (id, mode) in [
         (FILE_CONNECTOR_ID, Some("read")),
@@ -257,7 +301,7 @@ fn single_response_frames_prove_visibility_and_replace_has_no_frame() {
         let profile = contract(id, mode);
         assert_eq!(
             profile.frame_production("out"),
-            Some(FrameProduction::ExactlyOneOnExit("Completed"))
+            Some(FrameProduction::ExactlyOneOn(&["Completed"]))
         );
         assert_eq!(profile.frame_production("err"), None);
         assert_eq!(

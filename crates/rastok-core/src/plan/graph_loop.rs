@@ -571,7 +571,7 @@ fn call_outcomes(
                 None,
             );
             let frames = match call.frame_production(port.port.name()) {
-                Some(FrameProduction::ExactlyOneOnExit(on)) if on == *case => {
+                Some(FrameProduction::ExactlyOneOn(cases)) if cases.contains(case) => {
                     cache.get(&source)?.clone()
                 }
                 Some(FrameProduction::ZeroOrMore) => {
