@@ -149,10 +149,37 @@ pub struct Operation {
     /// Why this operation ended.
     pub closed: Option<CloseReason>,
     admitted_at: Option<i64>,
+    call_opened_at: Option<i64>,
     policy: Policy,
     terminal: Option<String>,
     parent: Option<Id>,
     withhold: bool,
+}
+
+impl Operation {
+    /// Original retained instant of this attempt's admission.
+    #[must_use]
+    pub const fn admitted_at(&self) -> Option<i64> {
+        self.admitted_at
+    }
+
+    /// Disposition fixed by the winning closure, before any later Closing.
+    #[must_use]
+    pub const fn withholds(&self) -> bool {
+        self.withhold
+    }
+
+    /// The preceding terminal, retained by the exact complete batch.
+    #[must_use]
+    pub const fn terminal_parent(&self) -> Option<Id> {
+        self.parent
+    }
+
+    /// Policy re-derived from the original validated program.
+    #[must_use]
+    pub const fn policy(&self) -> &Policy {
+        &self.policy
+    }
 }
 
 /// Pure fold of accepted operation facts. No Driver or clock is accessible.
@@ -178,6 +205,12 @@ impl Fold {
     /// cascade is resolved by the lifecycle fold, never a string-prefix test.
     pub fn begin_closing(&mut self, instance: &InstanceRef) {
         self.closing.insert(instance.clone());
+    }
+
+    /// Exact-generation Closing has already won in the retained prefix.
+    #[must_use]
+    pub fn is_closing(&self, instance: &InstanceRef) -> bool {
+        self.closing.contains(instance)
     }
 
     /// Fold one atomic packet. `at` is an explicit retained logical instant;
@@ -321,6 +354,7 @@ impl Fold {
                 pending: None,
                 closed: None,
                 admitted_at: None,
+                call_opened_at: None,
                 policy: authority.policy.clone(),
                 terminal: None,
                 parent: None,
@@ -402,6 +436,7 @@ impl Fold {
         state.envelope = envelope.clone();
         state.phase = Phase::Admitted;
         state.call = None;
+        state.call_opened_at = None;
         state.closed_at = None;
         state.due_at = None;
         state.terminal = None;
@@ -422,6 +457,7 @@ impl Fold {
         }
         Self::check_intent(state, intent)?;
         state.call = Some(intent.call_ref);
+        state.call_opened_at = Some(intent.logical_time);
         state.phase = Phase::CallOpen;
         Ok(())
     }
@@ -431,7 +467,7 @@ impl Fold {
             || intent.prepared != state.pin.prepared
             || intent.resolved_settings != state.pin.settings
             || intent.idempotency_key != state.pin.key
-            || intent.logical_time != state.pin.opened_at
+            || state.admitted_at.is_none_or(|at| intent.logical_time < at)
             || intent.emitting_id != state.envelope.meta().sys().id()
             || ids::delivery_ref(&intent.edge, intent.emitting_id) != state.delivery
             || ids::call_ref(state.delivery, state.pin.prepared.digest()) != intent.call_ref
@@ -460,6 +496,7 @@ impl Fold {
         if state.ordinal != attempt.ordinal
             || state.phase != Phase::CallOpen
             || state.call != Some(settlement.intent.call_ref)
+            || state.call_opened_at != Some(settlement.intent.logical_time)
         {
             return Err(Error::Transition);
         }
@@ -474,8 +511,8 @@ impl Fold {
             return Err(Error::Terminal);
         }
         if state
-            .admitted_at
-            .is_none_or(|admitted| settlement.closed_at < admitted)
+            .call_opened_at
+            .is_none_or(|opened| settlement.closed_at < opened)
         {
             return Err(Error::Timing);
         }

@@ -177,7 +177,7 @@ impl Fixture {
             prepared: self.pin.prepared.clone(),
             idempotency_key: self.pin.key.clone(),
             resolved_settings: self.pin.settings.clone(),
-            logical_time: self.pin.opened_at,
+            logical_time: state.admitted_at().unwrap(),
         }
     }
 
@@ -294,7 +294,7 @@ fn carrier(
         instance_commands: None,
         retry_record: Some(Box::new(packet)),
         timer_schedule: None,
-        logical_time: manager.then_some(0),
+        logical_time: None,
         consumed: if manager {
             vec![]
         } else {
@@ -310,6 +310,23 @@ fn carrier(
         routes: vec![],
         timers: vec![],
     }
+}
+
+#[test]
+fn retry_manager_retention_does_not_invent_a_semantic_now_read() {
+    let f = Fixture::new(3);
+    let mut opened = carrier(
+        &f,
+        manager(vec![f.opened(), f.admitted(1, None)]),
+        vec![],
+        true,
+    );
+    // Pin.opened_at retains preparation time; no DSL expression read now().
+    // Later admissions retain their time in the mandatory Call timeout arm.
+    opened.logical_time = None;
+    validate_transaction(&opened).unwrap();
+    opened.logical_time = Some(0);
+    assert_eq!(validate_transaction(&opened), Err(Error::PacketShape));
 }
 
 #[test]

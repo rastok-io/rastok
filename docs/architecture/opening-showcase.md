@@ -9,8 +9,9 @@ gate. D-2026-09-14-3 separately authorizes minimal pure member-presence
 inspection, without a package-version or journal move. This ledger records
 delivery, not new semantic authority.
 The subsequent D-2026-09-14-4 approves the
-[Loop / Retry / Saga refactor](retry-extension-refactor.md); C2 implementation
-is in progress. `rework/retry` carries the unblessed v19/recording-v3
+[Loop / Retry / Saga refactor](retry-extension-refactor.md); the
+[C3 runtime checkpoint](retry-c3-implementation.md) is in progress.
+`rework/retry` carries the unblessed v19/recording-v3
 candidate; v18 is the last fully qualified baseline. Retry still refuses at
 the named manager execution gate; no release or golden blessing is claimed.
 The [explicit instance-closure design](instance-stop-command.md) is now
@@ -47,7 +48,7 @@ dead when no handler emits on that port.
 | Readable golden divergence | Done | Expected/actual labels, first record and field, retained causal context; shared CLI/UI path; classified values hidden; byte/seal comparison unchanged |
 | `rastok new` | Done | One executable typed graph plus Lab; tests simulate it and prove no overwrite and path/name refusals |
 | Optional JSON member presence | Done | Approved `has(object.member)`, core evaluator, independent package validation, constant folding, classification and pinned CEL differential tests; absence is distinct from null and observed zero; no witness re-blessing |
-| Loop / Retry / Saga separation | Partial — v19/v3 candidate, no executable Retry yet | [C2 evidence](retry-c2-implementation.md) records Session authority, original-plan idempotence, ServerError, HIR/transport validation, the Loop warning and retained attempt/closure evidence. [C1 inventory](retry-c1-identity.md) owns this unblessed cutover; [C0–C4](retry-extension-refactor.md#8-implementation-order-and-exits) still require full original-prefix binding, manager/recovery/accounting and migration. No golden has changed |
+| Loop / Retry / Saga separation | Partial — v19/v3 candidate; staged runtime, source gate closed | [C2 evidence](retry-c2-implementation.md) covers the validated plan and retained carriers. [C3 evidence](retry-c3-implementation.md) adds whole-batch disposition, closure-based scheduling, original-prefix recovery and Lab/recording tests. Unopened Closing requests drain once without Retry, D-2026-09-15-4. Mixed scheduling, accounting, footprint and C4 migration remain. No golden has changed |
 | `docs/site/README.md` schema | Done | Plain Markdown/YAML, exact requested fields; Rust validation rejects missing/unknown/duplicate fields and checks artifact references; no extra field introduced |
 | Editor grammar | Done for the executable v18 syntax | Data-only package, three lexical tests and two real TextMate/Oniguruma tests; all shipped examples, JSON quoting, raw readers, nested comments and instance commands. Future guest compilers and semantic tokens remain outside scope; no interactive historical-VS-Code certification |
 | echo page and comparison | Done | Three scenarios and gallery goldens; reproducible run/replay; `cli` versus `lab` provenance prevents a false claim of raw run/simulate seal equality |

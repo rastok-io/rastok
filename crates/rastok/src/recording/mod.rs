@@ -350,11 +350,14 @@ impl Recording {
                 .map(|(_, at)| *at)
                 .ok_or(Error::Invalid("missing prefix observation"))?
         };
-        let mut vm = if self.empty_deployment_header {
-            Vm::boot_at_with_deployment(&self.plan, self.version, now, &BootBindings::empty())
-        } else {
-            Vm::boot_at(&self.plan, self.version, now)
-        };
+        let empty = BootBindings::empty();
+        let mut vm = Vm::boot_program(
+            &self.plan,
+            self.hash,
+            self.version,
+            now,
+            self.empty_deployment_header.then_some(&empty),
+        );
         let mut contracts = replay::Contracts::bind(&self.plan)?;
         vm.recover_with_bindings(&journal, &mut contracts)
             .map_err(Error::Recovery)?;

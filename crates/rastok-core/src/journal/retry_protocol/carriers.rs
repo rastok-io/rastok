@@ -86,7 +86,7 @@ pub(crate) fn validate_transaction(record: &TransactionRecord) -> Result<(), Err
 
 fn manager_carrier(record: &TransactionRecord) -> Result<(), Error> {
     if record.trigger != Trigger::Lifecycle(Lifecycle::Retry)
-        || record.logical_time.is_none()
+        || record.logical_time.is_some()
         || record.cause.is_none()
         || !record.consumed.is_empty()
         || !record.emissions.is_empty()

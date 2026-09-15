@@ -54,6 +54,7 @@ mod graph_loop;
 mod instance_stop;
 mod loop_manager;
 mod recovery;
+mod retry_manager;
 mod timing;
 use core::fmt;
 
@@ -127,9 +128,9 @@ pub enum VmError {
         /// The refusing node.
         node: node::Path,
     },
-    /// The bounded Loop-manager queue cannot admit another external root.
-    LoopQueueFull {
-        /// Loop owner refusing the root.
+    /// The shared recurrence budget cannot admit another Loop run or Retry operation.
+    RecurrenceQueueFull {
+        /// Owner whose opening cannot be reserved.
         owner: OwnerPath,
     },
     /// Runtime defense for a control decision the validated L3 proof says is
@@ -283,8 +284,11 @@ impl fmt::Display for VmError {
             Self::MailboxFull { node } => {
                 write!(f, "the mailbox of `{node}` is full")
             }
-            Self::LoopQueueFull { owner } => {
-                write!(f, "the Loop work queue of `{owner}` is full")
+            Self::RecurrenceQueueFull { owner } => {
+                write!(
+                    f,
+                    "the shared recurrence admission budget is full at `{owner}`"
+                )
             }
             Self::InvalidLoopDecision { owner, reason } => {
                 write!(
@@ -985,6 +989,8 @@ impl Scheduler {
 #[derive(Debug)]
 pub struct Vm<'plan> {
     plan: &'plan ValidatedExecutionPlan,
+    original_hash: Option<crate::plan::SemanticHash>,
+    retry_manager: Option<Box<crate::journal::retry_protocol::Fold>>,
     /// First still-unsupported classified schema, computed once at boot. Raw
     /// secret payloads remain closed; personal data opens only under the
     /// attested run-scoped privacy profile.
@@ -1264,7 +1270,7 @@ impl<'plan> Vm<'plan> {
             });
         }
         self.plan.owners.iter().find_map(|owner| {
-            if owner.retry_spec().is_some() {
+            if owner.retry_spec().is_some() && self.original_hash.is_none() {
                 return Some(VmError::UnsupportedExtension { owner: owner.path.clone(), extension: node::Extension::Retry });
             }
             let spec = owner.loop_spec()?;
@@ -1326,6 +1332,22 @@ impl<'plan> Vm<'plan> {
         Self::boot_at_inner(plan, graph_version, logical_time, Some(boot))
     }
 
+    /// Boots the exact validated program, including its separately transported
+    /// semantic identity. Retry openings bind to this original identity; a
+    /// plan body alone cannot reconstruct it.
+    #[must_use]
+    pub fn boot_program(
+        plan: &'plan ValidatedExecutionPlan,
+        hash: crate::plan::SemanticHash,
+        graph_version: GraphVersion,
+        logical_time: i64,
+        boot: Option<&crate::deployment::BootBindings>,
+    ) -> Self {
+        let mut vm = Self::boot_at_inner(plan, graph_version, logical_time, boot);
+        vm.original_hash = Some(hash);
+        vm
+    }
+
     fn boot_at_inner(
         plan: &'plan ValidatedExecutionPlan,
         graph_version: GraphVersion,
@@ -1346,6 +1368,12 @@ impl<'plan> Vm<'plan> {
         }
         Self {
             plan,
+            original_hash: None,
+            retry_manager: plan
+                .owners
+                .iter()
+                .any(|owner| owner.retry_spec().is_some())
+                .then(|| Box::new(crate::journal::retry_protocol::Fold::default())),
             unsupported_data_policy: first_unsupported_data_policy_location(plan, boot),
             missing_deployment_binding: first_missing_deployment_binding(plan, boot),
             requires_personal_retention: personal_data_requirements(plan).personal,
@@ -2115,6 +2143,7 @@ impl<'plan> Vm<'plan> {
         bindings: &mut B,
     ) -> Result<bool, VmError> {
         self.preflight(journal)?;
+        self.synchronize_retry_closures(journal)?;
         if self.step_instance_commands(journal)? {
             return Ok(true);
         }
@@ -2134,6 +2163,9 @@ impl<'plan> Vm<'plan> {
             return Ok(true);
         }
         if self.has_loops && self.step_loop_manager(journal)? {
+            return Ok(true);
+        }
+        if self.step_retry_manager(journal)? {
             return Ok(true);
         }
         let inbound_ready =
@@ -2358,10 +2390,19 @@ impl<'plan> Vm<'plan> {
         bindings: &mut B,
     ) -> Result<PumpReport, VmError> {
         let gate = PlanGate { plan: self.plan };
+        let retry = self.retry_manager.as_deref();
+        let now = self.now;
         let batch = self
             .dispatcher
-            .pump(journal, bindings, &gate, self.now)
+            .pump_with_timing(journal, bindings, &gate, now, &mut |intent, completion| {
+                retry_manager::closure_schedule(retry, intent, completion, now).map_err(|error| {
+                    crate::boundary::DispatchError::Journal(
+                        crate::journal::Error::InvalidRetryProtocol(error),
+                    )
+                })
+            })
             .map_err(VmError::Dispatch)?;
+        self.synchronize_retry_closures(journal)?;
         self.retry_session_actions(bindings)?;
         self.retry_session_closes(bindings)?;
         let settled = batch.events.len();
@@ -2766,7 +2807,7 @@ impl<'plan> Vm<'plan> {
                 }
                 return Ok(());
             }
-            DatedPayload::LoopDelay { .. } => {
+            DatedPayload::LoopDelay { .. } | DatedPayload::RetryDelay { .. } => {
                 // The wakeup only dates eligibility. The manager rechecks the
                 // committed run, generation and deadline before any admission.
                 return Ok(());
@@ -2824,13 +2865,29 @@ impl<'plan> Vm<'plan> {
                 .cancel(&connector, &call_ref)
                 .map_err(crate::boundary::DispatchError::Driver)
                 .map_err(VmError::Dispatch)?;
+            let intent = journal
+                .find_call(&call_ref)
+                .ok_or(VmError::MissingPending(call_ref))?;
+            let schedule = retry_manager::closure_schedule(
+                self.retry_manager.as_deref(),
+                &intent,
+                &completion,
+                self.now,
+            )
+            .map_err(retry_manager::error)?;
             match journal
-                .close_outbound(&call_ref, crate::journal::Closure::Timeout, self.now, None)
+                .close_outbound(
+                    &call_ref,
+                    crate::journal::Closure::Timeout,
+                    self.now,
+                    schedule,
+                )
                 .map_err(VmError::Journal)?
             {
                 crate::journal::CloseVerdict::AlreadyClosed => return Ok(()),
                 crate::journal::CloseVerdict::Won => {}
             }
+            self.synchronize_retry_closures(journal)?;
             let intent = journal
                 .find_call(&call_ref)
                 .unwrap_or_else(|| unreachable!("a closed call is journaled"));
@@ -2871,29 +2928,37 @@ impl<'plan> Vm<'plan> {
                     reason: "a request requires an outbound Call Contract",
                 });
             }
-            let resolved_settings =
-                self.resolve_invocation_settings(&instance, spec, &planned.path, &queued.envelope)?;
-            match bindings
-                .prepare_request(&planned.path, queued.envelope.data(), &resolved_settings)
-                .map_err(crate::boundary::DispatchError::Driver)
-                .map_err(VmError::Dispatch)?
-            {
-                RequestPreparation::Rejected(completion) => Err(completion),
-                RequestPreparation::Prepared(prepared) => {
-                    let emitting_id = queued.envelope.meta().sys().id();
-                    Ok(Intent {
-                        call_ref: ids::call_ref(
-                            ids::delivery_ref(&queued.edge, emitting_id),
-                            prepared.digest(),
-                        ),
-                        emitting_id,
-                        edge: queued.edge.clone(),
-                        connector_path: planned.path.clone(),
-                        prepared,
-                        idempotency_key: None,
-                        resolved_settings,
-                        logical_time: self.now,
-                    })
+            if let Some(intent) = self.pinned_retry_intent(&instance, queued) {
+                Ok(intent)
+            } else {
+                let resolved_settings = self.resolve_invocation_settings(
+                    &instance,
+                    spec,
+                    &planned.path,
+                    &queued.envelope,
+                )?;
+                match bindings
+                    .prepare_request(&planned.path, queued.envelope.data(), &resolved_settings)
+                    .map_err(crate::boundary::DispatchError::Driver)
+                    .map_err(VmError::Dispatch)?
+                {
+                    RequestPreparation::Rejected(completion) => Err(completion),
+                    RequestPreparation::Prepared(prepared) => {
+                        let emitting_id = queued.envelope.meta().sys().id();
+                        Ok(Intent {
+                            call_ref: ids::call_ref(
+                                ids::delivery_ref(&queued.edge, emitting_id),
+                                prepared.digest(),
+                            ),
+                            emitting_id,
+                            edge: queued.edge.clone(),
+                            connector_path: planned.path.clone(),
+                            prepared,
+                            idempotency_key: None,
+                            resolved_settings,
+                            logical_time: self.now,
+                        })
+                    }
                 }
             }
         };
@@ -2951,24 +3016,53 @@ impl<'plan> Vm<'plan> {
                     .map_err(crate::boundary::DispatchError::Driver)
                     .map_err(VmError::Dispatch)?;
                 self.admit_expiring_call_loop(journal, slot, &instance, &edge, delivery)?;
+                let queued = self
+                    .scheduler
+                    .mailboxes
+                    .find_by_ref(slot, &instance, &edge, delivery)
+                    .cloned()
+                    .ok_or_else(|| {
+                        retry_manager::error(crate::journal::retry_protocol::Error::OpeningIdentity)
+                    })?;
+                self.open_retry_operation(journal, slot, &instance, &queued, &intent)?;
+                let attempt = self.retry_attempt(&instance, &queued);
                 let call_ref = intent.call_ref;
                 let connector_path = intent.connector_path.clone();
                 let emitting_id = intent.emitting_id;
                 // Idempotent open: a replay after a refused close
                 // finds its own open fact and proceeds to close it.
                 if journal.find_call(&call_ref).is_none() {
+                    let mut next = self.retry_manager.clone();
+                    if let (Some(attempt), Some(fold)) = (attempt, next.as_deref_mut()) {
+                        fold.open_call(attempt, &intent)
+                            .map_err(retry_manager::error)?;
+                    }
                     journal
-                        .open_outbound(intent, None)
+                        .open_outbound(intent.clone(), attempt)
                         .map_err(VmError::Journal)?;
+                    self.retry_manager = next;
                 }
+                let schedule = retry_manager::closure_schedule(
+                    self.retry_manager.as_deref(),
+                    &intent,
+                    &completion,
+                    self.now,
+                )
+                .map_err(retry_manager::error)?;
                 match journal
-                    .close_outbound(&call_ref, crate::journal::Closure::Timeout, self.now, None)
+                    .close_outbound(
+                        &call_ref,
+                        crate::journal::Closure::Timeout,
+                        self.now,
+                        schedule,
+                    )
                     .map_err(VmError::Journal)?
                 {
                     crate::journal::CloseVerdict::Won => {}
                     // A replay can find its own earlier closure.
                     crate::journal::CloseVerdict::AlreadyClosed => {}
                 }
+                self.synchronize_retry_closures(journal)?;
                 // The facts hold; only now does the delivery leave
                 // the queue and join the settled path.
                 let Some(queued) = self
@@ -3367,6 +3461,7 @@ impl<'plan> Vm<'plan> {
             || self.instance_command_ready()
             || self.single_pass_close().is_some()
             || self.loop_manager_ready()
+            || self.retry_has_work(None)
             || !self.settled.is_empty()
             || !self.pending.is_empty()
             || !self.settled_inbound_calls.is_empty()
@@ -3434,6 +3529,7 @@ impl<'plan> Vm<'plan> {
             || self.instance_command_ready()
             || self.single_pass_close().is_some()
             || self.loop_manager_ready()
+            || self.retry_manager_ready()
             || self.settled_inbound_calls.iter().any(|event| {
                 self.inbound_calls
                     .get(&event.call_ref)
@@ -3556,6 +3652,7 @@ impl<'plan> Vm<'plan> {
             }
         };
         node_work
+            || self.retry_has_work(Some(reference))
             || self
                 .lifecycle
                 .iter()
@@ -3721,6 +3818,9 @@ impl<'plan> Vm<'plan> {
             .cloned()
             .collect();
         for target in targets {
+            if let Some(fold) = self.retry_manager.as_deref_mut() {
+                fold.begin_closing(&target);
+            }
             let widen = self
                 .instances
                 .get(&target)
@@ -4273,19 +4373,40 @@ impl<'plan> Vm<'plan> {
                 &event.completion,
             )
             .map_err(VmError::Fault)?;
-        self.prepare_call_completion(
-            slot,
+        self.validate_call_completion(slot, &outcome.record)?;
+        let retry = self.prepare_retry_completion(
             &request.instance,
             &request.delivery,
+            event.call_ref,
             &mut outcome.record,
         )?;
-        let prepared =
-            self.validate_and_prepare_emissions(journal, slot, &request.instance, &outcome.record)?;
+        let held = retry.as_ref().is_some_and(|(_, held)| *held);
+        let prepared = if held {
+            let context = self.graph_context(&request.delivery);
+            if !context.is_empty() {
+                outcome.record.loop_record =
+                    Some(Box::new(crate::journal::loop_protocol::Packet {
+                        context: context.to_vec(),
+                        ..Default::default()
+                    }));
+            }
+            retry_manager::hold_emissions(&outcome.record)
+        } else {
+            self.prepare_call_completion(
+                slot,
+                &request.instance,
+                &request.delivery,
+                &mut outcome.record,
+            )?;
+            self.validate_and_prepare_emissions(journal, slot, &request.instance, &outcome.record)?
+        };
         self.retain_emission_routes(&mut outcome.record, &prepared)?;
-        journal
-            .commit(outcome.record.clone())
-            .map_err(VmError::Journal)?;
-        if outcome.record.loop_protocol().is_some() {
+        let has_loop_context = outcome.record.loop_protocol().is_some();
+        journal.commit(outcome.record).map_err(VmError::Journal)?;
+        if let Some((fold, _)) = retry {
+            self.retry_manager = Some(fold);
+        }
+        if has_loop_context {
             self.refresh_loop_manager(journal)?;
         }
         self.settled.remove(index);
@@ -5336,6 +5457,9 @@ impl<'plan> Vm<'plan> {
             self.scheduler.ack(key);
             return Ok(());
         }
+        if let Some(intent) = self.pinned_retry_intent(instance, delivery) {
+            return self.retain_call_open(journal, slot, instance, delivery, intent);
+        }
         let planned = &self.plan.nodes[slot.index()];
         let NodeExecution::Connector(spec) = &planned.execution else {
             unreachable!("routed here by kind");
@@ -5398,10 +5522,31 @@ impl<'plan> Vm<'plan> {
             resolved_settings,
             logical_time: self.now,
         };
+        if self.open_retry_operation(journal, slot, instance, delivery, &intent)? {
+            return Ok(());
+        }
+        self.retain_call_open(journal, slot, instance, delivery, intent)
+    }
+
+    fn retain_call_open(
+        &mut self,
+        journal: &mut dyn Journal,
+        slot: Slot,
+        instance: &InstanceRef,
+        delivery: &Delivery,
+        intent: Intent,
+    ) -> Result<(), VmError> {
+        let attempt = self.retry_attempt(instance, delivery);
+        let mut retry = self.retry_manager.clone();
+        if let (Some(attempt), Some(fold)) = (attempt, retry.as_deref_mut()) {
+            fold.open_call(attempt, &intent)
+                .map_err(retry_manager::error)?;
+        }
         let call_ref = intent.call_ref;
         journal
-            .open_outbound(intent, None)
+            .open_outbound(intent, attempt)
             .map_err(VmError::Journal)?;
+        self.retry_manager = retry;
         let delivery = self
             .scheduler
             .mailboxes
@@ -6416,11 +6561,14 @@ impl<'plan> Vm<'plan> {
                 let Some(target) = to.node else {
                     continue;
                 };
-                if self.has_loops {
+                if self.has_loops || self.retry_manager.is_some() {
                     let owner = self.plan.nodes[target.index()].owner;
                     if self.plan.owners[owner.index()]
                         .loop_spec()
                         .is_some_and(|spec| spec.entry == to.port)
+                        || self.plan.owners[owner.index()]
+                            .retry_spec()
+                            .is_some_and(|spec| spec.entry == to.port)
                     {
                         loop_admissions = loop_admissions.saturating_add(1);
                         loop_owner.get_or_insert(owner);
@@ -6453,12 +6601,11 @@ impl<'plan> Vm<'plan> {
         }
         if let Some(owner) = loop_owner
             && self
-                .loop_admission_load()
-                .saturating_add(self.graph_admission_load())
+                .recurrence_admission_load()
                 .saturating_add(loop_admissions)
                 > WORKER_MAILBOX_CAPACITY
         {
-            return Err(VmError::LoopQueueFull {
+            return Err(VmError::RecurrenceQueueFull {
                 owner: self.plan.owners[owner.index()].path.clone(),
             });
         }

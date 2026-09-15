@@ -1944,6 +1944,15 @@ pub enum DatedPayload {
         /// Re-entry envelope id, also used as timer kind 5's stable ref.
         state: envelope::Id,
     },
+    /// Original closure-based eligibility, on the same dated scheduler as Loop.
+    RetryDelay {
+        /// Exact generation retaining the operation.
+        instance: InstanceRef,
+        /// Predecessor whose winning closure armed this deadline.
+        attempt: crate::journal::retry_protocol::AttemptRef,
+        /// Following admission reference (timer kind 5).
+        admission: envelope::Id,
+    },
     /// One owner lifetime reached a scheduler-owned deadline. The complete
     /// instance reference is the generation fence; idle additionally compares
     /// the causal admission id, while fixed and tumbling never move after
@@ -2647,6 +2656,23 @@ impl Dispatcher {
         gate: &dyn CompletionGate,
         now: i64,
     ) -> Result<PumpBatch, DispatchError> {
+        self.pump_with_timing(journal, bindings, gate, now, &mut |_, _| Ok(None))
+    }
+
+    pub(crate) fn pump_with_timing<B: OutboundConnectorBindings + ?Sized>(
+        &mut self,
+        journal: &mut dyn Journal,
+        bindings: &mut B,
+        gate: &dyn CompletionGate,
+        now: i64,
+        timing: &mut impl FnMut(
+            &Intent,
+            &Completion,
+        ) -> Result<
+            Option<alloc::boxed::Box<crate::journal::timing::TimerSchedule>>,
+            DispatchError,
+        >,
+    ) -> Result<PumpBatch, DispatchError> {
         // A timeout or abandonment can close a call outside this response
         // loop. Keep the local start cache equal to the journal's open fold,
         // rather than retaining every historical call for the run's life.
@@ -2691,8 +2717,9 @@ impl Dispatcher {
                 continue;
             }
             let closure = Closure::Response(response.completion.clone());
+            let schedule = timing(intent, &response.completion)?;
             match journal
-                .close_outbound(&response.call_ref, closure, now, None)
+                .close_outbound(&response.call_ref, closure, now, schedule)
                 .map_err(DispatchError::Journal)?
             {
                 CloseVerdict::Won => {

@@ -359,7 +359,7 @@ fn graph_manager_admissions_reserve_capacity_before_ingress_commits() {
         .unwrap_err();
     assert!(matches!(
         error,
-        rastok::runtime::vm::VmError::LoopQueueFull { .. }
+        rastok::runtime::vm::VmError::RecurrenceQueueFull { .. }
     ));
     assert_eq!(journal.records().len(), count);
 }
@@ -846,7 +846,7 @@ fn delayed_runs_reserve_manager_capacity_before_the_next_ingress_commit() {
     };
     assert!(matches!(
         vm.inject(&mut journal, incoming()),
-        Err(rastok::runtime::vm::VmError::LoopQueueFull { .. })
+        Err(rastok::runtime::vm::VmError::RecurrenceQueueFull { .. })
     ));
     assert_eq!(
         journal.records(),

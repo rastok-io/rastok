@@ -329,6 +329,15 @@ CallRef derivation and request-digest checks remain independent checks.
 
 ## 8. Closing — stop without publishing a held failure
 
+**C3 drain clarification, D-2026-09-15-4:** a request already admitted to the
+mailbox before Closing, with no opened Retry operation, drains as one ordinary
+Call without Retry. This includes `single_pass`. Its original queue timeout
+and closing budgets are unchanged; its final completion takes the ordinary
+routes. No operation, Held batch or retry timer is manufactured. Recovery
+requires the exact generation's retained Closing prefix for this exception.
+An already admitted Retry attempt remains admitted work under its existing
+operation; the exception does not rewrite it as an ordinary Call.
+
 Settled rules: Closing prevents every further attempt admission, invalidates
 the wakeup, settles/cancels a currently open Call by the existing protocol and
 never transfers work into a successor generation. A response after a winning

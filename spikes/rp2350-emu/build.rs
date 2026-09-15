@@ -2,6 +2,13 @@ fn main() {
     // A categorical-package candidate can be measured before blessing the
     // tracked fixture. CI without the override still embeds the tracked plan.
     println!("cargo:rerun-if-env-changed=RASTOK_SPIKE_PACKAGE");
+    for parameter in [
+        "RASTOK_RETRY_OPERATIONS",
+        "RASTOK_RETRY_FRAMES",
+        "RASTOK_RETRY_FRAME_BYTES",
+    ] {
+        println!("cargo:rerun-if-env-changed={parameter}");
+    }
     let package = std::env::var_os("RASTOK_SPIKE_PACKAGE")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {

@@ -439,6 +439,12 @@ root admissions reserve the exact successor generation and wait in its normal
 bounded mailbox. The current generation drains its admitted work under the
 same explicit closing contract as every other finite lifetime.
 
+The approved Retry refactor preserves this rule: if the request's Retry
+operation has not opened when Closing begins, it drains as one ordinary Call
+without recurrence. Existing timeout and closing budgets still apply; see
+[D-2026-09-15-4](decisions.md#d-2026-09-15-4--drain-an-unopened-retry-request-as-one-ordinary-call).
+This is not permission to open a Retry manager in a closing generation.
+
 ### 6.5 Tumbling
 
 Processing-time boxes are epoch-aligned at `epoch + k·every`. The runtime adds

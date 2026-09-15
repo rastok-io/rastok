@@ -629,20 +629,12 @@ fn a_resolved_contract_port_table_enters_the_validated_plan_complete() {
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
         ],
-        common: &[
-            AttributeSpec {
-                name: "behavior",
-                presence: Presence::Required,
-                domain: ValueDomain::Choice(&["deterministic"]),
-                latest_site: EvaluationSite::Plan,
-            },
-            AttributeSpec {
-                name: "effect",
-                presence: Presence::Required,
-                domain: ValueDomain::Choice(&["idempotent"]),
-                latest_site: EvaluationSite::Plan,
-            },
-        ],
+        common: &[AttributeSpec {
+            name: "behavior",
+            presence: Presence::Required,
+            domain: ValueDomain::Choice(&["deterministic"]),
+            latest_site: EvaluationSite::Plan,
+        }],
         selector: None,
     };
     let registry = ContractCatalog::try_m0()

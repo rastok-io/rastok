@@ -1,10 +1,12 @@
 # Loop, Retry, Call and Saga — refactor contract
 
-14 September 2026. **Semantic direction approved; C2 implementation in progress.**
+14 September 2026, implementation status updated 15 September.
+**Semantic direction approved; C2/C3 implementation in progress.**
 [D-2026-09-14-4](../spec/decisions.md#d-2026-09-14-4--separate-loop-retry-and-saga-over-one-recurrence-engine)
 owns the decision. This document records the repository contact, implementation
 order and acceptance evidence still required, including the pre-C1 review
-amendments. Current packages remain v18.
+amendments. `rework/retry` carries an unblessed v19 / recording-v3 candidate;
+the ordinary source compiler still refuses Retry pending full qualification.
 The original-plan idempotence authority was settled on 15 September by
 [D-2026-09-15-1](../spec/decisions.md#d-2026-09-15-1--keep-idempotence-in-the-original-validated-plan).
 The C1 design handoff now consists of the [operation algebra](retry-c1-algebra.md),
@@ -50,8 +52,9 @@ and compensation Calls without reclassifying idempotence as compensability.
 
 The following is a candidate-syntax fragment, not a runnable v18 program.
 C2's [source policy gate](retry-c2-implementation.md#4-retry-source-policy-gate)
-recognizes the new attributes and their supported domains, then refuses the
-unfinished Contract/manager cutover by name before HIR/package emission:
+recognizes the new attributes and their supported domains. The staged checker,
+lowering and independent validator now construct candidate plans; ordinary
+compilation still refuses the unfinished manager qualification by name:
 
 ```rastok
 connector pay : HttpClient + Retry {
@@ -367,8 +370,8 @@ inventoried individually. No existing id may acquire another meaning.
 |---|---|---|
 | C0 — contract and contact | approved semantic distinction, output publication, audit and migration inventory | recorded here; exact encoding still unallocated |
 | C1 — operation and recurrence algebra | pinned operation, retained attempt disposition/consumption, closure-based deadlines, exact Session opening rule, plan-owned guarantee and Intent field removal, shared fold, identity register and crash traces | reviewed on 15 September: [algebra](retry-c1-algebra.md), [traces](retry-c1-traces.md), [inventory](retry-c1-identity.md); warning restored to C2 checklist, uniform closure time settled, pending capacity separated from journal retention; no runtime/format changes |
-| C2 — source and validated plan | Retry settings, idempotence, `W-LOOP-REPEAT` with focused tests, typed HTTP 5xx/cardinality, removal of global effect, full registry-free checks, one declared format cutover | [implementation in progress](retry-c2-implementation.md): exact Session opening, canonical frame case sets and fail-closed source policy checks implemented; no executable Retry; v18/v2 still unchanged; preflight measurement in [C1 §12](retry-c1-algebra.md#12-review-follow-up-and-pre-c2-measurement) |
-| C3 — runtime and accounting | qualified Call attempts, final publication, shared scheduling/recovery, exact per-attempt report input | not started |
+| C2 — source and validated plan | Retry settings, idempotence, `W-LOOP-REPEAT` with focused tests, typed HTTP 5xx/cardinality, removal of global effect, full registry-free checks, one declared format cutover | [v19/v3 candidate implemented, unblessed](retry-c2-implementation.md); v18/v2 is the last qualified baseline, not the candidate encoding |
+| C3 — runtime and accounting | qualified Call attempts, final publication, shared scheduling/recovery, exact per-attempt report input | [staged execution/recovery checkpoint](retry-c3-implementation.md); source gate closed pending Closing arbitration and remaining qualification/accounting/footprint work |
 | C4 — migration and qualification | examples, goldens with reasons, UI, docs, no_std and memory/code-size gates | not started |
 
 C1 must enumerate package/Contract/recording movements and non-movements before

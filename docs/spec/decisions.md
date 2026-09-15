@@ -5,6 +5,35 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-09-15-4 — Drain an unopened Retry request as one ordinary Call
+
+**Approved during C3; source admission still awaits complete qualification.**
+Yoann chose to preserve the existing drain of work already admitted to an
+instance when Closing begins. If that request has no opened Retry operation,
+it may execute **one ordinary Call, without Retry**. This also applies to
+`single_pass`, whose creating admission requests Closing before the first
+application. It does not admit a new operation in the Retry fold.
+
+The original request, instance, queue timeout and bounded drain/settlement
+deadlines remain authoritative. A timeout already won may settle the request
+without Driver execution; this rule does not guarantee an effect after its
+budget expired or grant a renewed timeout. The ordinary final completion is
+published according to the existing routes, even if its case belongs to
+`Retry.on`. No Held batch, recurrence, synthetic attempt or new terminal is
+created. Recovery proves this exception from the exact generation's retained
+Closing prefix, not merely from the absence of a Retry packet.
+
+An operation whose admission already committed follows its existing protocol:
+Closing does not undo that admitted work, and the winning closure/Closing
+order decides final publication versus the stopped Held disposition of
+D-2026-09-15-2. Later external inputs still wait for the proper successor
+generation; the exception never stops another instance's operation or enables
+a new recurrence after Closing.
+
+No package, Contract, journal tag or recording version is added. Rejected:
+silently cancelling already admitted drain work, opening a Retry manager in
+Closing, or bypassing Retry without a retained exact-instance Closing fact.
+
 ## D-2026-09-15-3 — Retain outbound Call closure time independently of Retry
 
 **Reviewed refactor target; no executable v18 change.** The C1 follow-up

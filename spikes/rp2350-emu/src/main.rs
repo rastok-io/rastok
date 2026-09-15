@@ -29,6 +29,9 @@ use rastok_core::node::{Path, Port, Trigger};
 use rastok_core::plan::{GraphVersion, OwnerPath};
 use rastok_core::runtime::vm::Vm;
 
+#[cfg(feature = "retry-qualification")]
+mod retry;
+
 /// The allocator, wrapped to record a true high-water mark: the
 /// peak is updated inside every successful allocation, so no
 /// transient allocation can slip between two samples.
@@ -167,6 +170,12 @@ fn main() -> ! {
         core::mem::size_of::<journal::OutboundRecord>()
     );
 
+    #[cfg(feature = "retry-qualification")]
+    if plan.owners.iter().any(|owner| owner.retry_spec().is_some()) {
+        let records = retry::run(&plan, hash);
+        finish(records);
+    }
+
     // 2. Boot and run: each round injects one envelope and measures exactly
     //    the relay's port transaction. R4 makes every selected owner emit a
     //    lazy lifecycle transaction; those turns are real work but are not a
@@ -220,13 +229,17 @@ fn main() -> ! {
     hprintln!("blake3_id x1000: {} ticks total (last: {})", id_ticks, last);
     let _ = journal::ids::delivery_ref("bench.out>echo.in", last);
 
+    finish(journal.records().len())
+}
+
+fn finish(records: usize) -> ! {
     let peak = HEAP.peak.load(core::sync::atomic::Ordering::Relaxed);
     hprintln!(
         "heap_watermark: {} bytes of {} (allocator-tracked peak)",
         peak,
         HEAP_SIZE
     );
-    hprintln!("records: {}", journal.records().len());
+    hprintln!("records: {}", records);
     if peak > HEAP_GATE_BYTES {
         hprintln!("SPIKE_HEAP_LIMIT: {} > {} bytes", peak, HEAP_GATE_BYTES);
         debug::exit(debug::EXIT_FAILURE);

@@ -26,7 +26,7 @@ use crate::connectors::{
 };
 use crate::envelope::{Data, Envelope, Namespace, Value, WriteTarget};
 use crate::journal::{MemJournal, Record};
-use crate::plan::{GraphVersion, ValidatedExecutionPlan};
+use crate::plan::{GraphVersion, SemanticHash, ValidatedExecutionPlan};
 use crate::runtime::vm::{Observed, TimeAdvance, Vm};
 use crate::{expr, node, runtime};
 use std::cell::RefCell;
@@ -177,6 +177,57 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
         scenario: &'scenario Scenario,
         boot: Option<&crate::deployment::BootBindings>,
     ) -> Result<Self, String> {
+        Self::try_new_inner(
+            plan,
+            None,
+            graph_version,
+            simulation,
+            shared_mocks,
+            scenario,
+            boot,
+        )
+    }
+
+    /// Creates a scenario over an exact validated program. Retry retains this
+    /// original identity beside its prepared operation, just as real execution does.
+    ///
+    /// # Errors
+    /// Invalid Driver composition or missing original program authority.
+    pub fn try_new_program(
+        plan: &'plan ValidatedExecutionPlan,
+        hash: SemanticHash,
+        graph_version: GraphVersion,
+        simulation: &str,
+        shared_mocks: &[Mock],
+        scenario: &'scenario Scenario,
+        boot: Option<&crate::deployment::BootBindings>,
+    ) -> Result<Self, String> {
+        Self::try_new_inner(
+            plan,
+            Some(hash),
+            graph_version,
+            simulation,
+            shared_mocks,
+            scenario,
+            boot,
+        )
+    }
+
+    fn try_new_inner(
+        plan: &'plan ValidatedExecutionPlan,
+        hash: Option<SemanticHash>,
+        graph_version: GraphVersion,
+        simulation: &str,
+        shared_mocks: &[Mock],
+        scenario: &'scenario Scenario,
+        boot: Option<&crate::deployment::BootBindings>,
+    ) -> Result<Self, String> {
+        if hash.is_none() && plan.owners.iter().any(|owner| owner.retry_spec().is_some()) {
+            return Err(
+                "Retry requires the original program identity; use try_new_program or run_program"
+                    .into(),
+            );
+        }
         // Nearest wins, whole-mock replacement: a scenario mock for a
         // connector shadows the simulation-level one entirely.
         let mut mocks: BTreeMap<node::Path, Mock> = BTreeMap::new();
@@ -203,9 +254,14 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
             || MemJournal::new(graph_version),
             |boot| MemJournal::new_with_deployment(graph_version, boot.attestation().clone()),
         );
-        let vm = boot.map_or_else(
-            || Vm::boot(plan, graph_version),
-            |boot| Vm::boot_with_deployment(plan, graph_version, boot),
+        let vm = hash.map_or_else(
+            || {
+                boot.map_or_else(
+                    || Vm::boot(plan, graph_version),
+                    |boot| Vm::boot_with_deployment(plan, graph_version, boot),
+                )
+            },
+            |hash| Vm::boot_program(plan, hash, graph_version, 0, boot),
         );
         Ok(Self {
             plan,
@@ -679,7 +735,7 @@ pub fn run(
     graph_version: GraphVersion,
     lab: &Lab,
 ) -> Vec<ScenarioRun> {
-    run_inner(plan, graph_version, lab, None)
+    run_inner(plan, None, graph_version, lab, None)
 }
 
 /// Runs every scenario with the same resolved deployment inputs used by real
@@ -692,11 +748,24 @@ pub fn run_with_boot(
     lab: &Lab,
     boot: &crate::deployment::BootBindings,
 ) -> Vec<ScenarioRun> {
-    run_inner(plan, graph_version, lab, Some(boot))
+    run_inner(plan, None, graph_version, lab, Some(boot))
+}
+
+/// Runs each scenario against the exact original program, including Retry.
+#[must_use]
+pub fn run_program(
+    plan: &ValidatedExecutionPlan,
+    hash: SemanticHash,
+    graph_version: GraphVersion,
+    lab: &Lab,
+    boot: Option<&crate::deployment::BootBindings>,
+) -> Vec<ScenarioRun> {
+    run_inner(plan, Some(hash), graph_version, lab, boot)
 }
 
 fn run_inner(
     plan: &ValidatedExecutionPlan,
+    hash: Option<SemanticHash>,
     graph_version: GraphVersion,
     lab: &Lab,
     boot: Option<&crate::deployment::BootBindings>,
@@ -706,6 +775,7 @@ fn run_inner(
         for scenario in &simulation.scenarios {
             reports.push(run_scenario(
                 plan,
+                hash,
                 graph_version,
                 &simulation.name,
                 &simulation.mocks,
@@ -719,14 +789,16 @@ fn run_inner(
 
 fn run_scenario(
     plan: &ValidatedExecutionPlan,
+    hash: Option<SemanticHash>,
     graph_version: GraphVersion,
     simulation: &str,
     shared_mocks: &[Mock],
     scenario: &Scenario,
     boot: Option<&crate::deployment::BootBindings>,
 ) -> ScenarioRun {
-    match ScenarioSession::try_new(
+    match ScenarioSession::try_new_inner(
         plan,
+        hash,
         graph_version,
         simulation,
         shared_mocks,

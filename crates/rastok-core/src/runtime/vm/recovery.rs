@@ -8,6 +8,7 @@ mod calls;
 mod exchanges;
 mod ingress;
 mod loops;
+mod retries;
 
 impl Vm<'_> {
     /// Restores Executor instances, exchanges, timed joins, lifetimes,
@@ -44,6 +45,7 @@ impl Vm<'_> {
         self.preflight(journal)?;
         let resume_at = self.now;
         let mut candidate = Self::boot_at(self.plan, self.graph_version, 0);
+        candidate.original_hash = self.original_hash;
         candidate.expected_deployment = self.expected_deployment.clone();
         candidate.unsupported_data_policy = self.unsupported_data_policy.clone();
         candidate.missing_deployment_binding = self.missing_deployment_binding.clone();
@@ -61,7 +63,19 @@ impl Vm<'_> {
                         .timer_schedule()
                         .map(|schedule| schedule.armed_at())
                         .or_else(|| match record {
-                            Record::Transaction(record) => record.logical_time,
+                            Record::Transaction(record) => record.logical_time.or_else(|| {
+                                record
+                                    .retry_record
+                                    .as_deref()
+                                    .and_then(|packet| packet.facts.first())
+                                    .and_then(|fact| match fact {
+                                        crate::journal::retry_protocol::Fact::Opened {
+                                            pin,
+                                            ..
+                                        } => Some(pin.opened_at),
+                                        _ => None,
+                                    })
+                            }),
                             Record::Outbound(crate::journal::OutboundRecord::Call(record)) => {
                                 record.closed_at.or(Some(record.intent.logical_time))
                             }
@@ -171,6 +185,11 @@ impl Vm<'_> {
         record: &TransactionRecord,
         resume_at: i64,
     ) -> Result<(), VmError> {
+        crate::journal::retry_protocol::validate_transaction(record)
+            .map_err(super::retry_manager::error)?;
+        if record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Retry) {
+            return self.restore_retry_manager(index, record);
+        }
         crate::journal::timing::validate_transaction(record)
             .map_err(|_| invalid(index, "retained deadlines contradict the accepting record"))?;
         if record
@@ -317,7 +336,8 @@ impl Vm<'_> {
         } else if record.exchange_exit.is_none() {
             self.check_consumed_loop_context(index, slot, record)?;
         }
-        if self.graph_loops.is_some() {
+        let retry_held = super::retry_manager::is_held(record);
+        if self.graph_loops.is_some() && !retry_held {
             let mut derived = record.clone();
             if let Some(packet) = derived.loop_record.as_deref_mut() {
                 packet.produced.retain(|command| {
@@ -338,6 +358,7 @@ impl Vm<'_> {
             }
         }
         let mut consumed_cause = None;
+        let mut consumed_call = false;
         for consumed in record
             .consumed
             .iter()
@@ -347,6 +368,7 @@ impl Vm<'_> {
                 continue;
             }
             if self.restore_call_consumption(admissions, index, slot, record, consumed)? {
+                consumed_call = true;
                 continue;
             }
             let delivery = self
@@ -374,6 +396,12 @@ impl Vm<'_> {
                 delivery.envelope.meta().sys().id(),
             );
         }
+        if record.retry_record.is_some() && !consumed_call {
+            return Err(invalid(
+                index,
+                "a Retry disposition requires consumption of its retained Connector Call",
+            ));
+        }
         if !record
             .state_delta
             .windows(2)
@@ -391,8 +419,11 @@ impl Vm<'_> {
             ));
         }
 
-        let prepared =
-            self.validate_and_prepare_emissions(admissions, slot, &record.instance, record)?;
+        let prepared = if retry_held {
+            super::retry_manager::hold_emissions(record)
+        } else {
+            self.validate_and_prepare_emissions(admissions, slot, &record.instance, record)?
+        };
         if record
             .instance_commands
             .as_deref()

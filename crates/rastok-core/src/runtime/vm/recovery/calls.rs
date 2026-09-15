@@ -62,17 +62,43 @@ impl Vm<'_> {
                     "a Call opens before its retained Loop admission",
                 ));
             }
-            let settings = self.resolve_invocation_settings(
-                &instance,
-                spec,
-                &intent.connector_path,
-                &delivery.envelope,
-            )?;
-            if settings != intent.resolved_settings {
+            let retry = self.retry_attempt(&instance, &delivery);
+            if record
+                .retry_record
+                .as_deref()
+                .and_then(|packet| packet.context)
+                != retry
+            {
                 return Err(invalid(
                     index,
-                    "the Call settings contradict their retained request",
+                    "the Call changed its admitted Retry context",
                 ));
+            }
+            if retry.is_some() {
+                self.retry_call_opened(retry, intent)?;
+            } else {
+                if self.plan.owners[self.plan.nodes[slot.index()].owner.index()]
+                    .retry_spec()
+                    .is_some()
+                    && !self.closing.contains(&instance)
+                {
+                    return Err(invalid(
+                        index,
+                        "a Retry Call has no operation admission or retained Closing",
+                    ));
+                }
+                let settings = self.resolve_invocation_settings(
+                    &instance,
+                    spec,
+                    &intent.connector_path,
+                    &delivery.envelope,
+                )?;
+                if settings != intent.resolved_settings {
+                    return Err(invalid(
+                        index,
+                        "the Call settings contradict their retained request",
+                    ));
+                }
             }
             self.scheduler.mailboxes.remove_by_ref(
                 slot,
@@ -138,6 +164,16 @@ impl Vm<'_> {
         PlanGate { plan: self.plan }
             .admit(&intent.connector_path, &completion)
             .map_err(|_| invalid(index, "the retained Call completion violates its Contract"))?;
+        let attempt = self.retry_attempt(&pending.instance, &pending.delivery);
+        if record
+            .retry_record
+            .as_deref()
+            .and_then(|packet| packet.context)
+            != attempt
+        {
+            return Err(invalid(index, "the Call closure changed its Retry context"));
+        }
+        self.retain_retry_closure(record)?;
         self.settled.push_back(SettledEntry {
             event: BoundaryEvent {
                 call_ref: intent.call_ref,
@@ -197,13 +233,30 @@ impl Vm<'_> {
                 "a Call transaction contradicts its retained completion",
             ));
         }
-        self.prepare_call_completion(
-            slot,
+        let retry = self.prepare_retry_completion(
             &pending.instance,
             &pending.delivery,
+            call,
             &mut expected.record,
         )?;
-        if self.graph_loops.is_some() {
+        let held = retry.as_ref().is_some_and(|(_, held)| *held);
+        if held {
+            let context = self.graph_context(&pending.delivery);
+            if !context.is_empty() {
+                expected.record.loop_record = Some(Box::new(protocol::Packet {
+                    context: context.to_vec(),
+                    ..Default::default()
+                }));
+            }
+        } else {
+            self.prepare_call_completion(
+                slot,
+                &pending.instance,
+                &pending.delivery,
+                &mut expected.record,
+            )?;
+        }
+        if self.graph_loops.is_some() && !held {
             let prepared = self.validate_and_prepare_emissions(
                 admissions,
                 slot,
@@ -212,11 +265,16 @@ impl Vm<'_> {
             )?;
             self.retain_emission_routes(&mut expected.record, &prepared)?;
         }
-        if record.loop_record != expected.record.loop_record {
+        if record.loop_record != expected.record.loop_record
+            || record.retry_record != expected.record.retry_record
+        {
             return Err(invalid(
                 index,
                 "a Call transaction contradicts its retained Loop verdict",
             ));
+        }
+        if let Some((fold, _)) = retry {
+            self.retry_manager = Some(fold);
         }
         self.settled.remove(settled);
         self.pending.remove(&call);

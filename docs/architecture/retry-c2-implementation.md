@@ -148,6 +148,10 @@ not rerun; no UI or physical Driver implementation changed in this checkpoint.
 
 ## 5. Retained attempt algebra and shared codecs at `a574895`
 
+Historical checkpoint: [C3 §2](retry-c3-implementation.md#2-corrections-found-by-executable-tests)
+corrects the pinned-Call-clock claim below and the later carrier's fake manager
+`now()` read. These corrections reuse already inventoried fields, not new keys.
+
 The core now has typed Retry operations and a pure protocol fold, together
 with the candidate key-58 retention and causal projections from C1. This is
 **not journal carrier admission, spatial recovery or executable Retry**. No

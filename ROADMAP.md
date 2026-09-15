@@ -70,6 +70,11 @@ require an identity inventory before any executable format cutover.
 The 15 September C1 design handoff now supplies the operation algebra, crash
 traces and the v19/v3 inventory; stopping during Retry backoff publishes
 no new output (D-2026-09-15-2). C2–C4 implementation/qualification remain open.
+The [C3 checkpoint](docs/architecture/retry-c3-implementation.md) now executes
+retained attempts and original-prefix recovery through the staged plan, Lab
+and diagnostic recorder. Closing drains unopened requests once without Retry
+(D-2026-09-15-4). Source admission still refuses pending complete
+scheduling/accounting/footprint qualification.
 Other semantics remain frozen. The remaining work includes the six-example
 showcase and its qualification, tracked in the
 [opening ledger](docs/architecture/opening-showcase.md).

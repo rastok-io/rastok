@@ -476,9 +476,12 @@ fn run(
             return ExitCode::FAILURE;
         }
     };
-    let mut vm = boot.map_or_else(
-        || Vm::boot_at(&compilation.plan, version, time.logical_now()),
-        |boot| Vm::boot_at_with_deployment(&compilation.plan, version, time.logical_now(), boot),
+    let mut vm = Vm::boot_program(
+        &compilation.plan,
+        compilation.hash,
+        version,
+        time.logical_now(),
+        boot,
     );
     if let Err(error) = recording_checkpoint(&mut recorder, &journal, vm.now()) {
         eprintln!("error: {error}");
@@ -787,9 +790,12 @@ fn simulate(
     let mut failed = 0usize;
     let mut total = 0usize;
     for lab_decl in &compilation.labs {
-        let runs = boot.map_or_else(
-            || lab::run(&compilation.plan, GraphVersion(1), lab_decl),
-            |boot| lab::run_with_boot(&compilation.plan, GraphVersion(1), lab_decl, boot),
+        let runs = lab::run_program(
+            &compilation.plan,
+            compilation.hash,
+            GraphVersion(1),
+            lab_decl,
+            boot,
         );
         for run in runs {
             let report = &run.report;
@@ -847,8 +853,9 @@ fn simulate_with_ui(
         eprintln!("error: this unit declares no scenario");
         return ExitCode::FAILURE;
     };
-    let mut session = match lab::ScenarioSession::try_new(
+    let mut session = match lab::ScenarioSession::try_new_program(
         &compilation.plan,
+        compilation.hash,
         GraphVersion(1),
         &simulation.name,
         &simulation.mocks,
@@ -1329,8 +1336,9 @@ fn recreate_scenario<'plan>(
         .ok_or_else(|| {
             format!("simulation `{simulation_name}` has no scenario `{scenario_name}`")
         })?;
-    lab::ScenarioSession::try_new(
+    lab::ScenarioSession::try_new_program(
         &compilation.plan,
+        compilation.hash,
         GraphVersion(1),
         &simulation.name,
         &simulation.mocks,

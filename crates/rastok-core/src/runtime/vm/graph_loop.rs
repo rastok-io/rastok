@@ -342,14 +342,16 @@ impl Vm<'_> {
     }
 
     pub(super) fn graph_context(&self, delivery: &Delivery) -> &[LoopRunRef] {
+        self.graph_context_for(ids::delivery_ref(
+            &delivery.edge,
+            delivery.envelope.meta().sys().id(),
+        ))
+    }
+
+    pub(super) fn graph_context_for(&self, delivery: Id) -> &[LoopRunRef] {
         self.graph_loops
             .as_deref()
-            .and_then(|graph| {
-                graph.contexts.get(&ids::delivery_ref(
-                    &delivery.edge,
-                    delivery.envelope.meta().sys().id(),
-                ))
-            })
+            .and_then(|graph| graph.contexts.get(&delivery))
             .map_or(&[], Vec::as_slice)
     }
 
@@ -364,6 +366,12 @@ impl Vm<'_> {
             .flatten()
             .chain(self.pending.values().map(|pending| &pending.delivery))
             .any(|delivery| self.graph_context(delivery).contains(&run))
+            || self.retry_manager.as_deref().is_some_and(|fold| {
+                fold.operations().any(|(_, state)| {
+                    state.phase != crate::journal::retry_protocol::Phase::Closed
+                        && self.graph_context_for(state.opening).contains(&run)
+                })
+            })
             || self.graph_loops.as_deref().is_some_and(|graph| {
                 graph
                     .admissions
@@ -537,7 +545,9 @@ impl Vm<'_> {
             true,
         )?;
         match self.check_room_for_routes(core::iter::once(routes.as_slice())) {
-            Err(VmError::MailboxFull { .. } | VmError::LoopQueueFull { .. }) => return Ok(false),
+            Err(VmError::MailboxFull { .. } | VmError::RecurrenceQueueFull { .. }) => {
+                return Ok(false);
+            }
             result => result?,
         }
         let mut record = super::loop_manager::manager_record(
@@ -844,7 +854,7 @@ impl Vm<'_> {
         if self.graph_loops.is_none() {
             return;
         }
-        let live: BTreeSet<_> = self
+        let mut live: BTreeSet<_> = self
             .scheduler
             .mailboxes
             .queues
@@ -853,6 +863,14 @@ impl Vm<'_> {
             .chain(self.pending.values().map(|pending| &pending.delivery))
             .map(|delivery| ids::delivery_ref(&delivery.edge, delivery.envelope.meta().sys().id()))
             .collect();
+        // Consuming an attempt releases its mailbox delivery, not the enclosing
+        // Loop obligation. Keep the opening context until the operation closes.
+        if let Some(fold) = self.retry_manager.as_deref() {
+            live.extend(fold.operations().filter_map(|(_, state)| {
+                (state.phase != crate::journal::retry_protocol::Phase::Closed)
+                    .then_some(state.opening)
+            }));
+        }
         if let Some(graph) = self.graph_loops.as_deref_mut() {
             graph.contexts.retain(|reference, _| {
                 live.contains(reference) || graph.admissions.contains_key(reference)
