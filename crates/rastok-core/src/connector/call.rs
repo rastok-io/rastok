@@ -22,14 +22,20 @@ pub enum TerminalVisibility {
 }
 
 impl TerminalVisibility {
+    /// Repeating an operation is safe only before visibility or with the
+    /// guarantee supplied by its original validated Contract/plan.
+    #[must_use]
+    pub const fn allows_repetition(self, idempotent: bool) -> bool {
+        matches!(self, Self::BeforeEffect) || idempotent
+    }
+
     /// Compensation is an undo protocol, not permission to repeat the operation.
     #[must_use]
     pub const fn allows_recurrence(self, effect: Effect) -> bool {
-        matches!(self, Self::BeforeEffect)
-            || matches!(
-                effect,
-                Effect::None | Effect::Class(EffectClass::Idempotent)
-            )
+        self.allows_repetition(matches!(
+            effect,
+            Effect::None | Effect::Class(EffectClass::Idempotent)
+        ))
     }
 }
 
@@ -105,6 +111,38 @@ impl CallSemantics {
         self.frames
             .iter()
             .find_map(|(name, production)| (*name == port).then_some(*production))
+    }
+
+    /// Validates a canonical Retry selection against this exact Call profile.
+    /// The caller resolves the plan-owned guarantee; neither an Intent nor a
+    /// Driver can supply it. An empty selection never requests repetition.
+    ///
+    /// # Errors
+    ///
+    /// Refuses noncanonical selections, unknown terminals and unsafe repeated
+    /// operations. This does not grant admission to an unfinished manager.
+    pub fn validate_retry_cases(
+        self,
+        cases: &[String],
+        idempotent: bool,
+    ) -> Result<(), RetryCaseError> {
+        if cases.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(RetryCaseError::Noncanonical);
+        }
+        for case in cases {
+            let (_, visibility) = self
+                .cases
+                .iter()
+                .find(|(name, _)| *name == case)
+                .ok_or_else(|| RetryCaseError::Unknown(case.clone()))?;
+            if !visibility.allows_repetition(idempotent) {
+                return Err(RetryCaseError::Unsafe {
+                    case: case.clone(),
+                    visibility: *visibility,
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Proves that a direct command from this Call's own output is bounded and
@@ -207,6 +245,37 @@ impl fmt::Display for CallCommandError {
 }
 
 impl core::error::Error for CallCommandError {}
+
+/// A static Retry selection contradicts its Call Contract or guarantee.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RetryCaseError {
+    /// Case names must be sorted and unique before validation.
+    Noncanonical,
+    /// A name is outside this Contract's closed terminal domain.
+    Unknown(String),
+    /// The original operation has no guarantee permitting this repetition.
+    Unsafe {
+        /// Selected terminal case.
+        case: String,
+        /// Contract-owned conservative visibility.
+        visibility: TerminalVisibility,
+    },
+}
+
+impl fmt::Display for RetryCaseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Noncanonical => f.write_str("Retry cases must be sorted and unique"),
+            Self::Unknown(case) => write!(f, "the Contract declares no terminal case `{case}`"),
+            Self::Unsafe { case, visibility } => write!(
+                f,
+                "Retry after `{case}` ({visibility}) requires idempotent = true"
+            ),
+        }
+    }
+}
+
+impl core::error::Error for RetryCaseError {}
 
 /// Resolves the standard finite-profile Call facts without a Driver registry.
 ///

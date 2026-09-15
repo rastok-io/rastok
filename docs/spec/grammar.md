@@ -10,6 +10,11 @@
 > output dispositions explicit, and represents Loop recurrence as manager
 > commands rather than spatial ports. M1.8 annotations and exact
 > `env()`/`secret()` boot references are unchanged.
+> The approved Retry refactor has a
+> [C2 source policy gate](../architecture/retry-c2-implementation.md#4-retry-source-policy-gate):
+> candidate `+ Retry` and `idempotent` declarations are checked and refused
+> by name before HIR/package emission. They are not executable v18 syntax;
+> no Retry port, command, state binding or transport tag is admitted here.
 >
 > **Conceptual basis** : this document assumes the model defined in [WHITEPAPER.md](../../WHITEPAPER.md) and the normative instance contract in [instances.md](instances.md). This document is the grammar ; foundations is the constitution.
 >

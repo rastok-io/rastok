@@ -47,7 +47,7 @@ retains its independently bounded streams. In particular, HTTP 500 is **still
 Completed in the current Contract**. ServerError, its typed status checks and
 two-case cardinality land with the declared Contract-major cutover, not here.
 
-## 3. Preparatory qualification
+## 3. Preparatory qualification at `451dbb5`
 
 All required workspace checks pass on this batch:
 
@@ -83,12 +83,74 @@ This is the existing non-Retry echo workload. It proves neither held-attempt
 memory nor new closure-field overhead; those measurements remain cutover/C3
 gates. No gate, package fixture or golden was changed.
 
-## 4. Remaining C2 gates
+## 4. Retry source policy gate
+
+The source checker now recognizes candidate Retry policies before applying
+the executable v18 sheets. It checks the exact resolved outbound Call profile,
+same-owner Loop/Retry conflict, duplicate/missing attributes, positive attempts
+and constant timeout, fixed/exponential delay, canonical terminal selection
+and plan-constant boolean idempotence. Unit, Graph and earlier Node `val`s use
+the existing expression/type/constant evaluator; no invocation state becomes
+a policy constant. The delay checker is shared with Loop without changing
+Loop's accepted forms, HIR or identity.
+
+Process job and HttpClient omission/false supply no guarantee in this gate;
+File read/replace fixes true and rejects false. The historical `effect` word
+never substitutes for that boolean. `idempotent` without Retry is also a
+candidate surface, not a v18 effect alias. Session, Event, inbound Call, Graph
+and Operator hosts fail by name. The structured Extension conflict carries
+the complete owner path and canonical Loop/Retry names.
+
+Core's Contract-owned Call facts independently check canonical selected cases
+and the conservative visibility/guarantee matrix. They neither import a
+Driver registry nor create a runtime obligation. Unknown and duplicate cases
+cannot manufacture a guarantee. An empty case set selects no recurrence.
+
+**This is not complete candidate HIR/plan validation or Retry execution.**
+An otherwise accepted policy still gets `E-CHECK-DEFERRED`; invalid policies
+retain their specific refusals. Neither produces HIR/package. Ordinary
+attributes, wiring, instance-bound timeout
+proofs and the complete target Contract mirrors still require the cutover.
+In particular, `ServerError` is recognized only to name its pending HttpClient
+major change; it is not inserted into current @2 types or published by its
+Driver. Policy order tests are not yet hash-neutrality evidence for Retry.
+
+The eleven focused source tests exercise these refusals through public
+compilation; two new core matrices cover every current Call terminal and both
+guarantee values, noncanonical sets and unknown cases. Their initial regression
+run failed with generic unknown-Extension/attribute diagnostics; the dedicated
+policy gate replaces that cascade with named refusals.
+The first test attempt was blocked by an unaccepted license for the active
+Xcode installation. The already installed Command Line Tools worked using a
+per-command `DEVELOPER_DIR=/Library/Developer/CommandLineTools`; no license was
+accepted and no global tool selection was changed.
+
+Qualification of this source checkpoint:
+
+- the all-features workspace run reports **1,411 passed, zero failed, zero
+  ignored**; the final eleven policy tests were also rerun after tightening
+  diagnostic payloads and annotation refusals;
+- fmt, all-target/all-feature clippy with warnings denied, rustdoc and all
+  three core `no_std` targets pass;
+- local documentation link targets and `git diff --check` pass;
+- the rebuilt Cortex-M33/QEMU spike reports `SPIKE_OK`, 67 records and the
+  unchanged echo semantic hash; peak heap is **111,732 B** (19,340 B margin),
+  `.text + .rodata` is **882,780 + 69,872 = 952,652 B** (95,924 B margin);
+- compared with §3, heap and record layouts are unchanged and code is 8 B
+  smaller. This still does not measure retained Retry batches, which do not
+  exist in the executable runtime yet.
+
+No package version, recording version, Contract major, hash pin or causal
+golden was changed. Browser/JavaScript and independent protocol campaigns were
+not rerun; no UI or physical Driver implementation changed in this checkpoint.
+
+## 5. Remaining C2 gates
 
 - HTTP ServerError and its declared Contract/type cutover, including decoded
   status boundaries and frame cardinality in Driver, Lab and core validation.
-- Source Retry settings and plan-owned idempotence; `W-LOOP-REPEAT` and its
-  positive/negative/sibling/canonical-order tests.
+- Carry checked Retry settings and plan-owned idempotence into complete HIR
+  and independently validated transport; `W-LOOP-REPEAT` and its
+  positive/negative/sibling/canonical-order tests remain required.
 - Remove global effect and Intent.effect without duplicating the guarantee.
 - Carry all C1 packet, reference, closure-time and recording changes in the
   single cutover, with independent hostile validation.

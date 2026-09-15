@@ -10,6 +10,7 @@
 mod dispatch;
 mod extensions;
 mod loop_control;
+mod retry_control;
 mod routing;
 
 use dispatch::*;
@@ -367,6 +368,18 @@ pub fn check(
     checker.collapse_alias_chains();
     checker.resolve_expression_types(&valid_type_names);
     checker.check_unit_constants(unit);
+    // The candidate protocol cannot fall through to an effect-based v18
+    // Contract or produce an executable package before the complete cutover.
+    if retry_control::has_retry_surface(app) {
+        let signature = checker.unit_signature(&expr::Signature::new());
+        checker.check_retry_surface(
+            app,
+            &crate::plan::OwnerPath::root(),
+            &signature,
+            &BTreeMap::new(),
+        );
+        return None;
+    }
     let mut checked_app = checker.graph(app);
     // The production schema seals HERE — from the deployed graph's
     // writes alone. Everything the Lab compiles below is checked

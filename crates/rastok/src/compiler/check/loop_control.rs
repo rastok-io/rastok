@@ -945,50 +945,94 @@ impl Checker<'_, '_> {
         signature: &expr::Signature,
         consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<LoopDelay> {
+        self.extension_delay(attribute, signature, consts, "Loop", E_LOOP)
+    }
+
+    pub(super) fn extension_delay(
+        &mut self,
+        attribute: &SynAttribute,
+        signature: &expr::Signature,
+        consts: &BTreeMap<String, crate::value::Value>,
+        extension: &str,
+        code: Code,
+    ) -> Option<LoopDelay> {
+        let refuse = |checker: &mut Self, span: Span, detail: String| {
+            checker.bag.push(
+                Diagnostic::new(code, Phase::Check, &detail)
+                    .with_span(span)
+                    .with_field("detail", detail),
+            );
+        };
         let SynValue::Braced(body) = &attribute.value else {
-            self.loop_refusal(
+            refuse(
+                self,
                 attribute.span,
-                "`Loop.delay` must be a composite with a `kind` field",
+                format!("`{extension}.delay` must be a composite with a `kind` field"),
             );
             return None;
         };
         let mut fields: BTreeMap<String, (&SynValue, Span)> = BTreeMap::new();
         for entry in &body.entries {
             let StructEntry::Field { key, value } = entry else {
-                self.loop_refusal(
+                refuse(
+                    self,
                     attribute.span,
-                    "`Loop.delay` admits fields, not nested configuration blocks",
+                    format!("`{extension}.delay` admits fields, not nested configuration blocks"),
                 );
                 return None;
             };
             if key.segments.len() != 1 {
-                self.loop_refusal(key.span, "Loop.delay fields are single names");
+                refuse(
+                    self,
+                    key.span,
+                    format!("{extension}.delay fields are single names"),
+                );
                 return None;
             }
             let name = key.segments[0].text.clone();
             if fields.insert(name.clone(), (value, key.span)).is_some() {
-                self.loop_refusal(key.span, &format!("`Loop.delay.{name}` is declared twice"));
+                refuse(
+                    self,
+                    key.span,
+                    format!("`{extension}.delay.{name}` is declared twice"),
+                );
                 return None;
             }
         }
         let Some((kind, kind_span)) = fields.remove("kind") else {
-            self.loop_refusal(attribute.span, "`Loop.delay` requires exactly one `kind`");
+            refuse(
+                self,
+                attribute.span,
+                format!("`{extension}.delay` requires exactly one `kind`"),
+            );
             return None;
         };
         let SynValue::Expr(kind) = kind else {
-            self.loop_refusal(kind_span, "`Loop.delay.kind` is a bare choice word");
+            refuse(
+                self,
+                kind_span,
+                format!("`{extension}.delay.kind` is a bare choice word"),
+            );
             return None;
         };
         if !is_bare_word(&kind.text) {
-            self.loop_refusal(kind.span, "`Loop.delay.kind` is a bare choice word");
+            refuse(
+                self,
+                kind.span,
+                format!("`{extension}.delay.kind` is a bare choice word"),
+            );
             return None;
         }
         let delay = {
             let mut duration = |name: &str| {
                 let Some((value, span)) = fields.remove(name) else {
-                    self.loop_refusal(
+                    refuse(
+                        self,
                         attribute.span,
-                        &format!("`Loop.delay(kind = {})` requires `{name}`", kind.text),
+                        format!(
+                            "`{extension}.delay(kind = {})` requires `{name}`",
+                            kind.text
+                        ),
                     );
                     return None;
                 };
@@ -997,15 +1041,16 @@ impl Checker<'_, '_> {
                     signature,
                     Some(&DataType::DURATION),
                     span,
-                    &format!("Loop.delay.{name}"),
+                    &format!("{extension}.delay.{name}"),
                 )?;
                 let constant = self.reduce_constant(tree, span, consts)?;
                 match constant.value {
                     crate::value::Value::Duration(nanos) if nanos > 0 => Some(constant),
                     _ => {
-                        self.loop_refusal(
+                        refuse(
+                            self,
                             span,
-                            &format!("`Loop.delay.{name}` must be a positive duration"),
+                            format!("`{extension}.delay.{name}` must be a positive duration"),
                         );
                         None
                     }
@@ -1026,19 +1071,23 @@ impl Checker<'_, '_> {
                         return None;
                     };
                     if ceiling_nanos < first_nanos {
-                        self.loop_refusal(
+                        refuse(
+                            self,
                             attribute.span,
-                            "`Loop.delay.ceiling` must be no smaller than `Loop.delay.first`",
+                            format!(
+                                "`{extension}.delay.ceiling` must be no smaller than `{extension}.delay.first`"
+                            ),
                         );
                         return None;
                     }
                     LoopDelay::Exponential { first, ceiling }
                 }
                 other => {
-                    self.loop_refusal(
+                    refuse(
+                        self,
                         kind.span,
-                        &format!(
-                            "unknown Loop.delay kind `{other}`; expected fixed or exponential"
+                        format!(
+                            "unknown {extension}.delay kind `{other}`; expected fixed or exponential"
                         ),
                     );
                     return None;
@@ -1046,10 +1095,11 @@ impl Checker<'_, '_> {
             }
         };
         if let Some((unexpected, (_, span))) = fields.into_iter().next() {
-            self.loop_refusal(
+            refuse(
+                self,
                 span,
-                &format!(
-                    "`Loop.delay(kind = {})` has no `{unexpected}` field",
+                format!(
+                    "`{extension}.delay(kind = {})` has no `{unexpected}` field",
                     kind.text
                 ),
             );

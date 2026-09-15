@@ -11,7 +11,8 @@ use core::fmt;
 mod call;
 
 pub use call::{
-    CallCommandError, CallSemantics, FrameProduction, TerminalVisibility, outbound_call_semantics,
+    CallCommandError, CallSemantics, FrameProduction, RetryCaseError, TerminalVisibility,
+    outbound_call_semantics,
 };
 
 /// The standard Process contract's stable major-version identity.

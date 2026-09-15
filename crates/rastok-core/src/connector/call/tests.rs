@@ -18,6 +18,62 @@ fn contract(id: &str, mode: Option<&str>) -> CallSemantics {
 }
 
 #[test]
+fn retry_safety_is_derived_for_every_terminal_without_an_effect_class() {
+    for (id, mode) in [
+        (PROCESS_CONNECTOR_ID, Some("job")),
+        (FILE_CONNECTOR_ID, Some("read")),
+        (FILE_CONNECTOR_ID, Some("replace")),
+        (HTTP_CLIENT_CONNECTOR_ID, None),
+    ] {
+        let profile = contract(id, mode);
+        for (case, visibility) in profile.terminal_cases() {
+            for idempotent in [false, true] {
+                let result = profile.validate_retry_cases(&[(*case).to_string()], idempotent);
+                assert_eq!(
+                    result.is_ok(),
+                    idempotent || *visibility == TerminalVisibility::BeforeEffect,
+                    "{id}: {case}, idempotent={idempotent}"
+                );
+                if let Err(error) = result {
+                    assert_eq!(
+                        error,
+                        RetryCaseError::Unsafe {
+                            case: (*case).to_string(),
+                            visibility: *visibility
+                        }
+                    );
+                }
+            }
+        }
+        assert_eq!(profile.validate_retry_cases(&[], false), Ok(()));
+    }
+}
+
+#[test]
+fn retry_never_trusts_unknown_or_noncanonical_case_sets() {
+    let profile = contract(PROCESS_CONNECTOR_ID, Some("job"));
+    for cases in [
+        ["SpawnFailed", "SpawnFailed"],
+        ["TimeoutExpired", "SpawnFailed"],
+    ] {
+        assert_eq!(
+            profile.validate_retry_cases(&cases.map(String::from), true),
+            Err(RetryCaseError::Noncanonical)
+        );
+    }
+    assert_eq!(
+        profile.validate_retry_cases(&["RetryExpired".into()], true),
+        Err(RetryCaseError::Unknown("RetryExpired".into()))
+    );
+    // The new HTTP response case is not silently grafted onto the current @2.
+    assert_eq!(
+        contract(HTTP_CLIENT_CONNECTOR_ID, None)
+            .validate_retry_cases(&["ServerError".into()], true),
+        Err(RetryCaseError::Unknown("ServerError".into()))
+    );
+}
+
+#[test]
 fn call_profiles_require_exact_identity_roles_exchange_and_mode() {
     for (id, mode) in [
         (PROCESS_CONNECTOR_ID, Some("job")),

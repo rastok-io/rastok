@@ -8,8 +8,11 @@
 > **Approved next refactor (2026-09-14):**
 > [D-2026-09-14-4](decisions.md#d-2026-09-14-4--separate-loop-retry-and-saga-over-one-recurrence-engine)
 > introduces Retry as a distinct protocol over the common recurrence manager.
-> The vocabulary and tables below describe the current v18 implementation;
-> Retry is not yet recognized or executable. Its
+> The vocabulary and tables below describe the current v18 implementation.
+> The C2 source gate now recognizes Retry policies and plan-owned
+> `idempotent`, checks their supported profile/constant/case domains, then
+> refuses by name before HIR/package emission. Retry is not executable and
+> is not a transported v18 Extension. Its
 > [contract and implementation gates](../architecture/retry-extension-refactor.md)
 > are recorded separately, without allocating a transport tag.
 
