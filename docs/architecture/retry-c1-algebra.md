@@ -9,6 +9,11 @@ The [reference traces](retry-c1-traces.md) and
 [identity inventory](retry-c1-identity.md) accompany this checkpoint.
 No Rust, package, recording or golden changes in C1.
 
+The C1 review follow-up makes the Loop warning an explicit C2 gate, clarifies
+one pending manager batch versus cumulative journal retention, and makes
+closure-time retention uniform for outbound Calls under
+[D-2026-09-15-3](../spec/decisions.md#d-2026-09-15-3--retain-outbound-call-closure-time-independently-of-retry).
+
 Yoann settled closure during backoff on 15 September: stop the Retry without
 publishing a held failure (§8), recorded in
 [D-2026-09-15-2](../spec/decisions.md#d-2026-09-15-2--stop-a-waiting-retry-without-publishing-its-held-failure).
@@ -104,6 +109,29 @@ subform, both validated by the same recurrence implementation (§5 and the
 identity inventory). There is no second journal or synthetic Loop command.
 The source-specific validators still check their own proof obligations.
 
+### 3.1 Pending capacity is not journal retention
+
+An operation can have **at most one unconsumed attempt batch**. The next
+attempt is admitted only after Consumed/Advance of its predecessor. The
+manager therefore needs one pending receipt per operation, not an array of
+`Retry.attempts - 1` pending batches. Many live operations still add their
+independently bounded pending receipts to the common admission budget.
+
+The journal, in contrast, retains every intermediate batch after consumption:
+up to `attempts - 1`, plus the final attempt if one publishes. Consumption
+releases pending-manager ownership/capacity, not journal evidence. With M1's
+in-memory journal, that history still occupies RAM. Referencing the committed
+batch avoids a second retained copy; it does not make the journal free.
+
+For Process job, `max_output` bounds **aggregate raw stdout + stderr**, not
+decoded heap size. The bound also does not include all envelope/reference,
+terminal, allocation and recording overhead. C3 must measure both pending
+capacity and cumulative retention with many small frames as well as large
+frames, both channels, attempts 1/3/a larger admitted bound and concurrent
+operations. It must include completion drafts, decoded envelopes, consumption
+references and recovery peaks. No arithmetic claim that the peak is simply
+`attempts * max_output` substitutes for that measurement.
+
 ## 4. Exact host rules and repetition safety
 
 An ordinary Call may execute once without a Saga classification. Retry uses:
@@ -163,6 +191,26 @@ Both WebSocket Contracts have inbound/outbound roles and Session exchange.
 Their opening rule must therefore come from exact Contract identity, not
 roles alone, idempotence, port names or the presence of `url`/`listen`.
 This is a pure Contract fact, not another public trait or DSL setting.
+
+### 4.1 Required C2 Loop warning
+
+`W-LOOP-REPEAT` remains required by C0 §5 and D-2026-09-14-4. Its omission
+from the first C1 checker checklist did not reject it. C2 must register it in
+the diagnostic catalog **with its implementation and focused tests**, before
+closing the checker slice; this document does not claim a v18 diagnostic.
+
+Warn when an authored `Loop.again` path may repeat an externally visible Call
+whose original plan has no idempotence guarantee (absent or false). Include
+successful sibling Calls repeated by that application, not only the failed
+Call that caused Again. A path proved entirely BeforeEffect does not warn.
+An unproved absence of effects is not a proof of BeforeEffect.
+
+Identify the Loop owner, Again site and repeated Connector, in canonical
+order. The warning is advisory, does not reject the Loop and changes neither
+plan/hash nor journal. Do not reclassify an intentional `Loop.next` as Retry.
+Retry's own unsafe selected-terminal rule remains a hard refusal, independent
+of this warning. Positive/negative fixtures and declaration-order stability
+are listed in the reference traces and C2 inventory checklist.
 
 ## 5. Retained transitions and atomic boundaries
 
@@ -224,10 +272,14 @@ Without a configured delay, no retry timer is armed; recurrence can become
 eligible after consumption/quiescence. Neither case promises immediate execution.
 
 The clock input is the VM/Lab logical instant at which the closure is accepted,
-not a physical timestamp supplied by the Driver. All Retry terminal records
-retain that original instant, including timeout and abandoned outcomes. A
-selected failure with another attempt available arms kind 5 at that closure;
-the timer reference identifies the possible next admission. The arm is retained
+not a physical timestamp supplied by the Driver. Every winning **outbound
+Call closure**, with or without Retry, retains that original instant, including
+response, timeout and abandoned outcomes. Open records and late discarded
+observations are not closures and cannot carry a replacement closure instant.
+This does not add a timestamp to every transaction, inbound-Call lifecycle or
+Session event. A selected Retry failure with another attempt available arms
+kind 5 at that closure; the timer reference identifies the possible next
+admission. The arm is retained
 even if the manager cannot yet consume the completion. A final attempt arms none.
 
 The existing timer schedule can then retain `armed_at = closed_at` and
@@ -241,7 +293,11 @@ Recovery must reject a missing closure instant, inconsistent due instant,
 wrong timer reference or second arm pretending to renew the delay. Timestamp
 retention stays outside the causal seal, as key 56 does today; the existence
 and reference of the dated obligation remain causal. No general exact commit
-clock or OpenTelemetry export is added by this change.
+clock or OpenTelemetry export is added by this change. Uniform closure time
+replaces C1's earlier Retry-only retention rule; it does not widen timer-arm
+eligibility. No measured embedded limitation justified the earlier sparsity.
+The additional in-memory representation, padding and recording bytes must be
+measured during C2, not advertised as exactly eight bytes per whole record.
 
 ## 7. Recovery without recall
 
@@ -352,9 +408,10 @@ independent validation, negative cases, prefix recovery and per-attempt accounti
 C4 owes example/golden migration, Lab/CLI/UI agreement, no_std and measured
 memory/code-size checks. No future fact is called qualified by this checkpoint.
 
-## 11. Checks at this documentary handoff
+## 11. Checks at the initial documentary handoff
 
-15 September, unchanged executable baseline; `RASTOK_BLESS` explicitly unset:
+15 September, initial handoff `f41ad34`, unchanged executable baseline;
+`RASTOK_BLESS` explicitly unset:
 
 ```sh
 env -u RASTOK_BLESS cargo test -p rastok --test gauge_fixture --test jsonl_fixture --test contracts --test loop_control --test accounting
@@ -375,3 +432,35 @@ not repeated for this documentation-only patch. C2–C4 still require their
 implementation gates. No Rust, dependency, executable format, fixture or
 golden was modified; no external model, paid service, public push or release
 operation was invoked.
+
+## 12. Review follow-up and pre-C2 measurement
+
+15 September, executable baseline still `f41ad34`. The review follow-up changes
+only documentation. The Loop warning is an explicit C2 obligation (§4.1);
+uniform outbound closure time is decided before cutover (§6); Process pending
+capacity and retained history have separate measurement obligations (§3.1).
+
+Before adding retained fields, the existing Cortex-M33 echo spike was rebuilt
+with `cargo build --release --locked` from `spikes/rp2350-emu` and executed
+using its [documented QEMU recipe](spike-rp2350-emulated.md#reproduction).
+`llvm-size -A` measured the same release ELF:
+
+| Baseline measurement | Result | Gate / remaining margin |
+|---|---|---|
+| allocator-tracked peak heap | 111,732 B | 128 KiB / 19,340 B |
+| `.text` + `.rodata` | 882,204 + 69,824 = 952,028 B | 1 MiB / 96,548 B |
+| record layouts printed by the spike | Record 8 B; Inbound 216 B; Transaction 224 B; Outbound 8 B | layout baseline, not owned payload totals |
+| retained records | 67 | `SPIKE_OK`; echo semantic hash unchanged |
+
+The allocator's 256 KiB arena does not change the 128 KiB peak gate. This is
+the **existing non-Retry echo workload**, not qualification of Retry batches,
+the new closure-time field or recovery peaks. C2/C3 must compare against this
+baseline and exercise the larger retained histories explicitly. No gate was
+relaxed and no fixture or golden was regenerated.
+
+The initial handoff's 142 tests (§11) were not rerun for this documentary
+follow-up; neither were full workspace tests, clippy or rustdoc. The embedded
+build/run above is new evidence, not a substitute for those implementation
+checks. `cargo fmt --all -- --check` and `git diff --check` pass; fenced blocks
+are balanced in the five changed Markdown files and the seven added local
+links/anchors resolve. No external-link audit was run.

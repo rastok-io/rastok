@@ -188,6 +188,40 @@ above 599 if the physical parser admits one; 500 with decode failure is still
 DecodeFailed, not ServerError. Both usable response cases owe one body frame.
 Missing/extra frames and a status inconsistent with the selected case refuse.
 
+## 8. Review additions before C2
+
+The Loop warning is required, not a new unresolved design choice. These are
+prospective tests of `W-LOOP-REPEAT`, not diagnostics the v18 binary emits:
+
+| Loop path | Checker result at cutover |
+|---|---|
+| Again repeats a possibly visible Call with idempotent false | warning naming owner, Again site and Connector; Loop remains admitted |
+| same path, idempotence omitted | same warning; absence is no guarantee |
+| Again caused by a BeforeEffect failure, but repeats a successful non-idempotent sibling | warning for that sibling |
+| every potentially repeated Call proved BeforeEffect on that path | no warning |
+| potentially visible repeated Calls all idempotent true | no warning |
+| only an intentional Next path, not Again | no warning from this Again-specific rule |
+| same unsafe selected terminal under Retry without the guarantee | error, not this advisory warning |
+| reorder independent Connector declarations / closed arms | same warning subjects in canonical order |
+
+Uniform closure-time retention also needs a **non-Retry** fixture. Run one
+ordinary Call to a response, one to timeout and one to abandonment. Each
+winning OUTBOUND closure retains its original logical instant; none has a
+Retry packet or retry arm. Missing time refuses; open records have none.
+Read-only replay restores those instants without I/O. A later discarded
+response cannot change them. The ordinary causal seals stay unchanged even
+though the v3 recording bytes acquire the retained time.
+
+For Process capacity qualification, use stdout and stderr together, many
+small frames and large frames near the raw aggregate budget. Instrument both
+pending receipt load and journal-owned memory. For attempts 3, the two
+intermediate batches coexist in **history**, never as two simultaneously
+unconsumed manager batches of the same operation. Delay consumption to show
+that the next attempt cannot start; resume it to show receipt capacity is
+released without deleting the historical batch. Repeat with concurrent
+operations and prefix recovery. Frame count/decoded representation/metadata
+overhead must be measured, not assumed equal to captured bytes.
+
 Accounting qualification needs known typed usage on intermediate and final
 emissions, missing usage as unknown, subset consistency, decimal totals,
 per-operation correlation and redaction. Retaining a body is not evidence

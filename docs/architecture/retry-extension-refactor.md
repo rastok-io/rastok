@@ -11,6 +11,9 @@ The C1 design handoff now consists of the [operation algebra](retry-c1-algebra.m
 [reference traces](retry-c1-traces.md) and [identity inventory](retry-c1-identity.md).
 Closing during backoff is settled by
 [D-2026-09-15-2](../spec/decisions.md#d-2026-09-15-2--stop-a-waiting-retry-without-publishing-its-held-failure).
+The C1 review retains the required Loop warning and makes outbound Call
+closure-time retention uniform under
+[D-2026-09-15-3](../spec/decisions.md#d-2026-09-15-3--retain-outbound-call-closure-time-independently-of-retry).
 These are design artifacts, not executable Retry qualification.
 
 > A Loop advances a state; a Retry repeats an operation. The first proves
@@ -219,6 +222,10 @@ the opening context, and `Record::timer_schedule()` returns none for OUTBOUND.
 Thus C1 must specify this temporal retention before its identity inventory.
 Reuse the existing distinction between mandatory retained time and the causal
 seal; do not infer the missing instant from record position or an opening time.
+The reviewed C1 target retains the winning closure instant on **all outbound
+Calls**, not only Retry attempts. Only Retry-selected failures arm its delay.
+This uniform time field is included in the single proposed cutover; its real
+layout and recording cost must be measured before executable qualification.
 
 ## 5. Composition
 
@@ -356,8 +363,8 @@ inventoried individually. No existing id may acquire another meaning.
 | Slice | Required result | Status |
 |---|---|---|
 | C0 — contract and contact | approved semantic distinction, output publication, audit and migration inventory | recorded here; exact encoding still unallocated |
-| C1 — operation and recurrence algebra | pinned operation, retained attempt disposition/consumption, closure-based deadlines, exact Session opening rule, plan-owned guarantee and Intent field removal, shared fold, identity register and crash traces | design handoff written on 15 September: [algebra](retry-c1-algebra.md), [traces](retry-c1-traces.md), [inventory](retry-c1-identity.md); backoff stop settled, no runtime/format changes; review before C2 |
-| C2 — source and validated plan | Retry settings, idempotence, Loop warning, typed HTTP 5xx/cardinality, removal of global effect, full registry-free checks, one declared format cutover | not started |
+| C1 — operation and recurrence algebra | pinned operation, retained attempt disposition/consumption, closure-based deadlines, exact Session opening rule, plan-owned guarantee and Intent field removal, shared fold, identity register and crash traces | reviewed on 15 September: [algebra](retry-c1-algebra.md), [traces](retry-c1-traces.md), [inventory](retry-c1-identity.md); warning restored to C2 checklist, uniform closure time settled, pending capacity separated from journal retention; no runtime/format changes |
+| C2 — source and validated plan | Retry settings, idempotence, `W-LOOP-REPEAT` with focused tests, typed HTTP 5xx/cardinality, removal of global effect, full registry-free checks, one declared format cutover | preflight embedded baseline measured ([C1 §12](retry-c1-algebra.md#12-review-follow-up-and-pre-c2-measurement)); implementation not started |
 | C3 — runtime and accounting | qualified Call attempts, final publication, shared scheduling/recovery, exact per-attempt report input | not started |
 | C4 — migration and qualification | examples, goldens with reasons, UI, docs, no_std and memory/code-size gates | not started |
 

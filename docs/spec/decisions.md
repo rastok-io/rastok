@@ -5,6 +5,35 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-09-15-3 — Retain outbound Call closure time independently of Retry
+
+**Reviewed refactor target; no executable v18 change.** The C1 follow-up
+adopts uniform retention of the original logical instant for every winning
+outbound Call closure: response, timeout or abandonment, with or without
+Retry. Proposed retained key 59 belongs to the Call closure, not to an
+Extension. Open records have no closure instant; discarded late observations
+never replace the winner's time.
+
+The VM's explicit logical input supplies the instant, not a Driver wall
+clock, record index or reconstructed opening time. As with scheduler key 56,
+it is retained and integrity-checked but excluded from the causal seal. Echo
+and JSONL recording bytes change under the already proposed v3 cutover;
+their causal seals do not change merely to retain this time. Retry alone
+still controls its timer arms and reads the retained closure as delay origin.
+
+This replaces the first C1 draft's Retry-only key-59 rule. That restriction
+had no measured embedded-memory justification; uniformity avoids two Call
+closure shapes distinguished by an Extension. Actual Rust layout, allocator
+and recording overhead remain measured C2 gates, not an eight-byte estimate
+presented as a heap result. Package v19 / recording v3 remain one proposed
+cutover; no new version, golden or executable tag is allocated here.
+
+Scope is outbound Call closure retention, not all transaction timestamps,
+inbound-Call or Session timing, an OTel exporter, or permission for replay to
+start effects. The C1 algebra, inventory and non-Retry negative tests reflect
+that boundary. Rejected: an Extension-dependent closure clock, a missing
+instant inferred from restart, or weakening the embedded gate without evidence.
+
 ## D-2026-09-15-2 — Stop a waiting Retry without publishing its held failure
 
 **Approved refactor target; no executable v18 change.** Yoann chose to stop

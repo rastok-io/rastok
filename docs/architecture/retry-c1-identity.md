@@ -7,6 +7,12 @@ changed in C1. Read with the [algebra](retry-c1-algebra.md),
 [reference traces](retry-c1-traces.md) and current
 [identity registry](../spec/identity.md).
 
+**C1 review amendment:** key 59 below is uniform across outbound Call
+closures, not conditional on Retry (D-2026-09-15-3). The Loop warning is
+explicit in the C2 checklist; pending-manager and retained-journal capacities
+have separate qualification obligations. No executable allocation changes in
+this documentary follow-up.
+
 Use one package cutover, proposed **v19**, and one recording cutover, proposed
 **v3**, after their complete schema and independent validators are ready.
 Do not silently amend a v18 body or reinterpret a v2 Intent tuple. C2 must
@@ -166,10 +172,11 @@ golden is blessed. No counters or Worker-slot numbers enter these recipes.
 **Timing movements are part of this same cutover:**
 
 - New retained-only **key 59**: the original logical closure instant (signed
-  nanoseconds), mandatory on every winning Retry Call closure (response,
-  timeout or abandonment),
-  absent on an open Call. No ordinary non-Retry closure timestamp is required
-  by this first profile. It is not the opening `Intent.logical_time`.
+  nanoseconds), mandatory on every winning outbound Call closure (response,
+  timeout or abandonment), whether or not the Connector has Retry. It is
+  absent on an open Call; a late discarded observation cannot replace it.
+  It is not the opening `Intent.logical_time`. Inbound Calls and Sessions do
+  not use this OUTBOUND-Call retention rule.
 - Extend **key 37** to accepting Retry OUTBOUND closures: the causal presence
   and reference of the original retry arm. Existing timer meaning/order stays.
 - Extend retained-only **key 56** to those closures: `armed_at = closed_at`,
@@ -186,6 +193,10 @@ the causal projection but preserved by the recording integrity checksum and
 validated against each other, the policy and prefix. Logical-time differences
 may still change which events win, and therefore change the causal trace.
 This is not a generalized commit clock or an OTLP feature.
+The first C1 proposal made key 59 Retry-only to limit the initial retention
+surface, not because a measured heap cost prohibited uniformity. The reviewed
+target is uniform. Actual Rust layout/allocator and codec deltas must be
+measured: a signed i64's eight bytes are not a complete peak-memory estimate.
 
 ## 6. Recording and compatibility
 
@@ -195,6 +206,9 @@ tuple; do **not** insert an idempotence member in the vacated position. The
 new version owns the changed tuple arity. Extend Call/transaction retention
 with Retry packets and the closure schedule/time, using the same fact codec
 as journal reconstruction, not a separate replay interpretation.
+Non-Retry Call recordings also carry the mandatory closure time, but still
+omit Retry packets and retry timer arms. That changes retained v3 bytes, not
+their causal seals, and must be exercised on echo and JSONL.
 
 The existing whole-recording checksum domain remains, with the new version
 inside its protected bytes. Old v2 recordings and old plan versions refuse by
@@ -218,7 +232,7 @@ and the existing fixture tests; C1 changes none of them:
 | Witness | Baseline semantic hash | Required cutover behavior |
 |---|---|---|
 | gauge | `0d3ad43d9fb09c8626146342f6a50d1f4c387a8de52a47a3134a408cf74cb22e` | pure body/hash/trace unchanged; package version/checksum changes |
-| echo | `5ffba3ea18c52a98a538a63ed0a7bf23cd3b4be0fa1b7d7acc51ba85dd73cfa3` | Process Contract/default changes move body/hash; unchanged ordinary Call causality must be proved, not re-blessed automatically |
+| echo | `5ffba3ea18c52a98a538a63ed0a7bf23cd3b4be0fa1b7d7acc51ba85dd73cfa3` | Process Contract/default changes move body/hash; v3 retains closure time; ordinary causal seals remain exact, not automatically re-blessed |
 | JSONL | `2f89c8b5fa22f7fbe489d6aa770d517c3c9db8f92e850028c1e2bb1280efb2fc` | same Contract/hash move; framing/request bytes and ordinary causal trace remain witnesses |
 | pure Loop without a Connector | existing specific fixture pin | LoopSpec/hash/r2 facts unchanged; only package container moves |
 | non-Retry network/Session fixtures | existing per-Contract pins | hashes move for Contract/default changes; opening, close-once and orphan-write behavior must remain |
@@ -245,11 +259,26 @@ Loop r2 facts and no-recall inspection. Internal sharing alone moves no bytes.
 3. Independent hostile validation covers Contract opening, guarantee constancy,
    Retry host/cases/attempts/cardinality, exact producer/consumer pairing,
    references, original binding, schedules, capacity and generation fencing.
+   All winning outbound Call closures require key 59, including non-Retry
+   responses, timeouts and abandonments; malformed/missing time refuses, an
+   open Call cannot masquerade as closed, and causal seals exclude the field.
 4. Prove canonical Extension and case order; prove semantically changed policy
    inputs change identity. No speculative Saga tag, counter or public trait.
 5. Measure embedded heap and code size **before** growing retained structures;
    common admission/receipt caps must not become unbounded or duplicated per
-   Extension. Do not weaken the existing gates to make the design pass.
+   Extension. At most one unconsumed batch exists per Retry operation, but the
+   journal retains all intermediate batches plus the final attempt. Measure
+   both, with decoded stdout/stderr and metadata/reference/recording overhead;
+   `max_output` bounds aggregate raw capture, not total retained heap. Prove
+   Consumed frees pending capacity without deleting historical evidence.
+   Do not weaken the existing gates to make the design pass.
 6. Do not migrate a historical trace by ignoring failures. Each affected
    witness gets a reason; pure and ordinary nonparticipating witnesses stay
    exact in the registers that do not change.
+7. Implement and register advisory `W-LOOP-REPEAT` with its tests before
+   closing C2: Again with a possibly visible non-idempotent Call, including a
+   successful sibling, warns; a proven entirely BeforeEffect path or an
+   idempotent Call does not. Omitted guarantee equals false. Include no
+   promotion of Next to Retry, stable canonical warning order and no new
+   plan/hash/causal bytes caused by a tool warning. Unsafe Retry remains an
+   independent error. The name stays prospective until these tests land.
