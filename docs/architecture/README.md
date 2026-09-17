@@ -16,6 +16,9 @@ checkpoints, not the current completion status.
 
 Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 
+- [`parallelism-notes.md`](parallelism-notes.md) for the one-Worker baseline,
+  future cooperative/multicore/multiprocess profiles, and independent flows as
+  placement candidates rather than new Executors or mandatory tasks;
 - [`retry-extension-refactor.md`](retry-extension-refactor.md) for the approved
   Loop/Retry separation and C0–C4 gates; C1's [algebra](retry-c1-algebra.md),
   [reference traces](retry-c1-traces.md) and [identity inventory](retry-c1-identity.md)
@@ -25,8 +28,9 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 - [`process-service.md`](process-service.md) for the resident Process Contract,
   real/Lab transport, shutdown, dialogue and remaining gateway limits;
 - [`agent-gateway-showcase.md`](agent-gateway-showcase.md) for the composed
-  resident WebSocket bridge, its ownership/order regressions, native JSON
-  protocol seam and the still-open HTTP usage adapter;
+  resident WebSocket bridge, its readable HTTP/vanilla-JS chat continuation,
+  ownership/order regressions, native JSON protocol seam and the still-open
+  HTTP usage adapter;
 - [`process-contract-review.md`](process-contract-review.md) for the requested
   historical Process job/service design review and its subsequent amendments;
 - [`documentation-audit-2026-09-09.md`](documentation-audit-2026-09-09.md) for

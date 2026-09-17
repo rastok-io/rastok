@@ -293,6 +293,11 @@ in the checker and core, without changing the runtime, plan format or goldens.
 
 ## Later — incident lab and safe dogfood
 
+- Design and qualify the physical parallelism profiles in
+  [parallelism-notes.md](docs/architecture/parallelism-notes.md): bounded
+  multicore Workers, task granularity, and optional flow grouping before
+  multiprocess placement. None changes per-instance transaction ownership or
+  blocks the M1 local chat's existing I/O concurrency.
 - Turn one real internal failure into a redacted fixture and scenario.
 - Run in a trusted, non-critical environment with a kill switch.
 - Measure installation time, diagnosis time, cost per session, and

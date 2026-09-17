@@ -10,11 +10,13 @@ For a guided introduction, read the [learning path](../site/index.md): each
 chapter adds a problem, explains the relevant graph, and asks you to change
 one behavior and inspect the golden. The catalogue below is the reference
 inventory, not the recommended reading order. The resident-process
-conversation chapter remains separate from the current WebSocket-to-job proof.
+conversation chapter includes a resident WebSocket-to-Process bridge, then
+a standalone HTML/vanilla-JavaScript client served by the same App.
 
 ## Executable examples
 
-Current opening catalogue: **12 programs, 28 scenarios**. The webhook page
+The opening catalogue below includes the smaller reference programs as well
+as the six-chapter path. The webhook page
 includes the required synthetic deployment profile in its CLI command; the
 other examples need none. The [opening ledger](../architecture/opening-showcase.md)
 tracks the six-page public gallery separately from these executable examples.
@@ -37,6 +39,7 @@ corrected and regression-tested.
 | [sensor alarm](../../examples/sensor-alarm.rkg) | Per-sensor hysteresis, a missing heartbeat, a virtual day | 3 |
 | [resident dialogue](../../examples/agent-dialogue.rkg) | One JSONL Process per conversation, match mocks, exact child closure, fresh input after quit | 2 |
 | [resident agent gateway](../../examples/agent-gateway.rkg) | WebSocket → per-conversation Process, app-server JSON frames, exact child shutdown, independent sockets | 2 |
+| [browser chat](../../examples/agent-chat.rkg) | Embedded readable HTML, shared HTTP/WebSocket listeners, one Process per nickname, conversation-scoped Quit | 3 |
 
 From the repository root:
 

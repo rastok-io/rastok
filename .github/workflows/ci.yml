@@ -20,8 +20,8 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/rastok-browser" --no-save --ignore-scripts playwright@1.58.2
           "$RUNNER_TEMP/rastok-browser/node_modules/.bin/playwright" install --with-deps chromium
-      - name: layout and editor lexical probes
-        run: node --test crates/rastok/src/ui/graph_layout.test.cjs editors/vscode/rastok-dsl/grammar.test.cjs
+      - name: layout, editor and standalone chat probes
+        run: node --test crates/rastok/src/ui/graph_layout.test.cjs editors/vscode/rastok-dsl/grammar.test.cjs examples/agent-chat.test.cjs
       - name: debugger interaction and console probes
         env:
           RASTOK_PLAYWRIGHT: ${{ runner.temp }}/rastok-browser/node_modules/playwright

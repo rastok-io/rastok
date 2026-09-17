@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rastok Codex Gateway</title>
+  <link rel="icon" href="data:,">
+  <!-- Everything is local: no framework, font download, bundler or CDN. -->
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 24px;
+      color: #111;
+      background: #fff;
+      font: 16px/1.5 system-ui, sans-serif;
+    }
+    h1 { margin: 0; font-size: 24px; }
+    p { margin: 8px 0; }
+    form { display: flex; gap: 8px; align-items: center; }
+    input, textarea, button { font: inherit; border: 1px solid #111; padding: 8px; }
+    input, textarea { min-width: 0; flex: 1; background: #fff; color: #111; }
+    textarea { resize: vertical; }
+    button { color: #fff; background: #111; cursor: pointer; }
+    button:disabled { color: #777; background: #eee; border-color: #aaa; cursor: default; }
+    :focus-visible { outline: 2px solid #111; outline-offset: 3px; }
+    #status { min-height: 24px; font-size: 14px; }
+    #messages {
+      height: 50vh;
+      min-height: 180px;
+      overflow-y: auto;
+      border: 1px solid #111;
+      margin: 12px 0;
+      padding: 12px;
+    }
+    #messages p { white-space: pre-wrap; overflow-wrap: anywhere; }
+    #messages strong { display: block; font-size: 13px; }
+    footer { margin-top: 12px; font-size: 13px; color: #555; }
+    @media (max-width: 480px) {
+      body { padding: 12px; }
+      form { flex-wrap: wrap; }
+      label { flex-basis: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Rastok Codex Gateway</h1>
+  <p>Open as many tabs as you want. Each nickname gets its own Codex process.</p>
+  <form id="connect-form">
+    <label for="nickname">Nickname</label>
+    <input id="nickname" maxlength="32" required placeholder="alice" autocomplete="off">
+    <button id="connect" type="submit">Connect</button>
+    <button id="quit" type="button" disabled>Quit</button>
+  </form>
+  <p id="status" role="status" aria-live="polite">Disconnected.</p>
+  <section id="messages" role="log" aria-label="Conversation" aria-live="polite"></section>
+  <form id="message-form">
+    <label for="prompt">Message</label>
+    <textarea id="prompt" rows="2" maxlength="8000" required disabled></textarea>
+    <button id="send" type="submit" disabled>Send</button>
+  </form>
+  <footer>Local teaching demo. No accounts or reconnection. Codex may keep its own local history.</footer>
+
+  <script>
+    "use strict";
+
+    // HTTP only delivers this file. Conversation traffic uses the second
+    // listener in agent-chat.rkg. Keep its address in sync if you change ports.
+    const websocketUrl = "ws://127.0.0.1:8778/chat";
+    const nicknameInput = document.getElementById("nickname");
+    const promptInput = document.getElementById("prompt");
+    const connectButton = document.getElementById("connect");
+    const quitButton = document.getElementById("quit");
+    const sendButton = document.getElementById("send");
+    const statusLine = document.getElementById("status");
+    const messages = document.getElementById("messages");
+
+    let socket = null;
+    let nickname = "";
+    let threadId = null;
+    let nextRequestId = 0;
+    let phase = "disconnected";
+    const pendingRequests = new Map();
+    const agentMessages = new Map();
+
+    function showStatus(nextPhase, text) {
+      phase = nextPhase;
+      statusLine.textContent = text;
+      const disconnected = phase === "disconnected";
+      nicknameInput.disabled = !disconnected;
+      connectButton.disabled = !disconnected;
+      quitButton.disabled = disconnected || phase === "closing" || phase === "cancelling";
+      promptInput.disabled = phase !== "ready";
+      sendButton.disabled = phase !== "ready";
+    }
+
+    function appendMessage(author, text) {
+      const paragraph = document.createElement("p");
+      const label = document.createElement("strong");
+      const content = document.createElement("span");
+      label.textContent = author;
+      // Treat model output as text, never HTML, including during streaming.
+      content.textContent = text;
+      paragraph.append(label, content);
+      messages.append(paragraph);
+      messages.scrollTop = messages.scrollHeight;
+      return content;
+    }
+
+    function sendRpc(message) {
+      socket.send(JSON.stringify({ nickname, kind: "rpc", rpc: message }));
+    }
+
+    function request(method, params) {
+      const id = nextRequestId++;
+      pendingRequests.set(id, method);
+      sendRpc({ id, method, params });
+    }
+
+    function showError(message) {
+      appendMessage("Error", message);
+      showStatus("error", message + " Use Quit to end this conversation.");
+    }
+
+    function receiveRpc(message) {
+      // In-flight replies must not start a thread after the user chose Quit.
+      if (phase === "closing" || phase === "cancelling") return;
+      // Requests have an id; notifications do not. A write acknowledgement
+      // is not a completed answer: only turn/completed ends the active turn.
+      if (message.id !== undefined && message.method === undefined) {
+        const method = pendingRequests.get(message.id);
+        if (!method) return;
+        pendingRequests.delete(message.id);
+        if (message.error) {
+          showError(message.error.message || "Codex refused the request.");
+          return;
+        }
+        if (method === "initialize") {
+          sendRpc({ method: "initialized", params: {} });
+          request("thread/start", { approvalPolicy: "never", sandbox: "read-only" });
+        } else if (method === "thread/start") {
+          threadId = message.result?.thread?.id;
+          if (typeof threadId !== "string") {
+            showError("Codex did not return a thread id.");
+            return;
+          }
+          showStatus("ready", "Connected as " + nickname + ".");
+          promptInput.focus();
+        }
+        return;
+      }
+
+      // This small client has no approval or custom-tool UI. Refuse unexpected
+      // server requests explicitly instead of leaving their RPC unanswered.
+      if (message.id !== undefined) {
+        sendRpc({ id: message.id, error: { code: -32601, message: "Unsupported by this teaching client." } });
+        showError("Codex requested an unsupported interaction.");
+        return;
+      }
+
+      const params = message.params || {};
+      if (params.threadId !== threadId) return;
+      if (message.method === "item/agentMessage/delta") {
+        const key = params.turnId + "/" + params.itemId;
+        let content = agentMessages.get(key);
+        if (!content) {
+          content = appendMessage("Codex", "");
+          agentMessages.set(key, content);
+        }
+        if (typeof params.delta === "string") content.textContent += params.delta;
+        messages.scrollTop = messages.scrollHeight;
+      } else if (message.method === "item/completed" && params.item?.type === "agentMessage") {
+        // Some configurations provide a completed item without earlier deltas.
+        const key = params.turnId + "/" + params.item.id;
+        if (!agentMessages.has(key) && typeof params.item.text === "string") {
+          agentMessages.set(key, appendMessage("Codex", params.item.text));
+        }
+      } else if (message.method === "turn/completed" && phase !== "closing") {
+        const turn = params.turn || {};
+        if (turn.status !== "completed") {
+          appendMessage("Codex", turn.error?.message || "Turn ended: " + turn.status);
+        }
+        showStatus("ready", "Connected as " + nickname + ".");
+        promptInput.focus();
+      }
+    }
+
+    document.getElementById("connect-form").addEventListener("submit", event => {
+      event.preventDefault();
+      if (phase !== "disconnected") return;
+      nickname = nicknameInput.value.trim();
+      if (!nickname) return;
+      nextRequestId = 0;
+      threadId = null;
+      pendingRequests.clear();
+      agentMessages.clear();
+      messages.replaceChildren();
+      showStatus("connecting", "Connecting…");
+      const connection = new WebSocket(websocketUrl);
+      socket = connection;
+
+      connection.onopen = () => {
+        if (socket !== connection || phase !== "connecting") return;
+        showStatus("connecting", "Initializing Codex…");
+        request("initialize", { clientInfo: { name: "rastok_chat", version: "1" } });
+      };
+      connection.onmessage = event => {
+        if (socket !== connection) return;
+        try {
+          const frame = JSON.parse(event.data);
+          if (frame.kind === "rpc") {
+            receiveRpc(frame.rpc);
+          } else if (frame.kind === "error") {
+            if (phase === "connecting") {
+              // A rejected nickname owns no conversation. Disconnect, without
+              // sending Quit to the conversation already using that name.
+              appendMessage("Error", frame.message);
+              showStatus("rejected", frame.message);
+              connection.close(1000, "rejected");
+            } else showError(frame.message);
+          } else if (frame.kind === "closing") {
+            // This acknowledges the journaled closure request, not an invented
+            // successful Process exit. Rastok still drains/terminates the child.
+            showStatus("closing", "Conversation closure requested.");
+            connection.close(1000, "quit");
+          }
+        } catch {
+          showError("Invalid message received from the gateway.");
+        }
+      };
+      connection.onerror = () => {
+        if (socket === connection) showError("WebSocket connection failed.");
+      };
+      connection.onclose = () => {
+        if (socket !== connection) return;
+        const closing = phase === "closing";
+        const cancelled = phase === "cancelling";
+        const rejected = phase === "rejected";
+        socket = null;
+        threadId = null;
+        pendingRequests.clear();
+        showStatus("disconnected", closing
+          ? "Disconnected; conversation closure was requested."
+          : cancelled ? "Disconnected; connection cancelled."
+          : rejected ? "Disconnected. Choose another nickname."
+          : "Disconnected. Abandoned conversations expire after five minutes.");
+      };
+    });
+
+    document.getElementById("message-form").addEventListener("submit", event => {
+      event.preventDefault();
+      const text = promptInput.value.trim();
+      if (phase !== "ready" || !text) return;
+      appendMessage(nickname, text);
+      promptInput.value = "";
+      showStatus("busy", "Codex is replying…");
+      request("turn/start", { threadId, input: [{ type: "text", text }] });
+    });
+
+    quitButton.addEventListener("click", () => {
+      if (!socket || phase === "closing" || phase === "cancelling") return;
+      if (socket.readyState !== WebSocket.OPEN) {
+        showStatus("cancelling", "Cancelling connection…");
+        socket.close();
+        return;
+      }
+      // Quit belongs to the Rastok application, not Codex's stdin protocol.
+      showStatus("closing", "Requesting conversation closure…");
+      socket.send(JSON.stringify({ nickname, kind: "quit" }));
+    });
+  </script>
+</body>
+</html>

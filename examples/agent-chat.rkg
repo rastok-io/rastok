@@ -1,0 +1,203 @@
+// Continue agent-gateway.rkg with a browser, not another execution model.
+// Two shared listeners; only conversation is keyed. No real Codex runs in Lab.
+val alice_session = "11111111111111111111111111111111"
+val bob_session = "22222222222222222222222222222222"
+type JsonObject = map<text,variant>
+type ClientFrame = struct { nickname: text, kind: text, rpc: JsonObject }
+type ChildExit = union {
+  Exited { exit_code: int, signal: int? }
+  SpawnFailed { message: text }
+  DecodeFailed { line: text?, message: text }
+  OutputOverflow { limit: uint, reason: enum { budget, capacity } }
+  CaptureFailed {}
+  TimeoutExpired {}
+  OutcomeUnknown {}
+}
+
+graph agent_chat : App {
+  // The Lab supplies decoded messages here. Real browsers use clients.out.
+  input peer: variant
+  output reply: variant
+  output process_exit: ChildExit
+  output session_exit: variant
+
+  connector page : HttpServer {
+    listen = "127.0.0.1:8777"
+    path = "/"
+    mode = respond
+    codec = bytes
+    timeout = duration("5s")
+    versions = ["http/1.1"]
+  }
+  operator html {
+    input in: bytes
+    output out: bytes
+    on in { out = asset("agent-chat.html", "text/html; charset=utf-8") }
+  }
+  page -> html -> page
+  page.exit -> nothing
+
+  connector clients : WebSocketServer {
+    listen = "127.0.0.1:8778"
+    path = "/chat"
+    codec = json
+    handshake_timeout = duration("5s")
+    max_message = "1MiB"
+    correlate = meta.ext.session_id
+    versions = ["http/1.1"]
+  }
+
+  operator validate {
+    input in: variant
+    output accepted: ClientFrame
+    output rejected: variant
+    on in match {
+      data is JsonObject => match {
+        has(data.nickname) && data.nickname is text
+          && size(data.nickname as text) > 0 && size(data.nickname as text) <= 32
+          && has(data.kind) => match {
+          data.kind == "quit" => accepted = { nickname = data.nickname as text; kind = "quit"; rpc = {:} }
+          data.kind == "rpc" && has(data.rpc) && data.rpc is JsonObject => match {
+            has(data.rpc.method) && (data.rpc.method == "initialize" || data.rpc.method == "initialized"
+              || data.rpc.method == "thread/start" || data.rpc.method == "turn/start") =>
+              accepted = { nickname = data.nickname as text; kind = "rpc"; rpc = data.rpc as JsonObject }
+            // The page may refuse an unsupported server-initiated request.
+            !has(data.rpc.method) && has(data.rpc.id) && has(data.rpc.error) =>
+              accepted = { nickname = data.nickname as text; kind = "rpc"; rpc = data.rpc as JsonObject }
+            _ => rejected = { "kind": "error", "message": "This demo supports conversation messages and quit only." }
+          }
+          _ => rejected = { "kind": "error", "message": "Expected an rpc or quit message." }
+        }
+        _ => rejected = { "kind": "error", "message": "Expected a nickname (1-32 characters) and a message kind." }
+      }
+      _ => rejected = { "kind": "error", "message": "Expected a JSON object." }
+    }
+  }
+
+  graph conversation {
+    input in: ClientFrame
+    output out: variant
+    output exit: ChildExit
+    // Both listeners stay outside this scope: only conversations get children.
+    instance = { key = data.nickname }
+    lifetime = { kind = idle; after = duration("5m") }
+    closing = { drain_for = duration("1s"); settle_for = duration("1s") }
+
+    operator admit {
+      input in: ClientFrame
+      output request: JsonObject
+      output remember: text
+      output close: ClientFrame
+      output notice: variant
+      var socket: text = ""
+      on in match {
+        socket != "" && socket != meta.ext.session_id =>
+          notice = { "kind": "error", "message": "Nickname already in use. Choose another one." }
+        data.kind == "quit" => {
+          notice = { "kind": "closing", "message": "Conversation closure requested." }
+          close = data
+        }
+        _ => {
+          socket = meta.ext.session_id as text
+          // The remembered browser address precedes opening the child.
+          remember = socket
+          request = data.rpc
+        }
+      }
+    }
+    connector model : Process {
+      mode = service
+      command = "codex"
+      args = ["app-server", "--listen", "stdio://"]
+      codec = jsonl
+      max_frame = "1MiB"
+      behavior = probabilistic
+      closing = { drain_for = duration("1s"); settle_for = duration("1s") }
+    }
+    operator address_reply {
+      input remember: text
+      input in: variant
+      output out: variant
+      var socket: text = ""
+      on remember { socket = data }
+      // Process frames carry their own SessionRef, not the browser's.
+      on in { out = { data = { "kind": "rpc", "rpc": data }; meta.ext.session_id = socket } }
+    }
+    in -> admit
+    admit.remember -> address_reply.remember
+    admit.request -> model
+    admit.notice -> out
+    admit.close -> instance.stop  // This conversation and its descendants only.
+    model.out -> address_reply -> out
+    model.err -> nothing
+    model.exit -> exit
+  }
+
+  clients.out -> validate
+  peer -> validate
+  validate.accepted -> conversation
+  validate.rejected -> { clients.in; reply }
+  conversation.out -> { clients.in; reply }
+  conversation.exit -> process_exit
+  // A lost socket is not a fabricated Quit; idle lifetime bounds abandonment.
+  clients.exit -> session_exit
+}
+
+lab agent_chat {
+  simulation browser_protocol on app {
+    mock conversation.model {
+      on in where data is JsonObject && has(data.method) match {
+        data.method == "initialize" => out = { "id": data.id, "result": { "userAgent": "scripted-codex" } }
+        data.method == "initialized" => nothing
+        data.method == "thread/start" => out = { "id": data.id, "result": { "thread": { "id": "thread-1" } } }
+        data.method == "turn/start" => {
+          out = { "id": data.id, "result": { "turn": { "id": "turn-1", "status": "inProgress" } } }
+          out = ({ "method": "item/agentMessage/delta", "params": { "threadId": "thread-1", "turnId": "turn-1", "itemId": "item-1", "delta": "Hello from the simulated Codex." } })
+          out = ({ "method": "turn/completed", "params": { "threadId": "thread-1", "turn": { "id": "turn-1", "status": "completed" } } })
+        }
+        _ => nothing
+      }
+    }
+    scenario alice_and_bob "two names, two resident children; quitting Alice leaves Bob and the listeners alive" {
+      app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "id": 0, "method": "initialize", "params": { "clientInfo": { "name": "rastok_chat", "version": "1" } } } } }
+      expect app.reply count == 1 where meta.ext.session_id == alice_session
+      app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "bob", "kind": "rpc", "rpc": { "id": 0, "method": "initialize", "params": { "clientInfo": { "name": "rastok_chat", "version": "1" } } } } }
+      expect app.reply count == 1 where meta.ext.session_id == bob_session
+      app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "method": "initialized" } } }
+      app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "bob", "kind": "rpc", "rpc": { "method": "initialized" } } }
+      expect nothing app.reply
+      app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "id": 1, "method": "thread/start", "params": { "approvalPolicy": "never", "sandbox": "read-only" } } } }
+      expect app.reply count == 1
+      app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "bob", "kind": "rpc", "rpc": { "id": 1, "method": "thread/start", "params": { "approvalPolicy": "never", "sandbox": "read-only" } } } }
+      expect app.reply count == 1
+      app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "id": 2, "method": "turn/start", "params": { "threadId": "thread-1", "input": [{ "type": "text", "text": "Hello Alice" }] } } } }
+      expect app.reply count == 3 where meta.ext.session_id == alice_session
+      app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "bob", "kind": "rpc", "rpc": { "id": 2, "method": "turn/start", "params": { "threadId": "thread-1", "input": [{ "type": "text", "text": "Hello Bob" }] } } } }
+      expect app.reply count == 3 where meta.ext.session_id == bob_session
+      app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "quit" } }
+      expect app.reply count == 1 where data is JsonObject && data.kind == "closing"
+      advance duration("2s")
+      expect app.process_exit count == 1 where data is OutcomeUnknown
+      app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "bob", "kind": "rpc", "rpc": { "id": 3, "method": "turn/start", "params": { "threadId": "thread-1", "input": [{ "type": "text", "text": "Still here?" }] } } } }
+      expect app.reply count == 3 where meta.ext.session_id == bob_session
+      expect nothing app.process_exit
+    }
+    scenario duplicate_name "another socket cannot take Alice's process or quit it" {
+      app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "id": 0, "method": "initialize", "params": {:} } } }
+      expect app.reply count == 1
+      app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "alice", "kind": "quit" } }
+      expect app.reply count == 1 where meta.ext.session_id == bob_session && data is JsonObject && data.kind == "error"
+      expect nothing app.process_exit
+      app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "id": 0, "method": "initialize", "params": {:} } } }
+      expect app.reply count == 1 where meta.ext.session_id == bob_session && data is JsonObject && data.kind == "error"
+      expect nothing app.process_exit
+    }
+    scenario invalid_message "bad input and unsupported methods do not start a child" {
+      app.peer = { meta.ext.session_id = alice_session; data = { "nickname": 42, "kind": "quit" } }
+      expect app.reply count == 1
+      app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "id": 0, "method": "command/exec", "params": {:} } } }
+      expect app.reply count == 1 where data is JsonObject && data.kind == "error"
+      expect nothing app.process_exit
+    }
+  }
+}

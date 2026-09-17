@@ -1,6 +1,6 @@
 # Parallelism — logical instances and physical execution
 
-> Design notes — non-normative, audited 2026-09-09. Logical Executor/manager
+> Design notes — non-normative, extended 2026-09-17. Logical Executor/manager
 > ownership is implemented in v17; multi-Worker execution remains future work.
 > The semantic authorities are
 > [instances.md](../spec/instances.md),
@@ -58,6 +58,60 @@ allows it. Call identity correlates every `out`/`err` frame with exactly one
 typed `exit`. Instance Closing separately stops admission and boundedly
 drains/cancels/settles those calls.
 
+## Tasks are a runtime choice, not an instance's meaning
+
+The logical scheduling unit is an Executor mailbox or manager command inbox;
+the atomic unit is one transaction. An async task per live instance is one
+possible implementation, not a promise to allocate a task, thread or process
+for every key. Scheduling ready mailboxes on a bounded pool is another. A
+Graph remains a scope under either strategy; its children do not acquire a
+shared transaction or a graph-wide execution lock.
+
+The following are future implementation profiles, not new language modes:
+
+| Profile | Physical execution | Status |
+|---|---|---|
+| Embedded/reference | Bounded ready queues, one cooperative Worker, explicit Driver polling | The current one-Worker model; no autonomous task per instance |
+| Hosted multicore | Bounded Workers, optionally async tasks for suspended physical work | To design and qualify |
+| Multiprocess / distributed | Placement of instances or groups, explicit cross-Worker transport and ownership fencing | To design and qualify |
+
+`no_std` describes the library boundary, not the scheduler: an embedded host
+may have an RTOS or multiple cores. Conversely, a hosted runtime can use the
+same cooperative reference engine. An open Call or resident Process is an
+external obligation, not a DSL transaction waiting for the entire operation
+to finish. Other ready work may run while the Driver waits. Heavy computation
+inside one transaction still needs an explicit execution budget; cooperative
+execution alone is not a latency guarantee.
+
+All profiles must preserve per-instance ordering, atomic reservations and
+commits, exact-generation Closing and journal-relative replay. Different live
+schedules need not produce identical interleavings: competing arrivals are
+retained, not reconstructed from the replacement scheduler.
+
+## Independent flows are placement candidates, not another Executor
+
+The local chat example has two sibling flows inside one App: an HttpServer
+returns an embedded HTML asset, while a WebSocketServer routes conversations
+to resident Processes. Both listeners are shared; only the conversation scope
+is keyed. Loading the page does not wait for Alice's model, and Bob can use a
+different child while Alice's child is working. The existing one-Worker VM and
+non-blocking Driver boundaries are sufficient for this demonstration. This is
+I/O concurrency, not evidence of parallel Operator execution.
+
+These flows may later be grouped or isolated for placement and resource
+budgets. They do not require a second mandatory task layer above instances.
+One task for the whole chat flow could unnecessarily serialize all users;
+one task per drawn Graph would confuse lexical containment with scheduling.
+Use *independent flow* rather than *closed circuit*: the spatial graph is
+still a DAG, and physical request/reply traffic does not add spatial cycles.
+
+Disconnected spatial components are only candidates for such grouping. A
+shared lifecycle parent, manager commands, an exchange's request/response
+correlation, shared budgets and the journal can still require coordination.
+A partitioner must account for those dependencies, not merely erase edge
+directions and find connected components. No grouping syntax, automatic
+partitioner, scheduling-island identity or new plan field is decided here.
+
 ## Hierarchical address, independent placement
 
 Nested owners produce hierarchical logical addresses, but every keyed owner
@@ -99,6 +153,14 @@ protocol into local calls without deleting its journal facts.
    heavy guests use a bounded compute pool while logical ownership is held.
 7. **Hot-key operations** — mailbox depth and lag first; no speculative
    salting that silently breaks order.
+8. **Task granularity and fairness** — ready-mailbox scheduling versus async
+   tasks, bounded activation batches, and protection of cold keys and HTTP
+   ingress from a hot conversation. Measure latency and memory before choosing.
+9. **Flow grouping** — optional colocation/isolation policy, dependency-aware
+   cuts, shared listener ownership and budgets; never a new atomic Graph unit.
+
+These are post-M1 design gates. Completing the local HTTP/WebSocket chat does
+not depend on them and must not be reported as implementing them.
 
 ## Kafka Streams translation
 

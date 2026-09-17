@@ -4,6 +4,77 @@
 publication documentation, not the paid-model, authentication or accounting
 product. It changes no Contract, package version, journal key or language rule.
 
+## Readable browser continuation — 17 September
+
+`examples/agent-chat.rkg` continues the simulated app-server bridge with
+Rastok Codex Gateway. `examples/agent-chat.html` is a single, unminified
+HTML file with inline CSS and vanilla JavaScript, commented in English. No
+frontend dependency, generated bundle, API key or model setting is embedded.
+
+An HttpServer in `respond` mode returns the compiled `asset(...)` with its
+HTML content type. A separate shared WebSocketServer carries
+`{ nickname, kind, rpc }` messages. Only `conversation` is keyed, by nickname;
+it owns its resident Process and socket-return state. A second socket claiming
+an occupied nickname is refused by explicit instance state. This is local
+ownership logic, not authentication or a public security perimeter.
+
+The page sequences initialize/initialized/thread/start/turn/start, appends
+text deltas and waits for `turn/completed` to accept another turn. Unexpected
+server requests receive an explicit JSON-RPC error; tools and approval prompts
+have no UI here. The protocol was rechecked against the official app-server
+documentation on 17 September. No actual Codex invocation was used for tests.
+
+`kind = "quit"` routes to the current conversation's `instance.stop`, so its
+children close but both listeners and Bob's conversation remain available.
+The reply acknowledges a closure request, not an invented successful child
+exit. Cancelling a connection before admission sends no initialization;
+rejecting an occupied nickname sends no Quit to its existing owner. A lost
+socket is not converted into a closure command. The idle lifetime bounds
+abandoned conversations to five minutes; reconnect/resume and persistence
+remain outside this example. Codex may retain its own local thread history;
+the page's Quit requests process closure, not deletion of those files.
+
+Qualification:
+
+- Three Lab scenarios pass: Alice/Bob, duplicate nickname and invalid input.
+  No Driver implementation, network listener or child is used by the Lab;
+  the explicit `peer` input is its decoded-message seam.
+- Four Rust tests pass: the exact HTML survives plan encode/decode, scripted
+  runs are deterministic with exactly two reused children, stepping matches
+  batch, and real loopback HTTP/WebSocket traffic coexists with two harmless
+  shell JSONL processes. The latter observes Alice's child terminal, Bob's
+  unchanged PID and a still-working HTTP asset response after Quit.
+- Ten dependency-free Node tests pass against the inline script: page identity, handshake,
+  streaming/final-item handling, literal text, tab isolation, cancellation,
+  duplicate-name recovery, explicit unsupported-request refusal and errors.
+  They are wired into CI; a remote CI run is not claimed.
+- The adjacent gateway and site-contract suites also pass: 13 targeted Rust
+  tests in total. The client, layout and editor lexical suites total 28 passing
+  JavaScript tests. Workspace formatting, strict all-target/all-feature Clippy
+  and rustdoc pass. The full workspace test suite was not rerun for this
+  example/documentation-only pass; the unblessed v19 inventory stays open.
+- Yoann subsequently opened three conversations in the real application and
+  reported correct operation. This is a user-reported live smoke check, not
+  an automated model test. The full browser visual qualification remains
+  **open**: the agent's browser runtime reported no available browser, and
+  DOM/socket doubles do not replace that audit.
+
+```sh
+rastok simulate examples/agent-chat.rkg
+cargo test -p rastok --all-features --test agent_chat
+node --test examples/agent-chat.test.cjs
+# Optional real local demo: requires an installed/configured Codex.
+cargo run -p rastok --features hosted-websocket -- run examples/agent-chat.rkg
+# Then open http://127.0.0.1:8777/ in two tabs.
+```
+
+No runtime, journal, plan format or execution command changed for this
+composition; no golden was blessed. The asset belongs to this new program's
+identity, not the existing gateway's golden. Future task-per-instance,
+multicore and independent-flow placement choices are documented in
+[parallelism-notes.md](parallelism-notes.md), explicitly post-M1. One Worker
+already permits this I/O concurrency; no parallel Operator execution is claimed.
+
 ## Two independently runnable layers
 
 - `examples/agent-dialogue.rkg` teaches a typed conversation adapter with an

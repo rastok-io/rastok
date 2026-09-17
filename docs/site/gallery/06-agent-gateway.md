@@ -69,6 +69,57 @@ not a Process `exit`. The separate resident primer,
 [agent-dialogue.rkg](../../../examples/agent-dialogue.rkg), shows an
 application `quit`, observed resource exit and a fresh resource on new input.
 
+## Add the small browser client
+
+The next step is [Rastok Codex Gateway](../../../examples/agent-chat.rkg), with a
+single [readable HTML file](../../../examples/agent-chat.html). It uses plain
+HTML, CSS and JavaScript, with English comments: no framework, build step,
+CDN or generated bundle. Start with its scripted protocol:
+
+```sh
+rastok simulate examples/agent-chat.rkg
+```
+
+Three scenarios cover interleaved conversations, a duplicate nickname and
+invalid messages. The same app-server handshake is now wrapped in
+`{ nickname, kind, rpc }`. `conversation` is keyed by the nickname and remembers
+its socket; a second socket cannot take that name or close its child. The Lab
+still enters through `peer`, without binding either network listener.
+
+For the real local application, install and configure Codex first. This
+command **does launch real processes** when a client connects, and sending a
+message may use your configured model/account:
+
+```sh
+cargo run -p rastok --features hosted-websocket -- run examples/agent-chat.rkg
+```
+
+Open `http://127.0.0.1:8777/`, connect as Alice, and open another tab for Bob.
+Send a message in each, then choose **Quit** for Alice and continue with Bob.
+The page waits for `turn/completed`, not just the initial `turn/start` reply,
+before enabling the next message. Model text is rendered literally, not as HTML.
+An unsupported server-initiated request is explicitly declined.
+
+The two flows share an App, not a transaction. `page` serves the embedded
+`asset(...)` through HttpServer; `clients` carries chat over WebSocket at
+`127.0.0.1:8778/chat`. Neither listener is inside the keyed conversation.
+The current cooperative Worker can keep serving the page and other children
+while external I/O waits; this does not claim parallel DSL execution.
+
+Quit is an application message routed to `instance.stop` **inside that
+conversation**. It closes the conversation and its children, not the App or
+Bob. It is never a magic line sent to Codex's stdin. The acknowledgement means
+“closure requested”, not “the child exited successfully”. Closing a browser
+tab without Quit is different: the abandoned conversation has a five-minute
+idle lifetime. This page has no reconnect/resume feature or saved history.
+Codex may keep its own local thread history; Quit is not a deletion request.
+
+The page selects the app-server read-only sandbox and no-approval policy;
+this is a trusted local example, not a security boundary. Do not expose the
+listeners publicly or send credentials through the chat. Editing the HTML
+changes its embedded asset: restart `run` to load the new file. The browser
+does not edit the graph, the Lab or retained data.
+
 ## Break it
 
 Change only `Hello from the simulated agent.` to `A different answer.` in
@@ -88,7 +139,8 @@ Restore the answer before continuing.
 Previous: [Sensor alarm](05-sensor-alarm.md). You now have the pieces to
 isolate an agent conversation: typed Contracts, instance-owned state, a
 resident resource, explicit shutdown, and a controlled external world. Try
-the smaller resident primer to add your own typed adapter. Model-specific
+the standalone browser client above, or the smaller resident primer to add
+your own typed adapter. Model-specific
 usage accounting belongs at that adapter boundary, not in a protocol hidden
 inside Process. The HTTP usage/credential variant is still an explicit open
 item, not a cost guarantee smuggled into this chapter.
@@ -97,8 +149,9 @@ item, not a cost guarantee smuggled into this chapter.
 
 This is a trusted **local** bridge, not a public authenticated AI service.
 A real client owns handshake sequencing, request ids, approvals and the
-read-only tool policy. The repeat-safe effect declaration is not permission
-to run arbitrary non-repeatable tools. `behavior = probabilistic` describes
+read-only tool policy. The teaching page requests read-only execution; that
+is not an authentication boundary or permission to expose it publicly.
+`behavior = probabilistic` describes
 the external boundary; the Lab remains deterministic. Tests compose real
 sockets with harmless shell children, not a model or a credential.
 
