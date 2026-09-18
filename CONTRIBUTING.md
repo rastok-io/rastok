@@ -101,12 +101,17 @@ Assisted-by: <tool and model, if known>
 Human verification: <what was reviewed and tested>
 ```
 
-Commits may carry the same credit as a trailer, in the precise form
-used by this repository (see [AGENTS.md](AGENTS.md)):
+Commits must carry substantial assistance credit as a trailer, in the
+precise form used by this repository (see [AGENTS.md](AGENTS.md)):
 
 ```text
 Assisted-by: <company> <model> <version>
 ```
+
+This includes a model's design or review contribution, not only generated
+code. Credit each model that helped revise or validate the committed work
+with its own trailer, including reviews relayed by the contributor. Use the
+confirmed model version, following the attribution rules in `AGENTS.md`.
 
 The `Signed-off-by` line is always the human contributor's own
 certification — never an assistant's — and every commit carries one

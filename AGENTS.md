@@ -138,9 +138,20 @@ Rastok's central promise makes hidden nondeterminism a correctness bug.
   Assisted-by: <company> <model> <version>
   ```
 
-  Example: `Assisted-by: Anthropic Claude Fable 5`. No email address
-  on this line. The pull-request disclosure rules in
+  Example: `Assisted-by: Anthropic Claude Fable 5.1 (reasoning effort: max)`.
+  No email address on this line. The pull-request disclosure rules in
   [CONTRIBUTING.md](CONTRIBUTING.md) apply unchanged.
+- Substantial assistance includes design and review, not just code
+  generation. Add a separate `Assisted-by` trailer for a reviewing model
+  whose feedback was used to revise or validate the committed work,
+  including a review relayed by the user. A useful review earns credit
+  even when it requires no corrective code change. Do not credit a
+  reviewer who did not review the work covered by the commit.
+- Record each credited model's exact known name and version. Use
+  session metadata or the user's confirmation; ask when the version is
+  missing rather than guessing it. A known reasoning effort may follow
+  in parentheses, but is not a model version. Attribution does not
+  replace human review or the human sign-off.
 
 ## Agent-specific conduct
 
