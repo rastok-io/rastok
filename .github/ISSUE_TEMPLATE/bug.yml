@@ -1,0 +1,50 @@
+name: Bug report
+description: Report a reproducible mismatch between Rastok's contract and behavior.
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For suspected vulnerabilities or conduct concerns, use SECURITY.md or
+        CODE_OF_CONDUCT.md, not a public issue. Remove credentials and personal
+        data from examples, traces and screenshots; diagnostic recordings are
+        not share-safe exports.
+  - type: checkboxes
+    id: preparation
+    attributes:
+      label: Before reporting
+      options:
+        - label: I searched existing issues and the specification for this behavior.
+          required: true
+        - label: This report contains no credentials or private personal data.
+          required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Revision and environment
+      description: Commit or release, OS/architecture, build features and execution mode.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Small RKG source or scenario, exact command, and synthetic inputs.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result and contract
+      description: Explain the invariant and link the relevant specification when known.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: Sanitized diagnostics, first differing record, or observed behavior.
+      render: text
+    validations:
+      required: true

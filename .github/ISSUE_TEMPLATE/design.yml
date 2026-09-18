@@ -1,0 +1,44 @@
+name: Design proposal
+description: Discuss a language, Contract, dependency or runtime change before implementation.
+labels: [design, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Start with one concrete problem. A proposal is not approval to change
+        the semantics or open a broad implementation PR; see CONTRIBUTING.md.
+  - type: checkboxes
+    id: preparation
+    attributes:
+      label: Before proposing
+      options:
+        - label: I searched existing issues, specifications and decisions for this proposal.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and user-visible result
+      description: What cannot be expressed or guaranteed today? Include a small example.
+    validations:
+      required: true
+  - type: textarea
+    id: contract
+    attributes:
+      label: Proposed contract and affected decisions
+      description: State the invariant, normative home and any decisions that would change.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and scope
+      description: Include the existing-language solution, trade-offs and explicit non-goals.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence and qualification
+      description: Tests, failure cases, identity/recovery implications and dependency justification, where relevant.
+    validations:
+      required: true

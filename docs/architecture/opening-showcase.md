@@ -67,6 +67,7 @@ dead when no handler emits on that port.
 | Three release binaries | Partial | Both macOS targets rebuild with hosted-ui/hosted-websocket, without HTTP/3; starter and all three echo scenarios pass. Intel runs under Rosetta, not native hardware. Linux remains unbuilt here: no Linux target, container engine or cross-toolchain is installed; the prepared remote workflow is not invoked. |
 | CHANGELOG, crate metadata and release tag | Partial | `0.1.0-alpha` manifests, exact core dependency, license/readmes and CHANGELOG prepared. Both crate archives build outside the workspace using the packaged local core. Confirmed public URLs are now in local metadata/readmes; prior archives predate this URL-only update. Publication stays disabled; authorized tag/publication remain pending |
 | Public documentation destination | Partial — URL confirmed, availability unverified | `https://docs.rastok.com` must resolve before the authorized 15 October publication: minimal Starlight quickstart/gallery preferred, 301 to the actual `www.rastok.com` gallery as fallback. [Site handoff](../site/README.md#public-destination-handoff--18-september-2026); no deployment or DNS change performed |
+| Contribution safeguards and private contact | Partial — files prepared, activation pending | Local DCO check and nine regressions, issue forms and PR template are present. `contact@rastok.com` is planned for Yoann, not yet activated or receipt-tested. Hosted labels, main protection, private vulnerability reporting and one historical unsigned commit remain in the [owner checklist](github-opening-checklist.md). No GitHub, mailbox or DNS change performed |
 | Paid benchmark wave | Partial — dry harness requalified | All 20 references pass their referees; 4 runner tests and 3 canned attempts pass (17 deliberately unattempted). Prompt v4 uses executable idempotence/Retry, preserving frozen v1–v3. Exact three model IDs/adapters and spending authorization remain user choices; no paid run started. |
 | Optional concepts pages | Removed from this pass | No spare scope assumed; four short pages may follow the gallery |
 State vocabulary: Done = fait; Partial = partiel (including an explicitly
@@ -97,6 +98,9 @@ Remaining blocking evidence: independent browser review, two unaided
 quickstart trials, Linux/remote artifact production, availability of the
 confirmed documentation destination and the ordered release. The paid
 benchmark is rehearsed, not authorized/executed.
+The [contribution opening checklist](github-opening-checklist.md) also requires
+working private reporting, hosted safeguards and a maintainer decision on the
+single unsigned historical commit before public participation opens.
 The in-app Browser is unavailable here; the existing Chrome harness is not
 passed off as an external reviewer. No public push/tag/publication or paid
 model call is performed.

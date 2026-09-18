@@ -153,8 +153,22 @@ This adds a `Signed-off-by: Name <email>` line certifying the
 that you wrote the change, or otherwise have the right to submit it
 under the Apache License 2.0. The sign-off transfers no rights to the
 project beyond that license — it attests provenance, and it is the
-formal counterpart of the human-review attestation above. CI rejects
-commits without a sign-off.
+formal counterpart of the human-review attestation above. The CI job
+`DCO sign-off` checks every contribution commit for a trailer matching its
+author, including commits brought in through a merge. It checks the declared
+sign-off, not whether human review actually happened. The repository owner
+must require this check in branch protection before public contributions open.
+
+The same check runs locally without network access, using full commit SHAs:
+
+```sh
+node tools/ci/check-dco.mjs <base-sha> <head-sha>
+```
+
+Issue forms and the PR template guide the contribution contract; they do not
+replace review or prevent reports submitted through other clients. Hosted
+settings and private reporting remain tracked in the
+[opening checklist](docs/architecture/github-opening-checklist.md).
 
 ## Review outcomes
 

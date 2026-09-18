@@ -21,6 +21,11 @@ participation, or ban a participant when necessary to protect the project and
 its contributors. Enforcement decisions should be proportionate and may be
 reconsidered when new evidence appears.
 
-Report conduct concerns privately through the contact address published in
-the maintainer's profile on the canonical repository. Do not open a public
-issue containing sensitive personal information.
+The designated recipient for private conduct reports is Yoann Pantic,
+through `contact@rastok.com`, with subject prefix `[RASTOK CONDUCT]`.
+**Pre-opening status: mailbox/forwarding activation and a receipt test are
+pending.** This channel must work before public participation opens; its
+status is tracked in the [opening checklist](docs/architecture/github-opening-checklist.md).
+Do not assume the planned address is active yet, and do not open a public
+issue containing sensitive personal information. The GitHub profile and a
+GitHub `noreply` address are not substitutes for a working private channel.

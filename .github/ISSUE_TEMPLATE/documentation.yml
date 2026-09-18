@@ -1,0 +1,25 @@
+name: Documentation or example issue
+description: Report a confusing explanation, broken command or missing learning step.
+labels: [documentation, needs-triage]
+body:
+  - type: input
+    id: location
+    attributes:
+      label: Page, example and revision
+      description: Identify the file or page and the commit or release you read.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What was unclear or failed?
+      description: Include the exact command and sanitized result when applicable, without secrets or private data.
+    validations:
+      required: true
+  - type: textarea
+    id: improvement
+    attributes:
+      label: Suggested clarification
+      description: Explain what you expected to learn or propose corrected wording.
+    validations:
+      required: true

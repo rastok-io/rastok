@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security reporting policy
+    url: https://github.com/rastok-io/rastok/blob/main/SECURITY.md
+    about: Read the private reporting instructions; do not disclose vulnerabilities in an issue.
+  - name: Code of conduct and private contact
+    url: https://github.com/rastok-io/rastok/blob/main/CODE_OF_CONDUCT.md
+    about: Report conduct concerns privately, not in a public issue.
