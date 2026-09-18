@@ -1,5 +1,10 @@
 # The M1 slice — the public-opening milestone
 
+> **Later scope amendment — D-2026-09-16-7:** CostReport, automatic pricing
+> and subset arithmetic are removed from M1. References below preserve the
+> earlier design/qualification history; [observability.md](../spec/observability.md)
+> and [ui.md](../spec/ui.md) own the current measurement-retention contract.
+
 > **Supersession note (2026-09-05).** This file remains the historical M1
 > slice ledger. D-2026-09-05-1 puts M1.9/UI and its calendar target on hold and
 > opens the R0–R9 v16 semantic rework. M1.7's landed evidence remains valid for
@@ -14,7 +19,13 @@
 > not real-I/O `run`, branches or input authoring. Its external browser pass
 > remains in [release qualification](release-qualification.md).
 
-> **Current-state pointer (2026-09-09).** The
+> **Current-state pointer (2026-09-18).** Native Retry, generic measurements,
+> typed HTTP hydration and the common v19/v3 qualification are recorded in
+> [C4](retry-c4-qualification.md); the live M1/release checklist is
+> [opening-showcase.md](opening-showcase.md). The following September 9 pointer
+> and the dated ledger are historical.
+>
+> **Earlier pointer (2026-09-09).** The
 > [v17 amendment](loop-host-terminal-v17.md) supersedes the contributed Loop
 > expiry port without changing the three non-Loop witnesses. The
 > [documentation audit](documentation-audit-2026-09-09.md) owns the latest

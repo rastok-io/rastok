@@ -42,7 +42,8 @@ simulated HTTP flow with typed validation, bounded retries and an audit profile.
 
 ![A retained webhook timeout, backoff and successful retry in the debugger](docs/site/assets/webhook-tour.gif)
 
-Thirty seconds through the simulated flagship. The [chapter](docs/site/gallery/04-webhook-to-partner.md)
+Native Retry, rendered from retained simulation transitions in package v19.
+The [chapter](docs/site/gallery/04-webhook-to-partner.md)
 explains the inputs, retained transitions and visible limits.
 
 ## Model
@@ -62,11 +63,12 @@ a passive Graph scope or an Executor:
 An **Extension** is attached to one Node and may contribute attributes,
 bindings, commands, constraints and, only when necessary, ports. `App` marks
 the one public root Graph; `Loop` adds finite temporal recurrence through a
-journal-owned manager; `Saga` remains a future Extension. A manager is neither
+journal-owned manager; `Retry` repeats the same outbound Call under a
+bounded, statically checked policy; `Saga` remains a future Extension. A manager is neither
 a Node nor an edge, so temporal recurrence never creates a spatial cycle.
 Loop contributes no port: exhaustion is a `LoopExpired` case on the host's
 resolved failure terminal (`err`, a custom terminal, or a Call's `exit`).
-The categorical v18 package carries recursive Dispatch, case routing,
+The categorical v19 package carries recursive Dispatch, case routing,
 ordered multi-emission and command-based Operator, Graph and outbound Call
 Loops. Independent core validation re-derives their contracts, routes and
 proofs. Recovery reconstructs retained deliveries, state, commands, exchanges
@@ -185,11 +187,14 @@ The frozen [R0 algebra](docs/architecture/rework-r0-algebra.md),
 [R2 review handoff](docs/architecture/rework-r2-supersession.md). The [R9 qualification](docs/architecture/rework-r9-qualification.md)
 links that design to the executable host and recovery tests.
 
-M1.8 closed on categorical package v15; its contracts remain in the current
-v18 package. The source front end
-recognizes the closed `@sensitive`/`@secret`/`@personal`/`@measure`/`@cost` family,
+M1.8 closed on categorical package v15; its policy guarantees remain in the
+current v19 implementation. The source front end
+recognizes `@sensitive`, `@secret`, `@personal` and `@measure`,
 resolves aliases into canonical schema paths and transports the sparse policy
 tables through checked HIR, package decode and Registry-free validation.
+Quantities use exactly `@measure(id = amount, unit = "USD")`: money is an
+ordinary unit-bearing value, not a separate interpretation. The former
+`@cost` spelling and currency/basis arguments refuse with migration diagnostics.
 Invalid or forged annotations refuse by exact path. A3 independently derives
 effective policy across copies, projections, calculations, guards, state and
 Loop recurrence; accounting meanings never merge ambiguously, and terminal
@@ -200,20 +205,20 @@ data only with a complete attested run-scoped privacy profile. Exact
 `env()`/`secret()` references bind HttpClient URL and bearer settings through
 the same real/Lab descriptor; physical secret bytes enter neither source,
 profile JSON, CLI, `Value`, package nor journal. Raw incoming `@secret` fields
-remain fail-closed. Unannotated semantic
-hashes and all existing causal traces remain unchanged. Every causal record
+remain fail-closed. The annotation migration does not change unannotated semantic hashes or
+original causal DATA. The separate Retry/Contract cutover and its exact
+witness movements are inventoried in the
+[C4 qualification ledger](docs/architecture/retry-c4-qualification.md). Every causal record
 also yields a typed retained observation with exact flow/instance/Call/Session
 correlation. `rastok run --json-logs` projects that stream through a bounded
 never-block queue; payloads are omitted by default and classified values are
 redacted before JSON formatting. Export loss changes neither execution nor
-the retained accounting plane. A7 reconstructs a public per-flow
-`CostReport` lazily from the same causal records and validated schemas. Token
-subset relations prevent cache/reasoning double counting; positive quantities
-without a matching deployment price stay `unpriced`. Provider-reported and
-pricebook-calculated amounts retain exact decimal values, evidence and
-currency, and no cross-currency total exists. Optional Connector/provider/model
-price rows live in the deployment profile; only their stable reference and
-digest enter the run header, never graph identity or causal bytes. The ordered
+the retained facts. Measurements stay in their original typed envelopes;
+the associated validated plan retains their annotations. Signed quantities
+and reported amounts remain exact, with their units and original causal
+provenance; a currency code is simply a unit. Under D-2026-09-16-7, M1 implements no report, automatic
+pricing or subset arithmetic. Existing profile attestations keep their
+representation, but no tariff is automatically applied. The ordered
 work is tracked in the
 [M1.8 backlog](docs/architecture/m1.8-observability-backlog.md), and the
 [exit report](docs/architecture/m1.8-exit-report.md) owns the identity,
@@ -222,19 +227,45 @@ The optional OpenTelemetry transport is explicitly deferred until exact
 temporal observations exist; no exporter timestamp is presented as commit
 time.
 
+The current v19 implementation admits finite outbound Call `+ Retry`
+through the public compiler, Lab, runner and diagnostic replay. It repeats the
+same prepared operation, retains each attempt and publishes only the final
+result. Instances distinguishes operations/attempts from Loop applications;
+held envelopes remain inspectable with normal redaction. Unsupported Retry
+hosts still refuse. The common fixture migration and qualification are recorded
+in the [C4 ledger](docs/architecture/retry-c4-qualification.md); opening gates
+remain separate.
+
+The same implementation admits descriptive annotations
+declared with `type note = @struct { text: text }` and applied as
+`text @note(text = "Caller input")`. Definition identity and typed constant
+arguments are retained and independently checked; a lookalike of a standard
+annotation gains no security or accounting authority. Ordinary flat data and
+unused declarations stay identity-neutral. Additive business quantities now
+use simple ids and explicit units, for example
+`int @measure(id = carrots, unit = "item")`. Signed integers and exact decimals
+retain individual positive, zero and negative samples; decimal quantities are not implicitly
+money. Amounts use that same two-field schema, for example
+`decimal(18,6) @measure(id = refund, unit = "EUR")`; their ids remain distinct
+in the retained metadata. Generic subsets, reports, pricing and the future
+Budget Extension are outside M1. The implicit-unit registry is retired: even a
+dotted id needs an explicit unit. Standard definitions and aliases use the
+ordinary type system. The [common qualification](docs/architecture/retry-c4-qualification.md)
+records that migration separately from external M1 opening gates.
+
 The visual debugger is available through `simulate --ui`. It starts paused,
 uses the checked scenario on disk, and retains a read-only transition timeline.
 Back/forward inspection does not fork or mutate the simulation;
 Reset starts a fresh session and preserves the old history. The embedded page
 shows real compound topology, current mailbox FIFOs (`≡ n`), instances
 (`⧉ n`), source definitions, Loop-run state dependencies, redacted `META`/
-`DATA` and the public `CostReport`. Manager commands are described as commands,
+`DATA`. Manager commands are described as commands,
 never invented ports or spatial edges. Replay presents retained transitions at
 one or four events per second. Decisions, causal links, pending obligations
 and assertion evidence explain the selected journal prefix. The canvas
-pans/zooms and the inspector resizes. One controller limit remains explicit:
-an authored `advance` can retain several VM transactions in one transition;
-the UI does not claim that every transition is exactly one journal record.
+pans/zooms and the inspector resizes. An authored `advance` exposes its
+intermediate retained VM states. Transitions and journal records remain
+distinct: an authored action can also reach an effect without a new record.
 
 `run --ui` and `check --ui` refuse before effects. Editing, simulation
 branches and real-I/O experiment debugging remain separate future work.
@@ -290,7 +321,7 @@ the remaining lines. This is not a general CSV parser with quoted-newline suppor
 cargo run -p rastok --features hosted-ui -- simulate examples/csv-count.rkg --ui
 ```
 
-The larger executable UI tour combines structured DATA, keyed Loop retries, a nested
+The larger executable UI tour combines structured DATA, keyed Retry operations, a nested
 Graph, an Operator and a mocked Process boundary:
 
 ```sh

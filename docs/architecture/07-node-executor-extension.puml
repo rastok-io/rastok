@@ -1,6 +1,6 @@
 @startuml 07-node-executor-extension
 skinparam backgroundColor white
-title Rastok — semantic ownership (v18; not a Rust API inventory)
+title Rastok — semantic ownership (v19; not a Rust API inventory)
 skinparam shadowing false
 skinparam classAttributeIconSize 0
 hide empty methods
@@ -38,10 +38,15 @@ class Loop {
   Loop.state; resolved exhaustion target
   contributes no port
 }
+class Retry {
+  outbound Call; same prepared request
+  attempts; terminal cases; delay
+  no ports, commands or new terminal
+}
 class "Saga (deferred)" as Saga
 class Manager {
-  bounded journal-owned commands per run
-  Next / Again / Done
+  bounded journal-owned recurrence
+  Loop commands / Retry held attempts
   temporal admission; no PhysicalEdge
 }
 class Driver {
@@ -59,8 +64,10 @@ Connector "*" --> "1" Contract
 Connector --> Driver : bound before execution
 Extension <|-- App
 Extension <|-- Loop
+Extension <|-- Retry
 Extension <|-- Saga
 Loop *-- Manager
+Retry *-- Manager
 Manager ..> Node : owner address / generation
 
 note left of Node
@@ -77,6 +84,11 @@ Hosts: Operator, Graph, finite outbound Call.
 Exhaustion is LoopExpired on existing err,
 custom terminal, or the Call's extended exit.
 Commands are not ports or spatial edges.
+end note
+note bottom of Retry
+All attempts retained; only the final one delivered.
+Backoff starts at the retained Call closure time.
+Idempotence is a plan guarantee, not an Intent field.
 end note
 note bottom of Driver
 Process job: finite Call.

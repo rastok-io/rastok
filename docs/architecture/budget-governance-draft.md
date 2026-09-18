@@ -1,5 +1,16 @@
 # Draft — budget governance after M1
 
+> **Direction approved, outside M1 — D-2026-09-18-2.** Governance is the
+> future `Budget` Extension. The App Graph is the preferred attachment point
+> to explore, not an exclusive host rule or a decision about account scope.
+> The reservation/settlement protocol below remains a proposal; no Budget
+> implementation or qualification is required to close M1.
+
+> **Later scope amendment — D-2026-09-16-7:** CostReport, automatic pricing
+> and subset arithmetic are removed from M1. References below preserve the
+> earlier design/qualification history; [observability.md](../spec/observability.md)
+> and [ui.md](../spec/ui.md) own the current measurement-retention contract.
+
 > **Non-normative design memory, 2026-08-30.** This file preserves decisions
 > explored while scoping M1.8. It reserves no source spelling, Extension,
 > package tag, journal key, exit case or release milestone. M1.8 delivers the
@@ -9,6 +20,112 @@
 > are design history, not executable examples. v16 Graphs have no handlers;
 > a future Budget design must express these decisions through case routing
 > and child Operators under the current [Extension model](../spec/extensions.md).
+
+## Current proposal — 18 September 2026
+
+**Proposal for review, not an approved execution protocol.**
+[D-2026-09-18-1](../spec/decisions.md#d-2026-09-18-1--separate-generic-measurements-otlp-export-and-budget-authority)
+settles a generic `@measure(id, unit)` target and a future optional `otlp`
+observer. Neither enforces spending. The sections after this update preserve
+the August design exploration; their source spelling, refusal shape and
+unknown-outcome settlement are not commitments.
+
+[D-2026-09-18-2](../spec/decisions.md#d-2026-09-18-2--reserve-budget-governance-for-a-post-m1-extension)
+subsequently settles the Extension name/category and its exclusion from M1.
+It does not approve the remaining protocol choices.
+
+### Three separate capabilities
+
+| Capability | Input and authority | Delivery status |
+|---|---|---|
+| Retain measurements | Typed numerical fields, validated annotations and original causal journal records | M1 foundation; the new two-field signature still needs its explicit migration |
+| Show consumption and cost | Selected original samples, causal attribution, reported amount or explicit versioned valuation policy | Later read-only consumer; no M1 report or automatic tariff application |
+| Enforce a budget | Account policy and an atomic reservation before the effect, followed by settlement | Later semantic protocol; not OTLP and not implemented |
+
+A cost is not a new numerical type. Under the target signature, an amount may
+be `decimal(18,6) @measure(id = amount, unit = "USD")`, just as tokens use
+`unit = "token"`. An id and a unit do not say whether that value is a supplier
+charge, an estimate, a balance or a reservation. A financial consumer must bind
+its evidence explicitly to the producing Contract/port/path and causal scope.
+It must not sum every matching field in the graph.
+
+There are two valuation paths: inspect a provider-reported amount if it exists,
+or calculate from measured quantities under a retained, versioned price
+profile. For example, input and output tokens can have different prices.
+No price is inferred from their names. A calculated estimate and a reported
+charge for the same attempt are alternatives for reconciliation, not two
+expenses. Missing quantities or missing tariffs remain unknown. Arithmetic is
+exact and unit-specific; no implicit currency conversion is introduced.
+
+The selected producer and original emission identity matter. Copying annotated
+data downstream is not a second expense. Retry Held/Consumed/Published refer
+to the original attempts, not new consumption. Conversely, two actual attempts
+can incur two charges even if the parent only receives the final response.
+This selection/deduplication policy must be qualified with Retry and lineage
+before any total is presented as authoritative.
+
+### Proposed pre-effect protocol
+
+The proposed owner is the App Graph. Its account may represent a session,
+tenant or shared deployment; the attachment point does not choose the account
+scope, and neither rule is frozen yet. Its available quantity is
+the limit minus settled spending and outstanding reservations, all in the
+same unit. Limits and price policies are deployment inputs, not values frozen
+in graph source.
+
+1. Prepare the exact outgoing request and resolve its account, policy and
+   charging evidence. Derive a reservation ceiling under a versioned policy.
+2. Reserve atomically against that authority. On refusal, start no Driver;
+   the eventual typed refusal and its routing need a separate design decision.
+3. Commit the authorization before external work. Each actual Retry attempt
+   requires its own admission; concurrent instances cannot independently read
+   the same available balance and both spend it.
+4. Settle against the original outcome evidence, release unused reservation
+   when justified, and retain both the decision and its evidence for recovery.
+   An authorized correlated refund may credit an account; an arbitrary
+   negative annotated field may not.
+
+Illustrative arithmetic, not a measurement: with a USD 10 limit, USD 8 settled
+and USD 1 reserved, only USD 1 is available. A Call requiring USD 2 must refuse
+even though a dashboard shows only USD 8 spent. A USD 1 reservation later
+settled at USD 0.60 releases USD 0.40, without inventing a refund transaction.
+
+A strict monetary ceiling requires a trustworthy upper bound on the pending
+expense, not merely its eventual measurement. Request/output limits and a
+versioned provider tariff may supply such a bound only where the Contract and
+charging rules actually guarantee it. Otherwise policy must refuse strict
+admission or explicitly offer an estimated ceiling; it cannot promise that a
+post-call observation prevents an overrun that already occurred.
+
+A timeout or a cancelled Session does not prove that the provider charged
+nothing. Unknown settlement must remain a visible unresolved liability. Whether
+policy holds a reservation until reconciliation or conservatively debits the
+ceiling is still open. The latter is a budget-policy charge, not evidence that
+the provider actually billed that amount. Silence cannot release money by
+default, and stopping a Retry does not erase earlier attempts.
+
+### Durability, telemetry and remaining decisions
+
+Reservation, authorization and settlement must survive the recovery horizon
+claimed by the budget. M1's in-memory journal and diagnostic recording cannot
+promise a shared balance surviving crashes or multiple Workers. Durable
+journaling is M2; its existence alone will not supply the atomic shared-account
+protocol, external reconciliation or distributed admission. These need their
+own qualification before a cross-run guarantee is advertised.
+
+The future `otlp` observer can export consumption, estimated/reported cost and
+budget state once their producers exist, under explicit mapping and privacy
+rules. It does not supply tariffs or enforce a limit. Collector availability,
+aggregation delay, rounding and export loss cannot control admission or replace
+the exact evidence. The debugger remains an inspector, not the account lock.
+
+Before implementation, arbitrate: the first account scope and authority;
+guaranteed versus estimated reservation; source binding and refusal semantics;
+unknown outcomes and refunds; nested/shared budgets; durable recovery and
+Retry/Closing composition. The `Budget` name and Extension category are
+settled, but no attributes, executable tag or record are reserved by this
+update. The honest M1 promise is measurement evidence, not an enforced
+monetary ceiling.
 
 ## Why this is separate
 

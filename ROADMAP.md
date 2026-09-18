@@ -52,8 +52,33 @@ integration seam — request, external partner, late callback — be
 built, simulated, and shown end to end, before its real systems
 exist? Scope, order, and evidence:
 [`docs/architecture/m1-slice.md`](docs/architecture/m1-slice.md).
-Public opening is **15 October 2026**. R0–R9 and the v17 host-terminal
-amendment have passed. The 10 September approved exact-instance closure is the
+Public opening is **15 October 2026**.
+
+### Current close-out — 18 September
+
+The checkout uses **v19 / diagnostic recording v3**. The common
+[C4 ledger](docs/architecture/retry-c4-qualification.md) owns the single
+identity/trace blessing and current qualification, including native Retry,
+typed Responses hydration and generic `@measure(id, unit)` samples retained
+on original attempts. The six-chapter gallery, editor grammar and publication
+assets are migrated. OTLP export and the Budget Extension remain outside M1;
+measurements do not introduce reporting, aggregation or charging authority.
+
+M1's implementation and external opening gates are tracked separately in
+[opening-showcase.md](docs/architecture/opening-showcase.md). Independent
+browser review, two unaided quickstart trials, Linux/remote release artifacts,
+availability of the confirmed public documentation URL and the authorized
+publication are not inferred from local tests. The confirmed URLs and site
+handoff are recorded in the [release inventory](docs/architecture/release-qualification.md#public-destinations-and-opening-gate).
+No public push, tag, registry publication or paid model call is
+made by this pass. The embedded Retry workload leaves only **512 B of heap**
+and **6,852 B of code** margin; the unchanged limits remain gates.
+
+### Dated implementation checkpoints — superseded by the current ledger
+
+The following records the migration sequence, including earlier candidate
+failures and footprint measurements; it is not the current completion status.
+R0–R9 and the v17 host-terminal amendment have passed. The 10 September approved exact-instance closure is the
 named package exception to the opening freeze: v18, D-2026-09-10-1.
 The subsequently requested resident Process uses a distinct `process@3`
 Session contract inside that unchanged package (D-2026-09-14-1); jobs stay
@@ -62,22 +87,90 @@ The minimal optional-member expression `has(object.member)` is separately
 approved by D-2026-09-14-3, with no package-version or journal change.
 The Loop / Retry / Saga separation is now approved by D-2026-09-14-4:
 one recurrence engine, distinct state-iteration and protected-Call protocols,
-and no global Saga effect classification for ordinary Calls. This is a
-new refactor, not delivered Retry support. `rework/retry` now carries the
+and no global Saga effect classification for ordinary Calls. `rework/retry` carries the
 unblessed v19/recording-v3 candidate; the last qualified release baseline is v18.
 Its [contract and staged gates](docs/architecture/retry-extension-refactor.md)
 require an identity inventory before any executable format cutover.
 The 15 September C1 design handoff now supplies the operation algebra, crash
 traces and the v19/v3 inventory; stopping during Retry backoff publishes
-no new output (D-2026-09-15-2). C2–C4 implementation/qualification remain open.
+no new output (D-2026-09-15-2). Final C4 migration/qualification remains open.
 The [C3 checkpoint](docs/architecture/retry-c3-implementation.md) now executes
 retained attempts and original-prefix recovery through the staged plan, Lab
 and diagnostic recorder. Closing drains unopened requests once without Retry
-(D-2026-09-15-4). Source admission still refuses pending complete
-scheduling/accounting/footprint qualification.
+(D-2026-09-15-4). Its original source gate is superseded by the C4 checkpoint below.
+The 16 September qualification follow-up removes implicit Loop-before-Retry
+priority at equal deadlines and reproduces the same records after recovery
+alongside an ordinary Call timeout. The subsequent shared-admission and
+collection-construction pass brings Retry/full recovery to 1,040,824 B,
+7,752 B below the unchanged 1 MiB code gate. Its measured heap remains
+130,560 B, only 512 B below 128 KiB; metadata growth requires new measurement.
+No gate or golden is changed.
+The subsequent D-2026-09-15-5 approves flat annotation-capable types,
+`type Name = @struct { ... }`, using the existing value algebra and explicit
+stdlib/runtime interpretations. The [annotation integration handoff](docs/architecture/annotation-types-m1.md)
+separates flat declarations from annotation bindings, exact business
+measurements and type-directed response hydration (D-2026-09-15-6).
+The first source slice checks flat data with unchanged structural identity.
+D-2026-09-16-5 now retains declared descriptive annotation applications, their
+nominal definition and ordinary typed constants in candidate tag 6. Aliases
+and omitted nullable arguments normalize identically; forged semantic bindings
+refuse. The next quantity profile now implements the protected measure binding:
+simple ids, explicit units and original signed integer/decimal samples.
+D-2026-09-18-1 subsequently unifies amounts and other quantities under exactly
+`id` and `unit`, with signed original-attempt refunds and no monetary profile.
+The stdlib schema is executable; its identity migration and remaining
+qualification are recorded in the annotation ledger.
+D-2026-09-16-7 removes reports, automatic pricing and generic subset arithmetic
+from M1; it does not remove retention or Retry qualification, close A4 or
+bless candidate v19.
+D-2026-09-16-1 binds `output out: Response` on HttpClient's JSON
+profile, with exact field hydration and runtime `DecodeFailed` on incompatible
+bodies; other codec refinements remain unsupported. The existing annotations
+can therefore observe both held and published typed attempts. That hydration
+change allocates no format field; descriptive applications add only the
+inventoried candidate annotation tuple. No golden is blessed. That checkpoint's
+Retry image remains at 130,560 B peak heap. After named monetary binding and
+the simplified definition-table walk, it uses 1,048,344 B of code, leaving
+only 232 B under 1 MiB. This fixed unannotated workload measures decoder and
+validator growth, not maximum-size annotation inspection; further metadata work
+must be remeasured.
+The 17 September [Retry follow-up](docs/architecture/retry-c3-implementation.md#8-mixed-timers-bounded-publication-and-exact-instances--17-september)
+qualifies shared deadlines with timed joins, lifetimes and Closing, bounded
+fan-out publication, keyed same-origin operations and stop-at-held-batch cuts.
+It corrects recovered lifecycle work overtaking the unfinished dated frontier.
+The unchanged Retry/full-recovery workload now measures 1,048,368 B of code,
+leaving **208 B**, and the same 130,560 B peak heap. Source opening, migration
+and the reviewed v19/v3 blessing remain separate gates. The final full run has
+1,509 passing tests and the same nine unblessed candidate failures; two earlier
+cold-start incidents and their passing reruns remain recorded in the report.
+The [C4 inspection checkpoint](docs/architecture/retry-c4-inspection.md) opens
+the qualified Call profile through public compilation, with source refusals
+preserved for unsupported profiles. Runtime tests no longer bypass that gate.
+The debugger projects exact operations/attempts, held/final dispositions and
+deadlines; a held batch no longer animates a fictitious delivery to App.
+Gallery and annotation migration, the one v19/v3 blessing and browser/release
+qualification are not closed by this source opening.
+The [projected JSON follow-up](docs/architecture/openai-responses-hydration.md)
+implements the approved nullable/additional-member profile without changing
+ordinary structs, default hydration or the plan version. The Responses gateway
+now has six executable Lab scenarios; local physical HTTP tests prove original
+samples before Retry disposition. No paid OpenAI call is claimed. On the same
+Retry/recovery package, code is **1,048,520 B**, leaving **56 B** below 1 MiB;
+heap remains **130,560 B**, with 512 B of margin. These are workload-specific
+measurements, not permission for further unmeasured core growth. Goldens,
+complete annotation migration and the release gates remain open.
+The subsequent [explicit-unit migration](docs/architecture/annotation-types-m1.md#16-explicit-unit-migration-inventory--17-september-before-implementation)
+removes the implicit measurement registry and retires its compact annotation
+tag by name. Quantity ids now carry no unit, carrier or subset authority:
+units are explicit and observations retain their exact signed values.
+The same embedded Retry package uses **1,046,556 B** of code, recovering
+1,964 B and leaving **2,020 B** of margin; heap remains **130,560 B**.
+Final stdlib integration, A4 and the common reviewed blessing remain open.
 Other semantics remain frozen. The remaining work includes the six-example
 showcase and its qualification, tracked in the
 [opening ledger](docs/architecture/opening-showcase.md).
+
+### Opening gates and original slice inventory
 
 The 10 September opening brief separates the gates. The six-example gallery,
 measured quickstart, two CLI helpers, release binaries, editor grammar, captures
@@ -224,11 +317,17 @@ in `docs/site/`; the separate site consumes it and the examples at one tag.
   [ordered backlog](docs/architecture/m1.7-loop-backlog.md) and
   [exit report](docs/architecture/m1.7-exit-report.md).
 - M1.8 adds the data-policy, privacy and accounting foundation: canonical
-  `@sensitive`/`@secret`/`@personal`/`@measure`/`@cost` side-tables, late-resolved secrets,
-  structured observations, and exact per-flow measure/cost reports carried by
-  the journal. OpenTelemetry names are used wherever their semantic
-  conventions match; `rastok.*` fills only uncovered runtime concepts. Budget
-  enforcement, FX, FOCUS and OpenCost remain later consumers. Ordered work and
+  `@sensitive`/`@secret`/`@personal`/`@measure` side-tables, late-resolved secrets,
+  structured observations and exact measurement-bearing journal facts.
+  Its original closed registry uses OpenTelemetry names;
+  D-2026-09-16-3 supersedes that target naming policy with simple author-chosen
+  ids, without mandatory prefixes. The [annotation integration](docs/architecture/annotation-types-m1.md#9-simple-names-replace-standards-first-naming-16-september)
+  records the executable migration. D-2026-09-16-4 removes the separate
+  `@cost` spelling; D-2026-09-18-1 reduces `@measure` to `id` and `unit`
+  for every numerical quantity, including amounts.
+  The future `Budget` Extension is explicitly outside M1 (D-2026-09-18-2),
+  with App as its proposed owner; host and account scope are not yet frozen.
+  FX, FOCUS and OpenCost also remain later work. Ordered work and
   the calendar-safe OpenTelemetry cut are in the
   [M1.8 backlog](docs/architecture/m1.8-observability-backlog.md); the explored
   post-M1 reservation model is preserved separately in the
@@ -244,12 +343,11 @@ in `docs/site/`; the separate site consumes it and the examples at one tag.
   are retained beside causal history, and the opt-in JSON exporter is bounded,
   never-block and payload-free by default; saturation changes neither
   execution nor accounting. A6 qualifies and explicitly defers the optional
-  OpenTelemetry transport rather than fabricating timestamps. A7 derives one
-  public exact per-flow `CostReport` lazily from causal envelopes and resolved
-  schemas: inclusive token/subset relations cannot double-count, unknown
-  prices remain typed `unpriced`, exact provider and pricebook amounts retain
-  basis/currency, and an optional deployment price profile is attested in the
-  run header without moving graph or causal identity. A8 closes the
+  OpenTelemetry transport rather than fabricating timestamps. A7 originally
+  delivered a CostReport; D-2026-09-16-7 supersedes that scope and removes it
+  from M1. Original values, schema metadata, provenance and the existing
+  run-header attestations remain; no automatic pricing or subset arithmetic
+  remains. A8 closes the
   cross-layer audit, three-register identity ledger, independent interop,
   three-ISA `no_std` builds and Cortex-M33 evidence; see the
   [exit report](docs/architecture/m1.8-exit-report.md).
@@ -272,7 +370,7 @@ in `docs/site/`; the separate site consumes it and the examples at one tag.
   initially paused, read-only retained history, source-authored inputs and no
   branch authoring. Reset opens a fresh simulation session; past sessions remain
   inspectable. Real ports, mailbox FIFOs, instances, Loop-run dependencies,
-  redacted DATA/META and CostReport are projections of existing authorities.
+  redacted DATA/META are projections of existing authorities.
   Manager commands never create spatial edges. Playback, pan/zoom, inspector
   tabs and splitters remain physical UI state. See [ui.md](docs/spec/ui.md).
   The [explanatory projection pass](docs/architecture/simulation-debugger-explanations.md)

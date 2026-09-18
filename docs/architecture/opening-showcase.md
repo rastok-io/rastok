@@ -1,22 +1,20 @@
 # Public-opening showcase — 10 September 2026 brief
 
-Opening: **15 October 2026**. The v17 opening freeze has one explicit v18
-amendment: exact-instance closure under D-2026-09-10-1. All other semantics
-remain frozen except for the subsequently requested resident Process Contract:
-D-2026-09-14-1 admits `process@3` inside unchanged v18; its
-[qualification ledger](process-service.md) supersedes the review's admission
-gate. D-2026-09-14-3 separately authorizes minimal pure member-presence
-inspection, without a package-version or journal move. This ledger records
-delivery, not new semantic authority.
-The subsequent D-2026-09-14-4 approves the
-[Loop / Retry / Saga refactor](retry-extension-refactor.md); the
-[C3 runtime checkpoint](retry-c3-implementation.md) is in progress.
-`rework/retry` carries the unblessed v19/recording-v3
-candidate; v18 is the last fully qualified baseline. Retry still refuses at
-the named manager execution gate; no release or golden blessing is claimed.
-The [explicit instance-closure design](instance-stop-command.md) is now
-executed through bounded retained requests, with an explicitly versioned
-package and recording; its qualification ledger does not claim Process service.
+Opening: **15 October 2026**. This is the current M1 delivery checklist,
+updated **18 September**. Approved amendments to the original v17 opening
+freeze now converge on **v19 / diagnostic recording v3**: exact-instance
+closure, resident Process, native Retry, flat annotation types and bounded
+typed HTTP hydration. The [common C4 ledger](retry-c4-qualification.md) records
+the single fixture blessing and current verification; older candidate counts
+below are dated evidence, not outstanding failures.
+
+The standard measurement is exactly `@measure(id, unit)`. Signed original
+integer/decimal samples remain in the journal, including Retry-held attempts.
+No report, automatic pricing, aggregate, subset policy, OTLP implementation or
+Budget manager is required to close M1. The two future layers have explicit
+boundaries in [observability](../spec/observability.md#72-planned-optional-otlp-export)
+and the [Budget draft](budget-governance-draft.md).
+
 The [release inventory](release-qualification.md) distinguishes the blocking
 debugger browser pass from three **open, non-blocking** measurements: HTTP/3
 server ngtcp2, Autobahn, and marginal Connector implementation cost. This is a
@@ -46,33 +44,81 @@ dead when no handler emits on that port.
 | Bounded-join expiry productibility | Done | 14 destination tests; 9 September combined baseline: 1,297 Rust tests passed |
 | `run --record`, `replay [--ui]` | Done within the diagnostic contract | CLI and real-Chrome tests prove read-only prefix navigation and no Driver on replay; `@personal` and boot-dependent profiles still refuse persistence, as documented |
 | Readable golden divergence | Done | Expected/actual labels, first record and field, retained causal context; shared CLI/UI path; classified values hidden; byte/seal comparison unchanged |
+| Flat annotation types and generic business measurements | Done — executable two-field contract | `type Name = @struct { ... }` uses ordinary data identity and independently validated metadata. `@measure(id, unit)` retains signed integer/decimal original samples; monetary units have no special policy. Former cost/registry tags and arguments refuse by name. Stdlib/checker/core, typed hydration, held-attempt retention and hostile-package tests are part of [C4](retry-c4-qualification.md); reports, subsets and pricing are removed, not unfinished. |
 | `rastok new` | Done | One executable typed graph plus Lab; tests simulate it and prove no overwrite and path/name refusals |
 | Optional JSON member presence | Done | Approved `has(object.member)`, core evaluator, independent package validation, constant folding, classification and pinned CEL differential tests; absence is distinct from null and observed zero; no witness re-blessing |
-| Loop / Retry / Saga separation | Partial — v19/v3 candidate; staged runtime, source gate closed | [C2 evidence](retry-c2-implementation.md) covers the validated plan and retained carriers. [C3 evidence](retry-c3-implementation.md) adds whole-batch disposition, closure-based scheduling, original-prefix recovery and Lab/recording tests. Unopened Closing requests drain once without Retry, D-2026-09-15-4. Mixed scheduling, accounting, footprint and C4 migration remain. No golden has changed |
+| Loop / Retry / Saga separation | Done for the admitted M1 profile | Finite outbound Call Retry retains the prepared operation, all original attempts and exact closure-based deadlines; final-only publication and exact-prefix recovery are qualified. Loop progresses state, Retry repeats an operation; same-owner composition and unsupported hosts refuse. Saga remains deferred. [C4](retry-c4-qualification.md) records the common blessing and the unchanged embedded limits. |
 | `docs/site/README.md` schema | Done | Plain Markdown/YAML, exact requested fields; Rust validation rejects missing/unknown/duplicate fields and checks artifact references; no extra field introduced |
-| Editor grammar | Done for the executable v18 syntax | Data-only package, three lexical tests and two real TextMate/Oniguruma tests; all shipped examples, JSON quoting, raw readers, nested comments and instance commands. Future guest compilers and semantic tokens remain outside scope; no interactive historical-VS-Code certification |
+| Editor grammar | Done for executable v19 syntax | Data-only package, four lexical and three real TextMate/Oniguruma tests; all shipped examples, `@struct`, custom annotations, Retry, idempotence, JSON quoting and instance commands. No new dependency or claim of interactive historical-VS-Code certification. |
 | echo page and comparison | Done | Three scenarios and gallery goldens; reproducible run/replay; `cli` versus `lab` provenance prevents a false claim of raw run/simulate seal equality |
 | file-pipeline | Done | New File graph, three scenarios/goldens and page; CLI regression checks actual replacement, changes both files, and proves replay leaves them untouched |
-| asymmetric two-tenants | Done | Bob once, Alice timeout/backoff/retry; idle lifetime scenario asserts generations 0 and 1; two-simultaneous-retry UI regression retained as a separate fixture |
+| asymmetric two-tenants | Done | Bob once, Alice timeout/backoff/retry of identical prepared bytes; idle lifetime retains generations 0 and 1. No artificial attempt field. Both migrated goldens and batch/step equivalence pass; the genuine Loop UI fixture remains a separate regression. |
 | HttpServer ack source simulation | Done — qualification below | Decoded requests use the ordinary inbound binding and correlated ACK without a physical Driver or artificial App input; source observations come from INBOUND |
-| webhook-to-partner | Done — executable graph, audit profile, page and regression qualification | Six scenarios, including explicit HTTP 500 handling; deterministic journals, bounded Calls, attestation refusal, exact costs and snapshot/browser redaction pass. Visual assets are delivered below; malformed-wire refusal is qualified by real HTTP conformance, not decoded Lab injections |
+| webhook-to-partner | Done locally; independent visual gate remains separate | Six native Retry scenarios and their versioned goldens pass; invalid-business-payload trace stays unchanged. Typed Receipt retains charges on original Held and Published emissions, without an extractor or report. ACK, deduplication, personal-data admission and redaction remain qualified. Fresh captures/GIF and break-it golden checks are delivered. |
 | sensor-alarm | Done | New graph/page, three scenarios/goldens: per-sensor hysteresis, missing heartbeat, virtual day; warm CLI measurement published with its limits |
-| agent-gateway | Partial — resident WebSocket bridge delivered; HTTP usage/credential adapter awaits the approved refactor | Native-JSON protocol scenarios, exact conversation ownership and independent resident children are qualified. Minimal `has` is implemented. D-2026-09-14-4 resolves the design question: ordinary Calls need no Saga classification. The candidate still refuses under the current effect gate; implementing the cutover and qualifying the adapter remain required, with no invented idempotence. See [evidence](agent-gateway-showcase.md) |
+| agent-gateway | Done for resident and limited HTTP examples; no live HTTP-provider certification | `examples/agent-http.rkg` targets Responses with explicit projected JSON. Six first-time goldens, local physical HTTP and LIVE/HISTORY/REPLAY tests qualify original samples, missing versus zero, schema refusal, job/session META and secret-free retention. Inference is not declared idempotent. The resident bridge keeps its existing real-Process evidence; no paid provider call or report is claimed. |
 | Rastok Codex Gateway browser continuation | Partial — client/native tests and user live smoke check; full visual pass open | `agent-chat.rkg` serves readable HTML/vanilla JS and isolates resident Processes by nickname. Three Lab scenarios, four Rust tests (including simultaneous HTTP/WebSocket listeners and exact Quit), ten client-script tests. Yoann reports three real conversations working. No runtime/format change or golden blessing; no automated paid model test. [Evidence](agent-gateway-showcase.md#readable-browser-continuation--17-september) distinguishes that smoke check from full browser qualification |
 | Explicit conversation / child closure | Implemented — core/CLI qualification complete | `instance.stop` / `child.instance.stop`, exact generation, bounded queue, repeat-safe Closing, journal/recovery and recording v2. Package v18 is explicit; nonparticipating bodies/hashes/traces remain unchanged. Two-budget Session handoff follow-up: 1,356 tests passed, zero failed/ignored; three no_std targets and embedded heap rechecked. Missing/ambiguous targets refuse; an external input cannot guess a nested command's scope and refuses at check. This dated closure evidence is complemented by physical supervision in the resident-service ledger and local gateway browser tests. See [evidence](instance-stop-command.md#9-two-budget-session-shutdown--10-september) |
 | Gallery learning path | Done for six published chapters | Book-style index, graph-reading guides, transferable ideas and previous/next navigation. Chapter 6 now references the resident gateway and links the primer; its usage/credential limits remain prominent. No front-matter schema expansion |
 | Quickstart and README | Partial | One source block, exact-copy test, working `new` path and flagship/profile command; [two unaided trials](quickstart-trials.md) are prepared but not performed |
-| Debugger CI | Partial | Current browser/layout/lexical suites wired into CI; locally 33 browser, 15 layout and 5 editor tests pass on 14 September. The two optional full-tokenizer tests reuse the site's installed highlighter, outside CI. Remote workflow not run |
+| Debugger CI | Partial — local suite green; remote workflow unrun | 35 isolated browser tests, 16 layout tests, 4 lexical editor tests and 10 chat-client tests pass. Three additional real-tokenizer tests pass locally using the site's installed engines. Rust projection tests are in the all-feature matrix. Remote workflow has not been run. |
 | Browser opening gate | Partial | The six reported implementation/UX points now have focused regressions, including real intermediate advance states. An independent visual retest is still required; local automation does not certify it |
-| Three flagship captures and 30-second GIF | Done — regenerated after fine-grained advance and locally inspected | `docs/site/assets/`: timeout/retry scenario at transitions 0, 23 and 39, 1352×760; GIF has 120 real retained-state frames and verified duration 30.000 s. Reproduction script and manifest supplied; publication approval and independent browser audit remain separate |
-| Three release binaries | Partial | macOS arm64/x86-64 release builds with `hosted-ui,hosted-websocket` succeed; Intel echo is exercised under Rosetta, not native Intel hardware. Linux and remote workflow remain unrun; no HTTP/3 in these artifacts |
-| CHANGELOG, crate metadata and release tag | Partial | `0.1.0-alpha` manifests, exact core dependency, license/readmes and CHANGELOG prepared. Both crate archives build outside the workspace using the packaged local core; publication stays disabled. Public repository URLs and the authorized tag/publication remain pending |
-| Paid benchmark wave | Partial — dry harness requalified | All twenty reference graphs satisfy their referees; the three canned attempts and four runner tests pass. Exact three model IDs/adapters, provider spending cap and publication manifest still require selection and execution order; no paid run started |
+| Three flagship captures and 30-second GIF | Done locally — native Retry assets; publication review remains separate | `docs/site/assets/` records the current Retry graph at transitions 0/20/34, 1352×760, 120 frames / 30.000 s. The backoff view shows the real held attempt and due time, with no Loop dial. All three stills were visually inspected; a regression keeps page captions aligned with the capture manifest. No causal golden is changed |
+| Three release binaries | Partial | Both macOS targets rebuild with hosted-ui/hosted-websocket, without HTTP/3; starter and all three echo scenarios pass. Intel runs under Rosetta, not native hardware. Linux remains unbuilt here: no Linux target, container engine or cross-toolchain is installed; the prepared remote workflow is not invoked. |
+| CHANGELOG, crate metadata and release tag | Partial | `0.1.0-alpha` manifests, exact core dependency, license/readmes and CHANGELOG prepared. Both crate archives build outside the workspace using the packaged local core. Confirmed public URLs are now in local metadata/readmes; prior archives predate this URL-only update. Publication stays disabled; authorized tag/publication remain pending |
+| Public documentation destination | Partial — URL confirmed, availability unverified | `https://docs.rastok.com` must resolve before the authorized 15 October publication: minimal Starlight quickstart/gallery preferred, 301 to the actual `www.rastok.com` gallery as fallback. [Site handoff](../site/README.md#public-destination-handoff--18-september-2026); no deployment or DNS change performed |
+| Paid benchmark wave | Partial — dry harness requalified | All 20 references pass their referees; 4 runner tests and 3 canned attempts pass (17 deliberately unattempted). Prompt v4 uses executable idempotence/Retry, preserving frozen v1–v3. Exact three model IDs/adapters and spending authorization remain user choices; no paid run started. |
 | Optional concepts pages | Removed from this pass | No spare scope assumed; four short pages may follow the gallery |
 State vocabulary: Done = fait; Partial = partiel (including an explicitly
 unstarted or externally blocked item); Removed = retiré from this pass, not
 silently claimed complete. Six chapters are published in the checkout; the
-complete gateway demonstration remains partial as detailed above.
+remaining independent visual, distribution and opening work stays explicit above.
+Every result section below is dated; the live table and the C4 ledger take precedence.
+
+## Current local qualification — 18 September
+
+**1,545 Rust tests pass, zero failures/ignored, 60 result groups** in the final
+ordinary all-feature Cargo run. A separate six-worker campaign runs all 58
+Cargo-built test executables with the same pass count. Two earlier local
+listener-start failures and their unchanged passing reruns are retained in the
+[C4 ledger](retry-c4-qualification.md), alongside the common fixture blessing.
+Formatting, strict Clippy, rustdoc, three no_std checks, **35 browser tests**,
+**30 other JavaScript tests** and **3 real-tokenizer tests** pass.
+
+The eight gallery programs execute **27 versioned scenarios** and eight
+intentional break-it edits. Echo/JSONL/gauge causal witnesses stay unchanged;
+only the inventoried Retry traces and package/recording identities move.
+Both macOS artifacts and extracted crate builds pass their local probes.
+Fresh native Retry screenshots and the 30-second GIF are inspected; UML,
+whitepaper, current specs, public pages and editor syntax describe v19.
+
+M1 is **locally implemented and qualified, not fully signed off for opening**.
+Remaining blocking evidence: independent browser review, two unaided
+quickstart trials, Linux/remote artifact production, availability of the
+confirmed documentation destination and the ordered release. The paid
+benchmark is rehearsed, not authorized/executed.
+The in-app Browser is unavailable here; the existing Chrome harness is not
+passed off as an external reviewer. No public push/tag/publication or paid
+model call is performed.
+
+## Historical candidate qualification — 17 September
+
+After projected Responses hydration, browser corrections and explicit-unit
+registry retirement, the final workspace/all-features/no-fail-fast run has
+**1,527 passes, 9 failures, 0 ignored tests, 58 result groups**. The failures
+are the inventoried candidate identity/recording/golden expectations, not
+silently updated fixtures. The preceding cold-start run and the chat's passing
+isolated/full reruns are preserved in the
+[annotation migration evidence](annotation-types-m1.md#implementation-and-focused-qualification).
+This is not a green-workspace or M1-closure claim.
+
+Formatting, strict workspace Clippy, rustdoc and three `no_std` targets pass.
+The rebuilt CLI passes **35 browser tests**, and **29 JavaScript tests** pass
+without a new front dependency. Original measurements remain inspectable
+without reports; no paid provider call or external reviewer was invoked.
+The fixed embedded Retry/recovery workload has **2,020 B** of code margin and
+**512 B** of heap margin. Final stdlib/A4 work, the single candidate blessing,
+independent browser/quickstart review and current release artifacts remain open.
 
 ## Local close-out qualification — 14 September
 

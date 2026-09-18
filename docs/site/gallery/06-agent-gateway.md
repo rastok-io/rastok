@@ -11,7 +11,7 @@ limits:
   - The Lab uses explicit peer inputs, not a simulated WebSocket handshake; real socket composition is a separate local integration test.
   - Replies are scripted app-server examples, not a paid model invocation or complete protocol qualification.
   - This trusted local bridge does not authenticate clients, redact arbitrary protocol payloads or price agent jobs.
-  - The HTTP usage and secret adapter remains open pending safe optional JSON member inspection.
+  - The separate HTTP adapter uses an explicit projected Responses schema; local fixtures qualify it, not a live paid OpenAI call or arbitrary future API changes.
   - An unacknowledged system close becomes OutcomeUnknown, not a fabricated successful exit.
 replaces: 'NiFi: keyed session state plus a custom resident-process processor; MuleSoft: a stateful process adapter behind an integration flow.'
 order: 6
@@ -120,6 +120,44 @@ listeners publicly or send credentials through the chat. Editing the HTML
 changes its embedded asset: restart `run` to load the new file. The browser
 does not edit the graph, the Lab or retained data.
 
+## Inspect a typed model response
+
+The smaller [HTTP variant](../../../examples/agent-http.rkg) makes one
+non-streaming OpenAI Responses request per job. Unlike the resident bridge,
+it does not keep a conversation inside a child process. The input carries
+`session`, `job` and `prompt`; the first two remain in the response's META.
+Try its six scenarios without a real credential or model call:
+
+```sh
+RASTOK_SHOWCASE_MODEL_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_MODEL_TOKEN_VERSION=fixture-v1 rastok simulate examples/agent-http.rkg --deployment examples/agent-http.deployment.json --ui
+```
+
+Read `ModelResponse`, then `model`: `output out: ModelResponse` and
+`json_profile = projected` hydrate the declared fields before an emission is
+retained. Additional JSON members are omitted; absent nullable fields become
+null; a wrong type still gives `DecodeFailed`. This is an explicit selected
+view of Responses, not a new rule that makes every struct open.
+
+Inspect `model.out`. Its original `input_tokens`, `output_tokens` and
+`total_tokens` carry `@measure` annotations; no downstream Operator extracts
+or counts them again. Three scripted jobs retain their own measurements and
+session association. An absent `usage` produces no sample; an observed zero
+remains zero. The three quantities are separate evidence, **not three numbers
+to add together**. No token price or currency amount is invented.
+
+The other scenarios cover incompatible schema, a timeout, and HTTP failures.
+A decoded 500 is `ServerError`; an error body incompatible with the selected
+schema is `DecodeFailed` instead. There is no automatic Retry or invented
+idempotence guarantee for an inference that could be charged twice.
+
+The Lab supplies typed outcomes; separate tests exercise complete wire JSON
+and a real local HTTP server. No live OpenAI invocation was performed for this
+qualification. To compare all six scenarios, use the same command without
+`--ui` and add `--golden crates/rastok/tests/golden/gallery/agent-http`.
+Change `Hello from the simulated model.` to `A different model answer.`
+in that example's mock: its count assertions still pass, but the golden
+names the changed record. Restore the reply afterward; do not use `--bless`.
+
 ## Break it
 
 Change only `Hello from the simulated agent.` to `A different answer.` in
@@ -141,9 +179,9 @@ isolate an agent conversation: typed Contracts, instance-owned state, a
 resident resource, explicit shutdown, and a controlled external world. Try
 the standalone browser client above, or the smaller resident primer to add
 your own typed adapter. Model-specific
-usage accounting belongs at that adapter boundary, not in a protocol hidden
-inside Process. The HTTP usage/credential variant is still an explicit open
-item, not a cost guarantee smuggled into this chapter.
+usage evidence belongs at that adapter boundary, not in a protocol hidden
+inside Process. The HTTP variant above shows the typed boundary; it makes
+no claim of a billing report or measured usage from arbitrary app-server JSON.
 
 ## Limits
 
@@ -160,8 +198,13 @@ local authentication; do not transmit credentials through this gateway.
 Unannotated protocol payloads remain visible in the in-memory journal.
 Neither secret-free arbitrary payloads nor legal compliance are claimed.
 No token count or cost is invented from missing usage, message counts or
-Session writes. The separate HTTP adapter needs safe optional-field handling
-before that part can be qualified.
+Session writes. The HTTP adapter targets OpenAI Responses, not a surrogate
+model API. Its [projected profile](../../architecture/openai-responses-hydration.md)
+is qualified locally, including original samples from a held Retry attempt
+on an inert test endpoint. This does not authorize retrying model inference.
+`secret()` is bound only at the HttpClient Driver boundary; its bearer is not
+retained or displayed. That boot-dependent profile still refuses diagnostic
+recording, rather than persisting deployment secrets or inventing replay inputs.
 
 Disconnecting a socket is not the same as cancelling an agent turn. The idle
 lifetime bounds abandoned conversations but does not restore child memory

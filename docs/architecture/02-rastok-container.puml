@@ -3,7 +3,7 @@ skinparam backgroundColor white
 !include <C4/C4_Container>
 
 LAYOUT_LEFT_RIGHT()
-title Rastok — current container view (package v18)
+title Rastok — current container view (package v19)
 
 Person(author, "Graph author", "Checks and exercises an integration graph.")
 Person(operator, "Application operator", "Runs the App path and inspects evidence.")
@@ -13,7 +13,7 @@ System_Ext(world, "External systems", "Processes, files, HTTP services and WebSo
 
 System_Boundary(rastok_boundary, "Rastok") {
   Container(rastok_exec, "rastok executable", "Rust", "Parses, checks, plans, and executes one graph. App and Lab share the same semantic core.")
-  Container(browser, "Optional visual simulation debugger", "Embedded HTML / CSS / JS in a browser", "Simulation and recorded-history inspection: source, mailboxes, instances and cost. No authoring, branches or real-I/O debugging.")
+  Container(browser, "Optional visual simulation debugger", "Embedded HTML / CSS / JS in a browser", "Simulation and recorded-history inspection: source, mailboxes, instances and original measurements. No authoring, branches or real-I/O debugging.")
 }
 
 Rel(author, rastok_exec, "Check, run, simulate", "CLI")

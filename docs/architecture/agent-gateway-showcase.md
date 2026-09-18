@@ -4,6 +4,15 @@
 publication documentation, not the paid-model, authentication or accounting
 product. It changes no Contract, package version, journal key or language rule.
 
+**17 September status:** the resident bridge evidence below remains dated.
+The v19 candidate admits ordinary Calls without `effect`. The HTTP draft is
+replaced by [agent-http.rkg](../../examples/agent-http.rkg), with six executable
+scenarios and explicit projected JSON hydration of OpenAI Responses. Its
+[qualification ledger](openai-responses-hydration.md#implementation-and-qualification--17-september)
+separates local wire/Retry/recording evidence from a paid provider invocation,
+which was not performed. Final candidate blessing and browser qualification
+remain open.
+
 ## Readable browser continuation — 17 September
 
 `examples/agent-chat.rkg` continues the simulated app-server bridge with
@@ -164,22 +173,18 @@ regression gate. No golden is blessed merely to cover a failure.
 - Session writes are not agent jobs. Request IDs/turn IDs are application
   correlation; Session ingress roots must not be relabelled as their request's
   `origin_id`. No per-job or per-session cost is invented from byte counts.
-- The one-model HTTP usage/credential adapter remains a separate open item.
-  `secret()` is supported on `HttpClient.auth_bearer`. Yoann subsequently
-  authorized minimal `has(object.member)` presence inspection, implemented
-  under D-2026-09-14-3. It does not turn `as struct` into an open-map projection.
-  The [candidate adapter](../examples/agent-http-candidate.rkg) distinguishes
-  missing/null/invalid usage from reported zero. It deliberately remains outside
-  the executable gallery: `effect = irreversible` is still refused in M1.
-  D-2026-09-14-4 resolves that design question through the
-  [Loop / Retry / Saga refactor](retry-extension-refactor.md): an ordinary
-  Call needs no Saga classification or fabricated idempotence guarantee.
-  Implementing that cutover and qualifying the adapter remain open; neither
-  paid invocation nor adapter execution is claimed. The proposed wire shape
-  follows the
-  [official Responses request/response schema](https://developers.openai.com/api/reference/cli/resources/responses/methods/create),
-  consulted on 14 September. Companion prices are fictional demonstration rates,
-  never OpenAI tariffs.
+- The separate [HTTP adapter](../../examples/agent-http.rkg) now binds a typed
+  Responses output before journal retention. Optional usage stays absent;
+  present integers are original samples, with session/job META. No report,
+  tariff, automatic Retry or idempotence claim is supplied. Its bearer uses
+  `HttpClient.auth_bearer`; tests keep it out of records and every UI prefix.
+  The selected schema intentionally retains heterogeneous output as `variant`
+  and is not a complete or future-proof OpenAI schema. Six Lab scenarios,
+  physical local JSON tests and original samples across a held/published test
+  Retry are qualified; no paid model call or browser geometry is claimed.
+  Boot-dependent diagnostic recording remains a named refusal. The previous
+  downstream extractor and fictional price configuration are removed, not
+  relabelled as native measurements.
 
 ## Reproduce
 

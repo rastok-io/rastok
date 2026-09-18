@@ -4,9 +4,9 @@ description: Admit a webhook, validate and deduplicate it, then exercise bounded
 teaches: HttpServer ACK, typed validation, explicit deduplication state, HttpClient, finite retry, personal-data policy, secret binding, exact reported cost
 graph: examples/webhook-to-partner.rkg
 golden: crates/rastok/tests/golden/gallery/webhook-to-partner/webhook.nominal.trace
-command: env RASTOK_SHOWCASE_PARTNER_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_PARTNER_TOKEN_VERSION=fixture-v1 rastok simulate examples/webhook-to-partner.rkg --deployment examples/webhook-to-partner.deployment.json --golden crates/rastok/tests/golden/gallery/webhook-to-partner
+command: env RASTOK_SHOWCASE_PARTNER_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_PARTNER_TOKEN_VERSION=fixture-v1 rastok simulate examples/webhook-to-partner.rkg --deployment examples/webhook-to-partner.deployment.json
 expected: Six scenarios pass; ACK precedes business completion, retries are bounded, duplicates are suppressed during retention, and 500 is handled as a response.
-break_it: 'Change Loop.fuel = 2 to Loop.fuel = 1, then rerun the same command without --bless.'
+break_it: 'Change Retry.attempts = 2 to Retry.attempts = 1, then rerun the same command without --bless.'
 limits:
   - The Lab injects decoded HTTP requests; malformed-wire refusal is qualified separately by the real Driver test.
   - 202 means admitted, not processed; validation and deduplication occur after ACK.
@@ -23,6 +23,9 @@ use those ideas for a familiar integration: receive a webhook and deliver it
 to a partner that is not always available. Build the flow and its failure
 scenarios together, before you need a live partner environment.
 
+All six scenarios have versioned goldens. The captures below show native
+Retry retaining a failed attempt and publishing the final outcome.
+
 ## Run
 
 From the repository root:
@@ -31,8 +34,7 @@ From the repository root:
 env RASTOK_SHOWCASE_PARTNER_TOKEN=lab-only-not-a-credential \
     RASTOK_SHOWCASE_PARTNER_TOKEN_VERSION=fixture-v1 \
     rastok simulate examples/webhook-to-partner.rkg \
-      --deployment examples/webhook-to-partner.deployment.json \
-      --golden crates/rastok/tests/golden/gallery/webhook-to-partner
+      --deployment examples/webhook-to-partner.deployment.json
 ```
 
 Add `--ui` to inspect the same graph. No HTTP listener, real partner or paid
@@ -45,8 +47,11 @@ and version. The same Contract is used with a scripted or physical Driver.
 
 Follow the main path first: `listener` admits, `validate` checks the business
 data, `deduplicate` owns a `seen` flag per event, and `deliver` contains the
-bounded partner retry. Open that scope to find `request`, `partner`,
-`accounting` and `decide`; the complexity is composed from earlier chapters.
+bounded partner retry. Open that scope to find `request`,
+`partner : HttpClient + Retry` and `decide`. The response type `Receipt`
+annotates the charge where the Connector retains it, before any decision to
+hold or publish the attempt.
+`decide` classifies the final business outcome; it contains no retry logic.
 
 Then read the declarations that constrain the path: the idle lifetime, the
 partner's idempotency key, the exhaustive destinations, `@personal` and the
@@ -59,15 +64,16 @@ not separate conventions the reader must guess from the happy path.
 
 - `nominal`: one `202` ACK and one partner Call ending with `201`;
 - `timeout_then_success`: one second to timeout, one second of backoff,
-  then success on the second application;
-- `partner_dead`: two timed-out applications, then `LoopExpired`, with
+  then success on the second attempt;
+- `partner_dead`: two timed-out Calls, then the final `TimeoutExpired`
+  inside the business `PartnerFailed` response, with
   no further Call even after another ten seconds;
 - `duplicate`: an explicit `seen` state suppresses a second request with
   the same event id; after five minutes idle, a fresh instance admits it again;
 - `invalid_payload`: decoded JSON with the wrong shape, then a negative
   amount, both rejected after ACK and without contacting the partner;
-- `http_500`: `Completed { status: 500 }` is an ordinary response; the
-  graph chooses to retry it, and the second response is `201`.
+- `http_500`: `ServerError { status: 500 }` is a decoded response; the
+  static `Retry.on` policy selects it, and the second response is `201`.
 
 The email field is `@personal`. The deployment must attest the in-memory
 processing before admission; having a valid secret binding alone is not
@@ -75,40 +81,46 @@ enough. Debugger views redact before formatting. Personal data can remain in
 the in-memory causal journal: presentation masking is not erasure. The bearer
 is different: its clear bytes never enter the journal at all.
 
-The typed accounting Operator interprets the fictional partner's `charge`
-field as exact USD `provider_reported` evidence. The nominal reply reports
-`0.02`; the `500` and successful replies report `0.01` and `0.02`, folded as
-`0.03` at the accounting output for that origin. A timed-out Call supplies no charge:
-an absent row is **unknown cost, not a zero bill**. This is not an invoice or
-a sum across every copy of an envelope.
+The declared `output out: Receipt` interprets the fictional partner's `charge`
+field as an exact amount with `@measure(id = amount, unit = "USD")`.
+That declaration names a quantity and its unit, not a billing policy. No downstream accounting
+Operator is run or replayed to extract it. The nominal reply reports
+`0.02`; the `500` and successful replies retain two separate samples, `0.01`
+and `0.02`, with their causal references. The first is Held by Retry and
+never reaches `decide`; it remains inspectable in the journal. M1 computes no
+total or price and the debugger displays the original DATA, not a cost report. A timed-out Call
+supplies no charge: missing evidence is **unknown cost, not a zero bill**.
 
 ## Break it
 
-Change the single `Loop.fuel = 2` to `Loop.fuel = 1`. The timeout and `500`
-scenarios can no longer succeed on a second application. Rerun the command
+Change the single `Retry.attempts = 2` to `Retry.attempts = 1`. The timeout and
+`500` scenarios can no longer succeed on a second attempt. Rerun the command
 above, without `--bless`, then restore the source.
 
 ## Read the golden difference
 
+Add
+`--golden crates/rastok/tests/golden/gallery/webhook-to-partner`.
 The CLI names the first differing record and field, expected versus actual,
 and retained causal context. This classified graph deliberately redacts
 values in divergence messages; it does not expose an email to explain a
-failure. The opening fuel fact can differ before the final answer does.
+failure. Retained operation facts can differ before the final answer does.
 The versioned goldens contain **only the synthetic fixture data**; they are
 not sanitised exports suitable for real personal data.
 
 The following 30-second sequence visits retained states of
 `webhook.timeout_then_success`: admission, timeout, backoff and successful
-second application. It is a debugger recording, not a live HTTP request or
-an edited simulation branch.
+second attempt. During the backoff, Retry retains the failed batch without
+delivering it to `decide`; only the final result is published. These are real
+debugger views of a simulation, not live HTTP requests or an edited branch.
 
 ![Thirty seconds through the retained timeout and retry transitions](../assets/webhook-tour.gif)
 
 Three stills make the checkpoints easier to inspect:
 
 - [Before admission, transition 0](../assets/webhook-before.png).
-- [Armed backoff, transition 18](../assets/webhook-backoff.png).
-- [Success after two applications, transition 29](../assets/webhook-completed.png).
+- [Armed Retry backoff, transition 20](../assets/webhook-backoff.png).
+- [Success after two attempts, transition 34](../assets/webhook-completed.png).
 
 ## Carry forward
 
@@ -137,10 +149,9 @@ accept-once within an **idle** retention window: duplicates extend that
 window, and a permanently failed job is still considered seen until expiry.
 It is not exactly-once delivery, a durable outbox, or automatic resubmission
 after failure. A restart loses that state. The partner must honour the stable
-idempotency key, upsert
-by `event.event_id` and treat `attempt` as audit-only; both retry paths rely
-on that external property. The example does not test a real partner's
-idempotence.
+idempotency key, upsert by `event_id`; the request and key remain identical
+between attempts. Both retry paths rely on that external property. The example
+does not test a real partner's idempotence.
 
 The supplied privacy profile describes a local synthetic demonstration, not
 legal authority for production processing. Real purposes, recipients,

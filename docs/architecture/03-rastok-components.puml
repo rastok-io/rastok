@@ -2,7 +2,7 @@
 skinparam backgroundColor white
 !include <C4/C4_Component>
 LAYOUT_TOP_DOWN()
-title Rastok — current responsibilities (package v18)
+title Rastok — current responsibilities (package v19)
 
 System_Ext(project, "Project files", "RKG, Lab scenarios, profiles, goldens and diagnostic recordings.")
 System_Ext(world, "External systems", "Process, File, HTTP and WebSocket peers.")
@@ -11,12 +11,12 @@ System_Ext(browser, "Optional browser", "Visual simulation and diagnostic replay
 Container_Boundary(executable, "rastok executable") {
   Component(entry, "CLI / Lab runner", "rastok", "Check, run, simulate, new and diagnostic replay. Explicit logical time; one engine.")
   Component(compiler, "Compiler / Contract catalogue", "rastok", "Parse, resolve, type, Dispatch and route checks; canonical HIR identity.")
-  Component(plan, "Validated plan gate", "rastok-core, no_std + alloc", "Independent v18 validation: scopes, Contracts, Dispatch, routes, instance commands, policy and Loop proofs.")
+  Component(plan, "Validated plan gate", "rastok-core, no_std + alloc", "Independent v19 validation: scopes, Contracts, Dispatch, routes, instance commands, annotations, Loop proofs and Retry safety.")
   Component(core, "VM / HandlerExecutor / managers", "rastok-core", "Reserve before commit; atomic state, emissions and commands; recover from retained facts.")
   Component(binding, "Registry / runtime binding", "rastok", "Exact Contract id and role; pure request preparation shared by real and Lab Drivers.")
   Component(drivers, "Real or scripted Drivers", "rastok", "Effects after open; typed outcomes. Process job: Call; resident service: Session. Async stays private.")
   ComponentDb(journal, "Journal", "rastok-core: MemJournal", "INBOUND, TRANSACTION, OUTBOUND; routes, commands and retained original deadlines. No disk backend.")
-  Component(report, "Policy / observations / CostReport", "rastok-core", "Validated annotations; redaction policy; exact journal-derived accounting.")
+  Component(report, "Policy / observations", "rastok-core", "Validated annotations; redaction policy; individual journal-derived measurements, no report engine.")
   Component(ui, "UI / structured logs", "rastok", "Never-block presentation, prefix-relative inspection; no second accounting ledger.")
   Component(evidence, "Diagnostics / golden / recording", "rastok", "Named failures; causal diff; immutable diagnostic capture/replay, not durable recovery.")
 }
@@ -33,7 +33,7 @@ Rel(drivers, world, "Real mode only")
 Rel(drivers, core, "Typed external outcomes; never records")
 Rel(core, journal, "Runtime mechanics alone commit")
 Rel(journal, report, "Retained prefix")
-Rel(report, ui, "Exact report and redacted values")
+Rel(report, ui, "Policy-aware redacted values")
 Rel(ui, browser, "Capability-protected snapshots / SSE")
 Rel(core, ui, "Read-only VM inspection")
 Rel(entry, evidence, "Render diagnostics / compare")

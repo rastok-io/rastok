@@ -2,7 +2,7 @@
 
 > Implementation blueprint — non-normative and under review.
 
-> **Current implementation (package v18).** The Node/Graph/Executor/Connector/Extension
+> **Current implementation (package v19).** The Node/Graph/Executor/Connector/Extension
 > model, explicit dispositions, recursive Dispatch and Loop manager recovery
 > are executable. [R9](docs/architecture/rework-r9-qualification.md) records
 > the v16 qualification and remaining named limits; the
@@ -221,8 +221,9 @@ simulation. Next transition invokes existing VM work or an authored Lab action,
 never a second execution model. An authored `advance` may still group several
 VM transactions into one retained transition; this is a named controller limit.
 Immutable snapshots retain history, current
-mailbox contents, instances, Loop-run dependencies, redacted values and the
-public CostReport. Manager commands are not rendered as spatial edges. Reset
+mailbox contents, instances, Loop-run dependencies and redacted values.
+M1 retains individual measurements without a report engine (D-2026-09-16-7).
+Manager commands are not rendered as spatial edges. Reset
 creates a fresh session; historical inspection neither forks nor executes it.
 Capabilities, controller ownership, browser revisions, presentation speed and
 port numbers enter no package, semantic or causal identity. Reduced and

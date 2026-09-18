@@ -4,7 +4,9 @@ This directory contains implementation views derived from the normative
 specification. It answers *how Rastok is built*; it does not define new
 language or runtime behavior.
 
-The current implementation uses package v18. Its migration evidence is recorded in
+The checkout uses v19/recording v3 with [public Retry admission](retry-c4-inspection.md)
+and generic annotated measurements. The [common qualification ledger](retry-c4-qualification.md)
+records fixture migration and the final verification campaign. Earlier migration evidence is recorded in
 [R9 qualification](rework-r9-qualification.md) for the v16 rework and the
 [v17 host-terminal amendment](loop-host-terminal-v17.md), followed by
 [v18 exact-instance closure](instance-stop-command.md). Core/HIR share Dispatch and
@@ -19,6 +21,10 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 - [`parallelism-notes.md`](parallelism-notes.md) for the one-Worker baseline,
   future cooperative/multicore/multiprocess profiles, and independent flows as
   placement candidates rather than new Executors or mandatory tasks;
+- [`annotation-types-m1.md`](annotation-types-m1.md) for the approved `@struct`
+  syntax, protected stdlib/runtime metadata boundary,
+  business-measure/typed-hydration migration, dated checkpoints and current
+  two-field measurement contract;
 - [`retry-extension-refactor.md`](retry-extension-refactor.md) for the approved
   Loop/Retry separation and C0–C4 gates; C1's [algebra](retry-c1-algebra.md),
   [reference traces](retry-c1-traces.md) and [identity inventory](retry-c1-identity.md)
@@ -29,8 +35,10 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
   real/Lab transport, shutdown, dialogue and remaining gateway limits;
 - [`agent-gateway-showcase.md`](agent-gateway-showcase.md) for the composed
   resident WebSocket bridge, its readable HTTP/vanilla-JS chat continuation,
-  ownership/order regressions, native JSON protocol seam and the still-open
-  HTTP usage adapter;
+  ownership/order regressions and native JSON protocol seam;
+- [`openai-responses-hydration.md`](openai-responses-hydration.md) for the
+  confirmed Responses target, official schema contact and the approved limited
+  executable JSON projection profile and HTTP adapter qualification;
 - [`process-contract-review.md`](process-contract-review.md) for the requested
   historical Process job/service design review and its subsequent amendments;
 - [`documentation-audit-2026-09-09.md`](documentation-audit-2026-09-09.md) for
@@ -91,7 +99,7 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
   data forms, interfaces, dependency direction, and current status;
 - [`spec-to-code.md`](spec-to-code.md) for the map from normative
   documents to implementation responsibilities;
-- [`plan-package.md`](plan-package.md) for the categorical v18 package and
+- [`plan-package.md`](plan-package.md) for the categorical v19 package and
   independent validation boundary, with earlier format ledgers marked historical;
 - [`parallelism-notes.md`](parallelism-notes.md) for the keyed-mailbox
   concurrency model and the decisions left for physical parallelism;
@@ -141,3 +149,9 @@ with the existing PlantUML 1.2026.8 installation: v18, exact-instance closure,
 Process job/service and diagnostic record/replay. View 04 remains explicitly
 an outbound **Call**, not the resident Session frame protocol. Views 01, 04
 and archived 05 render unchanged; no renderer or frontend dependency is added.
+
+The 18 September follow-up renders the same seven views with that installed
+renderer and visually checks 02/03/06/07 at readable raster size. They now show
+v19, native Retry, current Contract versions, original two-field measurements
+and the separate deferred observation/export layer. No measured report,
+OTLP implementation, Budget manager or plugin loader is implied by these views.

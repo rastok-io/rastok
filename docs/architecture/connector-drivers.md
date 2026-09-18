@@ -280,11 +280,14 @@ agrees with it. Unsupported modes refuse by name rather than executing a
 nearby behavior.
 
 When a boundary returns a provider quantity or amount, expose it as ordinary
-typed payload data and annotate the exact field with the matching standard
-`@measure` or `@cost` contract. Use an OpenTelemetry semantic name whenever
-its definition matches; use no Connector-local alias. Cache/reasoning token
-subsets must remain separate fields because the report registry owns their
-inclusion relation. Never put a credential value in such a payload: Connector
+typed payload data and annotate the exact field with `@measure`. A monetary
+amount carries currency and basis, for example `@measure(id = amount,
+currency = USD, basis = provider_reported)`; `@cost` is retired. The approved
+business model uses simple author-chosen ids, not an OTel naming requirement;
+the [annotation handoff](annotation-types-m1.md) distinguishes that target
+from the still-closed numerical registry. Cache/reasoning token subsets must
+remain separate fields with their inclusion relation, never a second charge.
+Never put a credential value in such a payload: Connector
 authentication consumes a `secret()` reference at its declared setting, and
 raw `@secret` envelope fields refuse at source check and remain fail-closed at
 VM boot for foreign packages. Physical price rows belong

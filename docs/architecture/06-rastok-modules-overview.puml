@@ -3,12 +3,12 @@ skinparam backgroundColor white
 skinparam shadowing false
 skinparam packageStyle rectangle
 top to bottom direction
-title Rastok — current Rust modules and crate boundary (v18, 2026-09-14)
+title Rastok — current Rust modules and crate boundary (v19, 2026-09-18)
 
 package "rastok — hosted / compiler crate" as HOSTED {
   rectangle "main / render / diagnostics\nCLI assembly, source spans, named errors" as ENTRY
   rectangle "compiler\nsyntax / HIR / check / lower\nDispatch, routing, Extension checks" as COMP
-  rectangle "contract / stdlib\nContractCatalog / ConnectorContract\nsix @2 sheets plus Process service @3" as CATALOG
+  rectangle "contract / stdlib\nContractCatalog / ConnectorContract\nProcess job @4 / service @5; File and network @3" as CATALOG
   rectangle "schema_projection / openapi\nstrict JSON Schema, Avro, Arrow, OpenAPI\ngenerated-source ownership" as SCHEMA
   rectangle "connectors\nDriverRegistry / RuntimeBindings\nProcess job / service, File, HTTP, WebSocket\nbounded physical pumps; no DSL in Drivers" as DRIVERS
   rectangle "deployment_config\nprofile JSON; explicit environment/provider input\nno clear credentials in semantic artifacts" as CONFIG
@@ -22,13 +22,13 @@ package "rastok-core — no_std + alloc" as CORE {
   rectangle "datatype / value / envelope\nDataType, Value, Envelope, Data\none logical type/value authority" as DATA
   rectangle "expr / json / trivia\nTree, Signature, EvalValue\nbounded pure evaluation and exact readers" as EXPR
   rectangle "identity / canonical_cbor\nInstanceAddress, InstanceRef\ntagged values and canonical byte discipline" as IDENTITY
-  rectangle "plan / loop_proof\nValidatedExecutionPlan, Owner, Dispatch\nRouteRule, ExtensionSpec, LoopSpec/LoopExpiry\nindependent scope, type and proof validation" as PLAN
-  rectangle "runtime\nHandlerExecutor, Vm, Mailboxes, Scheduler\ncommand manager; spatial/exchange recovery\nGraph has no application handler" as VM
+  rectangle "plan / loop_proof\nValidatedExecutionPlan, Owner, Dispatch\nRouteRule, ExtensionSpec, LoopSpec/LoopExpiry, RetrySpec\nindependent scope, type and proof validation" as PLAN
+  rectangle "runtime\nHandlerExecutor, Vm, Mailboxes, Scheduler\nLoop / Retry managers; spatial/exchange recovery\nGraph has no application handler" as VM
   rectangle "boundary\nInbound/Outbound Driver traits\nIntent, Completion, CallRef, SessionRef\nDispatcher and Contract completion gates" as BOUNDARY
-  rectangle "journal / loop_protocol / instance_stop\nJournal, MemJournal, Record\nrun and exact-instance command facts\nretained original deadlines; no disk backend" as JOURNAL
-  rectangle "schema_annotation / data_policy\ncanonical SchemaPath and five policies\nindependent propagation and redaction" as POLICY
+  rectangle "journal / loop_protocol / retry_protocol / instance_stop\nJournal, MemJournal, Record\nruns, Held/Consumed/Published and instance commands\nretained original deadlines; no disk backend" as JOURNAL
+  rectangle "schema_annotation / data_policy\nSchemaPath; four standard annotations, typed metadata\nindependent propagation and redaction" as POLICY
   rectangle "deployment\nBootReference, BootBindings, SecretRef\nrun-scoped privacy/price attestations" as DEPLOY
-  rectangle "observation / accounting\nRecordObservation / CostReport\nexact decimals, currency and unpriced facts" as REPORT
+  rectangle "observation / accounting\nRecordObservation / AccountingObservation\nindividual exact samples and provenance\nno report or automatic pricing" as REPORT
 }
 
 ENTRY -[hidden]right-> COMP

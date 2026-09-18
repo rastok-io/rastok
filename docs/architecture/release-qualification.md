@@ -19,7 +19,56 @@ These are blocking loopback probes with finite deadlines. Package retrieval is
 explicit, pinned and separate from `cargo test`; it is not a hidden network
 dependency of normal development or CI.
 
+## Public destinations and opening gate
+
+Yoann confirmed these destinations on **18 September 2026**:
+
+| Metadata | Confirmed URL |
+|---|---|
+| Repository | `https://github.com/rastok-io/rastok` |
+| Homepage | `https://www.rastok.com` |
+| Documentation | `https://docs.rastok.com` |
+| Releases | `https://github.com/rastok-io/rastok/releases` |
+
+Both crates inherit the three standard Cargo URL fields from the workspace.
+Their readmes and the root README carry the release link; the latter is
+included in binary archives by the prepared artifact workflow. The repository
+is to be created privately and opened only on Yoann's instruction on
+15 October. The unowned bare GitHub handle is not a release destination.
+`publish = false` remains in force.
+
+**Still open:** before crate publication, `docs.rastok.com` must resolve to
+usable documentation. Prefer the minimal Starlight quickstart and six gallery
+chapters on 15 October, with the rest following in November. The fallback is a
+301 to the actual gallery page on `www.rastok.com`, replaced by the documentation
+site in November; the separate site repository must confirm that target path.
+The bare `rastok.com` domain is intended to redirect with 301 to `www.rastok.com`.
+
+This records addresses and a handoff, not live availability evidence. No DNS
+change, deployment, remote workflow, push, tag or publication is performed or
+authorized by this metadata preparation. The site handoff is tracked in
+[`docs/site/README.md`](../site/README.md#public-destination-handoff--18-september-2026).
+
 ## Open qualification inventory
+
+**18 September current qualification:** native Retry, two-field measurements
+and the Responses adapter share one v19/v3 blessing, documented in the
+[C4 ledger](retry-c4-qualification.md). The final ordinary workspace run has
+1,545 passing tests, zero failures/ignored; earlier listener-start failures
+and unchanged passing reruns remain recorded. Thirty-five isolated Chrome
+tests pass. Fresh flagship stills at 0/20/34 (1352×760) and a 120-frame,
+30.000-second GIF were visually inspected locally. All 27 gallery scenarios
+match their goldens. This closes local implementation/fixture work, not the
+independent review or release authorization below.
+
+Both macOS release binaries and extracted crate builds are requalified;
+archives and checked SHA-256 values are local under
+`/tmp/rastok-m1-artifacts.orJti6/dist/`. No Linux target/container/cross-toolchain
+is installed here and no remote workflow is invoked. Public URLs are now
+confirmed and prepared in local metadata; their availability is an opening
+gate below. The two unaided quickstart trials and independent browser review
+have not been performed. The artifact builds above precede this URL-only
+metadata update and are not claimed to contain it.
 
 The 10 September M1 opening brief makes the debugger visual/interaction pass
 **blocking for 15 October**. The three protocol/contribution rows are
@@ -149,8 +198,9 @@ published yet, hosted-package verification uses the extracted core archive
 through a command-local Cargo patch, not a registry publication. A direct
 offline workspace package attempt correctly refuses that unpublished
 dependency. License files, readmes, starter source and embedded UI assets are
-included. Cargo still warns about missing public repository/documentation
-URLs; those must be supplied once the public destination is confirmed.
+included. At that checkpoint Cargo warned about missing public repository/
+documentation URLs; the 18 September metadata handoff above resolves their
+choice, not their deployment.
 `publish = false` remains in force; no release tag has been created.
 
 macOS arm64 and x86-64 optimized binaries are built with
@@ -163,6 +213,81 @@ been run remotely. The [two external quickstart trials](quickstart-trials.md)
 remain unperformed.
 
 ## Embedded code-size watch before Saga
+
+**Current v19 measurement — 18 September:** the unchanged Retry/full-recovery
+package passes QEMU with 17 records and **1,041,724 B code / 130,560 B heap**.
+That leaves **6,852 B / 512 B** under the existing 1 MiB / 128 KiB gates.
+The freshly blessed echo image passes with 67 records, **973,524 B code** and
+**112,656 B heap**. These are workload-specific limits; maximum-size metadata,
+JSON or retained-batch workloads are not thereby qualified. Further core
+changes must remeasure before growth. The [C4 ledger](retry-c4-qualification.md)
+records commands/evidence. Measurements below are historical checkpoints.
+
+The 16 September **unblessed v19/v3 candidate** has its own
+[Retry/full-recovery qualification](retry-c3-implementation.md#42-shared-admission-and-bounded-collection-construction-16-september).
+Shared admission code and direct collection construction bring that image
+from 1,104,268 B to **1,040,824 B**, leaving **7,752 B** below 1 MiB. Its
+three-attempt, 16-frame-per-channel workload still peaks at **130,560 B**,
+only **512 B** below 128 KiB. Reference echo measures **972,656 B** of code
+and **112,656 B** peak heap. Both QEMU workloads pass their unchanged gates;
+this is not a blessing of the candidate format or an embedded bound for
+unmeasured annotation growth, JSON bodies or storage-refusal batches.
+
+The subsequent [declared-annotation checkpoint](annotation-types-m1.md#11-declared-descriptive-applications-16-september)
+remeasures that same Retry package at **1,046,444 B** of code and unchanged
+**130,560 B** peak heap (`SPIKE_OK`, 17 records). Only **2,132 B** of code
+margin remain. This checks the new decoder/validator on the fixed workload,
+not the additional retention of large metadata tables or future business
+measure bindings. Those workloads still require measurement before closure.
+
+The [additive business binding](annotation-types-m1.md#13-additive-business-binding--implementation-inventory-16-september)
+subsequently measures **1,048,232 B** (`.text` 964,612 + `.rodata` 83,620),
+with **344 B** of code margin and unchanged **130,560 B** heap peak. QEMU
+retains the same 17 records and reports `SPIKE_OK`. The initial implementation
+exceeded 1 MiB; shared definition-check storage, allocation-free standard-schema
+comparison and in-place canonical annotation sorting remove that excess.
+The fixed unannotated Retry image exercises validation/recovery, not a
+maximum-size annotation table or an embedded accounting query. Those profiles
+remain unqualified; neither gate was raised and no golden was changed.
+
+The [named monetary profile](annotation-types-m1.md#14-named-monetary-quantities-16-september)
+then measures **1,048,344 B** (`.text` 964,620 + `.rodata` 83,724), **232 B**
+below the same code gate, with unchanged **130,560 B** peak heap. The
+definition-table walk was simplified first (576 B saved in isolation);
+read-only schema validation no longer clones the type and annotation table.
+The fixed Retry/recovery image again reports 17 records and `SPIKE_OK`.
+This is not evidence for linked embedded accounting queries or maximum-size
+metadata tables: those qualification gates remain open. No bound was raised.
+
+The [17 September timer-order correction](retry-c3-implementation.md#8-mixed-timers-bounded-publication-and-exact-instances--17-september)
+remeasures the unchanged Retry/full-recovery workload at **1,048,368 B**
+(`.text` 964,644 + `.rodata` 83,724): +24 B, leaving **208 B** below 1 MiB.
+Peak heap remains **130,560 B**, with **512 B** of margin. The same candidate
+package hash, 17 records and `SPIKE_OK` are retained. Reference echo is
+**980,172 B** of code and **112,656 B** peak heap, 67 records and `SPIKE_OK`.
+These measured margins require remeasurement before further core growth;
+neither workload establishes a bound for maximum-size annotated payloads.
+
+The [projected JSON profile](openai-responses-hydration.md#implementation-and-qualification--17-september)
+remeasures that exact Retry package at `.text` **964,764 B** + `.rodata`
+**83,756 B** = **1,048,520 B**, **56 B** below 1 MiB. Peak heap remains
+**130,560 B**, 512 B below 128 KiB; the same hash, 17 records and `SPIKE_OK`
+are retained. The source/core attribute mirrors agree. This image includes
+the independent schema/profile validation, not a hosted JSON response or a
+maximum annotation-inspection workload. Further core growth requires a
+measured reduction first or a separately approved bound change; neither
+threshold has been raised. Evidence: `/tmp/rastok-json-profile.ygk4aj/`.
+
+The [explicit-unit registry retirement](annotation-types-m1.md#16-explicit-unit-migration-inventory--17-september-before-implementation)
+then removes the implicit-name lookup and its obsolete carrier/subset types.
+The **same** 956-byte Retry/full-recovery package measures `.text`
+**963,420 B** + `.rodata` **83,136 B** = **1,046,556 B**: 1,964 B recovered,
+**2,020 B** below 1 MiB. Peak heap remains **130,560 B**, **512 B** below
+128 KiB. The package hash, three Calls, 16 frames per channel, 17 records
+and `SPIKE_OK` are unchanged. This is still the fixed Retry workload, not
+maximum annotation storage or linked individual inspection. No gate was
+raised. Evidence: `/tmp/rastok-measure-migration.tZmKT9/spike-fixed.log`
+and `spike-size.log`.
 
 The 14 September resident Process pass retains **111,732 B** peak heap on
 the same Cortex-M33 echo workload, leaving **19,340 B** below 128 KiB.

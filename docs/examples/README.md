@@ -1,6 +1,8 @@
 # Checked examples and historical sketches
 
-The current package format is **v17**. Author against the live
+The checkout carries an **unblessed v19 candidate**; v18 is the last qualified
+baseline. The native-Retry examples run, but their versioned goldens await the
+single reviewed migration. Author against the live
 [grammar](../spec/grammar.md), [Contract sheets](../spec/stdlib.md) and
 [Loop specification](../spec/loop.md), not a frozen benchmark prompt or an old
 hand-derived trace. Graphs wire; Operators execute DSL handlers; Connectors
@@ -31,8 +33,8 @@ corrected and regression-tested.
 | [echo](../../examples/echo.rkg) | Process Call, success/timeout, explicit dispositions | 3 |
 | [JSONL](../../examples/jsonl.rkg) | Structured Process frames and deterministic replay | 1 |
 | [countdown](../../examples/countdown.rkg) | Operator Loop with a re-derived termination measure | 2 |
-| [keyed retry](../../examples/keyed-retry.rkg) | Bob completes once, Alice retries; keyed idle lifetime | 2 |
-| [webhook to partner](../../examples/webhook-to-partner.rkg) | HttpServer ACK, validation, explicit deduplication, finite HttpClient retry, privacy/secret/cost profile | 6 |
+| [keyed retry](../../examples/keyed-retry.rkg) | Bob completes once, Alice retries the pinned request; keyed idle lifetime | 2 |
+| [webhook to partner](../../examples/webhook-to-partner.rkg) | HttpServer ACK, validation, deduplication, native HttpClient Retry, typed per-attempt charges and privacy/secret policy | 6 |
 | [WebSocket gateway](codex-websocket-gateway.rkg) | Session request/response boundary with a scripted Process job | 1 |
 | [expense approval](expense-approval.rkg) | Keyed two-input join, approval/rejection and timed expiry | 3 |
 | [File pipeline](../../examples/file-pipeline.rkg) | Bounded read, explicit empty/refusal paths, atomic replacement | 3 |
@@ -40,6 +42,7 @@ corrected and regression-tested.
 | [resident dialogue](../../examples/agent-dialogue.rkg) | One JSONL Process per conversation, match mocks, exact child closure, fresh input after quit | 2 |
 | [resident agent gateway](../../examples/agent-gateway.rkg) | WebSocket → per-conversation Process, app-server JSON frames, exact child shutdown, independent sockets | 2 |
 | [browser chat](../../examples/agent-chat.rkg) | Embedded readable HTML, shared HTTP/WebSocket listeners, one Process per nickname, conversation-scoped Quit | 3 |
+| [HTTP model adapter](../../examples/agent-http.rkg) | Projected OpenAI Responses schema, original typed usage by job/session, absent versus zero, secret boundary; no automatic inference retry | 6 |
 
 From the repository root:
 
@@ -53,6 +56,13 @@ The debugger starts paused. Edit the `.rkg` on disk, then restart the simulation
 the UI inspects execution, not source or payload authoring. A Lab mock exercises
 the same Contract through controlled outcomes: passing it does **not** assert
 that a real external service, credential or installed command was qualified.
+
+The HTTP model adapter also takes `--deployment examples/agent-http.deployment.json`;
+set `RASTOK_SHOWCASE_MODEL_TOKEN=lab-only-not-a-credential` and
+`RASTOK_SHOWCASE_MODEL_TOKEN_VERSION=fixture-v1` for its Lab.
+Simulation never contacts the configured OpenAI URL. Its local wire qualification
+and persistence limits are recorded in the
+[projected JSON ledger](../architecture/openai-responses-hydration.md).
 
 The CSV example counts physical lines excluding the header; it is not a general
 CSV parser for quoted multiline fields. Its [sample file](../../examples/csv-count.csv)

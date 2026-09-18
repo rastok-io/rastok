@@ -298,4 +298,15 @@ fn publication_assets_have_the_documented_dimensions_and_retained_provenance() {
             .windows(2)
             .all(|pair| pair[0].as_u64() <= pair[1].as_u64())
     );
+    let chapter =
+        std::fs::read_to_string(root().join("docs/site/gallery/04-webhook-to-partner.md")).unwrap();
+    for checkpoint in ["before", "backoff", "completed"] {
+        let transition = evidence["screenshots"][checkpoint].as_u64().unwrap();
+        assert!(
+            chapter.contains(&format!(
+                "transition {transition}](../assets/webhook-{checkpoint}.png)"
+            )),
+            "{checkpoint} caption must name the transition captured in the manifest"
+        );
+    }
 }

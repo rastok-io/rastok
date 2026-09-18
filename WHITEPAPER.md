@@ -268,8 +268,10 @@ the deterministic fragment when the necessary verification support
 exists.
 
 For example, begin with an LLM Connector that classifies support
-requests. The journal records its answers; annotated usage and price evidence support
-exact cost reports. Universal commit timestamps and per-call latency are not
+requests. The journal records its answers and each original annotated usage or
+monetary value, including those from a held Retry attempt. M1 supplies this
+evidence, not a cost report or automatic price calculation. Universal commit
+timestamps and per-call latency are not
 yet retained, so OTLP spans remain deferred. If refund
 requests become a stable rule, move that case into a typed Operator with
 statically declared outputs and keep the LLM only as a fallback for ambiguous
@@ -442,10 +444,11 @@ Three distinctions matter:
   ingress root. Restoring a socket's return coordinate does not rewrite its
   `origin_id` into a previous request's cause. Application request/turn ids,
   not the number of Session writes, identify agent jobs.
-- **An OUTBOUND record is not a price.** Per-flow `CostReport` uses annotated
-  quantities/amounts and optional deployment prices. Missing price is
-  `unpriced`, never inferred from the number of calls. OTLP export and budget
-  enforcement remain separate future consumers.
+- **An OUTBOUND record is not a price.** Annotated quantities and amounts
+  remain in their original journaled envelopes with their causal provenance.
+  Missing consumption is unknown, never inferred from the number of calls.
+  M1 implements no report, automatic pricing or subset arithmetic; OTLP export
+  and budget enforcement also remain future consumers.
 
 The earlier [WebSocket-to-job example](docs/examples/codex-websocket-gateway.rkg)
 remains a finite-job demonstration, and the
@@ -740,7 +743,7 @@ A Connector contains Contract attributes but no DSL handler or author-owned
 connector model : HttpClient {
   url = "https://example.test/model"
   codec = json
-  effect = idempotent
+  idempotent = false
   behavior = probabilistic
   timeout = duration("10s")
 }
@@ -2694,7 +2697,7 @@ Contract or package. These version registers are independent.
 | Explicit Graph or direct-child closure, idempotent per exact instance generation | [Closure ledger](docs/architecture/instance-stop-command.md); no global key lookup, implicit creation or repeated cancellation |
 | Process job/service, File read/replace, HttpClient/HttpServer, WebSocketClient/WebSocketServer | Exact Contracts; HTTP/1.1–3 and complete-message Sessions; resident Process [qualification](docs/architecture/process-service.md), not a model-specific protocol or token-streaming SSE |
 | Strict logical types and JSON Schema / Avro / Arrow / OpenAPI projections | Unsupported/lossy cases refuse by path; guest-language execution remains deferred |
-| Five data annotations, exact HttpClient boot references, privacy attestations, redaction, structured logs and per-flow `CostReport` | [Observability contract](docs/spec/observability.md); no raw-secret payload, legal-compliance certificate, budget enforcement, FX, FOCUS/OpenCost or OTLP exporter |
+| Data annotations, exact HttpClient boot references, privacy attestations, redaction, structured logs and individual typed measurement retention | [Observability contract](docs/spec/observability.md); no measurement report, automatic pricing, subset arithmetic, raw-secret payload, legal-compliance certificate, budget enforcement, FX, FOCUS/OpenCost or OTLP exporter |
 | `simulate --ui`: retained transitions, source, mailboxes, instances, Loop dials, decisions, causal links, assertion evidence and comparisons | [UI contract](docs/spec/ui.md); read-only source-authored scenarios, no `run --ui`, editing or branches; an authored `advance` may still group VM transactions |
 | `new`, readable golden divergence, `run --record` and `replay [--ui]` | [Diagnostic recording](docs/architecture/diagnostic-recording.md); immutable restitution without a Driver, not durable recovery; classified/boot-dependent recording limits remain explicit |
 
@@ -2814,10 +2817,12 @@ the target architecture; the status table above bounds the shipped subset.
 21. **Data policy is orthogonal to logical type. Canonical annotations beside
     the resolved schema govern sensitivity, secrets, measures and exact cost
     without changing ordinary assignability. The causal journal remains the
-    accounting truth; reports are deterministic folds and OpenTelemetry/logs
-    are bounded, never-block projections. Missing usage or price is never
-    silently zero, and currencies are never added without an explicit FX
-    authority.**
+    measurement authority; M1 retains individual facts without a report,
+    automatic pricing or subset arithmetic. Hosted logs are bounded,
+    never-block projections; OTLP remains deferred. Missing evidence is never
+    silently zero; every measurement retains its explicit id, unit, exact value
+    and causal provenance. Valuation and the future Budget Extension are
+    separate consumers, not annotation fields.**
 
 These maxims are not arbitrary slogans. Each one resolves a specific
 architectural ambiguity, and contributors are expected to know them.
