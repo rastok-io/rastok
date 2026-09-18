@@ -6,7 +6,7 @@
 //! expression spans are delimited here and handed to the expression chain
 //! untouched.
 //!
-//! [`grammar.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/grammar.md
+//! [`grammar.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/grammar.md
 
 pub mod check;
 mod constants;

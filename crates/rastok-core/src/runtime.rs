@@ -9,7 +9,7 @@
 //! nothing does. The scheduler and the VM assemble these parts at the
 //! next stage.
 //!
-//! [`execution-model.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/execution-model.md
+//! [`execution-model.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/execution-model.md
 
 pub mod vm;
 

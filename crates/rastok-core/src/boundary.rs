@@ -7,7 +7,7 @@
 //! it drives open outbound calls and settles their closures; only a
 //! won closure ever becomes a VM input.
 //!
-//! [`delivery-semantics.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/delivery-semantics.md
+//! [`delivery-semantics.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/delivery-semantics.md
 
 use crate::datatype::{
     DataType, EnumType, StructType, TaggedCase, TaggedUnionType, TypeError, TypeField,

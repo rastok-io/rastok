@@ -5,7 +5,7 @@
 //! Never stable is the rendered message text. Machine output is
 //! `{code, severity, spans, fields}`; text is rendering.
 //!
-//! [`diagnostics.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/diagnostics.md
+//! [`diagnostics.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/diagnostics.md
 
 use std::fmt;
 

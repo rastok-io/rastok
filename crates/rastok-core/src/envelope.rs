@@ -11,7 +11,7 @@
 //! second value domain. The full derivation recipes (`root_id`,
 //! `emission_id`) belong to the journal's `ids` module.
 //!
-//! [`envelope.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/envelope.md
+//! [`envelope.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/envelope.md
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;

@@ -5,10 +5,10 @@
 //! for the `behavior` attribute, and [`envelope.md`] §3 for the trigger
 //! namespaces.
 //!
-//! [`grammar.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/grammar.md
-//! [`extensions.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/extensions.md
-//! [`stdlib.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/stdlib.md
-//! [`envelope.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/envelope.md
+//! [`grammar.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/grammar.md
+//! [`extensions.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/extensions.md
+//! [`stdlib.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/stdlib.md
+//! [`envelope.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/envelope.md
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -274,7 +274,7 @@ impl fmt::Display for Behavior {
 /// Lifecycle transaction kind — the closed `l:` registry of
 /// [`envelope.md`] §3.
 ///
-/// [`envelope.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/envelope.md
+/// [`envelope.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/envelope.md
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Lifecycle {
     /// Internal Retry manager fact; never an authored handler activation.

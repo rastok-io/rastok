@@ -31,3 +31,19 @@ the synthetic deployment profile and can open the same graph with `--ui`.
 No real server, partner or credential is required for that simulation.
 Downloadable binaries and two unaided timed installation trials are still required before
 this quickstart is qualified for opening. No elapsed-time claim is made yet.
+
+## After the public opening
+
+The planned 15 October 2026 download location is
+[Rastok releases](https://github.com/rastok-io/rastok/releases): macOS arm64,
+macOS x86-64 and Linux x86-64, with `hosted-ui,hosted-websocket`. Once the
+repository and `v0.1.0-alpha` tag have been published on Yoann's instruction,
+the Rust 1.97.1 source-install fallback is:
+
+```sh
+cargo install --git https://github.com/rastok-io/rastok --tag v0.1.0-alpha --locked --features hosted-ui,hosted-websocket rastok
+```
+
+This command is prepared for opening, not yet qualified against a public tag.
+Until then, use the checkout installation above. The public documentation
+address is [docs.rastok.com](https://docs.rastok.com).

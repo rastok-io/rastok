@@ -8,7 +8,7 @@
 //! `Process`, `File`, HTTP and WebSocket sheets; the remaining names are
 //! declared so they refuse explicitly rather than accidentally.
 //!
-//! [`stdlib.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/stdlib.md
+//! [`stdlib.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/stdlib.md
 
 use crate::connector::{
     ConnectorExchange, ConnectorRoles, FILE_CONNECTOR_ID, HTTP_CLIENT_CONNECTOR_ID,

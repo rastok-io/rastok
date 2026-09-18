@@ -8,6 +8,14 @@ textual, typed, readable in code review, easy to version in Git, and
 constrained enough for an LLM to generate without hiding the result
 behind a visual low-code format.
 
+Public destinations for the planned **15 October 2026** opening:
+[website](https://www.rastok.com) ·
+[documentation](https://docs.rastok.com) ·
+[source](https://github.com/rastok-io/rastok) ·
+[releases](https://github.com/rastok-io/rastok/releases).
+These addresses are confirmed; this checkout does not claim that the private
+repository or release downloads are already publicly available.
+
 ## Quickstart
 
 <!-- quickstart:start -->

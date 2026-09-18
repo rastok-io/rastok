@@ -5,6 +5,25 @@ The separate `rastok-site` repository consumes it at one explicit Git tag,
 together with `examples/`, the referenced goldens and the editor grammar.
 There is no site runtime, Node dependency, MDX or component import here.
 
+## Public destination handoff — 18 September 2026
+
+The confirmed documentation destination is `https://docs.rastok.com`; the
+homepage is `https://www.rastok.com`. The source and release destinations are
+recorded in the [release inventory](../architecture/release-qualification.md#public-destinations-and-opening-gate).
+No front-matter field changes with this handoff.
+
+For the authorized 15 October opening, prefer a minimal Starlight deployment
+serving the quickstart and six gallery chapters. If that cannot be ready,
+serve a 301 from the documentation domain to the actual gallery page on
+`www.rastok.com`, replacing it with the documentation site in November. The
+fallback gallery path must be confirmed in `rastok-site`, not invented here.
+The bare `rastok.com` domain's 301 target is `https://www.rastok.com`.
+
+This is a deployment requirement for the separate site repository, not a
+completed DNS, redirect or deployment change. The documentation URL must
+resolve before crates are published; verification remains an opening gate.
+No deployment or publication is authorized by these local file changes.
+
 ## Page schema
 
 Pages are ordinary UTF-8 Markdown with one leading YAML front-matter block.

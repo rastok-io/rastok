@@ -18,4 +18,11 @@ examples, gallery traces and the complete conformance suite are maintained
 together; the crate archive supplies the executable/library sources and
 embedded debugger assets, not the full documentation repository.
 
+Public destinations for the planned 15 October 2026 opening:
+[website](https://www.rastok.com),
+[documentation](https://docs.rastok.com),
+[repository](https://github.com/rastok-io/rastok),
+[binary releases](https://github.com/rastok-io/rastok/releases).
+These are release destinations, not a claim that publication has occurred.
+
 License: Apache-2.0.

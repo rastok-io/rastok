@@ -9,6 +9,9 @@ edition = "2024"
 rust-version = "1.97.1"
 authors = ["Yoann Pantic"]
 license = "Apache-2.0"
+repository = "https://github.com/rastok-io/rastok"
+homepage = "https://www.rastok.com"
+documentation = "https://docs.rastok.com"
 publish = false
 
 [workspace.dependencies]

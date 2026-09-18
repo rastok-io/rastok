@@ -14,9 +14,9 @@
 //! never rewrites the open one. Records are written by the runtime
 //! mechanics only; Drivers and mocks supply events, never records.
 //!
-//! [`delivery-semantics.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/delivery-semantics.md
-//! [`envelope.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/envelope.md
-//! [`identity.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/identity.md
+//! [`delivery-semantics.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/delivery-semantics.md
+//! [`envelope.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/envelope.md
+//! [`identity.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/identity.md
 
 use crate::boundary::{
     CallRef, Completion, InboundCallRef, InboundEnvelopeProvenance, InboundSession,
