@@ -1,8 +1,6 @@
 use super::*;
 use crate::plan::{DispatchErrorKind, Emission, FieldWrite, RouteErrorKind};
-use crate::schema_annotation::{
-    AnnotationSet, AnnotationTable, DataAnnotation, MeasureId, SchemaPath,
-};
+use crate::schema_annotation::{AnnotationSet, AnnotationTable, SchemaPath};
 use crate::value::Value;
 use alloc::collections::BTreeMap;
 
@@ -96,8 +94,8 @@ fn every_statement_builder_and_annotation_survives_transport() {
     let expression = expr::compile("data + 1", &signature).unwrap();
     let annotations = AnnotationTable::new(vec![(
         SchemaPath::root(),
-        AnnotationSet::new(vec![DataAnnotation::Measure(
-            MeasureId::new("gen_ai.usage.input_tokens").unwrap(),
+        AnnotationSet::new(vec![crate::schema_annotation::tests::measure(
+            "tokens", "token",
         )])
         .unwrap(),
     )])

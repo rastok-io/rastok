@@ -525,7 +525,7 @@ pub struct DeploymentAttestation {
     pub secrets: Vec<SecretBinding>,
     /// Privacy profile identity when personal data is admitted.
     pub privacy: Option<PrivacyAttestation>,
-    /// Optional exact price profile used only for non-causal reporting.
+    /// Retained price-profile identity; M1 performs no automatic pricing.
     pub cost_profile: Option<CostProfileAttestation>,
 }
 
@@ -674,7 +674,7 @@ impl BootBindings {
         self.privacy.as_ref()
     }
 
-    /// Optional deployment pricing used by [`crate::accounting::CostReport`].
+    /// Attested deployment profile metadata; M1 does not calculate a price from it.
     #[must_use]
     pub fn cost_profile(&self) -> Option<&CostProfile> {
         self.cost_profile.as_ref()

@@ -1,4 +1,4 @@
-# Rastok v18 syntax
+# Rastok v19 syntax
 
 Data-only VS Code extension: no activation code, dependencies, language server
 or build. The site's highlighter loads `syntaxes/rkg.tmLanguage.json` at the
@@ -13,6 +13,10 @@ This original Apache-2.0 grammar follows the current repository lexer and the
 No seed assets or third-party grammar were copied. Highlights cover declarations,
 ports, Extensions, manager commands, case routes, matches, annotations, Lab
 actions, per-instance closure, comments, literals and the three built-in readers.
+The v19 update adds Retry settings, `idempotent`, projected JSON and `@struct`;
+authored annotation names use the same application scope as standard ones.
+Highlighting an annotation does not claim a supported runtime interpretation.
+The removed global `effect` attribute is no longer an executable keyword.
 JSON readers respect strings and nested objects/arrays; raw text and base64 do
 not accidentally highlight their contents as DSL. It does not validate types
 or routes; `rastok check` does. Future guest compilers must supply their own
@@ -45,3 +49,9 @@ Qualified on 14 September with the site's existing
 including lexical smoke tests. This is tokenizer evidence, not an independent
 interactive VS Code usability audit. The site can run the same test at its
 pinned content tag, without copying this grammar or modifying this repository.
+
+Requalified on 18 September against v19 with the same installed engines:
+**four lexical + three real-tokenizer tests pass**. The added regressions cover
+`@struct` as a declaration rather than an annotation application, authored
+annotation names, `Retry` settings and the ordinary `idempotent` attribute.
+No new front-end dependency was introduced.

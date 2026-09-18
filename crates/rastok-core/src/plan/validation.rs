@@ -15,7 +15,7 @@ use crate::plan::{
     DispatchStep, Emission, EndpointRef, EvaluationSite, ExecutionPlan, InstanceLifetime, Node,
     NodeExecution, OwnerKind, OwnerSlot, Slot,
 };
-use crate::schema_annotation::{AnnotatedSchema, AnnotationTable, SchemaAnnotationError};
+use crate::schema_annotation::{AnnotationTable, SchemaAnnotationError};
 
 /// Why a plan is not executable — one named invariant violation. The
 /// variants are semantic, not prose: a caller can match on the class
@@ -1701,8 +1701,8 @@ fn annotated_schema_at(
     if annotations.is_empty() {
         return Ok(());
     }
-    AnnotatedSchema::new(ty.clone(), annotations.clone())
-        .map(|_| ())
+    annotations
+        .validate_for(ty)
         .map_err(|reason| PlanValidationError::InvalidSchemaAnnotations { location, reason })
 }
 
@@ -1821,6 +1821,9 @@ fn setting_has_type(setting: &crate::plan::AttrSetting, ty: &DataType) -> bool {
 
 fn network_setting_holds(name: &str, setting: &crate::plan::AttrSetting) -> bool {
     match name {
+        "json_profile" => {
+            matches!(setting, crate::plan::AttrSetting::Word(word) if word == "projected")
+        }
         "idempotent" => matches!(
             setting,
             crate::plan::AttrSetting::Value(crate::value::Value::Bool(_))
@@ -1949,6 +1952,7 @@ fn validate_network_connector(
                 "headers",
                 "idempotent",
                 "idempotency_key",
+                "json_profile",
                 "max_body",
                 "method",
                 "timeout",
@@ -2162,15 +2166,30 @@ fn validate_network_connector(
                 port: name,
             });
         };
-        if port.direction != *direction
-            || port.ty
-                != effective_contract_port(
+        let json_output = contract == crate::connector::HTTP_CLIENT_CONNECTOR_ID
+            && *name == "out"
+            && codec == Some("json");
+        if *name == "out"
+            && spec.attribute("json_profile").is_some()
+            && (!json_output || !matches!(port.ty, Some(DataType::Struct(_))))
+        {
+            return Err(PlanValidationError::ContractAttributeMismatch {
+                node: node.path.clone(),
+                attribute: String::from("json_profile"),
+            });
+        }
+        let type_holds = if json_output {
+            port.ty.as_ref().is_some_and(crate::json::supports_type)
+        } else {
+            port.ty
+                == effective_contract_port(
                     node,
                     loop_spec,
                     name,
                     crate::boundary::network_port_type(&spec.contract, name, codec),
                 )
-        {
+        };
+        if port.direction != *direction || !type_holds {
             return Err(PlanValidationError::ContractPortMismatch {
                 node: node.path.clone(),
                 port: port.port.clone(),
@@ -2570,12 +2589,10 @@ fn owner_values_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationEr
             }
         }
 
-        let local: BTreeMap<&str, usize> = owner
-            .vals
-            .iter()
-            .enumerate()
-            .map(|(index, value)| (value.name.as_str(), index))
-            .collect();
+        let mut local = BTreeMap::new();
+        for (index, value) in owner.vals.iter().enumerate() {
+            local.insert(value.name.as_str(), index);
+        }
         let mut visits = alloc::vec![BindingVisit::New; owner.vals.len()];
         let mut sites = alloc::vec![None; owner.vals.len()];
         for index in 0..owner.vals.len() {
@@ -4501,19 +4518,14 @@ type EndpointPresence = BTreeMap<(Option<Slot>, node::Port), MetaPresence>;
 /// plan facts, so a forged package cannot turn the runtime's absent-field
 /// defense into ordinary execution.
 fn join_metadata_presence_holds(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
-    let all_fields: MetaPresence = plan
-        .app_schema
-        .iter()
-        .map(|(field, _)| WritableMetaField::App(field.clone()))
-        .chain(
-            plan.ext_schema
-                .iter()
-                .map(|(field, _)| WritableMetaField::Ext(field.clone())),
-        )
-        .chain(core::iter::once(WritableMetaField::Ext(String::from(
-            "content_type",
-        ))))
-        .collect();
+    let mut all_fields = MetaPresence::new();
+    for (field, _) in &plan.app_schema {
+        all_fields.insert(WritableMetaField::App(field.clone()));
+    }
+    for (field, _) in &plan.ext_schema {
+        all_fields.insert(WritableMetaField::Ext(field.clone()));
+    }
+    all_fields.insert(WritableMetaField::Ext(String::from("content_type")));
     if all_fields.is_empty() {
         return Ok(());
     }
@@ -4656,14 +4668,15 @@ fn node_input_presence(
     slot: Slot,
     inputs: &EndpointPresence,
 ) -> MetaPresence {
-    plan.nodes[slot.index()]
-        .ports
-        .iter()
-        .filter(|port| port.direction == node::Direction::Input)
-        .filter_map(|port| inputs.get(&(Some(slot), port.port.clone())))
-        .flat_map(BTreeSet::iter)
-        .cloned()
-        .collect()
+    let mut presence = MetaPresence::new();
+    for port in &plan.nodes[slot.index()].ports {
+        if port.direction == node::Direction::Input
+            && let Some(fields) = inputs.get(&(Some(slot), port.port.clone()))
+        {
+            presence.extend(fields.iter().cloned());
+        }
+    }
+    presence
 }
 
 fn activation_presence(
@@ -4678,29 +4691,35 @@ fn activation_presence(
             .cloned()
             .unwrap_or_default(),
         node::HandlerActivation::Join { .. } => all_fields.clone(),
-        node::HandlerActivation::Lifecycle(_) => inputs
-            .iter()
-            .filter(|((slot, _), _)| *slot == Some(handler_node))
-            .flat_map(|(_, fields)| fields)
-            .cloned()
-            .collect(),
+        node::HandlerActivation::Lifecycle(_) => {
+            let mut presence = MetaPresence::new();
+            for ((slot, _), fields) in inputs {
+                if *slot == Some(handler_node) {
+                    presence.extend(fields.iter().cloned());
+                }
+            }
+            presence
+        }
     }
 }
 
 fn emission_meta_writes(emission: &Emission) -> MetaPresence {
     match emission {
-        Emission::Patch(writes) | Emission::FreshData(writes) => writes
-            .iter()
-            .filter_map(|write| match &write.target {
-                crate::envelope::WriteTarget::App(field) => {
-                    Some(WritableMetaField::App(field.clone()))
+        Emission::Patch(writes) | Emission::FreshData(writes) => {
+            let mut presence = MetaPresence::new();
+            for write in writes {
+                match &write.target {
+                    crate::envelope::WriteTarget::App(field) => {
+                        presence.insert(WritableMetaField::App(field.clone()));
+                    }
+                    crate::envelope::WriteTarget::Ext(field) => {
+                        presence.insert(WritableMetaField::Ext(field.clone()));
+                    }
+                    crate::envelope::WriteTarget::Data(_) => {}
                 }
-                crate::envelope::WriteTarget::Ext(field) => {
-                    Some(WritableMetaField::Ext(field.clone()))
-                }
-                crate::envelope::WriteTarget::Data(_) => None,
-            })
-            .collect(),
+            }
+            presence
+        }
         Emission::Identity | Emission::Data(_) | Emission::Nothing => MetaPresence::new(),
     }
 }

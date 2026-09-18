@@ -425,7 +425,11 @@ impl Vm<'_> {
         self.retain_graph_verdicts(record)
     }
 
-    pub(super) fn step_loop_manager(&mut self, journal: &mut dyn Journal) -> Result<bool, VmError> {
+    pub(super) fn step_loop_manager(
+        &mut self,
+        journal: &mut dyn Journal,
+        dated_admission: Option<Id>,
+    ) -> Result<bool, VmError> {
         if let Some(fold) = self.loop_manager.as_deref() {
             let mut entry = None;
             for (run, state) in fold.runs() {
@@ -446,7 +450,9 @@ impl Vm<'_> {
                     || (state.pending.is_some() && !self.graph_run_has_work(*run))
                     || (state.phase == Phase::AwaitingAdmission
                         && self.graph_admission_is_head(*run)
-                        && state.due_at.is_none_or(|due| due <= self.now)))
+                        && state.due_at.is_none_or(|due| due <= self.now)
+                        && (state.due_at.is_none()
+                            || dated_admission.is_none_or(|id| id == state.admission))))
                 .then(|| (*run, state.clone()))
             })
         });
@@ -731,9 +737,9 @@ impl Vm<'_> {
         }
         let prepared = match slot {
             Some(slot) => {
-                self.validate_and_prepare_emissions(journal, slot, &current.instance, &record)?
+                self.validate_and_prepare_emissions(&&*journal, slot, &current.instance, &record)?
             }
-            None => self.prepare_graph_emissions(journal, owner, &current.instance, &record)?,
+            None => self.prepare_graph_emissions(&&*journal, owner, &current.instance, &record)?,
         };
         self.retain_emission_routes(&mut record, &prepared)?;
         journal.commit(record).map_err(VmError::Journal)?;

@@ -8,7 +8,7 @@ use crate::plan::{Endpoint, InstanceStopTarget, RouteDestination};
 impl Vm<'_> {
     pub(super) fn prepare_instance_commands(
         &self,
-        journal: &(impl InstanceAdmissions + ?Sized),
+        journal: &dyn InstanceAdmissions,
         source: &Endpoint,
         source_instance: Option<&InstanceRef>,
         envelope: &Envelope,
@@ -106,7 +106,7 @@ impl Vm<'_> {
 
     pub(super) fn check_instance_command_room(
         &self,
-        journal: &(impl InstanceAdmissions + ?Sized),
+        journal: &dyn InstanceAdmissions,
         commands: &[Command],
     ) -> Result<(), VmError> {
         if commands.is_empty() {

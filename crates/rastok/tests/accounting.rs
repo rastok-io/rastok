@@ -3,7 +3,7 @@
 #![allow(clippy::disallowed_methods, clippy::unwrap_used, clippy::expect_used)]
 
 use rastok::accounting::{
-    CostProfile, CostProfileRef, CostReport, ExactDecimal, MeasureQuantity, UnitPrice,
+    CostProfile, CostProfileRef, ExactDecimal, UnitPrice, accounting_observations,
 };
 use rastok::boundary::{Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence};
 use rastok::compiler::compile;
@@ -30,12 +30,12 @@ impl SecretProvider for NoSecrets {
 }
 
 #[test]
-fn replay_reconstructs_exact_per_flow_measures_and_provider_costs() {
+fn replay_reads_each_original_measurement_without_combining_flow_points() {
     let source = r#"
 type Usage = struct {
-  input_tokens: uint @measure(id = gen_ai.usage.input_tokens)
-  cached_tokens: uint @measure(id = gen_ai.usage.cache_read.input_tokens)
-  charge: decimal(38,18) @cost(currency = USD, basis = provider_reported)
+  input_tokens: uint @measure(id = input_tokens, unit = "token")
+  cached_tokens: uint @measure(id = cached_tokens, unit = "token")
+  charge: decimal(38,18) @measure(id = amount, unit = "USD")
 }
 
 graph accounting_probe : App {
@@ -83,45 +83,78 @@ graph accounting_probe : App {
     .expect("inbound commits");
     vm.drain(&mut journal).expect("graph drains");
 
-    let first = CostReport::from_records(&compilation.plan, journal.records(), None)
-        .expect("the exact report folds");
-    let replay = CostReport::from_records(&compilation.plan, journal.records(), None)
-        .expect("the same records replay");
-    assert_eq!(first, replay, "no exporter state participates in the fold");
-
-    assert_eq!(first.measures().len(), 4, "two measures at each flow point");
-    assert!(first.measures().iter().any(|row| {
-        row.scope().port().name() == "in"
-            && row.id().as_str() == "gen_ai.usage.input_tokens"
-            && row.quantity() == MeasureQuantity::Integer(1_000)
-    }));
-    assert!(first.measures().iter().any(|row| {
-        row.scope().port().name() == "out"
-            && row.id().as_str() == "gen_ai.usage.cache_read.input_tokens"
-            && row
-                .subset_of()
-                .is_some_and(|parent| parent.as_str() == "gen_ai.usage.input_tokens")
-    }));
-    assert_eq!(
-        first.costs().len(),
-        2,
-        "currency remains per-flow, not global"
-    );
-    assert!(first.costs().iter().all(|row| {
-        row.money().currency().as_str() == "USD"
-            && row.money().amount() == ExactDecimal::new(125, 2).unwrap()
-    }));
-    assert_eq!(first.unpriced().len(), 2);
-    assert!(first.unpriced().iter().all(|row| {
-        row.id().as_str() == "gen_ai.usage.input_tokens"
-            && row.quantity() == MeasureQuantity::Integer(1_000)
-    }));
+    let first = accounting_observations(&compilation.plan, journal.records(), None)
+        .expect("individual typed observations");
+    let retained = MemJournal::from_records(GraphVersion(1), None, journal.records()).unwrap();
+    let replay = accounting_observations(&compilation.plan, retained.records(), None)
+        .expect("the same original records remain readable");
+    assert_eq!(first, replay);
+    assert_eq!(first.len(), 2, "one admission and one copy emission");
+    assert_ne!(first[0].envelope_id(), first[1].envelope_id());
+    assert_eq!(first[0].scope().origin_id(), first[1].scope().origin_id());
+    for (observation, port) in first.iter().zip(["in", "out"]) {
+        assert_eq!(observation.scope().port().name(), port);
+        assert_eq!(observation.measures().len(), 3);
+        assert!(observation.measures().iter().any(|sample| {
+            sample.id().as_str() == "input_tokens"
+                && sample.quantity() == ExactDecimal::new(1_000, 0).unwrap()
+        }));
+        assert!(observation.measures().iter().any(|sample| {
+            sample.id().as_str() == "cached_tokens"
+                && sample.quantity() == ExactDecimal::new(200, 0).unwrap()
+        }));
+        let amount = observation
+            .measures()
+            .iter()
+            .find(|sample| sample.id().as_str() == "amount")
+            .expect("the retained charge");
+        assert_eq!(amount.unit(), "USD");
+        assert_eq!(amount.quantity(), ExactDecimal::new(125, 2).unwrap());
+    }
 }
 
 #[test]
-fn a_deployment_price_matches_the_nearest_causal_connector_after_typed_decode() {
+fn independent_quantities_do_not_imply_a_subset_relationship() {
+    let compilation = compile(
+        &[r#"
+type Usage = struct {
+  input_tokens: uint @measure(id = input_tokens, unit = "token")
+  cached_tokens: uint @measure(id = cached_tokens, unit = "token")
+}
+graph app : App {
+  input in: Usage
+  in -> nothing
+}
+lab app { simulation usage on app { scenario original_values {
+  app.in = { input_tokens = 10u; cached_tokens = 20u }
+} } }
+"#],
+        &ContractCatalog::try_m0().unwrap(),
+    )
+    .unwrap();
+    let runs = rastok::lab::run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
+    assert!(runs[0].report.passed(), "{:?}", runs[0].report);
+    let observations = accounting_observations(&compilation.plan, &runs[0].records, None)
+        .expect("M1 retains original values without enforcing a report relationship");
+    assert_eq!(observations.len(), 1);
+    let values: Vec<_> = observations[0]
+        .measures()
+        .iter()
+        .map(|sample| (sample.id().as_str(), sample.quantity()))
+        .collect();
+    assert_eq!(
+        values,
+        [
+            ("cached_tokens", ExactDecimal::new(20, 0).unwrap()),
+            ("input_tokens", ExactDecimal::new(10, 0).unwrap()),
+        ]
+    );
+}
+
+#[test]
+fn typed_decode_preserves_connector_attribution_without_applying_deployment_prices() {
     let source = r#"
-type Tokens = int @measure(id = gen_ai.usage.input_tokens)
+type Tokens = int @measure(id = input_tokens, unit = "token")
 
 graph priced_call : App {
   input in: int
@@ -160,7 +193,7 @@ graph priced_call : App {
                 model.clone(),
                 "example-ai",
                 "model-v1",
-                MeasureId::new("gen_ai.usage.input_tokens").expect("registered measure"),
+                MeasureId::new("input_tokens").expect("authored measure id"),
                 1_000,
                 ExactDecimal::new(2, 0).expect("exact price"),
                 CurrencyCode::new("USD").expect("ISO currency"),
@@ -207,10 +240,16 @@ graph priced_call : App {
     }
     assert!(vm.is_stable(), "the priced Call must settle");
 
-    let report = CostReport::from_journal(&compilation.plan, &journal, Some(&profile))
-        .expect("the attested report folds");
-    assert_eq!(report.measures().len(), 1);
-    let scope = report.measures()[0].scope();
+    let observations =
+        accounting_observations(&compilation.plan, journal.records(), Some(&profile))
+            .expect("retained values and causal attribution");
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0].measures().len(), 1);
+    assert_eq!(
+        observations[0].measures()[0].quantity(),
+        ExactDecimal::new(1_000, 0).unwrap()
+    );
+    let scope = observations[0].scope();
     assert_eq!(
         scope.node().map(ToString::to_string).as_deref(),
         Some("typed_usage")
@@ -218,10 +257,11 @@ graph priced_call : App {
     assert_eq!(scope.connector(), Some(&model));
     assert_eq!(scope.provider(), Some("example-ai"));
     assert_eq!(scope.model(), Some("model-v1"));
-    assert_eq!(report.costs().len(), 1);
-    assert_eq!(
-        report.costs()[0].money().amount(),
-        ExactDecimal::new(2, 0).expect("exact total")
+    assert!(
+        observations[0]
+            .measures()
+            .iter()
+            .all(|sample| sample.unit() == "token"),
+        "a tariff is not an observed charge"
     );
-    assert!(report.unpriced().is_empty());
 }

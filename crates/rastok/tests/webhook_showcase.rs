@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use rastok::accounting::{CostReport, ExactDecimal};
+use rastok::accounting::{ExactDecimal, accounting_observations};
 use rastok::compiler::compile;
 use rastok::contract::ContractCatalog;
 use rastok::deployment::{
@@ -75,11 +75,12 @@ fn the_six_webhook_scenarios_are_deterministic_and_count_real_outbound_calls() {
         .unwrap_or_else(|bag| panic!("the flagship checks: {bag:#?}"));
     let boot = boot(true);
     let run = || {
-        lab::run_with_boot(
+        lab::run_program(
             &compilation.plan,
+            compilation.hash,
             GraphVersion(1),
             &compilation.labs[0],
-            &boot,
+            Some(&boot),
         )
     };
     let first = run();
@@ -118,18 +119,80 @@ fn the_six_webhook_scenarios_are_deterministic_and_count_real_outbound_calls() {
             );
         }
     }
+    for index in [1, 2, 5] {
+        let calls: Vec<_> = first[index]
+            .records
+            .iter()
+            .filter_map(|record| match record {
+                Record::Outbound(OutboundRecord::Call(call))
+                    if matches!(call.status, OutboundStatus::Open) =>
+                {
+                    Some(&call.intent)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(
+            calls[0].prepared, calls[1].prepared,
+            "a retry never changes the request body"
+        );
+        assert_eq!(calls[0].resolved_settings, calls[1].resolved_settings);
+        assert_eq!(calls[0].idempotency_key, calls[1].idempotency_key);
+        assert_ne!(calls[0].call_ref, calls[1].call_ref);
+    }
+    let failures: Vec<_> = first[2]
+        .records
+        .iter()
+        .filter_map(|record| match record {
+            Record::Transaction(tx) if tx.owner_path.to_string() == "deliver.decide" => {
+                Some(&tx.emissions)
+            }
+            _ => None,
+        })
+        .flatten()
+        .filter(|emission| emission.port.name() == "failed")
+        .collect();
+    assert_eq!(
+        failures.len(),
+        1,
+        "only the final timeout reaches the business adapter"
+    );
+    let Some(Value::TaggedUnion(failure)) = failures[0].envelope.data().materialized_value() else {
+        panic!("typed business failure");
+    };
+    assert_eq!(failure.case, "PartnerFailed");
+    let Some((_, Value::TaggedUnion(terminal))) =
+        failure.payload.iter().find(|(name, _)| name == "terminal")
+    else {
+        panic!("the original terminal remains typed");
+    };
+    assert_eq!(
+        terminal.case, "TimeoutExpired",
+        "no Retry/Loop exhaustion wrapper"
+    );
 }
 
 #[test]
 fn a_secret_binding_does_not_waive_the_required_privacy_attestation() {
     let compilation = compile(&[SOURCE], &ContractCatalog::try_m0().unwrap()).unwrap();
-    for run in lab::run_with_boot(
+    for run in lab::run_program(
         &compilation.plan,
+        compilation.hash,
         GraphVersion(1),
         &compilation.labs[0],
-        &boot(false),
+        Some(&boot(false)),
     ) {
         assert!(!run.report.passed(), "privacy coverage is mandatory");
+        assert!(
+            run.report
+                .failures
+                .iter()
+                .any(|reason| reason.contains("personal-data")
+                    && reason.contains("deployment boundary")),
+            "refusal must name privacy, not an unrelated boot failure: {:?}",
+            run.report
+        );
         assert!(
             run.records.is_empty(),
             "refusal precedes admission and effects"
@@ -140,26 +203,43 @@ fn a_secret_binding_does_not_waive_the_required_privacy_attestation() {
 #[test]
 fn charges_are_exact_reported_evidence_not_an_invented_price_for_timeouts() {
     let compilation = compile(&[SOURCE], &ContractCatalog::try_m0().unwrap()).unwrap();
-    let runs = lab::run_with_boot(
+    assert!(
+        compilation
+            .plan
+            .owners
+            .iter()
+            .all(|owner| owner.loop_spec().is_none())
+    );
+    assert_eq!(
+        compilation
+            .plan
+            .owners
+            .iter()
+            .filter(|owner| owner.retry_spec().is_some())
+            .count(),
+        1
+    );
+    let runs = lab::run_program(
         &compilation.plan,
+        compilation.hash,
         GraphVersion(1),
         &compilation.labs[0],
-        &boot(true),
+        Some(&boot(true)),
     );
     for (index, cents) in [
         (0, vec![2]),
         (1, vec![2]),
         (2, vec![]),
         (4, vec![]),
-        (5, vec![3]),
+        (5, vec![1, 2]),
     ] {
         assert!(runs[index].report.passed(), "{:?}", runs[index].report);
-        let report =
-            CostReport::from_records(&compilation.plan, &runs[index].records, None).unwrap();
-        let mut amounts: Vec<_> = report
-            .costs()
+        let observations =
+            accounting_observations(&compilation.plan, &runs[index].records, None).unwrap();
+        let mut amounts: Vec<_> = observations
             .iter()
-            .map(|row| row.money().amount())
+            .flat_map(|observation| observation.measures())
+            .map(|row| row.quantity())
             .collect();
         amounts.sort_by_key(|amount| amount.unscaled());
         assert_eq!(
@@ -170,15 +250,58 @@ fn charges_are_exact_reported_evidence_not_an_invented_price_for_timeouts() {
                 .collect::<Vec<_>>(),
             "scenario {index}"
         );
-        for row in report.costs() {
-            assert_eq!(row.money().currency().as_str(), "USD");
+        for observation in observations
+            .iter()
+            .filter(|observation| !observation.measures().is_empty())
+        {
+            assert!(
+                observation
+                    .measures()
+                    .iter()
+                    .all(|sample| sample.unit() == "USD")
+            );
             assert_eq!(
-                row.scope().connector().unwrap().to_string(),
+                observation.scope().connector().unwrap().to_string(),
                 "deliver.partner",
                 "attribution follows the sealed producer lineage"
             );
+            assert_eq!(
+                observation.scope().node().unwrap().to_string(),
+                "deliver.partner",
+                "typed evidence belongs to the Connector, not a downstream extractor"
+            );
         }
     }
+    let mut batches = Vec::new();
+    for record in &runs[5].records {
+        if let Record::Transaction(tx) = record {
+            for fact in tx.retry_record.iter().flat_map(|packet| &packet.facts) {
+                match fact {
+                    rastok::journal::retry_protocol::Fact::Held(batch) => {
+                        assert!(
+                            tx.routes.is_empty(),
+                            "the 500 charge is retained but not delivered"
+                        );
+                        batches.push((batch, "held"));
+                    }
+                    rastok::journal::retry_protocol::Fact::Published(batch) => {
+                        batches.push((batch, "published"))
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    assert_eq!(batches.len(), 2);
+    assert_eq!((batches[0].1, batches[1].1), ("held", "published"));
+    assert_eq!(
+        batches[0].0.attempt.operation,
+        batches[1].0.attempt.operation
+    );
+    assert_eq!(
+        (batches[0].0.attempt.ordinal, batches[1].0.attempt.ordinal),
+        (1, 2)
+    );
 }
 
 #[cfg(feature = "hosted-ui")]
@@ -187,9 +310,17 @@ fn every_webhook_transition_redacts_personal_data_and_the_secret_before_presenta
     let compilation = compile(&[SOURCE], &ContractCatalog::try_m0().unwrap()).unwrap();
     let boot = boot(true);
     let simulation = &compilation.labs[0].simulations[0];
-    for scenario in &simulation.scenarios {
-        let mut session = lab::ScenarioSession::try_new(
+    let expected = lab::run_program(
+        &compilation.plan,
+        compilation.hash,
+        GraphVersion(1),
+        &compilation.labs[0],
+        Some(&boot),
+    );
+    for (scenario, batch) in simulation.scenarios.iter().zip(&expected) {
+        let mut session = lab::ScenarioSession::try_new_program(
             &compilation.plan,
+            compilation.hash,
             GraphVersion(1),
             &simulation.name,
             &simulation.mocks,
@@ -206,7 +337,6 @@ fn every_webhook_transition_redacts_personal_data_and_the_secret_before_presenta
                 definitions: &compilation.source_definitions,
                 vm: session.vm(),
                 journal: session.journal(),
-                cost_profile: None,
                 fault: None,
                 activity: None,
                 scenario: None,
@@ -235,6 +365,10 @@ fn every_webhook_transition_redacts_personal_data_and_the_secret_before_presenta
             }
         }
         assert!(session.is_complete(), "the finite scenario must terminate");
-        assert!(session.finish().report.passed());
+        assert_eq!(
+            &session.finish(),
+            batch,
+            "same records in batch and interactive inspection"
+        );
     }
 }

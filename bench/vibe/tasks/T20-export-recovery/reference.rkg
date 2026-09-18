@@ -6,7 +6,7 @@ graph guarded : App {
   connector uplink : Process {
     mode = job ; command = "cat"
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true ; behavior = deterministic
     timeout = duration("1s")
   }
 

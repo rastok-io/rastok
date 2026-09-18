@@ -158,6 +158,14 @@ boundary ports come from the plan. The UI never infers execution from geometry.
 - Loop runs appear in Instances: exact run, owner, application, remaining fuel,
   phase, pending command, due instant and current state-envelope reference.
   That reference is a dependency, not a second unclassified DATA projection.
+- Retry operations appear separately in Instances in the v19 candidate: exact
+  operation and instance, admitted attempt/bound, phase, original due time,
+  and one row per admitted attempt. Call, admission, closure, production and
+  consumption links point to their original records. Held results are labelled
+  `held by Retry`, final ones `published`; both link to the common redacted
+  envelope inspector. Prepared request/settings never acquire another DATA view.
+  Selecting an instance filters both recurrence tables. `+ Retry` explains the
+  checked policy without adding a Loop dial, command, port or error wrapper.
 
 Each Loop badge carries a journal-derived `⟳ n/N` dial with explicit fuel N,
 or `⟳ n` when the budget is derived from a measure. It counts admitted
@@ -174,11 +182,21 @@ renders runs as a table, not raw JSON.
 History displays r2 facts as `l:open`, `l:admit`, `l:advance`, `l:close` and
 `l:expired`. These are presentation labels, not changes to journal triggers.
 Definition shows each Extension once, including the root App.
+Retry history separately names admission, holding, scheduling, final publication
+and stopping. A held batch can highlight its consumed input, never an outgoing
+public/discard route inferred from static topology. The future strip shows an
+armed Retry deadline from the accepted fold, not a new predicted action.
+History counts envelope observations, not deliveries: a held source emission
+remains observable without ever reaching a downstream mailbox.
+Live, historical and recorded views use the same selected-prefix projection.
+Evidence: `retry_inspection_agrees_in_steps_batch_and_every_recorded_prefix`
+and the browser regression `Retry keeps held attempts inspectable…`; execution
+status is explicit in [C4](../architecture/retry-c4-inspection.md).
 
 The page has a compact transport row, a timeline row, a graph canvas and
 Envelope / Mailbox / Definition / Instances / History / Assertion / Compare tabs.
 Tabs wrap without overlapping their panel. Instances includes
-exchanges, injection history and the public CostReport. The canvas pans/zooms;
+exchanges and injection history. The canvas pans/zooms;
 a splitter resizes the inspector. Initial fit uses the available space.
 Zoom percentages are relative to Fit graph (100%), not an absolute SVG scale.
 Toolbar zoom anchors at the canvas centre; wheel zoom anchors at the pointer.
@@ -191,8 +209,10 @@ as `graph_version` do not split across lines at the default inspector width.
 Graph text stays at interface text size. Automatic fit has a readability floor;
 larger drawings remain pannable instead of shrinking their boxes below the space
 reserved for text. Separate vertical scope bands reuse horizontal rank columns.
-Node sizes reserve title and instance-badge space before admission; opening an
-instance does not move the graph. Theme follows the system.
+Node sizes reserve title, the complete Contract/Extension subtitle, and
+instance-badge space before admission; opening an instance does not move the
+graph. The layout and SVG renderer use the same subtitle, so `HttpClient · + Retry`
+does not escape into a port label or pipe. Theme follows the system.
 
 Ports slide and reorder to reduce crossings. Smooth cubic paths have horizontal
 port tangents; deterministic lane/label placement separates overlapping paths.
@@ -230,10 +250,10 @@ keep their field-level redaction. The webhook showcase regression inspects
 every retained transition, including the mailbox before its first typed
 Operator, and refuses any visible email or physical credential.
 The browser test `the webhook gallery remains classified in LIVE, HISTORY
-and REPLAY with exact costs` covers all six flagship scenarios with a synthetic
+and REPLAY without a measurement report` covers all six flagship scenarios with a synthetic
 deployment profile, including the first admission, history and paused replay.
 The browser receives no raw email or physical bearer through the snapshot;
-the public cost report retains the exact nominal and HTTP-500 amounts.
+the snapshot and page contain no measurement report.
 
 Committed DATA may be scalar or structured. A tree separates technical
 `kind`/`materialized` metadata from `content`. Encoded, unmaterialized DATA
@@ -243,8 +263,12 @@ contains the exact sys/app/ext zones after admission.
 Resolved policy is consulted **before** serialization and DOM construction:
 classified sensitive/personal paths are redacted, with no reveal control.
 Raw secret payloads remain impossible on the admitted execution path. State
-uses the same policy boundary. No regex masking, string-built HTML or second
-accounting fold: CostReport comes from its existing public journal query.
+uses the same policy boundary. No regex masking or string-built HTML is used.
+D-2026-09-16-7 removes the CostReport pane and snapshot field. Original
+measurement-bearing DATA remains inspectable under the same policy; no UI
+aggregate has been decided. `view::tests::snapshots_do_not_compute_a_measurement_report`
+checks the absence of a report without changing journal facts. The flagship
+browser regression checks the same absence in LIVE, HISTORY and REPLAY.
 
 Scenario source is a physical compiler side table, not a reconstruction from
 values. Until source-level redaction exists, a program with classified ports,
@@ -349,6 +373,8 @@ Every item has a browser or projection regression; browser tests are in
 | Assertion diff, expect-nothing offender and redaction | `failed expect shows…`; `failure_explanation_uses_the_exact_assertion_window_and_field`; `classified_predicates_and_assertion_values_are_not_explanation_channels` |
 | Aligned comparisons, separate read-only sessions | `comparison aligns two keyed Loop instances…` |
 | Resident Process gateway, no child in simulation, correct scripted reply counts in LIVE/HISTORY/REPLAY | `the resident gateway explains independent Process Sessions…`; `resident_gateway_steps_deliver_opening_before_frames_like_the_batch_lab` compares the complete batch/step trace |
+| Typed Responses values remain inspectable without the deployment bearer or a measurement report | `the Responses adapter preserves typed evidence…`; `responses_debugger_projects_each_transition_without_materializing_the_bearer` covers every scenario prefix |
+| Complete Contract/Extension subtitles fit their node before and after admission | `Connector subtitles and Extension labels fit…`; `the flagship keeps readable graph text…` checks real SVG labels and pipes |
 | Individually inspectable advance transactions, original App output, folded history cells | `an authored advance retains each transaction…`; Rust `advancing_time_keeps_each_ready_transaction_individually_inspectable` compares the complete batch/step result |
 | Admission keys from retained routes, including a misleading `tenant` field | `injection history names the retained routing key…` |
 | Toolbar zoom keeps the canvas centre fixed, Fit is 100%, splitter remains usable | `the complete tour stays inspectable by mouse and keyboard` |

@@ -13,6 +13,13 @@ This directory defines the language and runtime contracts that an
 implementation of Rastok must honor. The documents are organized by
 semantic ownership rather than by release layer.
 
+[`annotations.md`](annotations.md) records the executable `@struct` model,
+protected standard bindings and generic two-field `@measure(id, unit)`.
+Policy, privacy and retained measurement meanings live in
+[`observability.md`](observability.md). The common v19/recording-v3 migration
+and its verification are tracked in the
+[qualification ledger](../architecture/retry-c4-qualification.md).
+
 ## Documentation rules
 
 1. **One home per decision.** A normative rule lives in exactly one
@@ -68,7 +75,7 @@ labelled historical derivations).
 |---|---|
 | [types.md](types.md) | logical payload/value tree, inference boundary, parametric port types, schema adapters, classification boundary |
 | [schema-projections.md](schema-projections.md) | lossless supported JSON Schema, Avro and Arrow mappings plus path-specific refusal vocabulary |
-| [observability.md](observability.md) | schema annotations, secret handling, typed record observations, OpenTelemetry projection and exact cost reports |
+| [observability.md](observability.md) | schema annotations, secret handling, individual measurement retention and policy-aware observation/export; reports deferred |
 | [expressions.md](expressions.md) | Rastok expression contract, CEL-compatible core, `IDENT!` tagged frontends, JSON values, narrowing |
 | [grammar.md](grammar.md) | host syntax, keywords, LL(1) productions, expression/frontend positions and delimitation, simulation grammar |
 | [envelope.md](envelope.md) | envelope structure, `meta.sys`, identity framing, storage and wire form, provenance |

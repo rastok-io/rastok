@@ -384,9 +384,12 @@ impl<'plan> HttpClient<'plan> {
                                     &h2_pool,
                                 )
                                 .await;
-                                let Some((completion, bytes)) =
-                                    completion_for(result, &work.value().request)
-                                else {
+                                let Some((completion, bytes)) = completion_for(
+                                    result,
+                                    &work.value().request,
+                                    work.value().binding.response_type.as_ref(),
+                                    work.value().binding.json_profile,
+                                ) else {
                                     return;
                                 };
                                 // Work bytes stay charged for the whole network
@@ -665,7 +668,12 @@ async fn execute_call(
     CallResult::Exit(last)
 }
 
-fn completion_for(result: CallResult, request: &HttpRequest) -> Option<(Completion, usize)> {
+fn completion_for(
+    result: CallResult,
+    request: &HttpRequest,
+    response_type: Option<&crate::datatype::DataType>,
+    json_profile: rastok_core::json::HydrationProfile,
+) -> Option<(Completion, usize)> {
     match result {
         CallResult::Cancelled => None,
         CallResult::Exit(exit) => Some((Completion::http_client_exit(exit), 0)),
@@ -683,7 +691,18 @@ fn completion_for(result: CallResult, request: &HttpRequest) -> Option<(Completi
                     0,
                 ));
             };
-            let Some(data) = decode_body(&request.codec, body) else {
+            let decoded = decode_body(&request.codec, body).and_then(|data| {
+                let Some(ty) = response_type else {
+                    return Some(data);
+                };
+                let Data::Materialized(value) = data else {
+                    return None;
+                };
+                rastok_core::json::hydrate_with_profile(ty, value, json_profile)
+                    .ok()
+                    .map(Data::materialized)
+            });
+            let Some(data) = decoded else {
                 return Some((
                     Completion::http_client_exit(HttpClientExit::DecodeFailed),
                     0,
@@ -1303,6 +1322,8 @@ pub(super) async fn probe_http3_server(
         binding: HttpClientPlanBinding {
             max_body: 1024 * 1024,
             versions: vec![HttpVersion::Http3],
+            response_type: None,
+            json_profile: rastok_core::json::HydrationProfile::Strict,
         },
         tls: TlsMaterial {
             ca: Some(ca.to_vec()),
@@ -1686,6 +1707,8 @@ mod tests {
                 binding: HttpClientPlanBinding {
                     max_body: 1024,
                     versions: vec![version],
+                    response_type: None,
+                    json_profile: rastok_core::json::HydrationProfile::Strict,
                 },
                 tls: TlsMaterial {
                     ca: None,
@@ -1810,6 +1833,8 @@ graph bounded_request : App {
                         body: body.to_vec(),
                     },
                     &request,
+                    None,
+                    rastok_core::json::HydrationProfile::Strict,
                 )
                 .expect("a retained response")
                 .0;
@@ -1841,6 +1866,8 @@ graph bounded_request : App {
                         body: b"same-value".to_vec(),
                     },
                     &request,
+                    None,
+                    rastok_core::json::HydrationProfile::Strict,
                 )
                 .expect("a usable response produces one completion")
                 .0
@@ -1883,6 +1910,8 @@ graph bounded_request : App {
                     body: b"same-value".to_vec(),
                 },
                 &request,
+                None,
+                rastok_core::json::HydrationProfile::Strict,
             )
             .expect("an invalid typed projection does not discard the response")
             .0;
@@ -1890,6 +1919,277 @@ graph bounded_request : App {
             assert_eq!(outputs.len(), 2);
             assert_eq!(outputs[0].ext.get("content_type"), None);
             assert!(outputs[0].ext.contains_key("http_headers"));
+        }
+    }
+
+    #[test]
+    fn typed_json_response_is_hydrated_before_a_completion_exists() {
+        use crate::datatype::{DataType, DecimalType, StructType, TypeField};
+        let schema = DataType::Struct(
+            StructType::new(vec![
+                TypeField::new("cost", DataType::Decimal(DecimalType::new(38, 18).unwrap())),
+                TypeField::new(
+                    "usage",
+                    DataType::Struct(
+                        StructType::new(vec![TypeField::new("tokens", DataType::UINT)]).unwrap(),
+                    ),
+                ),
+            ])
+            .unwrap(),
+        );
+        let mut request = request(String::from("https://example.test/model"), b"{}");
+        request.codec = String::from("json");
+        for status in [200, 500] {
+            for (body, valid) in [
+                (r#"{"cost":0.0042,"usage":{"tokens":120}}"#, true),
+                (
+                    r#"{"cost":0.0042,"usage":{"tokens":"secret-not-a-number"}}"#,
+                    false,
+                ),
+                (r#"{"cost":0.0042,"usage":{}}"#, false),
+                (
+                    r#"{"cost":0.0042,"usage":{"tokens":120},"new":true}"#,
+                    false,
+                ),
+                (
+                    r#"{"cost":0.0042,"usage":{"tokens":120,"tokens":121}}"#,
+                    false,
+                ),
+                (r#"{"cost":0.0042,"usage":{"tokens":120}} trailing"#, false),
+            ] {
+                let (completion, _) = completion_for(
+                    CallResult::Response {
+                        status,
+                        version: HttpVersion::Http1,
+                        headers: BTreeMap::new(),
+                        body: body.as_bytes().to_vec(),
+                    },
+                    &request,
+                    Some(&schema),
+                    rastok_core::json::HydrationProfile::Strict,
+                )
+                .unwrap();
+                let outputs = completion.into_outputs();
+                let terminal = outputs.last().unwrap().data.materialized_value().unwrap();
+                let Value::TaggedUnion(terminal) = terminal else {
+                    panic!("typed exit")
+                };
+                if valid {
+                    assert_eq!(outputs.len(), 2);
+                    assert_eq!(
+                        terminal.case,
+                        if status == 500 {
+                            "ServerError"
+                        } else {
+                            "Completed"
+                        }
+                    );
+                    let data = outputs[0].data.materialized_value().unwrap();
+                    assert!(schema.accepts(data));
+                    let Value::Struct(fields) = data else {
+                        panic!("hydrated struct")
+                    };
+                    assert_eq!(
+                        fields[0].1,
+                        Value::Decimal {
+                            unscaled: 4_200_000_000_000_000,
+                            scale: 18
+                        }
+                    );
+                } else {
+                    assert_eq!(outputs.len(), 1, "no partial response on {body}");
+                    assert_eq!(terminal.case, "DecodeFailed");
+                    assert!(!format!("{outputs:?}").contains("secret-not-a-number"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn typed_json_binding_uses_the_plan_without_changing_the_request_descriptor() {
+        let source = r#"
+graph app : App {
+  connector model : HttpClient {
+    url = "https://example.test/model"; codec = json
+    behavior = deterministic; timeout = duration("1s")
+    output out: struct { count: uint }
+  }
+  in -> model -> out
+  model.exit -> nothing
+}
+"#;
+        let catalogue = crate::contract::ContractCatalog::try_m0().unwrap();
+        let typed = crate::compiler::compile(&[source], &catalogue).unwrap();
+        let projected = crate::compiler::compile(
+            &[&source.replace("codec = json", "codec = json; json_profile = projected")],
+            &catalogue,
+        )
+        .unwrap();
+        assert_ne!(typed.hash, projected.hash);
+        let plain = crate::compiler::compile(
+            &[&source.replace("output out: struct { count: uint }", "")],
+            &catalogue,
+        )
+        .unwrap();
+        let path = crate::node::Path::new(["model"]).unwrap();
+        let boot = crate::deployment::BootBindings::empty();
+        let typed = HttpClientRequestBindings::try_bind_with_boot(
+            &typed.plan,
+            std::slice::from_ref(&path),
+            &boot,
+        )
+        .unwrap();
+        let plain = HttpClientRequestBindings::try_bind_with_boot(
+            &plain.plan,
+            std::slice::from_ref(&path),
+            &boot,
+        )
+        .unwrap();
+        let projected = HttpClientRequestBindings::try_bind_with_boot(
+            &projected.plan,
+            std::slice::from_ref(&path),
+            &boot,
+        )
+        .unwrap();
+        assert_eq!(
+            projected.plan_binding(&path).unwrap().json_profile,
+            rastok_core::json::HydrationProfile::Projected
+        );
+        assert_eq!(
+            typed.plan_binding(&path).unwrap().json_profile,
+            rastok_core::json::HydrationProfile::Strict
+        );
+        let ty = typed.plan_binding(&path).unwrap().response_type.unwrap();
+        assert!(matches!(ty, crate::datatype::DataType::Struct(_)));
+        assert!(plain.plan_binding(&path).unwrap().response_type.is_none());
+        let request = Data::materialized(Value::Map(BTreeMap::new()));
+        assert_eq!(
+            typed.prepare(&path, &request, &BTreeMap::new()).unwrap(),
+            plain.prepare(&path, &request, &BTreeMap::new()).unwrap()
+        );
+        assert_eq!(
+            projected
+                .prepare(&path, &request, &BTreeMap::new())
+                .unwrap(),
+            typed.prepare(&path, &request, &BTreeMap::new()).unwrap()
+        );
+    }
+
+    #[test]
+    fn projected_responses_validate_the_entire_body_before_retaining_typed_samples() {
+        let source = r#"
+type JsonObject = map<text, variant>
+type Usage = struct { input_tokens: uint, output_tokens: uint, total_tokens: uint, details: JsonObject? }
+type Response = struct { id: text, object: enum { response }, output: array<variant>, usage: Usage?, error: JsonObject? }
+graph app : App {
+  connector model : HttpClient {
+    url = "https://example.test/model"; codec = json; json_profile = projected
+    behavior = probabilistic; timeout = duration("1s")
+    output out: Response
+  }
+  in -> model -> out
+  model.exit -> nothing
+}
+"#;
+        let catalogue = crate::contract::ContractCatalog::try_m0().unwrap();
+        let compilation = crate::compiler::compile(&[source], &catalogue).unwrap();
+        let path = crate::node::Path::new(["model"]).unwrap();
+        let bindings = HttpClientRequestBindings::try_bind_with_boot(
+            &compilation.plan,
+            std::slice::from_ref(&path),
+            &crate::deployment::BootBindings::empty(),
+        )
+        .unwrap();
+        let binding = bindings.plan_binding(&path).unwrap();
+        let schema = binding.response_type.as_ref().unwrap();
+        let mut request = request(String::from("https://example.test/model"), b"{}");
+        request.codec = String::from("json");
+        let prefix =
+            r#""id":"resp_fixture","object":"response","output":[{"type":"message","content":[]}]"#;
+        for status in [200, 500] {
+            for (members, valid) in [
+                ("", true),
+                (r#", "usage":null"#, true),
+                (
+                    r#", "extra":"DROPPED", "usage":{"input_tokens":12,"output_tokens":4,"total_tokens":16,"added":true}"#,
+                    true,
+                ),
+                (
+                    r#", "usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0,"details":{"cached_tokens":0}}"#,
+                    true,
+                ),
+                (r#", "usage":{"input_tokens":12,"output_tokens":4}"#, false),
+                (
+                    r#", "usage":{"input_tokens":12,"output_tokens":"NOT-A-NUMBER","total_tokens":16}"#,
+                    false,
+                ),
+                (
+                    r#", "usage":{"input_tokens":-1,"output_tokens":4,"total_tokens":3}"#,
+                    false,
+                ),
+                (
+                    r#", "usage":{"input_tokens":1.5,"output_tokens":4,"total_tokens":5}"#,
+                    false,
+                ),
+                (r#", "usage":true"#, false),
+                (r#", "extra":{"duplicate":1,"duplicate":2}"#, false),
+                (r#", "extra":1e99999"#, false),
+                (r#", "extra": ]"#, false),
+            ] {
+                let body = format!("{{{prefix}{members}}}");
+                let (completion, _) = completion_for(
+                    CallResult::Response {
+                        status,
+                        version: HttpVersion::Http1,
+                        headers: BTreeMap::new(),
+                        body: body.into_bytes(),
+                    },
+                    &request,
+                    Some(schema),
+                    binding.json_profile,
+                )
+                .unwrap();
+                let outputs = completion.into_outputs();
+                let Value::TaggedUnion(terminal) =
+                    outputs.last().unwrap().data.materialized_value().unwrap()
+                else {
+                    panic!("exit")
+                };
+                assert_eq!(
+                    terminal.case,
+                    if !valid {
+                        "DecodeFailed"
+                    } else if status == 500 {
+                        "ServerError"
+                    } else {
+                        "Completed"
+                    },
+                    "{members}"
+                );
+                assert_eq!(outputs.len(), if valid { 2 } else { 1 }, "no partial out");
+                if valid {
+                    assert!(schema.accepts(outputs[0].data.materialized_value().unwrap()));
+                }
+                let retained = format!("{outputs:?}");
+                assert!(!retained.contains("DROPPED") && !retained.contains("NOT-A-NUMBER"));
+            }
+            let (completion, _) = completion_for(
+                CallResult::Response {
+                    status,
+                    version: HttpVersion::Http1,
+                    headers: BTreeMap::new(),
+                    body: br#"{"error":{"message":"not a Response object"}}"#.to_vec(),
+                },
+                &request,
+                Some(schema),
+                binding.json_profile,
+            )
+            .unwrap();
+            let outputs = completion.into_outputs();
+            assert_eq!(outputs.len(), 1);
+            assert!(
+                matches!(outputs[0].data.materialized_value(), Some(Value::TaggedUnion(exit)) if exit.case == "DecodeFailed")
+            );
         }
     }
 

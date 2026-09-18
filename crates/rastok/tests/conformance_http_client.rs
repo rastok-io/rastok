@@ -127,6 +127,12 @@ fn serve(mut stream: TcpStream) {
         "/large" => (200, 0, "text/plain", b"too-large"),
         "/bad-json" => (200, 0, "application/json", b"not-json"),
         "/server-error" => (503, 0, "text/plain", b"temporarily-unavailable"),
+        "/projected-json" => (
+            503,
+            0,
+            "application/json",
+            br#"{"usage":{"tokens":12,"extra":true},"extra":"OMITTED-WIRE-DATA"}"#,
+        ),
         "/first" => (200, 40, "text/plain", b"first-result"),
         "/second" => (200, 1, "text/plain", b"second-result"),
         "/mute" => {
@@ -466,4 +472,101 @@ fn http_client_passes_the_connector_neutral_call_battery() {
             "TimeoutExpired",
         ],
     );
+}
+
+#[test]
+fn physical_projected_attempts_keep_samples_before_retry_holds_or_publishes() {
+    use rastok::accounting::accounting_observations;
+    use rastok::journal::Record;
+    use rastok::journal::retry_protocol::Fact;
+    use rastok::recording::Recording;
+    let server = LoopbackServer::start();
+    // Only this inert local GET is declared idempotent, not model inference.
+    let source = format!(
+        r#"
+graph app : App {{
+  connector client : HttpClient + Retry {{
+    url = "{}"; method = "GET"; codec = json; json_profile = projected
+    output out: struct {{ usage: struct {{ tokens: uint @measure(id = tokens, unit = "token") }}? }}
+    timeout = duration("1s"); versions = ["http/1.1"]
+    idempotent = true; behavior = deterministic
+    Retry.attempts = 2; Retry.on = [ServerError]
+  }}
+  in -> client -> out
+  client.exit -> nothing
+}}
+"#,
+        server.url("/projected-json")
+    );
+    let compilation =
+        rastok::compiler::compile(&[&source], &ContractCatalog::try_m0().expect("catalogue"))
+            .expect("projected Retry");
+    let mut world = RuntimeBindings::try_new(&compilation.plan, &registry()).expect("HTTP binder");
+    let version = GraphVersion(1);
+    let mut journal = MemJournal::new(version);
+    let mut vm = Vm::boot_program(&compilation.plan, compilation.hash, version, 0, None);
+    vm.inject(
+        &mut journal,
+        rastok::boundary::InboundSubmission {
+            provenance: rastok::boundary::InboundEnvelopeProvenance::single(
+                node::Path::new(["wire-test"]).expect("provenance"),
+            ),
+            port: node::Port::new("in").expect("port"),
+            draft: rastok::boundary::Draft {
+                data: Data::materialized(Value::Map(BTreeMap::new())),
+                ext: Namespace::new(),
+            },
+            sequence: rastok::boundary::SubmissionSequence::Next,
+        },
+    )
+    .expect("admission");
+    drive(&mut vm, &mut journal, &mut world);
+    let samples = accounting_observations(&compilation.plan, journal.records(), None)
+        .expect("original samples");
+    assert_eq!(
+        samples.len(),
+        2,
+        "Held and Published each have one original sample"
+    );
+    assert_ne!(samples[0].envelope_id(), samples[1].envelope_id());
+    assert!(samples.iter().all(|sample| sample.measures().len() == 1
+        && sample.measures()[0].quantity().to_string() == "12"
+        && sample.measures()[0].unit() == "token"));
+    assert_eq!(
+        vm.outputs().len(),
+        1,
+        "only the final response reaches the graph"
+    );
+    let dispositions: Vec<_> = journal
+        .records()
+        .iter()
+        .filter_map(|record| match record {
+            Record::Transaction(tx) => tx.retry_record.as_deref(),
+            _ => None,
+        })
+        .flat_map(|packet| &packet.facts)
+        .filter_map(|fact| match fact {
+            Fact::Held(_) => Some("held"),
+            Fact::Published(_) => Some("published"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(dispositions, ["held", "published"]);
+    assert!(!format!("{:?}", journal.records()).contains("OMITTED-WIRE-DATA"));
+    let recording =
+        Recording::capture(&compilation, &journal, vm.now()).expect("diagnostic recording");
+    let decoded =
+        Recording::decode(&recording.encode().expect("encode")).expect("independent decode");
+    assert_eq!(decoded.records(), journal.records());
+    for through in 0..=journal.records().len() {
+        let (prefix, _) = decoded
+            .inspect(through)
+            .expect("every prefix recovers without Driver calls");
+        assert_eq!(
+            accounting_observations(decoded.plan(), prefix.records(), None)
+                .expect("recovered samples"),
+            accounting_observations(&compilation.plan, &journal.records()[..through], None)
+                .expect("original samples")
+        );
+    }
 }

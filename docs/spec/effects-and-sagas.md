@@ -1,52 +1,33 @@
 # Effects and the Saga boundary
 
-> **Status (2026-09-05): effect classification is normative; Saga execution
-> is a named future gate.** D-2026-09-05-1 removes Connector handlers and the
-> former executable-looking `on compensate` surface. No v16 program may
-> claim Saga semantics until the independent Saga decision closes every gate
-> in §5.
+> **Current v19 model — D-2026-09-14-4 and D-2026-09-15-1.** Ordinary
+> Connectors have no global `effect` classification. Retry uses a plan-owned
+> idempotence guarantee; compensation and irreversibility belong to the future
+> Saga step contract. `Intent.effect` is removed, with no duplicate
+> `Intent.idempotent`. Saga remains a named, non-executable Extension.
+> The [common qualification](../architecture/retry-c4-qualification.md) records
+> the cutover; no Saga tag or execution is introduced by that work.
 
-> **Approved next refactor (2026-09-14):**
-> [D-2026-09-14-4](decisions.md#d-2026-09-14-4--separate-loop-retry-and-saga-over-one-recurrence-engine)
-> removes the global Connector `effect` requirement at cutover. An ordinary
-> Call needs no Saga classification; operation idempotence governs Retry
-> safety, while compensation and irreversibility belong to the future Saga
-> step contract. The classification and gates below describe the pre-cutover
-> implementation, not the approved target. The
-> [refactor ledger](../architecture/retry-extension-refactor.md) tracks their
-> replacement; Saga execution remains unimplemented.
-> [D-2026-09-15-1](decisions.md#d-2026-09-15-1--keep-idempotence-in-the-original-validated-plan)
-> fixes the target guarantee in the original validated plan/Contract:
-> `Intent.effect` is removed without a duplicated `Intent.idempotent`.
+This document owns the distinction between operation repetition and future
+compensation. Loop's finitude contract lives in [loop.md](loop.md); the exact
+Retry protocol lives in the [approved contract](../architecture/retry-extension-refactor.md).
 
-This document owns the static classification of external effects and the
-minimal direction reserved for the future Saga Extension. Loop repetition
-safety is specified in [loop.md](loop.md).
-
-## 1. Effects live on Connectors
+## 1. Effects occur at Connectors; guarantees live in the plan
 
 Operators compute and mutate only journaled semantic state. Graphs describe
-scope and topology. Only Connectors communicate with external systems, so the
-`effect` axis belongs to the Connector's resolved Contract profile.
+scope and topology. Only Connectors communicate with external systems, but
+performing an ordinary Call does not require a Saga classification.
 
-```text
-Effect = none | idempotent | compensable | irreversible
-```
+`behavior = deterministic | probabilistic` remains the determinism axis.
+`idempotent = true` separately declares that repeating the same prepared
+operation has the same external meaning under its Contract. Absent or false
+means no guarantee, not proven impurity. The checker cannot verify a remote
+partner's truthfulness; an idempotency key alone does not supply the guarantee.
 
-| Effect | Forward repetition | Inverse operation | Meaning |
-|---|---|---|---|
-| `none` | safe | none | no external side effect |
-| `idempotent` | safe under the Contract | unnecessary | repeated operation has the same external meaning |
-| `compensable` | not implied safe | required by future Saga contract | a distinct inverse operation can repair the forward effect |
-| `irreversible` | unsafe unless the partner deduplicates the same operation identity | impossible | point of no return |
-
-The label describes semantics, not an HTTP verb, transport, or implementation
-technique. A Contract may fix it for a profile or require the declaration to
-choose it. Missing required classification fails closed.
-
-`behavior = deterministic | probabilistic` remains a separate Connector
-attribute. Determinism says whether identical admitted facts determine the
-same logical outcome; effect says what repeating the external operation does.
+The exact Contract decides whether idempotence is author-declared, fixed or
+not applicable. Session direction comes from Contract roles/opening facts,
+never an `effect = none` sentinel. The physical Driver cannot change either
+the guarantee or that opening role at runtime.
 
 ## 2. Journal-before-effect
 
@@ -66,63 +47,47 @@ Open effects whose outcome cannot be proved after recovery close loudly as
 `OutcomeUnknown`. Delivery semantics, idempotency-key stability, and
 close-once rules live in [delivery-semantics.md](delivery-semantics.md).
 
-## 3. Static companion rules
+## 3. Repetition and compensation are different promises
 
-### 3.1 Idempotent
+For a repeated Call, the retained operation pins request bytes, evaluated
+settings and any partner idempotency key. Retry does not recompute them at
+each attempt. Recovery validates them against the original plan and operation,
+not today's source or a guarantee copied into an Intent.
 
-No extra syntax is universally required. The Connector's Contract must state what
-makes repetition idempotent. If that depends on an operation key, the key is
-part of the prepared request seal and recovery must reuse byte-identical
-material.
+Compensability does not imply safe forward repetition. An inverse operation
+is a distinct Call with its own identity and, if retried, its own guarantee.
+Reusing the forward idempotency key may cause a partner to deduplicate an
+inverse into the forward operation. These are constraints for the future Saga
+decision, not a currently executable compensation block.
 
-### 3.2 Irreversible
+There is no Connector DSL handler. `on compensate` is removed, not an alias;
+a future compensation contract must preserve the no-Connector-code rule.
 
-An irreversible outbound operation requires a stable
-`idempotency_key` whenever its profile can be retried or recovered. A key
-which changes by Loop iteration does not make an ambiguous prior attempt safe:
-it names a new business operation.
+## 4. Loop and Retry interaction
 
-### 3.3 Compensable
-
-`compensable` does not authorize forward repetition. In particular,
-Loop Next/Again after `outcome_unknown` or `after_effect` is rejected;
-only `effect = none | idempotent` is repeat-safe there.
-
-The compensation itself is a different external operation and therefore needs
-its own stable identity. Reusing the forward idempotency key may cause a
-partner to deduplicate the inverse into the forward operation. The future
-Contract compensation block must make that distinction explicit.
-
-There is no Connector DSL handler. These historical forms are rejected with a
-migration diagnostic:
-
-```rastok
-on compensate { ... }
-connector x : SomeContract { on in { ... } }
-```
-
-A compensable Connector's Contract will eventually contribute a versioned
-`compensate = { ... }` contract understood by its core transition and Driver
-binding. Exact syntax and fields are not admitted yet.
-
-## 4. Loop interaction
-
-Every terminal case of a finite outbound Call profile is classified:
+Every terminal case of a finite outbound Call retains its Contract visibility:
 
 ```text
 before_effect | outcome_unknown | after_effect
 ```
 
-Recurrence after `before_effect` is allowed for every effect class because
-the contract proves nothing became externally visible. Recurrence after
-`outcome_unknown` or `after_effect` requires `none` or `idempotent`.
-`compensable` and `irreversible` refuse with `E-LOOP-EFFECT`.
+A Retry policy may select BeforeEffect cases without idempotence. Selected
+OutcomeUnknown/AfterEffect cases require `idempotent = true`, otherwise
+`E-RETRY-EFFECT`. All attempts stay journaled; only the final attempt is
+delivered. Exhaustion publishes the last failure unchanged.
 
-This is checked per productive terminal case, including a conservative join
-of any frame facts that can select a Loop command. A Driver cannot downgrade
-the class at runtime.
+Loop instead executes authored state progression and proves finitude.
+`Loop.again` that may repeat a visible Call without the guarantee produces
+the advisory `W-LOOP-REPEAT`, including successful sibling Calls. A wholly
+BeforeEffect path does not warn; `Loop.next` is not covered by this warning.
+This does not grant safe repetition or weaken Retry's hard gate.
 
-## 5. Saga Extension — reserved direction, not v16 execution
+A Loop application may contain Retry operations. Its obligations stay open
+through their backoff and final publication; Loop fuel counts the application,
+not every internal Call attempt. Reverse composition and whole-Graph Retry
+are not admitted profiles.
+
+## 5. Saga Extension — reserved direction, outside M1
 
 Saga is expected to be a temporal Extension on a Graph. The retained direction
 is:
@@ -187,20 +152,20 @@ and the no-Connector-code rule.
 
 | Diagnostic | Meaning |
 |---|---|
-| `E-EFFECT-MISSING` | a Connector's Contract profile requires an explicit effect and none was supplied |
-| `E-IDEMPOTENCY-KEY` | a repeatable/recoverable irreversible operation lacks stable identity |
-| `E-LOOP-EFFECT` | recurrence could repeat an unsafe visible effect |
+| `E-CONTRACT-ATTR` | the removed global `effect` attribute is not an alias for idempotence |
+| `E-RETRY-EFFECT` | a Retry policy selects an ambiguous/visible terminal without the guarantee |
+| `W-LOOP-REPEAT` | authored Again may repeat a visible Call without the guarantee |
 | `E-CHECK-DEFERRED` | Saga or compensation syntax is recognized but not executable |
 
-The precise existing diagnostic registry remains authoritative until R3
-allocates or consolidates codes.
+[diagnostics.md](diagnostics.md) owns the diagnostic registry. The former
+`E-EFFECT-MISSING` and `E-LOOP-EFFECT` are not current admission rules.
 
 ## 8. Related documents
 
 - [extensions.md](extensions.md) — Extension ownership and admission.
-- [loop.md](loop.md) — finite recurrence and effect-stage checking.
+- [loop.md](loop.md) — finite recurrence and advisory repetition warnings.
 - [delivery-semantics.md](delivery-semantics.md) — OUTBOUND WAL, recovery,
   close-once, and unknown outcomes.
-- [stdlib.md](stdlib.md) — Connector-Contract-specific effect requirements.
+- [stdlib.md](stdlib.md) — exact Contracts, roles and idempotence profiles.
 - [instances.md](instances.md) — lifetime, Closing, and journal-derived
   generations.

@@ -1,9 +1,9 @@
 //! Typed, non-causal facts retained beside the journal.
 //!
-//! These values correlate causal records for reporting and export without
+//! These values correlate causal records for inspection and export without
 //! becoming replay input or causal identity. Hosted exporters may discard a
 //! projection of this stream; the retained stream itself remains available to
-//! deterministic folds such as `CostReport`.
+//! read-only inspection at the selected journal prefix.
 
 use crate::boundary::{CallRef, InboundCallRef, SessionRef, SessionWriteRef};
 use crate::envelope::Id;

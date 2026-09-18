@@ -721,6 +721,16 @@ impl crate::boundary::CompletionGate for PlanGate<'_> {
             // The resolved table is therefore the sole admission authority
             // here too, independently of the concrete Connector family.
             let expected = resolved.ty();
+            if spec.contract.as_str() == crate::connector::HTTP_CLIENT_CONNECTOR_ID
+                && matches!(spec.attribute("codec"), Some(crate::plan::AttrSetting::Word(word)) if word == "json")
+                && output.port.name() == "out"
+                && expected != &crate::datatype::DataType::Variant
+                && !matches!(&output.data, Data::Materialized(_))
+            {
+                return Err(format!(
+                    "`{connector}.out` requires a hydrated JSON value before retention"
+                ));
+            }
             if output.port.name() == "exit" && !matches!(&output.data, Data::Materialized(_)) {
                 return Err(format!(
                     "`{connector}.exit` must carry a materialized terminal union"
@@ -1826,7 +1836,7 @@ impl<'plan> Vm<'plan> {
                     }
                 })?;
                 let target = self.prepare_target(
-                    journal,
+                    &&*journal,
                     scope,
                     None,
                     source,
@@ -1886,7 +1896,7 @@ impl<'plan> Vm<'plan> {
                     }
                 })?;
                 let target = self.prepare_target(
-                    journal,
+                    &&*journal,
                     scope,
                     None,
                     source,
@@ -1972,7 +1982,7 @@ impl<'plan> Vm<'plan> {
             Vec::new()
         } else {
             self.prepare_routes(
-                journal,
+                &&*journal,
                 &from,
                 // A Session message already owns an installed source instance.
                 // Preserve its ancestor scope: its new external metadata is
@@ -1991,13 +2001,13 @@ impl<'plan> Vm<'plan> {
             Vec::new()
         } else {
             self.prepare_instance_commands(
-                journal,
+                &&*journal,
                 &self.graph_endpoint(&from),
                 source_instance,
                 inbound.envelope(),
             )?
         };
-        self.check_instance_command_room(journal, &commands)?;
+        self.check_instance_command_room(&&*journal, &commands)?;
         if !commands.is_empty() {
             inbound = inbound.with_instance_commands(crate::journal::instance_stop::Packet {
                 produced: commands.clone(),
@@ -2137,10 +2147,10 @@ impl<'plan> Vm<'plan> {
     /// # Errors
     ///
     /// The same transaction or binding-integrity failures as [`Self::step`].
-    pub fn step_with_bindings<B: OutboundConnectorBindings + ?Sized>(
+    pub fn step_with_bindings(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut B,
+        bindings: &mut dyn OutboundConnectorBindings,
     ) -> Result<bool, VmError> {
         self.preflight(journal)?;
         self.synchronize_retry_closures(journal)?;
@@ -2162,10 +2172,11 @@ impl<'plan> Vm<'plan> {
         if self.graph_loops.is_some() && self.open_graph_loop(journal)? {
             return Ok(true);
         }
-        if self.has_loops && self.step_loop_manager(journal)? {
+        let recurrence = self.next_dated_recurrence(journal)?;
+        if self.has_loops && self.step_loop_manager(journal, recurrence)? {
             return Ok(true);
         }
-        if self.step_retry_manager(journal)? {
+        if self.step_retry_manager(journal, recurrence)? {
             return Ok(true);
         }
         let inbound_ready =
@@ -2248,10 +2259,10 @@ impl<'plan> Vm<'plan> {
     // scan made a plan with no joins miss the established relay budget even
     // though its branch was never taken.
     #[inline(never)]
-    fn step_join_mailboxes<B: OutboundConnectorBindings + ?Sized>(
+    fn step_join_mailboxes(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut B,
+        bindings: &mut dyn OutboundConnectorBindings,
     ) -> Result<bool, VmError> {
         let mut after = None;
         while let Some((slot, instance, delivery)) =
@@ -2356,10 +2367,10 @@ impl<'plan> Vm<'plan> {
     /// # Errors
     ///
     /// The first transaction or binding-integrity failure.
-    pub fn drain_with_bindings<B: OutboundConnectorBindings + ?Sized>(
+    pub fn drain_with_bindings(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut B,
+        bindings: &mut dyn OutboundConnectorBindings,
     ) -> Result<(), VmError> {
         while self.step_with_bindings(journal, bindings)? {}
         Ok(())
@@ -2373,10 +2384,10 @@ impl<'plan> Vm<'plan> {
     /// # Errors
     ///
     /// Dispatcher integrity faults propagate.
-    pub fn pump<B: OutboundConnectorBindings + ?Sized>(
+    pub fn pump(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut B,
+        bindings: &mut dyn OutboundConnectorBindings,
     ) -> Result<PumpReport, VmError> {
         self.preflight(journal)?;
         let mut report = core::mem::take(&mut self.buffered_pump);
@@ -2384,10 +2395,10 @@ impl<'plan> Vm<'plan> {
         Ok(report)
     }
 
-    fn poll_outbound_driver<B: OutboundConnectorBindings + ?Sized>(
+    fn poll_outbound_driver(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut B,
+        bindings: &mut dyn OutboundConnectorBindings,
     ) -> Result<PumpReport, VmError> {
         let gate = PlanGate { plan: self.plan };
         let retry = self.retry_manager.as_deref();
@@ -2574,9 +2585,9 @@ impl<'plan> Vm<'plan> {
     /// Re-offers bounded Session actions only from the boundary pump. A
     /// `Pending` result therefore cannot leave the same mailbox head runnable
     /// and spin the deterministic transaction drain.
-    fn retry_session_actions<B: OutboundConnectorBindings + ?Sized>(
+    fn retry_session_actions(
         &mut self,
-        bindings: &mut B,
+        bindings: &mut dyn OutboundConnectorBindings,
     ) -> Result<(), VmError> {
         let openings = self
             .sessions
@@ -2673,9 +2684,9 @@ impl<'plan> Vm<'plan> {
         Ok(())
     }
 
-    fn retry_session_closes<B: OutboundConnectorBindings + ?Sized>(
+    fn retry_session_closes(
         &mut self,
-        bindings: &mut B,
+        bindings: &mut dyn OutboundConnectorBindings,
     ) -> Result<(), VmError> {
         let pending: Vec<SessionRef> = self
             .sessions
@@ -2736,10 +2747,10 @@ impl<'plan> Vm<'plan> {
     /// # Errors
     ///
     /// Journal refusals and faulting steps, as in [`Self::drain`].
-    pub fn advance<B: OutboundConnectorBindings + ?Sized>(
+    pub fn advance(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut B,
+        bindings: &mut dyn OutboundConnectorBindings,
         target: i64,
     ) -> Result<(), VmError> {
         let mut advance = TimeAdvance::new(target);
@@ -2749,15 +2760,18 @@ impl<'plan> Vm<'plan> {
 
     fn peek_due(&self, target: i64) -> Option<((i64, u64), DatedPayload)> {
         self.scheduler.peek_due(target, |payload| {
-            !matches!(payload, DatedPayload::InstanceLifetime { instance, .. } if self.waiting.contains_key(instance))
+            !matches!(payload, DatedPayload::InstanceLifetime { instance, .. }
+                if self.waiting.contains_key(instance)
+                    || self.lifecycle.iter().any(|work|
+                        work.instance == *instance && work.lifecycle == node::Lifecycle::Start))
         })
     }
 
     /// Resolves one expired budget wherever the obligation lives.
-    fn expire<B: OutboundConnectorBindings + ?Sized>(
+    fn expire(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut B,
+        bindings: &mut dyn OutboundConnectorBindings,
         payload: DatedPayload,
     ) -> Result<(), VmError> {
         let (connector, edge, delivery, instance) = match payload {
@@ -2851,6 +2865,25 @@ impl<'plan> Vm<'plan> {
             })
             .map(|(call_ref, _)| *call_ref)
         {
+            // A retained closure can still await its completion transaction.
+            // Its old deadline is inert, including after recovery: neither a
+            // second terminal projection nor another Driver cancel is due.
+            let mut closed = false;
+            journal
+                .visit_records(&mut |record| {
+                    if let crate::journal::Record::Outbound(crate::journal::OutboundRecord::Call(
+                        call,
+                    )) = record
+                        && call.intent.call_ref == call_ref
+                        && call.status != crate::journal::OutboundStatus::Open
+                    {
+                        closed = true;
+                    }
+                })
+                .map_err(VmError::Journal)?;
+            if closed {
+                return Ok(());
+            }
             // Contract projection is pure, but it can still expose a broken
             // binding. Prove it before the close-once mutation so an
             // integrity refusal cannot strand a journaled obligation.
@@ -2986,8 +3019,12 @@ impl<'plan> Vm<'plan> {
                     self.prepare_call_completion(slot, &instance, queued, &mut outcome.record)?;
                     outcome
                 };
-                let prepared =
-                    self.validate_and_prepare_emissions(journal, slot, &instance, &outcome.record)?;
+                let prepared = self.validate_and_prepare_emissions(
+                    &&*journal,
+                    slot,
+                    &instance,
+                    &outcome.record,
+                )?;
                 self.retain_emission_routes(&mut outcome.record, &prepared)?;
                 journal
                     .commit(outcome.record.clone())
@@ -3097,10 +3134,10 @@ impl<'plan> Vm<'plan> {
         Ok(())
     }
 
-    fn expire_session_handshake<B: OutboundConnectorBindings + ?Sized>(
+    fn expire_session_handshake(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut B,
+        bindings: &mut dyn OutboundConnectorBindings,
         slot: Slot,
         instance: InstanceRef,
         edge: &str,
@@ -3323,6 +3360,19 @@ impl<'plan> Vm<'plan> {
     #[must_use]
     pub fn observations(&self) -> &[Observed] {
         &self.observed
+    }
+
+    /// Read-only operations from the accepted journal fold. Inspection borrows
+    /// these states without copying pinned requests or altering scheduling.
+    pub fn retry_operations(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            &crate::journal::retry_protocol::OperationRef,
+            &crate::journal::retry_protocol::Operation,
+        ),
+    > {
+        self.retry_manager.iter().flat_map(|fold| fold.operations())
     }
 
     /// Clones one read-only debugger view without changing scheduler state.
@@ -3946,10 +3996,10 @@ impl<'plan> Vm<'plan> {
         }
     }
 
-    fn expire_closing<B: OutboundConnectorBindings + ?Sized>(
+    fn expire_closing(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut B,
+        bindings: &mut dyn OutboundConnectorBindings,
         reference: &InstanceRef,
         cause: Id,
         deadline: ClosingDeadline,
@@ -4204,7 +4254,7 @@ impl<'plan> Vm<'plan> {
                     )
                     .map_err(VmError::Fault)?;
                 let prepared = self.validate_and_prepare_emissions(
-                    journal,
+                    &&*journal,
                     slot,
                     &work.instance,
                     &outcome.record,
@@ -4265,16 +4315,13 @@ impl<'plan> Vm<'plan> {
                     .take_unchecked(self.plan.plan(), slot, &work.instance);
             }
             self.instances.remove(&work.instance);
-            self.promote_waiting(journal)?;
+            self.promote_waiting(&&*journal)?;
         }
         self.progress_closures();
         Ok(())
     }
 
-    fn promote_waiting(
-        &mut self,
-        journal: &(impl InstanceAdmissions + ?Sized),
-    ) -> Result<(), VmError> {
+    fn promote_waiting(&mut self, journal: &dyn InstanceAdmissions) -> Result<(), VmError> {
         loop {
             let mut ready = Vec::new();
             for (reference, waiting) in &self.waiting {
@@ -4398,7 +4445,12 @@ impl<'plan> Vm<'plan> {
                 &request.delivery,
                 &mut outcome.record,
             )?;
-            self.validate_and_prepare_emissions(journal, slot, &request.instance, &outcome.record)?
+            self.validate_and_prepare_emissions(
+                &&*journal,
+                slot,
+                &request.instance,
+                &outcome.record,
+            )?
         };
         self.retain_emission_routes(&mut outcome.record, &prepared)?;
         let has_loop_context = outcome.record.loop_protocol().is_some();
@@ -4454,7 +4506,7 @@ impl<'plan> Vm<'plan> {
         }
         .map_err(VmError::Fault)?;
         let prepared = self.validate_and_prepare_emissions(
-            journal,
+            &&*journal,
             pending.slot,
             &pending.instance,
             &outcome.record,
@@ -4477,10 +4529,10 @@ impl<'plan> Vm<'plan> {
     /// opening cursor (client) and an optional locally rejected write cursor
     /// are consumed atomically with the typed `exit`; inbound peer openings
     /// are roots and therefore consume neither.
-    fn settle_session_next<B: OutboundConnectorBindings + ?Sized>(
+    fn settle_session_next(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut B,
+        bindings: &mut dyn OutboundConnectorBindings,
         index: usize,
     ) -> Result<(), VmError> {
         let settled = self
@@ -4512,7 +4564,7 @@ impl<'plan> Vm<'plan> {
             )
             .map_err(VmError::Fault)?;
         let prepared = self.validate_and_prepare_emissions(
-            journal,
+            &&*journal,
             session.slot,
             &session.instance,
             &outcome.record,
@@ -4757,7 +4809,7 @@ impl<'plan> Vm<'plan> {
             outcome.record.timers.extend(self.closing_timers(scope));
         }
         let prepared =
-            self.validate_and_prepare_emissions(journal, slot, instance, &outcome.record)?;
+            self.validate_and_prepare_emissions(&&*journal, slot, instance, &outcome.record)?;
         self.retain_emission_routes(&mut outcome.record, &prepared)?;
         // The journal owns the full transaction after commit. Retain only the
         // small delta the in-memory state fold still needs; cloning the whole
@@ -4782,10 +4834,10 @@ impl<'plan> Vm<'plan> {
     /// Routes a Connector delivery by its validated exchange cardinality.
     /// Roles decide direction; the exchange decides whether the retained
     /// obligation is one Call or one long-lived Session.
-    fn fire_connector<B: OutboundConnectorBindings + ?Sized>(
+    fn fire_connector(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut B,
+        bindings: &mut dyn OutboundConnectorBindings,
         slot: Slot,
         instance: &InstanceRef,
         delivery: &Delivery,
@@ -4871,7 +4923,7 @@ impl<'plan> Vm<'plan> {
             outcome.record.timers.extend(self.closing_timers(scope));
         }
         let prepared =
-            self.validate_and_prepare_emissions(journal, slot, instance, &outcome.record)?;
+            self.validate_and_prepare_emissions(&&*journal, slot, instance, &outcome.record)?;
         self.retain_emission_routes(&mut outcome.record, &prepared)?;
         journal
             .commit(outcome.record.clone())
@@ -4924,7 +4976,7 @@ impl<'plan> Vm<'plan> {
             .join_expired(slot, instance, delivery)
             .map_err(VmError::Fault)?;
         let prepared =
-            self.validate_and_prepare_emissions(journal, slot, instance, &outcome.record)?;
+            self.validate_and_prepare_emissions(&&*journal, slot, instance, &outcome.record)?;
         self.retain_emission_routes(&mut outcome.record, &prepared)?;
         journal
             .commit(outcome.record.clone())
@@ -5067,10 +5119,10 @@ impl<'plan> Vm<'plan> {
     /// lineage or their explicit `correlate` expression; client-like
     /// Connectors may open one session and thereafter reuse that sole live
     /// session for their instance.
-    fn progress_session<B: OutboundConnectorBindings + ?Sized>(
+    fn progress_session(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut B,
+        bindings: &mut dyn OutboundConnectorBindings,
         slot: Slot,
         instance: &InstanceRef,
         delivery: &Delivery,
@@ -5207,10 +5259,10 @@ impl<'plan> Vm<'plan> {
             }))
     }
 
-    fn open_session<B: OutboundConnectorBindings + ?Sized>(
+    fn open_session(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut B,
+        bindings: &mut dyn OutboundConnectorBindings,
         slot: Slot,
         instance: &InstanceRef,
         delivery: &Delivery,
@@ -5291,10 +5343,10 @@ impl<'plan> Vm<'plan> {
         }
     }
 
-    fn write_session<B: OutboundConnectorBindings + ?Sized>(
+    fn write_session(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut B,
+        bindings: &mut dyn OutboundConnectorBindings,
         dispatch: SessionDispatch<'_>,
         session_ref: SessionRef,
         settings: &BTreeMap<String, crate::value::Value>,
@@ -5413,7 +5465,7 @@ impl<'plan> Vm<'plan> {
             .connector_completion(slot, instance, delivery, &trigger, completion)
             .map_err(VmError::Fault)?;
         let prepared =
-            self.validate_and_prepare_emissions(journal, slot, instance, &outcome.record)?;
+            self.validate_and_prepare_emissions(&&*journal, slot, instance, &outcome.record)?;
         self.retain_emission_routes(&mut outcome.record, &prepared)?;
         journal.commit(outcome.record).map_err(VmError::Journal)?;
         self.scheduler.mailboxes.pop(slot, instance);
@@ -5437,10 +5489,10 @@ impl<'plan> Vm<'plan> {
     /// driver hears — and the request is held until the call
     /// settles, its mailbox claimed for the whole wait: the worker is
     /// free, the node is not.
-    fn open_call<B: OutboundConnectorBindings + ?Sized>(
+    fn open_call(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut B,
+        bindings: &mut dyn OutboundConnectorBindings,
         slot: Slot,
         instance: &InstanceRef,
         delivery: &Delivery,
@@ -5491,8 +5543,12 @@ impl<'plan> Vm<'plan> {
                     .connector_completion(slot, instance, delivery, &trigger, &completion)
                     .map_err(VmError::Fault)?;
                 self.prepare_call_completion(slot, instance, delivery, &mut outcome.record)?;
-                let prepared =
-                    self.validate_and_prepare_emissions(journal, slot, instance, &outcome.record)?;
+                let prepared = self.validate_and_prepare_emissions(
+                    &&*journal,
+                    slot,
+                    instance,
+                    &outcome.record,
+                )?;
                 self.retain_emission_routes(&mut outcome.record, &prepared)?;
                 journal
                     .commit(outcome.record.clone())
@@ -5589,7 +5645,7 @@ impl<'plan> Vm<'plan> {
     /// another emission on the same bad wiring, so NOTHING commits.
     fn validate_and_prepare_emissions(
         &self,
-        journal: &(impl InstanceAdmissions + ?Sized),
+        journal: &dyn InstanceAdmissions,
         slot: Slot,
         source_instance: &InstanceRef,
         record: &crate::runtime::TransactionRecord,
@@ -5654,7 +5710,7 @@ impl<'plan> Vm<'plan> {
     /// remains a pure candidate until the producer record commits.
     fn prepare_routes(
         &self,
-        journal: &(impl InstanceAdmissions + ?Sized),
+        journal: &dyn InstanceAdmissions,
         from: &EndpointRef,
         source_instance: Option<&InstanceRef>,
         envelope: &Envelope,
@@ -5912,7 +5968,7 @@ impl<'plan> Vm<'plan> {
 
     fn prepare_target(
         &self,
-        journal: &(impl InstanceAdmissions + ?Sized),
+        journal: &dyn InstanceAdmissions,
         scope: OwnerSlot,
         source_instance: Option<&InstanceRef>,
         target: Slot,
@@ -5932,7 +5988,7 @@ impl<'plan> Vm<'plan> {
 
     fn prepare_owner_target(
         &self,
-        journal: &(impl InstanceAdmissions + ?Sized),
+        journal: &dyn InstanceAdmissions,
         scope: OwnerSlot,
         source_instance: Option<&InstanceRef>,
         target_owner: OwnerSlot,
@@ -6049,7 +6105,7 @@ impl<'plan> Vm<'plan> {
 
     fn candidate_owner(
         &self,
-        journal: &(impl InstanceAdmissions + ?Sized),
+        journal: &dyn InstanceAdmissions,
         owner_slot: OwnerSlot,
         parent: Option<&InstanceRef>,
         source: Option<&InstanceRef>,
@@ -6142,12 +6198,7 @@ impl<'plan> Vm<'plan> {
         let selected_key = match owner.instance.key.as_ref() {
             None => None,
             Some(key) => {
-                let mut bindings: BTreeMap<String, crate::expr::EvalValue> = inherited
-                    .iter()
-                    .map(|(name, value)| {
-                        (name.clone(), crate::expr::EvalValue::from(value.clone()))
-                    })
-                    .collect();
+                let mut bindings = crate::expr::value_bindings(&inherited);
                 bindings.insert(
                     String::from("meta"),
                     crate::expr::EvalValue::from(meta_value(envelope.meta())),
@@ -6282,12 +6333,10 @@ impl<'plan> Vm<'plan> {
                     .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                 reason: "an owner reference escaped the validated owner table",
             })?;
-        let local: BTreeMap<&str, usize> = owner
-            .vals
-            .iter()
-            .enumerate()
-            .map(|(index, value)| (value.name.as_str(), index))
-            .collect();
+        let mut local = BTreeMap::new();
+        for (index, value) in owner.vals.iter().enumerate() {
+            local.insert(value.name.as_str(), index);
+        }
         let mut resolved: Vec<Option<crate::value::Value>> = vec![None; owner.vals.len()];
         let mut visiting = vec![false; owner.vals.len()];
         for index in 0..owner.vals.len() {
@@ -6372,12 +6421,7 @@ impl<'plan> Vm<'plan> {
                 });
             }
             (EvaluationSite::Boot | EvaluationSite::Instance, _) => {
-                let mut bindings: BTreeMap<String, crate::expr::EvalValue> = inherited
-                    .iter()
-                    .map(|(name, value)| {
-                        (name.clone(), crate::expr::EvalValue::from(value.clone()))
-                    })
-                    .collect();
+                let mut bindings = crate::expr::value_bindings(inherited);
                 for (dependency, value) in owner.vals.iter().zip(resolved.iter()) {
                     if let Some(value) = value {
                         bindings.insert(
@@ -6431,10 +6475,7 @@ impl<'plan> Vm<'plan> {
         let Some(spec) = self.plan.nodes[slot.index()].connector() else {
             return Ok(BTreeMap::new());
         };
-        let mut bindings: BTreeMap<String, crate::expr::EvalValue> = values
-            .iter()
-            .map(|(name, value)| (name.clone(), crate::expr::EvalValue::from(value.clone())))
-            .collect();
+        let mut bindings = crate::expr::value_bindings(values);
         if let Some(key) = selected_key {
             bindings.insert(
                 String::from("instance.key"),
@@ -6483,10 +6524,7 @@ impl<'plan> Vm<'plan> {
         }) {
             return Ok(settings);
         }
-        let mut bindings: BTreeMap<String, crate::expr::EvalValue> = values
-            .iter()
-            .map(|(name, value)| (name.clone(), crate::expr::EvalValue::from(value.clone())))
-            .collect();
+        let mut bindings = crate::expr::value_bindings(values);
         bindings.insert(
             String::from("meta"),
             crate::expr::EvalValue::from(meta_value(envelope.meta())),

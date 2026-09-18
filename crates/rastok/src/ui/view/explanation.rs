@@ -427,6 +427,27 @@ pub(super) fn history(plan: &ValidatedExecutionPlan, records: &[Record]) -> Hist
                     );
                 }
                 context_valid &= fold.apply_transaction(tx).is_ok();
+                if let Some(packet) = &tx.retry_record {
+                    for envelope in packet.envelopes() {
+                        let id = envelope.meta().sys().id();
+                        envelopes.entry(id).or_insert((envelope, index));
+                        ids.push(id);
+                    }
+                    extra["retry_operations"] = json!(
+                        packet
+                            .context
+                            .iter()
+                            .map(|context| context.operation)
+                            .chain(
+                                packet
+                                    .facts
+                                    .iter()
+                                    .map(crate::journal::retry_protocol::Fact::operation)
+                            )
+                            .map(|reference| reference.id().to_string())
+                            .collect::<BTreeSet<_>>()
+                    );
+                }
                 ids.sort();
                 ids.dedup();
                 extra["envelope_ids"] =

@@ -108,8 +108,9 @@ Nonempty deployment attestations and boot-dependent Connector settings
 (`env()` / `secret()`) also refuse in this slice: a reference-only header and
 offline bindings must be qualified before admitting them. No physical secret
 provider is consulted by the reader. A price-profile capture is consequently
-not yet supported; native observed measures/costs remain journal-derived and
-missing prices remain explicitly unpriced.
+not yet supported. Original typed measurements remain in their journaled
+envelopes; replay does not calculate prices or totals. Missing usage is unknown,
+not zero (D-2026-09-16-7).
 
 Annotations are not automatic personal-data discovery. Unclassified source,
 payloads and literal settings can contain sensitive data. `@sensitive` alone

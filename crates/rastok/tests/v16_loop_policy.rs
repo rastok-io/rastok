@@ -238,7 +238,7 @@ fn accounting_meaning_survives_a_command_copy_but_not_a_calculation() {
     for (next, expected) in [("data", true), ("data + data", false)] {
         let source = format!(
             r#"
-type Tokens = uint @measure(id = gen_ai.usage.input_tokens)
+type Tokens = uint @measure(id = input_tokens, unit = "token")
 graph app : App {{
   input in: Tokens
   output exhausted: union {{ LoopExpired {{ last_state: uint }} }}

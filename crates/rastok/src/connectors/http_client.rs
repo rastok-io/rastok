@@ -64,6 +64,8 @@ pub(crate) struct HttpRequest {
 pub(crate) struct HttpClientPlanBinding {
     pub(crate) max_body: u64,
     pub(crate) versions: Vec<HttpVersion>,
+    pub(crate) response_type: Option<crate::datatype::DataType>,
+    pub(crate) json_profile: rastok_core::json::HydrationProfile,
 }
 
 #[derive(Debug)]
@@ -71,6 +73,8 @@ pub(crate) struct HttpClientRequestBindings {
     pub(crate) specs: BTreeMap<crate::node::Path, crate::plan::ConnectorSpec>,
     boot_environment: BTreeMap<(crate::node::Path, String), Value>,
     boot_secrets: BTreeMap<(crate::node::Path, String), crate::deployment::SecretRef>,
+    #[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
+    response_types: BTreeMap<crate::node::Path, crate::datatype::DataType>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,6 +101,8 @@ impl HttpClientRequestBindings {
         let mut specs = BTreeMap::new();
         let mut boot_environment = BTreeMap::new();
         let mut boot_secrets = BTreeMap::new();
+        #[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
+        let mut response_types = BTreeMap::new();
         for path in nodes {
             let spec = plan
                 .plan()
@@ -117,6 +123,19 @@ impl HttpClientRequestBindings {
                     "the HttpClient binder received `{}` at `{path}`",
                     spec.contract
                 )));
+            }
+            #[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
+            if let Some(ty) = plan
+                .plan()
+                .nodes
+                .iter()
+                .find(|node| &node.path == path)
+                .and_then(|node| node.ports.iter().find(|port| port.port.name() == "out"))
+                .and_then(|port| port.ty.as_ref())
+                .filter(|ty| **ty != crate::datatype::DataType::Variant)
+                && matches!(spec.attribute("codec"), Some(AttrSetting::Word(word)) if word == "json")
+            {
+                response_types.insert(path.clone(), ty.clone());
             }
             for (name, setting) in &spec.attributes {
                 let AttrSetting::Expr { site, expr } = setting else {
@@ -168,6 +187,8 @@ impl HttpClientRequestBindings {
             specs,
             boot_environment,
             boot_secrets,
+            #[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
+            response_types,
         })
     }
 
@@ -311,7 +332,18 @@ impl HttpClientRequestBindings {
                 .collect::<Option<Vec<_>>>()?,
             _ => return None,
         };
-        (!versions.is_empty()).then_some(HttpClientPlanBinding { max_body, versions })
+        (!versions.is_empty()).then_some(HttpClientPlanBinding {
+            max_body,
+            versions,
+            response_type: self.response_types.get(connector).cloned(),
+            json_profile: match spec.attribute("json_profile") {
+                None => rastok_core::json::HydrationProfile::Strict,
+                Some(AttrSetting::Word(word)) if word == "projected" => {
+                    rastok_core::json::HydrationProfile::Projected
+                }
+                Some(_) => return None,
+            },
+        })
     }
 }
 

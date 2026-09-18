@@ -4370,6 +4370,7 @@ struct FlakyJournal {
     refuse_commits: bool,
     refuse_opens: bool,
     refuse_closes: bool,
+    refuse_call: Option<rastok::boundary::CallRef>,
     refuse_close_requests: bool,
     recovery_records: Option<Vec<Record>>,
 }
@@ -4381,6 +4382,7 @@ impl FlakyJournal {
             refuse_commits: false,
             refuse_opens: false,
             refuse_closes: false,
+            refuse_call: None,
             refuse_close_requests: false,
             recovery_records: None,
         }
@@ -4495,7 +4497,7 @@ impl Journal for FlakyJournal {
         closed_at: i64,
         schedule: Option<Box<rastok::journal::timing::TimerSchedule>>,
     ) -> Result<rastok::journal::CloseVerdict, rastok::journal::Error> {
-        if self.refuse_closes {
+        if self.refuse_closes || self.refuse_call.as_ref() == Some(call_ref) {
             return Err(rastok::journal::Error::Storage(String::from("scripted")));
         }
         self.inner
@@ -4997,6 +4999,284 @@ fn graph_recovery_rederives_admission_context_and_quiescence() {
         );
         assert_eq!(vm.inspection(), before);
         assert_eq!(journal.inner.records(), original);
+    }
+}
+
+#[test]
+fn retry_storage_refusals_preserve_batches_and_never_repeat_a_started_effect() {
+    use rastok::compiler::{Unit, check, lower, parser};
+    use rastok::diagnostics::{Bag, SourceId};
+    use rastok::journal::retry_protocol::Fact;
+    use rastok::runtime::vm::TimeAdvance;
+
+    let source = r#"
+graph app : App {
+  input in: text
+  output out: text
+  output errors: text
+  output exit: variant
+  connector call : Process + Retry {
+    command = "cat"; codec = lines; behavior = deterministic; idempotent = true
+    timeout = duration("1s"); Retry.attempts = 2; Retry.on = [TimeoutExpired]
+    Retry.delay = { kind = fixed; after = duration("100ms") }
+  }
+  in -> call -> out
+  call.err -> errors; call.exit -> exit
+}
+"#;
+    let catalog = ContractCatalog::try_m0().unwrap();
+    let mut diagnostics = Bag::new();
+    let id = SourceId::new(0);
+    let parsed = parser::parse(id, source, &catalog, &mut diagnostics);
+    let hir = check::check(
+        &Unit {
+            files: vec![(id, parsed)],
+        },
+        &catalog,
+        &mut diagnostics,
+        None,
+    )
+    .unwrap();
+    assert!(!diagnostics.has_errors(), "{diagnostics:?}");
+    let hash = lower::semantic_hash(&hir);
+    let (raw, _) = lower::lower(&hir).unwrap();
+    let plan = ValidatedExecutionPlan::try_new(raw).unwrap();
+
+    let advance = |vm: &mut Vm<'_>,
+                   journal: &mut FlakyJournal,
+                   world: &mut ClosingWorld,
+                   target: i64,
+                   faulted: bool| {
+        let mut sweep = TimeAdvance::new(target);
+        let mut steps = 0;
+        while !sweep.is_complete() {
+            steps += 1;
+            assert!(steps < 100, "the finite probe must make progress");
+            let records = journal.inner.records().to_vec();
+            let inspection = vm.inspection();
+            let observations = vm.observations().to_vec();
+            let effects = world.started.clone();
+            journal.refuse_commits = faulted;
+            journal.refuse_opens = faulted;
+            let result = sweep.step(vm, journal, world);
+            journal.refuse_commits = false;
+            journal.refuse_opens = false;
+            match result {
+                Ok(_) => {}
+                Err(error) if faulted => {
+                    assert!(
+                        matches!(
+                            error,
+                            VmError::Journal(rastok::journal::Error::Storage(_))
+                                | VmError::Dispatch(rastok::boundary::DispatchError::Journal(
+                                    rastok::journal::Error::Storage(_)
+                                ))
+                        ),
+                        "{error:?}"
+                    );
+                    assert_eq!(journal.inner.records(), records);
+                    assert_eq!(vm.inspection(), inspection);
+                    assert_eq!(vm.observations(), observations);
+                    assert_eq!(world.started, effects);
+                    assert!(sweep.step(vm, journal, world).unwrap());
+                }
+                Err(error) => panic!("unfaulted transition: {error:?}"),
+            }
+        }
+    };
+
+    let mut reference = None;
+    for faulted in [false, true] {
+        let mut journal = FlakyJournal::healthy(GraphVersion(1));
+        let mut vm = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
+        let mut world = ClosingWorld::default();
+        vm.inject(&mut journal, text_submission("same operation"))
+            .unwrap();
+        advance(&mut vm, &mut journal, &mut world, 0, faulted);
+        for (attempt, now) in [(1, 0), (2, 100_000_000)] {
+            advance(&mut vm, &mut journal, &mut world, now, faulted);
+            vm.pump(&mut journal, &mut world).unwrap();
+            assert_eq!(world.started.len(), attempt, "faulted={faulted}, now={now}");
+            world.answers.push(Response {
+                call_ref: *world.started.last().unwrap(),
+                completion: Completion::process(
+                    vec![Data::materialized(Value::Text(format!("stdout {attempt}")))],
+                    vec![Data::materialized(Value::Text(format!("stderr {attempt}")))],
+                    if attempt == 1 {
+                        ProcessExit::TimeoutExpired
+                    } else {
+                        ProcessExit::Exited {
+                            exit_code: 0,
+                            signal: None,
+                        }
+                    },
+                ),
+            });
+            if faulted {
+                let records = journal.inner.records().to_vec();
+                let inspection = vm.inspection();
+                journal.refuse_closes = true;
+                assert!(matches!(
+                    vm.pump(&mut journal, &mut world),
+                    Err(VmError::Dispatch(rastok::boundary::DispatchError::Journal(
+                        rastok::journal::Error::Storage(_)
+                    )))
+                ));
+                assert_eq!(journal.inner.records(), records);
+                assert_eq!(vm.inspection(), inspection);
+                assert_eq!(world.started.len(), attempt);
+                journal.refuse_closes = false;
+            }
+            vm.pump(&mut journal, &mut world).unwrap();
+            advance(&mut vm, &mut journal, &mut world, now, faulted);
+            assert_eq!(vm.outputs().len(), if attempt == 1 { 0 } else { 3 });
+        }
+        assert!(vm.is_stable());
+        assert_eq!(world.started.len(), 2);
+        assert_ne!(world.started[0], world.started[1]);
+        let facts: Vec<_> = journal
+            .inner
+            .records()
+            .iter()
+            .flat_map(|record| match record {
+                Record::Transaction(record) => record
+                    .retry_record
+                    .as_deref()
+                    .map_or(&[][..], |packet| packet.facts.as_slice()),
+                _ => &[],
+            })
+            .collect();
+        assert_eq!(
+            facts
+                .iter()
+                .filter(|fact| matches!(fact, Fact::Held(_)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            facts
+                .iter()
+                .filter(|fact| matches!(fact, Fact::Consumed(_)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            facts
+                .iter()
+                .filter(|fact| matches!(fact, Fact::Published(_)))
+                .count(),
+            1
+        );
+        let result = (
+            journal.inner.records().to_vec(),
+            vm.outputs().to_vec(),
+            world.started,
+        );
+        if let Some(expected) = &reference {
+            assert_eq!(&result, expected);
+        } else {
+            reference = Some(result);
+        }
+    }
+}
+
+#[test]
+fn a_partly_committed_response_batch_survives_the_next_closure_refusal() {
+    let compilation = compile(
+        &[r#"
+graph app : App {
+  input in: text
+  output out: text
+  connector first : Process { command = "cat"; codec = lines; behavior = deterministic }
+  connector second : Process { command = "cat"; codec = lines; behavior = deterministic }
+  in -> { first; second }
+  { first.out; second.out } -> out
+  first.err -> nothing; first.exit -> nothing
+  second.err -> nothing; second.exit -> nothing
+}
+"#],
+        &ContractCatalog::try_m0().unwrap(),
+    )
+    .unwrap();
+    for refused in 0..2 {
+        let mut journal = FlakyJournal::healthy(GraphVersion(1));
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        let mut world = ClosingWorld::default();
+        vm.inject(&mut journal, text_submission("one fan-out"))
+            .unwrap();
+        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.pump(&mut journal, &mut world).unwrap();
+        assert_eq!(world.started.len(), 2);
+        for call_ref in &world.started {
+            world.answers.push(Response {
+                call_ref: *call_ref,
+                completion: Completion::process(
+                    vec![Data::materialized(Value::Text("answer".into()))],
+                    vec![],
+                    ProcessExit::Exited {
+                        exit_code: 0,
+                        signal: None,
+                    },
+                ),
+            });
+        }
+        let late = world.answers[0].clone();
+        world.answers.insert(
+            0,
+            Response {
+                call_ref: world.started[0],
+                completion: Completion::process(
+                    vec![Data::materialized(Value::Uint(0))],
+                    vec![],
+                    ProcessExit::Exited {
+                        exit_code: 0,
+                        signal: None,
+                    },
+                ),
+            },
+        );
+        journal.refuse_call = Some(world.started[refused]);
+        assert!(matches!(
+            vm.pump(&mut journal, &mut world),
+            Err(VmError::Dispatch(rastok::boundary::DispatchError::Journal(
+                rastok::journal::Error::Storage(_)
+            )))
+        ));
+        assert_eq!(journal.inner.open_calls().len(), 2 - refused);
+        assert!(vm.outputs().is_empty());
+        assert!(
+            world.answers.is_empty(),
+            "the Driver already handed off both responses"
+        );
+        world.answers.push(late);
+        assert!(vm.pump(&mut journal, &mut world).is_err());
+        assert_eq!(
+            world.answers.len(),
+            1,
+            "store pressure cannot pull another Driver batch"
+        );
+        journal.refuse_call = None;
+        let report = vm.pump(&mut journal, &mut world).unwrap();
+        assert_eq!(
+            report.settled, 2,
+            "both winners must reach the VM exactly once"
+        );
+        assert!(report.discarded.is_empty());
+        assert_eq!(
+            report.rejected.len(),
+            1,
+            "the invalid first answer stays observable"
+        );
+        assert_eq!(world.answers.len(), 1);
+        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        assert_eq!(vm.outputs().len(), 2);
+        assert!(vm.is_stable());
+        assert_eq!(world.started.len(), 2);
+        let records = journal.inner.records().to_vec();
+        let late = vm.pump(&mut journal, &mut world).unwrap();
+        assert_eq!(late.settled, 0);
+        assert_eq!(late.discarded.len(), 1);
+        assert_eq!(journal.inner.records(), records);
     }
 }
 

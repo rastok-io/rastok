@@ -32,7 +32,7 @@ use crate::plan::{
     OwnerValue, PlanConstant, SemanticHash, Slot, SymbolTable, VarCell,
 };
 use crate::schema_annotation::{
-    AnnotationTable, CostBasis, DataAnnotation, SchemaPathSegment, SensitivityLevel,
+    AnnotationTable, DataAnnotation, SchemaPathSegment, SensitivityLevel,
 };
 
 /// Computes the semantic hash of a checked graph.
@@ -1385,6 +1385,16 @@ impl Writer<'_> {
             self.count(set.annotations().len());
             for annotation in set.annotations() {
                 match annotation {
+                    DataAnnotation::Declared(application) => {
+                        self.tag(6);
+                        self.tag(match application.binding() {
+                            crate::schema_annotation::AnnotationBinding::Metadata => 1,
+                            crate::schema_annotation::AnnotationBinding::Measure => 2,
+                        });
+                        self.str(application.definition());
+                        self.ty(application.argument_type());
+                        self.value(application.arguments());
+                    }
                     DataAnnotation::Sensitive(level) => {
                         self.tag(1);
                         self.tag(match level {
@@ -1394,24 +1404,6 @@ impl Writer<'_> {
                         });
                     }
                     DataAnnotation::Secret => self.tag(2),
-                    DataAnnotation::Measure(id) => {
-                        self.tag(3);
-                        self.str(id.as_str());
-                    }
-                    DataAnnotation::Cost(cost) => {
-                        self.tag(4);
-                        self.tag(match cost.basis() {
-                            CostBasis::ProviderReported => 1,
-                            CostBasis::PricebookCalculated => 2,
-                        });
-                        match cost.currency() {
-                            None => self.tag(0),
-                            Some(currency) => {
-                                self.tag(1);
-                                self.str(currency.as_str());
-                            }
-                        }
-                    }
                     DataAnnotation::Personal(class) => {
                         self.tag(5);
                         self.tag(
@@ -2399,7 +2391,7 @@ graph app : App {
   operator o {
     var credential: text @sensitive(level = restricted) = "placeholder"
     on in {
-      val tokens: int @measure(id = gen_ai.usage.output_tokens) = 1
+      val tokens: int @measure(id = output_tokens, unit = "token") = 1
       out = .
     }
   }
@@ -2469,7 +2461,7 @@ graph app : App {
         let source = r#"
 type Usage = struct {
   prompt: text @sensitive(level = confidential)
-  tokens: int @measure(id = gen_ai.usage.input_tokens)
+  tokens: int @measure(id = input_tokens, unit = "token")
 }
 graph app : App {
   input in: Usage
@@ -2527,7 +2519,8 @@ graph app : App {
                 .entries()
                 .get(&SchemaPath::root())
                 .map(|set| set.annotations()),
-            Some([DataAnnotation::Measure(_)])
+            Some([DataAnnotation::Declared(application)])
+                if application.binding() == crate::schema_annotation::AnnotationBinding::Measure
         ));
 
         let bytes = crate::plan::encode(&compilation.plan, &compilation.hash);
@@ -2541,7 +2534,7 @@ graph app : App {
         let source = r#"
 type Count = int
   @sensitive(level = internal)
-  @measure(id = gen_ai.usage.input_tokens)
+  @measure(id = input_tokens, unit = "token")
 graph app : App {
   input in: Count
   output out: int
@@ -2572,12 +2565,11 @@ graph app : App {
             root.annotations(),
             [DataAnnotation::Sensitive(SensitivityLevel::Internal)]
         );
-        assert!(root.annotations().iter().all(|annotation| {
-            !matches!(
-                annotation.kind(),
-                AnnotationKind::Measure | AnnotationKind::Cost
-            )
-        }));
+        assert!(
+            root.annotations()
+                .iter()
+                .all(|annotation| { !matches!(annotation.kind(), AnnotationKind::Measure) })
+        );
     }
 
     #[test]
@@ -2664,7 +2656,7 @@ graph app : App {
     #[test]
     fn incompatible_accounting_producers_refuse_as_source_policy() {
         let source = r#"
-type Tokens = int @measure(id = gen_ai.usage.input_tokens)
+type Tokens = int @measure(id = input_tokens, unit = "token")
 graph app : App {
   input metered: Tokens
   input plain: int
@@ -3211,8 +3203,8 @@ graph m0_probe : App {
 
     #[test]
     fn the_semantic_hash_is_pinned_byte_for_byte() {
-        // The v16 Contract/Dispatch identity move is enumerated in
-        // docs/architecture/rework-r9-qualification.md; spelling is neutral.
+        // The Process Contract/idempotence cutover is inventoried in
+        // docs/architecture/retry-c4-qualification.md; its causal trace stays fixed.
         let hash = compile(
             &[M0_PROBE],
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -3221,7 +3213,7 @@ graph m0_probe : App {
         .hash;
         assert_eq!(
             hash.to_string(),
-            "d8c35016ba0d9a1c8a6b57e1abd83192840a5e9c11c63abd7efc977e365f126f"
+            "3fe6e5319383eec3792f2981a40f9579fce96a4e1c3efe7b52b491dad932bc1a"
         );
     }
 

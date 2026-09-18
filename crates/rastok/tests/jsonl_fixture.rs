@@ -27,9 +27,9 @@ fn compilation() -> rastok::compiler::Compilation {
     .expect("a valid unit")
 }
 
-// Process @2 and canonical Dispatch move this witness in v16. The complete
-// ledger is docs/architecture/rework-r9-qualification.md; its trace is unchanged.
-const JSONL_HASH: &str = "2f89c8b5fa22f7fbe489d6aa770d517c3c9db8f92e850028c1e2bb1280efb2fc";
+// Process @4 and plan-owned idempotence move this witness in v19.
+// See docs/architecture/retry-c4-qualification.md; its causal trace is unchanged.
+const JSONL_HASH: &str = "3f1b40ec3457d1b371289d9cac615df0394ef1dffe8b52c7f36424961a0dd064";
 
 #[test]
 fn the_semantic_hash_is_pinned() {

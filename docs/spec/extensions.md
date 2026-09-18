@@ -1,20 +1,14 @@
 # Node, Graph, Executor, Connector, and Extension
 
-> **Status (2026-09-10): normative categorical v18.** Loop's host-terminal
-> amendment is D-2026-09-08-1. The underlying execution model and
-> independent validation are qualified in [R9](../architecture/rework-r9-qualification.md).
-> Unsupported Extension profiles refuse by name before effects.
-
-> **Approved next refactor (2026-09-14):**
-> [D-2026-09-14-4](decisions.md#d-2026-09-14-4--separate-loop-retry-and-saga-over-one-recurrence-engine)
-> introduces Retry as a distinct protocol over the common recurrence manager.
-> The vocabulary and tables below describe the current v18 implementation.
-> The C2 source gate now recognizes Retry policies and plan-owned
-> `idempotent`, checks their supported profile/constant/case domains, then
-> refuses by name before HIR/package emission. Retry is not executable and
-> is not a transported v18 Extension. Its
-> [contract and implementation gates](../architecture/retry-extension-refactor.md)
-> are recorded separately, without allocating a transport tag.
+> **Status (2026-09-18): normative categorical v19.** The underlying
+> Graph/Executor model is retained from [R9](../architecture/rework-r9-qualification.md).
+> Loop's host-terminal amendment is D-2026-09-08-1; exact-instance closure
+> is D-2026-09-10-1. [D-2026-09-14-4](decisions.md#d-2026-09-14-4--separate-loop-retry-and-saga-over-one-recurrence-engine)
+> adds native outbound Call Retry, with plan-owned idempotence and no new port.
+> Unsupported hosts/compositions refuse before effects. The
+> [common qualification](../architecture/retry-c4-qualification.md) records
+> package/trace movements and local tests; [opening gates](../architecture/opening-showcase.md)
+> remain distinct from executable support.
 
 This document owns Rastok's structural and extension taxonomy. Loop's temporal
 protocol lives in [loop.md](loop.md); Saga's future contract lives in
@@ -45,6 +39,13 @@ transaction. The generic lifecycle controller still commits `l:start`,
 `l:closing`, and `l:stop` transaction records attributed to the Graph owner;
 those records are instance facts, not Graph code.
 
+The approved [annotation-type model](annotations.md#7-extensions-can-consume-metadata-without-becoming-annotations)
+lets consumers read validated type metadata; it does not replace a Node's
+Extension list, attributes, admission contract or manager with annotations.
+In particular, `Loop.measure` remains a ranking proof, distinct from the
+observation annotation `@measure`. Flat data and descriptive applications
+are executable; only protected stdlib bindings grant runtime interpretation.
+
 Operator and Connector share the mechanics of execution: typed executable
 ports, a bounded activation mailbox per instance, semantic state, transactions,
 state deltas, ordered emissions, route preparation, capacity proof, and atomic
@@ -66,7 +67,7 @@ graph agent : App + Loop { ... }
 operator normalize { ... }
 operator countdown : Loop { ... }
 connector api : HttpClient { ... }
-connector pay : HttpClient + Loop { ... }
+connector pay : HttpClient + Retry { ... }
 ```
 
 The declaration keyword fixes structure:
@@ -76,7 +77,7 @@ The declaration keyword fixes structure:
 - `connector` is a Connector Executor and requires one Contract symbol.
 
 The annotation contains the Connector's Contract when the declaration is a Connector and zero
-or more Extensions. `App`, `Loop`, and `Saga` are Extensions, not Node types.
+or more Extensions. `App`, `Loop`, `Retry`, and `Saga` are Extensions, not Node types.
 Contract is an object owned by a Connector, not a sixth branch of the Node
 ontology. Its exact semantic identity is `<namespace>/<name>@<major>` and is
 transported as `ContractId`.
@@ -95,6 +96,7 @@ Extension whose complete execution gate has not landed is
 |---|---|---|---|
 | `App` | root Graph, exactly once | deployed public boundary | deployment-root identity; no manager |
 | `Loop` | admissible Operator, Graph, or outbound Call Connector | finite temporal recurrence | qualified attributes, `Loop.state`, three commands, host terminal roles/types; no port |
+| `Retry` | finite outbound Call Connector | bounded repetition of one pinned operation | `Retry.attempts`, `Retry.on`, `Retry.delay`; no binding, command, port or new terminal |
 | `Saga` | Graph, future gate | journal-folded compensation | future `Saga.compensate` protocol |
 
 One source list is a set. Compatible Extension order is non-semantic:
@@ -134,6 +136,21 @@ DAG and cannot be a source or destination of `PhysicalEdge`. An Extension port,
 when one exists, is an ordinary typed port and follows the same routing and
 explicit-destination rules as any other output.
 
+Retry retains one exact prepared operation and admits fresh Calls, up to
+`Retry.attempts` including the first. `Retry.on` is a closed set of Contract
+terminal cases; BeforeEffect is repeat-safe, other selected cases require
+the original plan's `idempotent = true`. A partner key alone proves nothing.
+The delay begins at the retained winning Call closure. Intermediate complete
+emission batches go explicitly to the manager (Held, then Consumed); only the
+final attempt uses authored graph destinations. The last error is unchanged,
+not wrapped. Every attempt's original typed measurements remain retained.
+
+A Loop Graph may contain a Retry Connector: a Loop application waits for the
+whole operation, including its backoff. Same-owner `Loop + Retry`, Graph and
+Operator Retry, inbound Calls, Events, Sessions and Process service Retry
+remain refused by name. The [operation algebra](../architecture/retry-c1-algebra.md)
+specifies Closing and recovery without effect recall.
+
 "No contributed port" does not mean "no contributed interface": Loop exposes
 typed commands as well as attributes and bindings. A command's destination-like
 spelling is sometimes described informally as a pseudo-port, but it creates
@@ -142,9 +159,10 @@ neither a data port nor a control port in the effective port table.
 D-2026-09-10-1 applies the same distinction to the common-lifecycle
 commands `instance.stop` and `child.instance.stop`. They belong to Node
 instances, require no new Extension, and invoke the existing lifecycle
-controller rather than a Loop manager. They execute under package v18;
-[instances §7.3](instances.md#73-explicit-closure-commands)
-owns their scope. The Graph/Executor split and bare Operator `stop` are unchanged.
+controller rather than a Loop manager. Introduced in package v18 and retained
+in v19, their scope is specified by
+[instances §7.3](instances.md#73-explicit-closure-commands).
+The Graph/Executor split and bare Operator `stop` are unchanged.
 
 ## 5. Extension admission test
 
@@ -159,7 +177,7 @@ five tests pass:
 | T4 | non-redundancy | ordinary ports, Dispatch, state, instance, lifetime, and wiring cannot express it honestly |
 | T5 | lexical ownership | attaches to one named Node owner and has a closed composition rule |
 
-Loop and the planned Saga pass. Timeout, fallback, audit, trace, validation,
+Loop, Retry and the planned Saga pass. Timeout, fallback, audit, trace, validation,
 mutex, reducer, aggregator, window, join, routing, and cost measurement do not:
 they are attributes, ordinary structures, guide patterns, or observation.
 
@@ -229,7 +247,7 @@ redefine an Extension contribution. The diagnostic names both contributors.
 
 ## 9. Transport and validation
 
-Plan v18 transports one closed `ExtensionSpec` list on every owner for which it
+Plan v19 transports one closed `ExtensionSpec` list on every owner for which it
 is non-empty. Registry-free validation re-derives:
 
 - structural owner compatibility;
@@ -274,6 +292,11 @@ suggestion that the id names a Node rather than its Contract.
 
 ## 11. Deferred questions
 
+- `Budget`, confirmed as a future Extension outside M1 by
+  [D-2026-09-18-2](decisions.md#d-2026-09-18-2--reserve-budget-governance-for-a-post-m1-extension):
+  App is the preferred owner to explore, not a frozen host restriction or
+  account scope. The [draft protocol](../architecture/budget-governance-draft.md)
+  still requires review; no executable Extension tag or attributes exist;
 - user-defined or parameterized Extensions;
 - dynamic loading of new Extension semantics;
 - Saga's complete protocol and `Saga + Loop` composition;

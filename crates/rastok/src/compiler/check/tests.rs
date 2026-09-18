@@ -2250,7 +2250,7 @@ fn recognized_data_annotations_reach_the_annotated_port_schema() {
 #[test]
 fn aliases_expand_annotations_to_exact_collection_and_union_paths() {
     let source = r#"
-type TokenCount = int @measure(id = gen_ai.usage.input_tokens)
+type TokenCount = int @measure(id = input_tokens, unit = "token")
 type Result = union {
   Done @sensitive(level = internal) {
 counts: array<TokenCount>
@@ -2346,11 +2346,10 @@ on in { out = . }
 }
 
 #[test]
-fn cost_secret_and_personal_contracts_reach_hir_without_changing_types() {
+fn measure_secret_and_personal_contracts_reach_hir_without_changing_types() {
     let source = r#"
-type ScalarCost = decimal(38,18) @cost(currency = EUR, basis = provider_reported)
-type Money = struct { amount: decimal(38,18), currency: text }
-         @cost(basis = pricebook_calculated)
+type ScalarCost = decimal(38,18) @measure(id = amount, unit = "EUR")
+type Money = struct { amount: ScalarCost, currency: text }
 type Credential = text @sensitive(level = restricted) @secret
 type PersonalFact = text @personal
 type SubjectId = text @personal(identifier = true)
@@ -2375,9 +2374,8 @@ graph g : App {}
         .annotations();
     assert!(matches!(
         scalar_annotations,
-        [DataAnnotation::Cost(cost)]
-            if cost.currency().map(CurrencyCode::as_str) == Some("EUR")
-                && cost.basis() == CostBasis::ProviderReported
+        [DataAnnotation::Declared(application)]
+            if application.quantity_measure() == Some(("amount", "EUR"))
     ));
 
     let money = hir
@@ -2390,12 +2388,11 @@ graph g : App {}
     assert!(matches!(
         money.annotations()
             .entries()
-            .get(&SchemaPath::root())
-            .expect("root Money annotations")
+            .get(&SchemaPath::root().child(SchemaPathSegment::Field("amount".into())))
+            .expect("amount field annotations")
             .annotations(),
-        [DataAnnotation::Cost(cost)]
-            if cost.currency().is_none()
-                && cost.basis() == CostBasis::PricebookCalculated
+        [DataAnnotation::Declared(application)]
+            if application.quantity_measure() == Some(("amount", "EUR"))
     ));
 
     let credential = hir
@@ -2562,7 +2559,7 @@ graph g : App {
   operator o {
 var credential: text @sensitive(level = restricted) = "placeholder"
 on in {
-  val tokens: int @measure(id = gen_ai.usage.output_tokens) = 1
+  val tokens: int @measure(id = output_tokens, unit = "token") = 1
   out = .
 }
   }
@@ -2649,25 +2646,25 @@ fn invalid_data_annotations_refuse_by_annotation_and_exact_path() {
             "type X = int @measure(id = data)\ngraph g : App {}\n",
             "measure",
             "$",
-            "not in the pinned registry",
+            "missing required argument `unit`",
         ),
         (
-            "type X = int @measure(id = env(\"MEASURE\"))\ngraph g : App {}\n",
+            "type X = int @measure(id = env(\"MEASURE\"), unit = \"item\")\ngraph g : App {}\n",
             "measure",
             "$",
             "symbolic plan constant",
         ),
         (
-            "type X = struct { prompt: text @measure(id = gen_ai.usage.input_tokens) }\ngraph g : App {}\n",
+            "type X = struct { prompt: text @measure(id = tokens, unit = \"token\") }\ngraph g : App {}\n",
             "measure",
             "$.field(\"prompt\")",
-            "cannot be carried",
+            "requires an integer or exact decimal",
         ),
         (
-            "type X = union { Done @cost(basis = provider_reported) }\ngraph g : App {}\n",
-            "cost",
+            "type X = union { Done @measure(id = amount, unit = \"USD\") }\ngraph g : App {}\n",
+            "measure",
             "$.tagged_union_case(\"Done\")",
-            "not a union case",
+            "integer or exact decimal",
         ),
         (
             "type X = text @sensitive(level = internal, level = restricted)\ngraph g : App {}\n",
@@ -2691,19 +2688,19 @@ fn invalid_data_annotations_refuse_by_annotation_and_exact_path() {
             "type X = int @measure(id = http.client.request.duration)\ngraph g : App {}\n",
             "measure",
             "$",
-            "runtime instrument",
+            "missing required argument `unit`",
         ),
         (
-            "type X = decimal(38,18) @cost(currency = ZZZ, basis = provider_reported)\ngraph g : App {}\n",
-            "cost",
+            "type X = decimal(38,18) @measure(id = amount, currency = ZZZ, basis = provider_reported)\ngraph g : App {}\n",
+            "measure",
             "$",
-            "not in the pinned ISO 4217 registry",
+            "id and unit",
         ),
         (
-            "type X = struct { amount: decimal(38,18), currency: text } @cost(currency = EUR, basis = provider_reported)\ngraph g : App {}\n",
-            "cost",
+            "type X = struct { amount: decimal(38,18), currency: text } @measure(id = amount, currency = EUR, basis = provider_reported)\ngraph g : App {}\n",
+            "measure",
             "$",
-            "unexpected argument `currency`",
+            "id and unit",
         ),
         (
             "type X = text @personal(identifier = maybe)\ngraph g : App {}\n",
@@ -2820,7 +2817,7 @@ fn conflicting_port_roles_are_refused() {
 }
 
 #[test]
-fn a_connector_never_declares_ports() {
+fn a_connector_cannot_add_input_ports() {
     let source = "graph g : App {\n  connector c : Process {\n    input extra\n    command = \"cat\" ; codec = lines\n    idempotent = true; behavior = deterministic\n  }\n  in -> c -> out\n}\n";
     let (_, bag) = check_source(source);
     let diagnostic = bag
@@ -2828,7 +2825,11 @@ fn a_connector_never_declares_ports() {
         .iter()
         .find(|diagnostic| diagnostic.code() == E_PORT_CONFLICT)
         .expect("the connector port refusal");
-    assert!(diagnostic.message().contains("its type defines them"));
+    assert!(
+        diagnostic
+            .message()
+            .contains("input `extra` belongs to the Contract")
+    );
 }
 
 #[test]

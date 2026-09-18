@@ -5,10 +5,10 @@ use super::*;
 use crate::journal::{CallRecord, Closure, ConsumedPosition, OutboundStatus};
 
 impl Vm<'_> {
-    pub(super) fn restore_call<B: OutboundConnectorBindings + ?Sized>(
+    pub(super) fn restore_call(
         &mut self,
         journal: &dyn Journal,
-        bindings: &mut B,
+        bindings: &mut dyn OutboundConnectorBindings,
         index: usize,
         record: &CallRecord,
     ) -> Result<(), VmError> {
@@ -188,7 +188,7 @@ impl Vm<'_> {
 
     pub(super) fn restore_call_consumption(
         &mut self,
-        admissions: &impl InstanceAdmissions,
+        admissions: &dyn InstanceAdmissions,
         index: usize,
         slot: Slot,
         record: &TransactionRecord,

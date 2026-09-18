@@ -107,6 +107,7 @@ const MATCH_SCRUTINEE_POSITION: TerminatorSet = TerminatorSet {
 
 /// Declaration keywords the recovery resynchronizes on.
 const SYNC_WORDS: &[&str] = &[
+    "type",
     "graph",
     "partition",
     "operator",
@@ -2539,8 +2540,49 @@ impl<'src> Parser<'src, '_> {
         }
     }
 
+    fn struct_type(&mut self, flat: bool) -> Option<BaseType> {
+        self.expect(TokenKind::LBrace, "`{`")?;
+        let mut fields = Vec::new();
+        let mut open = false;
+        loop {
+            match self.peek().kind {
+                TokenKind::RBrace | TokenKind::Eof => break,
+                TokenKind::Comma => {
+                    self.bump();
+                }
+                TokenKind::DotDot => {
+                    self.bump();
+                    open = true;
+                }
+                _ => {
+                    let name = self.name("a field name")?;
+                    self.expect(TokenKind::Colon, "`:`")?;
+                    fields.push(FieldDecl {
+                        name,
+                        ty: self.type_ref()?,
+                    });
+                }
+            }
+        }
+        self.expect(TokenKind::RBrace, "`}`")?;
+        Some(if flat {
+            BaseType::FlatStruct { fields, open }
+        } else {
+            BaseType::Struct { fields, open }
+        })
+    }
+
     fn base_type(&mut self) -> Option<BaseType> {
         let token = self.peek();
+        if token.kind == TokenKind::At {
+            self.bump();
+            if !self.at_word("struct") {
+                self.error_expected("`struct` after `@` in a type");
+                return None;
+            }
+            self.bump();
+            return self.struct_type(true);
+        }
         if token.kind != TokenKind::Ident {
             self.error_expected("a type");
             return None;
@@ -2565,30 +2607,7 @@ impl<'src> Parser<'src, '_> {
             }
             "struct" => {
                 self.bump();
-                self.expect(TokenKind::LBrace, "`{`")?;
-                let mut fields = Vec::new();
-                let mut open = false;
-                loop {
-                    let token = self.peek();
-                    match token.kind {
-                        TokenKind::RBrace | TokenKind::Eof => break,
-                        TokenKind::Comma => {
-                            self.bump();
-                        }
-                        TokenKind::DotDot => {
-                            self.bump();
-                            open = true;
-                        }
-                        _ => {
-                            let name = self.name("a field name")?;
-                            self.expect(TokenKind::Colon, "`:`")?;
-                            let ty = self.type_ref()?;
-                            fields.push(FieldDecl { name, ty });
-                        }
-                    }
-                }
-                self.expect(TokenKind::RBrace, "`}`")?;
-                Some(BaseType::Struct { fields, open })
+                self.struct_type(false)
             }
             "map" => {
                 self.bump();
@@ -3576,7 +3595,7 @@ mod tests {
     #[test]
     fn data_annotations_are_retained_as_named_constant_syntax() {
         let tree = parse_clean(
-            "type Usage = struct {\n  prompt: text @sensitive(level = confidential),\n  tokens: int @measure(id = gen_ai.usage.input_tokens)\n}\n",
+            "type Usage = struct {\n  prompt: text @sensitive(level = confidential),\n  tokens: int @measure(id = usage.input_tokens, unit = \"token\")\n}\n",
         );
         let TopDecl::Type(decl) = &tree.decls[0] else {
             panic!("expected a type declaration");
@@ -3596,7 +3615,7 @@ mod tests {
             &fields[1].ty.annotations[0].arguments[0].value,
             SchemaAnnotationConstant::Symbol(path)
                 if path.iter().map(|name| name.text.as_str()).collect::<Vec<_>>()
-                    == ["gen_ai", "usage", "input_tokens"]
+                    == ["usage", "input_tokens"]
         ));
     }
 

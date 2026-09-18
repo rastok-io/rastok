@@ -1,17 +1,15 @@
 use super::UiSnapshot;
-use crate::accounting::{CostEvidence, CostReport};
 use crate::compiler::SourceDefinition;
 use crate::data_policy::is_redacted_path;
 use crate::envelope::{Data, MetaValue, Namespace, Scalar, Value};
 use crate::identity::InstanceRef;
 use crate::journal::{Journal, MemJournal, OutboundRecord, OutboundStatus, Record, SessionStatus};
-use crate::observation::ExchangeCorrelation;
 use crate::plan::{NodeExecution, Slot, ValidatedExecutionPlan};
 use crate::runtime::vm::{
     CallDirectionInspection, CallReferenceInspection, InstancePhaseInspection,
     SessionDirectionInspection, Vm, VmInspection,
 };
-use crate::schema_annotation::{AnnotationTable, MeasureUnit, SchemaPath, SchemaPathSegment};
+use crate::schema_annotation::{AnnotationTable, SchemaPath, SchemaPathSegment};
 use serde_json::{Map, Value as JsonValue, json};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -19,6 +17,7 @@ static EMPTY_ANNOTATIONS: AnnotationTable = AnnotationTable::empty();
 
 mod expectation;
 mod explanation;
+mod retry;
 pub use expectation::expectation_json;
 
 /// Physical controller state, outside every semantic identity recipe.
@@ -239,8 +238,6 @@ pub struct SnapshotInput<'a> {
     pub vm: &'a Vm<'a>,
     /// Complete in-memory causal authority.
     pub journal: &'a MemJournal,
-    /// Optional deployment price evidence for the public accounting fold.
-    pub cost_profile: Option<&'a crate::accounting::CostProfile>,
     /// Current redaction-safe fault, when execution refused.
     pub fault: Option<&'a FaultView>,
     /// Most recently advanced physical UI boundary.
@@ -268,7 +265,6 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
         definitions,
         vm,
         journal,
-        cost_profile,
         fault,
         activity,
         scenario,
@@ -278,6 +274,9 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
     let legal_commands = legal_commands(mode, state, fault, scenario.as_ref());
     let inspection = vm.inspection();
     let active_instances = active_instance_lifecycles(journal);
+    let retry_operations = retry::operations(vm, journal.records());
+    let mut future = explanation::future(&inspection, journal.records());
+    retry::append_future(&mut future, &retry_operations);
     let value = json!({
         "revision": revision,
         "mode": mode,
@@ -303,9 +302,9 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
         "history": history(plan, vm, journal),
         "instances": instances(plan, &inspection, &active_instances),
         "loop_runs": loop_runs(plan, journal.records()),
-        "future": explanation::future(&inspection, journal.records()),
+        "retry_operations": retry_operations,
+        "future": future,
         "exchanges": exchanges(&inspection),
-        "cost_report": cost_report(plan, journal, cost_profile),
         "scenario": scenario,
         "fault": fault.map(|fault| json!({
             "message": fault.message,
@@ -466,7 +465,9 @@ fn topology(
                         record_activity_route(&mut activity_routes, &route.edge, "emitted");
                     }
                 }
-                if let Some(slot) = firing_slot {
+                // Held emissions have an explicit manager disposition. Static
+                // public/discard edges do not prove that a delivery occurred.
+                if let Some(slot) = firing_slot.filter(|_| !retry::held(transaction)) {
                     for emission in &transaction.emissions {
                         for edge in &plan.edges {
                             let leaves_graph = edge.to.as_ref().is_none_or(|to| to.node.is_none());
@@ -530,6 +531,7 @@ fn topology(
                 "type": ty,
                 "extensions": extensions,
                 "loop": loop_spec_json(&plan.owners[node.owner.index()]),
+                "retry": retry::spec(&plan.owners[node.owner.index()]),
                 "profile": match &node.execution {
                     NodeExecution::Connector(spec) => Some(format!("{:?} · {:?}", spec.exchange, spec.roles)),
                     NodeExecution::Operator => None,
@@ -1020,6 +1022,9 @@ fn history_record_description(record: &Record) -> (&'static str, Option<String>,
             ("inbound", None, format!("Input admitted · {source}"))
         }
         Record::Transaction(transaction) => {
+            if let Some((kind, summary)) = retry::description(transaction) {
+                return (kind, Some(transaction.trigger.to_string()), summary);
+            }
             if let Some(fact) = transaction
                 .loop_protocol()
                 .and_then(|packet| packet.facts.first())
@@ -1088,6 +1093,9 @@ fn history_record_description(record: &Record) -> (&'static str, Option<String>,
 }
 
 fn transaction_summary(transaction: &crate::journal::TransactionRecord) -> String {
+    if let Some((_, summary)) = retry::description(transaction) {
+        return summary;
+    }
     let owner = if transaction.owner_path.segments().is_empty() {
         String::from("App")
     } else {
@@ -1270,93 +1278,6 @@ fn exchanges(inspection: &VmInspection) -> JsonValue {
         })
         .collect::<Vec<_>>();
     json!({ "calls": calls, "sessions": sessions })
-}
-
-fn cost_report(
-    plan: &ValidatedExecutionPlan,
-    journal: &MemJournal,
-    profile: Option<&crate::accounting::CostProfile>,
-) -> JsonValue {
-    match CostReport::from_journal(plan, journal, profile) {
-        Ok(report) => json!({
-            "measures": report.measures().iter().map(|row| json!({
-                "scope": scope_json(row.scope()),
-                "id": row.id().as_str(),
-                "quantity": row.quantity().magnitude().to_string(),
-                "unit": measure_unit(row.unit()),
-                "subset_of": row.subset_of().map(|id| id.as_str()),
-            })).collect::<Vec<_>>(),
-            "costs": report.costs().iter().map(|row| json!({
-                "scope": scope_json(row.scope()),
-                "money": money_json(row.money()),
-                "basis": cost_evidence(row.evidence()),
-                "calculated_from": row.calculated_from().map(|id| id.as_str()),
-            })).collect::<Vec<_>>(),
-            "unpriced": report.unpriced().iter().map(|row| json!({
-                "scope": scope_json(row.scope()),
-                "id": row.id().as_str(),
-                "quantity": row.quantity().magnitude().to_string(),
-            })).collect::<Vec<_>>(),
-        }),
-        Err(error) => json!({ "error": error.to_string() }),
-    }
-}
-
-fn scope_json(scope: &crate::accounting::ReportScope) -> JsonValue {
-    json!({
-        "origin_id": scope.origin_id().map(|id| id.to_string()),
-        "instance": scope.instance().map(instance_ref_json),
-        "owner": scope.owner().map(ToString::to_string),
-        "node": scope.node().map(ToString::to_string),
-        "connector": scope.connector().map(ToString::to_string),
-        "port": scope.port().name(),
-        "exchange": scope.exchange().map(exchange_json),
-        "provider": scope.provider(),
-        "model": scope.model(),
-    })
-}
-
-fn exchange_json(exchange: &ExchangeCorrelation) -> JsonValue {
-    match exchange {
-        ExchangeCorrelation::OutboundCall(reference) => {
-            json!({ "kind": "outbound-call", "reference": reference.to_string() })
-        }
-        ExchangeCorrelation::InboundCall(reference) => {
-            json!({ "kind": "inbound-call", "reference": reference.to_string() })
-        }
-        ExchangeCorrelation::Session { session, write } => json!({
-            "kind": "session",
-            "reference": session.to_string(),
-            "write": write.map(|reference| reference.to_string()),
-        }),
-    }
-}
-
-fn money_json(money: &crate::accounting::Money) -> JsonValue {
-    json!({
-        "unscaled": money.amount().unscaled().to_string(),
-        "scale": money.amount().scale(),
-        "currency": money.currency().as_str(),
-    })
-}
-
-fn cost_evidence(evidence: &CostEvidence) -> JsonValue {
-    match evidence {
-        CostEvidence::ProviderReported => json!({ "kind": "provider-reported" }),
-        CostEvidence::PricebookCalculated { profile, digest } => json!({
-            "kind": "pricebook-calculated",
-            "profile": profile.as_str(),
-            "digest": hex(digest),
-        }),
-    }
-}
-
-fn measure_unit(unit: MeasureUnit) -> &'static str {
-    match unit {
-        MeasureUnit::Token => "token",
-        MeasureUnit::Byte => "byte",
-        MeasureUnit::Nanosecond => "nanosecond",
-    }
 }
 
 fn phase(phase: InstancePhaseInspection) -> &'static str {
@@ -1664,6 +1585,212 @@ fn hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn retry_inspection_agrees_in_steps_batch_and_every_recorded_prefix() {
+        let compilation = crate::compiler::compile(
+            &[include_str!("../../tests/fixtures/ui-retry.rkg")],
+            &crate::contract::ContractCatalog::try_m0().unwrap(),
+        )
+        .unwrap();
+        let version = crate::plan::GraphVersion(1);
+        let simulation = &compilation.labs[0].simulations[0];
+        let mut session = crate::lab::ScenarioSession::try_new_program(
+            &compilation.plan,
+            compilation.hash,
+            version,
+            &simulation.name,
+            &simulation.mocks,
+            &simulation.scenarios[0],
+            None,
+        )
+        .unwrap();
+        let view = |vm: &Vm<'_>, journal: &MemJournal, activity: Option<&ActivityView>| {
+            let snapshot = snapshot(SnapshotInput {
+                revision: 0,
+                mode: "simulate",
+                state: ExecutionState::Paused,
+                plan: &compilation.plan,
+                definitions: &compilation.source_definitions,
+                vm,
+                journal,
+                fault: None,
+                activity,
+                scenario: None,
+                session: 0,
+                boundary: 0,
+            })
+            .unwrap();
+            serde_json::from_slice::<JsonValue>(&snapshot.json).unwrap()
+        };
+        let mut frames = vec![(0, view(session.vm(), session.journal(), None))];
+        let mut saw_held = false;
+        let mut saw_wait = false;
+        for _ in 0..128 {
+            if session.is_complete() {
+                break;
+            }
+            let before = session.journal().records().len();
+            if session.is_quiescent() {
+                session.next_action().unwrap();
+            } else {
+                session.step_transaction().unwrap();
+            }
+            let activity = ActivityView::journal_change(session.journal(), before, None);
+            let frame = view(session.vm(), session.journal(), activity.as_ref());
+            let operations = frame["retry_operations"]
+                .as_array()
+                .expect("Retry is inspectable");
+            if let Some(operation) = operations.first() {
+                assert_eq!(operation["limit"], "2");
+                if operation["phase"] == "Held" {
+                    saw_held = true;
+                    assert_eq!(operation["attempts"][0]["disposition"], "manager");
+                    assert_eq!(frame["history"]["outputs"], json!([]));
+                    assert!(
+                        frame["topology"]["activity"]["routes"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .all(|route| route["phase"] == "consumed"),
+                        "a held batch must not pulse an App-output or discard pipe"
+                    );
+                }
+                if operation["phase"] == "AwaitingAdmission" {
+                    saw_wait = true;
+                    assert_eq!(operation["attempt"], "1");
+                    assert_eq!(operation["due_at_ns"], "100000000");
+                    assert!(
+                        frame["future"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|item| item["kind"] == "Retry attempt"
+                                && item["due_at_ns"] == "100000000")
+                    );
+                }
+            }
+            let text = frame.to_string();
+            assert!(!text.contains("private-held-response"));
+            assert!(!text.contains("private-final-response"));
+            frames.push((session.journal().records().len(), frame));
+        }
+        assert!(
+            session.is_complete() && session.report().passed(),
+            "{:?}",
+            session.report()
+        );
+        assert!(saw_held && saw_wait);
+        let final_view = &frames.last().unwrap().1;
+        let operation = &final_view["retry_operations"][0];
+        assert_eq!(operation["phase"], "Closed");
+        assert_eq!(operation["attempt"], "2");
+        assert_eq!(operation["attempts"].as_array().unwrap().len(), 2);
+        assert_eq!(operation["attempts"][0]["terminal"], "ServerError");
+        assert_eq!(operation["attempts"][1]["terminal"], "Completed");
+        assert_eq!(operation["attempts"][1]["disposition"], "graph");
+        assert_ne!(
+            operation["attempts"][0]["call"],
+            operation["attempts"][1]["call"]
+        );
+        for (attempt, tokens) in [(0, 10), (1, 20)] {
+            let id = &operation["attempts"][attempt]["emissions"][0];
+            let envelope = final_view["history"]["deliveries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|value| &value["envelope_id"] == id)
+                .expect("every original response is inspectable");
+            assert_eq!(envelope["data"]["content"]["tokens"], tokens);
+            assert_eq!(
+                envelope["data"]["content"]["detail"],
+                json!({"redacted": true})
+            );
+        }
+        assert_eq!(final_view["loop_runs"], json!([]));
+        assert_eq!(final_view["topology"]["commands"], json!([]));
+        assert!(
+            final_view["topology"]["nodes"][0]["ports"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|port| !port["name"].as_str().unwrap().starts_with("Retry"))
+        );
+
+        let batch = crate::lab::run_program(
+            &compilation.plan,
+            compilation.hash,
+            version,
+            &compilation.labs[0],
+            None,
+        );
+        assert_eq!(batch[0].records, session.journal().records());
+        let recording = crate::recording::Recording::capture(
+            &compilation,
+            session.journal(),
+            session.vm().now(),
+        )
+        .unwrap();
+        let recording = crate::recording::Recording::decode(&recording.encode().unwrap()).unwrap();
+        for cut in 0..=recording.records().len() {
+            let (journal, vm) = recording.inspect(cut).unwrap();
+            let replay = view(&vm, &journal, None);
+            for operation in replay["retry_operations"].as_array().unwrap() {
+                for attempt in operation["attempts"].as_array().unwrap() {
+                    for field in [
+                        "admitted_record",
+                        "opened_record",
+                        "closed_record",
+                        "produced_record",
+                        "consumed_record",
+                    ] {
+                        if let Some(index) = attempt[field].as_u64() {
+                            assert!(index < cut as u64, "future evidence at prefix {cut}");
+                        }
+                    }
+                }
+            }
+        }
+        for (cut, frame) in frames {
+            let (journal, vm) = recording.inspect(cut).unwrap();
+            let replay = view(&vm, &journal, None);
+            assert_eq!(
+                replay["retry_operations"], frame["retry_operations"],
+                "prefix {cut}"
+            );
+        }
+    }
+
+    #[test]
+    fn snapshots_do_not_compute_a_measurement_report() {
+        let compilation = crate::compiler::compile(
+            &["graph app : App { input in: int; output out: int; in -> out }"],
+            &crate::contract::ContractCatalog::try_m0().expect("catalogue"),
+        )
+        .expect("minimal graph");
+        let version = crate::plan::GraphVersion(1);
+        let journal = MemJournal::new(version);
+        let vm = Vm::boot(&compilation.plan, version);
+        let view = snapshot(SnapshotInput {
+            revision: 0,
+            mode: "simulate",
+            state: ExecutionState::Paused,
+            plan: &compilation.plan,
+            definitions: &compilation.source_definitions,
+            vm: &vm,
+            journal: &journal,
+            fault: None,
+            activity: None,
+            scenario: None,
+            session: 0,
+            boundary: 0,
+        })
+        .expect("snapshot");
+        let value: JsonValue = serde_json::from_slice(&view.json).expect("snapshot JSON");
+        assert!(value.get("cost_report").is_none());
+        assert!(value.get("measurement_report").is_none());
+        assert_eq!(journal.records().len(), 0);
+    }
+
     #[test]
     fn scenario_source_never_bypasses_classified_data_redaction() {
         for annotation in ["@sensitive(level = restricted)", "@personal"] {

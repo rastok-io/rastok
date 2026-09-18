@@ -17,7 +17,8 @@ use crate::identity::InstanceRef;
 use crate::journal::{CloseVerdict, Closure, Journal};
 use crate::node;
 use crate::plan::OwnerSlot;
-use alloc::collections::BTreeSet;
+use alloc::boxed::Box;
+use alloc::collections::{BTreeSet, VecDeque};
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
@@ -386,9 +387,8 @@ pub fn network_attribute_site(
 
     match contract.as_str() {
         crate::connector::HTTP_CLIENT_CONNECTOR_ID => match attribute {
-            "behavior" | "codec" | "idempotent" | "max_body" | "versions" | "zero_rtt" => {
-                Some(Plan)
-            }
+            "behavior" | "codec" | "idempotent" | "json_profile" | "max_body" | "versions"
+            | "zero_rtt" => Some(Plan),
             "timeout" | "tls_ca" | "tls_certificate" | "tls_private_key" => Some(Instance),
             "auth_bearer" | "custom_headers" | "headers" | "idempotency_key" | "method" | "url" => {
                 Some(Invocation)
@@ -2359,6 +2359,9 @@ pub trait SessionConnectorBindings {
 /// `RuntimeBindings` implementation selects among several contract families
 /// and returns a typed error if its pre-VM proof is ever contradicted. The VM
 /// therefore never matches `Process`, `File`, or another concrete contract.
+/// VM entry points borrow this object-safe boundary dynamically: the scheduler
+/// and recovery code are shared across Driver bindings rather than duplicated
+/// for each binding implementation in an embedded image.
 pub trait OutboundConnectorBindings {
     /// Frames one request through the Driver bound to `connector`.
     ///
@@ -2618,6 +2621,15 @@ impl core::error::Error for DispatchError {}
 #[derive(Debug, Default)]
 pub struct Dispatcher {
     started: BTreeSet<CallRef>,
+    pending_settlement: Option<Box<PendingSettlement>>,
+}
+
+/// One handed-off Driver batch, including closures already committed before
+/// a later refusal. Do not poll another batch until this one reaches the VM.
+#[derive(Debug)]
+struct PendingSettlement {
+    responses: VecDeque<Response>,
+    batch: PumpBatch,
 }
 
 impl Dispatcher {
@@ -2638,6 +2650,7 @@ impl Dispatcher {
                 .into_iter()
                 .map(|intent| intent.call_ref)
                 .collect(),
+            pending_settlement: None,
         }
     }
 
@@ -2648,7 +2661,8 @@ impl Dispatcher {
     ///
     /// [`DispatchError::MissingRequest`] when the causal history lacks
     /// a journaled request — an integrity fault; journal refusals are
-    /// propagated, never absorbed.
+    /// propagated, never absorbed. A refused settlement retains that Driver
+    /// batch, including earlier winning closures, until a later pump succeeds.
     pub fn pump<B: OutboundConnectorBindings + ?Sized>(
         &mut self,
         journal: &mut dyn Journal,
@@ -2679,33 +2693,42 @@ impl Dispatcher {
         let open = journal.open_calls();
         let open_refs: BTreeSet<_> = open.iter().map(|intent| intent.call_ref).collect();
         self.started.retain(|call_ref| open_refs.contains(call_ref));
-        // Start phase: every open call not yet started.
-        for intent in &open {
-            if self.started.contains(&intent.call_ref) {
-                continue;
-            }
-            let request = journal
-                .find_envelope(intent.emitting_id)
-                .ok_or(DispatchError::MissingRequest(intent.call_ref))?;
-            let start = bindings
-                .start(intent, &request)
-                .map_err(DispatchError::Driver)?;
-            if start == CallStart::Started {
-                self.started.insert(intent.call_ref);
+        // A refused batch keeps ownership of its answers. Starting more work
+        // or polling the Driver here would grow retention during store pressure.
+        if self.pending_settlement.is_none() {
+            for intent in &open {
+                if self.started.contains(&intent.call_ref) {
+                    continue;
+                }
+                let request = journal
+                    .find_envelope(intent.emitting_id)
+                    .ok_or(DispatchError::MissingRequest(intent.call_ref))?;
+                let start = bindings
+                    .start(intent, &request)
+                    .map_err(DispatchError::Driver)?;
+                if start == CallStart::Started {
+                    self.started.insert(intent.call_ref);
+                }
             }
         }
         // Settle phase: won closures become routable events; losers
         // and strays stay visible.
-        let mut batch = PumpBatch::default();
-        for response in bindings.events().map_err(DispatchError::Driver)? {
+        let mut settlement = match self.pending_settlement.take() {
+            Some(pending) => *pending,
+            None => PendingSettlement {
+                responses: bindings.events().map_err(DispatchError::Driver)?.into(),
+                batch: PumpBatch::default(),
+            },
+        };
+        while let Some(response) = settlement.responses.pop_front() {
             let Some(intent) = open
                 .iter()
                 .find(|intent| intent.call_ref == response.call_ref)
             else {
                 if journal.find_call(&response.call_ref).is_some() {
-                    batch.discarded.push(response);
+                    settlement.batch.discarded.push(response);
                 } else {
-                    batch.uncorrelated.push(response);
+                    settlement.batch.uncorrelated.push(response);
                 }
                 continue;
             };
@@ -2713,28 +2736,37 @@ impl Dispatcher {
             // refuses must never close the call — journaled garbage
             // would leave an unclosable obligation.
             if let Err(reason) = gate.admit(&intent.connector_path, &response.completion) {
-                batch.rejected.push((response, reason));
+                settlement.batch.rejected.push((response, reason));
                 continue;
             }
             let closure = Closure::Response(response.completion.clone());
-            let schedule = timing(intent, &response.completion)?;
-            match journal
-                .close_outbound(&response.call_ref, closure, now, schedule)
-                .map_err(DispatchError::Journal)?
-            {
+            let verdict = timing(intent, &response.completion).and_then(|schedule| {
+                journal
+                    .close_outbound(&response.call_ref, closure, now, schedule)
+                    .map_err(DispatchError::Journal)
+            });
+            let verdict = match verdict {
+                Ok(verdict) => verdict,
+                Err(error) => {
+                    settlement.responses.push_front(response);
+                    self.pending_settlement = Some(Box::new(settlement));
+                    return Err(error);
+                }
+            };
+            match verdict {
                 CloseVerdict::Won => {
                     self.started.remove(&response.call_ref);
-                    batch.events.push(BoundaryEvent {
+                    settlement.batch.events.push(BoundaryEvent {
                         call_ref: response.call_ref,
                         connector_path: intent.connector_path.clone(),
                         emitting_id: intent.emitting_id,
                         completion: response.completion,
                     });
                 }
-                CloseVerdict::AlreadyClosed => batch.discarded.push(response),
+                CloseVerdict::AlreadyClosed => settlement.batch.discarded.push(response),
             }
         }
-        Ok(batch)
+        Ok(settlement.batch)
     }
 }
 

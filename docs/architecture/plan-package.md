@@ -1,13 +1,12 @@
 # The plan package — the transportable, verifiable ExecutionPlan
 
-> **Categorical v18 (2026-09-10).** The reader accepts only v18. The current
-> tables below replace the previous format; no retired field or tag is
-> reinterpreted. [The v17 ledger](loop-host-terminal-v17.md) records the Loop
-> host-terminal amendment and its qualification. [R9](rework-r9-qualification.md)
-> retains the preceding v16 blessing and independently validated identities. Historical
-> format notes remain evidence, not alternative readable formats. The
-> [v18 closure ledger](instance-stop-command.md) adds route destination tag 4
-> and requires lexical boundary proof for exact-instance commands.
+> **Current executable format: categorical v19, recording v3.** The
+> [C1 inventory](retry-c1-identity.md), [final annotation inventory](annotation-types-m1.md#19-two-field-measure-migration-inventory--18-september-before-code)
+> and [common qualification ledger](retry-c4-qualification.md) own the single
+> cutover, fixture movements and checks. Earlier formats refuse by version;
+> no retired field or tag is reinterpreted. [R9](rework-r9-qualification.md),
+> [v17](loop-host-terminal-v17.md) and [v18](instance-stop-command.md) remain
+> dated migration evidence, not alternate readable package formats.
 
 > Format note — the bytes follow this document, never precede it.
 > Specified 2026-08-06 (M0.5 item 4), after the delivery-reference
@@ -321,20 +320,22 @@ no gap at the boundary.
 
 The package re-derives expression/Dispatch types, the exact six built-in
 Connector Contracts, port tables, routed narrowing, composition, productibility,
-Extensions and Loop control/measure/effect evidence without the hosted
+Extensions, Loop control/measure and Retry safety evidence without the hosted
 ContractCatalog. Unknown contracts or unsupported execution profiles refuse.
 Checksums do not substitute for these proofs. Refusals are typed and total;
 there is no silent migration.
 
 Data policy applies the same rule to data policy without consulting the compiler
 catalogue: every local table is reconstructed, resolved against its adjacent
-logical type and checked against the closed measure/currency registries. A raw
+logical type and checked against its exact supported interpretation and
+flat argument schema. Measurement ids and units are ordinary validated text,
+not entries in a closed monetary or telemetry registry. A raw
 port row is a declaration; resolved-port policy is a separately transported
 effective claim. A3 follows the canonical operation graph and requires that
 claim to equal its independent derivation exactly. It never rewrites the raw
 row or recovers meaning from payload strings.
 
-## Body tables (format v18)
+## Body tables (format v19)
 
 The body is one canonical CBOR value encoding the `ExecutionPlan`.
 Compound values use fixed-shape arrays with a leading numeric
@@ -392,6 +393,12 @@ owner_kind := [1]                                 — graph
 
 extension_spec := [2]                            — App
                 | [3, loop_spec]                — Loop r2; tag 1 retired
+                | [4, retry_spec]               — Retry r1
+retry_spec  := {1: attempts (plan_constant), 2: [case (text)+],
+                3: delay?, 4: entry (text), 5: terminal (text)}
+              // Positive total attempts; strictly sorted unique terminal cases;
+              // resolved ports, idempotence and bounded completion independently
+              // checked against the exact outbound Call Contract. No manager port.
 loop_spec   := {1: fuel?, 2: delay?, 3: proof?,
                 4: entry (text), 5: [terminal (text)*],
                 6: [exhaustion_port (text), complete_type]?}
@@ -446,16 +453,18 @@ owner_val  := {1: name (text), 2: evaluation_site, 3: tree,
               // requires exact equality with the transported reduction.
               // Invocation refuses for owner vals; invocation-local vals
               // remain handler steps.
-spec       := {1: contract_id (text), 2: effect,
+spec       := {1: contract_id (text),
                3: behavior (uint: 1 deterministic · 2 probabilistic),
                4: [[name (text), attr]*], 6: connector_roles,
-               7: connector_exchange}
+               7: connector_exchange, 8: idempotent (plan_constant)?}
               // contract_id is canonical <namespace>/<name>@<major>
               // connector_roles := uint: 1 inbound · 2 outbound ·
               //                            3 inbound+outbound
               // connector_exchange := uint: 1 event · 2 call · 3 session
-              // key 5 (error_set) is RETIRED by B5 and never reused
-effect     := 0 | [1, class (uint: 1 idempotent · 2 compensable · 3 irreversible)]
+              // key 2 (effect) and key 5 (error_set) are RETIRED, never reused.
+              // Key 8 is a boolean PlanConstant on admitted outbound Call
+              // profiles, absent on Sessions and inbound profiles. Its reduction
+              // must equal the effective Contract attribute; never copied to Intent.
 attr       := [1, word (text)] | [2, tagged_value]
             | [3, evaluation_site, tree]
               // plan-resolved choices/constants use the first two forms.
@@ -508,17 +517,26 @@ path_segment := [1, field (text)]                — struct field
 annotation_set := [data_annotation+]
 data_annotation := [1, sensitivity]
                  | [2]
-                 | [3, measure_id (text)]
-                 | [4, cost_basis, currency (text)?]
+                 // tags 3 (implicit measure) and 4 (cost) retired; named refusal
                  | [5, personal_flags]
+                 | [6, annotation_binding, definition (text), argument_type, tagged_value]
+                   // candidate v19: definition and complete typed struct arguments
+annotation_binding := uint: 1 descriptive metadata; 2 numerical measure;
+                      // unsupported tags/profiles refuse; binding 2 requires
+                      // rastok/measure@3, exactly { id: text, unit: text },
+                      // and complete typed constants; @2 is not reinterpreted.
 sensitivity := uint: 1 internal · 2 confidential · 3 restricted
-cost_basis  := uint: 1 provider-reported · 2 pricebook-calculated
 personal_flags := uint: bit 0 special-category · bit 1 criminal-offence
                          · bit 2 subject identifier; all other bits refuse
-              // Tables sort paths structurally and sets sort annotation tags.
+              // Tables sort paths structurally and sets by consumer identity,
+              // then declaring names for descriptive applications. Every
+              // numerical measure shares @measure's per-path uniqueness.
               // Decode reconstructs the closed domain, then validation resolves
               // every path against the adjacent type and rechecks its target,
-              // measure carrier/source and currency authority. Empty tables
+              // numerical target and unit consistency per id. Declared
+              // applications recheck flat argument types, complete constants,
+              // declaring identity and authority; their types/values count
+              // against the package-depth budget. Empty tables
               // have no wire spelling at an owning schema site.
 
 edge       := [scope (owner_slot), endpoint, endpoint | null]

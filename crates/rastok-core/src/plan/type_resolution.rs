@@ -1423,11 +1423,13 @@ fn write_type_path(
         return Ok(leaf);
     };
     let mut fields: BTreeMap<String, DataType> = match current {
-        Some(DataType::Struct(structure)) => structure
-            .fields()
-            .iter()
-            .map(|field| (field.name().to_string(), field.ty().clone()))
-            .collect(),
+        Some(DataType::Struct(structure)) => {
+            let mut fields = BTreeMap::new();
+            for field in structure.fields() {
+                fields.insert(field.name().to_string(), field.ty().clone());
+            }
+            fields
+        }
         Some(DataType::Variant) => return Ok(DataType::Variant),
         _ => BTreeMap::new(),
     };

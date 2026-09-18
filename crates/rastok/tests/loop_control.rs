@@ -108,7 +108,13 @@ fn run_lab(source: &str) -> Vec<rastok::lab::ScenarioRun> {
         .labs
         .first()
         .expect("the source carries one lab");
-    let runs = rastok::lab::run(&compilation.plan, GraphVersion(1), lab);
+    let runs = rastok::lab::run_program(
+        &compilation.plan,
+        compilation.hash,
+        GraphVersion(1),
+        lab,
+        None,
+    );
     for run in &runs {
         assert!(run.report.passed(), "{:#?}", run.report.failures);
     }

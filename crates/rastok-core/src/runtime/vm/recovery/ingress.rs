@@ -6,7 +6,7 @@ use crate::journal::{InboundExchangeRecord, InboundRecord, SessionIngressRecord,
 impl Vm<'_> {
     pub(super) fn restore_ingress(
         &mut self,
-        admissions: &impl InstanceAdmissions,
+        admissions: &dyn InstanceAdmissions,
         index: usize,
         inbound: &InboundRecord,
     ) -> Result<(), VmError> {
@@ -333,7 +333,7 @@ impl Vm<'_> {
 
     fn restore_source_target(
         &self,
-        admissions: &impl InstanceAdmissions,
+        admissions: &dyn InstanceAdmissions,
         index: usize,
         slot: Slot,
         envelope: &Envelope,

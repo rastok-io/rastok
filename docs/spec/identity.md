@@ -1,9 +1,12 @@
 # Identity and canonical form
 
-> **Next refactor, not current encoding:** the 15 September
-> [C1 inventory](../architecture/retry-c1-identity.md) proposes the single
-> Retry/idempotence package v19 and recording v3 cutover. Current readers,
-> writers, tags and goldens below remain v18 until C2 lands and is qualified.
+> **Current executable format: v19 / recording v3.** The
+> [C1 inventory](../architecture/retry-c1-identity.md) owns the Retry/idempotence
+> cutover. The [18 September annotation inventory](../architecture/annotation-types-m1.md#19-two-field-measure-migration-inventory--18-september-before-code)
+> retires measure/cost tags 3/4 and fixes the two-field `rastok/measure@3`
+> binding, without reusing a tag. The [C4 ledger](../architecture/retry-c4-qualification.md)
+> records the common fixture migration, unchanged causal witnesses and checks.
+> Historical version entries below do not override that current allocation.
 
 > **Status (2026-09-05): normative.** This document fixes the
 > **semantic identity** of a graph, the
@@ -583,6 +586,30 @@ Only programs using presence inspection gain these expression bytes. Existing
 echo, JSONL and gauge packages, hashes and causal traces remain unchanged.
 No witness re-blessing accompanies this approved opening-freeze exception.
 
+### 1.6 Plan v19 and recording v3 — Retry and annotation bindings
+
+The [C1 allocation](../architecture/retry-c1-identity.md) and
+[final annotation supplement](../architecture/annotation-types-m1.md#19-two-field-measure-migration-inventory--18-september-before-code)
+are one pre-public cutover. ConnectorSpec key 2 is retired; key 8 carries the
+original-plan idempotence constant. Extension tag 4 carries RetrySpec. Process
+job/service use Contracts `@4`/`@5`; File and network Contracts use `@3`.
+`ServerError` is a typed HttpClient 500–599 response after successful decode.
+
+Retry adds sparse causal key 58 and the distinct operation/admission domains
+`0x16`/`0x07`. Closure-time key 59 is retained on all winning outbound Call
+closures, not just Retry; it is excluded from the causal seal. Timer keys 37
+and 56 also cover Retry's closure-owned delay arm. Existing Loop r2 meanings
+are unchanged. Recording v3 removes the effect element from the Intent tuple;
+it does not replace it with an idempotence field.
+
+Annotation application tag 6 retains definition, schema and typed constants.
+Binding 2 now requires exactly `rastok/measure@3` with `id` and `unit`;
+retired compact measure/cost tags 3/4 and the old named profile refuse. Data
+values, original emissions and security/privacy interpretations do not change.
+The [qualification ledger](../architecture/retry-c4-qualification.md) records
+every moved witness: gauge's body/hash/trace and all three causal witnesses
+remain unchanged. No second candidate blessing is implied.
+
 ## 2. `graph_version` and the manifest
 
 `meta.sys.graph_version` is a small integer. It is a
@@ -759,6 +786,7 @@ execution-model §1) — keys `30–39`, `48–52`, `54–55` and sparse `57`:
 | 54 | logical_time | int | the signed nanosecond logical instant since the Unix epoch, present exactly when a checked firing handler can observe `now()`; fixed across guard selection and body evaluation, omitted otherwise. This is an explicit transaction input, not a scheduler due date or host `committed_at`. |
 | 55 | loop_protocol | map | Sparse r2 packet: 1 context, 2 routed contexts, 3 produced commands, 4 consumed commands, 5 manager facts. Exact forms below; absent for unrelated transactions. |
 | 57 | instance_commands | map | Production or winning target-owned consumption; exact shape below. Absent without commands; separate from Loop r2. |
+| 58 | retry_protocol | map | Sparse Retry packet, also carried on its outbound Call facts. Correlation and Opened/Admitted/Held/Consumed/Advance/Published/Close use the [C1 exact packet](../architecture/retry-c1-identity.md#4-shared-journal-distinct-causes), checked against the retained prefix. Absent on unrelated records, INBOUND and Sessions. |
 
 **Instance closure packet — key 57.** This is causal, unlike scheduler metadata
 at key 56. Exactly one field: `1: [command+]` for production, or
@@ -804,7 +832,7 @@ admission, not only business origin, identifies a run. See [Loop](loop.md).
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
-| 56 | timer_schedule | array | `[armed_at_ns, [[kind, reference_bytes16, due_at_ns], ...]]`, retained atomically beside the accepting INBOUND or TRANSACTION. Instants are signed i64 logical nanoseconds; due ≥ armed-at. Kinds use the existing 1–9 registry (4 remains reserved). Arms retain actual order, including ordered renewals, never sort by reference. Empty schedules are omitted. |
+| 56 | timer_schedule | array | `[armed_at_ns, [[kind, reference_bytes16, due_at_ns], ...]]`, retained atomically beside the accepting INBOUND, TRANSACTION or Retry OUTBOUND closure. Instants are signed i64 logical nanoseconds; due ≥ armed-at. Kinds use the existing 1–9 registry (4 remains reserved). Arms retain actual order, including ordered renewals, never sort by reference. Empty schedules are omitted. |
 
 Storage integrity must cover this required recovery evidence independently of
 the causal seal. Key 37 keeps its existing sealed timer references; key 54
@@ -828,6 +856,13 @@ delivery-semantics §4) — keys `40–47` :
 | 45 | closure | array | present iff status ∈ {closed, abandoned} ; EXACT byteshape fixed BY `status` (`[1,outputs]` response · `[2]` timeout · `[]` abandoned ; sub-forms below), so `status` and `closure` never disagree |
 | 46 | edge_cursor | array | present only on an inter-shard delivery — the DURABLE LOGICAL cursor `[edge (text), source_instance_ref, seq (uint)]` (seq never restarts on leader change within that source generation; the transport `leader_epoch` fence is separate and NOT sealed); a transport cursor, NOT an envelope id, outside every id domain |
 | 47 | edge | text | the canonical edge of the causing delivery ; with key 40 (`emitting_id`) it reconstructs `delivery_ref` and hence `call_ref` (envelope.md §2) — the record stays autonomous |
+
+Every outbound Call closure also retains **key 59**, `closed_at` as signed
+logical nanoseconds; an Open has no value. This field is outside the causal
+projection. Retry closures may carry causal timer references at key 37,
+retained schedule key 56 (`armed_at = closed_at`) and correlation key 58.
+The next-admission reference names the Retry operation/ordinal/preceding Call,
+not a Loop command. Recovery never restarts that delay from reboot time.
 
 **OUTBOUND / Session** (kind 3 — opening and message-write WAL facts;
 delivery-semantics §4.5) — key `51` only. The value is one closed array form:
@@ -1095,7 +1130,9 @@ fixed in the same immutable run header as `(stable profile reference,
 canonical digest)`. Price rows, provider/model dimensions and calculated cost
 remain outside graph/package and causal-record identity. Replaying with a
 supplied profile whose reference or digest differs from the header refuses;
-omitting the profile keeps exact usage and yields typed `unpriced` remainders.
+omitting the profile originally yielded typed `unpriced` remainders. This
+report behavior is superseded by D-2026-09-16-7: M1 retains individual facts
+without pricing or aggregation. The profile-attestation encoding is unchanged.
 Accounting observations are derived lazily from sealed envelopes plus the
 validated annotation table, so A7 adds no record key and moves no existing
 package, semantic witness or causal trace.

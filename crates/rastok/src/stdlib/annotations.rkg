@@ -1,0 +1,19 @@
+// Standard argument schemas share the ordinary type system.
+// Their protected interpretations and annotation-only defaults belong to
+// the checker and independent core validator, not to shape equality.
+type sensitive = @struct {
+  level: enum { internal, confidential, restricted }
+}
+
+type secret = @struct {}
+
+type personal = @struct {
+  special: bool
+  criminal: bool
+  identifier: bool
+}
+
+type measure = @struct {
+  id: text
+  unit: text
+}

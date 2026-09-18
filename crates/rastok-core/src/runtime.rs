@@ -136,11 +136,13 @@ impl InstanceState {
         if let Some(cell) = self.cells.get(&(slot, instance.clone())) {
             return cell.clone();
         }
-        plan.nodes[slot.index()]
-            .vars
-            .iter()
-            .filter_map(|var| var.init.clone().map(|value| (var.name.clone(), value)))
-            .collect()
+        let mut cell = BTreeMap::new();
+        for var in &plan.nodes[slot.index()].vars {
+            if let Some(value) = &var.init {
+                cell.insert(var.name.clone(), value.clone());
+            }
+        }
+        cell
     }
 
     /// Applies a committed delta to a cell. Verified like
@@ -719,10 +721,7 @@ impl<'plan> HandlerExecutor<'plan> {
             return Ok(true);
         };
         let (input, extra) = join_context(self.plan.plan(), candidate.trigger, candidate.inputs);
-        let mut base: BTreeMap<String, expr::EvalValue> = state
-            .iter()
-            .map(|(name, value)| (name.clone(), expr::EvalValue::from(value.clone())))
-            .collect();
+        let mut base = expr::value_bindings(state);
         for (name, value) in instance_values {
             base.insert(name.clone(), expr::EvalValue::from(value.clone()));
         }
@@ -968,10 +967,7 @@ impl<'plan> HandlerExecutor<'plan> {
         let base = |scratch: &BTreeMap<String, Value>,
                     lets: &BTreeMap<String, expr::EvalValue>|
          -> BTreeMap<String, expr::EvalValue> {
-            let mut map: BTreeMap<String, expr::EvalValue> = scratch
-                .iter()
-                .map(|(name, value)| (name.clone(), expr::EvalValue::from(value.clone())))
-                .collect();
+            let mut map = expr::value_bindings(scratch);
             for (name, value) in instance_values {
                 map.insert(name.clone(), expr::EvalValue::from(value.clone()));
             }
@@ -2094,24 +2090,22 @@ struct PayloadSlots<'a> {
 
 impl<'a> PayloadSlots<'a> {
     fn new(input: &'a Envelope, named: &'a [Delivery]) -> Self {
-        let named = named
-            .iter()
-            .map(|delivery| {
-                (
-                    delivery.port.name().to_string(),
-                    PayloadSource {
-                        data: DataSlot::new(delivery.envelope.data()),
-                        meta: Some(delivery.envelope.meta()),
-                    },
-                )
-            })
-            .collect();
+        let mut sources = BTreeMap::new();
+        for delivery in named {
+            sources.insert(
+                delivery.port.name().to_string(),
+                PayloadSource {
+                    data: DataSlot::new(delivery.envelope.data()),
+                    meta: Some(delivery.envelope.meta()),
+                },
+            );
+        }
         Self {
             input: PayloadSource {
                 data: DataSlot::new(input.data()),
                 meta: Some(input.meta()),
             },
-            named,
+            named: sources,
         }
     }
 
@@ -2600,17 +2594,16 @@ fn from_meta_value(value: &MetaValue) -> Value {
     match value {
         MetaValue::Scalar(scalar) => from_scalar(scalar),
         MetaValue::Array(items) => Value::Array(items.iter().map(from_scalar).collect()),
-        MetaValue::Map(entries) => Value::Map(
-            entries
-                .iter()
-                .map(|(key, values)| {
-                    (
-                        key.clone(),
-                        Value::Array(values.iter().map(from_scalar).collect()),
-                    )
-                })
-                .collect(),
-        ),
+        MetaValue::Map(entries) => {
+            let mut mapped = BTreeMap::new();
+            for (key, values) in entries {
+                mapped.insert(
+                    key.clone(),
+                    Value::Array(values.iter().map(from_scalar).collect()),
+                );
+            }
+            Value::Map(mapped)
+        }
     }
 }
 
@@ -2654,27 +2647,25 @@ pub fn to_meta_value(value: &Value) -> Result<MetaValue, Fault> {
             MetaValue::Array(scalars)
         }
         Value::Map(entries) => {
-            let entries = entries
-                .iter()
-                .map(|(key, value)| {
-                    let Value::Array(values) = value else {
-                        return Err(Fault::Unrepresentable(String::from(
-                            "a metadata map value is not an array",
-                        )));
-                    };
-                    let values = values
-                        .iter()
-                        .map(|value| match to_meta_value(value)? {
-                            MetaValue::Scalar(scalar) => Ok(scalar),
-                            MetaValue::Array(_) | MetaValue::Map(_) => Err(Fault::Unrepresentable(
-                                String::from("a metadata map contains a nested value"),
-                            )),
-                        })
-                        .collect::<Result<alloc::vec::Vec<_>, _>>()?;
-                    Ok((key.clone(), values))
-                })
-                .collect::<Result<alloc::collections::BTreeMap<_, _>, _>>()?;
-            MetaValue::Map(entries)
+            let mut mapped = BTreeMap::new();
+            for (key, value) in entries {
+                let Value::Array(values) = value else {
+                    return Err(Fault::Unrepresentable(String::from(
+                        "a metadata map value is not an array",
+                    )));
+                };
+                let values = values
+                    .iter()
+                    .map(|value| match to_meta_value(value)? {
+                        MetaValue::Scalar(scalar) => Ok(scalar),
+                        MetaValue::Array(_) | MetaValue::Map(_) => Err(Fault::Unrepresentable(
+                            String::from("a metadata map contains a nested value"),
+                        )),
+                    })
+                    .collect::<Result<alloc::vec::Vec<_>, _>>()?;
+                mapped.insert(key.clone(), values);
+            }
+            MetaValue::Map(mapped)
         }
         _ => {
             return Err(Fault::Unrepresentable(String::from(
@@ -2690,6 +2681,38 @@ mod emission_tests;
 #[cfg(test)]
 mod metadata_conformance_tests {
     use super::*;
+
+    #[test]
+    fn metadata_map_conversion_preserves_keys_scalars_and_first_refusal() {
+        let mut entries = BTreeMap::new();
+        for index in (0..40).rev() {
+            entries.insert(
+                format!("header_{index:02}"),
+                vec![
+                    Scalar::Int(index),
+                    Scalar::Bytes(vec![0, 255]),
+                    Scalar::Decimal {
+                        unscaled: i128::from(index),
+                        scale: 2,
+                    },
+                ],
+            );
+        }
+        let metadata = MetaValue::Map(entries);
+        let value = from_meta_value(&metadata);
+        assert_eq!(to_meta_value(&value).unwrap(), metadata);
+        let Value::Map(mut entries) = value else {
+            panic!("expected a map")
+        };
+        entries.insert(String::from("z"), Value::Array(vec![Value::Array(vec![])]));
+        entries.insert(String::from("a"), Value::Bool(false));
+        assert_eq!(
+            to_meta_value(&Value::Map(entries)),
+            Err(Fault::Unrepresentable(String::from(
+                "a metadata map value is not an array"
+            ))),
+        );
+    }
 
     #[test]
     fn metadata_uses_the_core_value_and_type_authorities() {

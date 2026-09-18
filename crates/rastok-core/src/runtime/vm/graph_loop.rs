@@ -195,7 +195,7 @@ impl Vm<'_> {
 
     pub(super) fn prepare_graph_routes(
         &self,
-        journal: &(impl InstanceAdmissions + ?Sized),
+        journal: &dyn InstanceAdmissions,
         source: &Endpoint,
         source_instance: Option<&InstanceRef>,
         envelope: &Envelope,
@@ -537,7 +537,7 @@ impl Vm<'_> {
         };
         let mut candidates = BTreeMap::new();
         let routes = self.prepare_graph_routes(
-            journal,
+            &&*journal,
             &source,
             Some(&current.instance),
             &envelope,
@@ -885,7 +885,7 @@ impl Vm<'_> {
 
     pub(super) fn prepare_graph_emissions(
         &self,
-        journal: &(impl InstanceAdmissions + ?Sized),
+        journal: &dyn InstanceAdmissions,
         owner: OwnerSlot,
         instance: &InstanceRef,
         record: &crate::journal::TransactionRecord,
@@ -966,7 +966,7 @@ impl Vm<'_> {
     pub(super) fn restore_graph_manager(
         &mut self,
         journal: &dyn Journal,
-        admissions: &impl InstanceAdmissions,
+        admissions: &dyn InstanceAdmissions,
         index: usize,
         owner: OwnerSlot,
         record: &crate::journal::TransactionRecord,

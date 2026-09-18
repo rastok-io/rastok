@@ -14,11 +14,12 @@ fn echo_retention_bytes_are_pinned_independently_of_the_codec_location() {
             .into_iter()
             .map(|run| codec::list(run.records.iter().map(codec::record)))
     })));
-    // Captured with diagnostic v2's hosted codec before the no_std relocation.
-    // The v19/v3 inventory must separately explain its eventual tuple movement.
+    // Recording v3 removes Intent.effect and retains the winning closure time.
+    // The tuple moves separately from the unchanged causal-seal witnesses;
+    // see docs/architecture/retry-c4-qualification.md.
     assert_eq!(
         blake3::hash(&bytes).to_hex().as_str(),
-        "e0688e724608dd1d9686e86d09148da3fdc3caaf40eeca32d26c9010af5234fa"
+        "eba461cb2011177539b0a0a864ee01064f39097cace16dd3268b5523ce9e2078"
     );
 }
 
@@ -119,7 +120,7 @@ fn boot_dependent_recording_refuses_instead_of_copying_resolved_values() {
 }
 
 #[test]
-fn keyed_loops_and_bounded_joins_survive_lossless_recording_and_prefix_reconstruction() {
+fn keyed_retries_loops_and_bounded_joins_survive_recording_and_prefix_reconstruction() {
     for source in [
         include_str!("../../../../examples/keyed-retry.rkg"),
         include_str!("../../../../examples/countdown.rkg"),
@@ -127,7 +128,13 @@ fn keyed_loops_and_bounded_joins_survive_lossless_recording_and_prefix_reconstru
     ] {
         let compilation = compile(source);
         for world in &compilation.labs {
-            for run in lab::run(&compilation.plan, GraphVersion(1), world) {
+            for run in lab::run_program(
+                &compilation.plan,
+                compilation.hash,
+                GraphVersion(1),
+                world,
+                None,
+            ) {
                 assert!(run.report.passed(), "{:?}", run.report);
                 let journal =
                     MemJournal::from_records(GraphVersion(1), None, &run.records).unwrap();

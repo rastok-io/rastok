@@ -40,6 +40,30 @@ tags. It is not allocated to Retry. No existing tag or domain below is reused.
 
 ## 2. Plan and semantic hash
 
+**Subsequent design gate (D-2026-09-15-5):** the approved
+[`@struct` annotation model](../spec/annotations.md) requires an additional
+exact inventory for annotation definitions/bindings, generic decimal measures
+and monetary desugaring before its implementation. The tables below remain
+the Retry candidate inventory, not an allocation for that later metadata
+work. The subsequent [common binding inventory](annotation-types-m1.md#41-common-binding-inventory-16-september-before-implementation)
+appends annotation tuple tag 6 inside this unblessed v19 candidate, without
+a new root key, Contract, recording field or version. Its first executable
+binding is descriptive metadata (1); unsupported interpretation tags refuse.
+The final pre-blessing amendment,
+[18 September inventory](annotation-types-m1.md#19-two-field-measure-migration-inventory--18-september-before-code),
+gives binding 2 exactly `id: text` and `unit: text` under
+`rastok/measure@3`. All quantities, including amounts, use it. Old implicit
+measure tag 3, cost tag 4 and protected definition `@2` refuse by name;
+none is reinterpreted. Security/privacy tags and the attested deployment
+profile representation remain unchanged. Numeric DATA, original emissions and
+their causal provenance are not revalued.
+
+The earlier 16 September source-only `@cost` migration was neutral at that
+checkpoint. The subsequent two-field simplification is deliberately not:
+annotated hashes and packages move for their schema/definition or retired
+compact interpretation. It introduces no root key, Contract major, journal
+fact, additional version or separate blessing.
+
 | Movement | Target |
 |---|---|
 | package header/checksum | v18 → v19; every package container moves |
@@ -52,6 +76,8 @@ tags. It is not allocated to Retry. No existing tag or domain below is reused.
 | RetrySpec key 3 | optional fixed/exponential delay, existing delay encoding and bounded values |
 | RetrySpec keys 4 / 5 | resolved request entry / Call terminal names, checked against the Contract |
 | HttpClient terminal type | ServerError { status: int } added; usable 500–599 only; Completed covers the other admitted final statuses |
+| HttpClient JSON output (16 September amendment) | Explicit `output out: T` refines the existing output under the JSON hydration profile; `T` and its annotations use existing port/schema tables, no new key; unrefined output remains `variant` |
+| HttpClient projected JSON (17 September amendment) | Opt-in plan attribute `json_profile = projected` in the existing attribute table; required JSON/struct output independently checked. No default row, new key, journal fact or recording tuple. Strict plans and request descriptors stay unchanged; opting in changes the program hash. |
 | frame cardinality | canonical set of response-producing terminal cases replaces the single-case internal rule |
 
 The guarantee is normalized from the Contract and an admitted author constant:
@@ -80,7 +106,7 @@ or DataType. Sharing Rust machinery is not itself a semantic hash movement.
 | Process job | rastok/process@2 | rastok/process@4 | remove global effect; declare plan-owned Call idempotence |
 | Process service | rastok/process@3 | rastok/process@5 | remove inherited effect requirement; preserve local Session opening |
 | File read/replace | rastok/file@2 | rastok/file@3 | replace fixed effect class with fixed Call guarantee |
-| HttpClient | rastok/http-client@2 | rastok/http-client@3 | guarantee plus ServerError/status/cardinality amendment |
+| HttpClient | rastok/http-client@2 | rastok/http-client@3 | guarantee, ServerError/status/cardinality, explicit typed JSON output and opt-in projected profile (D-2026-09-16-1 / D-2026-09-17-1), all before candidate blessing |
 | HttpServer | rastok/http-server@2 | rastok/http-server@3 | remove effect sentinel; preserve peer admission / Call response roles |
 | WebSocketClient | rastok/websocket-client@2 | rastok/websocket-client@3 | remove effect requirement; preserve local opening |
 | WebSocketServer | rastok/websocket-server@2 | rastok/websocket-server@3 | remove effect sentinel; preserve peer opening and orphan-write disposition |
@@ -259,8 +285,20 @@ The compiler's M0 probe is **not** the echo example: its current hash is
 Keep its migration separate. C2/C4 must enumerate all changed hashes, actual
 body sizes/checksums and causal fixture reasons before the one blessing.
 
+The [explicit-unit annotation migration](annotation-types-m1.md#16-explicit-unit-migration-inventory--17-september-before-implementation)
+retires the old implicit-registry annotation tag 3 by name, without reusing it.
+Numerical quantities use the already allocated tag-6 measure binding. Only
+formerly implicit-registry metadata/hash bytes move; explicit-unit bindings,
+compact monetary/security bytes and original causal records did not move in
+that dated slice. D-2026-09-18-1 subsequently retires compact monetary tag 4
+and replaces `rastok/measure@2` with the two-field `rastok/measure@3` binding;
+[the pre-code inventory](annotation-types-m1.md#19-two-field-measure-migration-inventory--18-september-before-code)
+is the additional annotation movement in the single cutover. The
+[C4 ledger](retry-c4-qualification.md) gives the measured current witness
+bodies, hashes, checksums and causal non-movements.
+
 Non-movements: envelope/DataType/value tags, expression ids including `has`,
-annotations and redaction policy, ordinary Dispatch, source/destination sets,
+redaction policy, ordinary Dispatch, source/destination sets,
 RouteRule/PhysicalEdge separation, owner/instance/address tables, `behavior`,
 Call close-once, state deltas, ordinary cursor ordering, instance-stop key 57,
 Loop r2 facts and no-recall inspection. Internal sharing alone moves no bytes.

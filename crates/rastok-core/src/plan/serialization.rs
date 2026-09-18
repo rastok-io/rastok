@@ -37,8 +37,8 @@ use crate::plan::{
     ValidatedExecutionPlan, VarCell,
 };
 use crate::schema_annotation::{
-    AnnotationSet, AnnotationTable, CostAnnotation, CostBasis, CurrencyCode, DataAnnotation,
-    MeasureId, PersonalDataClass, SchemaPath, SchemaPathSegment, SensitivityLevel,
+    AnnotationApplication, AnnotationBinding, AnnotationSet, AnnotationTable, DataAnnotation,
+    PersonalDataClass, SchemaPath, SchemaPathSegment, SensitivityLevel,
 };
 use crate::value::Value;
 
@@ -852,6 +852,16 @@ fn annotation_set_tree(set: &AnnotationSet) -> Cbor {
         set.annotations()
             .iter()
             .map(|annotation| match annotation {
+                DataAnnotation::Declared(application) => Cbor::Array(vec![
+                    Cbor::Uint(6),
+                    Cbor::Uint(match application.binding() {
+                        AnnotationBinding::Metadata => 1,
+                        AnnotationBinding::Measure => 2,
+                    }),
+                    Cbor::Text(application.definition().to_string()),
+                    type_tree(application.argument_type()),
+                    value_tagged(application.arguments()),
+                ]),
                 DataAnnotation::Sensitive(level) => Cbor::Array(vec![
                     Cbor::Uint(1),
                     Cbor::Uint(match level {
@@ -861,22 +871,6 @@ fn annotation_set_tree(set: &AnnotationSet) -> Cbor {
                     }),
                 ]),
                 DataAnnotation::Secret => Cbor::Array(vec![Cbor::Uint(2)]),
-                DataAnnotation::Measure(id) => {
-                    Cbor::Array(vec![Cbor::Uint(3), Cbor::Text(id.as_str().to_string())])
-                }
-                DataAnnotation::Cost(cost) => {
-                    let mut fields = vec![
-                        Cbor::Uint(4),
-                        Cbor::Uint(match cost.basis() {
-                            CostBasis::ProviderReported => 1,
-                            CostBasis::PricebookCalculated => 2,
-                        }),
-                    ];
-                    if let Some(currency) = cost.currency() {
-                        fields.push(Cbor::Text(currency.as_str().to_string()));
-                    }
-                    Cbor::Array(fields)
-                }
                 DataAnnotation::Personal(class) => Cbor::Array(vec![
                     Cbor::Uint(5),
                     Cbor::Uint(
@@ -1231,9 +1225,22 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
     }
     /// An annotation table at `level`: row, path/set, and segment/annotation
     /// arrays add four fixed levels. Path length changes width, never depth.
-    fn annotations(table: &AnnotationTable, level: usize, max: &mut usize) {
+    fn annotations<'a>(
+        table: &'a AnnotationTable,
+        level: usize,
+        max: &mut usize,
+        stack: &mut Vec<Item<'a>>,
+    ) {
         if !table.is_empty() {
             *max = (*max).max(level + 4);
+        }
+        for set in table.entries().values() {
+            for annotation in set.annotations() {
+                if let DataAnnotation::Declared(application) = annotation {
+                    stack.push(Item::Ty(application.argument_type(), level + 4));
+                    stack.push(Item::Val(application.arguments(), level + 4));
+                }
+            }
         }
     }
     // The root map's table arrays sit at level 1.
@@ -1301,7 +1308,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
             if let Some(ty) = &decl.ty {
                 stack.push(Item::Ty(ty, 5));
             }
-            annotations(&decl.annotations, 5, &mut max);
+            annotations(&decl.annotations, 5, &mut max, &mut stack);
         }
         for var in &node.vars {
             // var map at 4, its fields at 5.
@@ -1310,7 +1317,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
             if let Some(init) = &var.init {
                 stack.push(Item::Val(init, 5));
             }
-            annotations(&var.annotations, 5, &mut max);
+            annotations(&var.annotations, 5, &mut max, &mut stack);
         }
     }
     for owner in &plan.owners {
@@ -1325,14 +1332,14 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
             if let Some(resolved) = &value.resolved {
                 stack.push(Item::Val(resolved, 5));
             }
-            annotations(&value.annotations, 5, &mut max);
+            annotations(&value.annotations, 5, &mut max, &mut stack);
         }
         for decl in &owner.ports {
             // owner port array at 3, declaration array at 4, fields at 5.
             if let Some(ty) = &decl.ty {
                 stack.push(Item::Ty(ty, 5));
             }
-            annotations(&decl.annotations, 5, &mut max);
+            annotations(&decl.annotations, 5, &mut max, &mut stack);
         }
         for extension in &owner.extensions {
             // Extension array at 3, tagged payload at 4, policy map at 5.
@@ -1381,7 +1388,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
         if let Some(ty) = &decl.ty {
             stack.push(Item::Ty(ty, 3));
         }
-        annotations(&decl.annotations, 3, &mut max);
+        annotations(&decl.annotations, 3, &mut max, &mut stack);
     }
     if !plan.edges.is_empty() {
         // edge array at 2, endpoint arrays at 3, their fields at 4.
@@ -1439,7 +1446,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                         ..
                     } => {
                         tree(expr, level + 2, &mut stack);
-                        annotations(table, level + 1, &mut max);
+                        annotations(table, level + 1, &mut max, &mut stack);
                     }
                     DispatchStep::SetVar { value: expr, .. } => tree(expr, level + 2, &mut stack),
                     DispatchStep::Stop => {}
@@ -1538,59 +1545,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                 }
             }
             Item::Val(value, level) => {
-                // `value_tagged`: an array whose tag and scalar
-                // payloads sit one down.
-                max = max.max(level + 1);
-                match value {
-                    Value::Array(items) => {
-                        for item in items {
-                            stack.push(Item::Val(item, level + 2));
-                        }
-                    }
-                    Value::Map(entries) => {
-                        for entry in entries.values() {
-                            // pair array at +2, the tagged key's own
-                            // tag and text at +4.
-                            max = max.max(level + 4);
-                            stack.push(Item::Val(entry, level + 3));
-                        }
-                    }
-                    Value::KeyedMap(entries) => {
-                        for (key, value) in entries {
-                            // pair array at +2; both key and value are tagged
-                            // values whose own payload starts at +3.
-                            stack.push(Item::Val(key, level + 3));
-                            stack.push(Item::Val(value, level + 3));
-                        }
-                    }
-                    Value::Struct(fields) => {
-                        for (_, value) in fields {
-                            // pair array at +2, its BARE field text
-                            // at +3 (tag 17 keys carry no tag).
-                            max = max.max(level + 3);
-                            stack.push(Item::Val(value, level + 3));
-                        }
-                    }
-                    Value::Decimal { .. } => {
-                        // `[10, [bytes, scale]]` — the payload pair
-                        // sits one deeper than the tag.
-                        max = max.max(level + 2);
-                    }
-                    Value::StructuralUnion { value, .. } => {
-                        stack.push(Item::Val(value, level + 2));
-                    }
-                    Value::TaggedUnion(tagged) => {
-                        // `[21, [case, [17, [field-pair*]]]]`: the tagged
-                        // struct root sits at +2, its fields array at +3, a
-                        // field pair at +4, and its name/value roots at +5.
-                        max = max.max(level + 3);
-                        for (_, value) in &tagged.payload {
-                            max = max.max(level + 5);
-                            stack.push(Item::Val(value, level + 5));
-                        }
-                    }
-                    _ => {}
-                }
+                max = max.max(level + tagged_value_level(value));
             }
             Item::Ty(ty, level) => match ty {
                 DataType::Array(array) => {
@@ -1654,23 +1609,76 @@ pub(crate) fn deepest_level_with_resolved(
     let mut max = deepest_level(plan).max(2);
     for port in resolved.boundary() {
         max = max.max(4 + data_type_level(port.ty()));
-        if !port.annotations().is_empty() {
-            max = max.max(8);
-        }
+        max = max.max(4 + annotation_table_level(port.annotations()));
     }
     let mut slot = 0_u32;
     while let Some(row) = resolved.node(Slot::new(slot)) {
         max = max.max(3);
         for port in row {
             max = max.max(5 + data_type_level(port.ty()));
-            if !port.annotations().is_empty() {
-                max = max.max(9);
-            }
+            max = max.max(5 + annotation_table_level(port.annotations()));
         }
         let Some(next) = slot.checked_add(1) else {
             break;
         };
         slot = next;
+    }
+    max
+}
+
+fn annotation_table_level(table: &AnnotationTable) -> usize {
+    if table.is_empty() {
+        return 0;
+    }
+    let mut max = 4;
+    for set in table.entries().values() {
+        for annotation in set.annotations() {
+            if let DataAnnotation::Declared(application) = annotation {
+                max = max.max(4 + data_type_level(application.argument_type()));
+                max = max.max(4 + tagged_value_level(application.arguments()));
+            }
+        }
+    }
+    max
+}
+
+/// Exact depth of the shared tagged-value encoding, without constructing CBOR.
+fn tagged_value_level(value: &Value) -> usize {
+    let mut pending = vec![(value, 0)];
+    let mut max = 1;
+    while let Some((value, level)) = pending.pop() {
+        max = max.max(level + 1);
+        match value {
+            Value::Array(items) => pending.extend(items.iter().map(|item| (item, level + 2))),
+            Value::Map(entries) => {
+                for value in entries.values() {
+                    max = max.max(level + 4); // tagged key at pair + 1
+                    pending.push((value, level + 3));
+                }
+            }
+            Value::KeyedMap(entries) => {
+                for (key, value) in entries {
+                    pending.push((key, level + 3));
+                    pending.push((value, level + 3));
+                }
+            }
+            Value::Struct(fields) => {
+                for (_, value) in fields {
+                    max = max.max(level + 3); // bare field name
+                    pending.push((value, level + 3));
+                }
+            }
+            Value::Decimal { .. } => max = max.max(level + 2),
+            Value::StructuralUnion { value, .. } => pending.push((value, level + 2)),
+            Value::TaggedUnion(tagged) => {
+                max = max.max(level + 3);
+                for (_, value) in &tagged.payload {
+                    max = max.max(level + 5);
+                    pending.push((value, level + 5));
+                }
+            }
+            _ => {}
+        }
     }
     max
 }
@@ -2122,6 +2130,29 @@ fn annotation_set_from(tree: &Cbor) -> Result<AnnotationSet, DecodeError> {
 
 fn annotation_from(tree: &Cbor) -> Result<DataAnnotation, DecodeError> {
     match array_of(tree, "annotation")? {
+        [
+            Cbor::Uint(6),
+            Cbor::Uint(binding),
+            Cbor::Text(definition),
+            argument_type,
+            arguments,
+        ] => {
+            let binding = match binding {
+                1 => AnnotationBinding::Metadata,
+                2 => AnnotationBinding::Measure,
+                _ => return Err(err("unsupported annotation interpretation")),
+            };
+            let application = AnnotationApplication::new(
+                binding,
+                definition.clone(),
+                type_from(argument_type)?,
+                value_from(arguments)?,
+            )
+            .map_err(|error| {
+                DecodeError::Malformed(format!("invalid annotation application: {error}"))
+            })?;
+            Ok(DataAnnotation::Declared(Box::new(application)))
+        }
         [Cbor::Uint(1), Cbor::Uint(level)] => Ok(DataAnnotation::Sensitive(match level {
             1 => SensitivityLevel::Internal,
             2 => SensitivityLevel::Confidential,
@@ -2129,33 +2160,16 @@ fn annotation_from(tree: &Cbor) -> Result<DataAnnotation, DecodeError> {
             _ => return Err(err("sensitivity level")),
         })),
         [Cbor::Uint(2)] => Ok(DataAnnotation::Secret),
-        [Cbor::Uint(3), Cbor::Text(id)] => Ok(DataAnnotation::Measure(
-            MeasureId::new(id.clone())
-                .map_err(|error| DecodeError::Malformed(format!("invalid measure id: {error}")))?,
+        [Cbor::Uint(3), ..] => Err(err(
+            "retired implicit measure annotation; use an explicit-unit measure binding",
         )),
-        [Cbor::Uint(4), Cbor::Uint(basis)] => Ok(DataAnnotation::Cost(CostAnnotation::money(
-            cost_basis_from(*basis)?,
-        ))),
-        [Cbor::Uint(4), Cbor::Uint(basis), Cbor::Text(currency)] => {
-            Ok(DataAnnotation::Cost(CostAnnotation::scalar(
-                CurrencyCode::new(currency.clone()).map_err(|error| {
-                    DecodeError::Malformed(format!("invalid currency code: {error}"))
-                })?,
-                cost_basis_from(*basis)?,
-            )))
-        }
+        [Cbor::Uint(4), ..] => Err(err(
+            "retired cost annotation; use a numerical measure with id and unit",
+        )),
         [Cbor::Uint(5), Cbor::Uint(flags)] if *flags <= 0b111 => Ok(DataAnnotation::Personal(
             PersonalDataClass::new(flags & 0b001 != 0, flags & 0b010 != 0, flags & 0b100 != 0),
         )),
         _ => Err(err("annotation")),
-    }
-}
-
-fn cost_basis_from(tag: u64) -> Result<CostBasis, DecodeError> {
-    match tag {
-        1 => Ok(CostBasis::ProviderReported),
-        2 => Ok(CostBasis::PricebookCalculated),
-        _ => Err(err("cost basis")),
     }
 }
 
@@ -3060,16 +3074,278 @@ mod tests {
     }
 
     #[test]
-    fn v15_annotation_registry_and_structural_paths_have_one_wire_spelling() {
-        let eur = CurrencyCode::new("EUR")
-            .unwrap_or_else(|error| panic!("registered currency spelling: {error}"));
-        let measure = MeasureId::new("gen_ai.usage.input_tokens")
-            .unwrap_or_else(|error| panic!("registered measure spelling: {error}"));
+    fn declared_annotation_transport_checks_authority_flatness_and_typed_arguments() {
+        let ty = DataType::Struct(
+            StructType::new(vec![TypeField::new("text", DataType::Text)]).expect("flat schema"),
+        );
+        let value = Value::Struct(vec![(text("text"), Value::Text(text("description")))]);
+        let wire = Cbor::Array(vec![
+            Cbor::Uint(6),
+            Cbor::Uint(1),
+            Cbor::Text(text("note")),
+            type_tree(&ty),
+            value_tagged(&value),
+        ]);
+        let annotation = annotation_from(&wire).expect("explicit descriptive binding");
+        let DataAnnotation::Declared(application) = &annotation else {
+            panic!("declared metadata")
+        };
+        assert_eq!(application.argument_type(), &ty);
+        assert_eq!(application.arguments(), &value);
+        let Cbor::Array(fields) = &wire else {
+            panic!("application tuple")
+        };
+        for (index, replacement) in [
+            (1, Cbor::Uint(0)),
+            (1, Cbor::Uint(2)), // a descriptive schema cannot acquire measure authority
+            (1, Cbor::Uint(255)),
+            (2, Cbor::Text(text("secret"))),
+            (2, Cbor::Text(text("custom.personal"))),
+            (2, Cbor::Text(text("rastok/measure@2"))),
+            (3, type_tree(&DataType::Variant)),
+            (
+                3,
+                type_tree(&DataType::Struct(
+                    StructType::new(vec![TypeField::new(
+                        "text",
+                        DataType::array(DataType::Text),
+                    )])
+                    .expect("ordinary nested schema"),
+                )),
+            ),
+            (4, value_tagged(&Value::Struct(vec![]))),
+            (
+                4,
+                value_tagged(&Value::Struct(vec![(text("text"), Value::Int(7))])),
+            ),
+            (
+                4,
+                value_tagged(&Value::Struct(vec![
+                    (text("text"), Value::Text(text("a"))),
+                    (text("extra"), Value::Null),
+                ])),
+            ),
+        ] {
+            let mut altered = fields.clone();
+            altered[index] = replacement;
+            assert!(annotation_from(&Cbor::Array(altered)).is_err());
+        }
+        let plan = annotated_boundary_plan(annotation);
+        let package = encode(&plan, &SemanticHash::from_bytes([0; 32]));
+        assert_eq!(
+            decode(&package).expect("validated application package").0,
+            plan
+        );
+    }
+
+    #[test]
+    fn declared_annotation_depth_includes_types_and_constant_values() {
+        for (field_type, value) in [
+            (DataType::Text, Value::Text(text("label"))),
+            (
+                DataType::Decimal(DecimalType::new(38, 18).expect("decimal")),
+                Value::Decimal {
+                    unscaled: 12,
+                    scale: 18,
+                },
+            ),
+            (
+                DataType::structural_union(vec![DataType::Null, DataType::Text]).expect("optional"),
+                Value::StructuralUnion {
+                    branch: 0,
+                    value: Box::new(Value::Null),
+                },
+            ),
+        ] {
+            let ty = DataType::Struct(
+                StructType::new(vec![TypeField::new("value", field_type)]).expect("flat schema"),
+            );
+            let annotation = DataAnnotation::Declared(Box::new(
+                AnnotationApplication::new(
+                    AnnotationBinding::Metadata,
+                    text("note"),
+                    ty,
+                    Value::Struct(vec![(text("value"), value)]),
+                )
+                .expect("typed application"),
+            ));
+            let plan = annotated_boundary_plan(annotation);
+            assert_eq!(deepest_level(plan.plan()), levels(&plan_tree(plan.plan())));
+            let table = &plan.plan().boundary[0].annotations;
+            assert_eq!(
+                annotation_table_level(table),
+                levels(&annotation_table_tree(table))
+            );
+            let mut body = plan_tree(plan.plan());
+            let Cbor::Map(fields) = &mut body else {
+                panic!("plan map")
+            };
+            fields.insert(8, resolved_table_tree(plan.resolved_ports()));
+            assert_eq!(
+                deepest_level_with_resolved(plan.plan(), plan.resolved_ports()),
+                levels(&body)
+            );
+        }
+    }
+
+    #[test]
+    fn the_retired_implicit_measure_tag_refuses_by_name() {
+        for id in ["gen_ai.usage.input_tokens", "tokens"] {
+            let error = annotation_from(&Cbor::Array(vec![Cbor::Uint(3), Cbor::Text(text(id))]))
+                .expect_err("no registry-backed annotation survives in v19");
+            assert!(
+                error.to_string().contains("retired implicit measure"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_retired_cost_tag_refuses_instead_of_acquiring_generic_measure_meaning() {
+        for fields in [
+            vec![Cbor::Uint(4), Cbor::Uint(1)],
+            vec![Cbor::Uint(4), Cbor::Uint(2), Cbor::Text(text("USD"))],
+        ] {
+            let error = annotation_from(&Cbor::Array(fields))
+                .expect_err("a retired annotation tag cannot select a new interpretation");
+            assert!(
+                error.to_string().contains("retired cost annotation"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn business_measure_transport_rejects_forged_profiles_and_targets() {
+        let ty = crate::schema_annotation::measure_argument_type().expect("standard schema");
+        let DataType::Struct(schema) = &ty else {
+            panic!("standard struct")
+        };
+        let constants = |fields: Vec<(String, Value)>| {
+            Value::Struct(
+                fields
+                    .into_iter()
+                    .map(|(name, value)| {
+                        let field = schema
+                            .fields()
+                            .iter()
+                            .find(|field| field.name() == name)
+                            .expect("standard field");
+                        (
+                            name,
+                            field
+                                .ty()
+                                .narrow(value, None)
+                                .expect("typed field constant"),
+                        )
+                    })
+                    .collect(),
+            )
+        };
+        let arguments = constants(vec![
+            (text("id"), Value::Text(text("carrots"))),
+            (text("unit"), Value::Text(text("item"))),
+        ]);
+        let wire = vec![
+            Cbor::Uint(6),
+            Cbor::Uint(2),
+            Cbor::Text(text("rastok/measure@3")),
+            type_tree(&ty),
+            value_tagged(&arguments),
+        ];
+        let annotation =
+            annotation_from(&Cbor::Array(wire.clone())).expect("supported business consumer");
+        let plan = annotated_boundary_plan(annotation);
+        let package = encode(&plan, &SemanticHash::from_bytes([0; 32]));
+        assert_eq!(
+            decode(&package).expect("complete independent validation").0,
+            plan
+        );
+        assert_eq!(deepest_level(plan.plan()), levels(&plan_tree(plan.plan())));
+        for (index, replacement) in [
+            (1, Cbor::Uint(1)),
+            (1, Cbor::Uint(3)),
+            (2, Cbor::Text(text("measure"))),
+            (2, Cbor::Text(text("custom_measure"))),
+            (2, Cbor::Text(text("rastok/measure@2"))),
+            (3, type_tree(&DataType::Variant)),
+            (4, value_tagged(&Value::Struct(vec![]))),
+        ] {
+            let mut altered = wire.clone();
+            altered[index] = replacement;
+            assert!(annotation_from(&Cbor::Array(altered)).is_err());
+        }
+        for (field, value) in [
+            ("unit", Value::Null),
+            ("unit", Value::Text(text(""))),
+            ("id", Value::Text(text("Bad Name"))),
+            ("unit", Value::Text(text(" item"))),
+        ] {
+            let Value::Struct(mut fields) = arguments.clone() else {
+                panic!("struct")
+            };
+            let slot = fields
+                .iter_mut()
+                .find(|(name, _)| name == field)
+                .expect("field");
+            slot.1 = value;
+            let value = Value::Struct(fields);
+            let mut altered = wire.clone();
+            altered[4] = value_tagged(&value);
+            assert!(annotation_from(&Cbor::Array(altered)).is_err(), "{field}");
+        }
+        for target in [
+            DataType::Text,
+            DataType::Variant,
+            DataType::Float(crate::datatype::FloatType::Binary64),
+        ] {
+            let mut forged = plan.plan().clone();
+            forged.boundary[0].ty = Some(target);
+            assert!(
+                ValidatedExecutionPlan::try_new(forged).is_err(),
+                "numeric target checked independently"
+            );
+        }
+    }
+
+    #[test]
+    fn one_metadata_definition_cannot_change_schema_between_plan_sites() {
+        let note = |ty, value| {
+            DataAnnotation::Declared(Box::new(
+                AnnotationApplication::new(
+                    AnnotationBinding::Metadata,
+                    text("note"),
+                    DataType::Struct(
+                        StructType::new(vec![TypeField::new("value", ty)]).expect("flat schema"),
+                    ),
+                    Value::Struct(vec![(text("value"), value)]),
+                )
+                .expect("individually typed metadata"),
+            ))
+        };
+        let original = annotated_boundary_plan(note(DataType::Text, Value::Text(text("a"))));
+        let mut raw = original.plan().clone();
+        let mut other = raw.boundary[0].clone();
+        other.port = port("other");
+        other.annotations = AnnotationTable::new(vec![(
+            SchemaPath::root(),
+            one_annotation(note(DataType::Bool, Value::Bool(true))),
+        )])
+        .expect("other site");
+        raw.boundary.push(other);
+        let error =
+            ValidatedExecutionPlan::try_new(raw).expect_err("one declaring name has one schema");
+        assert!(
+            error.to_string().contains("inconsistent argument schemas"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn compact_policies_and_structural_paths_have_one_wire_spelling() {
         let root = AnnotationSet::new(vec![
             DataAnnotation::Sensitive(SensitivityLevel::Restricted),
             DataAnnotation::Secret,
-            DataAnnotation::Measure(measure),
-            DataAnnotation::Cost(CostAnnotation::scalar(eur, CostBasis::ProviderReported)),
         ])
         .unwrap_or_else(|error| panic!("closed annotation set: {error}"));
         let sensitive = || one_annotation(DataAnnotation::Sensitive(SensitivityLevel::Internal));
@@ -3110,11 +3386,6 @@ mod tests {
                     Cbor::Array(vec![
                         Cbor::Array(vec![Cbor::Uint(1), Cbor::Uint(3)]),
                         Cbor::Array(vec![Cbor::Uint(2)]),
-                        Cbor::Array(vec![
-                            Cbor::Uint(3),
-                            Cbor::Text(text("gen_ai.usage.input_tokens")),
-                        ]),
-                        Cbor::Array(vec![Cbor::Uint(4), Cbor::Uint(1), Cbor::Text(text("EUR")),]),
                     ]),
                 ]),
                 Cbor::Array(vec![
@@ -3171,13 +3442,11 @@ mod tests {
     }
 
     #[test]
-    fn v15_round_trips_annotations_in_raw_and_resolved_port_tables() {
-        let plan = annotated_boundary_plan(DataAnnotation::Measure(
-            MeasureId::new("gen_ai.usage.input_tokens")
-                .unwrap_or_else(|error| panic!("registered measure: {error}")),
-        ));
+    fn typed_annotations_round_trip_in_raw_and_resolved_port_tables() {
+        let plan =
+            annotated_boundary_plan(crate::schema_annotation::tests::measure("tokens", "token"));
         let package = encode(&plan, &SemanticHash::from_bytes([0; 32]));
-        let (decoded, _) = decode(&package).expect("v15 annotations read back");
+        let (decoded, _) = decode(&package).expect("typed annotations read back");
         assert_eq!(decoded, plan);
         assert_eq!(
             decoded.plan().boundary[0].annotations,
@@ -3226,11 +3495,9 @@ mod tests {
     }
 
     #[test]
-    fn v15_sabotage_rederives_annotation_paths_and_measure_membership() {
-        let plan = annotated_boundary_plan(DataAnnotation::Measure(
-            MeasureId::new("gen_ai.usage.input_tokens")
-                .unwrap_or_else(|error| panic!("registered measure: {error}")),
-        ));
+    fn sabotage_rederives_annotation_paths_and_measure_authority() {
+        let plan =
+            annotated_boundary_plan(crate::schema_annotation::tests::measure("tokens", "token"));
         let package = encode(&plan, &SemanticHash::from_bytes([0; 32]));
 
         let bad_path = mutate_package_body(&package, |body| {
@@ -3259,7 +3526,7 @@ mod tests {
             ))
         ));
 
-        let unknown_measure = mutate_package_body(&package, |body| {
+        let unknown_binding = mutate_package_body(&package, |body| {
             let Cbor::Array(boundary) = body.get_mut(&2).unwrap_or_else(|| panic!("boundary"))
             else {
                 panic!("boundary array");
@@ -3279,16 +3546,11 @@ mod tests {
             let Cbor::Array(measure) = &mut annotations[0] else {
                 panic!("measure annotation");
             };
-            measure[1] = Cbor::Text(text("rastok.unknown"));
+            measure[1] = Cbor::Uint(999);
         });
         assert!(matches!(
-            decode(&unknown_measure),
-            Err(DecodeError::Invalid(
-                PlanValidationError::InvalidSchemaAnnotations {
-                    reason: crate::schema_annotation::SchemaAnnotationError::UnknownMeasureId(_),
-                    ..
-                }
-            ))
+            decode(&unknown_binding),
+            Err(DecodeError::Malformed(reason)) if reason.contains("unsupported annotation interpretation")
         ));
     }
 

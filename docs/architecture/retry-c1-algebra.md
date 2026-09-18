@@ -371,6 +371,12 @@ never elapsed wall time. An explicit stop is not attempt-bound exhaustion.
 
 ## 9. Accounting, policy and inspection
 
+The subsequent [annotation-type and hydration decisions](../spec/annotations.md#61-hydration-supplies-the-values)
+choose typed response decoding before attempt disposition, not an executable
+extractor or downstream handler replay. Their [integration gates](annotation-types-m1.md)
+must close the raw-response gap below without changing attempt disposition
+or giving annotations any authority to repeat an effect.
+
 `accounting_observations` currently reads INBOUND envelopes and every
 TRANSACTION emission; it ignores raw OUTBOUND completion drafts. Therefore
 the retained Connector emissions in AttemptHeld are essential, not optional
@@ -379,17 +385,20 @@ and final routing does not mint or count another copy of its batch.
 
 Correlation must derive operation/attempt/Call from the retained association,
 and preserve business origin, instance and any enclosing Loop. It never
-attributes an earlier output using a later record. Unknown prices/quantities
-remain explicit, decimal/currency and subset rules remain unchanged, and
-redaction precedes all display/export for held batches too.
+attributes an earlier output using a later record. Missing quantities stay
+unknown, exact decimal/currency evidence remains intact, and redaction precedes
+all display/export for held batches too. D-2026-09-16-7 removes reports,
+automatic pricing and subset arithmetic from M1; qualification now inspects
+original values and dispositions directly, not computed totals.
 
 Repository limitation: the HTTP candidate's usage extraction is a downstream
 Operator. If an intermediate response is withheld, that Operator does not
 run. Merely retaining its JSON body does not produce typed `@measure` values.
 Do not claim the existing adapter already measures intermediate attempts;
 unsupported extraction remains unknown, not zero. C3 must qualify native
-annotated attempt evidence and state this adapter limitation; any additional
-extraction surface needs an explicit scope decision, not hidden handler replay.
+annotated attempt evidence and state this adapter limitation. D-2026-09-15-6
+now approves hydration using the response's annotated type; its explicit codec
+binding still requires implementation and qualification, not hidden handler replay.
 
 The debugger projects iteration / operation / attempt separately, including
 held outcomes, final publication and original due time. There are no Retry
@@ -409,7 +418,7 @@ symbols are the durable references:
 | [`CallSemantics`](../../crates/rastok-core/src/connector/call.rs) | visibility table exists; one-case frame cardinality must cover both HTTP terminal response cases |
 | [`stdlib`](../../crates/rastok/src/stdlib.rs) | effect present on all six sheets, Process service inherits the common sheet; File guarantee is already fixed |
 | [`accounting_observations`](../../crates/rastok-core/src/accounting.rs) | observes emission schemas, not raw OUTBOUND drafts or withheld downstream decoder results |
-| [`HTTP usage adapter`](../examples/agent-http-candidate.rkg) | typed usage is emitted by a downstream Operator, not the HttpClient Contract |
+| Historical HTTP usage draft, `agent-http-candidate.rkg` | At C1, typed usage was emitted by a downstream Operator, not the HttpClient Contract. The later [typed replacement](../../examples/agent-http.rkg) removes that extractor. |
 | [`delivery-semantics §4.4`](../spec/delivery-semantics.md#44-recovery--a-triage-not-a-gamble) | older recall table conflicts with today's no-recall recovery and the approved target; it cannot authorize old I/O |
 
 C1 is documentation and hand-written trace evidence. C2/C3 still owe executable

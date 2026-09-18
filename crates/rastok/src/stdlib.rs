@@ -22,6 +22,9 @@ use crate::contract::{
 };
 use crate::node::Direction;
 
+/// Hosted declarations; runtime interpretation is retained in the resolved plan.
+pub(crate) const ANNOTATION_DEFINITIONS: &str = include_str!("stdlib/annotations.rkg");
+
 /// One completion candidate for the open `media_type` logical scalar.
 ///
 /// This is deliberately a catalogue, not an enum: registered and vendor
@@ -434,7 +437,10 @@ pub const HTTP_CLIENT: ConnectorContract = ConnectorContract {
             name: "out",
             direction: Direction::Output,
 
-            ty: PortTypeRule::SameAs("in"),
+            ty: PortTypeRule::JsonOutput {
+                attribute: "codec",
+                choices: NETWORK_BODY_TYPES,
+            },
         },
         PortContract {
             name: "exit",
@@ -460,6 +466,12 @@ pub const HTTP_CLIENT: ConnectorContract = ConnectorContract {
             name: "codec",
             presence: Presence::Required,
             domain: ValueDomain::Choice(&["bytes", "json", "text"]),
+            latest_site: EvaluationSite::Plan,
+        },
+        AttributeSpec {
+            name: "json_profile",
+            presence: Presence::Optional,
+            domain: ValueDomain::Choice(&["projected"]),
             latest_site: EvaluationSite::Plan,
         },
         AttributeSpec {

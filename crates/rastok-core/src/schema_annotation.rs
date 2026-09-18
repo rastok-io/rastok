@@ -5,6 +5,7 @@
 //! canonical positions in that tree; it never wraps or extends the logical
 //! type algebra.
 
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -12,7 +13,13 @@ use core::fmt;
 
 use crate::datatype::{DataType, StructType};
 
-/// Maximum UTF-8 byte length of one registered semantic-measure name.
+mod application;
+pub use application::{
+    AnnotationApplication, AnnotationBinding, MAX_ANNOTATION_DEFINITION_BYTES, flat_field,
+    measure_argument_type,
+};
+
+/// Maximum UTF-8 byte length of one authored measure id or unit.
 pub const MAX_MEASURE_ID_BYTES: usize = 255;
 
 /// SHA-256 of the ISO 4217 Maintenance Agency's current List One snapshot
@@ -126,19 +133,11 @@ pub enum SensitivityLevel {
     Restricted,
 }
 
-/// Evidence basis of one exact monetary observation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum CostBasis {
-    /// The external provider reported the amount.
-    ProviderReported,
-    /// A versioned deployment price profile calculated the amount.
-    PricebookCalculated,
-}
-
 /// Canonical three-letter currency spelling.
 ///
 /// This type owns lexical canonicality only. The M1.8 registry performs the
-/// separately versioned ISO-4217 membership check when resolving `@cost`.
+/// separately versioned ISO-4217 membership check for retained tariff metadata.
+/// Generic measurement units do not use this type or registry.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CurrencyCode(String);
 
@@ -173,10 +172,9 @@ pub fn is_iso_4217_currency(code: &CurrencyCode) -> bool {
 
 /// Stable semantic-measure identifier.
 ///
-/// OpenTelemetry names are stored verbatim when a matching convention exists;
-/// otherwise the resolver admits a registered `rastok.*` name. This newtype
-/// enforces only the common canonical spelling. Registry membership remains a
-/// separate, versioned judgement.
+/// This newtype checks canonical spelling, not membership in a registry.
+/// Units and interpretation come from the validated annotation arguments,
+/// never from the name.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MeasureId(String);
 
@@ -208,143 +206,6 @@ impl MeasureId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
-}
-
-/// Where a registered semantic measure originates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum MeasureSource {
-    /// A typed field supplied by a provider or codec. These entries may be
-    /// selected by source `@measure` annotations.
-    Field,
-    /// A runtime instrument produced by Rastok itself. Source fields cannot
-    /// impersonate instruments merely by reusing their names.
-    Instrument,
-}
-
-/// Logical carrier required by one registered measure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum MeasureCarrier {
-    /// Exact integral count or byte quantity.
-    Integer,
-    /// Exact elapsed duration.
-    Duration,
-}
-
-/// Canonical exact unit owned by one registered measure.
-///
-/// Hosted OpenTelemetry projection may rescale nanoseconds to the standard
-/// presentation unit, but the retained accounting fold never uses a float.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum MeasureUnit {
-    /// One model token.
-    Token,
-    /// One byte.
-    Byte,
-    /// One nanosecond.
-    Nanosecond,
-}
-
-/// One entry of the pinned M1.8 semantic-measure registry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MeasureSpec {
-    source: MeasureSource,
-    carrier: MeasureCarrier,
-    unit: MeasureUnit,
-    subset_of: Option<&'static str>,
-}
-
-impl MeasureSpec {
-    /// Whether the value comes from a typed field or a runtime instrument.
-    #[must_use]
-    pub const fn source(self) -> MeasureSource {
-        self.source
-    }
-
-    /// Logical value family required by the convention.
-    #[must_use]
-    pub const fn carrier(self) -> MeasureCarrier {
-        self.carrier
-    }
-
-    /// Exact unit used by the retained fold.
-    #[must_use]
-    pub const fn unit(self) -> MeasureUnit {
-        self.unit
-    }
-
-    /// Inclusive parent quantity, when this measure is a semantic subset.
-    #[must_use]
-    pub const fn subset_of(self) -> Option<&'static str> {
-        self.subset_of
-    }
-}
-
-/// Looks up the pinned OpenTelemetry-first M1.8 registry.
-///
-/// The names and meanings are the snapshot recorded by D-2026-08-30-1.
-/// Unknown canonical dotted names remain invalid rather than becoming
-/// user-defined metrics by accident.
-#[must_use]
-pub fn measure_spec(id: &MeasureId) -> Option<MeasureSpec> {
-    let (source, carrier, unit, subset_of) = match id.as_str() {
-        "gen_ai.usage.input_tokens" | "gen_ai.usage.output_tokens" => (
-            MeasureSource::Field,
-            MeasureCarrier::Integer,
-            MeasureUnit::Token,
-            None,
-        ),
-        "gen_ai.usage.cache_read.input_tokens" | "gen_ai.usage.cache_creation.input_tokens" => (
-            MeasureSource::Field,
-            MeasureCarrier::Integer,
-            MeasureUnit::Token,
-            Some("gen_ai.usage.input_tokens"),
-        ),
-        "gen_ai.usage.reasoning.output_tokens" => (
-            MeasureSource::Field,
-            MeasureCarrier::Integer,
-            MeasureUnit::Token,
-            Some("gen_ai.usage.output_tokens"),
-        ),
-        "gen_ai.client.token.usage" => (
-            MeasureSource::Instrument,
-            MeasureCarrier::Integer,
-            MeasureUnit::Token,
-            None,
-        ),
-        "http.client.request.body.size"
-        | "http.client.response.body.size"
-        | "http.server.request.body.size"
-        | "http.server.response.body.size" => (
-            MeasureSource::Instrument,
-            MeasureCarrier::Integer,
-            MeasureUnit::Byte,
-            None,
-        ),
-        "gen_ai.client.operation.duration"
-        | "gen_ai.client.operation.time_to_first_chunk"
-        | "gen_ai.client.operation.time_per_output_chunk"
-        | "http.client.request.duration"
-        | "http.server.request.duration" => (
-            MeasureSource::Instrument,
-            MeasureCarrier::Duration,
-            MeasureUnit::Nanosecond,
-            None,
-        ),
-        _ => return None,
-    };
-    Some(MeasureSpec {
-        source,
-        carrier,
-        unit,
-        subset_of,
-    })
-}
-
-/// Exact monetary-field interpretation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct CostAnnotation {
-    currency: Option<CurrencyCode>,
-    basis: CostBasis,
 }
 
 /// GDPR-facing classification of one personal-data position.
@@ -418,65 +279,50 @@ impl PersonalDataClass {
     }
 }
 
-impl CostAnnotation {
-    /// Cost on a scalar decimal field; the contract fixes its currency.
-    #[must_use]
-    pub const fn scalar(currency: CurrencyCode, basis: CostBasis) -> Self {
-        Self {
-            currency: Some(currency),
-            basis,
-        }
-    }
-
-    /// Cost on the canonical Money struct; the value carries its currency.
-    #[must_use]
-    pub const fn money(basis: CostBasis) -> Self {
-        Self {
-            currency: None,
-            basis,
-        }
-    }
-
-    /// Contract-fixed currency, absent for a Money-shaped value.
-    #[must_use]
-    pub const fn currency(&self) -> Option<&CurrencyCode> {
-        self.currency.as_ref()
-    }
-
-    /// Evidence basis.
-    #[must_use]
-    pub const fn basis(&self) -> CostBasis {
-        self.basis
-    }
-}
-
-/// One closed M1.8 data annotation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// A compact standard interpretation or a typed, nominal metadata application.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DataAnnotation {
     /// Redaction and propagation classification.
     Sensitive(SensitivityLevel),
     /// Secret-handling marker. Secret origin remains the expression-level
     /// `secret("path")` function.
     Secret,
-    /// Registered exact semantic quantity.
-    Measure(MeasureId),
-    /// Exact monetary interpretation.
-    Cost(CostAnnotation),
     /// GDPR personal-data classification and optional subject-id role.
     Personal(PersonalDataClass),
+    /// A nominally bound application of an ordinary flat argument schema.
+    Declared(Box<AnnotationApplication>),
 }
 
 impl DataAnnotation {
-    /// Identity of this annotation within the closed family.
+    /// Consumer class of this annotation; declared metadata also has a nominal identity.
     #[must_use]
     pub const fn kind(&self) -> AnnotationKind {
         match self {
             Self::Sensitive(_) => AnnotationKind::Sensitive,
             Self::Secret => AnnotationKind::Secret,
-            Self::Measure(_) => AnnotationKind::Measure,
-            Self::Cost(_) => AnnotationKind::Cost,
             Self::Personal(_) => AnnotationKind::Personal,
+            Self::Declared(application) => match application.binding() {
+                AnnotationBinding::Metadata => AnnotationKind::Metadata,
+                AnnotationBinding::Measure => AnnotationKind::Measure,
+            },
         }
+    }
+
+    /// Canonical identity at one path. Two descriptive declarations are not
+    /// duplicates merely because their argument fields have the same shape.
+    #[must_use]
+    pub fn identity(&self) -> (AnnotationKind, &str) {
+        (
+            self.kind(),
+            match self {
+                Self::Declared(application)
+                    if application.binding() == AnnotationBinding::Metadata =>
+                {
+                    application.definition()
+                }
+                _ => "",
+            },
+        )
     }
 }
 
@@ -487,23 +333,23 @@ pub enum AnnotationKind {
     Sensitive,
     /// `rastok/secret@1`.
     Secret,
-    /// `rastok/measure@1`.
+    /// The protected numerical or monetary measure interpretation.
     Measure,
-    /// `rastok/cost@1`.
-    Cost,
     /// `rastok/personal@1`.
     ///
     /// Appended after the original A1 registry so existing annotation-set
     /// order and semantic identity remain unchanged.
     Personal,
+    /// User-declared descriptive metadata; ordered by declaring name within this kind.
+    Metadata,
 }
 
 /// Canonically ordered annotations attached to one schema path.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnnotationSet(Vec<DataAnnotation>);
 
 impl AnnotationSet {
-    /// Sorts by canonical annotation identity and rejects duplicate kinds or
+    /// Sorts by canonical annotation identity and rejects duplicate definitions or
     /// the empty set.
     ///
     /// # Errors
@@ -513,10 +359,12 @@ impl AnnotationSet {
         if annotations.is_empty() {
             return Err(SchemaAnnotationError::EmptySet);
         }
-        annotations.sort_by_key(DataAnnotation::kind);
+        // Equal identities are rejected below, so stable tie order carries no
+        // meaning. In-place sorting avoids a second annotation-sized buffer.
+        annotations.sort_unstable_by(|left, right| left.identity().cmp(&right.identity()));
         if let Some(kind) = annotations
             .windows(2)
-            .find_map(|pair| (pair[0].kind() == pair[1].kind()).then(|| pair[0].kind()))
+            .find_map(|pair| (pair[0].identity() == pair[1].identity()).then(|| pair[0].kind()))
         {
             return Err(SchemaAnnotationError::DuplicateAnnotation(kind));
         }
@@ -568,6 +416,20 @@ impl AnnotationTable {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// Checks every path and interpretation without copying the schema or its metadata.
+    ///
+    /// # Errors
+    /// Returns the first canonical path, target or annotation contract violation.
+    pub(crate) fn validate_for(&self, ty: &DataType) -> Result<(), SchemaAnnotationError> {
+        for (path, set) in self.entries() {
+            let target = validate_path(ty, path)?;
+            for annotation in set.annotations() {
+                validate_annotation(annotation, &target, path)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// One logical schema and its orthogonal policy table.
@@ -587,12 +449,7 @@ impl AnnotatedSchema {
     /// membership that does not hold. This is the Registry-free authority
     /// reused by package validation after decode.
     pub fn new(ty: DataType, annotations: AnnotationTable) -> Result<Self, SchemaAnnotationError> {
-        for (path, set) in annotations.entries() {
-            let target = validate_path(&ty, path)?;
-            for annotation in set.annotations() {
-                validate_annotation(annotation, &target, path)?;
-            }
-        }
+        annotations.validate_for(&ty)?;
         Ok(Self { ty, annotations })
     }
 
@@ -690,105 +547,40 @@ fn validate_annotation(
     path: &SchemaPath,
 ) -> Result<(), SchemaAnnotationError> {
     match annotation {
-        DataAnnotation::Sensitive(_) | DataAnnotation::Secret | DataAnnotation::Personal(_) => {
-            Ok(())
-        }
-        DataAnnotation::Measure(id) => {
-            let Some(spec) = measure_spec(id) else {
-                return Err(SchemaAnnotationError::UnknownMeasureId(id.as_str().into()));
-            };
-            if spec.source() != MeasureSource::Field {
-                return Err(SchemaAnnotationError::MeasureIsNotAField(
-                    id.as_str().into(),
-                ));
-            }
-            let AnnotationTarget::Type(ty) = target else {
+        DataAnnotation::Declared(application) => {
+            application.validate()?;
+            if application.binding() == AnnotationBinding::Measure
+                && !matches!(
+                    target,
+                    AnnotationTarget::Type(DataType::Integer(_) | DataType::Decimal(_))
+                )
+            {
                 return Err(SchemaAnnotationError::IllegalAnnotationTarget {
                     path: path.clone(),
                     kind: AnnotationKind::Measure,
                 });
-            };
-            let carrier_holds = match spec.carrier() {
-                MeasureCarrier::Integer => matches!(ty, DataType::Integer(_)),
-                MeasureCarrier::Duration => **ty == DataType::DURATION,
-            };
-            if !carrier_holds {
-                return Err(SchemaAnnotationError::MeasureCarrierMismatch {
-                    path: path.clone(),
-                    id: id.as_str().into(),
-                });
             }
             Ok(())
         }
-        DataAnnotation::Cost(cost) => {
-            let AnnotationTarget::Type(ty) = target else {
-                return Err(SchemaAnnotationError::IllegalAnnotationTarget {
-                    path: path.clone(),
-                    kind: AnnotationKind::Cost,
-                });
-            };
-            if is_money_type(ty) {
-                if cost.currency().is_some() {
-                    return Err(SchemaAnnotationError::InvalidCostCurrencyAuthority {
-                        path: path.clone(),
-                    });
-                }
-                return Ok(());
-            }
-            let Some(currency) = cost.currency() else {
-                return Err(SchemaAnnotationError::IllegalAnnotationTarget {
-                    path: path.clone(),
-                    kind: AnnotationKind::Cost,
-                });
-            };
-            if !matches!(ty, DataType::Decimal(_)) {
-                return Err(SchemaAnnotationError::IllegalAnnotationTarget {
-                    path: path.clone(),
-                    kind: AnnotationKind::Cost,
-                });
-            }
-            if !is_iso_4217_currency(currency) {
-                return Err(SchemaAnnotationError::UnknownCurrencyCode(
-                    currency.as_str().into(),
-                ));
-            }
+        DataAnnotation::Sensitive(_) | DataAnnotation::Secret | DataAnnotation::Personal(_) => {
             Ok(())
         }
     }
-}
-
-/// Whether a logical type is the exact canonical Money carrier.
-#[must_use]
-pub fn is_money_type(ty: &DataType) -> bool {
-    let DataType::Struct(structure) = ty else {
-        return false;
-    };
-    if structure.fields().len() != 2 {
-        return false;
-    }
-    let amount = structure
-        .fields()
-        .iter()
-        .find(|field| field.name() == "amount")
-        .map(crate::datatype::TypeField::ty);
-    let currency = structure
-        .fields()
-        .iter()
-        .find(|field| field.name() == "currency")
-        .map(crate::datatype::TypeField::ty);
-    matches!(
-        amount,
-        Some(DataType::Decimal(decimal))
-            if decimal.precision() == 38 && decimal.scale() == 18
-    ) && currency == Some(&DataType::Text)
 }
 
 /// Invalid schema annotation metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchemaAnnotationError {
+    /// A definition, interpretation or complete constant struct is invalid.
+    InvalidApplication {
+        /// Declaring name; argument values are deliberately not rendered.
+        definition: String,
+        /// The violated invariant, without user data.
+        detail: &'static str,
+    },
     /// No annotation belongs in a sparse table row.
     EmptySet,
-    /// Two annotations of the same closed kind target one path.
+    /// Two applications of the same annotation identity target one path.
     DuplicateAnnotation(AnnotationKind),
     /// Two rows target the same canonical path.
     DuplicatePath(SchemaPath),
@@ -803,30 +595,12 @@ pub enum SchemaAnnotationError {
     InvalidMeasureId(String),
     /// Currency spelling is not three uppercase ASCII letters.
     InvalidCurrencyCode(String),
-    /// A canonical measure name is absent from the pinned registry.
-    UnknownMeasureId(String),
-    /// A runtime instrument was forged into a field annotation.
-    MeasureIsNotAField(String),
-    /// A registered field measure targets an incompatible logical carrier.
-    MeasureCarrierMismatch {
-        /// Exact offending path.
-        path: SchemaPath,
-        /// Registered measure identity.
-        id: String,
-    },
     /// An annotation kind cannot target this canonical schema position.
     IllegalAnnotationTarget {
         /// Exact offending path.
         path: SchemaPath,
         /// Closed annotation kind.
         kind: AnnotationKind,
-    },
-    /// A canonical currency spelling is absent from the pinned ISO registry.
-    UnknownCurrencyCode(String),
-    /// A scalar cost omitted currency or a Money value redundantly fixed it.
-    InvalidCostCurrencyAuthority {
-        /// Exact offending path.
-        path: SchemaPath,
     },
     /// Policy metadata was carried without any adjacent effective logical
     /// schema against which it could be checked.
@@ -836,6 +610,9 @@ pub enum SchemaAnnotationError {
 impl fmt::Display for SchemaAnnotationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidApplication { definition, detail } => {
+                write!(f, "annotation definition {definition:?}: {detail}")
+            }
             Self::EmptySet => f.write_str("an annotation-table row cannot be empty"),
             Self::DuplicateAnnotation(kind) => {
                 write!(f, "annotation kind {kind:?} appears twice on one path")
@@ -853,23 +630,8 @@ impl fmt::Display for SchemaAnnotationError {
                     "currency code {code:?} is not three uppercase ASCII letters"
                 )
             }
-            Self::UnknownMeasureId(id) => {
-                write!(f, "measure id `{id}` is not in the pinned registry")
-            }
-            Self::MeasureIsNotAField(id) => {
-                write!(f, "measure id `{id}` names an instrument, not a field")
-            }
-            Self::MeasureCarrierMismatch { path, id } => {
-                write!(f, "measure id `{id}` cannot be carried at {path}")
-            }
             Self::IllegalAnnotationTarget { path, kind } => {
                 write!(f, "annotation kind {kind:?} cannot target {path}")
-            }
-            Self::UnknownCurrencyCode(code) => {
-                write!(f, "currency code `{code}` is not in the pinned registry")
-            }
-            Self::InvalidCostCurrencyAuthority { path } => {
-                write!(f, "cost currency authority is invalid at {path}")
             }
             Self::MissingLogicalType => {
                 f.write_str("an annotation table has no adjacent logical type")
@@ -881,10 +643,45 @@ impl fmt::Display for SchemaAnnotationError {
 impl core::error::Error for SchemaAnnotationError {}
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::datatype::{MapType, StructType, TaggedCase, TaggedUnionType, TypeField};
     use alloc::vec;
+
+    pub(crate) fn measure(id: &str, unit: &str) -> DataAnnotation {
+        use crate::value::Value;
+        let ty = measure_argument_type().unwrap_or_else(|error| panic!("measure schema: {error}"));
+        let DataType::Struct(schema) = &ty else {
+            panic!("measure arguments are a struct")
+        };
+        let values = schema
+            .fields()
+            .iter()
+            .map(|field| {
+                let value = match field.name() {
+                    "id" => Value::Text(id.into()),
+                    "unit" => Value::Text(unit.into()),
+                    _ => Value::Null,
+                };
+                (
+                    field.name().into(),
+                    field
+                        .ty()
+                        .narrow(value, None)
+                        .unwrap_or_else(|error| panic!("measure constant: {error}")),
+                )
+            })
+            .collect();
+        DataAnnotation::Declared(Box::new(
+            AnnotationApplication::new(
+                AnnotationBinding::Measure,
+                "rastok/measure@3".into(),
+                ty,
+                Value::Struct(values),
+            )
+            .unwrap_or_else(|error| panic!("measure application: {error}")),
+        ))
+    }
 
     fn sensitive(level: SensitivityLevel) -> AnnotationSet {
         AnnotationSet::new(vec![DataAnnotation::Sensitive(level)])
@@ -893,10 +690,7 @@ mod tests {
 
     #[test]
     fn annotations_are_canonical_but_do_not_wrap_the_logical_type() {
-        let measure = DataAnnotation::Measure(
-            MeasureId::new("gen_ai.usage.input_tokens")
-                .unwrap_or_else(|error| panic!("valid measure: {error}")),
-        );
+        let measure = measure("tokens", "token");
         let annotations = AnnotationSet::new(vec![
             DataAnnotation::Secret,
             measure.clone(),
@@ -1027,40 +821,9 @@ mod tests {
     }
 
     #[test]
-    fn measure_registry_distinguishes_fields_from_runtime_instruments() {
-        let field = MeasureId::new("gen_ai.usage.input_tokens")
-            .unwrap_or_else(|error| panic!("valid field measure: {error}"));
-        let instrument = MeasureId::new("http.client.request.duration")
-            .unwrap_or_else(|error| panic!("valid instrument measure: {error}"));
-        let unknown = MeasureId::new("rastok.unknown")
-            .unwrap_or_else(|error| panic!("canonical unknown measure: {error}"));
-        assert_eq!(
-            measure_spec(&field),
-            Some(MeasureSpec {
-                source: MeasureSource::Field,
-                carrier: MeasureCarrier::Integer,
-                unit: MeasureUnit::Token,
-                subset_of: None,
-            })
-        );
-        assert_eq!(
-            measure_spec(&instrument),
-            Some(MeasureSpec {
-                source: MeasureSource::Instrument,
-                carrier: MeasureCarrier::Duration,
-                unit: MeasureUnit::Nanosecond,
-                subset_of: None,
-            })
-        );
-        assert_eq!(measure_spec(&unknown), None);
-    }
-
-    #[test]
-    fn annotated_schema_rechecks_measure_registry_source_and_carrier() {
+    fn annotated_schema_rechecks_the_numeric_target_without_an_id_registry() {
         let schema = |ty: DataType, id: &str| {
-            let id = MeasureId::new(id)
-                .unwrap_or_else(|error| panic!("canonical measure spelling: {error}"));
-            let set = AnnotationSet::new(vec![DataAnnotation::Measure(id)])
+            let set = AnnotationSet::new(vec![measure(id, "item")])
                 .unwrap_or_else(|error| panic!("one annotation: {error}"));
             AnnotatedSchema::new(
                 ty,
@@ -1068,85 +831,22 @@ mod tests {
                     .unwrap_or_else(|error| panic!("one row: {error}")),
             )
         };
-        assert_eq!(
-            schema(DataType::INT, "rastok.unknown"),
-            Err(SchemaAnnotationError::UnknownMeasureId(String::from(
-                "rastok.unknown"
-            )))
-        );
-        assert_eq!(
-            schema(DataType::DURATION, "http.client.request.duration"),
-            Err(SchemaAnnotationError::MeasureIsNotAField(String::from(
-                "http.client.request.duration"
-            )))
-        );
-        assert_eq!(
-            schema(DataType::Text, "gen_ai.usage.input_tokens"),
-            Err(SchemaAnnotationError::MeasureCarrierMismatch {
-                path: SchemaPath::root(),
-                id: String::from("gen_ai.usage.input_tokens"),
-            })
-        );
-    }
-
-    #[test]
-    fn annotated_schema_rechecks_cost_target_and_currency_authority() {
-        let cost_schema = |ty: DataType, cost: CostAnnotation| {
-            let set = AnnotationSet::new(vec![DataAnnotation::Cost(cost)])
-                .unwrap_or_else(|error| panic!("one annotation: {error}"));
-            AnnotatedSchema::new(
-                ty,
-                AnnotationTable::new(vec![(SchemaPath::root(), set)])
-                    .unwrap_or_else(|error| panic!("one row: {error}")),
-            )
-        };
-        let decimal = DataType::Decimal(
-            crate::datatype::DecimalType::new(38, 18)
-                .unwrap_or_else(|error| panic!("valid decimal: {error}")),
-        );
-        let unknown = CurrencyCode::new("ZZZ")
-            .unwrap_or_else(|error| panic!("canonical currency spelling: {error}"));
-        assert_eq!(
-            cost_schema(
-                decimal.clone(),
-                CostAnnotation::scalar(unknown, CostBasis::ProviderReported),
-            ),
-            Err(SchemaAnnotationError::UnknownCurrencyCode(String::from(
-                "ZZZ"
-            )))
-        );
-        assert_eq!(
-            cost_schema(decimal, CostAnnotation::money(CostBasis::ProviderReported)),
-            Err(SchemaAnnotationError::IllegalAnnotationTarget {
-                path: SchemaPath::root(),
-                kind: AnnotationKind::Cost,
-            })
-        );
-
-        let money = DataType::Struct(
-            StructType::new(vec![
-                TypeField::new(
-                    "amount",
-                    DataType::Decimal(
-                        crate::datatype::DecimalType::new(38, 18)
-                            .unwrap_or_else(|error| panic!("valid decimal: {error}")),
-                    ),
-                ),
-                TypeField::new("currency", DataType::Text),
-            ])
-            .unwrap_or_else(|error| panic!("valid Money: {error}")),
-        );
-        let eur =
-            CurrencyCode::new("EUR").unwrap_or_else(|error| panic!("registered currency: {error}"));
-        assert_eq!(
-            cost_schema(
-                money,
-                CostAnnotation::scalar(eur, CostBasis::ProviderReported),
-            ),
-            Err(SchemaAnnotationError::InvalidCostCurrencyAuthority {
-                path: SchemaPath::root(),
-            })
-        );
+        for id in [
+            "carrots",
+            "gen_ai.usage.input_tokens",
+            "http.client.request.duration",
+        ] {
+            assert!(schema(DataType::INT, id).is_ok());
+            for ty in [DataType::DURATION, DataType::Text, DataType::Variant] {
+                assert_eq!(
+                    schema(ty, id),
+                    Err(SchemaAnnotationError::IllegalAnnotationTarget {
+                        path: SchemaPath::root(),
+                        kind: AnnotationKind::Measure,
+                    })
+                );
+            }
+        }
     }
 
     #[test]
@@ -1178,19 +878,6 @@ mod tests {
             )
             .is_ok()
         );
-    }
-
-    #[test]
-    fn cost_annotation_separates_scalar_and_money_currency_authority() {
-        let eur =
-            CurrencyCode::new("EUR").unwrap_or_else(|error| panic!("valid currency: {error}"));
-        let scalar = CostAnnotation::scalar(eur, CostBasis::ProviderReported);
-        assert_eq!(scalar.currency().map(CurrencyCode::as_str), Some("EUR"));
-        assert_eq!(scalar.basis(), CostBasis::ProviderReported);
-
-        let money = CostAnnotation::money(CostBasis::PricebookCalculated);
-        assert_eq!(money.currency(), None);
-        assert_eq!(money.basis(), CostBasis::PricebookCalculated);
     }
 
     #[test]

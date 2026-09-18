@@ -1,4 +1,4 @@
-//! The Retry source gate must explain its policy before claiming execution.
+//! Public Retry admission preserves the closed host, policy and safety rules.
 
 #![allow(clippy::expect_used, clippy::panic)]
 
@@ -11,7 +11,7 @@ fn refuse(source: &str) -> Bag {
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue"),
     )
-    .expect_err("Retry cannot execute before the complete cutover")
+    .expect_err("an unsupported Retry must refuse before execution")
 }
 
 fn graph(contract: &str, attributes: &str) -> String {
@@ -51,21 +51,33 @@ fn assert_code(bag: &Bag, code: &str, fragment: &str) {
     );
 }
 
-fn only_execution_gate(source: &str) {
-    let bag = refuse(source);
-    assert_code(&bag, "E-CHECK-DEFERRED", "manager");
-    assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
+fn admitted(source: &str) {
+    compile(&[source], &ContractCatalog::try_m0().expect("catalogue"))
+        .expect("a supported Retry passes independent plan validation");
 }
 
 #[test]
-fn valid_retry_has_one_named_execution_gate_not_an_unknown_extension() {
+fn valid_retry_executes_through_the_public_compiler_and_lab() {
     let source = graph(
         "Process",
         "command = \"cat\"; codec = lines; behavior = deterministic; timeout = duration(\"1s\")\nRetry.attempts = 3\nRetry.on = [SpawnFailed]",
     );
-    let bag = refuse(&source);
-    assert_code(&bag, "E-CHECK-DEFERRED", "Retry");
-    assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
+    compile(&[&source], &ContractCatalog::try_m0().expect("catalogue"))
+        .expect("the qualified Call Retry is executable");
+    let compilation = compile(
+        &[include_str!("fixtures/ui-retry.rkg")],
+        &ContractCatalog::try_m0().expect("catalogue"),
+    )
+    .expect("typed Retry through the public compiler");
+    let runs = rastok::lab::run_program(
+        &compilation.plan,
+        compilation.hash,
+        rastok::plan::GraphVersion(1),
+        &compilation.labs[0],
+        None,
+    );
+    assert_eq!(runs.len(), 1);
+    assert!(runs[0].report.passed(), "{:?}", runs[0].report);
 }
 
 #[test]
@@ -179,7 +191,7 @@ fn retry_attributes_fail_by_name_and_exact_source_span() {
 
 #[test]
 fn retry_uses_lexical_constants_without_invocation_state() {
-    only_execution_gate(
+    admitted(
         r#"
 val limit = 3
 val safe = true
@@ -228,7 +240,7 @@ graph app : App {
 #[test]
 fn retry_distinguishes_absent_false_true_and_fixed_idempotence() {
     for guarantee in ["", "idempotent = false;"] {
-        only_execution_gate(&graph(
+        admitted(&graph(
             "Process",
             &format!(
                 "{guarantee} Retry.attempts = 2; Retry.on = [SpawnFailed]; timeout = duration(\"1s\")"
@@ -246,7 +258,7 @@ fn retry_distinguishes_absent_false_true_and_fixed_idempotence() {
         "[SpawnFailed, TimeoutExpired]",
         "[TimeoutExpired, SpawnFailed]",
     ] {
-        only_execution_gate(&graph(
+        admitted(&graph(
             "Process",
             &format!(
                 "idempotent = true; Retry.attempts = 2; Retry.on = {cases}; timeout = duration(\"1s\")"
@@ -254,7 +266,7 @@ fn retry_distinguishes_absent_false_true_and_fixed_idempotence() {
         ));
     }
     for mode in ["read", "replace"] {
-        only_execution_gate(&graph(
+        admitted(&graph(
             "File",
             &format!(
                 "mode = {mode}; Retry.attempts = 2; Retry.on = [IoFailed]; timeout = duration(\"1s\")"
@@ -270,16 +282,14 @@ fn retry_distinguishes_absent_false_true_and_fixed_idempotence() {
 
 #[test]
 fn retry_selects_server_errors_from_the_versioned_http_contract() {
-    only_execution_gate(&graph(
+    admitted(&graph(
         "HttpClient",
         "Retry.attempts = 2; Retry.on = [ConnectFailed, DnsFailed, TlsFailed]; timeout = duration(\"1s\")",
     ));
-    let bag = refuse(&graph(
+    admitted(&graph(
         "HttpClient",
         "idempotent = true; Retry.attempts = 3; Retry.on = [ServerError]; timeout = duration(\"1s\")",
     ));
-    assert_code(&bag, "E-CHECK-DEFERRED", "Retry");
-    assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
     let bag = refuse(&graph(
         "Process",
         "idempotent = true; Retry.attempts = 3; Retry.on = [ServerError]; timeout = duration(\"1s\")",
@@ -345,7 +355,7 @@ fn retry_case_selection_is_not_an_expression_or_a_text_list() {
         ));
         assert_code(&bag, "E-RETRY-CASES", "");
     }
-    only_execution_gate(&graph(
+    admitted(&graph(
         "Process",
         "Retry.attempts = 1; Retry.on = []; timeout = duration(\"1s\")",
     ));
@@ -397,7 +407,7 @@ fn retry_bounds_and_delays_use_the_closed_positive_domains() {
         "{ kind = fixed; after = duration(\"1s\") }",
         "{ kind = exponential; first = duration(\"1s\"); ceiling = duration(\"1s\") }",
     ] {
-        only_execution_gate(&graph(
+        admitted(&graph(
             "Process",
             &format!(
                 "Retry.attempts = 2; Retry.on = []; Retry.delay = {delay}; timeout = duration(\"1s\")"

@@ -240,12 +240,13 @@ impl From<Value> for EvalValue {
             Value::Uuid(value) => Self::Uuid(value),
             Value::Null => Self::Null,
             Value::Array(items) => Self::List(items.into_iter().map(Self::from).collect()),
-            Value::Map(entries) => Self::Map(
-                entries
-                    .into_iter()
-                    .map(|(key, value)| (key, Self::from(value)))
-                    .collect(),
-            ),
+            Value::Map(entries) => {
+                let mut mapped = BTreeMap::new();
+                for (key, value) in entries {
+                    mapped.insert(key, Self::from(value));
+                }
+                Self::Map(mapped)
+            }
             Value::KeyedMap(entries) => Self::KeyedMap(
                 entries
                     .into_iter()
@@ -338,12 +339,13 @@ impl EvalValue {
                     .map(Self::into_value)
                     .collect::<Result<_, _>>()?,
             ),
-            Self::Map(entries) => Value::Map(
-                entries
-                    .into_iter()
-                    .map(|(key, value)| Ok((key, value.into_value()?)))
-                    .collect::<Result<_, Error>>()?,
-            ),
+            Self::Map(entries) => {
+                let mut mapped = BTreeMap::new();
+                for (key, value) in entries {
+                    mapped.insert(key, value.into_value()?);
+                }
+                Value::Map(mapped)
+            }
             Self::KeyedMap(entries) => Value::KeyedMap(
                 entries
                     .into_iter()
@@ -1111,11 +1113,18 @@ pub fn eval(tree: &Tree, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
 ///
 /// Same as [`eval`]; a reference to a non-constant name is an error.
 pub fn const_eval(tree: &Tree, consts: &BTreeMap<String, Value>) -> Result<Value, Error> {
-    let bindings: BTreeMap<String, EvalValue> = consts
-        .iter()
-        .map(|(name, value)| (name.clone(), EvalValue::from(value.clone())))
-        .collect();
+    let bindings = value_bindings(consts);
     eval_expr(&tree.root, &bindings)?.into_value()
+}
+
+/// Shared conversion for materialized lexical, instance and state bindings.
+/// Direct insertion avoids a collection/sort buffer for already unique keys.
+pub(crate) fn value_bindings(values: &BTreeMap<String, Value>) -> BTreeMap<String, EvalValue> {
+    let mut bindings = BTreeMap::new();
+    for (name, value) in values {
+        bindings.insert(name.clone(), EvalValue::from(value.clone()));
+    }
+    bindings
 }
 
 // ===== lexing =====
@@ -3304,6 +3313,55 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn materialized_binding_maps_preserve_nested_values_and_isolate_mutation() {
+        let mut values = BTreeMap::new();
+        for index in (0..40).rev() {
+            values.insert(
+                format!("field_{index:02}"),
+                Value::Map(BTreeMap::from([
+                    (String::from("count"), Value::Int(index)),
+                    (
+                        String::from("price"),
+                        Value::Decimal {
+                            unscaled: i128::from(index),
+                            scale: 2,
+                        },
+                    ),
+                ])),
+            );
+        }
+        let mut bindings = value_bindings(&values);
+        assert_eq!(bindings.len(), values.len());
+        assert!(bindings.keys().eq(values.keys()));
+        for (name, expected) in &values {
+            assert_eq!(bindings[name].clone().into_value().unwrap(), *expected);
+        }
+        assert_eq!(
+            EvalValue::from(Value::Map(values.clone()))
+                .into_value()
+                .unwrap(),
+            Value::Map(values.clone()),
+        );
+        bindings.insert(String::from("field_00"), EvalValue::Bool(false));
+        assert!(matches!(values["field_00"], Value::Map(_)));
+    }
+
+    #[test]
+    fn map_materialization_never_returns_a_partial_value_with_unresolved_payloads() {
+        let first = EvalValue::Payload(PayloadRef::Named(String::from("first")));
+        let later = EvalValue::Payload(PayloadRef::Named(String::from("later")));
+        let entries = BTreeMap::from([
+            (String::from("z"), later),
+            (String::from("a"), EvalValue::List(vec![first.clone()])),
+            (String::from("0"), EvalValue::Int(7)),
+        ]);
+        assert_eq!(
+            EvalValue::Map(entries).into_value().unwrap_err(),
+            first.into_value().unwrap_err(),
+        );
     }
 
     #[test]

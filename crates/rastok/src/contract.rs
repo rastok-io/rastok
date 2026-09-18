@@ -77,6 +77,14 @@ pub enum PortTypeRule {
         /// Total mapping of that attribute's choice words.
         choices: &'static [PortTypeChoice],
     },
+    /// Attribute-selected output whose JSON arm admits an explicit schema.
+    /// Other arms remain fixed, and omission preserves the selected type.
+    JsonOutput {
+        /// Codec-selecting attribute.
+        attribute: &'static str,
+        /// Default types, including the unrefined JSON `variant` arm.
+        choices: &'static [PortTypeChoice],
+    },
 }
 
 /// One port of a connector sheet under the same direction/type/routing model
@@ -308,7 +316,8 @@ impl ConnectorContract {
                         Some(ty.resolve().map_err(PortResolutionError::InvalidType)?)
                     }
                     PortTypeRule::SameAs(other) => resolved.get(other).cloned(),
-                    PortTypeRule::AttributeSelected { attribute, choices } => {
+                    PortTypeRule::AttributeSelected { attribute, choices }
+                    | PortTypeRule::JsonOutput { attribute, choices } => {
                         let word = attributes
                             .get(attribute)
                             .ok_or(PortResolutionError::MissingAttribute(attribute))?;
@@ -1131,7 +1140,19 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
                     }
                 }
             }
-            PortTypeRule::AttributeSelected { attribute, choices } => {
+            PortTypeRule::AttributeSelected { attribute, choices }
+            | PortTypeRule::JsonOutput { attribute, choices } => {
+                if matches!(port.ty, PortTypeRule::JsonOutput { .. })
+                    && (port.direction != crate::node::Direction::Output
+                        || !choices.iter().any(|choice| {
+                            choice.word == "json" && choice.ty == PortDataType::Variant
+                        }))
+                {
+                    return Err(SheetDefect::PortTypeChoiceMismatch {
+                        port: port.name,
+                        attribute,
+                    });
+                }
                 let Some(words) = choice_domain(attribute) else {
                     return Err(SheetDefect::UnknownPortTypeAttribute {
                         port: port.name,

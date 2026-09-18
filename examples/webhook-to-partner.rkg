@@ -5,12 +5,10 @@ type Webhook = struct {
   email: text @personal(identifier = true)
   amount: int
 }
-type Attempt = struct { event: Webhook, attempt: int }
-type Delivered = struct { event_id: text, attempts: int, status: int }
+type Delivered = struct { event_id: text, status: int }
 type Failure = union {
   Rejected { reason: text }
-  PartnerFailed { event_id: text, reason: text }
-  LoopExpired { last_state: Attempt }
+  PartnerFailed { event_id: text, terminal: PartnerExit }
 }
 type PartnerExit = union {
   Completed { status: int }
@@ -25,10 +23,9 @@ type PartnerExit = union {
   OutcomeUnknown {}
 }
 type Receipt = struct {
-  charge: decimal(38,18) @cost(currency = USD, basis = provider_reported)
+  charge: decimal(38,18) @measure(id = amount, unit = "USD")
 }
 type Charge = decimal(38,18)
-type WireReceipt = struct { charge: variant }
 
 graph webhook_to_partner : App {
   output done: Delivered
@@ -57,7 +54,7 @@ graph webhook_to_partner : App {
 
   operator deduplicate {
     input in: Webhook
-    output out: Attempt
+    output out: Webhook
     output duplicate: text
     instance = { key = data.event_id }
     lifetime = { kind = idle; after = duration("5m") }
@@ -66,90 +63,67 @@ graph webhook_to_partner : App {
       seen => duplicate = data.event_id
       _ => {
         seen = true
-        out = { event = data; attempt = 0 }
+        out = data
       }
     }
   }
 
-  graph deliver : Loop {
-    input in: Attempt
+  graph deliver {
+    input in: Webhook
     output done: Delivered
     output failed: Failure
-    instance = { key = data.event.event_id }
-    Loop.fuel = 2
-    Loop.terminal = [done, failed]
-    Loop.expired = failed
-    Loop.delay = { kind = fixed; after = duration("1s") }
+    instance = { key = data.event_id }
 
     operator request {
-      input in: Attempt
+      input in: Webhook
       output out: variant
       on in {
         // JSON erases the field schema: retain personal-data policy on the
         // opaque body, while the non-personal event id remains a typed key.
         out = {
           data = data as variant
-          meta.app.event_id = data.event.event_id
+          meta.app.event_id = data.event_id
         }
       }
     }
 
-    connector partner : HttpClient {
+    connector partner : HttpClient + Retry {
       url = env("PARTNER_URL")
       auth_bearer = secret("showcase/partner/token")
       method = "POST"
       codec = json
+      output out: Receipt
       timeout = duration("1s")
       max_body = "16 KiB"
       idempotency_key = meta.app.event_id
-      // Required partner contract: honour this key; attempt is audit-only.
+      // Required partner contract: honour this key for the identical request.
       // This declaration does not prove that a real service honours that contract.
       idempotent = true
       behavior = deterministic
-    }
-
-    operator accounting {
-      input in: variant
-      output out: Receipt
-      on in match {
-        data is WireReceipt => match {
-          data.charge is Charge => out = { charge = data.charge as Charge }
-          _ => nothing
-        }
-        _ => nothing
-      }
+      Retry.attempts = 2
+      Retry.on = [ServerError, TimeoutExpired, DnsFailed, ConnectFailed]
+      Retry.delay = { kind = fixed; after = duration("1s") }
     }
 
     operator decide {
       input in: PartnerExit
-      output retry: Attempt
       output done: Delivered
       output failed: Failure
       on in match {
         data is Completed && data.status >= 200 && data.status < 300 => done = {
-          event_id = Loop.state.data.event.event_id
-          attempts = Loop.state.data.attempt + 1
+          event_id = meta.app.event_id as text
           status = data.status
         }
-        data is ServerError => retry = {
-          event = Loop.state.data.event
-          attempt = Loop.state.data.attempt + 1
-        }
-        data is TimeoutExpired || data is DnsFailed || data is ConnectFailed => retry = {
-          event = Loop.state.data.event
-          attempt = Loop.state.data.attempt + 1
-        }
         _ => failed = PartnerFailed {
-          event_id = Loop.state.data.event.event_id
-          reason = "terminal transport failure"
+          event_id = meta.app.event_id as text
+          terminal = data
         }
       }
     }
 
     in -> request -> partner
-    partner.out -> accounting -> nothing
+    partner.out -> nothing
     partner.exit -> decide
-    decide.retry -> Loop.next
     decide.done -> done
     decide.failed -> failed
   }
@@ -165,18 +139,18 @@ graph webhook_to_partner : App {
 lab webhook_to_partner {
   simulation webhook on app {
     mock deliver.partner {
-      on in where data is Attempt && data.event.event_id == "dead" {
+      on in where data is Webhook && data.event_id == "dead" {
         out = nothing
       }
-      on in where data is Attempt && data.event.event_id == "retry" && data.attempt == 0 {
+      on in where data is Webhook && data.event_id == "retry" && now() == timestamp("1970-01-01T00:00:00Z") {
         out = nothing
       }
-      on in where data is Attempt && data.event.event_id == "http-500" && data.attempt == 0 {
-        out = { charge = decimal("0.01") }
+      on in where data is Webhook && data.event_id == "http-500" && now() == timestamp("1970-01-01T00:00:00Z") {
+        out = { charge = decimal("0.01") as Charge }
         exit = ServerError { status = 500 }
       }
       on in {
-        out = { charge = decimal("0.02") }
+        out = { charge = decimal("0.02") as Charge }
         exit = Completed { status = 201 }
       }
     }
@@ -184,31 +158,32 @@ lab webhook_to_partner {
     scenario nominal "ACK, validate, deliver once" {
       listener.out = { event_id = "ok"; email = "alice@example.test"; amount = 12 }
       expect listener.exit count == 1 where data is Completed && data.status == 202
-      expect app.done count == 1 where data.event_id == "ok" && data.attempts == 1 && data.status == 201
+      expect app.done count == 1 where data.event_id == "ok" && data.status == 201
       expect deliver.partner.in count == 1
-      expect deliver.accounting.out count == 1
+      expect deliver.partner.out count == 1 where data.charge == (decimal("0.02") as Charge)
       expect nothing app.failed
     }
 
-    scenario timeout_then_success "only the failed application is repeated" {
+    scenario timeout_then_success "the same request is repeated; only the final result is published" {
       listener.out = { event_id = "retry"; email = "alice@example.test"; amount = 12 }
       expect listener.exit count == 1 where data is Completed && data.status == 202
       expect nothing app.done
       advance duration("1s")
       expect deliver.partner.exit count == 1 where data is TimeoutExpired
       expect nothing deliver.partner.in
+      expect nothing deliver.decide.in
       advance duration("1s")
-      expect deliver.partner.in count == 1
-      expect app.done count == 1 where data.attempts == 2
+      expect deliver.decide.in count == 1 where data is Completed
+      expect app.done count == 1 where data.event_id == "retry" && data.status == 201
       expect nothing app.failed
     }
 
-    scenario partner_dead "two attempts, then explicit exhaustion" {
+    scenario partner_dead "two attempts, then the last failure unchanged" {
       listener.out = { event_id = "dead"; email = "alice@example.test"; amount = 12 }
       advance duration("1s")
       advance duration("1s")
       advance duration("1s")
-      expect app.failed count == 1 where data is LoopExpired && data.last_state.attempt == 2
+      expect app.failed count == 1 where data is PartnerFailed
       expect nothing app.done
       advance duration("10s")
       expect nothing deliver.partner.in
@@ -240,12 +215,14 @@ lab webhook_to_partner {
       expect nothing deliver.partner.in
     }
 
-    scenario http_500 "500 is a response; the graph explicitly chooses to retry" {
+    scenario http_500 "Retry selects the decoded ServerError and retains its charge" {
       listener.out = { event_id = "http-500"; email = "alice@example.test"; amount = 12 }
       expect deliver.partner.exit count == 1 where data is ServerError && data.status == 500
+      expect deliver.partner.out count == 1 where data.charge == (decimal("0.01") as Charge)
+      expect nothing deliver.decide.in
       expect nothing app.done
       advance duration("1s")
-      expect app.done count == 1 where data.attempts == 2 && data.status == 201
+      expect app.done count == 1 where data.event_id == "http-500" && data.status == 201
       expect nothing app.failed
     }
   }

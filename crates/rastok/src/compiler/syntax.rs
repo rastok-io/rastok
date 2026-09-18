@@ -828,7 +828,7 @@ pub struct SchemaAnnotationArgument {
 /// Closed constant vocabulary accepted by schema annotations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchemaAnnotationConstant {
-    /// Dotted symbolic constant such as `gen_ai.usage.input_tokens`.
+    /// Symbolic constant such as `input_tokens` or `USD`, optionally qualified.
     Symbol(Vec<Name>),
     /// String constant, with quotes stripped and source escapes retained.
     Text {
@@ -857,6 +857,13 @@ pub enum BaseType {
         /// The declared fields, in written order.
         fields: Vec<FieldDecl>,
         /// Whether `..` closes the record as open.
+        open: bool,
+    },
+    /// `@struct { a: T }` — a flat record eligible for annotation use.
+    FlatStruct {
+        /// The declared fields, in written order.
+        fields: Vec<FieldDecl>,
+        /// Retained for a named flatness refusal; a flat record is closed.
         open: bool,
     },
     /// `map<K, V>`

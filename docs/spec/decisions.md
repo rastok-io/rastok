@@ -5,6 +5,391 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-09-18-2 — Reserve Budget governance for a post-M1 Extension
+
+Yoann confirms that future budget governance is the `Budget` Extension,
+not an annotation interpretation or an OTLP exporter feature. It is explicitly
+outside M1 and is not a remaining M1 completion gate.
+
+The App Graph is the preferred starting point for its owner, not yet an
+exclusive host rule. Attaching an Extension to App does not by itself decide
+whether accounts are deployment-wide, per tenant or per keyed instance.
+Owner admission, account binding, nested scopes, reservation/settlement,
+typed refusal and composition with Loop, Retry and Closing still need their
+own design review. No executable attributes, package tag, journal key or
+delivery milestone is allocated now.
+
+M1 retains measurements and their provenance. `Budget` will govern admission
+before effects; the future `otlp` observer may expose its state but cannot
+enforce it. The [budget draft](../architecture/budget-governance-draft.md)
+separates this approved direction from the proposed protocol.
+
+## D-2026-09-18-1 — Separate generic measurements, OTLP export and budget authority
+
+Yoann approves documenting the observation architecture without implementing
+OpenTelemetry now. The target standard signature is deliberately generic:
+
+```rkg
+type measure = @struct {
+  id: text
+  unit: text
+}
+```
+
+The annotated field supplies the numerical type and value. Currency is a unit,
+for example `unit = "USD"`, not a second monetary branch of this annotation.
+Ids remain author-chosen. `currency`, `basis`, `aggregation` and `subset_of`
+are not fields of the target signature. Describing a quantity does not choose
+its aggregation, valuation, billing authority or budget policy. A signed
+amount can describe a refund without performing one or crediting an account.
+
+Typed hydration and original journaled envelopes retain the samples, including
+held Retry attempts. The associated validated plan supplies the annotation;
+causal history supplies producer, instance, exchange and attempt provenance.
+Missing evidence stays missing. A future cost consumer must separately select
+reported versus calculated evidence and a versioned tariff when needed. It
+must not infer a charge merely from an id or add an estimate to the amount
+it estimates. No existing evidence is silently erased by this decision.
+
+The planned Cargo feature is **`otlp`**, in the hosted `rastok` crate. It names
+the export protocol, not a promise to implement the full OTel SDK or its
+instrument API in the DSL. Compiling the capability and enabling it in a
+deployment are separate choices. Requesting an unavailable exporter must
+refuse explicitly. No dependency, empty Cargo feature, dynamic plugin loader
+or new core trait is introduced now; `rastok-core` remains independent of
+OTel types, transport and aggregation.
+
+The same optional observer exports selected business samples and technical
+observations. Business values come from retained typed envelopes; technical
+facts come from retained transitions or explicitly identified hosted samples.
+An export mapping outside the DSL selects metric representation, temporality,
+attributes and any local reduction required by the protocol. Id/unit alone
+cannot determine these. A bounded never-block handoff isolates execution from
+export; loss is visible, not an implicit backpressure or admission decision.
+Policy filtering precedes formatting, and payloads or instance keys never
+become metric labels by default. A dashboard is not an exact accounting ledger.
+
+D-2026-08-30-5's no-invented-time rule remains: unavailable commit instants or
+durations do not become spans with fabricated timestamps. Exported numbers do
+not replace exact journal quantities. Export configuration, collector outage
+and export loss do not change graph behavior or causal identity.
+
+This supersedes the target measure signature in D-2026-09-16-4, not the current
+candidate encoding by fiat. The currency/basis profiles in the working code
+remain an implementation checkpoint pending an explicit source/transport
+migration inventory and qualification. No format version, tag, hash expectation
+or golden is changed or blessed here. Standard policy annotations, signed
+values, typed hydration and D-2026-09-16-7's no-report M1 scope remain intact.
+
+Budget governance remains a later, separately reviewed semantic capability:
+observation cannot authorize future spend. The updated
+[budget draft](../architecture/budget-governance-draft.md#current-proposal--18-september-2026)
+explains reservation and settlement but settles no Budget syntax, account
+scope, refusal case or unknown-outcome policy. Durable budget authority is
+not supplied by M1 diagnostic recordings or by OTLP.
+
+**Rejected:** `hosted-otel` as the public feature name; mandatory OTel core
+dependencies; an exporter as a Connector Driver or a budget lock; inferring
+sum, price or spend permission from `@measure`; treating missing usage as zero;
+silently converting exact monetary evidence into a dashboard's authority.
+
+## D-2026-09-17-1 — Keep Responses and define explicit projected JSON hydration
+
+Yoann retains OpenAI Responses as the HTTP gateway target and approves a
+limited, explicit JSON profile for optional and additional response members.
+The [schema contact and profile](../architecture/openai-responses-hydration.md)
+define the boundary: `json_profile = projected` on a typed HttpClient JSON
+response, absent nullable fields normalized to null, extra struct members
+omitted, required missing or mistyped members still refusing with `DecodeFailed`.
+Ordinary structs, other codecs and strict JSON by default are unchanged.
+
+The projection is deliberately lossy: neither omitted extra members nor the
+wire distinction between absent and null is recoverable from its typed DATA.
+It is not a hidden raw-body journal. Declared maps/variant subtrees retain their
+contents; byte limits and complete JSON validation still apply before projection.
+No zero, monetary amount, measurement record or report is invented. Original
+typed samples are retained before Retry disposition, under the same policies.
+
+This amends D-2026-09-16-1's strict-only profile, not its existing strict
+interpretation. Candidate `http-client@3` must inventory the opt-in attribute
+before blessing; no additional package version or recording tuple is allocated.
+No provider-specific core or inferred idempotence is introduced. The subsequent
+[implementation ledger](../architecture/openai-responses-hydration.md) records
+source/binder/independent-validator tests, wire fixtures, replay, privacy and
+footprint evidence. It does not bless the common v19 candidate or certify a
+live provider invocation.
+
+## D-2026-09-16-7 — Retain measurements without an M1 reporting engine
+
+Yoann narrows M1 to retaining exact individual measurements and their causal
+provenance. A measurement annotation describes typed data; it does not select
+a reporting, pricing, aggregation or budget policy for the core or runtime.
+`CostReport`, automatic price calculation and `unpriced` report rows are removed
+from the executable M1 surface. Generic `subset_of` is outside M1, not a gate
+which must be implemented to finish it. A possible debugger-only aggregate
+remains undecided and is not introduced by this change.
+
+Values stay in the existing journaled envelopes, including the original
+emissions of every held Retry attempt. Their definitions, units, currency and
+annotation arguments stay in the associated validated plan. No new measurement
+record, running counter, format field or duplicated payload is introduced.
+Read-only observation helpers may expose individual retained samples, without
+combining them, subtracting subsets or calculating prices. Missing evidence is
+not zero. Security and personal-data admission/redaction rules remain unchanged.
+
+Retry still uses terminal cases, attempt limits, logical deadlines and
+repeatability. Held/Consumed/Published preserve the original emission identities;
+removing a report must not erase a held response, synthesize a second sample or
+change recovery. Qualification checks original emissions, their disposition and
+every restored journal prefix directly, not a report total.
+
+This supersedes the M1 report/pricing obligation in D-2026-08-30-6 and the report
+parts of D-2026-08-30-1, D-2026-09-16-2 and D-2026-09-16-6. Signed data, exact
+decimals, simple ids and the single monetary `@measure` spelling remain.
+Existing sum/subset metadata and deployment-profile attestations keep their
+candidate encoding in this scoped change; they do not authorize a runtime
+consumer. Removing or redesigning that transport is a separate decision, not
+an incidental second format migration. No golden is re-blessed here.
+
+## D-2026-09-16-6 — Admit signed business quantities, including refunds
+
+Yoann selects signed business measurements, explicitly including monetary
+refunds. The declared field type remains authoritative: signed integers and
+exact decimals may carry negative values; an unsigned field still refuses
+them. There is no second annotation-level numeric type or `signed` flag.
+
+M1 keeps checked exact sums. Corrections subtract naturally: EUR 12.50 and
+EUR -5.00 yield EUR 7.50 within the same report scope and evidence basis.
+Both original samples remain retained. A known zero or negative net is valid,
+never clamped, replaced by an absolute value or treated as missing evidence.
+Currencies, reported/calculated evidence and causal scopes remain distinct;
+an unknown amount is still unknown. A negative observation does not perform
+a refund, undo an effect or create a Saga/Budget operation.
+
+Repository contact distinguishes amounts from prices: `ExactDecimal`,
+`Money::new` and `money_from` already accept signed monetary observations.
+Only `UnitPrice::new` requires a non-negative deployment tariff; that rule is
+unchanged. The old closed-registry `MeasureQuantity` remains unsigned and
+`quantity_from` rejects negative counts/durations. Generic business bindings
+must replace that limitation explicitly, not reinterpret old registry entries
+or their subset checks silently. Signed subset/pricing consumers require
+their own checked arithmetic during A2 integration.
+
+This settles the open sign question in the annotation handoff, including
+monetary quantities rather than preserving an assumed non-negative amount
+restriction. It allocates no format field or golden and does not claim that
+generic business aggregation is implemented.
+
+## D-2026-09-16-5 — Retain declared annotation identity and typed constants
+
+Implement the descriptive application part of D-2026-09-15-5 using ordinary
+`DataType` and `Value`, not a second metadata value language. Candidate v19
+annotation tag 6 retains the explicit binding, declaring identity, flat
+argument schema and complete constant struct. The first admitted binding is
+descriptive metadata (1), with no security, accounting or execution authority.
+Unknown semantic bindings refuse. The common A1/A2 inventory is recorded
+before code in [the integration handoff](../architecture/annotation-types-m1.md#41-common-binding-inventory-16-september-before-implementation).
+
+Aliases resolve to their original declaration; a separately declared lookalike
+is distinct. One name cannot carry different argument schemas across the
+plan. Protected names and interpretation claims cannot be forged by shape.
+Omitted nullable arguments normalize to explicit null in the annotation
+value; ordinary data still requires every field. Argument and field order
+are non-semantic. Copies preserve metadata, calculations do not invent it,
+and alternatives must agree per definition.
+
+Definitions with policies on their argument fields remain named-deferred
+until nested argument-policy transport is designed. Ordinary annotated data
+of such a flat type remains valid. This refuses silent policy erasure and
+recursive interpretation without introducing annotation inheritance or hooks.
+
+The uncommon application is boxed; Value, envelopes, journal records and empty
+policy tables gain no field. Existing compact policy/monetary interpretations
+and their bytes remain unchanged. No additional package/recording version,
+Contract, causal domain or golden blessing is introduced. Generic business
+measure interpretation and arithmetic remain the next gate, not implicitly
+delivered by descriptive metadata.
+
+## D-2026-09-16-4 — Express monetary observations with measure, without cost syntax
+
+Yoann removes `@cost`, rather than keeping a second spelling. The monetary
+form is `@measure(id = amount, currency = USD, basis = provider_reported)`;
+its unit is the currency and its aggregation is sum. Explicit
+`aggregation = sum` normalizes identically; another aggregation or an
+additional `unit` refuses. A canonical Money-shaped value keeps its sole
+currency in the value: `@measure(id = amount, basis = provider_reported)`.
+The existing reported/calculated evidence and exact decimal rules hold.
+
+`@cost(...)` refuses with `E-DATA-ANNOTATION` and the replacement, never an
+alias or ignored metadata. Its retired name cannot be reclaimed by a source
+definition to make old programs silently descriptive. CostReport is still a
+monetary projection, not an annotation name or a second observation.
+
+The first source migration reuses the existing validated monetary
+interpretation and its compact encoding. It adds no plan field, journal fact,
+Contract version or hash domain; replacing the old spelling must preserve
+the plan, hash and report. Monetary ids other than `amount` remain behind the
+named binding gate until the common generic-annotation inventory transports
+them; they are never collapsed into `amount`. Non-monetary business measures
+still require their explicit units and their unfinished generic binding.
+This supersedes the `@cost` convenience spelling in D-2026-09-15-5, not its
+accounting guarantees, and is not a claim that all business measures ship.
+
+## D-2026-09-16-3 — Use simple author-chosen measurement names
+
+Yoann replaces standards-first measurement naming with simple vocabulary:
+`amount`, `currency`, `provider`, `tokens`, and author-chosen measure ids.
+Neither `gen_ai.*` nor `rastok.*` is required. The offered `std.` alternative
+is not needed: a protected interpretation is authorized by its validated
+annotation definition/binding, not by a prefix on a quantity's id.
+
+A quantity and its context remain different things. `tokens` can name a
+count; `amount` can name a numerical amount; `currency` and `provider`
+describe denomination and provenance, not quantities to sum. A field name
+alone neither extracts a sample nor makes an amount monetary. Explicit typed
+annotations supply that meaning, with exact integer/decimal values, declared
+units and M1's sum-only aggregation. This does not introduce dynamic labels,
+infer context from arbitrary JSON fields or settle new annotation arguments.
+Authors may keep input and output tokens distinct with simple ids such as
+`input_tokens` and `output_tokens`.
+
+This supersedes the naming priority of D-2026-08-30-1 and D-2026-09-15-5,
+not privacy, exact arithmetic, currency/basis separation, causal attribution
+or prevention of double counting. OTel conventions no longer determine the
+source vocabulary or require an external measure registry. A future exporter
+mapping is separate work, not a prerequisite or a source-level alias.
+
+The current executable M1.8 registry is still the migration baseline, not
+already renamed code. The common annotation inventory must enumerate the old
+ids, their replacement definitions (including existing subset relationships),
+price-profile references and affected identities before changing transport or
+blessing examples. No existing id silently changes meaning. This documentary
+decision allocates no format field, version or golden and does not close M1.
+
+## D-2026-09-16-2 — Limit M1 business aggregation to exact sums
+
+Yoann selected `aggregation = sum` for M1. Business quantities use existing
+integer or exact decimal field types and an explicit unit; they are not
+implicitly tokens or money. The pinned standard measures keep their existing
+units, carrier constraints and subset relationships at this checkpoint;
+D-2026-09-16-3 subsequently supersedes their naming policy. Missing evidence
+remains unknown, not zero, and a retained Retry attempt supplies its original
+sample only once. Addition is checked and exact, never rounded through a float.
+
+`last` is deferred: M1 does not introduce a last-observation order, replace a
+sum with the most recent value, or admit a profile that the reader ignores.
+This settles the aggregation choice in the annotation integration handoff;
+it is not a claim that generic definitions or decimal measures are already
+executable. Cost desugaring and the common transport inventory still precede
+their affected implementation. No format allocation or golden changes here.
+
+## D-2026-09-16-1 — Refine an existing Connector JSON output by its type
+
+Yoann selected `output out: ModelResponse` inside the Connector, not
+`codec = json(ModelResponse)`. This binds a schema to an existing output whose
+Contract explicitly permits JSON hydration; it never declares an additional
+port, changes an input, or grants a Connector DSL handlers. Names associate
+JSON object members with struct fields recursively. No mapping expression,
+field renaming, inference from wiring or provider-specific Contract is added.
+
+The first executable profile is HttpClient's `out` with `codec = json`.
+It admits closed structs, arrays, text-keyed maps, enums, exact integers and
+decimals, number, text, bool, null, variant and nullable forms recursively.
+Bytes, temporal/string encodings, floats and discriminator-dependent unions
+remain outside this hydration profile and refuse by name. A nullable field
+still must be present: null is not absence. Extra fields and invalid present
+values refuse; nothing is silently dropped, rounded or defaulted to zero.
+The real codec produces the existing `DecodeFailed` terminal without an `out`
+on failure. Native Driver completions must still conform to the resolved pin;
+the VM does not repair a malformed typed completion after retention.
+
+The existing plan port/type and annotation tables retain the schema. The
+HttpClient mirror re-derives its allowed codec profile without a Registry.
+This amends unblessed `http-client@3` in the candidate v19 inventory, not a
+published Contract. There is no additional plan field, Value kind, journal
+event, request-descriptor field, recording version or golden blessing.
+Unrefined programs retain their candidate identities. See
+[the implementation inventory](../architecture/annotation-types-m1.md#7-existing-output-json-hydration).
+
+## D-2026-09-15-6 — Hydrate annotated response types before Retry disposition
+
+**Approved at this checkpoint; the first HttpClient JSON profile subsequently
+lands under D-2026-09-16-1.** The declared response
+type supplies both the JSON field structure and its measurement annotations.
+Decode/hydrate each response into that type; read the resulting typed fields
+through the existing annotation consumers. No second path-mapping language,
+measurement extractor callback or downstream Operator replay is introduced.
+Annotation arguments stay constant: hydration fills data, not metadata.
+
+The response type is explicitly bound in the validated Connector profile;
+an edge or an accounting reader cannot silently narrow today's `variant`
+output. The type may be nested; `@struct` flatness constrains annotation
+arguments, not response payloads. Hydration and policy validation precede
+commit of classified payloads and Retry's Held/Published disposition, so
+retained attempts have the same typed evidence as published attempts.
+Consumption/publication never manufacture a second emission or expense.
+
+Exact decimals must survive decoding without a binary-float round-trip.
+Missing or invalid values are not zero. Existing conformance and refusal
+rules remain authoritative; this decision admits neither partial best-effort
+records nor ignored extra fields. Source binding, codec capability, failure
+cases and canonical transport must be inventoried before their implementation.
+Process/HTTP remain generic Contracts, without model-provider fields built in.
+
+[Annotations §6.1](annotations.md#61-hydration-supplies-the-values) owns the
+target and example. The [M1 handoff](../architecture/annotation-types-m1.md)
+replaces its earlier separate extraction proposal with typed hydration.
+No format key, Contract version or golden is allocated by this decision.
+D-2026-09-16-1 settles its source binding and first codec profile.
+
+## D-2026-09-15-5 — Define flat annotation-capable structs with one type system
+
+**Approved direction and spelling; annotation bindings remain staged.** Yoann chose
+`type Name = @struct { ... }`: one closed flat record schema, usable as an
+ordinary data type and as the parameter type of `@Name(...)`. Fields reuse
+the existing scalars/enums and their optional forms; aliases are resolved
+before rejecting hidden composites. This adds no parallel numerical type
+system or new family of runtime values. In a base-type position the leading
+`@` selects a disjoint production; the syntax remains LL(1), with no parser
+backtracking or second spelling.
+
+The stdlib supplies annotation definitions, including the ones interpreted by
+the runtime. Core subsystems, hosted policy/accounting tools and Extensions
+may consume their validated type metadata. Definition, typed constant
+application and interpretation are distinct authorities: equal record shapes
+or a familiar source name cannot grant the protected meaning of `secret`,
+`personal`, `sensitive` or a runtime measurement. Unknown annotations are not
+silently reclassified as descriptive; an unsupported required interpretation
+refuses before effects. Annotation declarations contain no executable hooks.
+
+The accepted measurement direction is domain-independent: integers and exact
+decimals, explicit units and aggregation, pinned OTel semantics when they
+match, declared Rastok meanings otherwise. **D-2026-09-16-3 subsequently
+supersedes that naming policy with simple author-chosen ids.** `@cost` is a
+convenience spelling of monetary measurement, preserving currency and
+reported/calculated evidence.
+Its exact general form, business profiles and canonical transport still need
+the integration inventory. This is not permission to guess missing usage,
+count copied values as new consumption, or make an observation choose Retry.
+
+[annotations.md](annotations.md) owns the target declaration/interpretation
+boundary. The [M1 handoff](../architecture/annotation-types-m1.md) records
+repository contact, pre-code binding/extraction questions and A0–A4 gates.
+The closed M1.8 annotations keep their executable meanings until those gates
+land. Required signature/default rules, protected binding identities and
+attempt extraction are not declared implemented by this decision.
+
+No format, Contract major, journal fact, golden or code changes here. Amend
+the C1 candidate inventory before any executable allocation; source admission
+and M1 remain open. Rejected: a separate `measure` declaration/type algebra,
+`struct@` as a second spelling, `type X : annotation` inheritance, a mandatory
+annotation plugin engine, and any weakening of secret/privacy or exact-cost
+rules merely to make their declarations generic. The subsequent
+[first source checkpoint](../architecture/annotation-types-m1.md#6-first-source-checkpoint)
+admits flat ordinary data, preserves plan/hash identity, and names the staging
+refusal for new annotation applications. It does not close interpretation or
+hydration gates.
+
 ## D-2026-09-15-4 — Drain an unopened Retry request as one ordinary Call
 
 **Approved during C3; source admission still awaits complete qualification.**
@@ -1784,6 +2169,9 @@ the causal record is immutable; and claiming GDPR certification from schema
 annotations alone.
 
 ## D-2026-08-30-1 — M1.8 separates data policy, accounting truth and disposable export
+
+> The standards-first naming clause below is historical after
+> D-2026-09-16-3; the closed executable registry remains the migration baseline.
 
 M1.8 replaces the old untyped Connector `cost` map with four typed schema
 annotations beside the resolved logical type: `@sensitive`, `@secret`,

@@ -41,7 +41,6 @@ fn snapshots(recording: &Recording) -> Result<Vec<UiSnapshot>, Error> {
             definitions: recording.definitions(),
             vm: &vm,
             journal: &journal,
-            cost_profile: None,
             fault: incomplete.as_ref(),
             activity: activity.as_ref(),
             scenario: None,

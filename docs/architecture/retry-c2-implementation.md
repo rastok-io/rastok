@@ -1,5 +1,10 @@
 # C2 — source and validated-plan implementation
 
+> **Later qualification — 18 September:** the [common C4 ledger](retry-c4-qualification.md)
+> records the single v19/v3 blessing and current checks. The candidate status,
+> failures and deferred steps below describe this report's dated checkpoint;
+> they are not the current [opening checklist](opening-showcase.md).
+
 15 September 2026. **In progress; Retry is not executable.** The
 [C1 inventory](retry-c1-identity.md) owns the proposed v19/v3 cutover.
 The preparatory checkpoints (§1–§5) preserved executable v18/recording v2.

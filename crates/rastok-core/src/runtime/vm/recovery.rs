@@ -37,10 +37,10 @@ impl Vm<'_> {
     /// # Errors
     /// The same atomic recovery refusals as [`Self::recover_from_journal`],
     /// or an unavailable/invalid pure Contract projection.
-    pub fn recover_with_bindings<B: OutboundConnectorBindings + ?Sized>(
+    pub fn recover_with_bindings(
         &mut self,
         journal: &dyn Journal,
-        bindings: &mut B,
+        bindings: &mut dyn OutboundConnectorBindings,
     ) -> Result<(), VmError> {
         self.preflight(journal)?;
         let resume_at = self.now;
@@ -133,11 +133,11 @@ impl Vm<'_> {
         Ok(())
     }
 
-    fn restore_record<B: OutboundConnectorBindings + ?Sized>(
+    fn restore_record(
         &mut self,
         journal: &dyn Journal,
-        admissions: &impl InstanceAdmissions,
-        bindings: &mut B,
+        admissions: &dyn InstanceAdmissions,
+        bindings: &mut dyn OutboundConnectorBindings,
         index: usize,
         record: &Record,
         resume_at: i64,
@@ -180,7 +180,7 @@ impl Vm<'_> {
     fn restore_transaction(
         &mut self,
         journal: &dyn Journal,
-        admissions: &impl InstanceAdmissions,
+        admissions: &dyn InstanceAdmissions,
         index: usize,
         record: &TransactionRecord,
         resume_at: i64,

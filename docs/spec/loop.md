@@ -2,7 +2,7 @@
 
 > **Status (2026-09-08): normative categorical plan v17.** Loop contributes
 > no port; exhaustion extends a resolved host terminal under D-2026-09-08-1.
-> [The v17 ledger](../architecture/loop-host-terminal-v17.md) records current qualification.
+> [The v17 ledger](../architecture/loop-host-terminal-v17.md) records that host-terminal qualification.
 > Operator, outbound Call and Graph hosts execute and recover, including nested
 > runs, annotated recurrence, entry-preserving Graph measures, boundary-only
 > bodies and unconditional same-context joins. The control-proof limits below
@@ -10,12 +10,11 @@
 > records the host checkpoint; [R9](../architecture/rework-r9-qualification.md)
 > records the final migration and qualification.
 
-> **Approved next refactor (2026-09-14):**
-> [D-2026-09-14-4](decisions.md#d-2026-09-14-4--separate-loop-retry-and-saga-over-one-recurrence-engine)
-> separates state iteration from protected repetition of one Call. Loop keeps
-> its state, commands and finitude contract. The current effect-safety coupling
-> in §§11–12 is to be superseded at the versioned cutover, not silently waived
-> in today's checker. See the [refactor contract](../architecture/retry-extension-refactor.md).
+> **Current v19 amendment — D-2026-09-14-4:** Loop advances authored state;
+> Retry repeats one prepared Call under its own hard safety gate. Global
+> `effect` classification is removed. §§11–12 distinguish the advisory Loop
+> warning from Retry admission. See the [refactor contract](../architecture/retry-extension-refactor.md)
+> and [common qualification](../architecture/retry-c4-qualification.md).
 
 `Loop` is a temporal Extension which applies one finite host application,
 then either terminates or re-enters the same host input. Recurrence is a
@@ -326,14 +325,18 @@ At terminal exit:
 3. otherwise the exit supplies natural Done;
 4. disposing the exit with `nothing` does not suppress natural Done.
 
-Every terminal case is classified `before_effect`, `outcome_unknown`, or
-`after_effect`. Recurrence after `before_effect` is always allowed.
-Recurrence after the other classes requires `effect = none | idempotent`.
-`compensable` does not make repetition safe. Unsafe recurrence is
-`E-LOOP-EFFECT`.
+Every terminal case retains its Contract classification: `before_effect`,
+`outcome_unknown`, or `after_effect`. Loop does not prove safe repetition of
+external effects: an authored `Loop.again` path which may repeat a visible
+Call without `idempotent = true` produces `W-LOOP-REPEAT`, including successful
+sibling Calls in a Graph. A wholly BeforeEffect path does not warn. `Loop.next`
+chooses a new state and is not diagnosed by this warning.
 
-The standard target profiles and conservative classifications are frozen in
-[rework-r1-host-contracts.md](../architecture/rework-r1-host-contracts.md).
+Protected repetition of the same operation belongs to `Retry`: selected
+OutcomeUnknown/AfterEffect cases without the guarantee refuse with
+`E-RETRY-EFFECT`. The former `E-LOOP-EFFECT` and global `effect` attribute are
+retired. The [C1 Contract tables](../architecture/retry-c1-algebra.md)
+retain conservative terminal visibility; no warning contributes to identity.
 
 ## 12. Operator and Graph control
 
@@ -352,8 +355,9 @@ A child Call's terminal settles that Call only. Unlike a Connector which
 itself hosts Loop, it supplies no implicit Done to its containing Graph.
 Its output routes participate in the Graph's verdict proof together with
 every other child path. The proof preserves Contract response/terminal
-correlation and checks the safety of all effects a recurrence could repeat,
-including sibling Calls which did not select the command.
+correlation. The separate `W-LOOP-REPEAT` analysis covers Calls that `again`
+could repeat, including sibling Calls which did not select the command;
+this is an advisory check, not the Loop control proof.
 
 A Graph has no `on in`, `on start`, or `on stop`. Window state and
 lifecycle emissions belong in an Operator child. The generic lifecycle
@@ -394,7 +398,9 @@ only the ordinary expiry emission's destination changes.
 
 These are interface excerpts. Complete checked programs, including every
 disposition and their Lab scenarios, are [countdown](../../examples/countdown.rkg)
-and [keyed retry](../../examples/keyed-retry.rkg).
+and the [Loop debugger fixture](../../crates/rastok/tests/fixtures/ui-two-retries.rkg).
+[Keyed retry](../../examples/keyed-retry.rkg) now teaches the distinct Retry
+protocol, not authored Loop state progression.
 
 ```rastok
 operator countdown : Loop {

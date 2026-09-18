@@ -1,13 +1,20 @@
 # Data policy, privacy, observations and cost
 
-> **Status: normative and executable through closed M1.8 under
-> D-2026-08-30-1 through D-2026-08-30-6 and D-2026-08-31-1.** Current package v17 retains the M1.8 policy transport as
-> canonical side-tables. Registry-free validation re-derives every local
-> claim and the effective policy of canonical operations; presentation
-> redacts before formatting. A4 admits personal data only under an attested
-> run-scoped privacy profile and resolves reference-origin credentials only at
-> declared Driver settings. Executable raw `@secret` sites defer at source
-> check, and VM boot keeps foreign packages fail-closed.
+> **M1 scope amendment — D-2026-09-16-7:** retain individual typed
+> measurements, including Retry's held attempts. No report engine, automatic
+> pricing or subset arithmetic ships in M1. §6–7 describe that reduced scope;
+> quantity ids have explicit units, not implicit registry meanings.
+
+> **Executable v19 — 18 September 2026.** M1.8's security, privacy,
+> propagation and late-bound secret guarantees remain in force. V19 adds [flat annotation types](annotations.md), typed response
+> hydration and original signed measurements. Under D-2026-09-18-1 every
+> measure has exactly `id` and `unit`: money is a quantity with a currency
+> unit, not a second annotation profile. The [annotation inventory](../architecture/annotation-types-m1.md)
+> and [common qualification](../architecture/retry-c4-qualification.md) track
+> identity movements, unchanged witnesses and verification.
+> Registry-free validation re-derives local claims and canonical propagation;
+> presentation redacts before formatting. Raw executable `@secret` sites
+> remain refused before effects.
 
 This document owns data classification, typed runtime observations and their
 accounting projections. Logical values and assignability remain owned by
@@ -53,7 +60,7 @@ schema that can own policy: raw and resolved port rows, nested-Graph ports,
 owner values, Node state cells and handler-local typed bindings. Empty tables
 are omitted. The decoder reconstructs the table from its structural wire form;
 validation resolves every path against the adjacent `DataType` and verifies
-the closed registry. Raw rows remain source declarations. The separately
+its interpretation and typed arguments. Raw rows remain source declarations. The separately
 transported resolved-port table is an effective verdict: A3 reconstructs it
 from raw declarations and canonical operations, then requires exact equality.
 A derived verdict is never copied back into a raw row and cannot masquerade as
@@ -73,14 +80,14 @@ Arguments are named plan constants. Duplicate names, positional arguments,
 expressions, `env()`, `secret()`, `data`, `meta`, state and open maps refuse.
 Annotation order is not semantic; canonical order follows annotation identity.
 
-The M1.8 set is closed:
+The executable source interpretations are:
 
 ```rastok
 text @sensitive(level = confidential)
 text @secret
 text @personal(identifier = true)
-uint @measure(id = gen_ai.usage.input_tokens)
-decimal(38,18) @cost(currency = USD, basis = provider_reported)
+uint @measure(id = input_tokens, unit = "token")
+decimal(38,18) @measure(id = amount, unit = "USD")
 ```
 
 There is no `@dimension` in M1.8. Provider, model, protocol, Node, port,
@@ -166,77 +173,65 @@ Article 9, Article 10 and identifier flags can coexist on one path.
 
 ### 3.4 `@measure`
 
-`id` selects one entry from the pinned semantic-measure registry. The entry
-fixes carrier, unit, aggregation, subset relations and legal sources; source
-does not repeat them. Unknown ids or incompatible field types refuse.
+A numerical quantity declares its id and unit explicitly:
 
-OpenTelemetry names have priority when their definitions match exactly. The
-registry distinguishes an OTel attribute from an OTel instrument even when
-both describe the same quantity. `@measure` binds a field to the former; the
-runtime projects the latter without inventing another semantic name.
+```rkg
+uint @measure(id = input_tokens, unit = "token")
+int @measure(id = stock_correction, unit = "item")
+decimal(38,18) @measure(id = weight, unit = "kg")
+```
 
-The initial standard field identities are:
+An id has no built-in unit, carrier, subset or exporter meaning. Canonical
+simple or dotted names are author-chosen; neither OTel names nor a reserved
+prefix confer authority. Even a former standard name requires an explicit
+unit. The target must be an integer or exact decimal; signed field types
+retain negative corrections, and zero is an observation, not missing evidence.
+The unit is opaque text: no conversion is implicit.
 
-- `gen_ai.usage.input_tokens`;
-- `gen_ai.usage.output_tokens`;
-- `gen_ai.usage.cache_read.input_tokens`;
-- `gen_ai.usage.cache_creation.input_tokens`;
-- `gen_ai.usage.reasoning.output_tokens`;
+The protected `rastok/measure@3` binding carries the same ordinary flat
+argument schema as other annotation definitions. Complete arguments, numeric
+targets, consistent units per id and interpretation authority are checked
+independently when opening a package. The schema has exactly two required
+text fields; there is no aggregation argument or M1 aggregate.
 
-The following standard instruments are pinned for the later hosted projection;
-they are not field annotations and A6 remains explicitly deferred:
+Input, output, cache and reasoning counts may be separate original samples.
+M1 derives no relationship or total from their names. Generic `subset_of`
+refuses by name. Runtime instruments and future exporter mappings are separate
+consumers; a field annotation neither produces an instrument nor adopts one.
 
-- `gen_ai.client.token.usage`;
-- `gen_ai.client.operation.duration`;
-- `gen_ai.client.operation.time_to_first_chunk`;
-- `gen_ai.client.operation.time_per_output_chunk`;
-- `http.client.request.duration`, `http.client.request.body.size` and
-  `http.client.response.body.size`;
-- `http.server.request.duration`, `http.server.request.body.size` and
-  `http.server.response.body.size`.
+D-2026-09-16-3 and D-2026-09-16-7 supersede the closed M1.8 registry. Its
+compact annotation tag 3 is retired and refuses by name; it is never reused
+or reinterpreted. The [migration inventory](../architecture/annotation-types-m1.md#16-explicit-unit-migration-inventory--17-september-before-implementation)
+records that first migration. The subsequent
+[two-field inventory](../architecture/annotation-types-m1.md#19-two-field-measure-migration-inventory--18-september-before-code)
+retires compact cost tag 4 and changes the generic protected definition to
+`rastok/measure@3`. Security/privacy guarantees remain unchanged.
 
-Cache-read and cache-creation counts are subsets of input tokens. Reasoning
-tokens are a subset of output tokens. Reports retain all observations but do
-not add a subset to its total. When a provider distinguishes consumed from
-billable token counts, the pinned OTel rule preferring billable usage applies;
-the observation retains its provider-reported provenance.
+### 3.5 Amounts are ordinary quantities
 
-The registry owns an exact internal unit as well as the carrier. Token fields
-use `token`; HTTP body sizes use bytes; retained durations use integer
-nanoseconds and are rescaled only by an exporter. Field measures are
-non-negative additive samples. A negative value, carrier mismatch or overflow
-refuses the report rather than being skipped.
+`decimal(18,6) @measure(id = amount, unit = "USD")` uses exactly the same
+binding as tokens or stock corrections. The field supplies the signed exact
+value. The id remains author-chosen; the unit is opaque text, not an ISO
+registry lookup or a permission to charge. A negative value can describe a
+refund. Original values remain separate facts; M1 computes no net amount.
 
-Rastok-specific operational instruments will use `rastok.*`, including flow
-envelope count/payload size, generic Connector calls and duration, mailbox
-depth, edge lag, instance count/eviction, journal size/low-water mark and
-dropped observation projections. Their final spellings are allocated only
-when their retained facts and exporter land; A7 does not pretend that an
-exporter counter is an annotated field measure. A future OTel convention that
-exactly covers one requires an explicit registry migration; two aliases are
-never emitted silently.
+If a response contains `{ amount, currency }`, annotate the numerical
+`amount` field with its statically declared unit. Annotating the whole struct,
+deriving a unit from a runtime field, or silently converting currencies is
+not admitted. One id cannot carry different units in the same validated plan.
 
-### 3.5 `@cost`
+`@cost` is retired. Former `currency`, `basis`, `aggregation` and
+`subset_of` arguments also refuse with a migration explanation. A consumer
+that values tokens, compares an estimate to an invoice, or enforces a budget
+needs an explicit policy; those operations are outside the M1 annotation.
 
-`basis` is initially `provider_reported` or `pricebook_calculated`. A decimal
-field requires a constant ISO currency. A canonical Money-shaped struct
-contains `amount: decimal(38,18)` and `currency: text`; its currency value is
-validated and a redundant constant argument refuses. Costs of different basis
-or currency remain separate observations.
-
-The source compiler checks membership against the ISO 4217 Maintenance
-Agency's current List One snapshot fetched on 2026-08-30 (SHA-256
-`838dfb991648cf36df939edd5fe3811737962b75a32252847d239cedd1e291c9`). A
-registry update is an explicit semantic migration; it is never inherited from
-the host or a dependency.
-
-`Money` is a carrier convention, not a `DataType` constructor. Arithmetic is
-checked exact decimal arithmetic. Overflow, excess precision, a malformed
-currency and any required rounding refuse; float conversion is never implicit.
+The existing exact `Money` and pinned ISO currency checks remain limited to
+retained deployment tariff metadata, not measured values. M1 does not apply
+those tariffs.
 
 ## 4. Propagation
 
-| Operation | Sensitive / secret / personal | Measure / cost |
+| Operation | Sensitive / secret / personal | Measure |
 |---|---|---|
 | exact copy, projection, rename | preserve | preserve |
 | calculation | maximum taint | drop unless a registered rule proves meaning |
@@ -251,7 +246,7 @@ guesses or reinterprets an annotation name.
 A3 covers boundary and Node ports, nested-Graph boundaries, owner `val`s,
 Node-owned `var`s, handler-local `let`s, guards, field writes, Loop recurrence
 and `LoopExpired.last_state`. Control dependence carries the strongest
-security taint. Alternative producers must agree exactly on measure and cost
+security taint. Alternative producers must agree exactly on measure
 meaning; disagreement is `E-DATA-ANNOTATION`, never a first-wins choice.
 Metadata has no data-policy schema in M1, so writing classified data into
 `meta.app` or `meta.ext` refuses rather than losing its policy.
@@ -275,7 +270,7 @@ mutation. The source checker has already refused that executable use; named
 aliases which are never used remain harmless structural vocabulary. A personal-data site
 is admitted only when the booted profile covers every ordinary/Article 9/
 Article 10 requirement and the journal exposes the exact same deployment
-attestation. Sensitivity, measure and cost policy otherwise execute. CLI and
+attestation. Sensitivity and measure policy otherwise execute. CLI and
 Lab fault paths never format a runtime value before consulting policy or
 reducing the message to a value category.
 
@@ -386,7 +381,7 @@ controller-owned stable identifiers, not free-form legal prose):
         "connector": "model",
         "provider": "example-ai",
         "model": "large-v1",
-        "measure": "gen_ai.usage.input_tokens",
+        "measure": "input_tokens",
         "units": 1000000,
         "amount": "2.50",
         "currency": "USD"
@@ -425,103 +420,131 @@ with record order; no second ordinal or placement fact is invented. The VM's
 payload-bearing `Observed` delivery log is a distinct Lab/debugger surface,
 not this retained accounting plane.
 
-The journal is the accounting authority. `CostReport` is a deterministic fold
-over retained observations, grouped by `origin_id` and optionally instance,
-Node, Connector, provider/model, basis and currency. A missing price produces
-an explicit `unpriced` item. No cross-currency total exists without a later
-explicit FX authority.
+The journal and its associated validated plan are the measurement authority.
+Values remain in the original admitted or emitted envelopes; annotations
+describe their meaning. They are not duplicated into a measurement ledger.
+D-2026-09-16-7 removes the report engine from M1: no grouping, total, automatic
+price calculation, subset subtraction or `unpriced` result is produced.
+A missing value stays missing; a known zero remains an original value.
 
 ## 7. Projection
 
-```text
-journal + retained observation stream
-       +-- deterministic fold ------> CostReport
-       `-- bounded try-send --------> logs / OpenTelemetry
-```
+Read-only inspection derives individual observations from the journal prefix
+and resolved schemas. Structured logging independently uses a bounded
+never-block queue: saturation drops a projection and increments its local
+typed drop counter, without delaying or failing a transaction. Redaction runs
+before formatting; payload content is omitted by default.
 
-The export path is never-block. A full queue drops the projection and
-saturating-increments its local typed drop counter; it cannot delay or fail a
-transaction. A future A6 exporter allocates the final `rastok.*` instrument
-name only with its retained fact and projection. Redaction runs before output
-formatting. Payload content is omitted by default.
+The hosted runner exposes structural logs through `--json-logs` on a
+separate thread. Its terminal I/O never runs in the VM producer. Event names
+remain `rastok.inbound.committed`, `rastok.transaction.committed`,
+`rastok.call.*` and `rastok.session.*`. The later OpenTelemetry exporter
+still requires exact retained timing evidence; it cannot invent span times.
+Neither that exporter nor a measurement report is an M1 completion gate.
 
-`meta.sys.origin_id` supplies the OpenTelemetry trace id. One logical
-transaction becomes one span; an outbound Call becomes its child only when the
-Call actually opens. A budget refusal or pre-open validation failure must never
-fabricate a network span. Sampling affects only export. The journal and report
-remain complete.
+### 7.1 Individual measurement inspection
 
-High-cardinality refs such as origin, instance, Call and Session are available
-on spans/logs and in reports. They are not metric labels by default. Standard
-OTel instrument names and attribute definitions are used verbatim when
-applicable; only uncovered project concepts use `rastok.*`.
+`accounting_observations` reads INBOUND and each original TRANSACTION
+emission. Each observation retains the record correlation, envelope id,
+canonical annotation path, exact value and provenance: origin, instance
+generation, owner, Node, Connector, port and typed exchange. It does not
+combine copies of a value at different flow points into a consumption total.
 
-The hosted runner exposes this projection through `--json-logs`. Export occurs
-on a separate thread; its blocking terminal I/O is never executed by the VM
-producer. Event names are Rastok-specific (`rastok.inbound.committed`,
-`rastok.transaction.committed`, `rastok.call.*`, `rastok.session.*`) while
-standard measure instruments remain governed by the registry in §3.4.
+A typed decoding Operator can expose annotations from a dynamically typed
+response. The Connector provenance is then the nearest producer in the
+envelope's sealed parent chain; Node and port still name the current point.
+The lineage walk stops at the current record, so a later record cannot
+explain an earlier sample. No attribution is guessed from topology.
 
-### 7.1 Exact report fold
+A Connector with a declared response type hydrates the fields before
+retention. Retry Held and Published batches retain those exact original
+emissions, including signed quantities and refunds. Consuming a Held batch
+does not produce another measurement-bearing emission. Recovery and diagnostic
+recording preserve the records and plan; neither re-runs an extractor nor
+recalculates a quantity.
 
-A7 enriches a structural `RecordObservation` lazily at each annotated envelope
-and port. The typed accounting observation carries the structural observation,
-the envelope id, canonical annotation path, measure/cost value and exact flow
-scope. The complete grouping key is origin, instance generation, owner, Node,
-Connector, port, typed exchange and optional deployment provider/model. This
-is deliberately a per-flow report: copying one measured value through three
-ports yields three clearly different rows, never one graph-wide total which a
-caller might mistake for new consumption.
+Numerical inspection preserves exact integer/decimal values, ids, units and
+sealed causal provenance. An id does not imply a unit or a tariff.
+Independent valid samples remain readable even if their sum would overflow.
+An annotated value retained only as bytes cannot be decoded by this inspection
+helper; its normal codec must have materialized it. Missing data is never zero.
 
-For a dynamically typed boundary, the field annotation can become visible
-only after an ordinary typed decoding Operator. The Connector dimension is
-then the nearest Connector producer in the envelope's sealed parent chain,
-while Node and port continue to name the current flow point. Exact
-copy/projection is the only way accounting meaning reaches that point;
-calculations drop it. The lineage walk ends at the current record, so a future
-fact can never explain an earlier observation. Attribution never guesses from
-graph topology or a Connector name.
+The existing deployment `CostProfile` and its run-header attestation keep
+their encoded representation for compatibility. They may supply declared
+provider/model context for the matching causal Connector; M1 does not apply
+their tariffs or infer a financial basis from a sample. These metadata must
+not be advertised as an executable reporting engine.
 
-`CostReport::from_journal` folds those observations directly from causal
-records and the validated plan while checking any supplied price profile
-against the immutable run header. The lower-level `from_records` form is for
-already authenticated record sets: its caller owns that external provenance.
-Provider-reported fields retain their exact basis and
-currency. An optional deployment `CostProfile` calculates additional costs
-from registered measures. It is a closed canonical table keyed by Connector
-path and measure; every rule fixes provider, model/SKU, a positive power-of-ten
-unit quantity, exact decimal price and ISO currency. Its stable reference and
-digest are recorded in the immutable run header. The profile is not graph
-identity and cannot change causal bytes.
-An annotated `pricebook_calculated` field requires at least one profile row
-for its sealed causal Connector; a merely present but unrelated profile is not
-evidence.
+The debugger keeps its ordinary policy-aware DATA and META inspectors. It
+does not emit a `cost_report` snapshot or display a report panel. A local UI
+aggregate remains an undecided presentation feature, not a runtime policy.
 
-Subset-aware pricing prevents token double counting. If cache tokens have a
-special price, they are subtracted from inclusive input tokens and priced
-separately; otherwise the inclusive input rule covers them. The same rule
-holds for reasoning/output tokens. A subset larger than its inclusive parent
-is invalid within each observed envelope and cannot be hidden by aggregation
-with a later valid sample. Every positive remainder without a matching rule is
-emitted as `unpriced`. An explicit zero price is a real price and remains
-distinguishable from that state.
+### 7.2 Planned optional OTLP export
 
-Amounts normalize as exact decimal values. Addition and multiplication are
-checked; division by a unit bundle changes scale only. Any required rounding,
-precision overflow or scale beyond canonical Money refuses. Cost rows with
-different provider/pricebook evidence, currency or source measure never merge.
-No API exposes a cross-currency total.
+**Approved architecture, not implemented — D-2026-09-18-1.** Export is a
+separate consumer of the executable two-field `@measure` signature. A currency
+used as a unit requires no special exporter hook in the semantic core.
 
-An annotated envelope retained only as encoded bytes cannot be interpreted by
-a reporting-only decoder and therefore refuses until its normal codec has
-materialized the logical value. This is fail-closed accounting, not missing
-data disguised as zero.
+The future Cargo feature is `otlp`, in hosted `rastok`, separately enabled by
+deployment configuration. An image without that capability must reject an
+explicit export request. No feature placeholder or dependency is added now.
+The semantic core neither imports OTel nor requires an exporter to retain,
+inspect or replay its measurements.
+
+One observation adapter can select two sources:
+
+- business quantities from original typed envelopes plus their validated
+  annotations and sealed causal provenance, including held Retry attempts;
+- technical facts from retained transitions, such as Call/Retry events, or
+  explicitly identified hosted observations, such as current queue occupancy.
+  A live host sample must not be presented as replayable journal evidence.
+
+The adapter does not decode a response again or rerun a downstream Operator.
+Existing `RecordObservation` and individual accounting inspection supply
+starting read seams, not an already implemented incremental OTLP subscription.
+The present Driver registry registers effect implementations; it is not an
+observer registry. A static optional hosted adapter needs no dynamic plugin
+loader or speculative general-purpose plugin ABI.
+
+An export mapping chooses source paths, metric names, units, allowed attributes,
+representation and temporality. It lives outside the DSL and cannot change a
+source quantity's meaning. The
+[OTel metrics model](https://opentelemetry.io/docs/specs/otel/metrics/data-model/)
+carries metric streams with aggregation semantics, not arbitrary exact raw
+measurement events. The adapter must therefore define any local reduction
+needed before a Collector/backend can aggregate further; `@measure(id, unit)`
+alone does not select a sum, gauge or histogram. Signed observations cannot
+silently become a monotonic counter. The numerical conversion policy must
+make loss of exact decimal precision explicit; journal values remain exact.
+
+The handoff is bounded and never blocks the semantic producer. Export runs
+outside the VM, with bounded buffering/retries, observable loss and a qualified
+shutdown policy. Re-export/restart cursor behavior must be defined before
+shipping, not advertised as exactly-once delivery. Diagnostic replay must not
+silently add old measurements to live production series.
+
+Redaction and destination policy precede serialization. An exporter does not
+bypass `@secret`, `@personal` or `@sensitive`; arbitrary payload fields and
+high-cardinality instance/envelope ids are not metric attributes by default.
+Durations and spans require their actual time evidence. Collection time must
+not masquerade as transaction commit time. No hidden clock enters the core.
+
+This is a projection, like structural logs: its absence or failure cannot
+change routing, Retry admission or a future budget verdict. A read-only cost
+consumer may later value retained quantities under an explicit tariff or
+select a reported amount. Enforcing a budget instead requires authority
+**before** the effect; the
+[current budget proposal](../architecture/budget-governance-draft.md#current-proposal--18-september-2026)
+keeps that protocol distinct. Neither consumer is implemented by this decision.
 
 ## 8. Named later work
 
 - Budget/quota Extensions and pre-effect reservation;
 - FX, billing authority, FOCUS conformance and OpenCost allocation;
-- arbitrary user-defined measures or metric dimensions;
+- measurement reports, automatic pricing and any debugger-only aggregate;
+- generic subset relations and complete registry migration;
+  simple additive integer/decimal business quantities are executable under
+  [D-2026-09-15-5](annotations.md); arbitrary metric dimensions remain deferred;
 - sampled cost calibration and automatic model selection;
 - field-level externalization of incoming secret payloads;
 - hot secret rotation and encrypted durable-journal storage;

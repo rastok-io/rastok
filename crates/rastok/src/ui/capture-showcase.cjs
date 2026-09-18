@@ -64,14 +64,29 @@ const rasterSize = { width: 1352, height: 760 };
     let waiting;
     for (let transition = 1; transition < head; transition++) {
       await seek(transition);
-      if ((await page.locator(".graph-svg").textContent()).includes("⏱")) {
+      const awaitingRetry = await page.evaluate(() => currentSnapshot.retry_operations.some(operation =>
+        operation.phase === "AwaitingAdmission" && operation.due_at_ns !== null));
+      if (awaitingRetry) {
         waiting = transition;
+        await page.locator(".graph-node-name").filter({ hasText: /^partner$/ }).click();
+        await page.locator("#tab-instances").click();
+        if (await page.locator("#future").getAttribute("open") === null) {
+          await page.locator("#future summary").click();
+        }
+        assert.match(await page.locator("#future-items").innerText(), /Retry attempt.*due/);
+        assert.match(await page.locator("#retry-operations").innerText(), /held by Retry/);
+        await page.locator("#retry-operations").scrollIntoViewIfNeeded();
+        await render();
         await page.screenshot({ path: path.join(destination, "webhook-backoff.png") });
         break;
       }
     }
-    assert.ok(waiting, "the retry scenario must expose an armed Loop delay");
+    assert.ok(waiting, "the retry scenario must expose its retained operation deadline");
     await seek(head);
+    await page.locator(".graph-node-name").filter({ hasText: /^partner$/ }).click();
+    await page.locator("#tab-envelope").click();
+    await page.locator("#future summary").click();
+    await render();
     await page.screenshot({ path: path.join(destination, "webhook-completed.png") });
     // Thirty seconds at four frames/s. A frame is an actual selected journal
     // prefix. Repeated positions hold still; no interpolation invents events.

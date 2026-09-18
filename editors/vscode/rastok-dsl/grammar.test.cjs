@@ -16,16 +16,29 @@ test("every TextMate regular expression compiles in the shared regex subset", ()
   visit(grammar);
 });
 
-test("v18 manager commands, annotations and spatial arrows have distinct scopes", () => {
+test("manager commands, annotations and spatial arrows have distinct scopes", () => {
   const matches = (word, scope) => grammar.patterns.some(rule => rule.match && rule.name === scope && new RegExp(rule.match).test(word));
   for (const word of ["Loop.next", "Loop.again", "Loop.done", "Loop.expired", "Loop.state"]) assert.ok(matches(word, "support.variable.loop.rkg"));
   for (const word of ["model.instance.stop", "conversation.model.instance.stop"]) assert.ok(matches(word, "support.function.instance-command.rkg"));
-  for (const word of ["@personal", "@secret", "@sensitive", "@measure", "@cost"]) assert.ok(matches(word, "storage.modifier.annotation.rkg"));
+  for (const word of ["@personal", "@secret", "@sensitive", "@measure"]) assert.ok(matches(word, "storage.modifier.annotation.rkg"));
   for (const arrow of ["->", "=>", "<->"]) assert.ok(matches(arrow, "keyword.operator.rkg"));
   assert.ok(matches("has(data.usage)", "support.function.rkg"));
   assert.equal(matches("when", "keyword.control.rkg"), false, "removed wiring guard is not an executable keyword");
   assert.match("operator decide", new RegExp(grammar.repository.declarations.match));
   assert.equal(new RegExp(grammar.repository.declarations.match).exec("connector model")[2], "model");
+});
+
+test("v19 annotations, Retry and idempotence reflect the executable language", () => {
+  const matches = (word, scope) => grammar.patterns.some(rule => rule.match && rule.name === scope && new RegExp(rule.match).test(word));
+  for (const word of ["Retry.attempts", "Retry.delay", "Retry.on"]) assert.ok(matches(word, "support.variable.retry.rkg"), word);
+  assert.ok(matches("Retry", "entity.other.inherited-class.rkg"));
+  assert.ok(matches("@note", "storage.modifier.annotation.rkg"));
+  assert.ok(matches("@struct", "storage.type.rkg"));
+  assert.ok(matches("idempotent", "variable.language.rkg"));
+  assert.ok(matches("json_profile", "variable.language.rkg"));
+  assert.equal(matches("effect", "variable.language.rkg"), false);
+  assert.equal(matches("Retry.again", "support.variable.retry.rkg"), false);
+  assert.equal(matches("@struct", "storage.modifier.annotation.rkg"), false);
 });
 
 test("comments, strings and readers precede keyword matching", () => {

@@ -362,6 +362,14 @@ arms preserve the original due instants and tie order; a restart cannot turn
 a missing instant into `now + duration`. R4 wires Loop delay retention; the
 remaining temporal recovery profiles stay gated until R7 wires their arm facts.
 
+A resumed sweep preserves the unfinished dated frontier before executing
+lifecycle work queued by an expiry. Only an instance's own lifetime is fenced
+while its start is pending: a successor cannot expire before its retained
+start commits. This is not a global priority for starts. Neither a restored
+`l:closing` nor a newly admitted child permits its lifecycle transaction to
+overtake another event that the uninterrupted sweep would resolve first at
+that instant.
+
 
 ## 6. Per-call supervision — `timeout` on Connectors
 

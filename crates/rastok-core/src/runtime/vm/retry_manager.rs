@@ -2,6 +2,7 @@
 //! attempt facts, sharing the Worker's mailbox budget and dated scheduler.
 
 use super::*;
+use crate::journal::loop_protocol::{Fact as LoopFact, Phase as LoopPhase};
 use crate::journal::retry_protocol::{self as protocol, AttemptRef, Fact, Fold, Packet, Phase};
 use crate::journal::timing::{TimerArm, TimerSchedule};
 use crate::journal::{CallRecord, Closure, OutboundStatus, Record, TransactionRecord};
@@ -344,9 +345,72 @@ impl Vm<'_> {
         occupied
     }
 
+    /// Dated Loop and Retry admissions share the retained arm order even
+    /// after the scheduler has acknowledged their wakeups. Derive this head
+    /// from current folds and the journal, without a second ready queue.
+    pub(super) fn next_dated_recurrence(
+        &self,
+        journal: &dyn Journal,
+    ) -> Result<Option<Id>, VmError> {
+        let (Some(loops), Some(retries)) =
+            (self.loop_manager.as_deref(), self.retry_manager.as_deref())
+        else {
+            return Ok(None);
+        };
+        let mut head = None;
+        journal
+            .visit_records(&mut |record| {
+                let Some(schedule) = record.timer_schedule() else {
+                    return;
+                };
+                for arm in schedule.arms().iter().filter(|arm| {
+                    arm.kind == crate::journal::timer_kind::LOOP_DELAY && arm.due_at <= self.now
+                }) {
+                    let eligible = match record {
+                        Record::Transaction(record) => {
+                            record.loop_protocol().is_some_and(|packet| {
+                                packet.facts.iter().any(|fact| {
+                                    let LoopFact::Advance { run, .. } = fact else {
+                                        return false;
+                                    };
+                                    loops.run(*run).is_some_and(|state| {
+                                        state.phase == LoopPhase::AwaitingAdmission
+                                            && state.admission == arm.reference
+                                            && state.due_at == Some(arm.due_at)
+                                            && self.graph_admission_is_head(*run)
+                                            && !self.closing.contains(&state.instance)
+                                    })
+                                })
+                            })
+                        }
+                        Record::Outbound(crate::journal::OutboundRecord::Call(call)) => call
+                            .retry_record
+                            .as_deref()
+                            .and_then(|packet| packet.context)
+                            .and_then(|attempt| retries.operation(attempt.operation))
+                            .is_some_and(|state| {
+                                state.phase == Phase::AwaitingAdmission
+                                    && state.call == Some(call.intent.call_ref)
+                                    && state.due_at == Some(arm.due_at)
+                                    && !self.closing.contains(&state.instance)
+                            }),
+                        _ => false,
+                    };
+                    // Equal dates keep the first retained arm, not a policy
+                    // priority or the ordering of derived run identities.
+                    if eligible && head.is_none_or(|(due, _)| arm.due_at < due) {
+                        head = Some((arm.due_at, arm.reference));
+                    }
+                }
+            })
+            .map_err(VmError::Journal)?;
+        Ok(head.map(|(_, reference)| reference))
+    }
+
     pub(super) fn step_retry_manager(
         &mut self,
         journal: &mut dyn Journal,
+        dated_admission: Option<Id>,
     ) -> Result<bool, VmError> {
         if !self.retry_manager_ready() {
             return Ok(false);
@@ -359,6 +423,7 @@ impl Vm<'_> {
         // is stable, but is not the retained scheduler tie-breaker. Reading the
         // prefix also preserves this order after a late recovery.
         let mut selected = None;
+        let mut deferred = false;
         let mut index = 0usize;
         journal
             .visit_records(&mut |record| {
@@ -370,23 +435,41 @@ impl Vm<'_> {
                         .and_then(|packet| packet.context)
                     && let Some(state) = fold.operation(attempt.operation)
                     && state.call == Some(call.intent.call_ref)
-                    && (state.phase == Phase::Held
-                        || (state.phase == Phase::AwaitingAdmission
-                            && (self.closing.contains(&state.instance)
-                                || state.due_at.is_none_or(|due| due <= self.now))))
                 {
-                    let key = (state.due_at.unwrap_or(i64::MIN), index);
-                    if selected
-                        .as_ref()
-                        .is_none_or(|(previous, _)| key < *previous)
-                    {
-                        selected = Some((key, attempt.operation));
+                    let closing = self.closing.contains(&state.instance);
+                    let ready = state.phase == Phase::Held
+                        || (state.phase == Phase::AwaitingAdmission
+                            && (closing || state.due_at.is_none_or(|due| due <= self.now)));
+                    let in_turn = state.phase != Phase::AwaitingAdmission
+                        || closing
+                        || state.due_at.is_none()
+                        || dated_admission.is_none_or(|reference| {
+                            call.timer_schedule.as_deref().is_some_and(|schedule| {
+                                schedule.arms().iter().any(|arm| arm.reference == reference)
+                            })
+                        });
+                    if ready && in_turn {
+                        let key = (state.due_at.unwrap_or(i64::MIN), index);
+                        if selected
+                            .as_ref()
+                            .is_none_or(|(previous, _)| key < *previous)
+                        {
+                            selected = Some((key, attempt.operation));
+                        }
+                    } else if ready {
+                        deferred = true;
                     }
                 }
                 index += 1;
             })
             .map_err(VmError::Journal)?;
-        let (_, operation) = selected.ok_or_else(|| error(protocol::Error::Transition))?;
+        let Some((_, operation)) = selected else {
+            return if deferred {
+                Ok(false)
+            } else {
+                Err(error(protocol::Error::Transition))
+            };
+        };
         let state = fold
             .operation(operation)
             .ok_or_else(|| error(protocol::Error::UnknownOperation))?

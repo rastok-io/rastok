@@ -186,11 +186,11 @@ pub enum PropagationError {
     InvalidProjection(String),
     /// Transported expression typing could not be independently repeated.
     UnresolvedExpression,
-    /// Alternative values disagree about one exact accounting meaning.
+    /// Alternative values disagree about one exact metadata/accounting meaning.
     ConflictingMeaning {
         /// Canonical result path.
         path: SchemaPath,
-        /// Measure or cost.
+        /// Measure, cost or descriptive metadata.
         kind: AnnotationKind,
     },
     /// A newly derived table violated the adjacent schema contract.
@@ -566,7 +566,7 @@ pub(crate) fn overlay(
 }
 
 /// Merges values that may arrive at the same logical position. Security is a
-/// conservative maximum. Measure and cost must be identical on every
+/// conservative maximum. Measure, cost and descriptive metadata must be identical on every
 /// alternative; otherwise the destination would sometimes mean something
 /// its schema cannot state.
 pub(crate) fn alternatives(
@@ -582,15 +582,15 @@ pub(crate) fn alternatives(
         .skip(1)
         .any(|table| semantic_rows(table) != first_semantics)
     {
-        let candidate_paths = tables
-            .iter()
-            .flat_map(|table| table.entries().keys().cloned())
-            .collect::<alloc::collections::BTreeSet<_>>();
+        let mut candidate_paths = alloc::collections::BTreeSet::new();
+        for table in &tables {
+            candidate_paths.extend(table.entries().keys().cloned());
+        }
         for path in candidate_paths {
-            for kind in [AnnotationKind::Measure, AnnotationKind::Cost] {
+            for kind in [AnnotationKind::Measure, AnnotationKind::Metadata] {
                 let values: Vec<_> = tables
                     .iter()
-                    .map(|table| annotation_at(table, &path, kind))
+                    .map(|table| annotations_at(table, &path, kind).collect::<Vec<_>>())
                     .collect();
                 if values.windows(2).any(|pair| pair[0] != pair[1]) {
                     return Err(PropagationError::ConflictingMeaning { path, kind });
@@ -611,30 +611,27 @@ pub(crate) fn alternatives(
             }
         }
     }
-    let personal_paths = tables
-        .iter()
-        .flat_map(|table| {
-            table
-                .entries()
+    let mut personal_paths = alloc::collections::BTreeSet::new();
+    for table in &tables {
+        for (path, set) in table.entries() {
+            if set
+                .annotations()
                 .iter()
-                .filter(|(_, set)| {
-                    set.annotations()
-                        .iter()
-                        .any(|annotation| matches!(annotation, DataAnnotation::Personal(_)))
-                })
-                .map(|(path, _)| path.clone())
-        })
-        .collect::<alloc::collections::BTreeSet<_>>();
+                .any(|annotation| matches!(annotation, DataAnnotation::Personal(_)))
+            {
+                personal_paths.insert(path.clone());
+            }
+        }
+    }
     for path in personal_paths {
         let mut combined: Option<crate::schema_annotation::PersonalDataClass> = None;
         let mut every_alternative_is_identifier = true;
         for table in &tables {
-            let class =
-                annotation_at(table, &path, AnnotationKind::Personal).and_then(|annotation| {
-                    match annotation {
-                        DataAnnotation::Personal(class) => Some(*class),
-                        _ => None,
-                    }
+            let class = annotations_at(table, &path, AnnotationKind::Personal)
+                .next()
+                .and_then(|annotation| match annotation {
+                    DataAnnotation::Personal(class) => Some(*class),
+                    _ => None,
                 });
             every_alternative_is_identifier &= class.is_some_and(|class| class.is_identifier());
             if let Some(class) = class {
@@ -688,45 +685,40 @@ pub(crate) fn security_taint(
 }
 
 fn table_rows(table: &AnnotationTable) -> BTreeMap<SchemaPath, Vec<DataAnnotation>> {
-    table
-        .entries()
-        .iter()
-        .map(|(path, set)| (path.clone(), set.annotations().to_vec()))
-        .collect()
+    let mut rows = BTreeMap::new();
+    for (path, set) in table.entries() {
+        rows.insert(path.clone(), set.annotations().to_vec());
+    }
+    rows
 }
 
 fn semantic_rows(table: &AnnotationTable) -> BTreeMap<SchemaPath, Vec<DataAnnotation>> {
-    table
-        .entries()
-        .iter()
-        .filter_map(|(path, set)| {
-            let annotations: Vec<_> = set
-                .annotations()
-                .iter()
-                .filter(|annotation| {
-                    matches!(
-                        annotation,
-                        DataAnnotation::Measure(_) | DataAnnotation::Cost(_)
-                    )
-                })
-                .cloned()
-                .collect();
-            (!annotations.is_empty()).then(|| (path.clone(), annotations))
-        })
-        .collect()
+    let mut rows = BTreeMap::new();
+    for (path, set) in table.entries() {
+        let annotations: Vec<_> = set
+            .annotations()
+            .iter()
+            .filter(|annotation| matches!(annotation, DataAnnotation::Declared(_)))
+            .cloned()
+            .collect();
+        if !annotations.is_empty() {
+            rows.insert(path.clone(), annotations);
+        }
+    }
+    rows
 }
 
-fn annotation_at<'a>(
+fn annotations_at<'a>(
     table: &'a AnnotationTable,
     path: &SchemaPath,
     kind: AnnotationKind,
-) -> Option<&'a DataAnnotation> {
+) -> impl Iterator<Item = &'a DataAnnotation> {
     table
         .entries()
-        .get(path)?
-        .annotations()
-        .iter()
-        .find(|annotation| annotation.kind() == kind)
+        .get(path)
+        .into_iter()
+        .flat_map(|set| set.annotations())
+        .filter(move |annotation| annotation.kind() == kind)
 }
 
 fn push_annotations(
@@ -748,7 +740,7 @@ fn insert_annotation(
     let row = rows.entry(path.clone()).or_default();
     let Some(index) = row
         .iter()
-        .position(|existing| existing.kind() == annotation.kind())
+        .position(|existing| existing.identity() == annotation.identity())
     else {
         row.push(annotation);
         return Ok(());
@@ -873,7 +865,7 @@ fn derived_security_annotation(annotation: &DataAnnotation) -> Option<DataAnnota
     match annotation {
         DataAnnotation::Sensitive(_) | DataAnnotation::Secret => Some(annotation.clone()),
         DataAnnotation::Personal(class) => Some(DataAnnotation::Personal(class.derived())),
-        DataAnnotation::Measure(_) | DataAnnotation::Cost(_) => None,
+        DataAnnotation::Declared(_) => None,
     }
 }
 
@@ -980,9 +972,7 @@ fn format_value(
 mod tests {
     use super::*;
     use crate::datatype::{StructType, TypeField};
-    use crate::schema_annotation::{
-        CostAnnotation, CostBasis, CurrencyCode, MeasureId, PersonalDataClass, SensitivityLevel,
-    };
+    use crate::schema_annotation::{PersonalDataClass, SensitivityLevel};
     use alloc::boxed::Box;
     use alloc::format;
     use alloc::vec;
@@ -1018,10 +1008,7 @@ mod tests {
             ),
             &table(
                 tokens,
-                DataAnnotation::Measure(
-                    MeasureId::new("gen_ai.usage.input_tokens")
-                        .unwrap_or_else(|error| panic!("measure: {error}")),
-                ),
+                crate::schema_annotation::tests::measure("tokens", "token"),
             ),
         )
         .unwrap_or_else(|error| panic!("disjoint rows: {error}"));
@@ -1040,7 +1027,8 @@ mod tests {
                 .entries()
                 .get(&SchemaPath::root())
                 .map(AnnotationSet::annotations),
-            Some([DataAnnotation::Measure(_)])
+            Some([DataAnnotation::Declared(application)])
+                if application.binding() == crate::schema_annotation::AnnotationBinding::Measure
         ));
 
         let calculated = expression(
@@ -1159,7 +1147,7 @@ mod tests {
         )
         .unwrap_or_else(|error| panic!("personal projection: {error}"));
         assert!(matches!(
-            annotation_at(&projected, &SchemaPath::root(), AnnotationKind::Personal),
+            annotations_at(&projected, &SchemaPath::root(), AnnotationKind::Personal).next(),
             Some(DataAnnotation::Personal(class))
                 if class.is_special_category() && class.is_identifier()
         ));
@@ -1177,7 +1165,7 @@ mod tests {
         )
         .unwrap_or_else(|error| panic!("personal calculation: {error}"));
         assert!(matches!(
-            annotation_at(&derived, &SchemaPath::root(), AnnotationKind::Personal),
+            annotations_at(&derived, &SchemaPath::root(), AnnotationKind::Personal).next(),
             Some(DataAnnotation::Personal(class))
                 if class.is_special_category() && !class.is_identifier()
         ));
@@ -1197,7 +1185,7 @@ mod tests {
         let merged = alternatives([identifier, special_non_identifier])
             .unwrap_or_else(|error| panic!("personal alternatives: {error}"));
         assert!(matches!(
-            annotation_at(&merged, &SchemaPath::root(), AnnotationKind::Personal),
+            annotations_at(&merged, &SchemaPath::root(), AnnotationKind::Personal).next(),
             Some(DataAnnotation::Personal(class))
                 if class.is_special_category() && !class.is_identifier()
         ));
@@ -1205,15 +1193,14 @@ mod tests {
 
     #[test]
     fn alternative_accounting_meanings_refuse_instead_of_becoming_a_lie() {
-        let eur = CurrencyCode::new("EUR").unwrap_or_else(|error| panic!("currency: {error}"));
         let cost = table(
             SchemaPath::root(),
-            DataAnnotation::Cost(CostAnnotation::scalar(eur, CostBasis::ProviderReported)),
+            crate::schema_annotation::tests::measure("amount", "EUR"),
         );
         assert!(matches!(
             alternatives([cost, AnnotationTable::empty()]),
             Err(PropagationError::ConflictingMeaning {
-                kind: AnnotationKind::Cost,
+                kind: AnnotationKind::Measure,
                 ..
             })
         ));

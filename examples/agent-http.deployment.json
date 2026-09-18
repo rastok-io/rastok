@@ -1,0 +1,8 @@
+{
+  "environment": [
+    { "name": "MODEL_URL", "value": "https://api.openai.com/v1/responses" }
+  ],
+  "secrets": [
+    { "reference": "showcase/model/token", "environment": "RASTOK_SHOWCASE_MODEL_TOKEN", "version": "fixture-v1" }
+  ]
+}

@@ -5,13 +5,13 @@ graph fanout : App {
   connector archive : Process {
     mode = job ; command = "cat"
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true ; behavior = deterministic
   }
 
   connector pager : Process {
     mode = job ; command = "cat"
     codec = lines
-    effect = idempotent ; behavior = deterministic
+    idempotent = true ; behavior = deterministic
   }
 
   operator gate {

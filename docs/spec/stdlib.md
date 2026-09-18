@@ -1,8 +1,10 @@
 # Standard library contracts
 
-> **Status (2026-09-09): normative, current package v17.** The six executable Connector
-> Contracts use `@2`, with independently checked production/cardinality/
-> terminal/effect-stage facts in §1.1. HttpClient and
+> **Status (2026-09-18): normative, package v19.** Process job uses `@4`,
+> Process service `@5`, and File/HTTP/WebSocket use `@3`. Their exact roles,
+> cardinality, terminal visibility and idempotence profiles are independently
+> checked. [C4 qualification](../architecture/retry-c4-qualification.md) records
+> the single cutover from the earlier Contracts. HttpClient and
 > HttpServer are live over HTTP/1.1–3, including bounded `ack` and `respond`;
 > WebSocketClient and WebSocketServer are live over HTTP/1.1 Upgrade and
 > HTTP/2–3 Extended CONNECT. M1.8 A4 adds versioned boot binding for
@@ -43,7 +45,7 @@ contract identity.
 | 1 | **Role** | what it bridges (a protocol, a process, time) |
 | 2 | **Direction** | inbound source / outbound caller / both / sink |
 | 3 | **Ports** | `in`/`out`/`err`/`exit` conventions + extras, with types |
-| 4 | **`effect`** | pre-declared by the contract, or per-instance (dev-declared) |
+| 4 | **Repetition guarantee** | plan-owned `idempotent` where the Call profile admits it; absent/false supplies no guarantee. Session opening follows roles, not an effect sentinel |
 | 5 | **`behavior`** | deterministic / probabilistic — §2; pre-declared or per-instance |
 | 6 | **Attributes** | the config surface with a contract-declared latest evaluation site (plan, boot, instance, or invocation); checking chooses the earliest legal actual site and transports it; `env()`/`secret()` are boot-only, and timeout/shutdown settings belong only to the profiles that declare them |
 | 7 | **Correlator** | what one invocation or session is in its protocol, and how messages/answers find it (execution-model §6.1: the Connector matches) |
@@ -102,7 +104,7 @@ The exact implemented profile tables, including conservative terminal classifica
 live in
 [rework-r1-host-contracts.md](../architecture/rework-r1-host-contracts.md).
 
-## 2. `behavior` — the second axis, beside `effect`
+## 2. `behavior` — determinism, separate from idempotence
 
 The world's *timing* nondeterminism is already journal-absorbed
 (journal-relative replay). `behavior` declares something else: **the
@@ -119,7 +121,8 @@ external system's semantic function** —
 - **Pre-declared** where the Connector's Contract imposes it: `Timer`, `Calendar`,
   `Memory`, `HttpServer` = `deterministic`.
 - **Per-instance, mandatory** on `HttpClient` and `Process` (only the dev
-  knows who answers). Forgetting it = compile refusal, like `effect`.
+  knows who answers). Forgetting a required `behavior` = compile refusal. An ordinary Call needs no
+  global `effect` declaration; the removed attribute refuses.
 - **`seeded` = reserved, not spec'd** (deterministic given a recorded seed —
   LLMs at fixed temperature+seed, PRNGs).
 
@@ -178,13 +181,13 @@ There is no parallel `mime_type` spelling.
 
 | Case | Contract |
 |---|---|
-| Stable identity | `rastok/http-server@2` (v16; `@1` is its v15 predecessor) |
+| Stable identity | `rastok/http-server@3` (v19; earlier majors refuse) |
 | Role / Direction | HTTP endpoint; **inbound** Driver role |
 | Exchange | call — one admitted request, at most one protocol response, one typed request-lifecycle `exit` |
 | Ports | `out: T` decoded request; `in: T` graph response in `respond`; `exit: HttpServerExit`; no implicit `err` |
 | Payload type | required `codec`: `json → variant`, `text → text`, `bytes → bytes`; one complete body is one value |
 | Populates | canonical `meta.ext.content_type: media_type`, lossless `http_headers`, `http_method`, `http_uri`, `http_version`; a response carries `http_status` when applicable |
-| effect / behavior | `none` / `deterministic` (pre-declared) |
+| behavior | `deterministic` (pre-declared); no repetition guarantee for this inbound/event profile |
 | Attributes | common: `listen: text` required (instance), `path: text = "/"` (plan), required `codec` (plan), `max_body: ByteSize = "8MiB"` (plan), optional typed `headers` and open `custom_headers` plus `auth_bearer: text` (instance), optional paired `tls_certificate`/`tls_private_key: bytes` (instance), ordered `versions = ["http/3", "http/2", "http/1.1"]` (plan), `zero_rtt = disabled` (plan); `mode = ack` default, while `respond` adds optional invocation `correlate` and required positive instance `timeout` |
 | Correlator | mode `respond`: **default = lineage** (`origin_id == R.id`) — valid on join-free return paths ONLY. **A return path crossing a root-mixing join ⇒ explicit `correlate` required (compile error otherwise)**: the join output inherits the TRIGGER's origin, creating a race. The author carries the token (`meta.app.request_id = meta.sys.id`) and attributes it through joins with the explicit-attribution rule; matching = correlate-value == the open request's root id. An orphan response (no open request — it already expired, the 504 went out) is **discarded-and-journaled** (the call-closed rule's cousin). |
 | Outcome cases | `Completed { status: int }`, `RequestExpired`, `Overloaded`, `PeerDisconnected`, `OutcomeUnknown` |
@@ -218,34 +221,43 @@ request.
 
 ### 3.2 `HttpClient` — outbound HTTP
 
-> **Approved next Contract, not current execution:** the pre-C1 amendment to
+> **Current @3 Contract:** the amendment to
 > [D-2026-09-14-4](decisions.md#pre-c1-review-amendments--14-september)
 > separates usable 500–599 responses as `ServerError { status }`; other
 > admitted final statuses remain `Completed { status }`. Both produce `out`
-> and are `after_effect`. The table below still describes `http-client@2`;
-> [C1](../architecture/retry-extension-refactor.md#21-http-server-failures--approved-contract-amendment)
-> must inventory the version, cardinality, validation and golden changes.
+> and are `after_effect`. The table below describes `http-client@3`;
+> [C1](../architecture/retry-c1-identity.md) inventories the version,
+> cardinality, validation and golden changes. D-2026-09-16-1 also admits
+> `output out: Response` under `codec = json`, using the existing port table.
+> The body is hydrated by field name before retention; a mismatching actual
+> API response is `DecodeFailed`, not a partially usable value. See
+> [the exact M1 schema profile](types.md#41-explicit-json-response-types-in-m1).
+> D-2026-09-17-1 additionally defines an opt-in `json_profile = projected` for
+> optional/additional JSON members, executable in the `@3` Contract.
+> It requires `codec = json` and a declared struct output. Omission keeps strict
+> hydration; it adds no default attribute, port or request field.
+> See its [normalization and qualification contract](../architecture/openai-responses-hydration.md#4-limited-projected-profile).
 
 | Case | Contract |
 |---|---|
-| Stable identity | `rastok/http-client@2` (v16; `@1` is its v15 predecessor) |
+| Stable identity | `rastok/http-client@3` (v19; earlier majors refuse) |
 | Role / Direction | HTTP calls; **outbound caller** |
 | Exchange | call — one request, response outputs, one typed call `exit` |
 | Ports | `in: T` request body, `out: T` every usable response body including non-2xx, `exit: HttpClientExit`; no implicit `err` |
 | Payload type | required `codec`: `json → variant`, `text → text`, `bytes → bytes`; no line delimiter is added |
 | Populates | response canonical `meta.ext.content_type: media_type` when valid, lossless `http_headers`, `http_status: int`, and `http_version` |
-| effect / behavior | **both mandatory on each node; plan-evaluated** |
+| idempotent / behavior | `idempotent: bool = false`; `behavior` required; both plan-evaluated |
 | Attributes | required invocation `url: text` (M1.8 A4 additionally admits the exact boot reference `env("NAME")`); invocation `method: text = "GET"`, optional typed `headers`, open `custom_headers`, `auth_bearer` (A4 admits only `secret("logical/path")` at boot), `idempotency_key`; required plan `codec`; plan `max_body: ByteSize = "8MiB"` bounds request and response bodies; required positive instance `timeout`; optional instance `tls_ca`, plus paired `tls_certificate`/`tls_private_key`; ordered plan `versions = ["http/3", "http/2", "http/1.1"]`; `zero_rtt = disabled` |
 | Correlator | protocol-native: HTTP request ↔ response |
-| Outcome cases | `Completed { status: int }`, `DnsFailed`, `ConnectFailed`, `TlsFailed`, `ProtocolFailed`, `TimeoutExpired`, `BodyTooLarge { limit: uint }`, `DecodeFailed`, `OutcomeUnknown` |
-| Application profile | outbound finite Call and Loop-admissible; exactly one request `in`, exactly one `out` iff the exit is `Completed`, then exactly one terminal `exit`; terminal visibility is the conservative `@2` table in [R1](../architecture/rework-r1-host-contracts.md#71-contracts-for-loop-admissible-connectors) |
+| Outcome cases | `Completed { status: int }`, `ServerError { status: int }`, `DnsFailed`, `ConnectFailed`, `TlsFailed`, `ProtocolFailed`, `TimeoutExpired`, `BodyTooLarge { limit: uint }`, `DecodeFailed`, `OutcomeUnknown` |
+| Application profile | outbound finite Call and Loop-admissible; exactly one request `in`, exactly one `out` iff the exit is `Completed` or `ServerError`, then exactly one terminal `exit`; terminal visibility is the conservative [C1 table](../architecture/retry-c1-algebra.md) |
 | Instances | singleton by default; the common Node attribute `instance.key` may key the Connector |
 | Journal / sim | method, resolved URL, canonical ordinary headers, exact body, idempotency material and a logical bearer `SecretRef` seal before OUTBOUND open; physical bearer bytes are fixed by the run header and overlaid only in the real Driver; the contract-specific Lab twin scripts only the post-open outcome |
 
 The hosted H4 Driver attempts declared versions in order, skipping backends
 not compiled into the runtime. It may fall back only before request bytes can
-have become visible. Once visible, failure is terminal for that call; redirects
-and status retries are graph policy. Local work/byte saturation leaves the
+have become visible. Once visible, failure is terminal for that call; redirects remain outside the Driver, and retries follow the validated static
+`Retry.on` policy when that Extension is present. Local work/byte saturation leaves the
 open call pending and starts no effect. HTTP/1.1 uses origin-form plus a
 Driver-owned Host field, HTTP/2 multiplexes by origin/TLS identity, and HTTP/3
 requires verified HTTPS. Every valid status, including non-2xx, publishes its
@@ -272,10 +284,10 @@ weaken verification or reinterpret the plan bytes.
 
 | Case | Contract |
 |---|---|
-| Stable identity | `job`: `rastok/process@2`; `service`: `rastok/process@3` (D-2026-09-14-1); both use package v18 |
+| Stable identity | `job`: `rastok/process@4`; `service`: `rastok/process@5`; both use package v19 |
 | Role / Direction | Job: outbound Call. Service: both roles, resident Session. Selecting a profile resolves its exact Contract before lowering. |
 | Ports | `in` → stdin; `out` ← decoded/framed stdout; `err` ← framed stderr data; `exit` ← `ProcessExit` |
-| effect / behavior | **per-instance, both mandatory** |
+| idempotent / behavior | job: `idempotent: bool = false`; service has no idempotence attribute. `behavior` required for both profiles, plan-evaluated |
 | Attributes | the normative table below (D-2026-08-12-1, amended by D-2026-08-14-1) — every attribute is `name = value`, presence and defaults are the CONTRACT's, and the checker injects every omitted default into the effective HIR |
 | Correlation | Job: the Call itself. Service: the exact Node instance selects its resource Session; application request/reply correlation belongs to Operators. An upstream socket's SessionRef cannot select a child process. |
 | Outcome cases | `ProcessExit` below; exactly one terminal per job invocation or resident child incarnation, never per service message. stderr never carries lifecycle data. |
@@ -303,7 +315,7 @@ R2 step, never a Driver fallback.
 | `cwd` | common | Rastok expression → `text` | instance | Optional |
 | `codec` | common | choice `lines \| jsonl \| bytes` for `in` and `out` | plan | **Required** — request/reply framing is never chosen silently (D-2026-08-11-1) |
 | `err_codec` | common | choice `lines \| bytes` for stderr only | plan | Defaulted(`lines`) — diagnostics never inherit `jsonl` from `codec`; omission ≡ `lines` |
-| `effect` | common | choice, typed | plan | **Required** |
+| `idempotent` | job only | bool | plan | `false`, no guarantee |
 | `behavior` | common | choice, typed | plan | **Required** |
 | `timeout` | job | Rastok expression → `duration` | instance | Optional — a true optional: no budget declared, no budget; refused on service |
 | `env` | common | `map<text,text>` | instance | Optional; canonical spelling `env = { "K": v }`; written entries override inherited host entries and unspecified entries remain inherited |
@@ -499,7 +511,7 @@ and non-Unix physical supervision are not claimed.
 | Exchange | event — each firing is one spontaneous inbound root and has no per-event `exit` |
 | Role / Direction | one-shot or periodic logical-time event; **inbound source** |
 | Ports | `out`: timestamp envelopes |
-| effect / behavior | `none` / `deterministic` (pre-declared) |
+| behavior | `deterministic` (pre-declared); no repetition guarantee for this inbound/event profile |
 | Attributes | exactly one of `after = duration("…")` (one firing) or `every = duration("…")` (periodic); positive plan constants |
 | Correlator | **none** (a pure source makes no calls) |
 | Outcome cases | none (a timer event has no runtime outcome worth another envelope) |
@@ -520,7 +532,7 @@ civil-time source is needed only to anchor `Calendar` semantics.
 | Exchange | event — each civil instant is one spontaneous inbound root and has no per-event `exit` |
 | Role / Direction | calendar instants; **inbound source** |
 | Ports | `out`: `data : struct { scheduled_at: timestamp }` |
-| effect / behavior | `none` / `deterministic` (pre-declared) |
+| behavior | `deterministic` (pre-declared); no repetition guarantee for this inbound/event profile |
 | Attributes | **either** `cron = <expr>` + `tz = <IANA zone>` (mandatory together — never the host's implicit zone) **or** `at = timestamp("…")` (fires **once**; the zone lives in the RFC-3339 string) |
 | Correlator | **none** (a pure source makes no calls) |
 | Outcome cases | none (misconfiguration is compile-time: bad cron/tz = refusal) |
@@ -539,7 +551,7 @@ The classic sane-cron behavior, written down.
 |---|---|
 | Role / Direction | bounded, ordered, in-process value store; **append and snapshot read** |
 | Ports | `in: T` appends `data`; `read: struct { }` requests a snapshot; `out: array<T>` returns it; `exit: MemoryExit` terminates each admitted operation |
-| effect / behavior | `idempotent` / `deterministic` (pre-declared) |
+| behavior | `deterministic`; this future Memory sheet grants no admitted Retry profile |
 | Attributes | `cap = <n>` (default 10 000 — bounded **by construction**), `overflow = evict_oldest (default, evictions journaled) \| reject` |
 | Correlator | each delivery to `in` or `read` is one operation; a read also completes with an `out` snapshot, and every operation has exactly one ordinary typed exit |
 | Outcome cases | every admitted append or read emits exactly one `MemoryExit`: `Completed` (with an `out` snapshot for a read), or `CapacityExceeded` when `overflow = reject` |
@@ -566,10 +578,10 @@ run can inject selected values as new roots.
 
 | Case | Contract |
 |---|---|
-| Stable identity | `rastok/file@2` (v16; `@1` is its v15 predecessor) |
+| Stable identity | `rastok/file@3` (v19; earlier majors refuse) |
 | Role / Direction | outbound one-file operation; `mode = read \| replace` is required; `watch` is a known deferred spelling whose inbound role requires a later contract-version decision |
 | Ports | read: `in: variant`, one `out: bytes` on success, then `exit: FileExit`; replace: `in: bytes`, no success `out`, then `exit: FileExit` |
-| effect / behavior | `idempotent` / `deterministic` (pre-declared) |
+| idempotent / behavior | `true` / `deterministic` (pre-declared by the File Contract) |
 | Common attributes | `path: text` Required, latest site **invocation**; `timeout: duration` Optional, latest site instance |
 | Read attributes | `max_read: ByteSize = "8MiB"` (plan; portable maximum 4 GiB) |
 | Outcome cases | `Completed`; `NotFound`; `NotAFile`; `PermissionDenied`; `InvalidPath`; `ReadLimitExceeded { limit: uint }`; `AtomicReplaceUnavailable`; `IoFailed`; scheduler `TimeoutExpired`; bounded-Closing `OutcomeUnknown` |
@@ -614,13 +626,13 @@ deletion, overflow, resynchronization and acknowledgement semantics.
 
 | Case | Contract |
 |---|---|
-| Stable identity | `rastok/websocket-server@2` (v16; `@1` is its v15 predecessor) |
+| Stable identity | `rastok/websocket-server@3` (v19; earlier majors refuse) |
 | Role / Direction | both roles over one shared bound listener/session table; accepts remote sessions, receives messages and writes graph replies |
 | Exchange | session — many messages in either direction, exactly one terminal `WebSocketExit` per accepted session |
 | Ports | `out: T` receives complete peer messages; `in: T` sends complete messages; `exit: WebSocketExit` terminates a session; no implicit `err` |
 | Payload type | `codec = json` → `variant`; `text` → `text`; `bytes` → `bytes`; text/binary mismatch is a protocol refusal, never coercion |
 | Populates | `meta.ext.session_id: text` on every `out` and `exit`, plus `http_headers`, `http_uri`, `http_version`, `websocket_origin`, and selected `websocket_subprotocol` from the admitted handshake |
-| effect / behavior | `none` / `deterministic` for admission; graph-to-peer message effects remain journaled session writes |
+| behavior | `deterministic` for admission; graph-to-peer effects remain journaled Session writes. No idempotence attribute |
 | Attributes | required instance `listen: text` and positive `handshake_timeout: duration`; plan `path: text = "/"`, required `codec`, `max_message: ByteSize = "8MiB"`, ordered `versions = ["http/3", "http/2", "http/1.1"]`, `zero_rtt = disabled`; optional instance typed `headers`, open `custom_headers`, `auth_bearer`, `allowed_origins: array<text>`, `subprotocols: array<text>`, paired certificate/key bytes; optional invocation `correlate: text` |
 | Correlator | direct descendants reply by session lineage; root-mixing, stored or spontaneous paths use explicit `correlate`, normally `meta.ext.session_id` |
 | Outcome cases | `WebSocketExit`: `Closed { code: int, reason: text }`, `DnsFailed`, `ConnectFailed`, `TlsFailed`, `HandshakeRejected { status: int }`, `ProtocolFailed`, `TransportLost`, `TimeoutExpired`, `MessageTooLarge { limit: uint }`, `DecodeFailed`, `OutcomeUnknown` |
@@ -654,12 +666,12 @@ orphan write, discarded-and-journaled without misrouting or a second exit.
 
 | Case | Contract |
 |---|---|
-| Stable identity | `rastok/websocket-client@2` (v16; `@1` is its v15 predecessor) |
+| Stable identity | `rastok/websocket-client@3` (v19; earlier majors refuse) |
 | Role / Direction | both roles over one shared connection state; opens a remote session, writes graph messages and receives peer messages |
 | Exchange | session — many messages in either direction, exactly one terminal `WebSocketExit` per opened session |
 | Ports | `in: T`, `out: T`, `exit: WebSocketExit`; types follow the same required codec table as WebSocketServer; no implicit `err` |
 | Populates | `meta.ext.session_id: text`, `http_headers`, `http_uri`, `http_version`, and selected `websocket_subprotocol` |
-| effect / behavior | both mandatory on each node and plan-evaluated, as for an external client boundary |
+| behavior | required on each node, plan-evaluated; no Session idempotence attribute |
 | Attributes | required instance `url: text` and positive `handshake_timeout: duration`; required plan `codec`; plan `max_message: ByteSize = "8MiB"`, ordered `versions = ["http/3", "http/2", "http/1.1"]`, `zero_rtt = disabled`; optional instance typed `headers`, open `custom_headers`, `auth_bearer`, `subprotocols: array<text>`, `tls_ca`, and paired certificate/key bytes |
 | Correlator | v1 permits at most one live remote session per logical Node instance; no message-level request/reply correlation is invented |
 | Outcome cases | the same closed `WebSocketExit` authority as the server; an opening failure is the sole terminal of the attempted session |
@@ -788,29 +800,18 @@ must instead be owned by a Connector. This rule reserves no new syntax.
 
 ## 6. The observability note (minimal — names and principles)
 
-The parallel plane's contract is set (real times = journal `committed_at` +
-spans; nothing wall-clock in the data plane). This note pins four things:
+[observability.md](observability.md) owns the current contract: original typed
+measurements stay in journaled envelopes, with exactly `id` and `unit` in
+their annotation. M1 has no report engine, automatic price calculation,
+subset arithmetic, metric instrument registry or OTLP exporter.
 
-1. **Normative metric names** — per logical instance: `mailbox_depth`, `lag` (per
-   edge — *the* backpressure signal), `instances`, `evictions`; per
-   Connector: `calls`, `timeouts`, `retries`, `outbound_open` (in-flight),
-   `terminals`; per app: `journal_size` vs `low_water_mark`. Dashboards
-   converge on names, not guesses.
-2. **Inactivity & liveness** (deferred from execution-model §6.1):
-   observation-plane watches (*"nothing emitted for 5min"*, *"is the process
-   alive?"*) producing **alerts, never envelopes** — zero determinism
-   impact.
-3. **OTel export** — `origin_id` = trace id; one span per transaction (real
-   durations); outbound calls as child spans. **The journal is the truth;
-   spans are derived** — never the reverse.
-4. **Per-flow measure and cost attribution** — M1.8 replaces the former
-   stringly Connector `cost` map (which never became executable) with typed
-   `RecordObservation` values. Standard OpenTelemetry names identify exact
-   matching measures; `rastok.*` covers only project-specific runtime facts.
-   The journal folds calls, bytes, durations, tokens and exact monetary facts
-   by logical instance / `origin_id` into `CostReport`. Export is a subscriber;
-   it is never the accounting authority. See
-   [observability.md](observability.md).
+The planned optional hosted `otlp` feature observes runtime facts and can
+export explicit business measurements alongside technical telemetry.
+Aggregation and visualization happen downstream. Exporter time is never
+invented commit time; exact temporal export and metric mapping need their
+own qualification. The future Budget Extension consumes authoritative
+retained facts for admission policy; it is not controlled by that exporter.
+No exporter, instrument or Budget setting becomes executable through this note.
 
 
 ## 7. The MCP appendix (non-normative design direction)
@@ -820,14 +821,16 @@ The surface reserves the following mapping:
 - **An exposed graph = an MCP tool**: typed input ports → `inputSchema`
   (the Arrow-anchored types project to JSON Schema); typed output ports and
   tagged exit cases → result/tool errors according to the export profile.
-- **`effect` → the existing MCP annotations**, derived (the max over the
-  graph's Connectors): `idempotent` → `idempotentHint`, `irreversible` →
-  `destructiveHint`, `none` → `readOnlyHint`.
+- **Operation guarantees → MCP hints** need an explicit future export
+  contract. A plan-owned idempotence guarantee is potential input; no global
+  effect enum or maximum-over-Connectors calculation supplies read-only,
+  destructive or whole-graph repetition claims.
 - **`behavior` → an annotation MCP does not define**: exported as a
   documented `_meta` extension.
 - **Prompt confidentiality**: internal prompts are hidden from the
   *caller* (a tool exposes its contract, not its insides) — never from
-  *audit* (the journal sees everything). The onion rule.
+  *authorized audit*. Secret credential bytes never enter the journal, and
+  classified data remains subject to the deployment's privacy policy.
 - **`McpClient` / `McpServer` are deferred Contracts for Connectors**.
   Plain REST needs no dedicated type; it lives in `HttpClient`/`HttpServer`.
 
@@ -892,7 +895,7 @@ preserves the design inventory, including future Lab world actions.
 - [simulation-semantics.md](simulation-semantics.md) — mocks, the coverage
   checklist fed by resolved port cases, `origin` for `Calendar` scenarios.
 - [envelope.md](envelope.md) — `inbound_seq`, terminal envelopes.
-- [effects-and-sagas.md](effects-and-sagas.md) — the `effect` axis;
-  `behavior` is its sibling.
+- [effects-and-sagas.md](effects-and-sagas.md) — operation guarantees,
+  journal-before-effect and future Saga compensation.
 - [M1.6 HTTP/WebSocket backlog](../architecture/m1.6-http-websocket-backlog.md)
   — ordered gates from generic sessions through the hosted network proof.

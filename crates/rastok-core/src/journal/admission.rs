@@ -4,17 +4,19 @@
 
 use super::*;
 
+/// Borrowed dynamically by routing so live and prefix recovery share one
+/// implementation without making later journal facts visible to the prefix.
 pub(crate) trait InstanceAdmissions {
     fn instance_ref_for_admission(&self, address: &InstanceAddress) -> Result<InstanceRef, Error>;
     fn instance_commands(&self) -> Result<instance_stop::Fold, Error>;
 }
 
-impl<T: Journal + ?Sized> InstanceAdmissions for T {
+impl<T: Journal + ?Sized> InstanceAdmissions for &T {
     fn instance_ref_for_admission(&self, address: &InstanceAddress) -> Result<InstanceRef, Error> {
-        Journal::instance_ref_for_admission(self, address)
+        Journal::instance_ref_for_admission(*self, address)
     }
     fn instance_commands(&self) -> Result<instance_stop::Fold, Error> {
-        Journal::instance_commands(self)
+        Journal::instance_commands(*self)
     }
 }
 

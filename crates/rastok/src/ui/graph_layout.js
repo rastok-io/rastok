@@ -67,6 +67,17 @@
     return { nodes: [...nodes.values()], byId: nodes, edges };
   }
 
+  function nodeSubtitle(node) {
+    const contract = node.kind === "connector"
+      ? String(node.type || "Connector").split("/").at(-1).split("@")[0]
+        .split(/[-_]/)
+        .map(part => part ? `${part[0].toUpperCase()}${part.slice(1)}` : "")
+        .join("")
+      : "";
+    return [contract, ...(node.extensions || []).map(extension => `+ ${extension}`)]
+      .filter(Boolean).join(" · ");
+  }
+
   function layoutGraph(nodes, edges, owners) {
     const byId = new Map(nodes.map((node, index) => [node.id, { node, index }]));
     const incoming = new Map(nodes.map((node) => [node.id, 0]));
@@ -158,7 +169,8 @@
       return [node.id, {
         // Reserve the instance badge even before the first instance opens.
         // Admission must not move the title into a badge or reflow the graph.
-        width: Math.max(126, String(node.label || node.path || node.id).length * 7 + 68),
+        width: Math.max(126, String(node.label || node.path || node.id).length * 7 + 68,
+          nodeSubtitle(node).length * 7 / MINIMUM_READABLE_SCALE + 20),
         height: Math.max(54, (Math.max(inputs, outputs) - 1) * PORT_SPACING + 36),
       }];
     }));
@@ -1586,6 +1598,7 @@
 
   return Object.freeze({
     minimumReadableScale: MINIMUM_READABLE_SCALE,
+    nodeSubtitle,
     materializeGraph,
     layoutGraph,
     routeGraphEdges,

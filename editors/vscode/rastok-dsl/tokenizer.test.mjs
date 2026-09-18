@@ -55,3 +55,26 @@ test('every shipped example finishes outside a reader, string or block comment',
     assert.ok(tokens.some(t => t.text === 'tokenizer_sentinel' && t.scopes.includes('entity.name.type.rkg')), `${name}: lexical state leaked beyond the source`);
   }
 });
+
+test('flat annotation declarations and Retry use distinct executable scopes', () => {
+  const { tokens } = tokenize(`type note = @struct { text: text }
+type Reading = struct { quantity: decimal(18,6) @measure(id = amount, unit = "USD") @note(text = "Reported") }
+connector request : HttpClient + Retry {
+  idempotent = true
+  json_profile = projected
+  Retry.on = [ServerError]
+  Retry.attempts = 2
+  Retry.delay = { kind = fixed ; after = duration("1s") }
+}`);
+  for (const [text, scope] of [
+    ['@struct', 'storage.type.rkg'],
+    ['@measure', 'storage.modifier.annotation.rkg'],
+    ['@note', 'storage.modifier.annotation.rkg'],
+    ['Retry', 'entity.other.inherited-class.rkg'],
+    ['Retry.on', 'support.variable.retry.rkg'],
+    ['Retry.attempts', 'support.variable.retry.rkg'],
+    ['Retry.delay', 'support.variable.retry.rkg'],
+    ['idempotent', 'variable.language.rkg'],
+    ['json_profile', 'variable.language.rkg'],
+  ]) assert.ok(tokens.some(t => t.text === text && t.scopes.includes(scope)), `${text}: missing ${scope}`);
+});

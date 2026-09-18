@@ -123,6 +123,27 @@ test("a four-digit mailbox count fits the routed badge without changing the edge
   assert.ok(full.routes.get(0).label.box.width * layoutEngine.minimumReadableScale >= 40);
 });
 
+test("Connector subtitles and Extension labels fit before any instance opens", () => {
+  const topology = {
+    owners: [owner("owner:0", null)],
+    nodes: [{
+      ...operator("partner", "owner:0", [
+        { name: "in", direction: "input" },
+        { name: "out", direction: "output" },
+        { name: "exit", direction: "output" },
+      ]),
+      kind: "connector", type: "rastok/http-client@3", extensions: ["Retry"],
+    }],
+    edges: [],
+  };
+  const { layout } = render(topology);
+  const subtitle = "HttpClient · + Retry";
+  assert.ok(layout.positions.get("partner").width >= subtitle.length * 6.8 / layoutEngine.minimumReadableScale + 20,
+    "the subtitle stays inside its box, away from external pins and routes");
+  const opened = render({ ...topology, nodes: topology.nodes.map(node => ({ ...node, instances: [{}] })) });
+  assert.deepEqual(layout.positions, opened.layout.positions, "admission must not reflow the graph");
+});
+
 test("Graph-side ports slide to their neighbours instead of retaining declaration order", () => {
   const topology = {
     owners: [owner("owner:0", null, [

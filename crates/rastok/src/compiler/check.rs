@@ -7,6 +7,7 @@
 //! (`E-CHECK-DEFERRED`). Rules with a normative home carry their own
 //! codes; `meta.sys` writes are the canonical example.
 
+mod annotation_arguments;
 mod dispatch;
 mod extensions;
 mod loop_control;
@@ -42,9 +43,8 @@ use crate::expr;
 use crate::node;
 use crate::plan::closed_case_domain;
 use crate::schema_annotation::{
-    AnnotatedSchema, AnnotationSet, AnnotationTable, CostAnnotation, CostBasis, CurrencyCode,
-    DataAnnotation, MeasureCarrier, MeasureId, MeasureSource, PersonalDataClass, SchemaPath,
-    SchemaPathSegment, SensitivityLevel, is_iso_4217_currency, is_money_type, measure_spec,
+    AnnotatedSchema, AnnotationSet, AnnotationTable, DataAnnotation, PersonalDataClass, SchemaPath,
+    SchemaPathSegment, SensitivityLevel, flat_field as flat_struct_field,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -129,6 +129,7 @@ enum DataAnnotationTarget<'a> {
     Type(&'a DataType),
     TaggedUnionCase,
 }
+
 /// Diagnostic adapted from the expression chain, span mapped to the source.
 pub const E_EXPR: Code = Code::new("E-EXPR");
 /// Diagnostic for grammar admitted but outside the executable subset.
@@ -304,6 +305,7 @@ pub fn check(
         asset_root: asset_root.map(std::path::Path::to_path_buf),
         assets: Vec::new(),
         type_decls: BTreeMap::new(),
+        annotation_origins: BTreeMap::new(),
         resolved_types: BTreeMap::new(),
         resolved_named_schemas: BTreeMap::new(),
         type_stack: Vec::new(),
@@ -313,6 +315,7 @@ pub fn check(
         declared_outputs: BTreeSet::new(),
         unit_constants: BTreeMap::new(),
     };
+    let mut valid_type_names = checker.load_standard_annotations()?;
     // Additional top-level Graphs still require unit composition/liveness.
     // Constants are checked independently below, never silently ignored.
     for (_, tree) in &unit.files {
@@ -352,7 +355,6 @@ pub fn check(
             }
         }
     }
-    let mut valid_type_names = std::collections::BTreeSet::new();
     for (_, tree) in &unit.files {
         for decl in &tree.decls {
             if let TopDecl::Type(type_decl) = decl
@@ -488,6 +490,8 @@ struct Checker<'bag, 'registry> {
     /// The unit's named types (D-2026-08-10-8): structural sugar,
     /// pre-validated for cycles and budgets at collection.
     type_decls: BTreeMap<String, crate::compiler::syntax::TypeRef>,
+    /// Declaring identity survives structural alias-chain collapse.
+    annotation_origins: BTreeMap<String, String>,
     /// Named aliases expanded to their logical type for `is`/`as`. Expression
     /// trees carry the expansion, never the source spelling.
     resolved_types: BTreeMap<String, DataType>,
@@ -3143,6 +3147,7 @@ impl Checker<'_, '_> {
             decl.span,
         );
         self.contract(&mut node, decl);
+        self.connector_output_types(&mut node, decl);
         node.loop_spec =
             self.node_loop_declaration(&decl.body, &node, graph_signature, graph_consts, decl.span);
         if let Some(expired) = node
@@ -3164,6 +3169,101 @@ impl Checker<'_, '_> {
             decl.span,
         );
         Some(node)
+    }
+
+    fn connector_output_types(&mut self, node: &mut Node, decl: &ConnectorDecl) {
+        let Some(sheet) = node
+            .connector_contract_id()
+            .and_then(|id| self.registry.connector_by_id(id))
+        else {
+            return;
+        };
+        let mut declared = std::collections::BTreeSet::new();
+        for item in &decl.body {
+            let OperatorItem::Port(port) = item else {
+                continue;
+            };
+            let refusal = if !declared.insert(port.name.text.clone()) {
+                Some(format!(
+                    "the output `{}` is already refined",
+                    port.name.text
+                ))
+            } else if port.direction != crate::compiler::syntax::PortDirection::Output {
+                Some(format!(
+                    "input `{}` belongs to the Contract; only a codec-admitted output can be typed",
+                    port.name.text
+                ))
+            } else {
+                match sheet
+                    .ports
+                    .iter()
+                    .find(|row| row.name == port.name.text)
+                    .map(|row| row.ty)
+                {
+                    Some(contract::PortTypeRule::JsonOutput { attribute, .. })
+                        if node.attributes().iter().any(|setting| {
+                            setting.name == attribute
+                                && matches!(&setting.value, AttrValue::Word(word) if word == "json")
+                        }) =>
+                    {
+                        None
+                    }
+                    _ => Some(format!(
+                        "`{}` cannot be refined: the Contract/codec must admit JSON output hydration; no port is added",
+                        port.name.text
+                    )),
+                }
+            };
+            let refusal = refusal.or_else(|| {
+                port.ty
+                    .is_none()
+                    .then(|| format!("output `{}` needs an explicit type", port.name.text))
+            });
+            if let Some(message) = refusal {
+                self.bag.push(
+                    Diagnostic::new(E_PORT_CONFLICT, Phase::Check, message)
+                        .with_span(port.span)
+                        .with_field("port", port.name.text.clone()),
+                );
+                continue;
+            }
+            let Some(schema) = port
+                .ty
+                .as_ref()
+                .and_then(|ty| self.resolve_executable_schema(ty))
+            else {
+                continue;
+            };
+            if !rastok_core::json::supports_type(schema.ty()) {
+                self.bag.push(Diagnostic::new(E_TYPE_INVALID, Phase::Check,
+                    format!("`{}` has no exact JSON hydration profile; use JSON structs, collections, enums, exact numbers and nullable fields", port.name.text))
+                    .with_span(port.span).with_field("port", port.name.text.clone()));
+                continue;
+            }
+            if let Some(resolved) = node
+                .ports
+                .iter_mut()
+                .find(|resolved| resolved.port.name() == port.name.text)
+            {
+                resolved.ty = Some(schema.ty().clone());
+                resolved.annotations = schema.annotations().clone();
+            }
+        }
+        if node
+            .attributes()
+            .iter()
+            .any(|attribute| attribute.name == "json_profile")
+            && !(node.attributes().iter().any(|attribute| {
+                attribute.name == "codec"
+                    && matches!(&attribute.value, AttrValue::Word(word) if word == "json")
+            }) && node.ports.iter().any(|port| {
+                port.port.name() == "out" && matches!(port.ty, Some(DataType::Struct(_)))
+            }))
+        {
+            self.bag.push(Diagnostic::new(E_CONTRACT_ATTR, Phase::Check,
+                "`json_profile` requires `codec = json` and an explicit `output out: StructType` on HttpClient")
+                .with_span(decl.span).with_field("attribute", "json_profile"));
+        }
     }
 
     /// Validates a connector declaration against its contract sheet
@@ -3780,20 +3880,8 @@ impl Checker<'_, '_> {
             match item {
                 OperatorItem::Port(port) => {
                     if is_connector {
-                        // A connector's type defines its ports; the
-                        // declaration itself is the fault.
-                        self.bag.push(
-                            Diagnostic::new(
-                                E_PORT_CONFLICT,
-                                Phase::Check,
-                                format!(
-                                    "`{}`: a connector never declares ports — its type defines them",
-                                    port.name.text
-                                ),
-                            )
-                            .with_span(port.span)
-                            .with_field("port", port.name.text.clone()),
-                        );
+                        // Refine only after attributes/defaults resolve the
+                        // Contract's codec capability and exact port inventory.
                         continue;
                     }
                     if port.direction == crate::compiler::syntax::PortDirection::Output
@@ -4262,6 +4350,22 @@ impl Checker<'_, '_> {
         if !self.guard_binding_name(name, "a type name") {
             return false;
         }
+        let protected = match name.text.as_str() {
+            "sensitive" | "secret" | "personal" | "measure" => Some(format!(
+                "`{}` is a stdlib annotation; a user definition cannot replace it",
+                name.text
+            )),
+            "cost" => Some("`cost` is retired; use `@measure(id = amount, ...)`, not a replacement annotation definition".to_owned()),
+            _ => None,
+        };
+        if let Some(message) = protected {
+            self.bag.push(
+                Diagnostic::new(E_NAME_RESERVED, Phase::Resolve, message)
+                    .with_span(name.span)
+                    .with_field("name", name.text.clone()),
+            );
+            return false;
+        }
         if !crate::compiler::parser::is_builtin_type_name(&name.text) {
             return true;
         }
@@ -4471,13 +4575,22 @@ impl Checker<'_, '_> {
             BaseType::Scalar(ScalarType::Uuid) => DataType::Uuid,
             BaseType::Scalar(ScalarType::Duration) => DataType::DURATION,
             BaseType::Variant => DataType::Variant,
-            BaseType::Struct { fields, open } => {
+            BaseType::Struct { fields, open } | BaseType::FlatStruct { fields, open } => {
+                let flat = matches!(ty, BaseType::FlatStruct { .. });
                 if *open {
                     self.bag.push(
                         Diagnostic::new(
-                            E_TYPE_UNRESOLVED,
+                            if flat {
+                                E_TYPE_INVALID
+                            } else {
+                                E_TYPE_UNRESOLVED
+                            },
                             Phase::Check,
-                            "an open struct is an inference constraint, not an effective type",
+                            if flat {
+                                "a flat struct must be closed; `..` is not admitted"
+                            } else {
+                                "an open struct is an inference constraint, not an effective type"
+                            },
                         )
                         .with_span(span)
                         .with_field("type", "struct { .. }"),
@@ -4486,10 +4599,21 @@ impl Checker<'_, '_> {
                 }
                 let mut resolved = Vec::with_capacity(fields.len());
                 for field in fields {
-                    resolved.push(TypeField::new(
-                        field.name.text.clone(),
-                        self.resolve_plain_type_ref(&field.ty)?,
-                    ));
+                    let field_type = self.resolve_plain_type_ref(&field.ty)?;
+                    if flat && !flat_struct_field(&field_type) {
+                        self.bag.push(
+                            Diagnostic::new(
+                                E_TYPE_INVALID,
+                                Phase::Check,
+                                "a flat struct field must be a scalar, enum, or optional scalar/enum after alias resolution",
+                            )
+                            .with_span(field.ty.span)
+                            .with_field("field", field.name.text.clone())
+                            .with_field("type", field_type.to_string()),
+                        );
+                        return None;
+                    }
+                    resolved.push(TypeField::new(field.name.text.clone(), field_type));
                 }
                 match StructType::new(resolved) {
                     Ok(structure) => DataType::Struct(structure),
@@ -4783,7 +4907,7 @@ impl Checker<'_, '_> {
                 self.type_stack.pop();
                 result
             }
-            BaseType::Struct { fields, .. } => {
+            BaseType::Struct { fields, .. } | BaseType::FlatStruct { fields, .. } => {
                 let DataType::Struct(structure) = resolved else {
                     return None;
                 };
@@ -4898,7 +5022,7 @@ impl Checker<'_, '_> {
         for annotation in annotations {
             if row
                 .iter()
-                .any(|existing| existing.kind() == annotation.kind())
+                .any(|existing| existing.identity() == annotation.identity())
             {
                 self.annotation_refusal(
                     span,
@@ -4923,7 +5047,12 @@ impl Checker<'_, '_> {
         path: &SchemaPath,
     ) -> Option<DataAnnotation> {
         let arguments = self.annotation_arguments(annotation, path)?;
-        match annotation.name.text.as_str() {
+        let definition = self
+            .annotation_origins
+            .get(&annotation.name.text)
+            .cloned()
+            .unwrap_or_else(|| annotation.name.text.clone());
+        match definition.as_str() {
             "sensitive" => {
                 self.require_annotation_arguments(annotation, path, &arguments, &["level"])?;
                 let level = self.annotation_symbol(
@@ -4952,65 +5081,16 @@ impl Checker<'_, '_> {
                 self.require_annotation_arguments(annotation, path, &arguments, &[])?;
                 Some(DataAnnotation::Secret)
             }
-            "measure" => {
-                self.require_annotation_arguments(annotation, path, &arguments, &["id"])?;
-                let id =
-                    self.annotation_symbol(annotation, path, arguments.get("id").copied()?, "id")?;
-                let id = match MeasureId::new(id) {
-                    Ok(id) => id,
-                    Err(error) => {
-                        self.annotation_refusal(
-                            annotation.span,
-                            &annotation.name.text,
-                            path,
-                            &error.to_string(),
-                        );
-                        return None;
-                    }
-                };
-                let Some(spec) = measure_spec(&id) else {
-                    self.annotation_refusal(
-                        annotation.span,
-                        &annotation.name.text,
-                        path,
-                        &format!("measure id `{}` is not in the pinned registry", id.as_str()),
-                    );
-                    return None;
-                };
-                if spec.source() != MeasureSource::Field {
-                    self.annotation_refusal(
-                        annotation.span,
-                        &annotation.name.text,
-                        path,
-                        "this registry entry is a runtime instrument, not a field annotation",
-                    );
-                    return None;
-                }
-                let DataAnnotationTarget::Type(ty) = target else {
-                    self.annotation_refusal(
-                        annotation.span,
-                        &annotation.name.text,
-                        path,
-                        "a semantic measure targets a typed field, not a union case",
-                    );
-                    return None;
-                };
-                let carrier_holds = match spec.carrier() {
-                    MeasureCarrier::Integer => matches!(ty, DataType::Integer(_)),
-                    MeasureCarrier::Duration => *ty == &DataType::DURATION,
-                };
-                if !carrier_holds {
-                    self.annotation_refusal(
-                        annotation.span,
-                        &annotation.name.text,
-                        path,
-                        &format!("the registered measure cannot be carried by `{ty}`"),
-                    );
-                    return None;
-                }
-                Some(DataAnnotation::Measure(id))
+            "measure" => self.resolve_business_measure(annotation, target, path, &arguments),
+            "cost" => {
+                self.annotation_refusal(
+                    annotation.span,
+                    "cost",
+                    path,
+                    "`@cost` is retired; replace it with `@measure(id = amount, ...)` with an explicit unit (for example USD); valuation is a separate consumer",
+                );
+                None
             }
-            "cost" => self.resolve_cost_annotation(annotation, target, path, &arguments),
             "personal" => {
                 self.allow_annotation_arguments(
                     annotation,
@@ -5035,100 +5115,25 @@ impl Checker<'_, '_> {
                 )))
             }
             _ => {
-                self.annotation_refusal(
-                    annotation.span,
-                    &annotation.name.text,
-                    path,
-                    "unknown data annotation",
-                );
+                if let Some(declaration) = self.type_decls.get(&annotation.name.text).cloned()
+                    && !declaration.optional
+                    && matches!(
+                        declaration.alternatives.as_slice(),
+                        [BaseType::FlatStruct { .. }]
+                    )
+                {
+                    return self.resolve_declared_annotation(annotation, &declaration, path);
+                } else {
+                    self.annotation_refusal(
+                        annotation.span,
+                        &annotation.name.text,
+                        path,
+                        "unknown data annotation",
+                    );
+                }
                 None
             }
         }
-    }
-
-    fn resolve_cost_annotation(
-        &mut self,
-        annotation: &SynSchemaAnnotation,
-        target: &DataAnnotationTarget<'_>,
-        path: &SchemaPath,
-        arguments: &BTreeMap<&str, &SchemaAnnotationConstant>,
-    ) -> Option<DataAnnotation> {
-        let DataAnnotationTarget::Type(ty) = target else {
-            self.annotation_refusal(
-                annotation.span,
-                &annotation.name.text,
-                path,
-                "a cost targets a decimal or canonical Money value, not a union case",
-            );
-            return None;
-        };
-        let is_money = is_money_type(ty);
-        let required = if is_money {
-            &["basis"][..]
-        } else {
-            &["basis", "currency"][..]
-        };
-        self.require_annotation_arguments(annotation, path, arguments, required)?;
-        let basis =
-            self.annotation_symbol(annotation, path, arguments.get("basis").copied()?, "basis")?;
-        let basis = match basis.as_str() {
-            "provider_reported" => CostBasis::ProviderReported,
-            "pricebook_calculated" => CostBasis::PricebookCalculated,
-            _ => {
-                self.annotation_refusal(
-                    annotation.span,
-                    &annotation.name.text,
-                    path,
-                    "`basis` must be `provider_reported` or `pricebook_calculated`",
-                );
-                return None;
-            }
-        };
-        if is_money {
-            return Some(DataAnnotation::Cost(CostAnnotation::money(basis)));
-        }
-        if !matches!(ty, DataType::Decimal(_)) {
-            self.annotation_refusal(
-                annotation.span,
-                &annotation.name.text,
-                path,
-                &format!("a scalar cost requires decimal, found `{ty}`"),
-            );
-            return None;
-        }
-        let currency = self.annotation_symbol(
-            annotation,
-            path,
-            arguments.get("currency").copied()?,
-            "currency",
-        )?;
-        let currency = match CurrencyCode::new(currency) {
-            Ok(currency) => currency,
-            Err(error) => {
-                self.annotation_refusal(
-                    annotation.span,
-                    &annotation.name.text,
-                    path,
-                    &error.to_string(),
-                );
-                return None;
-            }
-        };
-        if !is_iso_4217_currency(&currency) {
-            self.annotation_refusal(
-                annotation.span,
-                &annotation.name.text,
-                path,
-                &format!(
-                    "currency code `{}` is not in the pinned ISO 4217 registry",
-                    currency.as_str()
-                ),
-            );
-            return None;
-        }
-        Some(DataAnnotation::Cost(CostAnnotation::scalar(
-            currency, basis,
-        )))
     }
 
     fn annotation_arguments<'annotation>(
@@ -5560,6 +5565,12 @@ impl Checker<'_, '_> {
                     break;
                 }
             }
+            let origin = self
+                .annotation_origins
+                .get(&current)
+                .cloned()
+                .unwrap_or_else(|| current.clone());
+            self.annotation_origins.insert(name.clone(), origin);
             if current != name
                 && let Some(terminal) = self.type_decls.get(&current).cloned()
             {
@@ -5758,7 +5769,7 @@ impl Checker<'_, '_> {
                     self.walk_type(&aliased, nodes, depth, stack)?;
                     stack.pop();
                 }
-                BaseType::Struct { fields, .. } => {
+                BaseType::Struct { fields, .. } | BaseType::FlatStruct { fields, .. } => {
                     if fields.len() > MAX_FIELDS {
                         return Err(TypeRefusal::WidthBudget {
                             what: "struct fields",

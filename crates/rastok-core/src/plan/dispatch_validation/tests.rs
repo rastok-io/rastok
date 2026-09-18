@@ -3,9 +3,7 @@ use crate::datatype::TaggedUnionType;
 use crate::datatype::{StructType, TaggedCase, TypeField};
 use crate::node::Port;
 use crate::plan::{ClosedArm, FieldWrite, OpenArm};
-use crate::schema_annotation::{
-    AnnotationSet, AnnotationTable, DataAnnotation, MeasureId, SchemaPath,
-};
+use crate::schema_annotation::{AnnotationSet, AnnotationTable, SchemaPath};
 use crate::value::Value;
 use alloc::{boxed::Box, vec, vec::Vec};
 
@@ -455,8 +453,8 @@ fn local_annotation_compatibility_is_not_a_source_only_claim() {
     let signature = Signature::new();
     let annotations = AnnotationTable::new(vec![(
         SchemaPath::root(),
-        AnnotationSet::new(vec![DataAnnotation::Measure(
-            MeasureId::new("gen_ai.usage.input_tokens").unwrap(),
+        AnnotationSet::new(vec![crate::schema_annotation::tests::measure(
+            "tokens", "token",
         )])
         .unwrap(),
     )])

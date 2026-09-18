@@ -193,6 +193,15 @@ expansion is the type identity, so renaming an alias does not change a
 plan. Tagged-union case names are not aliases and do affect identity.
 Recursive aliases remain illegal in v1.
 
+**Flat data declarations implemented; annotation binding still staged:** [D-2026-09-15-5](decisions.md#d-2026-09-15-5--define-flat-annotation-capable-structs-with-one-type-system)
+adds the flat annotation-capable declaration `type Name = @struct { ... }`.
+Its data values reuse ordinary struct/scalar types; its annotation definition
+and interpretation authority are separate from structural value equality.
+[annotations.md](annotations.md) owns that target and its alias/flatness rules.
+No general struct-field omission, inheritance or new Value family is admitted
+by this source slice. New annotation applications remain fail-closed until
+their definitions and bindings are transportable.
+
 ### 2.1 Canonical composite invariants
 
 The resolved tree admits no source-order aliases:
@@ -397,6 +406,47 @@ is an explicit Operator. Connecting `OrderV1` to `OrderV2` without an
 adapter is a type error even when a mechanical migration could be
 guessed.
 
+### 4.1 Explicit JSON response types in M1
+
+D-2026-09-16-1 admits `output out: Response` inside HttpClient when
+`codec = json`. It refines that existing output, not the input, terminal or
+port inventory. The candidate Contract's resolved port and annotation tables
+retain the schema; no separate mapping language is involved. Omission keeps
+the previous `variant` output and its identity.
+
+The codec reads exact JSON values, then associates object members with closed
+struct fields by name, recursively. The supported schema includes arrays,
+text-keyed maps, enums, exact integers/decimals, `number`, text, bool, null,
+`variant` and nullable forms. Integer widths and decimal precision/scale are
+checked without rounding. All declared fields must exist, including nullable
+fields; extra fields refuse. There is no implicit date, byte, float or tagged
+union encoding. Such a target refuses at check, as do output refinements on
+the other M1 codec profiles.
+
+A declared or OpenAPI-derived schema is an expectation, not proof that the
+remote API complies. Invalid JSON or an incompatible actual body produces
+the existing `DecodeFailed` terminal, with no partial response or fabricated
+measurement. A valid decoded 500–599 still produces its typed `out` and
+`ServerError`. Hydration precedes the retained completion and Retry disposition.
+The Lab supplies typed responses; the VM rejects malformed native completions
+before journalization rather than repairing them. No general serializer,
+OpenAPI fetch at runtime or wire-schema negotiation is introduced.
+
+**Explicit opt-in:** D-2026-09-17-1 defines the executable
+[`json_profile = projected`](../architecture/openai-responses-hydration.md#4-limited-projected-profile)
+for typed HttpClient JSON responses. It omits extra struct members and
+normalizes absent nullable members to null, while required or mistyped values
+still refuse. This is a codec projection, not a change to ordinary closed
+structs or the strict default above. Its loss of extra members and of the
+absent/null wire distinction is explicit.
+Only a declared struct output on HttpClient with `codec = json` admits this
+plan-time attribute; unknown profile values and other combinations refuse.
+Arrays and maps recurse into their declared values; map keys and `variant`
+subtrees are retained. The complete JSON reader still checks omitted members
+for malformed syntax, duplicate keys and numeric bounds. Source, independent
+plan, physical-codec, Retry and prefix-replay evidence is tracked in the
+[profile ledger](../architecture/openai-responses-hydration.md).
+
 ## 5. Values, expressions and narrowing
 
 There is one materialized `Value` domain conforming to `DataType`.
@@ -471,16 +521,20 @@ hashes is a typed refusal, never an implicit application of a shim.
 
 ## 7. Data classifications are a side-table, never another type algebra
 
-M1.8 allocates `@sensitive`, `@secret`, `@personal`, `@measure` and `@cost`
-under [D-2026-08-30-1 and D-2026-08-30-2](decisions.md). They do not create logical scalar or composite
+M1.8 allocates sensitivity, secret, personal-data, quantity and monetary
+interpretations under [D-2026-08-30-1 and D-2026-08-30-2](decisions.md).
+D-2026-09-18-1 gives numerical `@measure` exactly `id` and `unit`;
+currency units such as `"USD"` need no special annotation. `@cost` and the
+former currency/basis arguments are retired.
+These interpretations do not create logical scalar or composite
 types and do not affect ordinary assignability. Their resolved meaning lives
 in a sparse canonical `SchemaPath -> AnnotationSet` table beside `DataType`.
 Policy-aware propagation and sink checks are separate judgements.
 
 The annotation table is absent/empty for an unannotated schema and therefore
-adds no recursive wrapper to this type tree. `Money` likewise remains the
-canonical struct shape `{ amount: decimal(38,18), currency: text }`, not a new
-`DataType` family. The source form, path vocabulary, propagation rules,
+adds no recursive wrapper to this type tree. A struct containing an amount
+annotates its numerical field; there is no special Money-shaped target or
+new `DataType` family. The source form, path vocabulary, propagation rules,
 secret boundary and observation semantics are normative in
 [observability.md](observability.md). Categorical package v17 carries the
 sparse table beside every owning schema without allocating a `DataType` tag.

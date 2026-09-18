@@ -1,6 +1,6 @@
 # Rastok DSL — Grammar notes
 
-> **Status (2026-09-10): normative v18 under D-2026-09-05-1, D-2026-09-08-1 and D-2026-09-10-1.**
+> **Status (2026-09-18): normative v19 with the approved Retry and annotation amendments.**
 > The implemented subset and migration evidence are recorded in
 > [R9](../architecture/rework-r9-qualification.md). Unsupported forms refuse
 > by name at check. V16 preserves Node-owned `instance`, `lifetime`, `closing`,
@@ -8,13 +8,16 @@
 > Kind/Type/Aspect model with Node/Graph/Executor/Connector/Extension, removes Graph
 > and Connector handlers, adds Operator Dispatch and case routing, makes
 > output dispositions explicit, and represents Loop recurrence as manager
-> commands rather than spatial ports. M1.8 annotations and exact
-> `env()`/`secret()` boot references are unchanged.
-> The approved Retry refactor has a
-> [C2 source policy gate](../architecture/retry-c2-implementation.md#4-retry-source-policy-gate):
-> candidate `+ Retry` and `idempotent` declarations are checked and refused
-> by name before HIR/package emission. They are not executable v18 syntax;
-> no Retry port, command, state binding or transport tag is admitted here.
+> commands rather than spatial ports. M1.8 security/privacy guarantees and
+> exact `env()`/`secret()` boot references are preserved; the generic measure
+> signature is now exactly `id` and `unit`.
+> The [Retry contract](../architecture/retry-extension-refactor.md) admits
+> finite outbound Call `+ Retry`, plan-owned `idempotent` and static retry
+> attributes. Unsupported profiles still refuse by name. Retry contributes
+> no port, command or state binding. The [`@struct` declaration](annotations.md#2-flatness-and-parsing)
+> parses as a distinct LL(1) base type; flat data and typed annotation
+> applications are executable without a separate value algebra. Qualified
+> movements and unchanged witnesses live in the [C4 ledger](../architecture/retry-c4-qualification.md).
 >
 > **Conceptual basis** : this document assumes the model defined in [WHITEPAPER.md](../../WHITEPAPER.md) and the normative instance contract in [instances.md](instances.md). This document is the grammar ; foundations is the constitution.
 >
@@ -80,7 +83,7 @@ connector echo : Process {         // type annotation with ":"
   args     = []                     // list value
   mode     = job
   codec    = jsonl
-  effect   = idempotent
+  idempotent = true
   behavior = deterministic
   timeout  = duration("5s")         // expression value
   env      = { "LANG": "C" }       // map value
@@ -118,14 +121,14 @@ graph teams_gateway : App {          // the DEPLOYMENT ENTRY POINT — exactly o
     closing   = { drain_for = duration("30s") ; settle_for = duration("5s") }
     connector codex : Process { mode = service ; command = "codex" ; args = ["app-server"]
                                 codec = jsonl
-                                effect = idempotent ; behavior = probabilistic }
+                                behavior = probabilistic }
     in -> codex.in
     codex.out -> out
   }
 
   connector outbound : HttpClient { url = env("TEAMS_URL") ; codec = json
                                     timeout = duration("10s")
-                                    effect = idempotent ; behavior = deterministic }
+                                    idempotent = false ; behavior = deterministic }
 
   inbound.out -> sessions.in         // graphs WIRE BY NAME, like every node
   sessions.out -> outbound.in
@@ -347,7 +350,6 @@ graph sessions {
     env = { "CODEX_HOME": codex_home }
 
     codec    = jsonl
-    effect   = idempotent
     behavior = probabilistic
     // in / out / err / exit = stdin / stdout / stderr / child terminal
   }
@@ -925,7 +927,7 @@ Writing two arrows in opposite directions gives a compile error. Express the sam
 
 | Need | Pattern |
 |---|---|
-| Retry after a selected outcome | a Loop host whose closed exit cases route to `Loop.again` or whose next state is sent to `Loop.next` |
+| Protected repetition of one Call | a finite outbound Call with `+ Retry`, `Retry.on`, bounded attempts and the required idempotence guarantee; no authored Loop verdict |
 | DLQ + replay | Failed → `Memory`; operations tooling reads a bounded snapshot, then injects selected values as roots of a new run |
 | Iterative refinement, fixed N | Static unfolding : `step -> step -> step` |
 | Iterative refinement, dynamic N | the finite `: Loop` Extension |
@@ -1406,13 +1408,13 @@ DECL_KW    = { "graph", "operator", "connector",
                "val", "var", "input", "output", "on",
                "start", "stop", "match",                               // Operator lifecycle and Dispatch
                "where", "having", "within", "last",
-               "effect", "behavior",                                   // the two mandatory Connector axes (effects-and-sagas.md ; stdlib.md §2)
                "lab", "simulation", "experiment", "theorem", "over",  // the Lab surface
                "scenario", "defaults",
                "expect", "envelope", "advance", "mock",
                "after", "crash", "restart",                            // scenario steps (simulation-semantics.md §5)
                "as" }
-// `profile` is an ordinary attribute name (experiment body), not a keyword.
+// `profile`, `behavior` and `idempotent` are ordinary Contract attribute
+// names, not global effect-class keywords. Removed `effect` refuses.
 // Simulation setup uses ordinary fixture injections.
 TYPE_KW    = { "variant",                                             // the value-type tree (types.md)
                "struct", "map", "array", "table", "enum", "union",   // composites (+ table view)
@@ -1433,7 +1435,6 @@ TYPE_KW    = { "variant",                                             // the val
 LITERAL_KW = { "true", "false", "null", "nothing",
                "block", "drop_oldest", "drop_newest", "error",
                "cascade", "mirror", "none", "local", "global",   // none/local/global = durability scopes ; none/cascade/mirror = close policy
-               "idempotent", "compensable", "irreversible",       // Connector effect classes — see effects-and-sagas.md
                "deterministic", "probabilistic", "seeded",        // behavior values (stdlib.md §2 ; seeded reserved)
                "ack", "respond",                                  // HttpServer modes
                "job", "service",                                  // Process modes
@@ -1535,6 +1536,8 @@ operator_body     ::= "{" ( port_decl | val_decl | var_decl
                                                                       // sub_block is DEAD (D-2026-08-12-1); parsed only to refuse
                                                                       //   with its migration hint
 connector_body    ::= "{" ( port_decl | val_decl | attribute )* "}"  // no DSL var or handler in v16
+// D-2026-09-16-1: a Connector port_decl only refines a Contract-admitted
+// output type; M1 implements HttpClient/json/out. It never adds a port.
 
 graph_body        ::= ( port_decl | operator_decl | connector_decl
                        | val_decl | edge_decl
@@ -1631,6 +1634,7 @@ union_type        ::= base_type ( "|" base_type )*                    // sum typ
 base_type         ::= scalar_type
                     | "variant"
                     | "struct" "{" ( field_decl ( "," field_decl )* )? "}" // typed record — EMPTY struct { } is legal
+                    | "@" "struct" "{" ( field_decl ( "," field_decl )* )? "}" // flat record; scalar/enum/optional fields after alias resolution
                     | "map" "<" type_ref "," type_ref ">"
                     | "array" "<" type_ref ( "," INT )? ">"              // optional exact length; zero is legal
                     | "table" "<" type_ref ">"                        // alias for array<struct>

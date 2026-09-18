@@ -552,8 +552,8 @@ graph g : App {
 
 #[test]
 fn the_example_package_matches_its_golden() {
-    // The v18 package move is enumerated before blessing in
-    // docs/architecture/instance-stop-command.md. Its trace is unchanged.
+    // The v19 package move is inventoried before blessing in
+    // docs/architecture/retry-c4-qualification.md. Its causal trace is unchanged.
     let (_, _, bytes) = packaged_example();
     let rendered: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/echo.rkp");

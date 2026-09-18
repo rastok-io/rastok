@@ -113,6 +113,91 @@ test('the resident gateway explains independent Process Sessions without startin
   await page.locator('[data-command="pause"]').click();
 });
 
+test('the Responses adapter preserves typed evidence and hides the bearer in LIVE, HISTORY and REPLAY', { timeout: 120000 }, async t => {
+  const source = 'examples/agent-http.rkg';
+  const credential = 'browser-responses-fixture-not-a-real-credential';
+  const page = await openTour(t, undefined, source, [
+    'simulate', source, '--ui', '--deployment', 'examples/agent-http.deployment.json',
+  ], {
+    RASTOK_SHOWCASE_MODEL_TOKEN: credential,
+    RASTOK_SHOWCASE_MODEL_TOKEN_VERSION: 'fixture-v1',
+  });
+  const assertPrivate = async () => {
+    assert.ok(!(await page.locator('body').innerText()).includes(credential));
+    assert.ok(!(await page.evaluate(() => JSON.stringify(currentSnapshot))).includes(credential));
+    assert.equal(await page.locator('#cost').count(), 0, 'no report or manufactured total');
+  };
+  const scenarios = ['two_sessions', 'missing_usage', 'observed_zero', 'schema_failure', 'transport_failure', 'http_errors'];
+  for (const [index, scenario] of scenarios.entries()) {
+    if (index) {
+      await page.locator('#return-live').click();
+      await page.locator('#scenario-select').selectOption(`responses\u0000${scenario}`);
+      await page.locator('#select-scenario').click();
+      await page.locator('#timeline-position').filter({ hasText: new RegExp(`^LIVE · Session ${index} · transition 0$`) }).waitFor();
+    }
+    const head = Number(await finish(page));
+    assert.deepEqual(await page.evaluate(() => currentSnapshot.scenario.current.failures), [], scenario);
+    await assertPrivate();
+    if (scenario === 'two_sessions' || scenario === 'observed_zero') {
+      await page.locator('.graph-port[aria-label*="model.out"]').press('Enter');
+      assert.equal(await page.locator('#tab-envelope').getAttribute('aria-selected'), 'true');
+      const usage = page.locator('#envelope summary').filter({ hasText: /^usage/ });
+      await usage.click();
+      await usage.locator('..').locator(':scope > .data-tree-children > details > summary').filter({ hasText: /^value/ }).click();
+      assert.match(await page.locator('#envelope').innerText(), /input_tokens/);
+      const inputTokens = page.locator('#envelope .data-tree-key').filter({ hasText: /^input_tokens$/ }).locator('..');
+      assert.match(await inputTokens.innerText(), scenario === 'observed_zero' ? /input_tokens\s+0$/ : /input_tokens\s+12$/);
+    }
+    await seek(page, Math.min(8, head - 1));
+    await assertPrivate();
+    await page.locator('[data-command="resume"]').click();
+    await page.locator('#timeline-position').filter({ hasText: /^REPLAY/ }).waitFor();
+    await page.locator('[data-command="pause"]').click();
+    await assertPrivate();
+  }
+});
+
+test('Retry keeps held attempts inspectable without drawing Loop state or downstream delivery', { timeout: 90000 }, async t => {
+  const page = await openTour(t, undefined, 'crates/rastok/tests/fixtures/ui-retry.rkg');
+  let held;
+  let waiting;
+  for (let i = 0; i < 100; i += 1) {
+    if (await page.locator('#execution-state').innerText() === 'completed') break;
+    const revision = await page.evaluate(() => currentSnapshot.revision);
+    await page.locator('#step').click();
+    await page.waitForFunction(previous => currentSnapshot.revision > previous && pendingCommandRevision === null, revision);
+    const frame = await page.evaluate(() => currentSnapshot);
+    const operation = frame.retry_operations[0];
+    if (operation?.phase === 'Held') {
+      held = frame.timeline.boundary;
+      assert.deepEqual(frame.history.outputs, []);
+      assert.ok(frame.topology.activity.routes.every(route => route.phase === 'consumed'));
+    }
+    if (operation?.phase === 'AwaitingAdmission') waiting = frame.timeline.boundary;
+  }
+  assert.notEqual(held, undefined);
+  assert.notEqual(waiting, undefined);
+  assert.equal(await page.locator('.graph-loop-dial').count(), 0);
+  await page.locator('#tab-instances').click();
+  assert.match(await page.locator('#retry-operations').innerText(), /Attempt 2\/2 · final result published/);
+  assert.equal(await page.locator('#retry-operations tbody tr').count(), 2);
+  assert.match(await page.locator('#retry-operations tbody tr').first().innerText(), /ServerError.*held by Retry/s);
+  assert.match(await page.locator('#retry-operations tbody tr').last().innerText(), /Completed.*published/s);
+  assert.match(await page.locator('#history-summary').textContent(), /envelope observations/);
+  assert.doesNotMatch(await page.locator('#history-summary').textContent(), /deliver/);
+  assert.doesNotMatch(await page.locator('body').innerText(), /private-(held|final)-response|[a-f0-9]{32}/);
+  await seek(page, held);
+  assert.equal(await page.locator('#retry-operations tbody tr').count(), 1);
+  await page.locator('#retry-operations summary').click();
+  await page.locator('#retry-operations details .identifier > button').first().click();
+  assert.equal(await page.locator('#tab-envelope').getAttribute('aria-selected'), 'true');
+  assert.match(await page.locator('#envelope').innerText(), /tokens.*10/s);
+  assert.doesNotMatch(await page.locator('#envelope').innerText(), /private-held-response/);
+  await seek(page, waiting);
+  await page.locator('#future summary').click();
+  assert.match(await page.locator('#future-items').innerText(), /Retry attempt.*due 0.1 s/s);
+});
+
 test('injection history names the retained routing key, not a guessed tenant field', { timeout: 60000 }, async t => {
   const page = await openTour(t, undefined, 'crates/rastok/tests/fixtures/ui-instance-keys.rkg');
   await finish(page);
@@ -210,7 +295,7 @@ test('a decoded HttpServer source is inspectable without an artificial App input
   assert.equal(await page.evaluate(() => currentSnapshot.history.sources.length), 2);
 });
 
-test('the webhook gallery remains classified in LIVE, HISTORY and REPLAY with exact costs', { timeout: 120000 }, async t => {
+test('the webhook gallery remains classified in LIVE, HISTORY and REPLAY without a measurement report', { timeout: 120000 }, async t => {
   const source = 'examples/webhook-to-partner.rkg';
   const credential = 'browser-fixture-not-a-real-credential';
   const page = await openTour(t, undefined, source, [
@@ -224,6 +309,8 @@ test('the webhook gallery remains classified in LIVE, HISTORY and REPLAY with ex
     const snapshot = await page.evaluate(() => JSON.stringify(currentSnapshot));
     assert.ok(!snapshot.includes('alice@example.test'), 'no raw email in the browser snapshot');
     assert.ok(!snapshot.includes(credential), 'the physical secret never reaches the browser');
+    assert.equal(await page.evaluate(() => Object.hasOwn(currentSnapshot, 'cost_report')), false);
+    assert.equal(await page.locator('#cost').count(), 0);
   };
   await assertClassified();
   await capture(page, 'webhook-B0');
@@ -242,11 +329,6 @@ test('the webhook gallery remains classified in LIVE, HISTORY and REPLAY with ex
     const head = Number(await finish(page));
     assert.deepEqual(await page.evaluate(() => currentSnapshot.scenario.current.failures), [], scenario);
     await assertClassified();
-    if (scenario === 'nominal' || scenario === 'http_500') {
-      assert.deepEqual(await page.evaluate(() => currentSnapshot.cost_report.costs.map(row => row.money)), [
-        { unscaled: scenario === 'nominal' ? '2' : '3', scale: 2, currency: 'USD' },
-      ]);
-    }
     if (!index) {
       await page.locator('#tab-envelope').click();
       await capture(page, 'webhook-completed');
@@ -403,7 +485,7 @@ test('explanatory hovers expose types, capacity, command disposition, queued dat
   await page.locator('.graph-scope-type[aria-label*="Loop"]').first().focus();
   assert.match(await page.locator('#graph-tooltip').innerText(), /Commands:.*Loop.next.*Fuel: 2/s);
   await page.locator('.graph-node-name').filter({ hasText: /^model$/ }).focus();
-  assert.match(await page.locator('#graph-tooltip').innerText(), /connector.*rastok\/process@2.*open instances/);
+  assert.match(await page.locator('#graph-tooltip').innerText(), /connector.*rastok\/process@4.*open instances/);
   await seek(page, (await bothRunsWaiting(page))[0]);
   await page.locator('.graph-loop-dial').focus();
   assert.match(await page.locator('#graph-tooltip').innerText(), /applications remaining.*waiting until.*exhaustion: failed/s);
@@ -544,7 +626,7 @@ test('the explanatory path is reachable with Tab and keyboard alone', { timeout:
     [page.locator('.graph-edge-path[aria-label*="capacity"]'), /capacity 1024/],
     [page.locator('.edge-counter').filter({ hasText: /≡ 1/ }), /messages waiting/],
     [page.locator('.graph-scope-type[aria-label*="Loop"]'), /Commands:.*Loop.next/s],
-    [page.locator('.graph-node-name').filter({ hasText: /^model$/ }), /rastok\/process@2/],
+    [page.locator('.graph-node-name').filter({ hasText: /^model$/ }), /rastok\/process@4/],
   ]) {
     await tabTo(target);
     assert.match(await page.locator('#graph-tooltip').innerText(), explanation);

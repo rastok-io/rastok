@@ -412,7 +412,7 @@ mod tests {
       "connector": "agent.model",
       "provider": "openai",
       "model": "gpt-5",
-      "measure": "gen_ai.usage.input_tokens",
+      "measure": "input_tokens",
       "units": 1000000,
       "amount": "2.50",
       "currency": "USD"

@@ -358,8 +358,8 @@ function renderRelatedPanels(snapshot) {
   renderInjections(snapshot, selection);
   renderInstances(snapshot.instances, selection);
   renderLoopRuns(snapshot.loop_runs, selection);
+  renderRetryOperations(snapshot.retry_operations, selection);
   renderExchanges(snapshot.exchanges, selection);
-  renderCost(snapshot.cost_report, selection);
   renderFuture(snapshot);
   renderSearchResults();
   renderAssertion(snapshot);
@@ -441,7 +441,9 @@ function extensionDescription(item) {
     ? "App · public deployment scope · no manager"
     : extension === "Loop" && loop
       ? `Loop · entry ${loop.entry} · terminals ${loop.terminals.join(", ")}\nCommands: Loop.next · Loop.again · Loop.done\nAttributes: Loop.fuel · Loop.delay · Loop.measure · Loop.entry · Loop.terminal · Loop.expired\nFuel: ${loop.fuel ?? "derived from measure"} · extended terminal: ${loop.expired_port || "exhaustion proved impossible"}`
-      : extension).join("\n");
+      : extension === "Retry" && item.retry
+        ? `Retry · same prepared operation · ${item.retry.attempts} attempts maximum\nOn: ${item.retry.cases.join(" | ") || "no recurrence"}\nEntry: ${item.retry.entry} · terminal: ${item.retry.terminal}\nOnly the final attempt is delivered · no command or contributed port`
+        : extension).join("\n");
 }
 
 function renderFuture(snapshot) {
@@ -1204,16 +1206,16 @@ function renderTopology(topology, animateBoundary = false) {
       height: position.height,
       rx: "3",
     });
+    const subtitle = graphLayout.nodeSubtitle(node);
     const name = svgElement("text", {
       class: "graph-node-name",
       x: "10",
-      y: nodeSubtitle(node) || node.extensions?.length ? "17" : "25",
+      y: subtitle ? "17" : "25",
       "text-anchor": "start",
     });
     name.textContent = truncate(node.label || node.path || node.id, 22);
     attachTooltip(name, title.textContent);
     group.append(body, name);
-    const subtitle = [nodeSubtitle(node), ...(node.extensions || []).map((extension) => `+ ${extension}`)].filter(Boolean).join(" · ");
     if (subtitle) {
       const type = svgElement("text", {
         class: "graph-node-type",
@@ -1816,15 +1818,6 @@ function commandPortLabel(topology, item, port) {
   return port.name;
 }
 
-function nodeSubtitle(node) {
-  if (node.kind !== "connector") return "";
-  const contract = String(node.type || "Connector").split("/").at(-1).split("@")[0];
-  return contract
-    .split(/[-_]/)
-    .map((part) => part ? `${part[0].toUpperCase()}${part.slice(1)}` : "")
-    .join("");
-}
-
 function appendInstanceBadge(group, instances, right, top, itemId) {
   if (!instances.length) return;
   const width = 40;
@@ -1873,7 +1866,7 @@ function renderHistory(history, selection) {
   const records = allRecords.filter((row) => rowMatchesSelection(row, selection, ["owner", "connector"]));
   const deliveries = allDeliveries.filter((row) => rowMatchesSelection(row, selection, ["node"]));
   const suffix = selection ? ` Filtered by ${selection.label}.` : "";
-  text("history-summary", `${records.length} causal record${records.length === 1 ? "" : "s"}; ${deliveries.length} observed deliver${deliveries.length === 1 ? "y" : "ies"}.${suffix}`);
+  text("history-summary", `${records.length} causal record${records.length === 1 ? "" : "s"}; ${deliveries.length} envelope observation${deliveries.length === 1 ? "" : "s"}.${suffix}`);
   if (!records.length && !deliveries.length) {
     empty(target, selection ? "No retained activity for this selection." : "No committed records.");
     document.querySelector("#show-older").hidden = true;
@@ -2062,7 +2055,7 @@ function renderInstances(instances, selection) {
     const select = document.createElement("button");
     select.type = "button";
     select.textContent = instance.owner || "App";
-    select.title = "Filter Loop runs and the iteration dial by this instance";
+    select.title = "Filter Loop runs, Retry operations and the iteration dial by this instance";
     select.setAttribute("aria-pressed", String(Boolean(sameInstance(instance.reference, selectedLoopInstance?.reference))));
     select.addEventListener("click", () => {
       selectedLoopInstance = sameInstance(instance.reference, selectedLoopInstance?.reference)
@@ -2140,17 +2133,64 @@ function renderExchanges(exchanges, selection) {
   }));
 }
 
-function renderCost(report, selection) {
-  if (report?.error) {
-    renderGeneric("cost", report, "No measured cost.");
-    return;
-  }
-  const matches = (row) => rowMatchesSelection(row?.scope, selection, ["owner", "node", "connector"]);
-  renderGeneric("cost", {
-    measures: (report?.measures || []).filter(matches),
-    costs: (report?.costs || []).filter(matches),
-    unpriced: (report?.unpriced || []).filter(matches),
-  }, "No measured cost.");
+function renderRetryOperations(operations, selection) {
+  const target = document.querySelector("#retry-operations");
+  const visible = (operations || []).filter(operation => rowMatchesSelection(operation, selection, ["owner"])
+    && (!selectedLoopInstance || (operation.owner === selectedLoopInstance.owner && sameInstance(operation.instance, selectedLoopInstance.reference))));
+  if (!visible.length) { empty(target, "No retained Retry operation for this selection."); return; }
+  target.className = "card-stack";
+  target.replaceChildren(...visible.map(operation => {
+    const card = document.createElement("article");
+    card.className = "data-card retry-operation";
+    const title = document.createElement("h3");
+    title.append(`${operation.owner} · `, identifier(operation.reference, "operation"));
+    const status = document.createElement("p");
+    status.className = "card-meta";
+    const phase = {
+      Initial: "opened", Admitted: "admitted", CallOpen: "Call open",
+      Settled: "Call closed, result pending", Held: "result held by manager",
+      AwaitingAdmission: "waiting for next attempt", Closed: operation.closed === "Stopped" ? "stopped without new publication" : "final result published",
+    }[operation.phase] || operation.phase;
+    status.textContent = `Attempt ${operation.attempt}/${operation.limit} · ${phase}${operation.active && operation.due_at_ns != null ? ` · due ${formatLogicalTime(operation.due_at_ns)}` : ""}`;
+    card.append(title, status);
+    const table = document.createElement("table");
+    const head = document.createElement("thead");
+    const header = document.createElement("tr");
+    for (const text of ["Attempt", "Terminal", "Disposition", "Evidence"]) {
+      const cell = document.createElement("th"); cell.textContent = text; header.append(cell);
+    }
+    head.append(header); table.append(head);
+    const body = document.createElement("tbody");
+    for (const attempt of operation.attempts) {
+      const row = document.createElement("tr");
+      for (const text of [attempt.ordinal, attempt.terminal || "not yet emitted", attempt.disposition === "manager" ? "held by Retry" : attempt.disposition === "graph" ? "published" : "pending"]) {
+        const cell = document.createElement("td"); cell.textContent = text; row.append(cell);
+      }
+      const evidence = document.createElement("td");
+      if (attempt.call) evidence.append(identifier(attempt.call, "Call"));
+      for (const [field, label] of [["admitted_record", "Admitted"], ["closed_record", "Call closed"], ["produced_record", "Result"], ["consumed_record", "Consumed"]]) {
+        if (attempt[field] == null) continue;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = `${label} · record ${attempt[field]}`;
+        button.addEventListener("click", () => showRecordBoundary(attempt[field]).catch(showViewError));
+        evidence.append(button);
+      }
+      const emissions = attempt.emissions || [];
+      if (emissions.length) {
+        const details = document.createElement("details");
+        const summary = document.createElement("summary"); summary.textContent = `${emissions.length} retained envelopes`;
+        details.append(summary);
+        for (const id of emissions) details.append(identifier(id, "envelope", () => selectEnvelope(id)));
+        evidence.append(details);
+      }
+      row.append(evidence); body.append(row);
+    }
+    table.append(body);
+    const scroll = document.createElement("div"); scroll.className = "table-scroll"; scroll.append(table);
+    card.append(scroll);
+    return card;
+  }));
 }
 
 function renderGeneric(id, value, message) {

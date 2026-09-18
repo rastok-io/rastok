@@ -864,6 +864,137 @@ fn a_recorded_file_run_replays_after_the_world_and_source_are_removed() {
 }
 
 #[test]
+fn retry_is_public_in_simulation_and_real_recording_without_recalling_the_world() {
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ui-retry.rkg");
+    let simulated = rastok().arg("simulate").arg(&fixture).output().unwrap();
+    assert!(simulated.status.success(), "{simulated:?}");
+    assert!(String::from_utf8_lossy(&simulated.stdout).contains("PASS retained.second_attempt"));
+
+    let root = std::env::temp_dir().join(format!("rastok-cli-retry-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let source = root.join("retry.rkg");
+    let recording = root.join("retry.rkrec");
+    let missing = root.join("unavailable-child");
+    std::fs::write(
+        &source,
+        format!(
+            r#"
+graph app : App {{
+  input in: text
+  output exit: variant
+  connector call : Process + Retry {{
+    command = {:?}; codec = lines; behavior = deterministic
+    timeout = duration("1s")
+    Retry.attempts = 2; Retry.on = [SpawnFailed]
+    Retry.delay = {{ kind = fixed; after = duration("1ms") }}
+  }}
+  in -> call
+  call.out -> nothing; call.err -> nothing; call.exit -> exit
+}}
+"#,
+            missing.to_string_lossy()
+        ),
+    )
+    .unwrap();
+    let mut child = rastok()
+        .arg("run")
+        .arg(&source)
+        .arg("--record")
+        .arg(&recording)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(b"same request\n")
+        .unwrap();
+    // EOF requests Closing. Keep admission open until final publication;
+    // otherwise the already-admitted request correctly drains as one Call.
+    let stdout = child.stdout.take().unwrap();
+    let (sent, received) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        use std::io::BufRead as _;
+        let mut stdout = std::io::BufReader::new(stdout);
+        let mut line = String::new();
+        let result = stdout.read_line(&mut line);
+        let _ = sent.send((result, line));
+    });
+    let first = received.recv_timeout(std::time::Duration::from_secs(30));
+    if first.is_err() {
+        let _ = child.kill();
+    }
+    let (read, output) = first.expect("bounded Retry publishes its terminal");
+    assert!(
+        read.unwrap() > 0,
+        "the graph publishes a final output before Closing"
+    );
+    reader.join().unwrap();
+    drop(child.stdin.take());
+    let original = child.wait_with_output().unwrap();
+    assert!(original.status.success(), "{original:?}");
+    let captured = rastok::recording::Recording::read(&recording).unwrap();
+    assert!(captured.finished());
+    use rastok::journal::{OutboundRecord, OutboundStatus, Record, retry_protocol::Fact};
+    assert_eq!(
+        captured
+            .records()
+            .iter()
+            .filter(|record| matches!(record,
+        Record::Outbound(OutboundRecord::Call(call)) if call.status == OutboundStatus::Open))
+            .count(),
+        2
+    );
+    let facts: Vec<_> = captured
+        .records()
+        .iter()
+        .filter_map(|record| match record {
+            Record::Transaction(tx) => tx.retry_record.as_ref(),
+            _ => None,
+        })
+        .flat_map(|packet| &packet.facts)
+        .collect();
+    assert_eq!(
+        facts
+            .iter()
+            .filter(|fact| matches!(fact, Fact::Held(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        facts
+            .iter()
+            .filter(|fact| matches!(fact, Fact::Consumed(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        facts
+            .iter()
+            .filter(|fact| matches!(fact, Fact::Published(_)))
+            .count(),
+        1
+    );
+    std::fs::remove_file(&source).unwrap();
+    let replay = rastok()
+        .arg("replay")
+        .arg(&recording)
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert!(replay.status.success(), "{replay:?}");
+    assert_eq!(replay.stdout, output.as_bytes());
+    let seal = rastok::golden::project(captured.records()).seal_hex();
+    assert!(String::from_utf8_lossy(&replay.stderr).contains(&seal));
+    assert!(!missing.exists());
+    std::fs::remove_file(&recording).unwrap();
+    std::fs::remove_dir(&root).unwrap();
+}
+
+#[test]
 fn the_gallery_file_pipeline_replaces_once_and_replay_does_not_touch_the_world() {
     let root = std::env::temp_dir().join(format!("rastok-gallery-file-{}", std::process::id()));
     std::fs::create_dir(&root).unwrap();

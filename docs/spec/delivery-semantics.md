@@ -312,7 +312,7 @@ At restart, `open` outbound records without closure = the set of unknowns :
 **15 September contact correction.** The previous table proposed blind recall
 for idempotence or a present key. That was not the implemented
 `Dispatcher::resume` contract and conflicts with D-2026-09-15-1. It is superseded
-here, not admitted as a new recovery capability. Under the future Retry policy,
+here, not admitted as a new recovery capability. Under the current Retry policy,
 only a selected *closed* terminal can authorize a distinct later attempt;
 that attempt is not a second start of the original Call. Durable storage and
 Saga triage remain separate gates.
@@ -462,7 +462,7 @@ output case has at least one explicit disposition in the validated plan:
 - a temporal-manager command;
 - `nothing`.
 
-> **Approved Retry target, not an executable v18 disposition:**
+> **Executable v19 Retry disposition:**
 > [D-2026-09-14-4](decisions.md#pre-c1-review-amendments--14-september)
 > gives intermediate attempt envelopes an explicit retained disposition to
 > their Retry manager and a separate consumption fact. They are emitted and
@@ -470,7 +470,8 @@ output case has at least one explicit disposition in the validated plan:
 > still require the ordinary authored destinations. This creates no manager
 > port, user command or spatial edge; the
 > [refactor contract](../architecture/retry-extension-refactor.md#31-every-attempt-emission-has-a-retained-disposition)
-> owns the producer/consumer crash window to qualify in C1.
+> owns the producer/consumer crash window, qualified by the
+> [C4 ledger](../architecture/retry-c4-qualification.md).
 
 Missing disposition is recursive `E-UNWIRED-OUTPUT`, including a nested
 Graph boundary and a particular uncovered union case. A deliberate discard is

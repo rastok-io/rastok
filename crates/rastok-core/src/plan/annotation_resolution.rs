@@ -13,7 +13,9 @@ use crate::data_policy::{
 use crate::datatype::DataType;
 use crate::envelope::WriteTarget;
 use crate::node;
-use crate::schema_annotation::{AnnotationTable, SchemaPathSegment};
+use crate::schema_annotation::{
+    AnnotationTable, DataAnnotation, SchemaAnnotationError, SchemaPathSegment,
+};
 
 use super::type_resolution::ResolvedPortTable;
 use super::{
@@ -263,13 +265,11 @@ impl<'a> Solver<'a> {
                     strict = true;
                     continue;
                 }
-                return Ok(Outcome {
-                    ports: self
-                        .ports
-                        .into_iter()
-                        .map(|(key, state)| (key, state.current))
-                        .collect(),
-                });
+                let mut ports = BTreeMap::new();
+                for (key, state) in self.ports {
+                    ports.insert(key, state.current);
+                }
+                return Ok(Outcome { ports });
             }
         }
         Err(ResolutionError {
@@ -1006,6 +1006,94 @@ fn has_policy_declaration(plan: &ExecutionPlan, resolved: &ResolvedPortTable) ->
         })
 }
 
+fn validate_definitions(plan: &ExecutionPlan) -> Result<(), ResolutionError> {
+    let mut definitions = BTreeMap::new();
+    let mut measures = BTreeMap::new();
+    for port in &plan.boundary {
+        validate_table_definitions(&port.annotations, &mut definitions, &mut measures)?;
+    }
+    for node in &plan.nodes {
+        for port in &node.ports {
+            validate_table_definitions(&port.annotations, &mut definitions, &mut measures)?;
+        }
+    }
+    for node in &plan.nodes {
+        for var in &node.vars {
+            validate_table_definitions(&var.annotations, &mut definitions, &mut measures)?;
+        }
+    }
+    for owner in &plan.owners {
+        for port in &owner.ports {
+            validate_table_definitions(&port.annotations, &mut definitions, &mut measures)?;
+        }
+    }
+    for owner in &plan.owners {
+        for value in &owner.vals {
+            validate_table_definitions(&value.annotations, &mut definitions, &mut measures)?;
+        }
+    }
+    for handler in &plan.handlers {
+        for step in handler.dispatch.steps() {
+            if let DispatchStep::Let { annotations, .. } = step {
+                validate_table_definitions(annotations, &mut definitions, &mut measures)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_table_definitions<'a>(
+    table: &'a AnnotationTable,
+    definitions: &mut BTreeMap<&'a str, &'a DataAnnotation>,
+    measures: &mut BTreeMap<&'a str, &'a DataAnnotation>,
+) -> Result<(), ResolutionError> {
+    for (path, set) in table.entries() {
+        for annotation in set.annotations() {
+            let measurement = match annotation {
+                DataAnnotation::Declared(application) => application.measure_id(),
+                _ => None,
+            };
+            if let Some(id) = measurement
+                && measures
+                    .insert(id, annotation)
+                    .is_some_and(|previous| previous != annotation)
+            {
+                return Err(ResolutionError {
+                    location: format!("measure `{id}` at {path}"),
+                    reason: PropagationError::InvalidDerivedTable(
+                        SchemaAnnotationError::InvalidApplication {
+                            definition: id.to_string(),
+                            detail: "one measure id has inconsistent units or interpretations",
+                        },
+                    ),
+                });
+            }
+            if let DataAnnotation::Declared(application) = annotation
+                && definitions
+                    .insert(application.definition(), annotation)
+                    .is_some_and(|previous| match previous {
+                        DataAnnotation::Declared(previous) => {
+                            previous.binding() != application.binding()
+                                || previous.argument_type() != application.argument_type()
+                        }
+                        _ => true,
+                    })
+            {
+                return Err(ResolutionError {
+                    location: format!("annotation `{}` at {path}", application.definition()),
+                    reason: PropagationError::InvalidDerivedTable(
+                        SchemaAnnotationError::InvalidApplication {
+                            definition: application.definition().to_string(),
+                            detail: "one declaring name has inconsistent argument schemas or bindings",
+                        },
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn resolve(
     plan: &ExecutionPlan,
     resolved: &ResolvedPortTable,
@@ -1016,6 +1104,7 @@ pub(super) fn resolve(
     if !has_policy_declaration(plan, resolved) {
         return Ok(resolved.clone());
     }
+    validate_definitions(plan)?;
     let outcome = Solver::new(plan, resolved).solve()?;
     let mut effective = resolved.clone();
     for (key, annotations) in outcome.ports {

@@ -56,15 +56,25 @@ impl TimeAdvance {
     /// # Errors
     /// The same transaction, expiry or binding refusals as [`Vm::advance`].
     /// A refused transaction/expiry retains its cursor for retry.
-    pub fn step<B: OutboundConnectorBindings + ?Sized>(
+    pub fn step(
         &mut self,
         vm: &mut Vm<'_>,
         journal: &mut dyn Journal,
-        bindings: &mut B,
+        bindings: &mut dyn OutboundConnectorBindings,
     ) -> Result<bool, VmError> {
         loop {
             match &self.phase {
                 Phase::Ready => {
+                    // A recovered VM can already be at a retained deadline.
+                    // Resolve that dated frontier before admitting ready
+                    // recurrences, just as the uninterrupted sweep does.
+                    // Lifecycle work queued by an expiry waits for the rest
+                    // of that frontier. `peek_due` fences only the lifetime
+                    // of an instance whose own start has not committed yet.
+                    if self.instant.is_none() && vm.peek_due(vm.now.min(self.target)).is_some() {
+                        self.phase = Phase::Due;
+                        continue;
+                    }
                     if vm.step_with_bindings(journal, bindings)? {
                         return Ok(true);
                     }

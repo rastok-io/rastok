@@ -280,22 +280,6 @@ pub fn compile_with_assets(
             return Err(bag);
         }
     };
-    if let Some(owner) = plan
-        .owners
-        .iter()
-        .find(|owner| owner.retry_spec().is_some())
-    {
-        bag.push(
-            Diagnostic::new(
-                check::E_CHECK_DEFERRED,
-                Phase::Check,
-                "Retry requires the complete retained-operation manager before execution",
-            )
-            .with_field("construct", "Retry manager")
-            .with_field("owner", owner.path.to_string()),
-        );
-        return Err(bag);
-    }
     match plan.loop_repeat_warnings() {
         Ok(warnings) => {
             for warning in warnings {

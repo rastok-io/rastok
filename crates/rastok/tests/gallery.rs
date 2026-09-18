@@ -19,6 +19,7 @@ fn opening_examples_match_versioned_scenario_goldens() {
         ("sensor-alarm", "sensor-alarm", 3),
         ("agent-dialogue", "agent-gateway", 2),
         ("agent-gateway", "agent-gateway", 2),
+        ("agent-http", "agent-http", 6),
     ] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_rastok"));
         command.current_dir(&root).args([
@@ -35,6 +36,11 @@ fn opening_examples_match_versioned_scenario_goldens() {
                 ])
                 .env("RASTOK_SHOWCASE_PARTNER_TOKEN", "lab-only-not-a-credential")
                 .env("RASTOK_SHOWCASE_PARTNER_TOKEN_VERSION", "fixture-v1");
+        } else if graph == "agent-http" {
+            command
+                .args(["--deployment", "examples/agent-http.deployment.json"])
+                .env("RASTOK_SHOWCASE_MODEL_TOKEN", "lab-only-not-a-credential")
+                .env("RASTOK_SHOWCASE_MODEL_TOKEN_VERSION", "fixture-v1");
         }
         let output = command.output().unwrap();
         assert!(output.status.success(), "{graph}: {output:?}");
@@ -63,14 +69,14 @@ fn each_gallery_break_it_edit_exposes_a_record_difference_without_blessing() {
         (
             "keyed-retry",
             "two-tenants",
-            "Loop.fuel = 2",
-            "Loop.fuel = 1",
+            "Retry.attempts = 2",
+            "Retry.attempts = 1",
         ),
         (
             "webhook-to-partner",
             "webhook-to-partner",
-            "Loop.fuel = 2",
-            "Loop.fuel = 1",
+            "Retry.attempts = 2",
+            "Retry.attempts = 1",
         ),
         (
             "sensor-alarm",
@@ -89,6 +95,12 @@ fn each_gallery_break_it_edit_exposes_a_record_difference_without_blessing() {
             "agent-gateway",
             "Hello from the simulated agent.",
             "A different answer.",
+        ),
+        (
+            "agent-http",
+            "agent-http",
+            "Hello from the simulated model.",
+            "A different model answer.",
         ),
     ] {
         let source = std::fs::read_to_string(root.join(format!("examples/{graph}.rkg"))).unwrap();
@@ -110,6 +122,11 @@ fn each_gallery_break_it_edit_exposes_a_record_difference_without_blessing() {
                 ])
                 .env("RASTOK_SHOWCASE_PARTNER_TOKEN", "lab-only-not-a-credential")
                 .env("RASTOK_SHOWCASE_PARTNER_TOKEN_VERSION", "fixture-v1");
+        } else if graph == "agent-http" {
+            command
+                .args(["--deployment", "examples/agent-http.deployment.json"])
+                .env("RASTOK_SHOWCASE_MODEL_TOKEN", "lab-only-not-a-credential")
+                .env("RASTOK_SHOWCASE_MODEL_TOKEN_VERSION", "fixture-v1");
         }
         let output = command.output().unwrap();
         assert_eq!(output.status.code(), Some(1), "{graph}: {output:?}");

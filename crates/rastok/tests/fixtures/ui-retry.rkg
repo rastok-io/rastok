@@ -1,0 +1,44 @@
+// The first decoded response is retained by Retry, not delivered to App.out.
+type Reply = struct {
+  tokens: int @measure(id = tokens, unit = "token")
+  detail: text @sensitive(level = confidential)
+}
+
+graph app : App {
+  input in: variant
+  output out: Reply
+  connector call : HttpClient + Retry {
+    url = "https://retry.invalid/model"
+    codec = json
+    output out: Reply
+    behavior = probabilistic
+    idempotent = true
+    timeout = duration("1s")
+    Retry.attempts = 2
+    Retry.on = [ServerError]
+    Retry.delay = { kind = fixed; after = duration("100ms") }
+  }
+  in -> call -> out
+  call.exit -> nothing
+}
+
+lab app {
+  simulation retained on app {
+    mock call {
+      on in where now() == timestamp("1970-01-01T00:00:00Z") {
+        out = { tokens = 10; detail = "private-held-response" }
+        exit = ServerError { status = 503 }
+      }
+      on in {
+        out = { tokens = 20; detail = "private-final-response" }
+        exit = Completed { status = 200 }
+      }
+    }
+    scenario second_attempt {
+      app.in = json! {}
+      expect nothing app.out
+      advance duration("100ms")
+      expect app.out count == 1 where data.tokens == 20
+    }
+  }
+}

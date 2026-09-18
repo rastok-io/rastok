@@ -145,7 +145,11 @@ fn narrow_decimal(target: DecimalType, value: Value) -> Option<Value> {
     })
 }
 
-fn rescale_decimal(unscaled: i128, source_scale: i32, target_scale: i32) -> Option<i128> {
+pub(crate) fn rescale_decimal(
+    unscaled: i128,
+    source_scale: i32,
+    target_scale: i32,
+) -> Option<i128> {
     if unscaled == 0 || source_scale == target_scale {
         return Some(unscaled);
     }
