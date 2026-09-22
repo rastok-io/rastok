@@ -66,10 +66,10 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustup toolchain install 1.97.1 --component rustfmt,clippy --no-self-update
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --workspace --all-features
-      - run: cargo doc --workspace --no-deps
-      - run: cargo run --quiet -- simulate examples/echo.rkg
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace --all-features
+      - run: cargo doc --locked --workspace --no-deps
+      - run: cargo run --locked --quiet -- simulate examples/echo.rkg
 
   # The kernel must stay buildable for bare metal across the three
   # portability boundaries we claim: current Arm M-profile, an older
@@ -88,7 +88,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustup toolchain install 1.97.1 --no-self-update
       - run: rustup target add ${{ matrix.target }} --toolchain 1.97.1
-      - run: cargo check -p rastok-core --no-default-features --target ${{ matrix.target }}
+      - run: cargo check --locked -p rastok-core --no-default-features --target ${{ matrix.target }}
 
   # The spike's proof must not rot outside the workspace: build it
   # warnings-as-errors and execute it under QEMU, asserting the
@@ -103,7 +103,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y qemu-system-arm
       - name: build (warnings are errors)
         working-directory: spikes/rp2350-emu
-        run: RUSTFLAGS="-D warnings -C link-arg=-Tlink.x" cargo build --release
+        run: RUSTFLAGS="-D warnings -C link-arg=-Tlink.x" cargo build --locked --release
       - name: run under QEMU
         working-directory: spikes/rp2350-emu
         run: |
@@ -125,19 +125,19 @@ jobs:
       - run: rustup toolchain install 1.97.1 --no-self-update
       - name: runner unit tests
         working-directory: bench/vibe/runner
-        run: cargo test
+        run: cargo test --locked
       - name: build the CLI
-        run: cargo build -p rastok
+        run: cargo build --locked -p rastok
       - name: every reference satisfies its referee
         run: |
           for t in bench/vibe/tasks/T*/; do
             echo "== $t"
-            cargo run -q -p rastok -- simulate "$t/reference.rkg" "$t/referee.rkg"
+            cargo run --locked -q -p rastok -- simulate "$t/reference.rkg" "$t/referee.rkg"
           done
       - name: dry rehearsal of the loop
         working-directory: bench/vibe
         run: |
-          cargo build --manifest-path runner/Cargo.toml
+          cargo build --locked --manifest-path runner/Cargo.toml
           ./runner/target/debug/vibe-runner --tasks tasks \
             --author canned:fixtures/dry --rastok ../../target/debug/rastok \
             --prompt prompts/v4.md --out results/ci --wave ci-dry-v19

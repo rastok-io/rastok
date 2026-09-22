@@ -30,6 +30,7 @@ explicitly authorized destination.
 | Private vulnerability reporting | Pending | Enable it for `rastok-io/rastok`; verify the reporting entry and maintainer notifications with a synthetic report |
 | Labels | Pending | Create or confirm `bug`, `design`, `documentation`, `needs-triage`; verify the forms assign them. Missing labels are not created by an issue form |
 | DCO and CI on the hosted repository | Pending | Run a signed sample contribution and an unsigned one, verify pass/refusal; record the real checks produced by the complete workflow |
+| PR merge strategy | Decided by Yoann on 18 September; activation pending | Keep strict DCO for every commit. Enable only Rebase and merge, disable merge commits and squash, and require linear history. Verify author-matching sign-offs and Assisted-by trailers on the resulting main commits |
 | Historical DCO exception | Maintainer decision pending | Commit `bb1b1edb3606` (6 August 2026) has no author sign-off; decide how to address it before the first hosted push, without silently exempting or rewriting it |
 | Protection of `main` | Pending | Require PR review and the actual DCO/full CI checks; disable force pushes and deletion; explicitly review any bypass permissions |
 | Contribution forms | Pending | Check each form and PR template in the hosted UI, including private-report links and no sensitive data in sample reports |
@@ -43,11 +44,21 @@ The first push checks all introduced history. If legacy commits lack DCO
 sign-offs, surface that finding for a maintainer decision; do not silently
 skip them or rewrite history to make a check green.
 
+Fable's review identified a separate integration risk: a new merge commit
+without its author's sign-off fails the main push check even when all PR
+commits passed. Yoann selected strict DCO and rebase-only integration, not a
+`--no-merges` exemption. Rebase adds the reviewed commits without a merge
+commit; squash is not a substitute for preserving their attribution footers.
+The selected policy still needs hosted configuration and a test PR. No
+GitHub setting or existing commit was changed here. See GitHub's
+[merge strategies](https://docs.github.com/en/pull-requests/reference/pull-request-merges).
+
 ## Local verification — 18 September
 
-All nine Git-fixture regressions pass: author matching, missing or wrong
+All ten Git-fixture regressions pass: author matching, missing or wrong
 sign-offs, parsed footers, unsigned earlier and merged-parent commits,
-first-push history and invalid revision arguments. Workflow and issue-form
+first-push history and invalid revision arguments, plus an unsigned merge
+whose two branches are correctly signed. Workflow and issue-form
 YAML parse locally. The hosted form rendering and Actions run remain untested.
 
 The read-only history audit through `a1c1728` checks **328 commits** and

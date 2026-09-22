@@ -159,6 +159,12 @@ author, including commits brought in through a merge. It checks the declared
 sign-off, not whether human review actually happened. The repository owner
 must require this check in branch protection before public contributions open.
 
+The approved opening policy is **rebase-only PR integration**: preserve each
+reviewed commit and its author-matching sign-off and assistance credits. Merge
+commits are not exempt from DCO. GitHub's merge-commit and squash buttons are
+to be disabled before opening; those hosted settings have not been activated
+by this local policy change. Existing history is not rewritten by this rule.
+
 The same check runs locally without network access, using full commit SHAs:
 
 ```sh

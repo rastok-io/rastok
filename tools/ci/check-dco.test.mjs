@@ -91,6 +91,18 @@ test("a zero base checks the entire newly pushed history", t => {
   assert.match(result.stderr, /1 of 2 commits/);
 });
 
+test("an unsigned merge is rejected even when both branches are signed", t => {
+  const repo = repository(t);
+  repo.git("checkout", "-b", "side");
+  repo.commit(`Signed side change\n\n${signOff}`);
+  repo.git("checkout", "main");
+  repo.commit(`Signed main change\n\n${signOff}`);
+  repo.git("merge", "--no-ff", "side", "-m", "Unsigned integration commit");
+  const result = repo.check();
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /1 of 3 commits/);
+});
+
 test("a known empty range passes but missing or malformed revisions refuse", t => {
   const repo = repository(t);
   assert.equal(repo.check(repo.base, repo.base).status, 0);
