@@ -86,7 +86,7 @@ other.
 
 ### 1.1 V16 application profile
 
-The Contracts of the six executable Connectors add two mandatory cases in v16:
+The v16 rework added two mandatory kinds of evidence to executable Contracts:
 
 | Case | Required material |
 |---|---|
@@ -94,15 +94,19 @@ The Contracts of the six executable Connectors add two mandatory cases in v16:
 | Repeat visibility | every terminal case classified `before_effect | outcome_unknown | after_effect` |
 
 These facts are Registry-free validation material, productibility evidence,
-and Loop-host qualification. Removing `unwired` and adding them changes the
+and Loop-host qualification. Removing `unwired` and adding them changed the
 six ids to `rastok/process@2`, `rastok/file@2`,
 `rastok/http-client@2`, `rastok/http-server@2`,
 `rastok/websocket-client@2`, and `rastok/websocket-server@2`. An `@1`
 package is never interpreted as `@2`.
 
-The exact implemented profile tables, including conservative terminal classifications,
-live in
-[rework-r1-host-contracts.md](../architecture/rework-r1-host-contracts.md).
+Those are historical ids, not the current sheets: v19 uses Process job/service
+`@4`/`@5` and File/network `@3`, as listed above. The
+[R1 tables](../architecture/rework-r1-host-contracts.md) retain the initial
+application evidence; the [Retry Contract tables](../architecture/retry-c1-algebra.md)
+amend terminal visibility and Call idempotence, including HttpClient
+`ServerError`. The [C4 ledger](../architecture/retry-c4-qualification.md)
+records their common qualification.
 
 ## 2. `behavior` — determinism, separate from idempotence
 

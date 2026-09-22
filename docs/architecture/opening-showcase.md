@@ -67,7 +67,7 @@ dead when no handler emits on that port.
 | Three release binaries | Partial | Both macOS targets rebuild with hosted-ui/hosted-websocket, without HTTP/3; starter and all three echo scenarios pass. Intel runs under Rosetta, not native hardware. Linux remains unbuilt here: no Linux target, container engine or cross-toolchain is installed; the prepared remote workflow is not invoked. |
 | CHANGELOG, crate metadata and release tag | Partial | `0.1.0-alpha` manifests, exact core dependency, license/readmes and CHANGELOG prepared. Both crate archives build outside the workspace using the packaged local core. Confirmed public URLs are now in local metadata/readmes; prior archives predate this URL-only update. Publication stays disabled; authorized tag/publication remain pending |
 | Public documentation destination | Partial — URL confirmed, availability unverified | `https://docs.rastok.com` must resolve before the authorized 15 October publication: minimal Starlight quickstart/gallery preferred, 301 to the actual `www.rastok.com` gallery as fallback. [Site handoff](../site/README.md#public-destination-handoff--18-september-2026); no deployment or DNS change performed |
-| Contribution safeguards and private contact | Partial — files prepared, activation pending | Local DCO check and nine regressions, issue forms and PR template are present. `contact@rastok.com` is planned for Yoann, not yet activated or receipt-tested. Hosted labels, main protection, private vulnerability reporting and one historical unsigned commit remain in the [owner checklist](github-opening-checklist.md). No GitHub, mailbox or DNS change performed |
+| Contribution safeguards and private contact | Partial — files prepared, activation pending | Local DCO check and ten regressions, issue forms and PR template are present. Yoann selected strict DCO and rebase-only PR integration; hosted activation remains pending. `contact@rastok.com` is planned for Yoann, not yet activated or receipt-tested. Labels, main protection, private vulnerability reporting and one historical unsigned commit remain in the [owner checklist](github-opening-checklist.md). No GitHub, mailbox or DNS change performed |
 | Paid benchmark wave | Partial — dry harness requalified | All 20 references pass their referees; 4 runner tests and 3 canned attempts pass (17 deliberately unattempted). Prompt v4 uses executable idempotence/Retry, preserving frozen v1–v3. Exact three model IDs/adapters and spending authorization remain user choices; no paid run started. |
 | Optional concepts pages | Removed from this pass | No spare scope assumed; four short pages may follow the gallery |
 State vocabulary: Done = fait; Partial = partiel (including an explicitly
@@ -104,6 +104,52 @@ single unsigned historical commit before public participation opens.
 The in-app Browser is unavailable here; the existing Chrome harness is not
 passed off as an external reviewer. No public push/tag/publication or paid
 model call is performed.
+
+### Prereview corrections — 18 September
+
+Fable's prereview showed that the earlier claim of fully aligned public prose
+was premature: the whitepaper and example catalogue still named v18 or an
+unblessed candidate, and an instance example retained the removed `effect`
+attribute. Those three discrepancies are corrected. Regression tests check
+the current package/Contract names, reject retired syntax in public DSL
+excerpts, and compile the whitepaper's Retry example against its real Contract.
+The superseded roadmap checkpoints now read as history, and an orphan checker
+comment is removed. Compiling CI commands use `--locked`, checked by a test.
+
+Yoann chose strict DCO with rebase-only integration; hosted activation remains
+pending in the [opening checklist](github-opening-checklist.md). The possible
+quadratic Retry journal-scan cost is recorded as an M2 qualification debt in
+the [release inventory](release-qualification.md#retry-journal-scan-debt-before-m2).
+The suggested consolidation of two terminal-case lookups remains a separate
+core cleanup, not a behavior fix delivered here. No runtime logic, format,
+golden or repository history changes in this pass.
+
+Focused verification: **10 site-content tests and 10 DCO regressions pass**.
+Formatting, strict workspace/all-targets/all-features Clippy and rustdoc also
+pass on this tree, with locked offline dependency resolution where applicable.
+The full 1,545-test result above is the preceding qualification, not a fresh
+workspace run for these documentation, CI and regression-test changes.
+
+### Current-document cross-check — 21 September
+
+The prereview corrections were still present in the local tree. A further
+source/spec comparison removed remaining current-v17 labels, the whitepaper's
+plan-phase `effect` attribute, and `E-LOOP-EFFECT` from Loop's active diagnostic
+table. Native Retry is no longer described as an unimplemented target in the
+delivery contract; its manager advances retained attempt facts, not authored
+Loop commands. The optional partner key is distinct from an idempotence
+guarantee and from future Saga requirements. Identity tables now consistently
+describe recurrence timer references and retained Call closure time, without
+changing any encoding. The diagnostic registry also reflects the corrected
+bounded-join rule, two-field measurements and Contract/Driver separation.
+
+Regression evidence: three documentation checks failed on the stale text,
+then **12 site-content tests, 14 destination tests and 10 DCO tests passed**.
+The whitepaper Retry fragment is compiled against the real Contract catalogue.
+Formatting, strict workspace/all-targets/all-features Clippy and rustdoc pass. No full
+workspace test run, new runtime qualification, golden change or publication
+is claimed. Historical reports retain their original versions and counts;
+F-06 and hosted activation remain separate from this documentary correction.
 
 ## Historical candidate qualification — 17 September
 

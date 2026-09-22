@@ -1,10 +1,12 @@
 # The Execution Model — mailboxes, ordering, time, and the two planes
 
-> **Status (2026-09-09): normative, current categorical package v17.** Graph scopes own
+> **Status (2026-09-21): normative, current categorical package v19.** Graph scopes own
 > lifecycle, not application transactions. Operators and Connectors share the
-> transactional execution mechanism; temporal managers own their commands.
+> transactional execution mechanism; temporal managers own their protocol transactions.
 > [R9 qualification](../architecture/rework-r9-qualification.md) records the
 > implemented Dispatch, routing, Loop and recovery boundaries.
+> The [C4 ledger](../architecture/retry-c4-qualification.md) qualifies native
+> Retry and typed measurement retention on those same boundaries.
 > Companion to
 > [envelope.md](envelope.md) (identity, journal-relative contract) — this doc
 > pins the rules envelope.md deferred to the execution model : the
@@ -22,13 +24,14 @@ what order — and what can be reproduced ?**
 A transaction belongs to an **Executor** or to a temporal Extension manager.
 An Operator transaction consumes an activation and evaluates one checked
 Dispatch; a Connector transaction consumes a spatial delivery or typed Driver
-activation and applies the Connector's Contract; a manager transaction consumes one
-durable Extension command. In each case the abstract shape is
+activation and applies the Connector's Contract; a manager transaction advances
+its journal-owned protocol from a retained command or application/exchange
+obligation. Retry has no authored command. In each case the abstract shape is
 `f(state, activation) → state', ordered products`.
 "Transaction" is meant literally, not as a metaphor — **A**tomic (one commit,
 all-or-nothing : the transaction record, delivery-semantics), **C**onsistent
 (types + Dispatch/contracts), **I**solated (one instance mailbox or manager
-command inbox, one worker at a time),
+operation, one worker at a time),
 **D**urable per the `durability` scope. *(Other traditions call
 this unit a Petri* transition firing *or an actor* turn *; Rastok says
 transaction because that is what it does.)*
@@ -726,7 +729,7 @@ only on empty mailboxes, and byte-identical per-address traces across runs.
 
 - [envelope.md](envelope.md) — identity recipe, journal-relative contract,
   the `l:` trigger registry, parent rules.
-- [effects-and-sagas.md](effects-and-sagas.md) — effect classes and the
+- [effects-and-sagas.md](effects-and-sagas.md) — operation guarantees and the
   deferred Saga Extension direction.
 - [loop.md](loop.md) — `Loop.delay` as a dated event; finite fuel and a
   checked `measure` are data-driven termination witnesses orthogonal to

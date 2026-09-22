@@ -1,15 +1,16 @@
 # Rastok — White Paper
 
-> **Documentation follow-up (2026-09-14), package v18.** The Node/Executor/Extension
-> model, Loop exhaustion through host terminals and exact-instance closure are
-> executable. [R9 qualification](docs/architecture/rework-r9-qualification.md)
-> distinguishes tested capabilities, proof-subset limits and external release
-> qualifications; the [v17 amendment](docs/architecture/loop-host-terminal-v17.md)
-> records that host-terminal change. This white paper is not a production-readiness claim.
-> The [v18 amendment](docs/architecture/instance-stop-command.md), 10 September,
-> adds exact-instance closure commands without restoring Graph execution.
-> The [resident Process Contract](docs/architecture/process-service.md),
-> 14 September, selects `process@3` within v18, independently of the job Contract.
+> **Documentation follow-up (2026-09-21), package v19 / diagnostic recording v3.**
+> The Node/Executor/Extension model, host-terminal Loop, exact-instance closure,
+> native outbound Call Retry and typed measurement retention are executable.
+> The [common C4 qualification](docs/architecture/retry-c4-qualification.md)
+> records the single fixture blessing and local checks; external
+> [opening gates](docs/architecture/opening-showcase.md) remain separate.
+> Process jobs use `rastok/process@4`; resident Sessions use `rastok/process@5`.
+> Earlier [R9](docs/architecture/rework-r9-qualification.md),
+> [host-terminal](docs/architecture/loop-host-terminal-v17.md) and
+> [exact-instance closure](docs/architecture/instance-stop-command.md) ledgers
+> preserve their historical version movements. This is not a production-readiness claim.
 >
 > **Reading examples.** Linked `.rkg` programs in the
 > [example catalogue](docs/examples/README.md) are checked and simulated.
@@ -369,8 +370,8 @@ accounting.exit -> nothing
 
 The accounting example assumes an idempotent upsert service keyed by
 `request_id`. Its mock proves graph behavior, not the external service's
-idempotency or a payment guarantee. Irreversible/compensable effect profiles
-and Saga remain deferred; this example does not pretend to execute them.
+idempotency or a payment guarantee. Compensation and irreversible-step
+contracts belong to future Saga work; this example does not execute them.
 
 The Lab supplies the service response and exercises three cases:
 
@@ -1071,7 +1072,7 @@ through a lexical Graph `val`.
 Connector contracts apply the same distinction by declaring the latest
 evaluation site a field permits: plan, boot, instance, or invocation. Checking
 selects the earliest site where the written expression closes. Profile,
-port-type, effect, behavior, and other plan-shaping attributes permit only
+port-type, idempotence, behavior, and other plan-shaping attributes permit only
 plan resolution. An operational setting (`cwd`, path, URL, command, arguments,
 environment) may permit instance binding; its typed expression may consume
 enclosing immutable context and is evaluated once when the Connector instance
@@ -1295,8 +1296,9 @@ journaled:
   variable, Operator-local state does across envelopes.
 - **In external event/session sequence** (§2.7). A user replying turn after
   turn or a long-lived Session produces distinct typed facts rather than a
-  spatial cycle. A finite outbound Call may instead opt into the Loop
-  Extension when its Contract and `effect` make repetition safe.
+  spatial cycle. A finite outbound Call may use `+ Retry` to repeat one
+  prepared operation under a checked terminal-case policy. This is distinct
+  from an authored `+ Loop` iteration, not another spelling for it.
 - **In the `Loop` Extension.** Finite temporal recursion—apply this Operator,
   Graph, or outbound finite Call again until it reaches a terminal verdict—uses
   the host's existing entry and outputs:
@@ -1340,9 +1342,39 @@ journaled:
   Dispatch leaf proves positivity and an exact literal decrease; the
   deterministic `no_std` validator re-derives the certificate. Opaque Driver
   progress requires fuel, and every Call still needs a finite completion
-  contract. Repeating an ambiguous or visible effect is legal only when its
-  effect is `none` or `idempotent`. Optional `Loop.delay` changes neither fuel,
+  contract. Loop proves bounded state progression, not safe repetition of
+  external effects. An authored Again path that may repeat a visible Call
+  without the plan-owned `idempotent = true` guarantee produces
+  `W-LOOP-REPEAT`; it is not Retry's hard refusal. Optional `Loop.delay` changes neither fuel,
   Call timeout nor instance lifetime ([loop.md](docs/spec/loop.md)).
+
+**Loop advances state; Retry repeats an operation.** `+ Loop` remains admitted
+on finite outbound Calls under the Loop host rules. Use `+ Retry` when the
+request must remain identical and a static list of terminal cases decides
+whether another Call is allowed:
+
+```rastok
+connector partner : HttpClient + Retry {
+  url = "https://partner.example/orders"
+  behavior = probabilistic
+  codec = bytes
+  idempotent = true
+  timeout = duration("1s")
+  Retry.attempts = 3
+  Retry.on = [TimeoutExpired, ServerError]
+  Retry.delay = { kind = fixed ; after = duration("100ms") }
+}
+```
+
+The author must justify that idempotence guarantee against the real operation;
+a URL or partner key alone does not prove it. BeforeEffect terminals can be
+retried without the guarantee; OutcomeUnknown and AfterEffect terminals require
+it, otherwise `E-RETRY-EFFECT`. The request, resolved settings and idempotency
+material are retained, not recomputed. Each attempt is journaled, but only the
+final batch is delivered to the graph; the last failure remains its original
+typed case, with no `RetryExpired` wrapper. Retry's delay starts at the retained
+logical Call closure. A Loop may contain a Retry Connector; same-owner
+`Loop + Retry` remains refused. See [Extensions](docs/spec/extensions.md).
 
 The maxim form: *cycles do not appear in the graph — they appear in
 state, in events, and in sequence*. Every admitted `Loop` has a finite
@@ -1369,7 +1401,7 @@ exactly what makes replay deterministic (envelope.md §2.0/§8). The
 Connector draws the boundary; the journal captures what crosses it.
 
 **The Contract is not the Driver.** Source names resolve through a compiler
-catalogue to a stable versioned contract id such as `rastok/process@2`. The
+catalogue to a stable versioned contract id such as `rastok/process@4`. The
 Contract declares inbound/outbound roles, typed ports, attributes and
 lifecycle rules. A physical Driver supplies real I/O; a Lab model supplies
 scripted arrivals and outcomes through the same pure protocol and admission
@@ -1406,7 +1438,7 @@ The reference CLI makes that assembly visible: Process is linked by default,
 an explicit `--file-root` adds File and supplies deployment data that never
 enters the graph or plan identity, and hosted feature presets add the selected
 HTTP/WebSocket Connector implementations without changing their Contract ids. The full hosted
-image registers Drivers for all six implemented Contracts exactly once; a reduced image
+image registers each supported Contract/profile id exactly once; a reduced image
 refuses a missing required Driver before VM construction.
 
 Hosted network Drivers use the same separation. The synchronous Driver/VM
@@ -2683,29 +2715,33 @@ ledgers are evidence for Rastok; future design sections are not.
 
 ## 10. Status
 
-Rastok is experimental, not production-ready. The current package is **v18**;
-the retained type/value registry is v7. The original six Connector Contracts
-remain `@2`; resident Process selects `process@3` without changing the job
-Contract or package. These version registers are independent.
+Rastok is experimental, not production-ready. The current package is **v19**;
+diagnostic recordings use v3 and the retained type/value registry is v7.
+Process job/service Contracts are `rastok/process@4` / `rastok/process@5`;
+File and the four HTTP/WebSocket Contracts use `@3`. These version registers
+are independent. The [C4 ledger](docs/architecture/retry-c4-qualification.md)
+records the single blessing and the unchanged echo/JSONL/gauge causal witnesses.
 
 | Executable today | Qualification / exact limit |
 |---|---|
 | Node / Graph / Executor / Connector / Extension; recursive Dispatch; explicit destinations; case routing; ordered multi-emission | [R9 ledger](docs/architecture/rework-r9-qualification.md), Registry-free validation and hostile-package tests |
 | Operator, Graph and outbound Call Loop; exact run context, fuel, delay and integer measure | [Loop contract](docs/spec/loop.md); guarded/timed joins, lifecycle-dependent bodies and broader proof fragments refuse by name |
 | Loop exhaustion on an existing host terminal, no contributed port | [v17 amendment](docs/architecture/loop-host-terminal-v17.md); non-Loop identity witnesses unchanged |
+| Native Retry of a finite outbound Call, prepared request retained, final-only publication | [Operation contract](docs/architecture/retry-c1-algebra.md); statically checked terminal cases and plan-owned idempotence, closure-based backoff, no Retry port/command or new error case |
 | Keyed instances, all five lifetimes, bounded Closing, joins and recovery from retained records | One synchronous Worker; recovery is not a durable storage backend or distributed runtime |
 | Explicit Graph or direct-child closure, idempotent per exact instance generation | [Closure ledger](docs/architecture/instance-stop-command.md); no global key lookup, implicit creation or repeated cancellation |
 | Process job/service, File read/replace, HttpClient/HttpServer, WebSocketClient/WebSocketServer | Exact Contracts; HTTP/1.1–3 and complete-message Sessions; resident Process [qualification](docs/architecture/process-service.md), not a model-specific protocol or token-streaming SSE |
 | Strict logical types and JSON Schema / Avro / Arrow / OpenAPI projections | Unsupported/lossy cases refuse by path; guest-language execution remains deferred |
 | Data annotations, exact HttpClient boot references, privacy attestations, redaction, structured logs and individual typed measurement retention | [Observability contract](docs/spec/observability.md); no measurement report, automatic pricing, subset arithmetic, raw-secret payload, legal-compliance certificate, budget enforcement, FX, FOCUS/OpenCost or OTLP exporter |
-| `simulate --ui`: retained transitions, source, mailboxes, instances, Loop dials, decisions, causal links, assertion evidence and comparisons | [UI contract](docs/spec/ui.md); read-only source-authored scenarios, no `run --ui`, editing or branches; an authored `advance` may still group VM transactions |
+| `simulate --ui`: retained transitions, source, mailboxes, instances, Loop dials, Retry attempts, decisions, causal links, assertion evidence and comparisons | [UI contract](docs/spec/ui.md); read-only source-authored scenarios, no `run --ui`, editing or branches; intermediate VM transitions within an authored `advance` are individually inspectable |
 | `new`, readable golden divergence, `run --record` and `replay [--ui]` | [Diagnostic recording](docs/architecture/diagnostic-recording.md); immutable restitution without a Driver, not durable recovery; classified/boot-dependent recording limits remain explicit |
 
 The [example catalogue](docs/examples/README.md) distinguishes passing programs,
 isolated illustrative fragments and historical future-surface sketches.
-The [documentation audit](docs/architecture/documentation-audit-2026-09-09.md)
-records checks against the current repository, including discrepancies that
-documentation alone cannot fix.
+The [9 September documentation audit](docs/architecture/documentation-audit-2026-09-09.md)
+is historical evidence. The [current C4 ledger](docs/architecture/retry-c4-qualification.md)
+and [opening checklist](docs/architecture/opening-showcase.md) distinguish local
+qualification from remaining external evidence.
 
 Historical milestone reports retain their original counts and format versions.
 [R9](docs/architecture/rework-r9-qualification.md) and

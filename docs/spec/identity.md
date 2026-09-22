@@ -8,13 +8,14 @@
 > records the common fixture migration, unchanged causal witnesses and checks.
 > Historical version entries below do not override that current allocation.
 
-> **Status (2026-09-05): normative.** This document fixes the
+> **Status (2026-09-21): normative.** This document fixes the
 > **semantic identity** of a graph, the
 > **allocation of `graph_version`**, and the **canonical byte form** of
 > journal records.
 >
 > The registry below retains the executable v7 value registry inside
-> categorical plan-package v18. V12 introduced the
+> categorical plan-package v19. The following chronology preserves earlier
+> allocations, not additional current formats. V12 introduced the
 > open `media_type` scalar and its constructor, and specifies the M1.4 instance-address
 > extension under D-2026-08-18-1. V9 refuses the old unpublished v8
 > named-partition draft and carries the parent-linked owner tree, scoped edges,
@@ -667,10 +668,12 @@ a separate categorical transport change (D-2026-08-14-1).
 ## 3. The canonical record form
 
 These tables describe the current causal projection, established at v16,
-unchanged by v17, and extended sparsely at key 57 by v18. Historical key 53
-is retained in the registry solely to prevent reuse; active Loop state uses
-key 55. Required timer dates are retained separately at key 56 and are not
-part of the causal seal.
+unchanged by v17, extended sparsely at key 57 by v18 and at key 58 by v19.
+Historical key 53 is retained in the registry solely to prevent reuse; active
+Loop state uses key 55 and Retry uses key 58. Required timer dates (key 56)
+and outbound Call closure times (key 59) are retained separately, outside the
+causal seal. Retry OUTBOUND closures may also carry causal timer references
+at the existing key 37.
 
 Two byte formats exist and are never the same object : the **durable
 journal encoding** (free to evolve) and the **canonical form**
@@ -764,7 +767,7 @@ causal record.
 **TRANSACTION** (kind 2 — one Executor/manager firing or one controller-owned
 Node lifecycle fact;
 the commit packet of
-execution-model §1) — keys `30–39`, `48–52`, `54–55` and sparse `57`:
+execution-model §1) — keys `30–39`, `48–52`, `54–55` and sparse `57–58`:
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
@@ -775,7 +778,7 @@ execution-model §1) — keys `30–39`, `48–52`, `54–55` and sparse `57`:
 | 34 | join_inputs | array | for a join trigger, the presence-completing set (envelope.md §3), each a spine-`id` (bytes 16), **in the handler's declared port order**; this array is deliberately not lexicographically re-sorted, because tuple order is identity; omitted otherwise |
 | 35 | state_delta | array | canonical **sorted pair list** `[field_path (text), tagged_value]` of the firing Node's private `var` changes `state → state'` (sub-form below; fields sorted by `field_path`); omitted when empty |
 | 36 | emissions | array | **in text/`emission_index` order** (execution-model §4) ; each entry a fixed tuple `[port (text), emission_index (uint), envelope (spine 1–9)]` |
-| 37 | timers | array | dated obligations armed by a transaction or accepting inbound fact — each a fixed tuple `[kind (uint), ref (bytes)]`, sorted by `(kind, ref)`. The extend-only kinds are `1 = call timeout`, `2 = join within`, `3 = instance lifetime`, `4 = Saga timeout`, `5 = Loop delay`, `6 = instance drain`, `7 = instance settlement`, `8 = inbound Call request timeout`, `9 = outbound Session handshake timeout`. Kind 3 uses domain `0x21`; kind 5 uses the manager-produced `l:next` envelope id; kinds 6/7 use domain `0x22` plus their kind; kind 8 uses the already-derived `InboundCallRef`; kind 9 uses the candidate `SessionRef`. The due instant is NOT sealed (a persisted, replayable scheduler annotation). |
+| 37 | timers | array | dated obligations armed by a transaction, accepting INBOUND fact or Retry OUTBOUND closure — each a fixed tuple `[kind (uint), ref (bytes)]`, sorted by `(kind, ref)`. The extend-only kinds are `1 = call timeout`, `2 = join within`, `3 = instance lifetime`, `4 = Saga timeout (reserved)`, `5 = temporal recurrence delay (Loop or Retry)`, `6 = instance drain`, `7 = instance settlement`, `8 = inbound Call request timeout`, `9 = outbound Session handshake timeout`. Kind 3 uses domain `0x21`; kind 5 names the exact next admission (Loop domain `0x06`, Retry domain `0x07`); kinds 6/7 use domain `0x22` plus their kind; kind 8 uses the already-derived `InboundCallRef`; kind 9 uses the candidate `SessionRef`. The due instant is NOT sealed (retained separately for recovery). |
 | 38 | routes | array | target admissions made before commit, each `[delivery_id (bytes16), edge (text), target_instance_ref]`, sorted by canonical tuple; omitted only when the transaction creates no routed delivery. This is the recovery authority for a delivery not yet consumed by its target; replay never re-evaluates `instance.key` and never substitutes a later generation. |
 | 39 | cause_id | bytes(16) | causal envelope of a lifecycle transaction. Normally key 33 identifies the same cause and this field is omitted; `l:start`, `l:stop` and later `l:evict` have no consumed cursor, while a graph-response `l:reply` deliberately carries both: key 33 names the response delivery and key 39 preserves the distinct opening root as causal parent. This keeps lifecycle causality autonomous rather than relying on record order. |
 | 48 | parent_instance_ref | array | present exactly on `l:start` for a non-root owner; the fixed `[instance_address, generation]` of the enclosing Graph instance. It opens the replayable parent/child lifecycle obligation and is omitted only for the root App owner. A logical child address contains ancestor key/time frames but not ancestor generations, so this fact is not derivable from key 31. |
@@ -833,24 +836,26 @@ admission, not only business origin, identifies a run. See [Loop](loop.md).
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
 | 56 | timer_schedule | array | `[armed_at_ns, [[kind, reference_bytes16, due_at_ns], ...]]`, retained atomically beside the accepting INBOUND, TRANSACTION or Retry OUTBOUND closure. Instants are signed i64 logical nanoseconds; due ≥ armed-at. Kinds use the existing 1–9 registry (4 remains reserved). Arms retain actual order, including ordered renewals, never sort by reference. Empty schedules are omitted. |
+| 59 | closed_at | int | Original signed logical nanoseconds of every winning outbound Call closure, including non-Retry Calls. Absent on Open and on INBOUND/TRANSACTION/Session facts. A Retry delay arm uses this instant as its key-56 `armed_at`; recovery never substitutes restart time. |
 
 Storage integrity must cover this required recovery evidence independently of
 the causal seal. Key 37 keeps its existing sealed timer references; key 54
 keeps its observable `now()` meaning. Key 56 changes neither graph identity,
 package bytes nor causal projection. A causal trace alone is not a complete
 recovery backup. The field codec and every admitted timer producer retain original dates;
-recovery restores Calls, joins, lifetimes, Closing and Loop wakes from accepting
+recovery restores Calls, joins, lifetimes, Closing, Loop and Retry wakes from accepting
 prefixes. Missing dates never default to restart time. Storage is still an
 in-memory implementation; this is not a durable-backend claim.
 
 **OUTBOUND / Call** (kind 3 — one external call's WAL record ;
-delivery-semantics §4) — keys `40–47` :
+delivery-semantics §4) — keys `40–47`, plus sparse `37` and `58` for Retry;
+retained-only `56` and `59` are described above:
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
 | 40 | emitting_id | bytes(16) | the id of the envelope that opened the call (the cause) |
 | 41 | connector_path | text | the calling node |
-| 42 | call_key | bytes | the `idempotency_key` (E-COMPENSATE-KEY) ; omitted only for `compensable` without key |
+| 42 | call_key | bytes | UTF-8 bytes of the optional partner `idempotency_key`; omitted when none is retained. Stable across Retry attempts, but neither its presence nor its value proves idempotence. |
 | 43 | request_digest | bytes(32) | the boundary integrity seal (delivery-semantics §4.2) |
 | 44 | status | uint | the SEALED causal states : `1 = open · 2 = closed · 4 = abandoned` ; value `3` is reserved — `discarded` (a late reply after closure) is a NON-causal observability record, never a sealed status |
 | 45 | closure | array | present iff status ∈ {closed, abandoned} ; EXACT byteshape fixed BY `status` (`[1,outputs]` response · `[2]` timeout · `[]` abandoned ; sub-forms below), so `status` and `closure` never disagree |

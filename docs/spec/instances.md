@@ -274,7 +274,7 @@ Connector contracts name the **latest evaluation site** allowed for each
 configuration field. The ordered sites are plan, boot, instance, and
 invocation. The checker always chooses the earliest site at which the written
 expression closes and transports that actual site in the effective plan. An
-attribute that selects a profile, port type, effect, behavior, or other plan
+attribute that selects a profile, port type, idempotence, behavior, or other plan
 shape has `plan` as its latest site and must therefore reduce during
 compilation. A contract may allow an operational setting such as a command,
 argument, URL, environment value, or a path shared by an instance as late as
@@ -306,7 +306,7 @@ graph sessions {
     command = "worker"
     cwd = workdir                 // Process marks cwd instance-bound
     codec = jsonl                 // plan-resolved: it determines port types
-    effect = idempotent
+    idempotent = true
     behavior = deterministic
   }
 }

@@ -1,8 +1,10 @@
 # Checked examples and historical sketches
 
-The checkout carries an **unblessed v19 candidate**; v18 is the last qualified
-baseline. The native-Retry examples run, but their versioned goldens await the
-single reviewed migration. Author against the live
+The checkout uses **v19 / diagnostic recording v3**. The native-Retry examples
+and their versioned goldens share the single inventoried blessing recorded in
+the [C4 qualification ledger](../architecture/retry-c4-qualification.md).
+Local qualification is complete; the external opening gates remain separate.
+Author against the live
 [grammar](../spec/grammar.md), [Contract sheets](../spec/stdlib.md) and
 [Loop specification](../spec/loop.md), not a frozen benchmark prompt or an old
 hand-derived trace. Graphs wire; Operators execute DSL handlers; Connectors
@@ -20,7 +22,8 @@ a standalone HTML/vanilla-JavaScript client served by the same App.
 The opening catalogue below includes the smaller reference programs as well
 as the six-chapter path. The webhook page
 includes the required synthetic deployment profile in its CLI command; the
-other examples need none. The [opening ledger](../architecture/opening-showcase.md)
+HTTP model adapter also needs the profile and fixture bindings listed below.
+The other examples need none. The [opening ledger](../architecture/opening-showcase.md)
 tracks the six-page public gallery separately from these executable examples.
 The [documentation audit](../architecture/documentation-audit-2026-09-09.md)
 retains the earlier checkpoint; its bounded-join destination finding is now

@@ -1,11 +1,12 @@
 # Delivery Semantics — the journal, the transaction, and the boundary
 
-> **Status (2026-09-09): normative, current v17 under D-2026-09-05-1 and D-2026-09-08-1.**
+> **Status (2026-09-21): normative, current v19.**
 > Companion to [envelope.md](envelope.md) (identity ; its §7 journal stub is
 > filled by §6 below) and [execution-model.md](execution-model.md)
 > (Executor/manager transactions, ordering, and the dated-events queue).
-> Reference simulations 3–4 exercise Loop retry × outbound WAL and saga
-> compensation × crash recovery.
+> The [C4 ledger](../architecture/retry-c4-qualification.md) qualifies native
+> Retry and retained-prefix recovery. Reference simulations 3–4 are historical
+> Loop/Saga sketches, not current executable qualification.
 > D-2026-08-25-1 adds sessions in §4.5. H1 makes their generic causal
 > subforms and two-phase Driver decision API executable. H2 publishes the
 > concrete HTTP/WebSocket sheets and Lab bindings. H3 selects the private
@@ -27,7 +28,8 @@ durability scope ?**
 An [Executor or temporal-manager transaction](execution-model.md) commits
 **atomically as one journal record**. Operator transitions use Dispatch;
 Connector transitions use their Contracts and typed Driver activations;
-manager transitions consume durable Extension commands:
+manager transitions advance their journal-owned protocols (Loop commands or
+Retry operation/attempt facts):
 
 ```
    transaction record = CAUSAL CORE + OBSERVATION ANNOTATIONS
@@ -243,18 +245,20 @@ they have no envelope identities yet. The following Connector transaction
 mints and commits every output envelope together. The final draft is the
 call's unique typed `exit` barrier.
 
-The request **digest** is the boundary's integrity seal : a retry must
-re-derive a byte-identical request, or the graph changed under the call —
-loud error, never a silent divergence (§2's cousin).
+The request **digest** is the boundary's integrity seal. Retry reuses the
+retained prepared request and resolved settings; it does not re-evaluate
+invocation expressions. Recovery checks that retained material against the
+digest and original validated plan, refusing disagreement rather than silently
+preparing a different operation.
 
 ### 4.3 Retry with the byte-same key — and the key-stability rule
 
-> The key examples below include future Saga classes, not executable M1
-> effect admission. They do not authorize recovery to re-run a transaction or
-> a Call. Under the approved [Retry target](../architecture/retry-c1-algebra.md),
-> the prepared operation, resolved settings and key are retained once;
-> invocation expressions are not re-evaluated between attempts. This target
-> is not implemented in v18.
+> Native Retry is executable in v19 for finite outbound Calls. Under its
+> [operation contract](../architecture/retry-c1-algebra.md), the prepared
+> operation, resolved settings and optional partner key are retained once;
+> invocation expressions are not re-evaluated between attempts. This does not
+> authorize recovery to recall an unresolved Call. The compensation discussion
+> below is a future Saga requirement, not a current Connector effect class.
 
 On an unknown partner outcome, repeating an operation with the same business
 key is safe only when the partner actually honors the required guarantee.
@@ -265,13 +269,15 @@ new admission. Replay itself starts no effect and replays no producer code.
 **The key names the business operation, not the attempt** (the
 Stripe-semantics rule) :
 
-- **Stable business key = the taught norm** for `irreversible` :
-  `idempotency_key = meta.app.payment_id`. Retry after timeout → partner
-  dedups (safe) ; retry after a *processed* failure → the partner replays
-  the failure (correct — a declined payment must not silently re-run).
+- **Stable business key = the taught norm** when the partner offers keyed
+  deduplication: `idempotency_key = meta.app.payment_id`. Repetition after
+  timeout is safe only under that partner guarantee; a partner that retains
+  failed outcomes must return the same failure, not silently rerun a declined
+  payment.
 - **Per-attempt key = an explicit state-carried escape** (`data.operation_id +
   "#" + string(data.attempt)`) for partners that consume the key on failure.
-  The Loop Graph must advance that field visibly in its `next` state.
+  A Loop Graph must advance that field visibly through `Loop.next`. This is
+  a new authored operation, not an attempt of the same Retry operation.
 - **A key must not be required to vary per iteration inside a Loop.** Composed
   with the call-closed rule and Loop re-injection, that
   requirement would double-pay on the timeout-with-late-success path:
@@ -283,19 +289,20 @@ Stripe-semantics rule) :
    💸💸 double payment. Every rule was fine ; the composition was fatal.
 ```
 
-  **And the key's converse** : a compensable Connector performs
+  **And the key's converse, for future Saga work**: a compensable step performs
   TWO business operations — the forward call and its inverse. One key
   expression cannot name both : against a key-deduping partner, a
   compensation reusing the forward key is deduplicated INTO the forward call
   (the release never executes ; the fold reports a clean `rolled_back`).
   A future compensation Contract whose forward path declares
-  `idempotency_key` must declare a distinct inverse-operation key. V16 has
+  `idempotency_key` must declare a distinct inverse-operation key. M1 has
   no `on compensate` handler; [effects-and-sagas.md](effects-and-sagas.md)
   reserves this requirement for the Saga decision.
 
-  What remains mandatory: an `idempotency_key` on every
-  `irreversible`. Loop recurrence is additionally constrained by
-  [loop.md §11](loop.md).
+  In M1 the partner key is optional, and its presence alone is not a
+  repetition guarantee. Retry admission uses terminal visibility and the
+  original plan's `idempotent` constant; authored Loop repetition has the
+  separate advisory rule in [loop.md §11](loop.md).
 
 ### 4.4 Recovery — a triage, not a gamble
 
@@ -304,7 +311,7 @@ At restart, `open` outbound records without closure = the set of unknowns :
 | Situation | Resolution |
 |---|---|
 | emission delivered, **no** outbound record | no effect started; an explicit continuation may open/start the Call after ordinary admission checks. Read-only replay does not. |
-| open, no closure, regardless of effect declaration or key | reconstruct the unresolved Call; never automatically recall it. Resume uses its retained timeout or the explicit bounded-Closing settlement; replay only inspects it. |
+| open, no closure, regardless of idempotence guarantee or key | reconstruct the unresolved Call; never automatically recall it. Resume uses its retained timeout or the explicit bounded-Closing settlement; replay only inspects it. |
 | retained timeout wins | close exactly once as Timeout; emit the Contract's TimeoutExpired terminal through the ordinary completion transaction |
 | bounded settlement exhausts without a confirmed outcome | emit **OutcomeUnknown** on the Contract terminal (normally exit; trigger **l:recover**, parent = request) and close as abandoned; no invented success or silent recall |
 | closure already retained | reconstruct its completion/publication obligation; never restart that effect |
@@ -413,8 +420,8 @@ correlator.
 The exact Contract owns opening authority: WebSocketServer admits peer
 openings; WebSocketClient and Process service open locally on input. All
 three have duplex roles, so roles alone cannot select the opener. Execution
-and recovery use this same Contract fact, independently of the effect
-classification. A server's uncorrelated write never becomes a client opening
+and recovery use this same Contract fact, never a global effect classification
+or an idempotence flag. A server's uncorrelated write never becomes a client opening
 or a guessed write to its only live peer.
 
 An outbound message has a durable write obligation but **not** a graph-visible
@@ -638,9 +645,10 @@ contract:
 - [execution-model.md](execution-model.md) — the Executor transaction (§1
   naming rule incl. reserved *graph/cascade transaction*), mailboxes,
   ordering, dated events, `timeout`/`on_timeout`, `JoinExpired`.
-- [effects-and-sagas.md](effects-and-sagas.md) — effect classes and future
+- [effects-and-sagas.md](effects-and-sagas.md) — operation guarantees and future
   Saga requirements.
-- [loop.md](loop.md) — finite recurrence and repeat-safety rules.
-- [extensions.md](extensions.md) — Extension ownership and validation.
+- [loop.md](loop.md) — finite recurrence and the advisory repetition warning.
+- [extensions.md](extensions.md) — Extension ownership, Retry's hard admission
+  rule and final-only publication.
 - [M1.6 HTTP/WebSocket backlog](../architecture/m1.6-http-websocket-backlog.md)
   — the H1 allocation that makes §4.5 executable.

@@ -218,8 +218,9 @@ Next/Again/Done into durable manager commands outside the spatial DAG. See the
 
 The optional `hosted-ui` feature embeds one loopback HTTP/SSE debugger for
 simulation. Next transition invokes existing VM work or an authored Lab action,
-never a second execution model. An authored `advance` may still group several
-VM transactions into one retained transition; this is a named controller limit.
+never a second execution model. An authored `advance` retains individually
+inspectable intermediate VM transitions through the same advance cursor as
+batch execution; it does not compress ready transactions into one UI frame.
 Immutable snapshots retain history, current
 mailbox contents, instances, Loop-run dependencies and redacted values.
 M1 retains individual measurements without a report engine (D-2026-09-16-7).

@@ -221,6 +221,24 @@ without a target environment; the prepared manual build workflow has not
 been run remotely. The [two external quickstart trials](quickstart-trials.md)
 remain unperformed.
 
+## Retry journal-scan debt before M2
+
+The 18 September Fable prereview identifies repeated full-prefix traversal in
+`runtime/vm/retry_manager.rs`: `synchronize_retry_closures` scans when Calls
+are open, `next_dated_recurrence` scans for retained arm order when both manager
+folds exist, and `step_retry_manager` scans when work is ready. `MemJournal`
+also performs linear `find_call` / `find_envelope` lookups. This is a structural
+cost analysis, not a measured latency claim: S eligible steps over a prefix
+of up to J records can cost O(S × J), hence O(J²) when both grow together.
+
+This remains a named M2 scalability debt, not a newly failed M1 gate. Before
+durable storage, qualify derived indexes for exact Calls, envelopes and the
+winning retained timer-arm order, including recovery reconstruction and
+bounded-memory costs. Do not turn a retained-prefix traversal into disk I/O
+on every step or replace the journal's tie-breaker with RAM/scheduler order.
+No optimization, index format, journal fact or golden change is made in this
+documentation follow-up.
+
 ## Embedded code-size watch before Saga
 
 **Current v19 measurement — 18 September:** the unchanged Retry/full-recovery

@@ -1,6 +1,6 @@
 # Diagnostics catalog
 
-> **Status (2026-09-09):** normative registry, with reserved names explicitly marked.
+> **Status (2026-09-21):** normative v19 registry, with reserved and retired names explicitly marked.
 > This file is the single registry of tool-output diagnostic codes.
 
 **Scope.** This catalog norms diagnostics emitted by *tools* (compiler,
@@ -11,8 +11,8 @@ ordinary typed port payloads, hashed through their resolved types and
 compared in the causal core. They live in their home specs, not here.
 
 The current `E-EXPR` and `IDENT!` rows describe the expression registry first
-published in v7; categorical package v17 retains it (v12 added only the
-`media_type(text)` constructor). New or
+published in v7; categorical package v19 retains it (v12 added
+`media_type(text)` and v18 added `has(object.member)`). New or
 renamed checks are registered only when their focused negative tests
 land, never pre-allocated by a planning pass.
 `E-EXPR` supersedes the unreleased `E-CEL-EXPR` spelling as part of B3;
@@ -24,9 +24,11 @@ still describe a required rule or future tool surface, not a diagnostic the
 current CLI emits. Core validation may reject the same construct through a
 typed error or an existing capability gate without publishing that tool code.
 `W-DEAD-GRAPH` currently covers nested Graph admission, not unused top-level
-Graph definitions. The known timed-join `W-DEAD-OUTPUT` defect is recorded in
-the [documentation audit](../architecture/documentation-audit-2026-09-09.md);
-its false impossibility claim does not amend the output-disposition invariant.
+Graph definitions. The bounded-join expiry productibility defect found in the
+[9 September audit](../architecture/documentation-audit-2026-09-09.md) is fixed:
+both `within` and `last` require an explicit disposition for productible
+`JoinExpired`. [Checker and hostile-plan regressions](../../crates/rastok/tests/v16_destinations.rs)
+cover the refusal, nested boundaries and actual expiry observations.
 
 ## Rules
 
@@ -72,7 +74,7 @@ its false impossibility claim does not amend the output-disposition invariant.
 | E-META-SYS-READONLY | error | check | [envelope.md](envelope.md) | a write reaching the read-only `meta.sys` namespace (§6: there is no write) |
 | E-EXPR | error | check | [grammar.md](grammar.md) | a Rastok expression fault, adapted from the isolated expression compiler; field `detail` |
 | E-CHECK-DEFERRED | error | check | [grammar.md](grammar.md) | grammar admitted but outside the executable subset of this build; field `construct` |
-| E-DATA-ANNOTATION | error | check | [observability.md](observability.md) | a data annotation is unknown, duplicated, malformed, dynamically parameterized, missing its explicit unit or monetary evidence, uses an unsupported currency, or is illegal at its resolved canonical target; fields `annotation`, `path`, `detail` |
+| E-DATA-ANNOTATION | error | check | [observability.md](observability.md) | a data annotation is unknown, duplicated, malformed, dynamically parameterized, missing its explicit measurement id/unit, uses retired cost arguments, or is illegal at its resolved canonical target; fields `annotation`, `path`, `detail` |
 | E-NODE-ANNOTATION | error | check | [extensions.md](extensions.md) | historical stable code for an unknown, duplicated, or incompatible Node annotation; v16 interprets a Connector annotation as one exact Contract plus a canonical Extension list; fields `name`, `detail` |
 | E-EXTENSION-CONFLICT | error | check, plan | [extensions.md](extensions.md) | two Extensions have incompatible same-owner contributions; C2 checks the unadmitted Loop + Retry combination before transport; fields `owner`, `left`, `right`, `detail` |
 | E-RETRY-HOST | error | check | [Retry contract](../architecture/retry-extension-refactor.md#2-retry-source-and-admission) | Retry or plan-owned Call idempotence on a non-Call/unknown Contract or inadmissible owner/profile; field `detail` |
@@ -88,9 +90,9 @@ its false impossibility claim does not amend the output-disposition invariant.
 | E-LOOP-TERMINAL | error | check, plan | [loop.md](loop.md) | the natural terminal set is ambiguous, contradictory or ill-typed, or is authored for a Connector Call; fields `owner`, `port`, `detail` |
 | E-LOOP-CONTEXT | error | check, plan | [loop.md](loop.md) | **reserved as a tool code:** a route, join or activation can mix Loop runs or let uncorrelated work vote in a run; the current VM uses this name in its runtime join-context refusal, not a structured compiler diagnostic; planned fields `owner`, `path`, `detail` |
 | E-LOOP-CARDINALITY | error | check, plan | [loop.md](loop.md) | a possibly repeated frame can select more than one manager command for one application; fields `owner`, `port`, `detail` |
-| E-LOOP-EFFECT | retired | — | [Retry contract](../architecture/retry-extension-refactor.md) | removed by the v19 candidate: authored Loop repetition is advisory; Retry has the separate hard refusal `E-RETRY-EFFECT` |
+| E-LOOP-EFFECT | retired | — | [Retry contract](../architecture/retry-extension-refactor.md) | removed in v19: authored Loop repetition is advisory; Retry has the separate hard refusal `E-RETRY-EFFECT` |
 | W-LOOP-REPEAT | warning | check | [C1 algebra](../architecture/retry-c1-algebra.md#41-required-c2-loop-warning) | authored `Loop.again` may repeat a visible Call without an original-plan idempotence guarantee, including successful sibling Calls; not emitted for `Loop.next` or a wholly BeforeEffect path; no identity contribution |
-| E-CONNECTOR-UNAVAILABLE | error | check | [stdlib.md](stdlib.md) | a connector type with no Driver in this build — declared catalogue or unknown; field `type` |
+| E-CONNECTOR-UNAVAILABLE | error | check | [stdlib.md](stdlib.md) | a Connector Contract is unknown, only declared without an executable sheet, absent from the compiler catalogue, or has an invalid semantic id; field `type`. Physical Driver availability is checked separately at deployment; Lab simulation does not require one |
 | E-CONTRACT-ATTR | error | check | [stdlib.md](stdlib.md) | an attribute violating its connector contract sheet; fields `attribute`, `detail` |
 | E-CONTRACT-REQUIRED | error | check | [stdlib.md](stdlib.md) | a mandatory contract attribute left undeclared; field `attribute` |
 | E-DUP-BINDING | error | check | [grammar.md](grammar.md) | a binding name shadowing a visible binding or a reserved handler name; field `name` |
@@ -107,7 +109,7 @@ its false impossibility claim does not amend the output-disposition invariant.
 | E-WIRING-MIGRATION | error | check | [grammar.md](grammar.md) | removed `when`, dot-prefixed boundary wiring, a former `Loop.expired` port, or a non-port destination used to continue a path chain; field `construct` |
 | E-PORT-DIRECTION | error | check | [grammar.md](grammar.md) | a port used against its direction — edge, handler, or emission side; fields `port`, `direction` |
 | E-GRAPH-CYCLE | error | check | [grammar.md](grammar.md) | a wiring cycle among nodes — edges form a DAG; field `node` |
-| E-PORT-CONFLICT | error | check | [grammar.md](grammar.md) | a port name declared or inferred with conflicting roles, redeclared, or declared on a connector; field `port` |
+| E-PORT-CONFLICT | error | check | [grammar.md](grammar.md) | a port name declared or inferred with conflicting roles, redeclared, or an unsupported Connector port declaration; field `port`. An existing output refinement is admitted only where its Contract/codec explicitly supports typed JSON hydration |
 | E-META-ZONE | error | check | [envelope.md](envelope.md) | a metadata path outside the three zones (`sys`/`app`/`ext`), outside a zone's vocabulary, a dynamic `meta[…]` access, or a Lab write into the application's zone (D-2026-08-10-1); field `path` |
 | E-META-TYPE | error | check | [envelope.md](envelope.md) | one `meta.app` field written with two incompatible types — both sites carried as spans; field `field` |
 | E-META-PREFIX | error | check | [envelope.md](envelope.md) | two flat keys where one prefixes the other (`audit` vs `audit.origin`) — the nested projection cannot hold both; field `field` |

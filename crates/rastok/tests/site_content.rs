@@ -217,6 +217,208 @@ fn readme_quickstart_is_a_verbatim_copy_of_the_site_source() {
 }
 
 #[test]
+fn current_public_status_matches_the_qualified_package_and_contracts() {
+    let paper = std::fs::read_to_string(root().join("WHITEPAPER.md")).unwrap();
+    let version = rastok_core::plan::FORMAT_VERSION;
+    assert!(paper.contains(&format!("package v{version} / diagnostic recording v3")));
+    assert!(paper.contains(&format!("current package is **v{version}**")));
+    for contract in [
+        rastok_core::connector::PROCESS_CONNECTOR_ID,
+        rastok_core::connector::PROCESS_SERVICE_CONNECTOR_ID,
+    ] {
+        assert!(paper.contains(contract), "whitepaper names {contract}");
+    }
+    for stale in [
+        "process@2",
+        "process@3",
+        "`effect` make repetition safe",
+        "effect is `none`",
+        "port-type, effect, behavior",
+    ] {
+        assert!(!paper.contains(stale), "whitepaper still teaches {stale}");
+    }
+
+    let catalogue = std::fs::read_to_string(root().join("docs/examples/README.md")).unwrap();
+    assert!(catalogue.contains(&format!("**v{version} / diagnostic recording v3**")));
+    assert!(catalogue.contains("retry-c4-qualification.md"));
+    assert!(!catalogue.contains("unblessed v19 candidate"));
+    assert!(!catalogue.contains("v18 is the last qualified"));
+
+    for path in [
+        "docs/spec/execution-model.md",
+        "docs/spec/delivery-semantics.md",
+        "docs/spec/loop.md",
+    ] {
+        let source = std::fs::read_to_string(root().join(path)).unwrap();
+        let status = source
+            .lines()
+            .find(|line| line.starts_with("> **Status"))
+            .unwrap();
+        assert!(status.contains(&format!("v{version}")), "{path}: {status}");
+    }
+}
+
+#[test]
+fn live_loop_diagnostics_do_not_reintroduce_retired_codes() {
+    let source = std::fs::read_to_string(root().join("docs/spec/loop.md")).unwrap();
+    let registry = std::fs::read_to_string(root().join("docs/spec/diagnostics.md")).unwrap();
+    let table = source
+        .split_once("## 15. Named diagnostics")
+        .unwrap()
+        .1
+        .split_once("## 16.")
+        .unwrap()
+        .0;
+    let mut codes = 0;
+    for row in table.lines() {
+        let Some(code) = row.split('|').nth(1) else {
+            continue;
+        };
+        let code = code.trim().trim_matches('`');
+        if !(code.starts_with("E-") || code.starts_with("W-")) {
+            continue;
+        }
+        let registered = registry
+            .lines()
+            .find(|line| line.starts_with(&format!("| {code} |")))
+            .unwrap_or_else(|| panic!("unregistered Loop diagnostic {code}"));
+        assert_ne!(
+            registered.split('|').nth(2).unwrap().trim(),
+            "retired",
+            "loop.md still presents retired {code} as an active diagnostic"
+        );
+        codes += 1;
+    }
+    assert!(codes > 0);
+    assert!(table.contains("W-LOOP-REPEAT"));
+}
+
+#[test]
+fn current_journal_tables_include_retry_retention_without_saga_key_rules() {
+    let source = std::fs::read_to_string(root().join("docs/spec/identity.md")).unwrap();
+    for (key, name) in [
+        (
+            rastok_core::journal::timing::TIMER_SCHEDULE_KEY,
+            "timer_schedule",
+        ),
+        (
+            rastok_core::journal::timing::CALL_CLOSED_AT_KEY,
+            "closed_at",
+        ),
+    ] {
+        assert!(
+            source.contains(&format!("| {key} | {name} |")),
+            "identity.md omits the retained field {key}: {name}"
+        );
+    }
+    let timers = source
+        .lines()
+        .find(|line| line.starts_with("| 37 | timers |"))
+        .unwrap();
+    assert!(timers.contains("Loop") && timers.contains("Retry"));
+    let key = source
+        .lines()
+        .find(|line| line.starts_with("| 42 | call_key |"))
+        .unwrap();
+    assert!(
+        !key.contains("E-COMPENSATE-KEY") && !key.contains("compensable"),
+        "the optional partner key is not a Saga admission rule"
+    );
+}
+
+#[test]
+fn whitepaper_retry_example_checks_with_its_real_contract() {
+    let paper = std::fs::read_to_string(root().join("WHITEPAPER.md")).unwrap();
+    let declaration = paper
+        .split("```rastok\n")
+        .find(|block| block.starts_with("connector partner : HttpClient + Retry"))
+        .unwrap()
+        .split_once("```")
+        .unwrap()
+        .0;
+    let source = format!(
+        "graph demo : App {{\ninput in: bytes\n{declaration}\nin -> partner\npartner.out -> nothing\npartner.exit -> nothing\n}}"
+    );
+    rastok::compiler::compile(
+        &[&source],
+        &rastok::contract::ContractCatalog::try_m0().unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn public_dsl_excerpts_do_not_use_removed_effect_or_cost_syntax() {
+    let mut files = ["README.md", "WHITEPAPER.md", "docs/spec/instances.md"]
+        .map(|path| root().join(path))
+        .to_vec();
+    let mut directories = vec![root().join("docs/site")];
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                directories.push(path);
+            } else if path.extension().is_some_and(|extension| extension == "md") {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    for path in files {
+        let source = std::fs::read_to_string(&path).unwrap();
+        let mut in_dsl = false;
+        for (index, line) in source.lines().enumerate() {
+            let line = line.trim();
+            if line.starts_with("```") {
+                in_dsl = matches!(line, "```rastok" | "```rkg");
+            } else if in_dsl {
+                // Migration prose may name retired syntax; current DSL excerpts may not use it.
+                let words: Vec<_> = line.split_whitespace().collect();
+                assert!(
+                    !words.windows(2).any(|pair| pair == ["effect", "="])
+                        && !line.contains("effect=")
+                        && !line.contains("@cost("),
+                    "{}:{} contains removed DSL syntax",
+                    path.display(),
+                    index + 1
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn ci_compilation_uses_locked_dependency_resolution() {
+    let source = std::fs::read_to_string(root().join(".github/workflows/ci.yml")).unwrap();
+    let workflow: serde_yaml_ng::Value = serde_yaml_ng::from_str(&source).unwrap();
+    let mut commands = 0;
+    for (job, value) in workflow["jobs"].as_mapping().unwrap() {
+        for step in value["steps"].as_sequence().unwrap() {
+            let Some(run) = step["run"].as_str() else {
+                continue;
+            };
+            for line in run.lines() {
+                let words: Vec<_> = line.split_whitespace().collect();
+                let Some(cargo) = words.iter().position(|word| *word == "cargo") else {
+                    continue;
+                };
+                if matches!(
+                    words.get(cargo + 1),
+                    Some(&("build" | "check" | "clippy" | "test" | "doc" | "run"))
+                ) {
+                    commands += 1;
+                    assert!(
+                        words[cargo + 2..].contains(&"--locked"),
+                        "{}: {line}",
+                        job.as_str().unwrap()
+                    );
+                }
+            }
+        }
+    }
+    assert!(commands > 0, "the workflow must contain compilation checks");
+}
+
+#[test]
 fn the_editor_package_is_data_only_and_the_site_grammar_resolves() {
     let editor = root().join("editors/vscode/rastok-dsl");
     let manifest: serde_json::Value =

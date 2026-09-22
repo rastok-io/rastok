@@ -78,97 +78,98 @@ and **6,852 B of code** margin; the unchanged limits remain gates.
 
 The following records the migration sequence, including earlier candidate
 failures and footprint measurements; it is not the current completion status.
-R0–R9 and the v17 host-terminal amendment have passed. The 10 September approved exact-instance closure is the
+R0–R9 and the v17 host-terminal amendment had passed. The 10 September approved exact-instance closure was the
 named package exception to the opening freeze: v18, D-2026-09-10-1.
-The subsequently requested resident Process uses a distinct `process@3`
-Session contract inside that unchanged package (D-2026-09-14-1); jobs stay
+The subsequently requested resident Process introduced a distinct `process@3`
+Session contract inside that unchanged package (D-2026-09-14-1); jobs stayed
 `process@2`. See the [service ledger](docs/architecture/process-service.md).
-The minimal optional-member expression `has(object.member)` is separately
+The minimal optional-member expression `has(object.member)` was separately
 approved by D-2026-09-14-3, with no package-version or journal change.
-The Loop / Retry / Saga separation is now approved by D-2026-09-14-4:
+The Loop / Retry / Saga separation was then approved by D-2026-09-14-4:
 one recurrence engine, distinct state-iteration and protected-Call protocols,
-and no global Saga effect classification for ordinary Calls. `rework/retry` carries the
-unblessed v19/recording-v3 candidate; the last qualified release baseline is v18.
+and no global Saga effect classification for ordinary Calls. At that checkpoint,
+`rework/retry` carried the unblessed v19/recording-v3 candidate; v18 was the
+last qualified baseline.
 Its [contract and staged gates](docs/architecture/retry-extension-refactor.md)
-require an identity inventory before any executable format cutover.
-The 15 September C1 design handoff now supplies the operation algebra, crash
+required an identity inventory before any executable format cutover.
+The 15 September C1 design handoff supplied the operation algebra, crash
 traces and the v19/v3 inventory; stopping during Retry backoff publishes
-no new output (D-2026-09-15-2). Final C4 migration/qualification remains open.
-The [C3 checkpoint](docs/architecture/retry-c3-implementation.md) now executes
+no new output (D-2026-09-15-2). Final C4 migration/qualification was still open.
+The [C3 checkpoint](docs/architecture/retry-c3-implementation.md) began executing
 retained attempts and original-prefix recovery through the staged plan, Lab
-and diagnostic recorder. Closing drains unopened requests once without Retry
+and diagnostic recorder. Closing drained unopened requests once without Retry
 (D-2026-09-15-4). Its original source gate is superseded by the C4 checkpoint below.
-The 16 September qualification follow-up removes implicit Loop-before-Retry
-priority at equal deadlines and reproduces the same records after recovery
+The 16 September qualification follow-up removed implicit Loop-before-Retry
+priority at equal deadlines and reproduced the same records after recovery
 alongside an ordinary Call timeout. The subsequent shared-admission and
-collection-construction pass brings Retry/full recovery to 1,040,824 B,
-7,752 B below the unchanged 1 MiB code gate. Its measured heap remains
+collection-construction pass brought Retry/full recovery to 1,040,824 B,
+7,752 B below the unchanged 1 MiB code gate. Its measured heap remained
 130,560 B, only 512 B below 128 KiB; metadata growth requires new measurement.
-No gate or golden is changed.
-The subsequent D-2026-09-15-5 approves flat annotation-capable types,
+No gate or golden changed.
+The subsequent D-2026-09-15-5 approved flat annotation-capable types,
 `type Name = @struct { ... }`, using the existing value algebra and explicit
 stdlib/runtime interpretations. The [annotation integration handoff](docs/architecture/annotation-types-m1.md)
 separates flat declarations from annotation bindings, exact business
 measurements and type-directed response hydration (D-2026-09-15-6).
-The first source slice checks flat data with unchanged structural identity.
-D-2026-09-16-5 now retains declared descriptive annotation applications, their
+The first source slice checked flat data with unchanged structural identity.
+D-2026-09-16-5 then retained declared descriptive annotation applications, their
 nominal definition and ordinary typed constants in candidate tag 6. Aliases
-and omitted nullable arguments normalize identically; forged semantic bindings
-refuse. The next quantity profile now implements the protected measure binding:
+and omitted nullable arguments normalized identically; forged semantic bindings
+refused. The next quantity profile implemented the protected measure binding:
 simple ids, explicit units and original signed integer/decimal samples.
-D-2026-09-18-1 subsequently unifies amounts and other quantities under exactly
+D-2026-09-18-1 subsequently unified amounts and other quantities under exactly
 `id` and `unit`, with signed original-attempt refunds and no monetary profile.
-The stdlib schema is executable; its identity migration and remaining
+The stdlib schema became executable; its identity migration and subsequent
 qualification are recorded in the annotation ledger.
-D-2026-09-16-7 removes reports, automatic pricing and generic subset arithmetic
-from M1; it does not remove retention or Retry qualification, close A4 or
+D-2026-09-16-7 removed reports, automatic pricing and generic subset arithmetic
+from M1; it did not remove retention or Retry qualification, close A4 or
 bless candidate v19.
-D-2026-09-16-1 binds `output out: Response` on HttpClient's JSON
+D-2026-09-16-1 bound `output out: Response` on HttpClient's JSON
 profile, with exact field hydration and runtime `DecodeFailed` on incompatible
-bodies; other codec refinements remain unsupported. The existing annotations
-can therefore observe both held and published typed attempts. That hydration
-change allocates no format field; descriptive applications add only the
-inventoried candidate annotation tuple. No golden is blessed. That checkpoint's
-Retry image remains at 130,560 B peak heap. After named monetary binding and
-the simplified definition-table walk, it uses 1,048,344 B of code, leaving
+bodies; other codec refinements remained unsupported. The existing annotations
+could therefore observe both held and published typed attempts. That hydration
+change allocated no format field; descriptive applications added only the
+inventoried candidate annotation tuple. No golden was blessed at this step. Its
+Retry image remained at 130,560 B peak heap. After named monetary binding and
+the simplified definition-table walk, it used 1,048,344 B of code, leaving
 only 232 B under 1 MiB. This fixed unannotated workload measures decoder and
 validator growth, not maximum-size annotation inspection; further metadata work
 must be remeasured.
 The 17 September [Retry follow-up](docs/architecture/retry-c3-implementation.md#8-mixed-timers-bounded-publication-and-exact-instances--17-september)
-qualifies shared deadlines with timed joins, lifetimes and Closing, bounded
+qualified shared deadlines with timed joins, lifetimes and Closing, bounded
 fan-out publication, keyed same-origin operations and stop-at-held-batch cuts.
-It corrects recovered lifecycle work overtaking the unfinished dated frontier.
-The unchanged Retry/full-recovery workload now measures 1,048,368 B of code,
+It corrected recovered lifecycle work overtaking the unfinished dated frontier.
+The unchanged Retry/full-recovery workload then measured 1,048,368 B of code,
 leaving **208 B**, and the same 130,560 B peak heap. Source opening, migration
-and the reviewed v19/v3 blessing remain separate gates. The final full run has
+and the reviewed v19/v3 blessing were still separate gates. That full run had
 1,509 passing tests and the same nine unblessed candidate failures; two earlier
 cold-start incidents and their passing reruns remain recorded in the report.
-The [C4 inspection checkpoint](docs/architecture/retry-c4-inspection.md) opens
+The [C4 inspection checkpoint](docs/architecture/retry-c4-inspection.md) opened
 the qualified Call profile through public compilation, with source refusals
-preserved for unsupported profiles. Runtime tests no longer bypass that gate.
-The debugger projects exact operations/attempts, held/final dispositions and
-deadlines; a held batch no longer animates a fictitious delivery to App.
+preserved for unsupported profiles. Runtime tests stopped bypassing that gate.
+The debugger began projecting exact operations/attempts, held/final dispositions
+and deadlines; a held batch no longer animated a fictitious delivery to App.
 Gallery and annotation migration, the one v19/v3 blessing and browser/release
-qualification are not closed by this source opening.
+qualification were not closed by that source opening.
 The [projected JSON follow-up](docs/architecture/openai-responses-hydration.md)
-implements the approved nullable/additional-member profile without changing
+implemented the approved nullable/additional-member profile without changing
 ordinary structs, default hydration or the plan version. The Responses gateway
-now has six executable Lab scenarios; local physical HTTP tests prove original
-samples before Retry disposition. No paid OpenAI call is claimed. On the same
-Retry/recovery package, code is **1,048,520 B**, leaving **56 B** below 1 MiB;
-heap remains **130,560 B**, with 512 B of margin. These are workload-specific
+then had six executable Lab scenarios; local physical HTTP tests proved original
+samples before Retry disposition. No paid OpenAI call was claimed. On the same
+Retry/recovery package, code was **1,048,520 B**, leaving **56 B** below 1 MiB;
+heap remained **130,560 B**, with 512 B of margin. These were workload-specific
 measurements, not permission for further unmeasured core growth. Goldens,
-complete annotation migration and the release gates remain open.
+complete annotation migration and the release gates were still open.
 The subsequent [explicit-unit migration](docs/architecture/annotation-types-m1.md#16-explicit-unit-migration-inventory--17-september-before-implementation)
-removes the implicit measurement registry and retires its compact annotation
-tag by name. Quantity ids now carry no unit, carrier or subset authority:
-units are explicit and observations retain their exact signed values.
-The same embedded Retry package uses **1,046,556 B** of code, recovering
-1,964 B and leaving **2,020 B** of margin; heap remains **130,560 B**.
-Final stdlib integration, A4 and the common reviewed blessing remain open.
-Other semantics remain frozen. The remaining work includes the six-example
-showcase and its qualification, tracked in the
-[opening ledger](docs/architecture/opening-showcase.md).
+removed the implicit measurement registry and retired its compact annotation
+tag by name. Quantity ids no longer carried unit, carrier or subset authority:
+units became explicit and observations retained their exact signed values.
+The same embedded Retry package used **1,046,556 B** of code, recovering
+1,964 B and leaving **2,020 B** of margin; heap remained **130,560 B**.
+Final stdlib integration, A4 and the common blessing were still open then;
+the 18 September [C4 ledger](docs/architecture/retry-c4-qualification.md) records
+their closure. Other semantics stayed frozen. The current remaining work is
+listed only in the [opening ledger](docs/architecture/opening-showcase.md).
 
 ### Opening gates and original slice inventory
 
@@ -391,6 +392,11 @@ in the checker and core, without changing the runtime, plan format or goldens.
 
 ## Later — incident lab and safe dogfood
 
+- Qualify derived Retry journal indexes before M2 durable storage: current
+  prefix scans can make long histories quadratic in total work. Preserve the
+  retained arm order and exact recovery facts; the
+  [scalability debt](docs/architecture/release-qualification.md#retry-journal-scan-debt-before-m2)
+  is not a reason to change M1 semantics or its journal format.
 - Design and qualify the physical parallelism profiles in
   [parallelism-notes.md](docs/architecture/parallelism-notes.md): bounded
   multicore Workers, task granularity, and optional flow grouping before

@@ -1542,7 +1542,7 @@ connector_body    ::= "{" ( port_decl | val_decl | attribute )* "}"  // no DSL v
 graph_body        ::= ( port_decl | operator_decl | connector_decl
                        | val_decl | edge_decl
                        | defaults_block
-                       | graph_decl                            // graphs NEST (effects-and-sagas §7.2)
+                       | graph_decl                            // graphs nest as scopes (extensions.md §1)
                        | attribute )*                          // Graph has no var or handler
 
 type_decl         ::= "type" IDENT "=" type_ref                   // TOP-LEVEL only ; one namespace per unit ; duplicates refuse ;

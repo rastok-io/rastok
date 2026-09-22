@@ -4,7 +4,6 @@ use super::*;
 
 /// The exact Contract/profile cannot host Retry or Call idempotence.
 pub(super) const E_RETRY_HOST: Code = Code::new("E-RETRY-HOST");
-/// A policy attribute is unknown, duplicated, missing or outside its domain.
 /// The selected terminal set is malformed, duplicated or outside the Contract.
 const E_RETRY_CASES: Code = Code::new("E-RETRY-CASES");
 /// A selected terminal cannot justify repetition without idempotence.

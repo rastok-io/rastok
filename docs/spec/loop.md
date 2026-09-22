@@ -1,6 +1,6 @@
 # Loop — finite temporal recursion
 
-> **Status (2026-09-08): normative categorical plan v17.** Loop contributes
+> **Status (2026-09-21): normative, current categorical package v19.** Loop contributes
 > no port; exhaustion extends a resolved host terminal under D-2026-09-08-1.
 > [The v17 ledger](../architecture/loop-host-terminal-v17.md) records that host-terminal qualification.
 > Operator, outbound Call and Graph hosts execute and recover, including nested
@@ -453,7 +453,7 @@ refinement.failed -> alert
 | `E-LOOP-CONTEXT` | work cannot be associated with one exact run; currently a runtime refusal name, reserved as a dedicated tool code in the diagnostic registry |
 | `E-LOOP-CONTROL` | a reachable path has zero or competing verdicts |
 | `E-LOOP-CARDINALITY` | a Call output can issue more than one command per application |
-| `E-LOOP-EFFECT` | recurrence could repeat a non-repeat-safe effect |
+| `W-LOOP-REPEAT` | authored Again may repeat a visible Call without an original-plan idempotence guarantee; advisory, not Retry's admission gate |
 | `E-UNWIRED-OUTPUT` | productible exhaustion lacks a compatible host terminal or output disposition |
 | `E-WIRING-MIGRATION` | removed `x.Loop.expired` wiring; use the resolved `x.err`, `x.exit`, or custom terminal |
 | `LoopNoVerdict` | dynamic quiescence found no verdict |

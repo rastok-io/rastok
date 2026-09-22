@@ -510,7 +510,7 @@ checked and reviewable.
 
 This schema adapter is distinct from:
 
-- a package-format reader (the current v17 rejects older `.rkp` versions rather than
+- a package-format reader (the current v19 rejects older `.rkp` versions rather than
   translating application schemas);
 - an internal representation codec;
 - a journal-format decoder.
