@@ -18,7 +18,7 @@
 > optional-access expressions, jq/SQL guests, Timer, Calendar,
 > Saga, experiment and coverage generation remain named gates.
 
-> **Integrate AI faster. Keep production calm.**
+> **Rastok is a simulation-first integration platform.**
 >
 > **Rastok is the boxes-and-arrows paradigm, rebuilt as an engineering
 > discipline.** The flows that organizations already draw —

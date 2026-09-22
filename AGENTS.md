@@ -19,6 +19,18 @@ silently invent, weaken, or reinterpret a specified rule. If code and
 specification disagree, expose the disagreement instead of choosing the
 more convenient side.
 
+## Public narrative
+
+The single source for public positioning is
+`../rastok-strategy/NARRATIF.md`. This repository, crates.io and the English
+site use the section `Version anglaise de référence` verbatim in `README.md`,
+`crates/rastok/README.md` and `WHITEPAPER.md`; short product metadata uses the
+English one-sentence metadata that follows it. The French `Version courte de
+référence` is reserved for French-language surfaces (`/fr/`). Report proposed
+wording changes instead of rewriting or translating the narrative here.
+Keep the current implementation status and limits explicit alongside the
+product vision.
+
 ## Engineering posture
 
 - Prefer the smallest design that makes the invariant obvious.

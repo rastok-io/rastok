@@ -1,6 +1,21 @@
 # Rastok
 
-> Integrate AI faster. Keep production calm.
+<!-- Public narrative: rastok-strategy/NARRATIF.md, "Version anglaise de référence",
+     b650bc0. Keep this copy verbatim; propose wording changes in the source. -->
+
+> Rastok is a simulation-first integration platform. A flow and its
+> failure scenarios are written together, in a dedicated, typed language
+> versioned in Git. The same program runs against a simulated world,
+> virtual time and faults included, or against the real systems: you build
+> and prove an integration before its partner systems are available.
+>
+> Every run leaves a replayable journal. An incident becomes a scenario
+> that protects the next changes, and a record an auditor can read. The
+> language is constrained enough for code written or driven by AI to be
+> checked by the compiler and the simulation before it reaches production.
+
+The narrative describes the product vision. For this experimental alpha's
+implemented scope, see [Status and known limits](#status-and-known-limits).
 
 Rastok is an Apache-2.0 runtime and a dedicated domain-specific
 language (DSL) for stateful, effectful integration graphs. The DSL is
