@@ -73,7 +73,7 @@ impl CallConnectorDriver for EchoWorld {
 
     fn start(&mut self, intent: &Intent, _request: &Envelope) -> CallStart {
         self.answers.push(Response {
-            call_ref: intent.call_ref,
+            call_id: intent.call_id,
             completion: Completion::process(
                 vec![Data::encoded(Encoding::Raw, *b"salut")],
                 vec![],
@@ -153,8 +153,8 @@ fn retained_call_time_is_unsealed_but_retry_context_and_arm_identity_are_causal(
     let Record::Outbound(OutboundRecord::Call(call)) = &mut changed[index] else {
         unreachable!()
     };
-    let operation = retry::OperationRef::from_id(rastok::envelope::Id::from_bytes([7; 16]));
-    let context = retry::AttemptRef {
+    let operation = retry::OperationId::from_id(rastok::envelope::Id::from_bytes([7; 16]));
+    let context = retry::AttemptId {
         operation,
         ordinal: 1,
     };
@@ -162,12 +162,12 @@ fn retained_call_time_is_unsealed_but_retry_context_and_arm_identity_are_causal(
         context: Some(context),
         facts: vec![],
     }));
-    let reference = retry::admission_ref(operation, 2, call.intent.call_ref);
+    let reference = retry::admission_ref(operation, 2, call.intent.call_id);
     call.timer_schedule = Some(Box::new(
         TimerSchedule::try_new(
             99,
             vec![TimerArm {
-                kind: timer_kind::LOOP_DELAY,
+                kind: timer_kind::RECURRENCE_DELAY,
                 reference,
                 due_at: 199,
             }],
@@ -192,7 +192,7 @@ fn retained_call_time_is_unsealed_but_retry_context_and_arm_identity_are_causal(
     assert_eq!(
         keys.get(&37),
         Some(&Cbor::Array(vec![Cbor::Array(vec![
-            Cbor::Uint(u64::from(timer_kind::LOOP_DELAY)),
+            Cbor::Uint(u64::from(timer_kind::RECURRENCE_DELAY)),
             Cbor::Bytes(reference.as_bytes().to_vec())
         ])]))
     );
@@ -204,7 +204,7 @@ fn retained_call_time_is_unsealed_but_retry_context_and_arm_identity_are_causal(
         TimerSchedule::try_new(
             99,
             vec![TimerArm {
-                kind: timer_kind::LOOP_DELAY,
+                kind: timer_kind::RECURRENCE_DELAY,
                 reference,
                 due_at: 299,
             }],

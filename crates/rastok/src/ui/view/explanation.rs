@@ -23,7 +23,7 @@ pub(super) fn future(inspection: &VmInspection, records: &[Record]) -> JsonValue
             let id = delivery.envelope.meta().sys().id();
             result.push(json!({ "kind": "delivery", "owner": mailbox.node.to_string(),
                 "port": delivery.port.name(), "envelope_id": id.to_string(), "instance": instance_ref_json(&mailbox.instance) }));
-            let reference = crate::journal::ids::delivery_ref(&delivery.edge, id);
+            let reference = crate::journal::ids::delivery_id(&delivery.edge, id);
             for (kind, label) in [
                 (timer_kind::CALL_TIMEOUT, "l:timeout"),
                 (timer_kind::JOIN_WITHIN, "join expiry"),
@@ -53,13 +53,13 @@ pub(super) fn future(inspection: &VmInspection, records: &[Record]) -> JsonValue
         let scheduled = match instance.phase {
             InstancePhaseInspection::Open => vec![(
                 timer_kind::INSTANCE_LIFETIME,
-                crate::journal::ids::instance_lifetime_ref(&instance.reference),
+                crate::journal::ids::instance_lifetime_id(&instance.reference),
                 "l:closing",
             )],
             InstancePhaseInspection::Draining => vec![
                 (
                     timer_kind::INSTANCE_DRAIN,
-                    crate::journal::ids::instance_closing_ref(
+                    crate::journal::ids::instance_closing_id(
                         &instance.reference,
                         timer_kind::INSTANCE_DRAIN,
                     ),
@@ -67,7 +67,7 @@ pub(super) fn future(inspection: &VmInspection, records: &[Record]) -> JsonValue
                 ),
                 (
                     timer_kind::INSTANCE_SETTLEMENT,
-                    crate::journal::ids::instance_closing_ref(
+                    crate::journal::ids::instance_closing_id(
                         &instance.reference,
                         timer_kind::INSTANCE_SETTLEMENT,
                     ),
@@ -76,7 +76,7 @@ pub(super) fn future(inspection: &VmInspection, records: &[Record]) -> JsonValue
             ],
             InstancePhaseInspection::Settling => vec![(
                 timer_kind::INSTANCE_SETTLEMENT,
-                crate::journal::ids::instance_closing_ref(
+                crate::journal::ids::instance_closing_id(
                     &instance.reference,
                     timer_kind::INSTANCE_SETTLEMENT,
                 ),
@@ -160,7 +160,7 @@ pub(super) fn routes(plan: &crate::plan::ExecutionPlan) -> JsonValue {
 fn physical_matches(
     plan: &crate::plan::ExecutionPlan,
     logical: &Endpoint,
-    physical: &crate::plan::EndpointRef,
+    physical: &crate::plan::EdgeEnd,
 ) -> bool {
     logical.port == physical.port
         && match (&logical.owner, physical.node) {
@@ -208,7 +208,7 @@ pub(super) fn edge_cases(
 
 /// A display key is decoded from the address's retained frames, never guessed
 /// from a convenient DATA field such as `tenant`. Classified keys stay hidden.
-pub(super) fn instance_label(instance: &InstanceRef, classified: bool) -> String {
+pub(super) fn instance_label(instance: &InstanceGeneration, classified: bool) -> String {
     if classified {
         return "classified instance".into();
     }
@@ -281,7 +281,7 @@ pub(super) struct HistoryExplanation {
 pub(super) fn history(plan: &ValidatedExecutionPlan, records: &[Record]) -> HistoryExplanation {
     let protected = classified(plan);
     let mut envelopes = BTreeMap::<Id, (&Envelope, usize)>::new();
-    let mut positions = BTreeMap::<(String, InstanceRef), Vec<Id>>::new();
+    let mut positions = BTreeMap::<(String, InstanceGeneration), Vec<Id>>::new();
     let mut state = InstanceState::new();
     let mut fold = protocol::Fold::default();
     let mut context_valid = true;
@@ -472,7 +472,7 @@ pub(super) fn history(plan: &ValidatedExecutionPlan, records: &[Record]) -> Hist
 }
 
 fn consumed_id(
-    positions: &BTreeMap<(String, InstanceRef), Vec<Id>>,
+    positions: &BTreeMap<(String, InstanceGeneration), Vec<Id>>,
     position: &ConsumedPosition,
 ) -> Option<Id> {
     positions

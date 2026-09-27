@@ -51,10 +51,10 @@ pub(crate) fn validate_call(record: &super::CallRecord) -> Result<(), DecodeErro
             return Err(DecodeError::Malformed("Retry admission ordinal overflows"));
         };
         let reference =
-            super::retry_protocol::admission_ref(context.operation, next, record.intent.call_ref);
+            super::retry_protocol::admission_ref(context.operation, next, record.intent.call_id);
         if !matches!(record.status, super::OutboundStatus::Closed(_))
             || record.closed_at != Some(schedule.armed_at())
-            || !matches!(schedule.arms(), [arm] if arm.kind == super::timer_kind::LOOP_DELAY && arm.reference == reference)
+            || !matches!(schedule.arms(), [arm] if arm.kind == super::timer_kind::RECURRENCE_DELAY && arm.reference == reference)
         {
             return Err(DecodeError::Malformed(
                 "the Retry arm must belong to this winning closure and next admission",
@@ -248,7 +248,7 @@ pub(crate) fn validate_transaction(record: &super::TransactionRecord) -> Result<
     for (reference, due_at) in delayed {
         if !record
             .timers
-            .contains(&(super::timer_kind::LOOP_DELAY, reference))
+            .contains(&(super::timer_kind::RECURRENCE_DELAY, reference))
             || !record.timer_schedule.as_deref().is_some_and(|schedule| {
                 // A Loop admission reference already fixes the run and
                 // iteration: unlike an idle lifetime, it cannot be renewed.
@@ -256,7 +256,7 @@ pub(crate) fn validate_transaction(record: &super::TransactionRecord) -> Result<
                     .arms
                     .iter()
                     .filter(|arm| {
-                        arm.kind == super::timer_kind::LOOP_DELAY
+                        arm.kind == super::timer_kind::RECURRENCE_DELAY
                             && arm.reference == reference
                             && arm.due_at == due_at
                     })
@@ -271,7 +271,7 @@ pub(crate) fn validate_transaction(record: &super::TransactionRecord) -> Result<
     }
     if let Some(schedule) = record.timer_schedule.as_deref() {
         for arm in &schedule.arms {
-            if arm.kind == super::timer_kind::LOOP_DELAY && !facts.iter().any(|fact| {
+            if arm.kind == super::timer_kind::RECURRENCE_DELAY && !facts.iter().any(|fact| {
                 matches!(fact, super::loop_protocol::Fact::Advance {
                     run, to_iteration, command, due_at: Some(due_at), ..
                 } if super::loop_protocol::admission_ref(*run, *to_iteration, *command) == arm.reference

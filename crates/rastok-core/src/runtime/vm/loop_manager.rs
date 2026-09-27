@@ -26,7 +26,7 @@ impl Vm<'_> {
             };
             for delivery in queue.iter().filter(|delivery| delivery.port == spec.entry) {
                 let reference =
-                    ids::delivery_ref(&delivery.edge, delivery.envelope.meta().sys().id());
+                    ids::delivery_id(&delivery.edge, delivery.envelope.meta().sys().id());
                 let retained = fold.is_some_and(|fold| {
                     fold.runs().any(|(run, state)| {
                         live(state)
@@ -47,7 +47,7 @@ impl Vm<'_> {
 
     pub(super) fn close_instance_loops(
         &self,
-        instance: &InstanceRef,
+        instance: &InstanceGeneration,
         record: &mut crate::journal::TransactionRecord,
     ) -> Result<(), VmError> {
         let Some(fold) = self.loop_manager.as_deref() else {
@@ -98,11 +98,11 @@ impl Vm<'_> {
 
     pub(super) fn loop_application(
         &self,
-        instance: &InstanceRef,
+        instance: &InstanceGeneration,
         delivery: &Delivery,
-    ) -> Option<(LoopRunRef, &protocol::RunState)> {
+    ) -> Option<(LoopRunId, &protocol::RunState)> {
         let fold = self.loop_manager.as_deref()?;
-        let reference = ids::delivery_ref(&delivery.edge, delivery.envelope.meta().sys().id());
+        let reference = ids::delivery_id(&delivery.edge, delivery.envelope.meta().sys().id());
         fold.runs()
             .find_map(|(run, state)| {
                 (state.instance == *instance
@@ -125,7 +125,7 @@ impl Vm<'_> {
         &mut self,
         journal: &mut dyn Journal,
         slot: Slot,
-        instance: &InstanceRef,
+        instance: &InstanceGeneration,
         delivery: &Delivery,
     ) -> Result<bool, VmError> {
         let owner = &self.plan.owners[self.plan.nodes[slot.index()].owner.index()];
@@ -139,7 +139,7 @@ impl Vm<'_> {
         {
             return Ok(false);
         }
-        let opening = protocol::OpeningAdmissionRef::Delivery(ids::delivery_ref(
+        let opening = protocol::OpeningAdmissionRef::Delivery(ids::delivery_id(
             &delivery.edge,
             delivery.envelope.meta().sys().id(),
         ));
@@ -198,7 +198,7 @@ impl Vm<'_> {
         &mut self,
         journal: &mut dyn Journal,
         slot: Slot,
-        instance: &InstanceRef,
+        instance: &InstanceGeneration,
         edge: &str,
         envelope: Id,
     ) -> Result<(), VmError> {
@@ -222,7 +222,7 @@ impl Vm<'_> {
         {
             return Ok(());
         }
-        let opening = protocol::OpeningAdmissionRef::Delivery(ids::delivery_ref(edge, envelope));
+        let opening = protocol::OpeningAdmissionRef::Delivery(ids::delivery_id(edge, envelope));
         let run = protocol::run_ref(instance, &opening);
         let record = manager_record(
             instance,
@@ -232,7 +232,7 @@ impl Vm<'_> {
                 facts: vec![Fact::Admit {
                     run,
                     iteration: 0,
-                    admission: ids::delivery_ref(edge, envelope),
+                    admission: ids::delivery_id(edge, envelope),
                     envelope: delivery.envelope,
                 }],
                 ..Packet::default()
@@ -326,7 +326,7 @@ impl Vm<'_> {
     pub(super) fn prepare_call_completion(
         &self,
         slot: Slot,
-        instance: &InstanceRef,
+        instance: &InstanceGeneration,
         delivery: &Delivery,
         record: &mut crate::journal::TransactionRecord,
     ) -> Result<(), VmError> {
@@ -544,14 +544,14 @@ impl Vm<'_> {
                     && let Some(packet) = record.loop_record.as_deref_mut()
                 {
                     packet.routes.push(protocol::RoutedContext {
-                        delivery: ids::delivery_ref(&edge, envelope.meta().sys().id()),
+                        delivery: ids::delivery_id(&edge, envelope.meta().sys().id()),
                         runs: current.enclosing.clone(),
                     });
                 }
                 if call_timeout.is_some() {
                     record.timers.push((
                         crate::journal::timer_kind::CALL_TIMEOUT,
-                        ids::delivery_ref(&edge, envelope.meta().sys().id()),
+                        ids::delivery_id(&edge, envelope.meta().sys().id()),
                     ));
                 }
                 if let Some(timeout) = call_timeout {
@@ -559,7 +559,7 @@ impl Vm<'_> {
                         &mut record,
                         vec![crate::journal::timing::TimerArm {
                             kind: crate::journal::timer_kind::CALL_TIMEOUT,
-                            reference: ids::delivery_ref(&edge, envelope.meta().sys().id()),
+                            reference: ids::delivery_id(&edge, envelope.meta().sys().id()),
                             due_at: self.now.saturating_add(timeout),
                         }],
                     )?;
@@ -587,7 +587,7 @@ impl Vm<'_> {
                     vec![]
                 } else {
                     vec![protocol::RoutedContext {
-                        delivery: ids::delivery_ref(&edge, envelope.meta().sys().id()),
+                        delivery: ids::delivery_id(&edge, envelope.meta().sys().id()),
                         runs: current.enclosing.clone(),
                     }]
                 });
@@ -718,7 +718,7 @@ impl Vm<'_> {
         self.retain_graph_verdicts(&mut record)?;
         if let Some(due_at) = due {
             let timer = (
-                crate::journal::timer_kind::LOOP_DELAY,
+                crate::journal::timer_kind::RECURRENCE_DELAY,
                 protocol::admission_ref(run, current.iteration + 1, command.reference),
             );
             record.timers.push(timer);
@@ -767,7 +767,7 @@ impl Vm<'_> {
 pub(super) fn entry_measure_budget(
     proof: &crate::loop_proof::Certificate,
     envelope: &Envelope,
-    instance: &InstanceRef,
+    instance: &InstanceGeneration,
 ) -> Result<u64, VmError> {
     let invalid = || {
         loop_error(
@@ -803,7 +803,7 @@ pub(super) fn entry_measure_budget(
     Ok(u64::try_from(*measure).unwrap_or(0) + 1)
 }
 
-pub(super) fn manager_edge(run: LoopRunRef, entry: &node::Port) -> String {
+pub(super) fn manager_edge(run: LoopRunId, entry: &node::Port) -> String {
     format!("@loop:{run}:{entry}")
 }
 
@@ -833,7 +833,7 @@ pub(super) fn application_envelope(
     ))
 }
 
-fn loop_error(instance: &InstanceRef, reason: &'static str) -> VmError {
+fn loop_error(instance: &InstanceGeneration, reason: &'static str) -> VmError {
     VmError::InvalidLoopDecision {
         owner: instance.address().owner().clone(),
         reason,
@@ -841,7 +841,7 @@ fn loop_error(instance: &InstanceRef, reason: &'static str) -> VmError {
 }
 
 pub(super) fn manager_record(
-    instance: &InstanceRef,
+    instance: &InstanceGeneration,
     cause: Id,
     packet: Packet,
 ) -> crate::journal::TransactionRecord {

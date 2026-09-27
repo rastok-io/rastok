@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::journal::loop_protocol::{Fact as LoopFact, Phase as LoopPhase};
-use crate::journal::retry_protocol::{self as protocol, AttemptRef, Fact, Fold, Packet, Phase};
+use crate::journal::retry_protocol::{self as protocol, AttemptId, Fact, Fold, Packet, Phase};
 use crate::journal::timing::{TimerArm, TimerSchedule};
 use crate::journal::{CallRecord, Closure, OutboundStatus, Record, TransactionRecord};
 
@@ -14,10 +14,10 @@ pub(super) fn error(error: protocol::Error) -> VmError {
 impl Vm<'_> {
     pub(super) fn retry_attempt(
         &self,
-        instance: &InstanceRef,
+        instance: &InstanceGeneration,
         delivery: &Delivery,
-    ) -> Option<AttemptRef> {
-        let reference = ids::delivery_ref(&delivery.edge, delivery.envelope.meta().sys().id());
+    ) -> Option<AttemptId> {
+        let reference = ids::delivery_id(&delivery.edge, delivery.envelope.meta().sys().id());
         self.retry_manager
             .as_deref()?
             .operations()
@@ -25,7 +25,7 @@ impl Vm<'_> {
                 (state.instance == *instance
                     && state.delivery == reference
                     && state.phase != Phase::Closed)
-                    .then_some(AttemptRef {
+                    .then_some(AttemptId {
                         operation: *op,
                         ordinal: state.ordinal,
                     })
@@ -34,7 +34,7 @@ impl Vm<'_> {
 
     pub(super) fn pinned_retry_intent(
         &self,
-        instance: &InstanceRef,
+        instance: &InstanceGeneration,
         delivery: &Delivery,
     ) -> Option<Intent> {
         let attempt = self.retry_attempt(instance, delivery)?;
@@ -43,7 +43,7 @@ impl Vm<'_> {
             .as_deref()?
             .operation(attempt.operation)?;
         Some(Intent {
-            call_ref: ids::call_ref(state.delivery, state.pin.prepared.digest()),
+            call_id: ids::call_id(state.delivery, state.pin.prepared.digest()),
             emitting_id: delivery.envelope.meta().sys().id(),
             edge: delivery.edge.clone(),
             connector_path: node::Path::new(instance.address().owner().segments().iter().cloned())
@@ -59,7 +59,7 @@ impl Vm<'_> {
         &mut self,
         journal: &mut dyn Journal,
         slot: Slot,
-        instance: &InstanceRef,
+        instance: &InstanceGeneration,
         delivery: &Delivery,
         intent: &Intent,
     ) -> Result<bool, VmError> {
@@ -85,7 +85,7 @@ impl Vm<'_> {
         let plan = self
             .original_hash
             .ok_or_else(|| error(protocol::Error::OriginalBinding))?;
-        let opening = ids::delivery_ref(&delivery.edge, delivery.envelope.meta().sys().id());
+        let opening = ids::delivery_id(&delivery.edge, delivery.envelope.meta().sys().id());
         let operation = protocol::operation_ref(instance, &spec.entry, opening);
         let packet = Packet {
             context: None,
@@ -105,7 +105,7 @@ impl Vm<'_> {
                     },
                 },
                 Fact::Admitted {
-                    attempt: AttemptRef {
+                    attempt: AttemptId {
                         operation,
                         ordinal: 1,
                     },
@@ -148,7 +148,7 @@ impl Vm<'_> {
 
     pub(super) fn retry_call_opened(
         &mut self,
-        attempt: Option<AttemptRef>,
+        attempt: Option<AttemptId>,
         intent: &Intent,
     ) -> Result<(), VmError> {
         if let Some(attempt) = attempt {
@@ -187,7 +187,7 @@ impl Vm<'_> {
             .visit_records(&mut |record| {
                 if let Record::Outbound(crate::journal::OutboundRecord::Call(record)) = record
                     && record.status != OutboundStatus::Open
-                    && pending.contains(&record.intent.call_ref)
+                    && pending.contains(&record.intent.call_id)
                 {
                     closures.push(record.clone());
                 }
@@ -247,9 +247,9 @@ impl Vm<'_> {
 
     pub(super) fn prepare_retry_completion(
         &self,
-        instance: &InstanceRef,
+        instance: &InstanceGeneration,
         delivery: &Delivery,
-        call: CallRef,
+        call: CallId,
         record: &mut TransactionRecord,
     ) -> Result<Option<(Box<Fold>, bool)>, VmError> {
         let Some(attempt) = self.retry_attempt(instance, delivery) else {
@@ -305,7 +305,7 @@ impl Vm<'_> {
         })
     }
 
-    pub(super) fn retry_has_work(&self, instance: Option<&InstanceRef>) -> bool {
+    pub(super) fn retry_has_work(&self, instance: Option<&InstanceGeneration>) -> bool {
         self.retry_manager.as_deref().is_some_and(|fold| {
             fold.operations().any(|(_, state)| {
                 state.phase != Phase::Closed
@@ -364,7 +364,8 @@ impl Vm<'_> {
                     return;
                 };
                 for arm in schedule.arms().iter().filter(|arm| {
-                    arm.kind == crate::journal::timer_kind::LOOP_DELAY && arm.due_at <= self.now
+                    arm.kind == crate::journal::timer_kind::RECURRENCE_DELAY
+                        && arm.due_at <= self.now
                 }) {
                     let eligible = match record {
                         Record::Transaction(record) => {
@@ -390,7 +391,7 @@ impl Vm<'_> {
                             .and_then(|attempt| retries.operation(attempt.operation))
                             .is_some_and(|state| {
                                 state.phase == Phase::AwaitingAdmission
-                                    && state.call == Some(call.intent.call_ref)
+                                    && state.call == Some(call.intent.call_id)
                                     && state.due_at == Some(arm.due_at)
                                     && !self.closing.contains(&state.instance)
                             }),
@@ -434,7 +435,7 @@ impl Vm<'_> {
                         .as_deref()
                         .and_then(|packet| packet.context)
                     && let Some(state) = fold.operation(attempt.operation)
-                    && state.call == Some(call.intent.call_ref)
+                    && state.call == Some(call.intent.call_id)
                 {
                     let closing = self.closing.contains(&state.instance);
                     let ready = state.phase == Phase::Held
@@ -474,7 +475,7 @@ impl Vm<'_> {
             .operation(operation)
             .ok_or_else(|| error(protocol::Error::UnknownOperation))?
             .clone();
-        let attempt = AttemptRef {
+        let attempt = AttemptId {
             operation,
             ordinal: state.ordinal,
         };
@@ -529,11 +530,11 @@ impl Vm<'_> {
             );
             let edge = protocol::admission_edge(operation, &state.entry);
             facts.push(Fact::Admitted {
-                attempt: AttemptRef {
+                attempt: AttemptId {
                     operation,
                     ordinal: state.ordinal + 1,
                 },
-                delivery: ids::delivery_ref(&edge, id),
+                delivery: ids::delivery_id(&edge, id),
                 envelope: envelope.clone(),
             });
             admission = Some((edge, envelope));
@@ -563,7 +564,7 @@ impl Vm<'_> {
         }
         let mut timeout = None;
         if let Some((edge, envelope)) = &admission {
-            let reference = ids::delivery_ref(edge, envelope.meta().sys().id());
+            let reference = ids::delivery_id(edge, envelope.meta().sys().id());
             record.routes.push(RoutedDelivery {
                 delivery: envelope.meta().sys().id(),
                 edge: edge.clone(),
@@ -601,7 +602,7 @@ impl Vm<'_> {
         if let Some((edge, envelope)) = admission {
             if !context.is_empty() {
                 self.install_graph_contexts(vec![crate::journal::loop_protocol::RoutedContext {
-                    delivery: ids::delivery_ref(&edge, envelope.meta().sys().id()),
+                    delivery: ids::delivery_id(&edge, envelope.meta().sys().id()),
                     runs: context,
                 }]);
             }
@@ -663,7 +664,7 @@ pub(super) fn closure_schedule(
     let Some(fold) = fold else { return Ok(None) };
     let Some((op, state)) = fold
         .operations()
-        .find(|(_, state)| state.call == Some(intent.call_ref))
+        .find(|(_, state)| state.call == Some(intent.call_id))
     else {
         return Ok(None);
     };
@@ -689,8 +690,8 @@ pub(super) fn closure_schedule(
             TimerSchedule::try_new(
                 now,
                 vec![TimerArm {
-                    kind: crate::journal::timer_kind::LOOP_DELAY,
-                    reference: protocol::admission_ref(*op, state.ordinal + 1, intent.call_ref),
+                    kind: crate::journal::timer_kind::RECURRENCE_DELAY,
+                    reference: protocol::admission_ref(*op, state.ordinal + 1, intent.call_id),
                     due_at,
                 }],
             )
@@ -748,7 +749,7 @@ pub(super) fn hold_emissions(record: &TransactionRecord) -> PreparedEmissions {
 }
 
 pub(super) fn manager_record(
-    instance: &InstanceRef,
+    instance: &InstanceGeneration,
     cause: Id,
     packet: Packet,
 ) -> TransactionRecord {

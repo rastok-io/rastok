@@ -19,12 +19,12 @@
 //! [`identity.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/identity.md
 
 use crate::boundary::{
-    CallRef, Completion, InboundCallRef, InboundEnvelopeProvenance, InboundSession,
-    InboundSubmission, Intent, SessionOpenIntent, SessionRef, SessionWriteIntent, SessionWriteRef,
+    CallId, Completion, InboundCallId, InboundEnvelopeProvenance, InboundSession,
+    InboundSubmission, Intent, SessionId, SessionOpenIntent, SessionWriteId, SessionWriteIntent,
     SubmissionSequence,
 };
 use crate::envelope::{Envelope, Id, Meta, MetaSys};
-use crate::identity::{InstanceAddress, InstanceRef};
+use crate::identity::{InstanceGeneration, InstanceIdentity};
 use crate::node;
 use crate::observation::{
     ExchangeCorrelation, RecordCorrelation, RecordObservation, RecordObservationKind,
@@ -48,8 +48,8 @@ pub mod timing;
 /// `envelope.md` §2, with its domain tags.
 pub mod ids {
     use super::{
-        CallRef, Id, InboundEnvelopeProvenance, InstanceRef, OwnerPath, SessionRef,
-        SessionWriteRef, node,
+        CallId, Id, InboundEnvelopeProvenance, InstanceGeneration, OwnerPath, SessionId,
+        SessionWriteId, node,
     };
     use alloc::string::ToString;
     use alloc::vec::Vec;
@@ -144,13 +144,13 @@ pub mod ids {
     /// from. A fan-out of one envelope is one distinct reference per
     /// receiving edge, two ports of one connector included.
     #[must_use]
-    pub fn delivery_ref(edge: &str, delivery: Id) -> Id {
+    pub fn delivery_id(edge: &str, delivery: Id) -> Id {
         Id::derive(DELIVERY, &[edge.as_bytes(), delivery.as_bytes()])
     }
 
     /// The stable 16-byte timer reference for one instance generation.
     #[must_use]
-    pub fn instance_lifetime_ref(instance: &InstanceRef) -> Id {
+    pub fn instance_lifetime_id(instance: &InstanceGeneration) -> Id {
         Id::derive(
             INSTANCE_LIFETIME,
             &[
@@ -164,7 +164,7 @@ pub mod ids {
     /// extend-only timer-kind number (drain or settlement), so the two
     /// obligations of one generation cannot collide.
     #[must_use]
-    pub fn instance_closing_ref(instance: &InstanceRef, phase: u8) -> Id {
+    pub fn instance_closing_id(instance: &InstanceGeneration, phase: u8) -> Id {
         Id::derive(
             INSTANCE_CLOSING,
             &[
@@ -183,15 +183,15 @@ pub mod ids {
     /// says WHAT was sent; the reference says BY WHERE — routing
     /// never salts the digest.
     #[must_use]
-    pub fn call_ref(delivery_ref: Id, request_digest: &[u8; 32]) -> CallRef {
-        CallRef::new(Id::derive(CALL, &[delivery_ref.as_bytes(), request_digest]))
+    pub fn call_id(delivery_id: Id, request_digest: &[u8; 32]) -> CallId {
+        CallId::new(Id::derive(CALL, &[delivery_id.as_bytes(), request_digest]))
     }
 
     /// Logical reference of one inbound-opened session. The opening root is
     /// already journal-derived; the subtype frame keeps the recipe disjoint
     /// from outbound openings under the shared session domain.
     #[must_use]
-    pub fn inbound_session_ref(provenance: &InboundEnvelopeProvenance, opening: Id) -> SessionRef {
+    pub fn inbound_session_id(provenance: &InboundEnvelopeProvenance, opening: Id) -> SessionId {
         let subtype = [1];
         let mut parts = Vec::with_capacity(
             provenance
@@ -209,16 +209,16 @@ pub mod ids {
                 .map(|segment| segment.as_bytes()),
         );
         parts.push(opening.as_bytes());
-        SessionRef::new(Id::derive(SESSION, &parts))
+        SessionId::new(Id::derive(SESSION, &parts))
     }
 
     /// Logical reference of one outbound-opened session.
     #[must_use]
-    pub fn outbound_session_ref(
+    pub fn outbound_session_id(
         connector: &node::Path,
         emitting: Id,
         request_digest: &[u8; 32],
-    ) -> SessionRef {
+    ) -> SessionId {
         let subtype = [2];
         let mut parts = Vec::with_capacity(connector.segments().len().saturating_add(3));
         parts.push(subtype.as_slice());
@@ -230,17 +230,17 @@ pub mod ids {
         );
         parts.push(emitting.as_bytes());
         parts.push(request_digest);
-        SessionRef::new(Id::derive(SESSION, &parts))
+        SessionId::new(Id::derive(SESSION, &parts))
     }
 
     /// Identity of one graph-to-world session write.
     #[must_use]
-    pub fn session_write_ref(
-        session: SessionRef,
+    pub fn session_write_id(
+        session: SessionId,
         emitting: Id,
         message_digest: &[u8; 32],
-    ) -> SessionWriteRef {
-        SessionWriteRef::new(Id::derive(
+    ) -> SessionWriteId {
+        SessionWriteId::new(Id::derive(
             SESSION_WRITE,
             &[session.id().as_bytes(), emitting.as_bytes(), message_digest],
         ))
@@ -255,10 +255,9 @@ pub mod timer_kind {
     pub const JOIN_WITHIN: u8 = 2;
     /// One logical instance generation lifetime.
     pub const INSTANCE_LIFETIME: u8 = 3;
-    /// One Saga deadline (reserved until Saga execution).
-    pub const SAGA_TIMEOUT: u8 = 4;
-    /// One Loop delayed re-entry wakeup; the ref is its `l:next` envelope id.
-    pub const LOOP_DELAY: u8 = 5;
+    // byte 4 is reserved by identity.md, not allocated here
+    /// One Loop or Retry delayed re-entry wakeup, keyed by its admission id.
+    pub const RECURRENCE_DELAY: u8 = 5;
     /// End of an instance's admitted-work drain interval.
     pub const INSTANCE_DRAIN: u8 = 6;
     /// End of an instance's cancellation settlement interval.
@@ -365,7 +364,7 @@ fn inbound_exchange_context(
         return (None, None);
     };
     let connector = records.iter().rev().find_map(|record| match record {
-        Record::Outbound(OutboundRecord::Session(recorded)) if recorded.session_ref == session => {
+        Record::Outbound(OutboundRecord::Session(recorded)) if recorded.session_id == session => {
             Some(recorded.connector_path.clone())
         }
         _ => None,
@@ -375,14 +374,14 @@ fn inbound_exchange_context(
 
 fn session_origin(
     records: &[Record],
-    session: SessionRef,
-    write: Option<SessionWriteRef>,
+    session: SessionId,
+    write: Option<SessionWriteId>,
 ) -> Option<Id> {
     records.iter().rev().find_map(|record| {
         let Record::Outbound(OutboundRecord::Session(recorded)) = record else {
             return None;
         };
-        if recorded.session_ref != session {
+        if recorded.session_id != session {
             return None;
         }
         let emitting = match (&recorded.status, write) {
@@ -477,9 +476,7 @@ fn observation_for_record(records: &[Record], record: &Record) -> RecordObservat
             let correlation =
                 RecordCorrelation::new(recorded_origin(records, call.intent.emitting_id))
                     .with_connector(Some(call.intent.connector_path.clone()))
-                    .with_exchange(Some(ExchangeCorrelation::OutboundCall(
-                        call.intent.call_ref,
-                    )));
+                    .with_exchange(Some(ExchangeCorrelation::OutboundCall(call.intent.call_id)));
             RecordObservation::new(kind, correlation)
         }
         Record::Outbound(OutboundRecord::Session(session)) => {
@@ -508,11 +505,11 @@ fn observation_for_record(records: &[Record], record: &Record) -> RecordObservat
             };
             let origin = direct_emitting
                 .and_then(|id| recorded_origin(records, id))
-                .or_else(|| session_origin(records, session.session_ref, write));
+                .or_else(|| session_origin(records, session.session_id, write));
             let correlation = RecordCorrelation::new(origin)
                 .with_connector(Some(session.connector_path.clone()))
                 .with_exchange(Some(ExchangeCorrelation::Session {
-                    session: session.session_ref,
+                    session: session.session_id,
                     write,
                 }));
             RecordObservation::new(kind, correlation)
@@ -578,9 +575,9 @@ pub enum InboundExchangeRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InboundCallIngressRecord {
     /// Root-derived Call reference.
-    pub reference: InboundCallRef,
+    pub reference: InboundCallId,
     /// Exact Connector generation that owns the request and its terminal exit.
-    pub instance: InstanceRef,
+    pub instance: InstanceGeneration,
     /// Dated obligations armed by this Call-opening fact. The tuple registry
     /// is shared with transaction timers; ack-mode Calls carry none.
     pub timers: Vec<(u8, Id)>,
@@ -594,18 +591,18 @@ pub struct InboundCallIngressRecord {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InboundExchangeExitRecord {
     /// Terminal transaction of one admitted inbound Call.
-    Call(InboundCallRef),
+    Call(InboundCallId),
     /// Terminal transaction of one inbound Session.
-    Session(SessionRef),
+    Session(SessionId),
 }
 
 /// Resolved session meaning of one committed inbound fact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionIngressRecord {
     /// This record opened the named session.
-    Open(SessionRef),
+    Open(SessionId),
     /// This record delivered one message in the named live session.
-    Message(SessionRef),
+    Message(SessionId),
 }
 
 /// One pre-commit target selection for a single inbound envelope.
@@ -614,7 +611,7 @@ pub struct RouteTarget {
     /// Canonical edge text carrying the envelope.
     pub edge: String,
     /// Complete target instance reference returned by destination admission.
-    pub target: InstanceRef,
+    pub target: InstanceGeneration,
 }
 
 /// One consumed input position — the cursor is per
@@ -625,7 +622,7 @@ pub struct ConsumedPosition {
     /// The graph edge the input arrived on, canonically rendered.
     pub edge: String,
     /// Complete upstream instance reference which owns this edge cursor.
-    pub source: InstanceRef,
+    pub source: InstanceGeneration,
     /// The position on that edge.
     pub seq: u64,
 }
@@ -643,9 +640,9 @@ pub struct Emission {
 
 /// Placement-neutral identity of one finite Loop run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct LoopRunRef(Id);
+pub struct LoopRunId(Id);
 
-impl LoopRunRef {
+impl LoopRunId {
     /// Wraps an identity derived by [`loop_protocol::run_ref`].
     #[must_use]
     pub const fn new(id: Id) -> Self {
@@ -659,7 +656,7 @@ impl LoopRunRef {
     }
 }
 
-impl fmt::Display for LoopRunRef {
+impl fmt::Display for LoopRunId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(formatter)
     }
@@ -685,15 +682,15 @@ pub struct TransactionRecord {
     pub owner_path: OwnerPath,
     /// Complete firing instance reference. It is mandatory even for a
     /// persistent singleton owner.
-    pub instance: InstanceRef,
+    pub instance: InstanceGeneration,
     /// Enclosing Graph generation, present on a nested owner's `l:start`.
     /// The address carries ancestor key frames but deliberately not ancestor
     /// generations; recovery needs this explicit causal edge.
-    pub parent_instance: Option<InstanceRef>,
+    pub parent_instance: Option<InstanceGeneration>,
     /// A close request won atomically with this firing. The reference is the
     /// root of the closing scope; descendants may finish already-admitted
     /// work, while later external routes reserve the successor generation.
-    pub close_scope: Option<InstanceRef>,
+    pub close_scope: Option<InstanceGeneration>,
     /// What fired it.
     pub trigger: node::Trigger,
     /// Causal envelope for a lifecycle transaction that consumes no mailbox
@@ -753,7 +750,7 @@ pub struct RoutedDelivery {
     /// Canonical edge text carrying it.
     pub edge: String,
     /// Complete target instance reference selected before producer commit.
-    pub target: InstanceRef,
+    pub target: InstanceGeneration,
 }
 
 /// One external-world WAL fact. Call and Session subforms remain under the
@@ -788,7 +785,7 @@ pub struct SessionRecord {
     /// Connector that owns the logical session.
     pub connector_path: node::Path,
     /// Session whose fold this fact advances.
-    pub session_ref: SessionRef,
+    pub session_id: SessionId,
     /// Exact transition stated by this record.
     pub status: SessionStatus,
 }
@@ -803,10 +800,10 @@ pub enum SessionStatus {
     /// One graph-to-world message became an open write obligation.
     WriteOpen(SessionWriteIntent),
     /// The Driver locally accepted the message bytes.
-    WriteSettled(SessionWriteRef),
+    WriteSettled(SessionWriteId),
     /// Recovery cannot prove the message's external visibility; it must not
     /// be replayed blindly.
-    WriteAbandoned(SessionWriteRef),
+    WriteAbandoned(SessionWriteId),
 }
 
 /// The sealed causal states of an outbound call. A late reply after
@@ -849,7 +846,7 @@ pub enum CloseVerdict {
 pub struct CommittedInbound {
     /// The allocated or validated sequence.
     pub seq: u64,
-    /// The envelope born here — its spine minted by the runtime.
+    /// The envelope born here — its five reserved `sys` fields minted by the runtime.
     pub envelope: Envelope,
     /// The committed record.
     pub record: InboundRecord,
@@ -915,14 +912,14 @@ impl PreparedInbound {
     /// A boundary root, Session fact, or second Call marker is contradictory.
     pub(crate) fn into_call(
         mut self,
-        instance: InstanceRef,
+        instance: InstanceGeneration,
         timers: Vec<(u8, Id)>,
     ) -> Result<Self, Error> {
         if self.connector_path.is_none() || self.exchange.is_some() {
             return Err(Error::CorruptInboundCall);
         }
         self.exchange = Some(InboundExchangeRecord::Call(InboundCallIngressRecord {
-            reference: InboundCallRef::from_root(self.envelope.meta().sys().id()),
+            reference: InboundCallId::from_root(self.envelope.meta().sys().id()),
             instance,
             timers,
         }));
@@ -950,9 +947,9 @@ pub enum Error {
     /// from the journal's lifecycle fold for that address.
     InstanceGenerationMismatch {
         /// The journal-derived reference.
-        expected: InstanceRef,
+        expected: InstanceGeneration,
         /// The transported claim.
-        got: InstanceRef,
+        got: InstanceGeneration,
     },
     /// A transaction claims an actor other than the owner sealed into its
     /// instance address.
@@ -966,7 +963,7 @@ pub enum Error {
     /// attempted to close an address whose generation never started.
     InvalidInstanceLifecycle {
         /// The addressed generation.
-        instance: InstanceRef,
+        instance: InstanceGeneration,
         /// Whether the journal fold was active before the transition.
         active: bool,
     },
@@ -974,35 +971,35 @@ pub enum Error {
     /// enclosing owner. It belongs exactly on a non-root owner's `l:start`.
     InvalidParentInstance {
         /// The child lifecycle reference.
-        instance: InstanceRef,
+        instance: InstanceGeneration,
         /// The transported parent claim, if any.
-        parent: Option<InstanceRef>,
+        parent: Option<InstanceGeneration>,
     },
     /// A parent `l:stop` was attempted while at least one journaled child
     /// lifecycle obligation remained open.
     OpenChildInstances {
         /// Parent generation that must remain active.
-        parent: InstanceRef,
+        parent: InstanceGeneration,
     },
     /// A close request did not name the firing generation itself.
     InvalidCloseScope {
         /// Firing generation.
-        instance: InstanceRef,
+        instance: InstanceGeneration,
         /// Transported close root.
-        scope: InstanceRef,
+        scope: InstanceGeneration,
     },
     /// A second close request tried to govern a generation already covered by
     /// an active durable close root. The first causal request is authoritative.
     InstanceAlreadyClosing {
         /// Generation named by the losing request.
-        instance: InstanceRef,
+        instance: InstanceGeneration,
         /// Existing root whose Closing scope already covers it.
-        scope: InstanceRef,
+        scope: InstanceGeneration,
     },
     /// `l:stop` was attempted before a durable close request existed.
     StopWithoutClose {
         /// Generation whose lifecycle was truncated.
-        instance: InstanceRef,
+        instance: InstanceGeneration,
     },
     /// An r2 command packet contradicts the replay-derived protocol.
     InvalidLoopProtocol(loop_protocol::Error),
@@ -1050,7 +1047,7 @@ pub enum Error {
     /// conventional `exit` emission.
     InvalidSessionExit,
     /// A session terminal envelope omitted or contradicted the logical
-    /// `meta.ext.session_id` projection owned by its `SessionRef`.
+    /// `meta.ext.session_id` projection owned by its `SessionId`.
     SessionProjectionMismatch,
     /// The backing store failed to commit — the durable-journal
     /// escape hatch; the in-memory journal never raises it.
@@ -1289,7 +1286,10 @@ pub trait Journal {
     /// Returns the generation a route committing now must seal for this
     /// address. The value is a pure fold of journaled `l:start`/`l:stop`
     /// transactions; no Worker-local counter participates.
-    fn instance_ref_for_admission(&self, address: &InstanceAddress) -> Result<InstanceRef, Error>;
+    fn instance_ref_for_admission(
+        &self,
+        address: &InstanceIdentity,
+    ) -> Result<InstanceGeneration, Error>;
 
     /// Reconstructs the command-based Loop protocol from committed facts.
     ///
@@ -1333,7 +1333,7 @@ pub trait Journal {
     fn open_outbound(
         &mut self,
         intent: Intent,
-        attempt: Option<retry_protocol::AttemptRef>,
+        attempt: Option<retry_protocol::AttemptId>,
     ) -> Result<(), Error>;
 
     /// Journals one outbound session opening before the Driver acts.
@@ -1348,7 +1348,7 @@ pub trait Journal {
     /// # Errors
     ///
     /// The session is unknown or already terminal.
-    fn confirm_session_open(&mut self, session: &SessionRef) -> Result<CloseVerdict, Error>;
+    fn confirm_session_open(&mut self, session: &SessionId) -> Result<CloseVerdict, Error>;
 
     /// Journals one session message before the Driver may offer its bytes.
     ///
@@ -1365,7 +1365,7 @@ pub trait Journal {
     /// The session/write is unknown.
     fn settle_session_write(
         &mut self,
-        write_ref: &SessionWriteRef,
+        write_ref: &SessionWriteId,
         abandoned: bool,
     ) -> Result<CloseVerdict, Error>;
 
@@ -1380,7 +1380,7 @@ pub trait Journal {
     /// [`Error::UnknownCall`] when no record carries this call ref.
     fn close_outbound(
         &mut self,
-        call_ref: &CallRef,
+        call_id: &CallId,
         closure: Closure,
         closed_at: i64,
         schedule: Option<Box<timing::TimerSchedule>>,
@@ -1389,17 +1389,14 @@ pub trait Journal {
     /// Declares that bounded Closing could not establish an observed
     /// terminal outcome. This participates in the same close-once race as a
     /// response or timeout and appends an `abandoned` fact on success.
-    fn abandon_outbound(
-        &mut self,
-        call_ref: &CallRef,
-        closed_at: i64,
-    ) -> Result<CloseVerdict, Error>;
+    fn abandon_outbound(&mut self, call_id: &CallId, closed_at: i64)
+    -> Result<CloseVerdict, Error>;
 
     /// The envelope carrying `id`, wherever the history recorded it.
     fn find_envelope(&self, id: Id) -> Option<Envelope>;
 
     /// The intent of a journaled call, settled or not.
-    fn find_call(&self, call_ref: &CallRef) -> Option<Intent>;
+    fn find_call(&self, call_id: &CallId) -> Option<Intent>;
 
     /// The calls whose open fact has no closure fact yet, in open
     /// order.
@@ -1410,15 +1407,21 @@ pub trait Journal {
     fn open_inbound_calls(&self) -> Vec<InboundCallIngressRecord>;
 
     /// Live sessions in canonical reference order.
-    fn live_sessions(&self) -> Vec<SessionRef>;
+    fn live_sessions(&self) -> Vec<SessionId>;
 
     /// Session message writes whose open fact has no settlement fact.
     fn open_session_writes(&self) -> Vec<SessionWriteIntent>;
 }
 
-/// The M0 in-memory journal. It preserves the logical boundaries a
-/// durable implementation needs — typed records, per-provenance
-/// sequences, append-only closure — with no claim about files.
+/// The deliberately simple, linear M1 in-memory journal. It preserves the
+/// logical boundaries a durable implementation needs — typed records,
+/// per-provenance sequences, append-only closure — with no claim about files.
+///
+/// `find_call`, `find_envelope`, and `statuses_of` scan records in O(n); the VM
+/// also performs full scans. This is acceptable for in-memory runs of a few
+/// hundred records. M2 must maintain indexes atomically with the records,
+/// following the existing lifecycle and Session folds, without making an
+/// index a second source of truth.
 #[derive(Debug)]
 pub struct MemJournal {
     graph_version: GraphVersion,
@@ -1427,16 +1430,16 @@ pub struct MemJournal {
     next_seq: BTreeMap<InboundEnvelopeProvenance, u64>,
     /// Replay-derived lifecycle fold, maintained atomically with `records`.
     /// It is an index over causal facts, never a second generation authority.
-    instance_lifecycles: BTreeMap<InstanceAddress, InstanceLifecycle>,
+    instance_lifecycles: BTreeMap<InstanceIdentity, InstanceLifecycle>,
     /// Active durable close roots. The set is a replay-derived fast rejection:
     /// ordinary admission never walks an owner chain when no close fact exists.
-    active_close_roots: BTreeSet<InstanceRef>,
+    active_close_roots: BTreeSet<InstanceGeneration>,
     /// Replay-derived Session fold. It is an index over the three ordinary
     /// causal record kinds, never a fourth record stream.
-    sessions: BTreeMap<SessionRef, SessionLifecycle>,
+    sessions: BTreeMap<SessionId, SessionLifecycle>,
     /// Replay-derived inbound Call fold. The opening INBOUND fact and terminal
     /// TRANSACTION remain the only authorities.
-    inbound_calls: BTreeMap<InboundCallRef, InboundCallLifecycle>,
+    inbound_calls: BTreeMap<InboundCallId, InboundCallLifecycle>,
     /// Replay-derived Loop fold, replaced only with the committed record.
     /// The independent Fold reader reconstructs it from `records`; ordinary
     /// non-Loop journals allocate nothing for this index.
@@ -1446,7 +1449,7 @@ pub struct MemJournal {
 #[derive(Debug, Clone)]
 struct InboundCallLifecycle {
     connector_path: node::Path,
-    instance: InstanceRef,
+    instance: InstanceGeneration,
     timers: Vec<(u8, Id)>,
     open: bool,
 }
@@ -1455,7 +1458,7 @@ struct InboundCallLifecycle {
 struct InstanceLifecycle {
     starts: u64,
     active: bool,
-    parent: Option<InstanceRef>,
+    parent: Option<InstanceGeneration>,
     closing: bool,
 }
 
@@ -1463,7 +1466,7 @@ struct InstanceLifecycle {
 struct SessionLifecycle {
     connector_path: node::Path,
     phase: SessionPhase,
-    writes: BTreeMap<SessionWriteRef, bool>,
+    writes: BTreeMap<SessionWriteId, bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1575,10 +1578,10 @@ impl MemJournal {
                             .ext()
                             .iter()
                             .map(|(name, value)| {
-                                (name, crate::identity::encoding::meta_tagged(value))
+                                (name, crate::identity::encoding::canonical_meta_value(value))
                             })
                             .eq(inbound.envelope.meta().ext().iter().map(|(name, value)| {
-                                (name, crate::identity::encoding::meta_tagged(value))
+                                (name, crate::identity::encoding::canonical_meta_value(value))
                             }));
                     if !metadata_equal
                         || prepared.envelope.meta().sys() != inbound.envelope.meta().sys()
@@ -1601,7 +1604,7 @@ impl MemJournal {
                         let Some(original) =
                             journal.records.iter().find_map(|record| match record {
                                 Record::Outbound(OutboundRecord::Call(open))
-                                    if open.intent.call_ref == call.intent.call_ref =>
+                                    if open.intent.call_id == call.intent.call_id =>
                                 {
                                     Some(open)
                                 }
@@ -1634,7 +1637,7 @@ impl MemJournal {
                                 )
                             })?;
                             journal.close_outbound(
-                                &call.intent.call_ref,
+                                &call.intent.call_id,
                                 closure.clone(),
                                 at,
                                 call.timer_schedule.clone(),
@@ -1648,7 +1651,7 @@ impl MemJournal {
                                     ),
                                 )
                             })?;
-                            journal.abandon_outbound(&call.intent.call_ref, at)?;
+                            journal.abandon_outbound(&call.intent.call_id, at)?;
                         }
                     }
                 }
@@ -1657,7 +1660,7 @@ impl MemJournal {
                         journal.open_outbound_session(intent.clone())?
                     }
                     SessionStatus::Opened => {
-                        journal.confirm_session_open(&session.session_ref)?;
+                        journal.confirm_session_open(&session.session_id)?;
                     }
                     SessionStatus::WriteOpen(intent) => {
                         journal.open_session_write(intent.clone())?
@@ -1677,10 +1680,10 @@ impl MemJournal {
         Ok(journal)
     }
 
-    fn statuses_of(&self, call_ref: &CallRef) -> impl Iterator<Item = &OutboundStatus> {
+    fn statuses_of(&self, call_id: &CallId) -> impl Iterator<Item = &OutboundStatus> {
         self.records.iter().filter_map(move |record| match record {
             Record::Outbound(OutboundRecord::Call(outbound))
-                if outbound.intent.call_ref == *call_ref =>
+                if outbound.intent.call_id == *call_id =>
             {
                 Some(&outbound.status)
             }
@@ -1692,21 +1695,25 @@ impl MemJournal {
     /// `starts` is also the next generation ordinal whenever no generation is
     /// active. A durable implementation rebuilds the same projection while
     /// replaying `l:start`/`l:stop`; no Worker-local counter participates.
-    fn instance_lifecycle(&self, address: &InstanceAddress) -> InstanceLifecycle {
+    fn instance_lifecycle(&self, address: &InstanceIdentity) -> InstanceLifecycle {
         self.instance_lifecycles
             .get(address)
             .cloned()
             .unwrap_or_default()
     }
 
-    fn active_instance_ref(&self, address: &InstanceAddress) -> Option<InstanceRef> {
+    fn active_instance_ref(&self, address: &InstanceIdentity) -> Option<InstanceGeneration> {
         let lifecycle = self.instance_lifecycle(address);
         lifecycle
             .active
-            .then(|| InstanceRef::new(address.clone(), lifecycle.starts.saturating_sub(1)))
+            .then(|| InstanceGeneration::new(address.clone(), lifecycle.starts.saturating_sub(1)))
     }
 
-    fn instance_is_within(&self, child: &InstanceRef, ancestor: &InstanceRef) -> bool {
+    fn instance_is_within(
+        &self,
+        child: &InstanceGeneration,
+        ancestor: &InstanceGeneration,
+    ) -> bool {
         let mut cursor = Some(child.clone());
         while let Some(reference) = cursor {
             if reference == *ancestor {
@@ -1722,7 +1729,7 @@ impl MemJournal {
     }
 
     /// Outermost durable close root governing this active generation.
-    fn closing_scope(&self, instance: &InstanceRef) -> Option<InstanceRef> {
+    fn closing_scope(&self, instance: &InstanceGeneration) -> Option<InstanceGeneration> {
         if self.active_close_roots.is_empty() {
             return None;
         }
@@ -1743,8 +1750,8 @@ impl MemJournal {
 
     fn route_generation_is_valid(
         &self,
-        source: Option<&InstanceRef>,
-        target: &InstanceRef,
+        source: Option<&InstanceGeneration>,
+        target: &InstanceGeneration,
     ) -> Result<bool, Error> {
         let admission = self.instance_ref_for_admission(target.address())?;
         if target == &admission {
@@ -1763,13 +1770,13 @@ impl MemJournal {
         )
     }
 
-    fn has_active_children(&self, parent: &InstanceRef) -> bool {
+    fn has_active_children(&self, parent: &InstanceGeneration) -> bool {
         self.instance_lifecycles
             .values()
             .any(|lifecycle| lifecycle.active && lifecycle.parent.as_ref() == Some(parent))
     }
 
-    fn route_was_reserved(&self, target: &InstanceRef) -> bool {
+    fn route_was_reserved(&self, target: &InstanceGeneration) -> bool {
         self.records.iter().any(|record| match record {
             Record::Inbound(inbound) => {
                 inbound.routes.iter().any(|route| &route.target == target)
@@ -1788,8 +1795,8 @@ impl MemJournal {
 
     fn ancestor_route_was_reserved(
         &self,
-        target: &InstanceRef,
-        parent: &InstanceRef,
+        target: &InstanceGeneration,
+        parent: &InstanceGeneration,
         cause: Option<Id>,
     ) -> bool {
         let Some(cause) = cause else { return false };
@@ -1876,7 +1883,7 @@ impl MemJournal {
         let resolved_exchange = match session {
             None => None,
             Some(InboundSession::Open) => {
-                let reference = ids::inbound_session_ref(&submission.provenance, id);
+                let reference = ids::inbound_session_id(&submission.provenance, id);
                 if self.sessions.contains_key(&reference) {
                     return Err(Error::DuplicateSessionOpen);
                 }
@@ -2021,7 +2028,7 @@ impl Journal for MemJournal {
                 let Some(connector_path) = prepared.connector_path.as_ref() else {
                     return Err(Error::CorruptInboundCall);
                 };
-                if call.reference != InboundCallRef::from_root(root)
+                if call.reference != InboundCallId::from_root(root)
                     || call.instance.address().owner().segments() != connector_path.segments()
                 {
                     return Err(Error::CorruptInboundCall);
@@ -2168,9 +2175,9 @@ impl Journal for MemJournal {
         }
         let mut lifecycle = self.instance_lifecycle(transaction.instance.address());
         let expected = if is_start {
-            InstanceRef::new(transaction.instance.address().clone(), lifecycle.starts)
+            InstanceGeneration::new(transaction.instance.address().clone(), lifecycle.starts)
         } else {
-            InstanceRef::new(
+            InstanceGeneration::new(
                 transaction.instance.address().clone(),
                 lifecycle.starts.saturating_sub(1),
             )
@@ -2273,10 +2280,10 @@ impl Journal for MemJournal {
                 });
             }
         }
-        if let Some(InboundExchangeExitRecord::Session(session_ref)) =
+        if let Some(InboundExchangeExitRecord::Session(session_id)) =
             transaction.exchange_exit.as_deref().copied()
         {
-            let Some(session) = self.sessions.get(&session_ref) else {
+            let Some(session) = self.sessions.get(&session_id) else {
                 return Err(Error::UnknownSession);
             };
             if session.phase == SessionPhase::Exited
@@ -2308,15 +2315,15 @@ impl Journal for MemJournal {
                 projected,
                 Some(crate::envelope::MetaValue::Scalar(
                     crate::envelope::Scalar::Text(value)
-                )) if value == &session_ref.to_string()
+                )) if value == &session_id.to_string()
             ) {
                 return Err(Error::SessionProjectionMismatch);
             }
         }
-        if let Some(InboundExchangeExitRecord::Call(call_ref)) =
+        if let Some(InboundExchangeExitRecord::Call(call_id)) =
             transaction.exchange_exit.as_deref().copied()
         {
-            let Some(call) = self.inbound_calls.get(&call_ref) else {
+            let Some(call) = self.inbound_calls.get(&call_id) else {
                 return Err(Error::UnknownInboundCall);
             };
             if !call.open
@@ -2326,7 +2333,7 @@ impl Journal for MemJournal {
                 return Err(Error::UnknownInboundCall);
             }
             if transaction.trigger != node::Trigger::Lifecycle(node::Lifecycle::Reply)
-                || transaction.cause != Some(call_ref.id())
+                || transaction.cause != Some(call_id.id())
                 || transaction.consumed.len() > 1
             {
                 return Err(Error::InvalidInboundCallExit);
@@ -2376,25 +2383,28 @@ impl Journal for MemJournal {
             self.command_loops = Some(fold);
         }
         self.instance_lifecycles.insert(address, lifecycle);
-        if let Some(InboundExchangeExitRecord::Session(session_ref)) = exchange_exit
-            && let Some(session) = self.sessions.get_mut(&session_ref)
+        if let Some(InboundExchangeExitRecord::Session(session_id)) = exchange_exit
+            && let Some(session) = self.sessions.get_mut(&session_id)
         {
             session.phase = SessionPhase::Exited;
         }
-        if let Some(InboundExchangeExitRecord::Call(call_ref)) = exchange_exit
-            && let Some(call) = self.inbound_calls.get_mut(&call_ref)
+        if let Some(InboundExchangeExitRecord::Call(call_id)) = exchange_exit
+            && let Some(call) = self.inbound_calls.get_mut(&call_id)
         {
             call.open = false;
         }
         Ok(())
     }
 
-    fn instance_ref_for_admission(&self, address: &InstanceAddress) -> Result<InstanceRef, Error> {
+    fn instance_ref_for_admission(
+        &self,
+        address: &InstanceIdentity,
+    ) -> Result<InstanceGeneration, Error> {
         let lifecycle = self.instance_lifecycle(address);
         let closing = lifecycle.active
             && !self.active_close_roots.is_empty()
             && self
-                .closing_scope(&InstanceRef::new(
+                .closing_scope(&InstanceGeneration::new(
                     address.clone(),
                     lifecycle.starts.saturating_sub(1),
                 ))
@@ -2404,24 +2414,24 @@ impl Journal for MemJournal {
         } else {
             lifecycle.starts
         };
-        Ok(InstanceRef::new(address.clone(), generation))
+        Ok(InstanceGeneration::new(address.clone(), generation))
     }
 
     fn open_outbound(
         &mut self,
         intent: Intent,
-        attempt: Option<retry_protocol::AttemptRef>,
+        attempt: Option<retry_protocol::AttemptId>,
     ) -> Result<(), Error> {
         // The autonomy check: the call identity must recompute from
         // the fields this record seals (keys 40, 43, 47).
-        let derived = ids::call_ref(
-            ids::delivery_ref(&intent.edge, intent.emitting_id),
+        let derived = ids::call_id(
+            ids::delivery_id(&intent.edge, intent.emitting_id),
             intent.request_digest(),
         );
-        if derived != intent.call_ref {
+        if derived != intent.call_id {
             return Err(Error::CorruptIntent);
         }
-        if self.statuses_of(&intent.call_ref).next().is_some() {
+        if self.statuses_of(&intent.call_id).next().is_some() {
             return Err(Error::DuplicateOpen);
         }
         let record = CallRecord {
@@ -2443,24 +2453,24 @@ impl Journal for MemJournal {
     }
 
     fn open_outbound_session(&mut self, intent: SessionOpenIntent) -> Result<(), Error> {
-        let derived = ids::outbound_session_ref(
+        let derived = ids::outbound_session_id(
             &intent.connector_path,
             intent.emitting_id,
             intent.request_digest(),
         );
-        if derived != intent.session_ref {
+        if derived != intent.session_id {
             return Err(Error::CorruptSessionOpen);
         }
-        if self.sessions.contains_key(&intent.session_ref) {
+        if self.sessions.contains_key(&intent.session_id) {
             return Err(Error::DuplicateSessionOpen);
         }
-        let reference = intent.session_ref;
+        let reference = intent.session_id;
         let connector_path = intent.connector_path.clone();
         self.records
             .push(Record::Outbound(OutboundRecord::Session(Box::new(
                 SessionRecord {
                     connector_path: connector_path.clone(),
-                    session_ref: reference,
+                    session_id: reference,
                     status: SessionStatus::Opening(intent),
                 },
             ))));
@@ -2475,8 +2485,8 @@ impl Journal for MemJournal {
         Ok(())
     }
 
-    fn confirm_session_open(&mut self, session_ref: &SessionRef) -> Result<CloseVerdict, Error> {
-        let Some(session) = self.sessions.get_mut(session_ref) else {
+    fn confirm_session_open(&mut self, session_id: &SessionId) -> Result<CloseVerdict, Error> {
+        let Some(session) = self.sessions.get_mut(session_id) else {
             return Err(Error::UnknownSession);
         };
         match session.phase {
@@ -2489,7 +2499,7 @@ impl Journal for MemJournal {
             .push(Record::Outbound(OutboundRecord::Session(Box::new(
                 SessionRecord {
                     connector_path,
-                    session_ref: *session_ref,
+                    session_id: *session_id,
                     status: SessionStatus::Opened,
                 },
             ))));
@@ -2497,15 +2507,15 @@ impl Journal for MemJournal {
     }
 
     fn open_session_write(&mut self, intent: SessionWriteIntent) -> Result<(), Error> {
-        let derived = ids::session_write_ref(
-            intent.session_ref,
+        let derived = ids::session_write_id(
+            intent.session_id,
             intent.emitting_id,
             intent.message_digest(),
         );
         if derived != intent.write_ref {
             return Err(Error::CorruptSessionWrite);
         }
-        let Some(session) = self.sessions.get_mut(&intent.session_ref) else {
+        let Some(session) = self.sessions.get_mut(&intent.session_id) else {
             return Err(Error::UnknownSession);
         };
         if session.phase != SessionPhase::Open || session.connector_path != intent.connector_path {
@@ -2519,7 +2529,7 @@ impl Journal for MemJournal {
             .push(Record::Outbound(OutboundRecord::Session(Box::new(
                 SessionRecord {
                     connector_path: intent.connector_path.clone(),
-                    session_ref: intent.session_ref,
+                    session_id: intent.session_id,
                     status: SessionStatus::WriteOpen(intent),
                 },
             ))));
@@ -2528,10 +2538,10 @@ impl Journal for MemJournal {
 
     fn settle_session_write(
         &mut self,
-        write_ref: &SessionWriteRef,
+        write_ref: &SessionWriteId,
         abandoned: bool,
     ) -> Result<CloseVerdict, Error> {
-        let Some((session_ref, session)) = self
+        let Some((session_id, session)) = self
             .sessions
             .iter_mut()
             .find(|(_, session)| session.writes.contains_key(write_ref))
@@ -2554,7 +2564,7 @@ impl Journal for MemJournal {
             .push(Record::Outbound(OutboundRecord::Session(Box::new(
                 SessionRecord {
                     connector_path: session.connector_path.clone(),
-                    session_ref: *session_ref,
+                    session_id: *session_id,
                     status,
                 },
             ))));
@@ -2563,7 +2573,7 @@ impl Journal for MemJournal {
 
     fn close_outbound(
         &mut self,
-        call_ref: &CallRef,
+        call_id: &CallId,
         closure: Closure,
         closed_at: i64,
         schedule: Option<Box<timing::TimerSchedule>>,
@@ -2573,7 +2583,7 @@ impl Journal for MemJournal {
             let Record::Outbound(OutboundRecord::Call(outbound)) = record else {
                 continue;
             };
-            if outbound.intent.call_ref != *call_ref {
+            if outbound.intent.call_id != *call_id {
                 continue;
             }
             match outbound.status {
@@ -2605,7 +2615,7 @@ impl Journal for MemJournal {
 
     fn abandon_outbound(
         &mut self,
-        call_ref: &CallRef,
+        call_id: &CallId,
         closed_at: i64,
     ) -> Result<CloseVerdict, Error> {
         let mut intent = None;
@@ -2613,7 +2623,7 @@ impl Journal for MemJournal {
             let Record::Outbound(OutboundRecord::Call(outbound)) = record else {
                 continue;
             };
-            if outbound.intent.call_ref != *call_ref {
+            if outbound.intent.call_id != *call_id {
                 continue;
             }
             match outbound.status {
@@ -2645,10 +2655,10 @@ impl Journal for MemJournal {
         recorded_envelope(&self.records, id).cloned()
     }
 
-    fn find_call(&self, call_ref: &CallRef) -> Option<Intent> {
+    fn find_call(&self, call_id: &CallId) -> Option<Intent> {
         self.records.iter().find_map(|record| match record {
             Record::Outbound(OutboundRecord::Call(outbound))
-                if outbound.intent.call_ref == *call_ref =>
+                if outbound.intent.call_id == *call_id =>
             {
                 Some(outbound.intent.clone())
             }
@@ -2665,7 +2675,7 @@ impl Journal for MemJournal {
             match outbound.status {
                 OutboundStatus::Open => open.push(outbound.intent.clone()),
                 OutboundStatus::Closed(_) | OutboundStatus::Abandoned => {
-                    open.retain(|intent| intent.call_ref != outbound.intent.call_ref);
+                    open.retain(|intent| intent.call_id != outbound.intent.call_id);
                 }
             }
         }
@@ -2684,7 +2694,7 @@ impl Journal for MemJournal {
             .collect()
     }
 
-    fn live_sessions(&self) -> Vec<SessionRef> {
+    fn live_sessions(&self) -> Vec<SessionId> {
         self.sessions
             .iter()
             .filter_map(|(reference, lifecycle)| {
@@ -2728,9 +2738,9 @@ mod tests {
     use alloc::string::ToString;
     use alloc::vec;
 
-    fn instance(owner: &str, generation: u64) -> InstanceRef {
+    fn instance(owner: &str, generation: u64) -> InstanceGeneration {
         let owner = crate::plan::OwnerPath::new([owner]).expect("valid owner path");
-        InstanceRef::new(InstanceAddress::singleton(&owner), generation)
+        InstanceGeneration::new(InstanceIdentity::singleton(&owner), generation)
     }
 
     fn provenance(path: &str) -> InboundEnvelopeProvenance {
@@ -2758,7 +2768,7 @@ mod tests {
         }
     }
 
-    fn project_session(envelope: &Envelope, session: SessionRef) -> Envelope {
+    fn project_session(envelope: &Envelope, session: SessionId) -> Envelope {
         let mut ext = envelope.meta().ext().clone();
         ext.insert(
             String::from("session_id"),
@@ -2778,7 +2788,7 @@ mod tests {
         let edge = alloc::format!("shout.out>{connector}.in");
         let prepared = crate::boundary::PreparedRequest::seal(vec![digest; 4]);
         Intent {
-            call_ref: ids::call_ref(ids::delivery_ref(&edge, emitting_id), prepared.digest()),
+            call_id: ids::call_id(ids::delivery_id(&edge, emitting_id), prepared.digest()),
             emitting_id,
             edge,
             connector_path,
@@ -2794,7 +2804,7 @@ mod tests {
         for abandoned in [false, true] {
             let mut journal = MemJournal::new(GraphVersion(1));
             let original = intent("clocked", 3);
-            let call = original.call_ref;
+            let call = original.call_id;
             journal.open_outbound(original, None).unwrap();
             let open = journal.records()[0].clone();
             if abandoned {
@@ -2832,7 +2842,7 @@ mod tests {
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut original = intent("clocked", 4);
         original.logical_time = 11;
-        let call = original.call_ref;
+        let call = original.call_id;
         journal.open_outbound(original, None).unwrap();
         assert!(matches!(
             journal.close_outbound(&call, Closure::Timeout, 10, None),
@@ -2852,8 +2862,8 @@ mod tests {
                 1 => closed.intent.idempotency_key = Some("changed".into()),
                 _ => {
                     closed.retry_record = Some(Box::new(retry_protocol::Packet {
-                        context: Some(retry_protocol::AttemptRef {
-                            operation: retry_protocol::OperationRef::from_id(Id::from_bytes(
+                        context: Some(retry_protocol::AttemptId {
+                            operation: retry_protocol::OperationId::from_id(Id::from_bytes(
                                 [3; 16],
                             )),
                             ordinal: 1,
@@ -2875,14 +2885,14 @@ mod tests {
     #[test]
     fn retry_call_carriers_retain_only_their_own_next_admission_timer() {
         let original = intent("retrying", 5);
-        let call = original.call_ref;
-        let operation = retry_protocol::OperationRef::from_id(Id::from_bytes([7; 16]));
-        let attempt = retry_protocol::AttemptRef {
+        let call = original.call_id;
+        let operation = retry_protocol::OperationId::from_id(Id::from_bytes([7; 16]));
+        let attempt = retry_protocol::AttemptId {
             operation,
             ordinal: 1,
         };
         let arm = timing::TimerArm {
-            kind: timer_kind::LOOP_DELAY,
+            kind: timer_kind::RECURRENCE_DELAY,
             reference: retry_protocol::admission_ref(operation, 2, call),
             due_at: 110,
         };
@@ -2930,20 +2940,20 @@ mod tests {
         let emitting_id = Id::derive(0x02, &[b"session-cause", &[digest]]);
         let prepared = crate::boundary::PreparedRequest::seal(vec![digest; 4]);
         SessionOpenIntent {
-            session_ref: ids::outbound_session_ref(&connector_path, emitting_id, prepared.digest()),
+            session_id: ids::outbound_session_id(&connector_path, emitting_id, prepared.digest()),
             emitting_id,
             connector_path,
             prepared,
         }
     }
 
-    fn session_write(session_ref: SessionRef, connector: &str, digest: u8) -> SessionWriteIntent {
+    fn session_write(session_id: SessionId, connector: &str, digest: u8) -> SessionWriteIntent {
         let connector_path = node::Path::new([connector]).unwrap();
         let emitting_id = Id::derive(0x02, &[b"message-cause", &[digest]]);
         let prepared = crate::boundary::PreparedRequest::seal(vec![digest; 3]);
         SessionWriteIntent {
-            write_ref: ids::session_write_ref(session_ref, emitting_id, prepared.digest()),
-            session_ref,
+            write_ref: ids::session_write_id(session_id, emitting_id, prepared.digest()),
+            session_id,
             emitting_id,
             connector_path,
             prepared,
@@ -2951,14 +2961,14 @@ mod tests {
     }
 
     fn lifecycle_transaction(
-        instance: InstanceRef,
+        instance: InstanceGeneration,
         lifecycle: node::Lifecycle,
     ) -> TransactionRecord {
         let parent_instance = (lifecycle == node::Lifecycle::Start
             && !instance.address().owner().is_root())
         .then(|| {
-            InstanceRef::new(
-                InstanceAddress::singleton(&crate::plan::OwnerPath::root()),
+            InstanceGeneration::new(
+                InstanceIdentity::singleton(&crate::plan::OwnerPath::root()),
                 0,
             )
         });
@@ -2985,8 +2995,8 @@ mod tests {
     }
 
     fn activate_root(journal: &mut MemJournal) {
-        let root = InstanceRef::new(
-            InstanceAddress::singleton(&crate::plan::OwnerPath::root()),
+        let root = InstanceGeneration::new(
+            InstanceIdentity::singleton(&crate::plan::OwnerPath::root()),
             0,
         );
         journal
@@ -2996,11 +3006,11 @@ mod tests {
 
     #[test]
     fn reserved_descendants_prove_ancestor_admission_but_not_another_key_or_generation() {
-        use crate::identity::InstanceFrame;
+        use crate::identity::InstanceSegment;
         let mut journal = MemJournal::new(GraphVersion(1));
         activate_root(&mut journal);
-        let parent = InstanceRef::new(
-            InstanceAddress::singleton(&OwnerPath::new(["window"]).unwrap()),
+        let parent = InstanceGeneration::new(
+            InstanceIdentity::singleton(&OwnerPath::new(["window"]).unwrap()),
             0,
         );
         journal
@@ -3009,15 +3019,15 @@ mod tests {
                 node::Lifecycle::Start,
             ))
             .unwrap();
-        let source = InstanceRef::new(
-            InstanceAddress::singleton(&OwnerPath::new(["window", "total"]).unwrap()),
+        let source = InstanceGeneration::new(
+            InstanceIdentity::singleton(&OwnerPath::new(["window", "total"]).unwrap()),
             0,
         );
         let mut start = lifecycle_transaction(source.clone(), node::Lifecycle::Start);
         start.parent_instance = Some(parent.clone());
         journal.commit(start).unwrap();
-        let outside = InstanceRef::new(
-            InstanceAddress::singleton(&OwnerPath::new(["outside"]).unwrap()),
+        let outside = InstanceGeneration::new(
+            InstanceIdentity::singleton(&OwnerPath::new(["outside"]).unwrap()),
             0,
         );
         journal
@@ -3029,18 +3039,18 @@ mod tests {
         request_close(&mut journal, parent.clone());
         let owner = OwnerPath::new(["window", "bridge"]).unwrap();
         let address = |path: &OwnerPath, key: &str| {
-            InstanceAddress::new(
+            InstanceIdentity::new(
                 path,
-                &[InstanceFrame::SelectedKey {
-                    owner: owner.clone(),
+                &[InstanceSegment::SelectedKey {
+                    scope: owner.clone(),
                     ty: crate::datatype::DataType::Text,
                     value: crate::value::Value::Text(key.into()),
                 }],
             )
             .unwrap()
         };
-        let child = InstanceRef::new(address(&owner, "alice"), 0);
-        let leaf = InstanceRef::new(
+        let child = InstanceGeneration::new(address(&owner, "alice"), 0);
+        let leaf = InstanceGeneration::new(
             address(
                 &OwnerPath::new(["window", "bridge", "relay"]).unwrap(),
                 "alice",
@@ -3069,7 +3079,7 @@ mod tests {
         for wrong_key in [false, true] {
             let mut forged = start.clone();
             if wrong_key {
-                forged.instance = InstanceRef::new(address(&owner, "bob"), 0);
+                forged.instance = InstanceGeneration::new(address(&owner, "bob"), 0);
             } else {
                 forged.cause = Some(Id::from_bytes([2; 16]));
             }
@@ -3084,7 +3094,7 @@ mod tests {
         journal
             .commit(lifecycle_transaction(child.clone(), node::Lifecycle::Stop))
             .unwrap();
-        start.instance = InstanceRef::new(child.address().clone(), 1);
+        start.instance = InstanceGeneration::new(child.address().clone(), 1);
         let before = journal.records().to_vec();
         assert!(
             matches!(
@@ -3098,8 +3108,8 @@ mod tests {
 
     #[test]
     fn observable_time_must_match_the_retained_acceptance_instant() {
-        let reference = InstanceRef::new(
-            InstanceAddress::singleton(&crate::plan::OwnerPath::root()),
+        let reference = InstanceGeneration::new(
+            InstanceIdentity::singleton(&crate::plan::OwnerPath::root()),
             0,
         );
         let mut record = lifecycle_transaction(reference, node::Lifecycle::Start);
@@ -3125,14 +3135,14 @@ mod tests {
         journal.commit(record).unwrap();
     }
 
-    fn activate(journal: &mut MemJournal, reference: InstanceRef) {
+    fn activate(journal: &mut MemJournal, reference: InstanceGeneration) {
         activate_root(journal);
         journal
             .commit(lifecycle_transaction(reference, node::Lifecycle::Start))
             .expect("the child lifecycle starts under the root");
     }
 
-    fn request_close(journal: &mut MemJournal, reference: InstanceRef) {
+    fn request_close(journal: &mut MemJournal, reference: InstanceGeneration) {
         let mut record = lifecycle_transaction(reference.clone(), node::Lifecycle::Closing);
         record.close_scope = Some(reference);
         journal.commit(record).expect("Closing is durable");
@@ -3150,14 +3160,14 @@ mod tests {
         let connector_path = node::Path::new(["remote"]).expect("valid connector path");
         let edge = String::from("app.out>remote.in");
         let prepared = crate::boundary::PreparedRequest::seal(vec![1, 2, 3]);
-        let call_ref = ids::call_ref(
-            ids::delivery_ref(&edge, inbound.envelope.meta().sys().id()),
+        let call_id = ids::call_id(
+            ids::delivery_id(&edge, inbound.envelope.meta().sys().id()),
             prepared.digest(),
         );
         journal
             .open_outbound(
                 Intent {
-                    call_ref,
+                    call_id,
                     emitting_id: inbound.envelope.meta().sys().id(),
                     edge,
                     connector_path: connector_path.clone(),
@@ -3170,36 +3180,36 @@ mod tests {
             )
             .expect("the Call opens");
         journal
-            .abandon_outbound(&call_ref, 0)
+            .abandon_outbound(&call_id, 0)
             .expect("the Call closes abandoned");
 
         let prepared = crate::boundary::PreparedRequest::seal(vec![4, 5, 6]);
-        let session_ref = ids::outbound_session_ref(
+        let session_id = ids::outbound_session_id(
             &connector_path,
             inbound.envelope.meta().sys().id(),
             prepared.digest(),
         );
         journal
             .open_outbound_session(SessionOpenIntent {
-                session_ref,
+                session_id,
                 emitting_id: inbound.envelope.meta().sys().id(),
                 connector_path: connector_path.clone(),
                 prepared,
             })
             .expect("the Session opens");
         journal
-            .confirm_session_open(&session_ref)
+            .confirm_session_open(&session_id)
             .expect("the Session becomes live");
         let prepared = crate::boundary::PreparedRequest::seal(vec![7, 8, 9]);
-        let write_ref = ids::session_write_ref(
-            session_ref,
+        let write_ref = ids::session_write_id(
+            session_id,
             inbound.envelope.meta().sys().id(),
             prepared.digest(),
         );
         journal
             .open_session_write(SessionWriteIntent {
                 write_ref,
-                session_ref,
+                session_id,
                 emitting_id: inbound.envelope.meta().sys().id(),
                 connector_path: connector_path.clone(),
                 prepared,
@@ -3230,7 +3240,7 @@ mod tests {
             observation.correlation().origin_id() == Some(origin)
                 && observation.correlation().connector() == Some(&connector_path)
                 && observation.correlation().exchange()
-                    == Some(&ExchangeCorrelation::OutboundCall(call_ref))
+                    == Some(&ExchangeCorrelation::OutboundCall(call_id))
         }));
         let session = &observations[4..8];
         assert_eq!(session[0].kind(), RecordObservationKind::SessionOpening);
@@ -3247,7 +3257,7 @@ mod tests {
         assert_eq!(
             session[3].correlation().exchange(),
             Some(&ExchangeCorrelation::Session {
-                session: session_ref,
+                session: session_id,
                 write: Some(write_ref),
             })
         );
@@ -3264,10 +3274,10 @@ mod tests {
     #[test]
     fn generations_are_a_journal_fold_and_lifecycle_cannot_double_transition() {
         let mut journal = MemJournal::new(GraphVersion(1));
-        let address = InstanceAddress::singleton(
+        let address = InstanceIdentity::singleton(
             &crate::plan::OwnerPath::new(["worker"]).expect("valid owner path"),
         );
-        let first = InstanceRef::new(address.clone(), 0);
+        let first = InstanceGeneration::new(address.clone(), 0);
         assert_eq!(journal.instance_ref_for_admission(&address).unwrap(), first);
         activate_root(&mut journal);
 
@@ -3294,8 +3304,8 @@ mod tests {
         journal
             .commit(lifecycle_transaction(first.clone(), node::Lifecycle::Start))
             .unwrap();
-        let root = InstanceRef::new(
-            InstanceAddress::singleton(&crate::plan::OwnerPath::root()),
+        let root = InstanceGeneration::new(
+            InstanceIdentity::singleton(&crate::plan::OwnerPath::root()),
             0,
         );
         request_close(&mut journal, root.clone());
@@ -3328,7 +3338,7 @@ mod tests {
             },
             "the journal, not scheduler choreography, enforces inner-first stop"
         );
-        let second = InstanceRef::new(address.clone(), 1);
+        let second = InstanceGeneration::new(address.clone(), 1);
         assert_eq!(
             journal.instance_ref_for_admission(&address).unwrap(),
             second,
@@ -3364,7 +3374,7 @@ mod tests {
         journal
             .commit(lifecycle_transaction(root.clone(), node::Lifecycle::Stop))
             .unwrap();
-        let second_root = InstanceRef::new(root.address().clone(), 1);
+        let second_root = InstanceGeneration::new(root.address().clone(), 1);
         journal
             .commit(lifecycle_transaction(
                 second_root.clone(),
@@ -3391,10 +3401,10 @@ mod tests {
     #[test]
     fn a_committed_route_keeps_its_reserved_generation_until_start_materializes() {
         let mut journal = MemJournal::new(GraphVersion(1));
-        let address = InstanceAddress::singleton(
+        let address = InstanceIdentity::singleton(
             &crate::plan::OwnerPath::new(["worker"]).expect("valid owner path"),
         );
-        let reserved = InstanceRef::new(address.clone(), 0);
+        let reserved = InstanceGeneration::new(address.clone(), 0);
         activate_root(&mut journal);
         let prepared = journal
             .prepare_inbound(submission("inbound", SubmissionSequence::Next))
@@ -3434,8 +3444,8 @@ mod tests {
         // rejected; the reference carries the routing.
         let envelope_id = Id::from_bytes([7; 16]);
         let digest = [3u8; 32];
-        let a = ids::call_ref(ids::delivery_ref("src.out>c.a", envelope_id), &digest);
-        let b = ids::call_ref(ids::delivery_ref("src.out>c.b", envelope_id), &digest);
+        let a = ids::call_id(ids::delivery_id("src.out>c.a", envelope_id), &digest);
+        let b = ids::call_id(ids::delivery_id("src.out>c.b", envelope_id), &digest);
         assert_ne!(a, b, "two deliveries, two calls");
     }
 
@@ -3445,11 +3455,11 @@ mod tests {
         // 43 (digest), and 47 (edge) suffice — no other record, no
         // out-of-band state.
         let sealed = intent("echo", 7);
-        let reconstructed = ids::call_ref(
-            ids::delivery_ref(&sealed.edge, sealed.emitting_id),
+        let reconstructed = ids::call_id(
+            ids::delivery_id(&sealed.edge, sealed.emitting_id),
             sealed.request_digest(),
         );
-        assert_eq!(reconstructed, sealed.call_ref);
+        assert_eq!(reconstructed, sealed.call_id);
     }
 
     #[test]
@@ -3458,7 +3468,7 @@ mod tests {
         // derive(0x20, canonical_edge, envelope_id). Any drift here
         // silently unseals every golden's key 37 and every call ref.
         let delivery = Id::from_bytes([7; 16]);
-        let reference = ids::delivery_ref("shout.out>echo.in", delivery);
+        let reference = ids::delivery_id("shout.out>echo.in", delivery);
         assert_eq!(
             reference.to_string(),
             "301cd0af333f760b8f5dc13738b821ec",
@@ -3468,11 +3478,11 @@ mod tests {
 
     #[test]
     fn the_instance_lifetime_ref_seals_address_and_generation() {
-        let address = InstanceAddress::singleton(
+        let address = InstanceIdentity::singleton(
             &crate::plan::OwnerPath::new(["worker"]).expect("valid owner path"),
         );
-        let first = ids::instance_lifetime_ref(&InstanceRef::new(address.clone(), 0));
-        let second = ids::instance_lifetime_ref(&InstanceRef::new(address, 1));
+        let first = ids::instance_lifetime_id(&InstanceGeneration::new(address.clone(), 0));
+        let second = ids::instance_lifetime_id(&InstanceGeneration::new(address, 1));
         assert_eq!(first.to_string(), "d8977f984e5356cc4df3aca36c442642");
         assert_ne!(
             first, second,
@@ -3497,12 +3507,12 @@ mod tests {
     #[test]
     fn the_session_recipes_are_pinned_byte_for_byte() {
         let opening = Id::from_bytes([3; 16]);
-        let inbound = ids::inbound_session_ref(&provenance("gateway"), opening);
+        let inbound = ids::inbound_session_id(&provenance("gateway"), opening);
         let connector = node::Path::new(["chat", "socket"]).unwrap();
         let emitting = Id::from_bytes([4; 16]);
         let digest = [5; 32];
-        let outbound = ids::outbound_session_ref(&connector, emitting, &digest);
-        let write = ids::session_write_ref(outbound, Id::from_bytes([6; 16]), &[7; 32]);
+        let outbound = ids::outbound_session_id(&connector, emitting, &digest);
+        let write = ids::session_write_id(outbound, Id::from_bytes([6; 16]), &[7; 32]);
         assert_eq!(
             format!("{inbound}|{outbound}|{write}"),
             "45e41992da920539378d903e21f963a0|835d72e38dc56aaf373d9613449d7354|\
@@ -3635,7 +3645,7 @@ mod tests {
     fn closing_appends_a_fact_and_never_rewrites_the_open() {
         let mut journal = MemJournal::new(GraphVersion(1));
         let echo_intent = intent("echo", 7);
-        let call = echo_intent.call_ref;
+        let call = echo_intent.call_id;
         journal.open_outbound(echo_intent.clone(), None).unwrap();
         let open_before = journal.records()[0].clone();
         assert_eq!(
@@ -3656,7 +3666,7 @@ mod tests {
             panic!("expected the closure fact");
         };
         assert_eq!(closed.status, OutboundStatus::Closed(Closure::Timeout));
-        assert_eq!(closed.intent.call_ref, call);
+        assert_eq!(closed.intent.call_id, call);
         // The fold answers "open?" correctly.
         assert!(journal.open_calls().is_empty());
         // The race: every later closure loses and appends nothing.
@@ -3668,8 +3678,8 @@ mod tests {
         );
         assert_eq!(journal.records().len(), 2);
         // A closure for an unknown call is a fault, not a silence.
-        let ghost = ids::call_ref(
-            ids::delivery_ref("x.out>ghost.in", Id::from_bytes([9; 16])),
+        let ghost = ids::call_id(
+            ids::delivery_id("x.out>ghost.in", Id::from_bytes([9; 16])),
             &[0; 32],
         );
         assert_eq!(
@@ -3678,7 +3688,7 @@ mod tests {
         );
 
         let abandoned_intent = intent("slow", 8);
-        let abandoned = abandoned_intent.call_ref;
+        let abandoned = abandoned_intent.call_id;
         journal.open_outbound(abandoned_intent, None).unwrap();
         assert_eq!(
             journal.abandon_outbound(&abandoned, 0).unwrap(),
@@ -3706,8 +3716,8 @@ mod tests {
     fn a_forged_intent_is_refused() {
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut forged = intent("echo", 7);
-        forged.call_ref = ids::call_ref(
-            ids::delivery_ref("x.out>other.in", Id::from_bytes([9; 16])),
+        forged.call_id = ids::call_id(
+            ids::delivery_id("x.out>other.in", Id::from_bytes([9; 16])),
             &[1; 32],
         );
         assert_eq!(
@@ -3754,7 +3764,7 @@ mod tests {
                 emissions: vec![],
                 routes: vec![],
                 timers: vec![
-                    (timer_kind::LOOP_DELAY, Id::from_bytes([2; 16])),
+                    (timer_kind::RECURRENCE_DELAY, Id::from_bytes([2; 16])),
                     (timer_kind::CALL_TIMEOUT, Id::from_bytes([1; 16])),
                 ],
             })
@@ -3823,7 +3833,7 @@ mod tests {
                 .find_envelope(committed.envelope.meta().sys().id())
                 .is_some()
         );
-        assert!(journal.find_call(&intent("echo", 1).call_ref).is_some());
+        assert!(journal.find_call(&intent("echo", 1).call_id).is_some());
         assert_eq!(journal.open_calls().len(), 1);
     }
 
@@ -3964,12 +3974,12 @@ mod tests {
             .into_call(source.clone(), vec![])
             .unwrap();
         let root = prepared.envelope().meta().sys().id();
-        let call_ref = InboundCallRef::from_root(root);
+        let call_id = InboundCallId::from_root(root);
         let committed = journal.commit_inbound(prepared, vec![]).unwrap();
         assert_eq!(
             journal.open_inbound_calls(),
             [InboundCallIngressRecord {
-                reference: call_ref,
+                reference: call_id,
                 instance: source.clone(),
                 timers: vec![],
             }]
@@ -3977,7 +3987,7 @@ mod tests {
         assert_eq!(
             committed.record.exchange.as_deref(),
             Some(&InboundExchangeRecord::Call(InboundCallIngressRecord {
-                reference: call_ref,
+                reference: call_id,
                 instance: source.clone(),
                 timers: vec![],
             }))
@@ -3990,7 +4000,7 @@ mod tests {
             Error::InvalidInboundCallExit
         );
         let mut missing_exit = lifecycle_transaction(source.clone(), node::Lifecycle::Reply);
-        missing_exit.exchange_exit = Some(Box::new(InboundExchangeExitRecord::Call(call_ref)));
+        missing_exit.exchange_exit = Some(Box::new(InboundExchangeExitRecord::Call(call_id)));
         missing_exit.cause = Some(root);
         assert_eq!(
             journal.commit(missing_exit).unwrap_err(),
@@ -3998,7 +4008,7 @@ mod tests {
         );
 
         let mut terminal = lifecycle_transaction(source.clone(), node::Lifecycle::Reply);
-        terminal.exchange_exit = Some(Box::new(InboundExchangeExitRecord::Call(call_ref)));
+        terminal.exchange_exit = Some(Box::new(InboundExchangeExitRecord::Call(call_id)));
         terminal.cause = Some(root);
         terminal.emissions.push(Emission {
             port: node::Port::conventional_exit(),
@@ -4029,7 +4039,7 @@ mod tests {
     fn session_writes_settle_once_and_exit_only_after_every_write() {
         let mut journal = MemJournal::new(GraphVersion(1));
         let opening = session_open("socket", 1);
-        let session = opening.session_ref;
+        let session = opening.session_id;
         journal.open_outbound_session(opening).unwrap();
         assert_eq!(
             journal.confirm_session_open(&session).unwrap(),

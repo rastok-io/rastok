@@ -240,7 +240,7 @@ graph app : App + Loop {
             vm.advance(&mut journal, &mut world, 7_000_000_000).unwrap();
         } else {
             world.answers.push(rastok::boundary::Response {
-                call_ref: journal.open_calls()[0].call_ref,
+                call_id: journal.open_calls()[0].call_id,
                 completion: rastok::boundary::Completion::process_exit(
                     rastok::boundary::ProcessExit::Exited {
                         exit_code: 0,
@@ -377,9 +377,9 @@ fn graph_commands_wait_for_calls_and_recovery_never_restarts_them() {
     assert_eq!(journal.records(), retained);
 
     for iteration in 0..2 {
-        let call = journal.open_calls()[0].call_ref;
+        let call = journal.open_calls()[0].call_id;
         world.answers.push(rastok::boundary::Response {
-            call_ref: call,
+            call_id: call,
             completion: rastok::boundary::Completion::process(
                 vec![Data::materialized(Value::Int(42))],
                 vec![],
@@ -481,9 +481,9 @@ fn a_graph_call_from_another_instance_does_not_delay_run_quiescence() {
         .iter()
         .find(|call| call.emitting_id == state.state.meta().sys().id())
         .unwrap()
-        .call_ref;
+        .call_id;
     world.answers.push(rastok::boundary::Response {
-        call_ref: call,
+        call_id: call,
         completion: rastok::boundary::Completion::process(
             vec![],
             vec![],
@@ -576,9 +576,9 @@ fn call_recovery_restores_the_held_delivery_without_restarting_the_driver() {
     );
     assert_eq!(journal.records(), before);
 
-    let call = journal.open_calls()[0].call_ref;
+    let call = journal.open_calls()[0].call_id;
     world.answers.push(rastok::boundary::Response {
-        call_ref: call,
+        call_id: call,
         completion: rastok::boundary::Completion::process(
             vec![],
             vec![],
@@ -672,7 +672,7 @@ fn delivery_deadlines_are_retained_at_both_ingress_and_producer_commits() {
             assert!(
                 routes
                     .iter()
-                    .any(|(edge, envelope)| ids::delivery_ref(edge, *envelope) == arm.reference)
+                    .any(|(edge, envelope)| ids::delivery_id(edge, *envelope) == arm.reference)
             );
             assert_eq!(
                 arm.due_at,
@@ -766,7 +766,7 @@ fn scheduler_closed_calls_recover_through_pure_contract_projection_only() {
         let mut world = World::default();
         inject(&mut vm, &mut journal, "in", 4);
         vm.drain_with_bindings(&mut journal, &mut world).unwrap();
-        let call = journal.open_calls()[0].call_ref;
+        let call = journal.open_calls()[0].call_id;
         if abandoned {
             journal.abandon_outbound(&call, 0).unwrap();
         } else {

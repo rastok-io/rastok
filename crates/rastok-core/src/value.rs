@@ -176,7 +176,7 @@ impl Value {
     /// # Errors
     ///
     /// Returns the first structural defect with its path from the value root.
-    pub fn validate(&self) -> Result<(), ValueError> {
+    pub fn check_consistency(&self) -> Result<(), ValueError> {
         self.validate_at(&mut Vec::new())
     }
 
@@ -522,7 +522,7 @@ fn struct_fields_eq(
 /// v7 plan package transports this same complete value registry; map-key
 /// ordering therefore has one byte authority in plans and journals.
 pub(crate) fn canonical_value_bytes(value: &Value) -> Vec<u8> {
-    crate::canonical_cbor::encode(&crate::identity::encoding::value_tagged(value))
+    crate::canonical_cbor::encode(&crate::identity::encoding::canonical_value(value))
 }
 
 pub(crate) fn map_key_label(value: &Value) -> String {
@@ -596,7 +596,9 @@ mod tests {
             (String::from("amount"), Value::Int(1)),
             (String::from("amount"), Value::Int(2)),
         ])]);
-        let error = malformed.validate().expect_err("the duplicate refuses");
+        let error = malformed
+            .check_consistency()
+            .expect_err("the duplicate refuses");
         assert_eq!(error.path, alloc::vec![ValuePathSegment::Index(0)]);
         assert_eq!(
             error.defect,
@@ -632,7 +634,7 @@ mod tests {
             Value::Bool(true),
         )]);
         assert!(matches!(
-            malformed.validate(),
+            malformed.check_consistency(),
             Err(ValueError {
                 defect: ValueDefect::NonCanonicalMapKey(ValueKind::Array),
                 ..

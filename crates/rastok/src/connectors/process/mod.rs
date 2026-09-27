@@ -530,7 +530,7 @@ impl std::error::Error for ProcessBindError {}
 /// One in-flight child.
 #[derive(Debug)]
 struct Run {
-    call_ref: crate::boundary::CallRef,
+    call_id: crate::boundary::CallId,
     codec: crate::boundary::RequestCodec,
     err_codec: crate::boundary::RequestCodec,
     child: std::process::Child,
@@ -843,7 +843,7 @@ impl<'plan> Process<'plan> {
             }
         }
         Ok(Run {
-            call_ref: intent.call_ref,
+            call_id: intent.call_id,
             codec: settings.codec,
             err_codec: settings.err_codec,
             child,
@@ -952,7 +952,7 @@ impl Run {
             }
         };
         Response {
-            call_ref: self.call_ref,
+            call_id: self.call_id,
             completion,
         }
     }
@@ -1078,7 +1078,7 @@ impl CallConnectorDriver for Process<'_> {
         match self.launch(intent, request) {
             Ok(run) => self.runs.push(run),
             Err(completion) => self.answers.push(Response {
-                call_ref: intent.call_ref,
+                call_id: intent.call_id,
                 completion,
             }),
         }
@@ -1100,7 +1100,7 @@ impl CallConnectorDriver for Process<'_> {
                     .unwrap_or(ProcessFailure::CaptureFailed)
                     .into_completion();
                 answers.push(Response {
-                    call_ref: run.call_ref,
+                    call_id: run.call_id,
                     completion,
                 });
                 continue;
@@ -1110,10 +1110,10 @@ impl CallConnectorDriver for Process<'_> {
                     Ok(Some(status)) => run.exit = Some(status),
                     Ok(None) => {}
                     Err(_error) => {
-                        let call_ref = run.call_ref;
+                        let call_id = run.call_id;
                         kill_group(&mut run.child);
                         answers.push(Response {
-                            call_ref,
+                            call_id,
                             // No child status was observed, and inventing one
                             // would make policy nondeterministic. The closed
                             // capture failure case terminates the invocation.
@@ -1145,8 +1145,8 @@ impl CallConnectorDriver for Process<'_> {
         answers
     }
 
-    fn cancel(&mut self, call_ref: &crate::boundary::CallRef) {
-        if let Some(run) = self.runs.iter_mut().find(|run| &run.call_ref == call_ref) {
+    fn cancel(&mut self, call_id: &crate::boundary::CallId) {
+        if let Some(run) = self.runs.iter_mut().find(|run| &run.call_id == call_id) {
             // The whole process GROUP dies: descendants inherited the
             // pipes with the group, and the group takes them down. Keep the
             // run until wait+EOF produce the ordinary observed Exited fact;

@@ -117,7 +117,7 @@ impl AnnotationApplication {
             }
         }
         self.argument_type
-            .validate()
+            .check_bounds()
             .map_err(|_| self.invalid("invalid argument schema"))?;
         let DataType::Struct(schema) = &self.argument_type else {
             return Err(self.invalid("annotation arguments require a flat closed struct"));
@@ -126,7 +126,7 @@ impl AnnotationApplication {
             return Err(self.invalid("annotation fields must be scalar, enum, or nullable scalar"));
         }
         self.arguments
-            .validate()
+            .check_consistency()
             .map_err(|_| self.invalid("invalid argument value"))?;
         if !self.argument_type.accepts(&self.arguments) {
             return Err(self.invalid("arguments do not conform to the complete declared struct"));

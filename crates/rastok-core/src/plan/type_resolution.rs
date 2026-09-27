@@ -15,7 +15,7 @@ use crate::envelope::WriteTarget;
 use crate::expr;
 use crate::node;
 use crate::plan::{
-    Dispatch, DispatchStep, Emission, EndpointRef, ExecutionPlan, PlanValidationError, Slot,
+    Dispatch, DispatchStep, EdgeEnd, Emission, ExecutionPlan, PlanValidationError, Slot,
 };
 use crate::schema_annotation::AnnotationTable;
 
@@ -93,7 +93,7 @@ impl ResolvedPortTable {
 
     /// Effective type at an endpoint already proven to belong to the plan.
     #[must_use]
-    pub fn endpoint_type(&self, endpoint: &EndpointRef) -> Option<&DataType> {
+    pub fn endpoint_type(&self, endpoint: &EdgeEnd) -> Option<&DataType> {
         let row = match endpoint.node {
             Some(slot) => self.node(slot)?,
             None => self.boundary(),
@@ -221,7 +221,7 @@ impl<'plan> Solver<'plan> {
         index
     }
 
-    fn endpoint(&mut self, endpoint: &EndpointRef, direction: node::Direction) -> usize {
+    fn endpoint(&mut self, endpoint: &EdgeEnd, direction: node::Direction) -> usize {
         self.ensure(endpoint.node.map(Slot::index), &endpoint.port, direction)
     }
 
@@ -591,7 +591,7 @@ impl<'plan> Solver<'plan> {
 
     fn produce(&mut self, index: usize, candidate: DataType) -> Result<bool, PlanValidationError> {
         candidate
-            .validate()
+            .check_bounds()
             .map_err(|reason| PlanValidationError::InvalidDataType {
                 location: self.location(index),
                 reason,

@@ -135,9 +135,9 @@ pub(crate) fn type_error(path: &str, error: TypeError) -> ProjectionError {
         TypeError::DecimalScale { .. } => LossReason::UnsupportedSource,
         TypeError::ByteLength { length } if length > 0 => LossReason::BudgetExceeded,
         TypeError::ArrayLength { .. }
-        | TypeError::MemberBudget { .. }
-        | TypeError::NodeBudget { .. }
-        | TypeError::NestingBudget { .. } => LossReason::BudgetExceeded,
+        | TypeError::MembersExceeded { .. }
+        | TypeError::NodesExceeded { .. }
+        | TypeError::NestingExceeded { .. } => LossReason::BudgetExceeded,
         _ => LossReason::InvalidSchema,
     };
     ProjectionError::new(path, reason, error.to_string())

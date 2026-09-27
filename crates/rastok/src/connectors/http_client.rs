@@ -3,7 +3,7 @@
 //! The outbound request descriptor is already family-owned and deterministic:
 //! mocks and the real Driver agree on the exact method, URL, ordinary headers
 //! and body covered by the request digest. An attested bearer remains a
-//! logical `SecretRef` in that descriptor; only the real Driver overlays its
+//! logical `SecretName` in that descriptor; only the real Driver overlays its
 //! material. The server twin is a deliberately passive inbound Driver;
 //! scenario injections enter through the ordinary Lab boundary, never through
 //! a fake socket.
@@ -34,7 +34,7 @@ use super::http_shared::HttpVersion;
 #[derive(Clone, Eq, PartialEq)]
 pub(crate) enum HttpBearer {
     Inline(String),
-    Secret(crate::deployment::SecretRef),
+    Secret(crate::deployment::SecretName),
 }
 
 #[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
@@ -72,7 +72,7 @@ pub(crate) struct HttpClientPlanBinding {
 pub(crate) struct HttpClientRequestBindings {
     pub(crate) specs: BTreeMap<crate::node::Path, crate::plan::ConnectorSpec>,
     boot_environment: BTreeMap<(crate::node::Path, String), Value>,
-    boot_secrets: BTreeMap<(crate::node::Path, String), crate::deployment::SecretRef>,
+    boot_secrets: BTreeMap<(crate::node::Path, String), crate::deployment::SecretName>,
     #[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
     response_types: BTreeMap<crate::node::Path, crate::datatype::DataType>,
 }
@@ -162,7 +162,7 @@ impl HttpClientRequestBindings {
                                 environment.as_str()
                             ))
                         })?;
-                        if let Some(violation) = expr.ty.violation(name, value) {
+                        if let Err(violation) = expr.ty.check_value_type(name, value) {
                             return Err(super::DriverFactoryError::new(format!(
                                 "deployment value `{}` does not fit `{path}.{name}`: {violation}",
                                 environment.as_str()
@@ -215,7 +215,7 @@ impl HttpClientRequestBindings {
     }
 
     #[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
-    pub(crate) fn secret_references(&self) -> impl Iterator<Item = &crate::deployment::SecretRef> {
+    pub(crate) fn secret_references(&self) -> impl Iterator<Item = &crate::deployment::SecretName> {
         self.boot_secrets.values()
     }
 
@@ -223,7 +223,7 @@ impl HttpClientRequestBindings {
         &self,
         connector: &crate::node::Path,
         name: &str,
-    ) -> Option<&crate::deployment::SecretRef> {
+    ) -> Option<&crate::deployment::SecretName> {
         self.boot_secrets
             .get(&(connector.clone(), name.to_string()))
     }
@@ -308,7 +308,7 @@ impl HttpClientRequestBindings {
             ),
         ]);
         let bytes =
-            crate::canonical_cbor::encode(&crate::identity::encoding::value_tagged(&request));
+            crate::canonical_cbor::encode(&crate::identity::encoding::canonical_value(&request));
         Ok(PreparedRequest::seal(bytes))
     }
 
@@ -426,7 +426,7 @@ pub(crate) fn decode_request(prepared: &PreparedRequest) -> Option<HttpRequest> 
                 return None;
             };
             Some(HttpBearer::Secret(
-                crate::deployment::SecretRef::new(reference).ok()?,
+                crate::deployment::SecretName::new(reference).ok()?,
             ))
         }
         _ => return None,

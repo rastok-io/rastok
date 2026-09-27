@@ -150,7 +150,7 @@ pub(super) fn validate_plan_routing(
     plan: &super::ExecutionPlan,
     ports: &super::ResolvedPortTable,
 ) -> Result<(), super::PlanValidationError> {
-    let physical = |endpoint: &Endpoint| -> Option<super::EndpointRef> {
+    let physical = |endpoint: &Endpoint| -> Option<super::EdgeEnd> {
         let node = match &endpoint.owner {
             super::EndpointOwner::Graph(path) if path.is_root() => None,
             super::EndpointOwner::Node(path) => Some(super::Slot::new(
@@ -158,7 +158,7 @@ pub(super) fn validate_plan_routing(
             )),
             _ => return None,
         };
-        let endpoint = super::EndpointRef {
+        let endpoint = super::EdgeEnd {
             node,
             port: endpoint.port.clone(),
         };

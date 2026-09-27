@@ -64,7 +64,7 @@ impl Vm<'_> {
                     .into_iter()
                     .flatten()
                     .find(|delivery| {
-                        ids::delivery_ref(&delivery.edge, delivery.envelope.meta().sys().id())
+                        ids::delivery_id(&delivery.edge, delivery.envelope.meta().sys().id())
                             == *reference
                     })
                     .ok_or_else(|| invalid(index, "a Loop Open has no exact queued admission"))?;

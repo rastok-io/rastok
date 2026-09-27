@@ -6,9 +6,9 @@
 
 use crate::boundary::{
     Draft, InboundAcceptance, InboundConnectorDriver, InboundDecision, InboundEnvelopeProvenance,
-    InboundExchangeRef, InboundProposal, InboundProposalRef, InboundSession, InboundSubmission,
+    InboundExchangeRef, InboundProposal, InboundProposalHandle, InboundSession, InboundSubmission,
     OutboundConnectorDriver, PortOutput, RequestPreparation, SchedulerCompletion,
-    SessionConnectorDriver, SessionDriverEvent, SessionOpenIntent, SessionRef, SessionStart,
+    SessionConnectorDriver, SessionDriverEvent, SessionId, SessionOpenIntent, SessionStart,
     SessionWriteIntent, SubmissionSequence, WebSocketExit,
 };
 use crate::connectors::network::pump::{
@@ -229,7 +229,7 @@ impl Work {
 
 #[derive(Clone, Copy, Debug)]
 enum Control {
-    Close(SessionRef),
+    Close(SessionId),
 }
 
 #[derive(Debug)]
@@ -253,15 +253,15 @@ struct LiveProposal {
 
 #[derive(Default)]
 struct SessionRegistry {
-    active: BTreeMap<SessionRef, mpsc::Sender<ActorCommand>>,
-    close_before_registration: BTreeSet<SessionRef>,
+    active: BTreeMap<SessionId, mpsc::Sender<ActorCommand>>,
+    close_before_registration: BTreeSet<SessionId>,
 }
 
 type SessionTable = Arc<Mutex<SessionRegistry>>;
 
 async fn register_session(
     sessions: &SessionTable,
-    session: SessionRef,
+    session: SessionId,
     sender: mpsc::Sender<ActorCommand>,
 ) {
     let close = {
@@ -276,12 +276,12 @@ async fn register_session(
 
 async fn session_sender(
     sessions: &SessionTable,
-    session: SessionRef,
+    session: SessionId,
 ) -> Option<mpsc::Sender<ActorCommand>> {
     sessions.lock().await.active.get(&session).cloned()
 }
 
-async fn request_session_close(sessions: &SessionTable, session: SessionRef) {
+async fn request_session_close(sessions: &SessionTable, session: SessionId) {
     let sender = {
         let mut sessions = sessions.lock().await;
         let sender = sessions.active.get(&session).cloned();
@@ -295,7 +295,7 @@ async fn request_session_close(sessions: &SessionTable, session: SessionRef) {
     }
 }
 
-async fn forget_active_session(sessions: &SessionTable, session: SessionRef) {
+async fn forget_active_session(sessions: &SessionTable, session: SessionId) {
     let mut sessions = sessions.lock().await;
     sessions.active.remove(&session);
     sessions.close_before_registration.remove(&session);
@@ -329,7 +329,7 @@ impl InboundConnectorDriver for HostedWebSocket<'_> {
         self.pending.front().map(|live| live.proposal.clone())
     }
 
-    fn decide(&mut self, reference: InboundProposalRef, decision: InboundDecision) {
+    fn decide(&mut self, reference: InboundProposalHandle, decision: InboundDecision) {
         let Some(live) = self.pending.front() else {
             return;
         };
@@ -385,7 +385,7 @@ impl SessionConnectorDriver for HostedWebSocket<'_> {
     ) -> SessionStart {
         let Some(opening) = decode_client_open(&intent.prepared) else {
             self.session_events.push(exit_event(
-                intent.session_ref,
+                intent.session_id,
                 WebSocketExit::ProtocolFailed,
                 Namespace::new(),
             ));
@@ -393,7 +393,7 @@ impl SessionConnectorDriver for HostedWebSocket<'_> {
         };
         let Some(binding) = self.plans.get(&intent.connector_path).cloned() else {
             self.session_events.push(exit_event(
-                intent.session_ref,
+                intent.session_id,
                 WebSocketExit::ProtocolFailed,
                 Namespace::new(),
             ));
@@ -410,7 +410,7 @@ impl SessionConnectorDriver for HostedWebSocket<'_> {
             Err(SubmitError::Full(_) | SubmitError::ByteBudget(_)) => SessionStart::Pending,
             Err(SubmitError::Oversized { .. }) => {
                 self.session_events.push(exit_event(
-                    intent.session_ref,
+                    intent.session_id,
                     WebSocketExit::MessageTooLarge {
                         limit: self
                             .plans
@@ -423,7 +423,7 @@ impl SessionConnectorDriver for HostedWebSocket<'_> {
             }
             Err(SubmitError::Stopped(_)) => {
                 self.session_events.push(exit_event(
-                    intent.session_ref,
+                    intent.session_id,
                     WebSocketExit::ConnectFailed,
                     Namespace::new(),
                 ));
@@ -435,7 +435,7 @@ impl SessionConnectorDriver for HostedWebSocket<'_> {
     fn prepare_session_write(
         &mut self,
         connector: &crate::node::Path,
-        _: SessionRef,
+        _: SessionId,
         data: &Data,
         _: &BTreeMap<String, Value>,
     ) -> RequestPreparation {
@@ -454,7 +454,7 @@ impl SessionConnectorDriver for HostedWebSocket<'_> {
     ) -> SessionStart {
         let Some(message) = decode_message(&intent.prepared) else {
             self.session_events.push(exit_event(
-                intent.session_ref,
+                intent.session_id,
                 WebSocketExit::ProtocolFailed,
                 Namespace::new(),
             ));
@@ -470,7 +470,7 @@ impl SessionConnectorDriver for HostedWebSocket<'_> {
             Err(SubmitError::Full(_) | SubmitError::ByteBudget(_)) => SessionStart::Pending,
             Err(SubmitError::Oversized { .. } | SubmitError::Stopped(_)) => {
                 self.session_events.push(exit_event(
-                    intent.session_ref,
+                    intent.session_id,
                     WebSocketExit::TransportLost,
                     Namespace::new(),
                 ));
@@ -479,7 +479,7 @@ impl SessionConnectorDriver for HostedWebSocket<'_> {
         }
     }
 
-    fn close_session(&mut self, session: SessionRef) -> SessionStart {
+    fn close_session(&mut self, session: SessionId) -> SessionStart {
         match self.engine.try_control(Control::Close(session)) {
             Ok(()) => SessionStart::Started,
             Err(SubmitError::Full(_)) => SessionStart::Pending,
@@ -639,7 +639,7 @@ fn verify_binding(
     Ok(())
 }
 
-fn exit_event(session: SessionRef, exit: WebSocketExit, ext: Namespace) -> SessionDriverEvent {
+fn exit_event(session: SessionId, exit: WebSocketExit, ext: Namespace) -> SessionDriverEvent {
     SessionDriverEvent::Exited {
         session,
         exit: PortOutput {
@@ -664,7 +664,7 @@ async fn run_client_engine(
                     binding,
                 } => {
                     let (commands, receiver) = mpsc::channel(1);
-                    register_session(&sessions, intent.session_ref, commands).await;
+                    register_session(&sessions, intent.session_id, commands).await;
                     let events = runtime.event_sender();
                     let table = Arc::clone(&sessions);
                     tokio::spawn(async move {
@@ -675,14 +675,14 @@ async fn run_client_engine(
                     });
                 }
                 Work::Write { intent, message } => {
-                    let sender = session_sender(&sessions, intent.session_ref).await;
+                    let sender = session_sender(&sessions, intent.session_id).await;
                     if let Some(sender) = sender {
                         let _ = sender.send(ActorCommand::Write(intent, message)).await;
                     } else {
                         let _ = runtime
                             .emit(
                                 DriverEvent::Session(exit_event(
-                                    intent.session_ref,
+                                    intent.session_id,
                                     WebSocketExit::TransportLost,
                                     Namespace::new(),
                                 )),
@@ -729,7 +729,7 @@ async fn run_server_engine(
         match input {
             EngineInput::Work(work) => match work.into_inner() {
                 Work::Write { intent, message } => {
-                    let sender = session_sender(&sessions, intent.session_ref).await;
+                    let sender = session_sender(&sessions, intent.session_id).await;
                     if let Some(sender) = sender {
                         let _ = sender.send(ActorCommand::Write(intent, message)).await;
                     }
@@ -738,7 +738,7 @@ async fn run_server_engine(
                     let _ = runtime
                         .emit(
                             DriverEvent::Session(exit_event(
-                                intent.session_ref,
+                                intent.session_id,
                                 WebSocketExit::ProtocolFailed,
                                 Namespace::new(),
                             )),
@@ -763,7 +763,7 @@ async fn run_client_session(
     sessions: SessionTable,
     config: WebSocketConfig,
 ) {
-    let session = intent.session_ref;
+    let session = intent.session_id;
     let result = connect_client(
         &intent.connector_path,
         &opening,
@@ -791,7 +791,7 @@ async fn connect_client(
     connector: &crate::node::Path,
     opening: &WebSocketClientOpening,
     binding: &WebSocketPlanBinding,
-    session: SessionRef,
+    session: SessionId,
     commands: &mut mpsc::Receiver<ActorCommand>,
     events: &mut EventSender<DriverEvent>,
     config: WebSocketConfig,
@@ -950,7 +950,7 @@ async fn connect_client_h1(
     connector: &crate::node::Path,
     opening: &WebSocketClientOpening,
     binding: &WebSocketPlanBinding,
-    session: SessionRef,
+    session: SessionId,
     commands: &mut mpsc::Receiver<ActorCommand>,
     events: &mut EventSender<DriverEvent>,
 ) -> Result<(WebSocketExit, Namespace), WebSocketExit> {
@@ -1011,7 +1011,7 @@ async fn connect_client_h2(
     connector: &crate::node::Path,
     opening: &WebSocketClientOpening,
     binding: &WebSocketPlanBinding,
-    session: SessionRef,
+    session: SessionId,
     commands: &mut mpsc::Receiver<ActorCommand>,
     events: &mut EventSender<DriverEvent>,
 ) -> Result<(WebSocketExit, Namespace), WebSocketExit> {
@@ -1150,7 +1150,7 @@ async fn connect_client_h3(
     connector: &crate::node::Path,
     opening: &WebSocketClientOpening,
     binding: &WebSocketPlanBinding,
-    session: SessionRef,
+    session: SessionId,
     commands: &mut mpsc::Receiver<ActorCommand>,
     events: &mut EventSender<DriverEvent>,
     config: WebSocketConfig,
@@ -1369,7 +1369,7 @@ fn drain_h3_control(
 #[allow(clippy::too_many_arguments)]
 async fn run_h3_client_socket(
     connector: &crate::node::Path,
-    session: SessionRef,
+    session: SessionId,
     codec: &str,
     max_message: u64,
     initial_message: &[u8],
@@ -1499,7 +1499,7 @@ async fn run_h3_client_socket(
 #[cfg(feature = "hosted-http3")]
 async fn drain_h3_messages(
     connector: &crate::node::Path,
-    session: SessionRef,
+    session: SessionId,
     codec: &str,
     max_message: u64,
     websocket: &mut tungstenite::WebSocket<H3FrameIo>,
@@ -1622,7 +1622,7 @@ fn handshake_error(error: tungstenite::Error) -> WebSocketExit {
 struct SocketSession<'a> {
     role: Role,
     connector: &'a crate::node::Path,
-    session: SessionRef,
+    session: SessionId,
     codec: &'a str,
     max_message: u64,
     initial_message: &'a [u8],
@@ -1773,7 +1773,7 @@ fn close_exit(frame: Option<CloseFrame>) -> WebSocketExit {
 
 async fn propose_message(
     connector: &crate::node::Path,
-    session: SessionRef,
+    session: SessionId,
     data: Data,
     ext: Namespace,
     bytes: usize,
@@ -1819,10 +1819,10 @@ async fn propose_message(
 
 static NEXT_PROPOSAL: AtomicU64 = AtomicU64::new(1);
 
-fn next_proposal_ref() -> Result<InboundProposalRef, WebSocketExit> {
+fn next_proposal_ref() -> Result<InboundProposalHandle, WebSocketExit> {
     let value = NEXT_PROPOSAL.fetch_add(1, Ordering::Relaxed);
     (value != u64::MAX)
-        .then_some(InboundProposalRef::new(value))
+        .then_some(InboundProposalHandle::new(value))
         .ok_or(WebSocketExit::TransportLost)
 }
 
@@ -1912,7 +1912,7 @@ fn bind_h3_listeners(
 #[cfg(feature = "hosted-http3")]
 enum H3HandshakeState {
     Pending(oneshot::Receiver<InboundDecision>),
-    Accepted(SessionRef),
+    Accepted(SessionId),
     Rejected,
 }
 
@@ -1932,7 +1932,7 @@ struct H3LiveSession {
     outgoing_offset: usize,
     pending_decision: Option<(oneshot::Receiver<InboundDecision>, EventReservation)>,
     route: WebSocketServerBinding,
-    session: SessionRef,
+    session: SessionId,
     websocket: tungstenite::WebSocket<H3FrameIo>,
 }
 
@@ -2130,7 +2130,7 @@ async fn progress_h3_peer(
                 );
                 let (decision, accepted) = oneshot::channel();
                 let proposal = InboundProposal {
-                    reference: InboundProposalRef::new(reference_value),
+                    reference: InboundProposalHandle::new(reference_value),
                     submission: InboundSubmission {
                         provenance: InboundEnvelopeProvenance::single(route.node.clone()),
                         port: crate::node::Port::conventional_out(),
@@ -2819,7 +2819,7 @@ async fn serve_handshake(
     if reference_value == u64::MAX {
         return Ok(empty_response(StatusCode::SERVICE_UNAVAILABLE));
     }
-    let reference = InboundProposalRef::new(reference_value);
+    let reference = InboundProposalHandle::new(reference_value);
     let ext = server_metadata(&request, selected.as_deref());
     let draft = Draft {
         data: neutral_data(&route.codec),
@@ -3436,7 +3436,7 @@ graph websocket : App {{
             Err(TryRecvError::Empty),
             "the peer cannot observe upgrade success before causal acceptance"
         );
-        let session = SessionRef::new(Id::from_bytes([9; 16]));
+        let session = SessionId::new(Id::from_bytes([9; 16]));
         server.decide(
             opening.reference,
             InboundDecision::Accepted(InboundAcceptance {
@@ -3500,7 +3500,7 @@ graph websocket : App {{
         let (close_alpha, alpha_closing) = tokio::sync::oneshot::channel();
         let alpha = client_h1_message(address, "alpha", alpha_closing, true);
         let alpha_open = wait_for_proposal(&mut server);
-        let alpha_session = SessionRef::new(Id::from_bytes([0x51; 16]));
+        let alpha_session = SessionId::new(Id::from_bytes([0x51; 16]));
         server.decide(
             alpha_open.reference,
             InboundDecision::Accepted(InboundAcceptance {
@@ -3528,7 +3528,7 @@ graph websocket : App {{
         let (close_beta, beta_closing) = tokio::sync::oneshot::channel();
         let beta = client_h1_message(address, "beta", beta_closing, true);
         let beta_open = wait_for_proposal(&mut server);
-        let beta_session = SessionRef::new(Id::from_bytes([0x61; 16]));
+        let beta_session = SessionId::new(Id::from_bytes([0x61; 16]));
         server.decide(
             beta_open.reference,
             InboundDecision::Accepted(InboundAcceptance {
@@ -3589,7 +3589,7 @@ graph websocket : App {{
         let (drop_peer, dropping) = tokio::sync::oneshot::channel();
         let peer = client_h1_message(address, "before-loss", dropping, false);
         let opening = wait_for_proposal(&mut server);
-        let session = SessionRef::new(Id::from_bytes([0x71; 16]));
+        let session = SessionId::new(Id::from_bytes([0x71; 16]));
         server.decide(
             opening.reference,
             InboundDecision::Accepted(InboundAcceptance {
@@ -3638,7 +3638,7 @@ graph websocket : App {{
         let (release_peer, releasing) = tokio::sync::oneshot::channel();
         let peer = client_h1_message(address, "hello", releasing, true);
         let opening = wait_for_proposal(&mut server);
-        let session = SessionRef::new(Id::from_bytes([0x74; 16]));
+        let session = SessionId::new(Id::from_bytes([0x74; 16]));
         server.decide(
             opening.reference,
             InboundDecision::Accepted(InboundAcceptance {
@@ -3703,9 +3703,9 @@ graph websocket : App {{
         else {
             panic!("the opening prepares")
         };
-        let session = SessionRef::new(Id::from_bytes([0x41; 16]));
+        let session = SessionId::new(Id::from_bytes([0x41; 16]));
         let intent = SessionOpenIntent {
-            session_ref: session,
+            session_id: session,
             emitting_id: Id::from_bytes([0x40; 16]),
             connector_path: node.clone(),
             prepared,
@@ -3877,9 +3877,9 @@ graph websocket : App {
         else {
             panic!("the HTTP/3 opening must prepare")
         };
-        let client_session = SessionRef::new(Id::from_bytes([0x31; 16]));
+        let client_session = SessionId::new(Id::from_bytes([0x31; 16]));
         let intent = SessionOpenIntent {
-            session_ref: client_session,
+            session_id: client_session,
             emitting_id: Id::from_bytes([0x30; 16]),
             connector_path: node.clone(),
             prepared,
@@ -3915,7 +3915,7 @@ graph websocket : App {
             );
             std::thread::yield_now();
         };
-        let server_session = SessionRef::new(Id::from_bytes([0x32; 16]));
+        let server_session = SessionId::new(Id::from_bytes([0x32; 16]));
         server.decide(
             opening.reference,
             InboundDecision::Accepted(InboundAcceptance {

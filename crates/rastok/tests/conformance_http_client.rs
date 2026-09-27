@@ -18,8 +18,8 @@ use rastok::conformance::{
 use rastok::connectors::{DriverRegistry, HttpClientConfig, HttpClientFactory, RuntimeBindings};
 use rastok::contract::ContractCatalog;
 use rastok::deployment::{
-    BootBindings, DeploymentProfile, EnvironmentName, SecretBinding, SecretMaterial,
-    SecretProvider, SecretProviderError, SecretProviderId, SecretRef, SecretVersion,
+    BootBindings, DeploymentProfile, EnvironmentName, SecretBinding, SecretMaterial, SecretName,
+    SecretProvider, SecretProviderError, SecretProviderId, SecretVersion,
 };
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::MemJournal;
@@ -244,7 +244,7 @@ impl SecretProvider for FixedSecretProvider {
 }
 
 fn authenticated_boot(url: String) -> BootBindings {
-    let reference = SecretRef::new("providers/http/token").expect("logical secret reference");
+    let reference = SecretName::new("providers/http/token").expect("logical secret reference");
     let binding = SecretBinding::new(
         reference.clone(),
         SecretProviderId::new("rastok/test@1").expect("stable provider id"),

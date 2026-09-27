@@ -95,7 +95,7 @@ pub(super) fn operations(vm: &Vm<'_>, records: &[Record]) -> JsonValue {
                         let row = attempts
                             .entry(context.ordinal)
                             .or_insert_with(|| json!({"ordinal": context.ordinal.to_string()}));
-                        row["call"] = json!(call.intent.call_ref.to_string());
+                        row["call"] = json!(call.intent.call_id.to_string());
                         match call.status {
                             OutboundStatus::Open => row["opened_record"] = json!(index),
                             _ => {

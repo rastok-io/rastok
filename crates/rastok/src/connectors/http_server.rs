@@ -12,7 +12,7 @@ use std::rc::Rc;
 use crate::boundary::{
     Completion, HttpServerExit, InboundCallConnectorDriver, InboundCallEvent, InboundCallResponse,
     InboundCallResponseStart, InboundCallTimeout, InboundCallTimeoutStart, InboundConnectorDriver,
-    InboundDecision, InboundExchangeRef, InboundProposal, InboundProposalRef, InboundSubmission,
+    InboundDecision, InboundExchangeRef, InboundProposal, InboundProposalHandle, InboundSubmission,
 };
 use crate::connector::{ConnectorRoles, ContractId};
 use crate::plan::ValidatedExecutionPlan;
@@ -272,7 +272,7 @@ impl HttpServerLabInput {
             ));
         }
         self.pending = Some(InboundProposal {
-            reference: InboundProposalRef::new(action),
+            reference: InboundProposalHandle::new(action),
             submission,
             session: None,
         });
@@ -297,7 +297,7 @@ impl InboundConnectorDriver for HttpServerLabDriver {
         self.input.borrow().pending.clone()
     }
 
-    fn decide(&mut self, reference: InboundProposalRef, decision: InboundDecision) {
+    fn decide(&mut self, reference: InboundProposalHandle, decision: InboundDecision) {
         let mut input = self.input.borrow_mut();
         if input
             .pending
@@ -312,11 +312,11 @@ impl InboundConnectorDriver for HttpServerLabDriver {
         input.pending = None;
         if let InboundDecision::Accepted(accepted) = decision {
             match accepted.exchange {
-                Some(InboundExchangeRef::Call(call_ref)) if input.terminal.is_none() => {
+                Some(InboundExchangeRef::Call(call_id)) if input.terminal.is_none() => {
                     // A fixture scripts a decoded request and successful fixed
                     // ACK. Only the accepting commit supplies its Call identity.
                     input.terminal = Some(InboundCallEvent {
-                        call_ref,
+                        call_id,
                         completion: Completion::http_server_exit(HttpServerExit::Completed {
                             status: 202,
                         }),

@@ -3,7 +3,7 @@
 #![allow(clippy::expect_used, clippy::panic)]
 
 use rastok::accounting::{
-    CostProfile, CostProfileRef, ExactDecimal, UnitPrice, accounting_observations,
+    CostProfile, CostProfileName, ExactDecimal, UnitPrice, accounting_observations,
 };
 use rastok::boundary::{Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence};
 use rastok::compiler::{Compilation, compile};
@@ -308,7 +308,7 @@ lab app {
     let compiled = compile(&[source], &ContractCatalog::try_m0().expect("catalogue"))
         .expect("a declared exact quantity downstream of the generic Connector");
     let profile = CostProfile::new(
-        CostProfileRef::new("pricing/produce@1").expect("profile identity"),
+        CostProfileName::new("pricing/produce@1").expect("profile identity"),
         vec![
             UnitPrice::new(
                 node::Path::new(["weighing"]).expect("Connector path"),

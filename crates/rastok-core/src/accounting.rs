@@ -11,7 +11,7 @@ use core::fmt;
 
 use crate::canonical_cbor::{Value as Cbor, encode};
 use crate::envelope::{Id, Value};
-use crate::identity::InstanceRef;
+use crate::identity::InstanceGeneration;
 use crate::journal::{Record, observations_for_records_from, recorded_envelope};
 use crate::node;
 use crate::observation::{ExchangeCorrelation, RecordCorrelation, RecordObservation};
@@ -139,9 +139,9 @@ impl Money {
 
 /// Stable deployment price-profile identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct CostProfileRef(String);
+pub struct CostProfileName(String);
 
-impl CostProfileRef {
+impl CostProfileName {
     /// Builds one bounded, whitespace-free stable reference.
     ///
     /// # Errors
@@ -261,7 +261,7 @@ impl UnitPrice {
 /// Canonical optional deployment price book.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CostProfile {
-    reference: CostProfileRef,
+    reference: CostProfileName,
     rules: Vec<UnitPrice>,
     digest: [u8; 32],
 }
@@ -274,7 +274,7 @@ impl CostProfile {
     /// A Connector/measure pair has exactly one rule, and every rule for one
     /// Connector must agree on provider/model dimensions.
     pub fn new(
-        reference: CostProfileRef,
+        reference: CostProfileName,
         mut rules: Vec<UnitPrice>,
     ) -> Result<Self, AccountingError> {
         rules.sort_by(|left, right| {
@@ -313,7 +313,7 @@ impl CostProfile {
 
     /// Stable profile reference.
     #[must_use]
-    pub const fn reference(&self) -> &CostProfileRef {
+    pub const fn reference(&self) -> &CostProfileName {
         &self.reference
     }
 
@@ -377,7 +377,7 @@ impl MeasureSample {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ObservationScope {
     origin_id: Option<Id>,
-    instance: Option<InstanceRef>,
+    instance: Option<InstanceGeneration>,
     owner: Option<OwnerPath>,
     node: Option<node::Path>,
     connector: Option<node::Path>,
@@ -396,7 +396,7 @@ impl ObservationScope {
 
     /// Exact logical instance generation.
     #[must_use]
-    pub const fn instance(&self) -> Option<&InstanceRef> {
+    pub const fn instance(&self) -> Option<&InstanceGeneration> {
         self.instance.as_ref()
     }
 
@@ -1032,7 +1032,7 @@ mod tests {
             })
             .collect();
         CostProfile::new(
-            CostProfileRef::new("pricing/test@1")
+            CostProfileName::new("pricing/test@1")
                 .unwrap_or_else(|error| panic!("profile ref: {error}")),
             rules,
         )

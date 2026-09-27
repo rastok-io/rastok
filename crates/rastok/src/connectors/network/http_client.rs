@@ -1,5 +1,5 @@
 use crate::boundary::{
-    CallConnectorDriver, CallRef, CallStart, Completion, HttpClientExit, Intent,
+    CallConnectorDriver, CallId, CallStart, Completion, HttpClientExit, Intent,
     OutboundConnectorDriver, RequestPreparation, Response, SchedulerCompletion,
 };
 use crate::connectors::http_client::{
@@ -212,7 +212,7 @@ impl TlsMaterial {
 
 #[derive(Debug)]
 struct ClientWork {
-    call_ref: CallRef,
+    call_id: CallId,
     request: HttpRequest,
     binding: HttpClientPlanBinding,
     tls: TlsMaterial,
@@ -220,7 +220,7 @@ struct ClientWork {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct ClientControl(CallRef);
+struct ClientControl(CallId);
 
 #[derive(Debug)]
 struct ClientEvent {
@@ -272,11 +272,11 @@ type H2Pool = std::sync::Arc<tokio::sync::Mutex<BTreeMap<String, H2Sender>>>;
 struct HttpClient<'plan> {
     _plan: &'plan crate::plan::ValidatedExecutionPlan,
     bindings: HttpClientRequestBindings,
-    boot_secrets: BTreeMap<crate::deployment::SecretRef, crate::deployment::SecretMaterial>,
+    boot_secrets: BTreeMap<crate::deployment::SecretName, crate::deployment::SecretMaterial>,
     plans: BTreeMap<crate::node::Path, HttpClientPlanBinding>,
     config: HttpClientConfig,
     engine: HostedNetworkEngine<ClientWork, ClientControl, ClientEvent>,
-    cancellations: BTreeMap<CallRef, tokio::sync::watch::Sender<bool>>,
+    cancellations: BTreeMap<CallId, tokio::sync::watch::Sender<bool>>,
     immediate: Vec<Response>,
 }
 
@@ -375,7 +375,7 @@ impl<'plan> HttpClient<'plan> {
                             };
                             tokio::spawn(async move {
                                 let _in_flight = in_flight;
-                                let call_ref = work.value().call_ref;
+                                let call_id = work.value().call_id;
                                 let result = execute_call(
                                     work.value(),
                                     config.max_header_bytes,
@@ -398,7 +398,7 @@ impl<'plan> HttpClient<'plan> {
                                 let _completed_work = work.into_inner();
                                 let event = ClientEvent {
                                     response: Response {
-                                        call_ref,
+                                        call_id,
                                         completion,
                                     },
                                 };
@@ -453,9 +453,9 @@ impl<'plan> HttpClient<'plan> {
         Some(material)
     }
 
-    fn immediate(&mut self, call_ref: CallRef, exit: HttpClientExit) {
+    fn immediate(&mut self, call_id: CallId, exit: HttpClientExit) {
         self.immediate.push(Response {
-            call_ref,
+            call_id,
             completion: Completion::http_client_exit(exit),
         });
     }
@@ -536,33 +536,33 @@ impl CallConnectorDriver for HttpClient<'_> {
         })
     }
 
-    fn cancel(&mut self, call_ref: &CallRef) {
-        if let Some(cancel) = self.cancellations.remove(call_ref) {
+    fn cancel(&mut self, call_id: &CallId) {
+        if let Some(cancel) = self.cancellations.remove(call_id) {
             let _ = cancel.send(true);
         }
-        let _ = self.engine.try_control(ClientControl(*call_ref));
+        let _ = self.engine.try_control(ClientControl(*call_id));
     }
 
     fn start(&mut self, intent: &Intent, _request: &Envelope) -> CallStart {
         let Some(mut request) = decode_request(&intent.prepared) else {
-            self.immediate(intent.call_ref, HttpClientExit::ProtocolFailed);
+            self.immediate(intent.call_id, HttpClientExit::ProtocolFailed);
             return CallStart::Started;
         };
         if !self.resolve_bearer(&mut request) {
-            self.immediate(intent.call_ref, HttpClientExit::ProtocolFailed);
+            self.immediate(intent.call_id, HttpClientExit::ProtocolFailed);
             return CallStart::Started;
         }
         let Some(binding) = self.plans.get(&intent.connector_path).cloned() else {
-            self.immediate(intent.call_ref, HttpClientExit::ProtocolFailed);
+            self.immediate(intent.call_id, HttpClientExit::ProtocolFailed);
             return CallStart::Started;
         };
         let Some(tls) = self.tls_material(&intent.connector_path, &intent.resolved_settings) else {
-            self.immediate(intent.call_ref, HttpClientExit::TlsFailed);
+            self.immediate(intent.call_id, HttpClientExit::TlsFailed);
             return CallStart::Started;
         };
         let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
         let work = ClientWork {
-            call_ref: intent.call_ref,
+            call_id: intent.call_id,
             request,
             binding,
             tls,
@@ -570,16 +570,16 @@ impl CallConnectorDriver for HttpClient<'_> {
         };
         match self.engine.try_submit(work, intent.prepared.bytes().len()) {
             Ok(()) => {
-                self.cancellations.insert(intent.call_ref, cancel);
+                self.cancellations.insert(intent.call_id, cancel);
                 CallStart::Started
             }
             Err(SubmitError::Full(_work) | SubmitError::ByteBudget(_work)) => CallStart::Pending,
             Err(SubmitError::Stopped(_work)) => {
-                self.immediate(intent.call_ref, HttpClientExit::ConnectFailed);
+                self.immediate(intent.call_id, HttpClientExit::ConnectFailed);
                 CallStart::Started
             }
             Err(SubmitError::Oversized { value: _work, .. }) => {
-                self.immediate(intent.call_ref, HttpClientExit::ProtocolFailed);
+                self.immediate(intent.call_id, HttpClientExit::ProtocolFailed);
                 CallStart::Started
             }
         }
@@ -588,10 +588,10 @@ impl CallConnectorDriver for HttpClient<'_> {
     fn events(&mut self) -> Vec<Response> {
         let mut responses = std::mem::take(&mut self.immediate);
         for event in self.engine.drain_events(MAX_EVENTS_PER_POLL).events {
-            self.cancellations.remove(&event.response.call_ref);
+            self.cancellations.remove(&event.response.call_id);
             responses.push(event.response);
         }
-        responses.sort_by_key(|response| response.call_ref);
+        responses.sort_by_key(|response| response.call_id);
         responses
     }
 }
@@ -1218,7 +1218,7 @@ async fn execute_h3(
     let local = socket
         .local_addr()
         .map_err(|_| AttemptFailure::before_request(HttpClientExit::ConnectFailed))?;
-    let call_id = work.call_ref.id();
+    let call_id = work.call_id.id();
     let scid = quiche::ConnectionId::from_ref(call_id.as_bytes());
     let mut connection = quiche::connect(Some(host), &scid, local, remote, &mut config)
         .map_err(|_| AttemptFailure::before_request(HttpClientExit::TlsFailed))?;
@@ -1309,7 +1309,7 @@ pub(super) async fn probe_http3_server(
 ) -> Result<(u16, Vec<u8>), String> {
     let (_cancel_tx, cancel) = tokio::sync::watch::channel(false);
     let work = ClientWork {
-        call_ref: CallRef::new(crate::envelope::Id::from_bytes([0x35; 16])),
+        call_id: CallId::new(crate::envelope::Id::from_bytes([0x35; 16])),
         request: HttpRequest {
             auth_bearer: None,
             body: body.to_vec(),
@@ -1702,7 +1702,7 @@ mod tests {
         (
             cancel_tx,
             ClientWork {
-                call_ref: CallRef::new(crate::envelope::Id::from_bytes([call; 16])),
+                call_id: CallId::new(crate::envelope::Id::from_bytes([call; 16])),
                 request: request(url, body),
                 binding: HttpClientPlanBinding {
                     max_body: 1024,

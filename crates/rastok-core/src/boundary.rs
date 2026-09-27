@@ -13,7 +13,7 @@ use crate::datatype::{
     DataType, EnumType, StructType, TaggedCase, TaggedUnionType, TypeError, TypeField,
 };
 use crate::envelope::{self, Envelope};
-use crate::identity::InstanceRef;
+use crate::identity::InstanceGeneration;
 use crate::journal::{CloseVerdict, Closure, Journal};
 use crate::node;
 use crate::plan::OwnerSlot;
@@ -63,9 +63,9 @@ impl InboundEnvelopeProvenance {
 /// canonical call fields, never a new serialized causal field: it is
 /// always recomputable from the record that carries those fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct CallRef(envelope::Id);
+pub struct CallId(envelope::Id);
 
-impl CallRef {
+impl CallId {
     /// Wraps a derived identity; the recipe lives with the journal's
     /// `ids` module.
     #[must_use]
@@ -80,7 +80,7 @@ impl CallRef {
     }
 }
 
-impl fmt::Display for CallRef {
+impl fmt::Display for CallId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
@@ -88,15 +88,15 @@ impl fmt::Display for CallRef {
 
 /// Placement-neutral identity of one admitted inbound Call.
 ///
-/// Unlike [`CallRef`], this is not a digest of an outbound request intent. An
+/// Unlike [`CallId`], this is not a digest of an outbound request intent. An
 /// inbound Call is born as a root envelope, so its root id is already the
 /// unique causal reference. The newtype prevents the two directions from
 /// being crossed accidentally while keeping the recipe free of a redundant
 /// hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct InboundCallRef(envelope::Id);
+pub struct InboundCallId(envelope::Id);
 
-impl InboundCallRef {
+impl InboundCallId {
     /// Names the Call opened by one committed root envelope.
     #[must_use]
     pub const fn from_root(root: envelope::Id) -> Self {
@@ -110,7 +110,7 @@ impl InboundCallRef {
     }
 }
 
-impl fmt::Display for InboundCallRef {
+impl fmt::Display for InboundCallId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(formatter)
     }
@@ -121,9 +121,9 @@ impl fmt::Display for InboundCallRef {
 /// The value is derived from the opening fact by the journal. It never wraps
 /// a socket, address, negotiated protocol, Host, Worker, or library handle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct SessionRef(envelope::Id);
+pub struct SessionId(envelope::Id);
 
-impl SessionRef {
+impl SessionId {
     /// Wraps a journal-derived identity; the recipe lives in [`crate::journal::ids`].
     #[must_use]
     pub const fn new(id: envelope::Id) -> Self {
@@ -160,7 +160,7 @@ impl SessionRef {
     }
 }
 
-impl fmt::Display for SessionRef {
+impl fmt::Display for SessionId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(formatter)
     }
@@ -168,9 +168,9 @@ impl fmt::Display for SessionRef {
 
 /// Identity of one journaled graph-to-world write inside a session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct SessionWriteRef(envelope::Id);
+pub struct SessionWriteId(envelope::Id);
 
-impl SessionWriteRef {
+impl SessionWriteId {
     /// Wraps a journal-derived write identity.
     #[must_use]
     pub const fn new(id: envelope::Id) -> Self {
@@ -184,7 +184,7 @@ impl SessionWriteRef {
     }
 }
 
-impl fmt::Display for SessionWriteRef {
+impl fmt::Display for SessionWriteId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(formatter)
     }
@@ -192,7 +192,7 @@ impl fmt::Display for SessionWriteRef {
 
 /// The exact logical protocol or operation descriptor of a request, sealed.
 /// What the journal digests is what the Driver decodes and executes without
-/// recomputing settings. The sole M1 exception is an attested `SecretRef`:
+/// recomputing settings. The sole M1 exception is an attested `SecretName`:
 /// its physical material overlays the descriptor inside the authorized Driver
 /// and is fixed independently by the immutable run header.
 #[derive(Debug, Clone, PartialEq)]
@@ -1216,7 +1216,7 @@ pub fn prepare_lines(data: &envelope::Data) -> Result<PreparedRequest, String> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Intent {
     /// The derived internal call identity.
-    pub call_ref: CallRef,
+    pub call_id: CallId,
     /// The envelope that opened the call — the cause.
     pub emitting_id: envelope::Id,
     /// The canonical edge of the causing delivery (key 47): with the
@@ -1256,7 +1256,7 @@ impl Intent {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionOpenIntent {
     /// Session identity derived from the remaining canonical fields.
-    pub session_ref: SessionRef,
+    pub session_id: SessionId,
     /// Envelope whose delivery requested the opening.
     pub emitting_id: envelope::Id,
     /// Connector node that will own the session.
@@ -1281,9 +1281,9 @@ impl SessionOpenIntent {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionWriteIntent {
     /// Derived identity of this write obligation.
-    pub write_ref: SessionWriteRef,
+    pub write_ref: SessionWriteId,
     /// Logical session being addressed.
-    pub session_ref: SessionRef,
+    pub session_id: SessionId,
     /// Envelope whose emission requested the write.
     pub emitting_id: envelope::Id,
     /// Connector node owning the live session.
@@ -1514,7 +1514,7 @@ impl core::error::Error for CompletionError {}
 pub struct Response {
     /// The call this answers, correlated by the connector's own
     /// protocol.
-    pub call_ref: CallRef,
+    pub call_id: CallId,
     /// Ordered ordinary outputs plus the terminal invocation fact.
     pub completion: Completion,
 }
@@ -1572,7 +1572,7 @@ pub enum DriverRouteError {
         /// Family whose retained proposal was addressed.
         connector: crate::connector::ContractId,
         /// Proposal reference supplied by the caller.
-        reference: InboundProposalRef,
+        reference: InboundProposalHandle,
     },
     /// The inbound proposal's session framing contradicts the bound
     /// contract's categorical exchange lifecycle.
@@ -1592,7 +1592,7 @@ pub enum DriverRouteError {
     /// One Driver answered a call started through another Connector family.
     CrossFamilyResponse {
         /// Correlated call.
-        call_ref: CallRef,
+        call_id: CallId,
         /// Family that started it.
         expected: crate::connector::ContractId,
         /// Family that answered it.
@@ -1602,25 +1602,25 @@ pub enum DriverRouteError {
     /// another Connector family.
     CrossFamilyInboundCall {
         /// Correlated inbound Call.
-        call_ref: InboundCallRef,
+        call_id: InboundCallId,
         /// Family that admitted it.
         expected: crate::connector::ContractId,
         /// Family that reported the observation.
         actual: crate::connector::ContractId,
     },
     /// A Driver reported a terminal fact for no admitted inbound Call.
-    UncorrelatedInboundCall(InboundCallRef),
+    UncorrelatedInboundCall(InboundCallId),
     /// One Driver reported an event for a session owned by another family.
     CrossFamilySession {
         /// Correlated logical session.
-        session: SessionRef,
+        session: SessionId,
         /// Family that admitted or opened it.
         expected: crate::connector::ContractId,
         /// Family that reported the observation.
         actual: crate::connector::ContractId,
     },
     /// A Driver reported an observation for no admitted/opened session.
-    UncorrelatedSession(SessionRef),
+    UncorrelatedSession(SessionId),
 }
 
 impl fmt::Display for DriverRouteError {
@@ -1672,23 +1672,23 @@ impl fmt::Display for DriverRouteError {
                 "Driver `{connector}` proposed an inbound root from unbound source `{source}`"
             ),
             Self::CrossFamilyResponse {
-                call_ref,
+                call_id,
                 expected,
                 actual,
             } => write!(
                 formatter,
-                "Driver `{actual}` answered call {call_ref} started by `{expected}`"
+                "Driver `{actual}` answered call {call_id} started by `{expected}`"
             ),
             Self::CrossFamilyInboundCall {
-                call_ref,
+                call_id,
                 expected,
                 actual,
             } => write!(
                 formatter,
-                "Driver `{actual}` terminated inbound call {call_ref} admitted by `{expected}`"
+                "Driver `{actual}` terminated inbound call {call_id} admitted by `{expected}`"
             ),
-            Self::UncorrelatedInboundCall(call_ref) => {
-                write!(formatter, "no bound Driver owns inbound call {call_ref}")
+            Self::UncorrelatedInboundCall(call_id) => {
+                write!(formatter, "no bound Driver owns inbound call {call_id}")
             }
             Self::CrossFamilySession {
                 session,
@@ -1736,7 +1736,7 @@ impl CompletionGate for OpenGate {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BoundaryEvent {
     /// The settled call.
-    pub call_ref: CallRef,
+    pub call_id: CallId,
     /// The connector node that owns the coming transaction.
     pub connector_path: node::Path,
     /// The request envelope's id — the transaction's parent.
@@ -1777,7 +1777,7 @@ pub enum InboundSession {
     /// The accepting commit opens a new logical session and derives its ref.
     Open,
     /// One message belongs to an already committed live session.
-    Message(SessionRef),
+    Message(SessionId),
 }
 
 /// Driver-local identity of one bounded inbound proposal.
@@ -1786,9 +1786,9 @@ pub enum InboundSession {
 /// until the runtime decides it, while the accepting journal transaction
 /// mints the envelope and any Call or Session reference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct InboundProposalRef(u64);
+pub struct InboundProposalHandle(u64);
 
-impl InboundProposalRef {
+impl InboundProposalHandle {
     /// Creates one Driver-local proposal reference.
     #[must_use]
     pub const fn new(value: u64) -> Self {
@@ -1806,7 +1806,7 @@ impl InboundProposalRef {
 #[derive(Debug, Clone, PartialEq)]
 pub struct InboundProposal {
     /// Stable while the proposal remains pending in the Driver.
-    pub reference: InboundProposalRef,
+    pub reference: InboundProposalHandle,
     /// Draft and provenance to commit if admission succeeds. The provenance
     /// names the exact Connector node whose output introduces the root; the
     /// runtime verifies it against the bound family before committing.
@@ -1830,9 +1830,9 @@ pub struct InboundAcceptance {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InboundExchangeRef {
     /// The root opened one bounded Call obligation.
-    Call(InboundCallRef),
+    Call(InboundCallId),
     /// The root opened or addressed one logical Session.
-    Session(SessionRef),
+    Session(SessionId),
 }
 
 /// Portable contract-level reasons why a proposed fact was not accepted.
@@ -1906,16 +1906,16 @@ pub enum DatedPayload {
         /// id.
         delivery: envelope::Id,
         /// Exact connector instance owning the mailbox/call obligation.
-        instance: InstanceRef,
+        instance: InstanceGeneration,
     },
     /// An admitted inbound Call reached the request deadline published by
     /// its Connector contract. The Driver owns the protocol-side timeout
     /// response; this event only transfers the scheduler's won request.
     InboundCallBudget {
         /// Stable reference of the admitted root Call.
-        call_ref: InboundCallRef,
+        call_id: InboundCallId,
         /// Exact source generation retaining the request.
-        instance: InstanceRef,
+        instance: InstanceGeneration,
     },
     /// One retained join candidate reached its `within` bound. The full
     /// delivery reference makes a consumed candidate's stale event harmless.
@@ -1927,7 +1927,7 @@ pub enum DatedPayload {
         /// Envelope-id half of the buffered-delivery reference.
         delivery: envelope::Id,
         /// Exact Operator generation that retained it.
-        instance: InstanceRef,
+        instance: InstanceGeneration,
     },
     /// One committed Loop continuation reached its re-admission date. The
     /// journal fold remains authoritative for the state, ordinal and fuel;
@@ -1936,9 +1936,9 @@ pub enum DatedPayload {
         /// Graph owner carrying the Loop aspect.
         owner: OwnerSlot,
         /// Exact generation in which the continuation was selected.
-        instance: InstanceRef,
+        instance: InstanceGeneration,
         /// Durable Loop run whose fold must still be open.
-        run: crate::journal::LoopRunRef,
+        run: crate::journal::LoopRunId,
         /// Ordinal of the manager-produced state awaiting admission.
         iteration: u64,
         /// Re-entry envelope id, also used as timer kind 5's stable ref.
@@ -1947,9 +1947,9 @@ pub enum DatedPayload {
     /// Original closure-based eligibility, on the same dated scheduler as Loop.
     RetryDelay {
         /// Exact generation retaining the operation.
-        instance: InstanceRef,
+        instance: InstanceGeneration,
         /// Predecessor whose winning closure armed this deadline.
-        attempt: crate::journal::retry_protocol::AttemptRef,
+        attempt: crate::journal::retry_protocol::AttemptId,
         /// Following admission reference (timer kind 5).
         admission: envelope::Id,
     },
@@ -1961,7 +1961,7 @@ pub enum DatedPayload {
         /// Plan owner whose policy armed the event.
         owner: OwnerSlot,
         /// Exact generation whose deadline is being observed.
-        instance: InstanceRef,
+        instance: InstanceGeneration,
         /// Envelope whose arrival armed this deadline and causes `l:stop`.
         cause: envelope::Id,
         /// Which profile determines the stale-event rule.
@@ -1970,7 +1970,7 @@ pub enum DatedPayload {
     /// One phase boundary of the explicit bounded Closing protocol.
     InstanceClosing {
         /// Root generation whose policy owns the whole closing subtree.
-        instance: InstanceRef,
+        instance: InstanceGeneration,
         /// Envelope that won the close request.
         cause: envelope::Id,
         /// Drain or settlement deadline.
@@ -2019,7 +2019,7 @@ pub trait InboundConnectorDriver {
 
     /// Releases one retained proposal after a committed acceptance or a
     /// contract rejection. Pending admission deliberately makes no callback.
-    fn decide(&mut self, reference: InboundProposalRef, decision: InboundDecision);
+    fn decide(&mut self, reference: InboundProposalHandle, decision: InboundDecision);
 
     /// Inbound Call completion view, when this bound contract is Call-shaped.
     /// Event and Session Drivers leave the default absent.
@@ -2036,7 +2036,7 @@ pub trait InboundConnectorDriver {
 #[derive(Debug, Clone, PartialEq)]
 pub struct InboundCallEvent {
     /// Admitted root Call this observation terminates.
-    pub call_ref: InboundCallRef,
+    pub call_id: InboundCallId,
     /// Ordinary ordered outputs with exactly one terminal `exit` last.
     pub completion: Completion,
 }
@@ -2051,7 +2051,7 @@ pub struct InboundCallEvent {
 #[derive(Debug, Clone, PartialEq)]
 pub struct InboundCallResponse {
     /// Admitted root Call selected by lineage or the contract correlator.
-    pub call_ref: InboundCallRef,
+    pub call_id: InboundCallId,
     /// Exact inbound Connector endpoint that owns the open request.
     pub connector_path: node::Path,
     /// Already-journaled response envelope delivered to that endpoint.
@@ -2066,7 +2066,7 @@ pub struct InboundCallResponse {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InboundCallTimeout {
     /// Admitted root Call whose budget expired.
-    pub call_ref: InboundCallRef,
+    pub call_id: InboundCallId,
     /// Exact inbound Connector endpoint retaining the protocol request.
     pub connector_path: node::Path,
 }
@@ -2171,8 +2171,8 @@ pub trait CallConnectorDriver {
     /// Withdraws an open call: the machine closed it (a won timeout)
     /// and any in-flight work should stop. Default: nothing — a
     /// scripted world has nothing to stop.
-    fn cancel(&mut self, call_ref: &CallRef) {
-        let _ = call_ref;
+    fn cancel(&mut self, call_id: &CallId) {
+        let _ = call_id;
     }
 
     /// Offers an already-journaled open call for execution. A bounded Driver
@@ -2202,19 +2202,19 @@ where
 #[derive(Debug, Clone, PartialEq)]
 pub enum SessionDriverEvent {
     /// A journaled outbound opening established the logical session.
-    Opened(SessionRef),
+    Opened(SessionId),
     /// One journaled message write was accepted by the local protocol stack.
     WriteSettled {
         /// Session that owns the message.
-        session: SessionRef,
+        session: SessionId,
         /// Write obligation that settled.
-        write: SessionWriteRef,
+        write: SessionWriteId,
     },
     /// The session reached its sole terminal fact. The output must target the
     /// conventional `exit` port and is validated against the resolved sheet.
     Exited {
         /// Session that became terminal.
-        session: SessionRef,
+        session: SessionId,
         /// Typed terminal payload proposed for ordinary graph emission.
         exit: PortOutput,
     },
@@ -2248,7 +2248,7 @@ pub trait SessionConnectorDriver {
     fn prepare_session_write(
         &mut self,
         connector: &node::Path,
-        session: SessionRef,
+        session: SessionId,
         data: &envelope::Data,
         resolved_settings: &alloc::collections::BTreeMap<String, crate::value::Value>,
     ) -> RequestPreparation;
@@ -2257,7 +2257,7 @@ pub trait SessionConnectorDriver {
     fn write_session(&mut self, intent: &SessionWriteIntent, message: &Envelope) -> SessionStart;
 
     /// Requests protocol closure. Default: no local action is needed.
-    fn close_session(&mut self, session: SessionRef) -> SessionStart {
+    fn close_session(&mut self, session: SessionId) -> SessionStart {
         let _ = session;
         SessionStart::Started
     }
@@ -2270,7 +2270,7 @@ pub trait SessionConnectorDriver {
     /// This does not prove an exit or release journal correlation. A physical
     /// Driver must retain its cleanup request without blocking the core; a
     /// resource-free scripted world has nothing to stop.
-    fn abort_session(&mut self, session: SessionRef) {
+    fn abort_session(&mut self, session: SessionId) {
         let _ = session;
     }
 
@@ -2281,7 +2281,7 @@ pub trait SessionConnectorDriver {
     ///
     /// Handoff must not block on the peer or child. A physical Driver owns
     /// any remaining cleanup; a resource-free scripted world has none.
-    fn release_session(&mut self, session: SessionRef) {
+    fn release_session(&mut self, session: SessionId) {
         let _ = session;
     }
 
@@ -2317,7 +2317,7 @@ pub trait SessionConnectorBindings {
     fn prepare_session_write(
         &mut self,
         connector: &node::Path,
-        session: SessionRef,
+        session: SessionId,
         data: &envelope::Data,
         resolved_settings: &alloc::collections::BTreeMap<String, crate::value::Value>,
     ) -> Result<RequestPreparation, DriverRouteError>;
@@ -2333,7 +2333,7 @@ pub trait SessionConnectorBindings {
     fn close_session(
         &mut self,
         connector: &node::Path,
-        session: SessionRef,
+        session: SessionId,
     ) -> Result<SessionStart, DriverRouteError>;
 
     /// Requests forced cleanup through the exact Session's owning Driver,
@@ -2341,7 +2341,7 @@ pub trait SessionConnectorBindings {
     fn abort_session(
         &mut self,
         connector: &node::Path,
-        session: SessionRef,
+        session: SessionId,
     ) -> Result<(), DriverRouteError>;
 
     /// Collects Session observations from every bound Session family.
@@ -2350,7 +2350,7 @@ pub trait SessionConnectorBindings {
     /// Notifies the owning Driver after the terminal transaction commits,
     /// then releases routing-table ownership. An already forgotten reference
     /// is inert; a missing bound Driver is an integrity fault.
-    fn forget_session(&mut self, session: SessionRef) -> Result<(), DriverRouteError>;
+    fn forget_session(&mut self, session: SessionId) -> Result<(), DriverRouteError>;
 }
 
 /// The verified outbound routing table consumed by the core VM.
@@ -2391,11 +2391,7 @@ pub trait OutboundConnectorBindings {
     /// # Errors
     ///
     /// The planned path has no stable outbound route.
-    fn cancel(
-        &mut self,
-        connector: &node::Path,
-        call_ref: &CallRef,
-    ) -> Result<(), DriverRouteError>;
+    fn cancel(&mut self, connector: &node::Path, call_id: &CallId) -> Result<(), DriverRouteError>;
 
     /// Starts one already-journaled call through its owning binding.
     ///
@@ -2449,7 +2445,7 @@ pub trait OutboundConnectorBindings {
     fn prepare_session_write(
         &mut self,
         connector: &node::Path,
-        session: SessionRef,
+        session: SessionId,
         data: &envelope::Data,
         resolved_settings: &alloc::collections::BTreeMap<String, crate::value::Value>,
     ) -> Result<RequestPreparation, DriverRouteError> {
@@ -2473,7 +2469,7 @@ pub trait OutboundConnectorBindings {
     fn close_session(
         &mut self,
         connector: &node::Path,
-        session: SessionRef,
+        session: SessionId,
     ) -> Result<SessionStart, DriverRouteError> {
         let _ = session;
         Err(DriverRouteError::UnboundSession(connector.clone()))
@@ -2483,7 +2479,7 @@ pub trait OutboundConnectorBindings {
     fn abort_session(
         &mut self,
         connector: &node::Path,
-        session: SessionRef,
+        session: SessionId,
     ) -> Result<(), DriverRouteError> {
         let _ = session;
         Err(DriverRouteError::UnboundSession(connector.clone()))
@@ -2496,7 +2492,7 @@ pub trait OutboundConnectorBindings {
 
     /// Releases one committed terminal Session's local resources and routing
     /// state. It must not perform another protocol exchange.
-    fn forget_session(&mut self, session: SessionRef) -> Result<(), DriverRouteError> {
+    fn forget_session(&mut self, session: SessionId) -> Result<(), DriverRouteError> {
         let _ = session;
         Ok(())
     }
@@ -2533,9 +2529,9 @@ where
     fn cancel(
         &mut self,
         _connector: &node::Path,
-        call_ref: &CallRef,
+        call_id: &CallId,
     ) -> Result<(), DriverRouteError> {
-        CallConnectorDriver::cancel(self, call_ref);
+        CallConnectorDriver::cancel(self, call_id);
         Ok(())
     }
 
@@ -2581,7 +2577,7 @@ pub struct PumpBatch {
 pub enum DispatchError {
     /// A journaled intent whose request envelope cannot be found:
     /// an integrity fault in the causal history.
-    MissingRequest(CallRef),
+    MissingRequest(CallId),
     /// The verified Driver routing table was contradicted.
     Driver(DriverRouteError),
     /// The journal refused an operation.
@@ -2591,11 +2587,8 @@ pub enum DispatchError {
 impl fmt::Display for DispatchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MissingRequest(call_ref) => {
-                write!(
-                    f,
-                    "no journaled envelope for the request of call {call_ref}"
-                )
+            Self::MissingRequest(call_id) => {
+                write!(f, "no journaled envelope for the request of call {call_id}")
             }
             Self::Driver(error) => error.fmt(f),
             Self::Journal(error) => error.fmt(f),
@@ -2620,7 +2613,7 @@ impl core::error::Error for DispatchError {}
 /// started and re-calls nothing.
 #[derive(Debug, Default)]
 pub struct Dispatcher {
-    started: BTreeSet<CallRef>,
+    started: BTreeSet<CallId>,
     pending_settlement: Option<Box<PendingSettlement>>,
 }
 
@@ -2648,7 +2641,7 @@ impl Dispatcher {
             started: journal
                 .open_calls()
                 .into_iter()
-                .map(|intent| intent.call_ref)
+                .map(|intent| intent.call_id)
                 .collect(),
             pending_settlement: None,
         }
@@ -2691,23 +2684,23 @@ impl Dispatcher {
         // loop. Keep the local start cache equal to the journal's open fold,
         // rather than retaining every historical call for the run's life.
         let open = journal.open_calls();
-        let open_refs: BTreeSet<_> = open.iter().map(|intent| intent.call_ref).collect();
-        self.started.retain(|call_ref| open_refs.contains(call_ref));
+        let open_refs: BTreeSet<_> = open.iter().map(|intent| intent.call_id).collect();
+        self.started.retain(|call_id| open_refs.contains(call_id));
         // A refused batch keeps ownership of its answers. Starting more work
         // or polling the Driver here would grow retention during store pressure.
         if self.pending_settlement.is_none() {
             for intent in &open {
-                if self.started.contains(&intent.call_ref) {
+                if self.started.contains(&intent.call_id) {
                     continue;
                 }
                 let request = journal
                     .find_envelope(intent.emitting_id)
-                    .ok_or(DispatchError::MissingRequest(intent.call_ref))?;
+                    .ok_or(DispatchError::MissingRequest(intent.call_id))?;
                 let start = bindings
                     .start(intent, &request)
                     .map_err(DispatchError::Driver)?;
                 if start == CallStart::Started {
-                    self.started.insert(intent.call_ref);
+                    self.started.insert(intent.call_id);
                 }
             }
         }
@@ -2723,9 +2716,9 @@ impl Dispatcher {
         while let Some(response) = settlement.responses.pop_front() {
             let Some(intent) = open
                 .iter()
-                .find(|intent| intent.call_ref == response.call_ref)
+                .find(|intent| intent.call_id == response.call_id)
             else {
-                if journal.find_call(&response.call_ref).is_some() {
+                if journal.find_call(&response.call_id).is_some() {
                     settlement.batch.discarded.push(response);
                 } else {
                     settlement.batch.uncorrelated.push(response);
@@ -2742,7 +2735,7 @@ impl Dispatcher {
             let closure = Closure::Response(response.completion.clone());
             let verdict = timing(intent, &response.completion).and_then(|schedule| {
                 journal
-                    .close_outbound(&response.call_ref, closure, now, schedule)
+                    .close_outbound(&response.call_id, closure, now, schedule)
                     .map_err(DispatchError::Journal)
             });
             let verdict = match verdict {
@@ -2755,9 +2748,9 @@ impl Dispatcher {
             };
             match verdict {
                 CloseVerdict::Won => {
-                    self.started.remove(&response.call_ref);
+                    self.started.remove(&response.call_id);
                     settlement.batch.events.push(BoundaryEvent {
-                        call_ref: response.call_ref,
+                        call_id: response.call_id,
                         connector_path: intent.connector_path.clone(),
                         emitting_id: intent.emitting_id,
                         completion: response.completion,
@@ -2945,7 +2938,7 @@ mod tests {
             Ok(process_scheduler_completion(completion))
         }
 
-        fn cancel(&mut self, _: &node::Path, _: &CallRef) -> Result<(), DriverRouteError> {
+        fn cancel(&mut self, _: &node::Path, _: &CallId) -> Result<(), DriverRouteError> {
             Ok(())
         }
 
@@ -2987,7 +2980,7 @@ mod tests {
         let edge = String::from("shout.out>echo.in");
         let prepared = PreparedRequest::seal(b"salut\n".to_vec());
         let intent = Intent {
-            call_ref: ids::call_ref(ids::delivery_ref(&edge, emitting_id), prepared.digest()),
+            call_id: ids::call_id(ids::delivery_id(&edge, emitting_id), prepared.digest()),
             emitting_id,
             edge,
             connector_path,
@@ -3009,7 +3002,7 @@ mod tests {
             .pump(&mut journal, &mut driver, &OpenGate, 0)
             .unwrap();
         assert_eq!(driver.started.len(), 1);
-        assert_eq!(driver.started[0].0.call_ref, intent.call_ref);
+        assert_eq!(driver.started[0].0.call_id, intent.call_id);
         // A second pump never re-starts an already-started call.
         dispatcher
             .pump(&mut journal, &mut driver, &OpenGate, 0)
@@ -3087,9 +3080,9 @@ mod tests {
         dispatcher
             .pump(&mut journal, &mut driver, &OpenGate, 0)
             .unwrap();
-        assert!(dispatcher.started.contains(&intent.call_ref));
+        assert!(dispatcher.started.contains(&intent.call_id));
         journal
-            .close_outbound(&intent.call_ref, Closure::Timeout, 0, None)
+            .close_outbound(&intent.call_id, Closure::Timeout, 0, None)
             .unwrap();
 
         dispatcher
@@ -3108,7 +3101,7 @@ mod tests {
             .unwrap();
         driver.replies = vec![
             Response {
-                call_ref: intent.call_ref,
+                call_id: intent.call_id,
                 completion: Completion::process(
                     vec![Data::encoded(Encoding::Raw, *b"SALUT")],
                     vec![],
@@ -3120,7 +3113,7 @@ mod tests {
             },
             // A duplicate answer for the same call: the race loser.
             Response {
-                call_ref: intent.call_ref,
+                call_id: intent.call_id,
                 completion: Completion::process(
                     vec![Data::encoded(Encoding::Raw, *b"LATE")],
                     vec![],
@@ -3164,7 +3157,7 @@ mod tests {
             .pump(&mut journal, &mut driver, &OpenGate, 0)
             .unwrap();
         driver.replies = vec![Response {
-            call_ref: intent.call_ref,
+            call_id: intent.call_id,
             completion: Completion::process(
                 vec![],
                 vec![Data::encoded(Encoding::Raw, *b"diagnostic")],
@@ -3190,8 +3183,8 @@ mod tests {
         let mut driver = Scripted::default();
         let mut dispatcher = Dispatcher::new();
         driver.replies = vec![Response {
-            call_ref: ids::call_ref(
-                ids::delivery_ref("x.out>ghost.in", envelope::Id::from_bytes([9; 16])),
+            call_id: ids::call_id(
+                ids::delivery_id("x.out>ghost.in", envelope::Id::from_bytes([9; 16])),
                 &[0; 32],
             ),
             completion: Completion::process_exit(ProcessExit::Exited {

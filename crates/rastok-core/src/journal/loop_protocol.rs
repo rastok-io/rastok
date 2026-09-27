@@ -1,9 +1,9 @@
 //! Loop r2 causal facts. Command production and consumption are distinct so
 //! recovery never needs to re-run a committed producer to recover its verdict.
 
-use super::LoopRunRef;
+use super::LoopRunId;
 use crate::envelope::{Envelope, Id};
-use crate::identity::InstanceRef;
+use crate::identity::InstanceGeneration;
 use crate::node::Port;
 use alloc::vec::Vec;
 
@@ -26,9 +26,9 @@ pub enum OpeningAdmissionRef {
 
 /// One command obligation, independently addressable after a crash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct CommandRef(Id);
+pub struct CommandId(Id);
 
-impl CommandRef {
+impl CommandId {
     /// Raw identity for journal projection and correlation.
     #[must_use]
     pub const fn id(self) -> Id {
@@ -97,9 +97,9 @@ impl CommandValue {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CommandProduced {
     /// Derived command identity, verified against the other fields.
-    pub reference: CommandRef,
+    pub reference: CommandId,
     /// Run selected by the consumed delivery's Loop context.
-    pub run: LoopRunRef,
+    pub run: LoopRunId,
     /// Zero-based application which issued the command.
     pub iteration: u64,
     /// The retained verdict.
@@ -109,7 +109,7 @@ pub struct CommandProduced {
 impl CommandProduced {
     /// Constructs the command and its identity together.
     #[must_use]
-    pub fn new(run: LoopRunRef, iteration: u64, value: CommandValue) -> Self {
+    pub fn new(run: LoopRunId, iteration: u64, value: CommandValue) -> Self {
         let reference = command_ref(run, iteration, &value);
         Self {
             reference,
@@ -137,9 +137,9 @@ pub enum Fact {
     /// Retain one admission before its first application can execute.
     Open {
         /// Derived run identity.
-        run: LoopRunRef,
+        run: LoopRunId,
         /// Exact owner generation.
-        instance: InstanceRef,
+        instance: InstanceGeneration,
         /// The admission disambiguating sibling deliveries of one origin.
         opening: OpeningAdmissionRef,
         /// The host input to which every recurrence returns.
@@ -152,7 +152,7 @@ pub enum Fact {
     /// A consumed recurrence command selected a new state; admission is later.
     Advance {
         /// Run being advanced.
-        run: LoopRunRef,
+        run: LoopRunId,
         /// Application which produced the command.
         from_iteration: u64,
         /// Following application ordinal.
@@ -160,7 +160,7 @@ pub enum Fact {
         /// Remaining application budget.
         remaining: u64,
         /// Consumed command, never inferred from a business origin.
-        command: CommandRef,
+        command: CommandId,
         /// Proposed state for Next, retained state for Again.
         state: Envelope,
         /// Explicit scheduler annotation, outside causal identity.
@@ -169,7 +169,7 @@ pub enum Fact {
     /// Capacity was proved and the current state entered the host.
     Admit {
         /// Admitted run.
-        run: LoopRunRef,
+        run: LoopRunId,
         /// Admitted application ordinal.
         iteration: u64,
         /// Exact initial or recurrent admission identity.
@@ -181,7 +181,7 @@ pub enum Fact {
     /// No more applications of this run will execute.
     Close {
         /// Closed run.
-        run: LoopRunRef,
+        run: LoopRunId,
         /// Last application ordinal.
         iteration: u64,
         /// Natural completion, explicit Done, or owner closure.
@@ -190,11 +190,11 @@ pub enum Fact {
     /// A recurrence would exceed fuel; no following Admit exists.
     Expired {
         /// Exhausted run.
-        run: LoopRunRef,
+        run: LoopRunId,
         /// Last permitted application ordinal.
         iteration: u64,
         /// Consumed recurrence command.
-        command: CommandRef,
+        command: CommandId,
         /// Proposed Next state or retained Again state.
         last_state: Envelope,
         /// Manager-produced `LoopExpired` envelope on the resolved host terminal.
@@ -205,7 +205,7 @@ pub enum Fact {
 impl Fact {
     /// The run whose state this fact changes.
     #[must_use]
-    pub const fn run(&self) -> LoopRunRef {
+    pub const fn run(&self) -> LoopRunId {
         match self {
             Self::Open { run, .. }
             | Self::Advance { run, .. }
@@ -220,10 +220,10 @@ impl Fact {
 /// origin id remain unchanged when routing enters or leaves a Loop scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoutedContext {
-    /// Exact `ids::delivery_ref(edge, envelope)` identity.
+    /// Exact `ids::delivery_id(edge, envelope)` identity.
     pub delivery: Id,
     /// Context selected before committing the producer.
-    pub runs: Vec<LoopRunRef>,
+    pub runs: Vec<LoopRunId>,
 }
 
 /// Sparse Loop contribution to an ordinary TRANSACTION. Its presence does not
@@ -231,13 +231,13 @@ pub struct RoutedContext {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Packet {
     /// Context inherited from the consumed admission.
-    pub context: Vec<LoopRunRef>,
+    pub context: Vec<LoopRunId>,
     /// Contexts of outgoing deliveries, sorted by delivery reference.
     pub routes: Vec<RoutedContext>,
     /// Commands in deterministic producer order.
     pub produced: Vec<CommandProduced>,
     /// Commands consumed by this manager transaction, sorted by identity.
-    pub consumed: Vec<CommandRef>,
+    pub consumed: Vec<CommandId>,
     /// Manager transitions in commit order.
     pub facts: Vec<Fact>,
 }
@@ -282,12 +282,12 @@ const ADMISSION: u8 = 0x06;
 
 /// `rastok.loop-run.r2`: instance plus the exact opening admission.
 #[must_use]
-pub fn run_ref(instance: &InstanceRef, opening: &OpeningAdmissionRef) -> LoopRunRef {
+pub fn run_ref(instance: &InstanceGeneration, opening: &OpeningAdmissionRef) -> LoopRunId {
     let (tag, reference, port) = match opening {
         OpeningAdmissionRef::Ingress { inbound, port } => (1, *inbound, port.name().as_bytes()),
         OpeningAdmissionRef::Delivery(delivery) => (2, *delivery, &[][..]),
     };
-    LoopRunRef::new(Id::derive(
+    LoopRunId::new(Id::derive(
         RUN_R2,
         &[
             instance.address().as_bytes(),
@@ -301,12 +301,12 @@ pub fn run_ref(instance: &InstanceRef, opening: &OpeningAdmissionRef) -> LoopRun
 
 /// `rastok.loop-command.r1`: one verdict obligation for one application.
 #[must_use]
-pub fn command_ref(run: LoopRunRef, iteration: u64, value: &CommandValue) -> CommandRef {
+pub fn command_ref(run: LoopRunId, iteration: u64, value: &CommandValue) -> CommandId {
     let provenance = match value {
         CommandValue::Done { kind, .. } => kind.tag(),
         _ => 0,
     };
-    CommandRef(Id::derive(
+    CommandId(Id::derive(
         COMMAND,
         &[
             run.id().as_bytes(),
@@ -319,7 +319,7 @@ pub fn command_ref(run: LoopRunRef, iteration: u64, value: &CommandValue) -> Com
 
 /// `rastok.loop-admission.r1`: temporal admission caused by one consumed command.
 #[must_use]
-pub fn admission_ref(run: LoopRunRef, iteration: u64, command: CommandRef) -> Id {
+pub fn admission_ref(run: LoopRunId, iteration: u64, command: CommandId) -> Id {
     Id::derive(
         ADMISSION,
         &[
@@ -333,19 +333,17 @@ pub fn admission_ref(run: LoopRunRef, iteration: u64, command: CommandRef) -> Id
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::InstanceAddress;
+    use crate::identity::InstanceIdentity;
     use crate::plan::OwnerPath;
 
     #[test]
     fn sibling_deliveries_of_one_origin_open_distinct_runs() {
         let owner = OwnerPath::new(["loop"]).unwrap();
-        let instance = InstanceRef::new(InstanceAddress::singleton(&owner), 0);
+        let instance = InstanceGeneration::new(InstanceIdentity::singleton(&owner), 0);
         let envelope = Id::derive(1, &[b"same-origin"]);
-        let left = OpeningAdmissionRef::Delivery(super::super::ids::delivery_ref(
-            "left>loop.in",
-            envelope,
-        ));
-        let right = OpeningAdmissionRef::Delivery(super::super::ids::delivery_ref(
+        let left =
+            OpeningAdmissionRef::Delivery(super::super::ids::delivery_id("left>loop.in", envelope));
+        let right = OpeningAdmissionRef::Delivery(super::super::ids::delivery_id(
             "right>loop.in",
             envelope,
         ));
@@ -367,7 +365,7 @@ mod tests {
             assert!(!refs[..index].contains(reference));
             assert_ne!(
                 *reference,
-                LoopRunRef::new(Id::derive(
+                LoopRunId::new(Id::derive(
                     0x13,
                     &[
                         instance.address().as_bytes(),
@@ -377,14 +375,14 @@ mod tests {
                 ))
             );
         }
-        let successor = InstanceRef::new(instance.address().clone(), 1);
+        let successor = InstanceGeneration::new(instance.address().clone(), 1);
         assert_ne!(run_ref(&instance, &left), run_ref(&successor, &left));
         assert_eq!(run_ref(&instance, &left), refs[0]);
     }
 
     #[test]
     fn command_and_admission_domains_distinguish_verdict_iteration_and_cause() {
-        let run = LoopRunRef::new(Id::derive(1, &[b"run"]));
+        let run = LoopRunId::new(Id::derive(1, &[b"run"]));
         let cause = Id::derive(1, &[b"cause"]);
         let again = command_ref(run, 0, &CommandValue::Again(cause));
         let done = command_ref(

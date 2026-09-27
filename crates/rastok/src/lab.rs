@@ -434,7 +434,7 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
         };
         let resolved = injection_port(self.plan, target)?;
         let port = target.port();
-        if let Some(violation) = resolved.ty().violation("edited input data", &value) {
+        if let Err(violation) = resolved.ty().check_value_type("edited input data", &value) {
             return Err(format!(
                 "the edited input does not match `{port}`: {violation}"
             ));
@@ -704,7 +704,7 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
         for (response, reason) in &report.rejected {
             self.failures.push(format!(
                 "a reply to {:?} was refused before closure: {reason}",
-                response.call_ref
+                response.call_id
             ));
         }
         let progressed = inbound || report.settled > 0 || !report.rejected.is_empty();
@@ -855,7 +855,7 @@ fn settle<'plan>(
         for (response, reason) in &report.rejected {
             failures.push(format!(
                 "a reply to {:?} was refused before closure: {reason}",
-                response.call_ref
+                response.call_id
             ));
         }
         if report.settled == 0 && !inbound {
@@ -1498,7 +1498,7 @@ impl CallConnectorDriver for MockOutboundConnectorDriver {
     fn start(&mut self, intent: &Intent, request: &Envelope) -> CallStart {
         if let Some(completion) = self.answer(intent, request) {
             self.pending.push(Response {
-                call_ref: intent.call_ref,
+                call_id: intent.call_id,
                 completion,
             });
         }
@@ -1560,8 +1560,8 @@ mod tests {
         );
         let prepared = crate::boundary::PreparedRequest::seal(vec![1]);
         let intent = crate::boundary::Intent {
-            call_ref: crate::journal::ids::call_ref(
-                crate::journal::ids::delivery_ref(".in>echo.in", id),
+            call_id: crate::journal::ids::call_id(
+                crate::journal::ids::delivery_id(".in>echo.in", id),
                 prepared.digest(),
             ),
             emitting_id: id,

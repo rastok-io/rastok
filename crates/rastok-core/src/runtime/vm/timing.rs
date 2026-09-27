@@ -8,9 +8,9 @@ impl Vm<'_> {
     pub(super) fn admission_deadlines(
         &self,
         target: &PreparedTarget,
-        candidates: &BTreeMap<InstanceRef, InstanceCandidate>,
+        candidates: &BTreeMap<InstanceGeneration, InstanceCandidate>,
         envelope: &Envelope,
-        activity: &mut BTreeMap<InstanceRef, Id>,
+        activity: &mut BTreeMap<InstanceGeneration, Id>,
     ) -> Vec<(TimerArm, DatedPayload)> {
         if !self.has_lifetime_deadlines {
             return Vec::new();
@@ -59,7 +59,7 @@ impl Vm<'_> {
             arms.push((
                 TimerArm {
                     kind: crate::journal::timer_kind::INSTANCE_LIFETIME,
-                    reference: ids::instance_lifetime_ref(reference),
+                    reference: ids::instance_lifetime_id(reference),
                     due_at,
                 },
                 DatedPayload::InstanceLifetime {
@@ -77,7 +77,7 @@ impl Vm<'_> {
         &self,
         route: &PreparedEdge,
         target: &PreparedTarget,
-        candidates: &BTreeMap<InstanceRef, InstanceCandidate>,
+        candidates: &BTreeMap<InstanceGeneration, InstanceCandidate>,
         envelope: &Envelope,
     ) -> Vec<(TimerArm, DatedPayload)> {
         let Some(to) = &route.edge.to else {
@@ -91,7 +91,7 @@ impl Vm<'_> {
         // executable projection alone cannot identify the delivery timer.
         let edge = self.prepared_edge_text(route);
         let delivery = envelope.meta().sys().id();
-        let reference = ids::delivery_ref(&edge, delivery);
+        let reference = ids::delivery_id(&edge, delivery);
         let mut deadlines = Vec::new();
         let within = self.plan.handlers.iter().find_map(|handler| {
             (handler.owner == slot)
@@ -180,7 +180,7 @@ impl Vm<'_> {
     pub(super) fn route_timer_arms(
         &self,
         routes: &[PreparedEdge],
-        candidates: &BTreeMap<InstanceRef, InstanceCandidate>,
+        candidates: &BTreeMap<InstanceGeneration, InstanceCandidate>,
         envelope: &Envelope,
     ) -> Vec<TimerArm> {
         self.route_timer_arms_with_activity(routes, candidates, envelope, &mut BTreeMap::new())
@@ -189,9 +189,9 @@ impl Vm<'_> {
     pub(super) fn route_timer_arms_with_activity(
         &self,
         routes: &[PreparedEdge],
-        candidates: &BTreeMap<InstanceRef, InstanceCandidate>,
+        candidates: &BTreeMap<InstanceGeneration, InstanceCandidate>,
         envelope: &Envelope,
-        activity: &mut BTreeMap<InstanceRef, Id>,
+        activity: &mut BTreeMap<InstanceGeneration, Id>,
     ) -> Vec<TimerArm> {
         let mut arms = Vec::new();
         for route in routes {
@@ -246,7 +246,7 @@ impl Vm<'_> {
         self.retain_timer_arms(record, arms)
     }
 
-    pub(super) fn closing_timer_arms(&self, reference: &InstanceRef) -> Vec<TimerArm> {
+    pub(super) fn closing_timer_arms(&self, reference: &InstanceGeneration) -> Vec<TimerArm> {
         let Some(instance) = self.instances.get(reference) else {
             return Vec::new();
         };
@@ -264,7 +264,7 @@ impl Vm<'_> {
         .into_iter()
         .map(|(kind, due_at)| TimerArm {
             kind,
-            reference: ids::instance_closing_ref(reference, kind),
+            reference: ids::instance_closing_id(reference, kind),
             due_at,
         })
         .collect()

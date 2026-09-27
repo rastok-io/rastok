@@ -18,7 +18,7 @@ pub(super) fn validate(
             {
                 continue;
             }
-            let source = EndpointRef {
+            let source = EdgeEnd {
                 node: Some(slot),
                 port: decl.port().clone(),
             };

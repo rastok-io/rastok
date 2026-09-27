@@ -7,8 +7,8 @@ use rastok::accounting::accounting_observations;
 use rastok::compiler::{Compilation, compile};
 use rastok::contract::ContractCatalog;
 use rastok::deployment::{
-    BootBindings, DeploymentProfile, EnvironmentName, SecretBinding, SecretMaterial,
-    SecretProvider, SecretProviderError, SecretProviderId, SecretRef, SecretVersion,
+    BootBindings, DeploymentProfile, EnvironmentName, SecretBinding, SecretMaterial, SecretName,
+    SecretProvider, SecretProviderError, SecretProviderId, SecretVersion,
 };
 use rastok::envelope::Value;
 use rastok::journal::{MemJournal, OutboundRecord, OutboundStatus, Record};
@@ -27,7 +27,7 @@ impl SecretProvider for FixtureSecrets {
 }
 
 fn boot() -> BootBindings {
-    let reference = SecretRef::new("showcase/model/token").unwrap();
+    let reference = SecretName::new("showcase/model/token").unwrap();
     BootBindings::resolve(
         DeploymentProfile::new(
             BTreeMap::from([(

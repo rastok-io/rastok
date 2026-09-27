@@ -47,9 +47,7 @@ use crate::journal::{
     Closure, OutboundRecord, OutboundStatus, Record, SessionIngressRecord, SessionStatus,
 };
 use rastok_core::canonical_cbor::{Value as Cbor, decode, encode};
-use rastok_core::identity::encoding::{
-    data_spine as data_form, envelope_spine as spine, value_tagged,
-};
+use rastok_core::identity::encoding::{canonical_data, canonical_envelope, canonical_value};
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -250,8 +248,8 @@ fn explain(a: &Cbor, b: &Cbor, path: String) -> (String, String, String) {
                 (decode(left), decode(right))
                 && left_used == left.len()
                 && right_used == right.len()
-                && rastok_core::identity::encoding::value_from_tagged(&left_tree).is_ok()
-                && rastok_core::identity::encoding::value_from_tagged(&right_tree).is_ok()
+                && rastok_core::identity::encoding::decode_canonical_value(&left_tree).is_ok()
+                && rastok_core::identity::encoding::decode_canonical_value(&right_tree).is_ok()
             {
                 return explain(
                     &left_tree,
@@ -468,7 +466,7 @@ fn loop_packet_tree(packet: &crate::journal::loop_protocol::Packet) -> Cbor {
                     .iter()
                     .map(|command| {
                         let value = match &command.value {
-                            CommandValue::Next(state) => spine(state),
+                            CommandValue::Next(state) => canonical_envelope(state),
                             CommandValue::Again(cause) => id(*cause),
                             CommandValue::Done { cause, kind } => {
                                 Cbor::Array(vec![id(*cause), Cbor::Uint(u64::from(kind.tag()))])
@@ -533,7 +531,7 @@ fn loop_packet_tree(packet: &crate::journal::loop_protocol::Packet) -> Cbor {
                                     opening,
                                     Cbor::Text(entry.name().into()),
                                     Cbor::Uint(*fuel),
-                                    spine(state),
+                                    canonical_envelope(state),
                                 ]
                             }
                             Fact::Advance {
@@ -551,7 +549,7 @@ fn loop_packet_tree(packet: &crate::journal::loop_protocol::Packet) -> Cbor {
                                 Cbor::Uint(*to_iteration),
                                 Cbor::Uint(*remaining),
                                 id(command.id()),
-                                spine(state),
+                                canonical_envelope(state),
                             ],
                             Fact::Admit {
                                 run,
@@ -563,7 +561,7 @@ fn loop_packet_tree(packet: &crate::journal::loop_protocol::Packet) -> Cbor {
                                 id(run.id()),
                                 Cbor::Uint(*iteration),
                                 id(*admission),
-                                spine(envelope),
+                                canonical_envelope(envelope),
                             ],
                             Fact::Close {
                                 run,
@@ -590,8 +588,8 @@ fn loop_packet_tree(packet: &crate::journal::loop_protocol::Packet) -> Cbor {
                                 id(run.id()),
                                 Cbor::Uint(*iteration),
                                 id(command.id()),
-                                spine(last_state),
-                                spine(output),
+                                canonical_envelope(last_state),
+                                canonical_envelope(output),
                             ],
                         })
                     })
@@ -607,7 +605,7 @@ fn record_tree(record: &Record) -> Cbor {
         Record::Inbound(inbound) => {
             let mut pairs = BTreeMap::from([
                 (10, Cbor::Uint(1)),
-                (20, spine(&inbound.envelope)),
+                (20, canonical_envelope(&inbound.envelope)),
                 (
                     21,
                     Cbor::Text(inbound.provenance.connector_path().to_string()),
@@ -774,7 +772,7 @@ fn record_tree(record: &Record) -> Cbor {
                         delta
                             .iter()
                             .map(|(field, value)| {
-                                Cbor::Array(vec![Cbor::Text(field.clone()), value_tagged(value)])
+                                Cbor::Array(vec![Cbor::Text(field.clone()), canonical_value(value)])
                             })
                             .collect(),
                     ),
@@ -790,7 +788,7 @@ fn record_tree(record: &Record) -> Cbor {
                             Cbor::Array(vec![
                                 Cbor::Text(emission.port.name().to_string()),
                                 Cbor::Uint(u64::from(emission.index)),
-                                spine(&emission.envelope),
+                                canonical_envelope(&emission.envelope),
                             ])
                         })
                         .collect(),
@@ -854,7 +852,7 @@ fn record_tree(record: &Record) -> Cbor {
                     2,
                     Some(Cbor::Array(vec![
                         Cbor::Uint(1),
-                        completion_spine(completion),
+                        completion_form(completion),
                     ])),
                 ),
                 OutboundStatus::Closed(Closure::Timeout) => {
@@ -867,8 +865,8 @@ fn record_tree(record: &Record) -> Cbor {
                 pairs.insert(45, closure);
             }
             // Key 47: the causing delivery's canonical edge — with
-            // key 40 the record reconstructs delivery_ref and hence
-            // call_ref, autonomously (identity.md §3).
+            // key 40 the record reconstructs delivery_id and hence
+            // call_id, autonomously (identity.md §3).
             pairs.insert(47, Cbor::Text(outbound.intent.edge.clone()));
             if let Some(packet) = outbound.retry_record.as_deref() {
                 pairs.insert(58, packet.tree());
@@ -896,19 +894,19 @@ fn record_tree(record: &Record) -> Cbor {
             let fact = match &session.status {
                 SessionStatus::Opening(intent) => Cbor::Array(vec![
                     Cbor::Uint(1),
-                    Cbor::Bytes(session.session_ref.id().as_bytes().to_vec()),
+                    Cbor::Bytes(session.session_id.id().as_bytes().to_vec()),
                     Cbor::Bytes(intent.emitting_id.as_bytes().to_vec()),
                     Cbor::Text(session.connector_path.to_string()),
                     Cbor::Bytes(intent.request_digest().to_vec()),
                 ]),
                 SessionStatus::Opened => Cbor::Array(vec![
                     Cbor::Uint(2),
-                    Cbor::Bytes(session.session_ref.id().as_bytes().to_vec()),
+                    Cbor::Bytes(session.session_id.id().as_bytes().to_vec()),
                     Cbor::Text(session.connector_path.to_string()),
                 ]),
                 SessionStatus::WriteOpen(intent) => Cbor::Array(vec![
                     Cbor::Uint(3),
-                    Cbor::Bytes(session.session_ref.id().as_bytes().to_vec()),
+                    Cbor::Bytes(session.session_id.id().as_bytes().to_vec()),
                     Cbor::Bytes(intent.write_ref.id().as_bytes().to_vec()),
                     Cbor::Bytes(intent.emitting_id.as_bytes().to_vec()),
                     Cbor::Text(session.connector_path.to_string()),
@@ -916,13 +914,13 @@ fn record_tree(record: &Record) -> Cbor {
                 ]),
                 SessionStatus::WriteSettled(reference) => Cbor::Array(vec![
                     Cbor::Uint(4),
-                    Cbor::Bytes(session.session_ref.id().as_bytes().to_vec()),
+                    Cbor::Bytes(session.session_id.id().as_bytes().to_vec()),
                     Cbor::Bytes(reference.id().as_bytes().to_vec()),
                     Cbor::Text(session.connector_path.to_string()),
                 ]),
                 SessionStatus::WriteAbandoned(reference) => Cbor::Array(vec![
                     Cbor::Uint(5),
-                    Cbor::Bytes(session.session_ref.id().as_bytes().to_vec()),
+                    Cbor::Bytes(session.session_id.id().as_bytes().to_vec()),
                     Cbor::Bytes(reference.id().as_bytes().to_vec()),
                     Cbor::Text(session.connector_path.to_string()),
                 ]),
@@ -933,9 +931,9 @@ fn record_tree(record: &Record) -> Cbor {
 }
 
 /// A completion is raw world material — no envelope identity exists yet.
-/// The VM later mints every output in one TRANSACTION; this closure spine
+/// The VM later mints every output in one TRANSACTION; this canonical form
 /// seals only the ordered `(port, data)` drafts that won the close race.
-fn completion_spine(completion: &crate::boundary::Completion) -> Cbor {
+fn completion_form(completion: &crate::boundary::Completion) -> Cbor {
     Cbor::Array(
         completion
             .outputs()
@@ -943,7 +941,7 @@ fn completion_spine(completion: &crate::boundary::Completion) -> Cbor {
             .map(|output| {
                 Cbor::Array(vec![
                     Cbor::Text(output.port.name().to_string()),
-                    data_form(&output.data),
+                    canonical_data(&output.data),
                 ])
             })
             .collect(),
@@ -960,8 +958,8 @@ mod tests {
     fn the_loop_protocol_registry_pins_open_admit_and_observed_time() {
         use crate::journal::loop_protocol::{Fact, OpeningAdmissionRef, Packet, run_ref};
         let owner = crate::plan::OwnerPath::root();
-        let instance = crate::identity::InstanceRef::new(
-            crate::identity::InstanceAddress::singleton(&owner),
+        let instance = crate::identity::InstanceGeneration::new(
+            crate::identity::InstanceIdentity::singleton(&owner),
             0,
         );
         let root = crate::envelope::Id::from_bytes([3; 16]);
@@ -1024,7 +1022,7 @@ mod tests {
                     ]),
                     Cbor::Text("in".into()),
                     Cbor::Uint(9),
-                    spine(&state),
+                    canonical_envelope(&state),
                 ])])
             )])))
         );
@@ -1068,7 +1066,7 @@ mod tests {
                     Cbor::Bytes(run.id().as_bytes().to_vec()),
                     Cbor::Uint(0),
                     Cbor::Bytes(root.as_bytes().to_vec()),
-                    spine(&state),
+                    canonical_envelope(&state),
                 ])])
             )])))
         );

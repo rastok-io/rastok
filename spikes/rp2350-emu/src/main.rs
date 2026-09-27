@@ -227,7 +227,7 @@ fn main() -> ! {
         last
     });
     hprintln!("blake3_id x1000: {} ticks total (last: {})", id_ticks, last);
-    let _ = journal::ids::delivery_ref("bench.out>echo.in", last);
+    let _ = journal::ids::delivery_id("bench.out>echo.in", last);
 
     finish(journal.records().len())
 }

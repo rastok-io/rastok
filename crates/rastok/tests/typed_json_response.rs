@@ -269,7 +269,7 @@ fn malformed_native_or_unhydrated_data_cannot_enter_the_outbound_journal() {
         }
         fn start(&mut self, intent: &Intent, _: &rastok::envelope::Envelope) -> CallStart {
             self.responses.push(Response {
-                call_ref: intent.call_ref,
+                call_id: intent.call_id,
                 completion: Completion::http_client(
                     self.data.clone(),
                     Namespace::new(),

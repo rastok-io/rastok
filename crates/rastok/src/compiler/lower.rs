@@ -25,8 +25,8 @@ use crate::datatype::{
 use crate::expr;
 use crate::node;
 use crate::plan::{
-    AttrSetting, ClosingPolicy as PlanClosingPolicy, ConnectorSpec, DispatchStep, Edge, Emission,
-    EndpointRef, EvaluationSite, ExecutionPlan, ExtensionSpec, FieldWrite, Handler,
+    AttrSetting, ClosingPolicy as PlanClosingPolicy, ConnectorSpec, DispatchStep, Edge, EdgeEnd,
+    Emission, EvaluationSite, ExecutionPlan, ExtensionSpec, FieldWrite, Handler,
     InstanceLifetime as PlanInstanceLifetime, InstanceSpec, LoopDelay as PlanLoopDelay,
     LoopSpec as PlanLoopSpec, Node, NodeExecution, Owner, OwnerKind, OwnerPath, OwnerSlot,
     OwnerValue, PlanConstant, SemanticHash, Slot, SymbolTable, VarCell,
@@ -735,7 +735,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         {
             continue;
         }
-        let endpoint = |end: &crate::compiler::hir::Endpoint| -> Result<EndpointRef, LowerError> {
+        let endpoint = |end: &crate::compiler::hir::Endpoint| -> Result<EdgeEnd, LowerError> {
             let node = match &end.owner {
                 EndpointOwner::Node(path) => Some(slot_of(path)),
                 EndpointOwner::Graph(path) if path.is_root() => None,
@@ -746,7 +746,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                     });
                 }
             };
-            Ok(EndpointRef {
+            Ok(EdgeEnd {
                 node,
                 port: end.port.clone(),
             })
@@ -2173,7 +2173,7 @@ impl Writer<'_> {
                 self.tag(22);
                 let mut sorted: Vec<_> = entries.iter().collect();
                 sorted.sort_by_cached_key(|(key, _)| {
-                    crate::canonical_cbor::encode(&crate::identity::encoding::value_tagged(key))
+                    crate::canonical_cbor::encode(&crate::identity::encoding::canonical_value(key))
                 });
                 self.count(sorted.len());
                 for (key, item) in sorted {
@@ -2824,11 +2824,11 @@ graph app : App {
             }
         }
         let policy = |value| {
-            crate::deployment::PolicyRef::new(value)
+            crate::deployment::PolicyName::new(value)
                 .unwrap_or_else(|error| panic!("policy ref: {error}"))
         };
         let privacy = crate::deployment::PrivacyProfile::new(
-            crate::deployment::PrivacyProfileRef::new("privacy/support@1")
+            crate::deployment::PrivacyProfileName::new("privacy/support@1")
                 .expect("stable privacy profile"),
             policy("ropa/support"),
             vec![policy("purpose/support")],
@@ -2907,7 +2907,7 @@ graph app : App {
         assert!(missing_conditions_journal.records().is_empty());
 
         let regulated_privacy = crate::deployment::PrivacyProfile::new(
-            crate::deployment::PrivacyProfileRef::new("privacy/regulated@1")
+            crate::deployment::PrivacyProfileName::new("privacy/regulated@1")
                 .expect("stable privacy profile"),
             policy("ropa/regulated"),
             vec![policy("purpose/regulated-support")],
@@ -2971,7 +2971,7 @@ graph app : App {
         ));
 
         let recipient_privacy = crate::deployment::PrivacyProfile::new(
-            crate::deployment::PrivacyProfileRef::new("privacy/disclosure@1")
+            crate::deployment::PrivacyProfileName::new("privacy/disclosure@1")
                 .expect("stable privacy profile"),
             policy("ropa/disclosure"),
             vec![policy("purpose/model-service")],

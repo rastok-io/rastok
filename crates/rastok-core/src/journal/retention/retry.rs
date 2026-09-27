@@ -1,7 +1,7 @@
 use super::*;
 use crate::connector::ContractId;
 use crate::journal::retry_protocol::{
-    self as rp, AttemptRef, Batch, CloseReason, Fact, Packet, Pin,
+    self as rp, AttemptId, Batch, CloseReason, Fact, Packet, Pin,
 };
 use crate::plan::SemanticHash;
 use alloc::collections::BTreeSet;
@@ -19,20 +19,20 @@ fn retained_pin(pin: &Pin) -> Cbor {
         list(
             pin.settings
                 .iter()
-                .map(|(name, value)| list([word(name), value_tagged(value)])),
+                .map(|(name, value)| list([word(name), canonical_value(value)])),
         ),
         optional(pin.key.as_ref(), |value| word(value)),
         integer(pin.opened_at),
     ])
 }
 
-fn attempt(operation: &Cbor, ordinal: &Cbor, zero: bool) -> Result<AttemptRef, Error> {
+fn attempt(operation: &Cbor, ordinal: &Cbor, zero: bool) -> Result<AttemptId, Error> {
     let ordinal = uint(ordinal)?;
     if ordinal == 0 && !zero {
         return Err(Error::Invalid("Retry attempt must be positive"));
     }
-    Ok(AttemptRef {
-        operation: rp::OperationRef::from_id(read_id(operation)?),
+    Ok(AttemptId {
+        operation: rp::OperationId::from_id(read_id(operation)?),
         ordinal,
     })
 }
@@ -47,7 +47,7 @@ fn batch(operation: &Cbor, ordinal: &Cbor, call: &Cbor, emissions: &Cbor) -> Res
     }
     Ok(Batch {
         attempt: attempt(operation, ordinal, false)?,
-        call: CallRef::new(read_id(call)?),
+        call: CallId::new(read_id(call)?),
         emissions,
     })
 }
@@ -109,11 +109,11 @@ impl Reader {
                     previous = Some(name);
                     resolved.insert(
                         name.to_owned(),
-                        value_from_tagged(value).map_err(Error::Read)?,
+                        decode_canonical_value(value).map_err(Error::Read)?,
                     );
                 }
                 Ok(Fact::Opened {
-                    operation: rp::OperationRef::from_id(read_id(operation)?),
+                    operation: rp::OperationId::from_id(read_id(operation)?),
                     opening: read_id(opening)?,
                     entry: read_port(entry)?,
                     plan: SemanticHash::from_bytes(
@@ -161,7 +161,7 @@ impl Reader {
                 Ok(Fact::Advance {
                     from,
                     to,
-                    call: CallRef::new(read_id(call)?),
+                    call: CallId::new(read_id(call)?),
                 })
             }
             Some(7) => {
@@ -187,14 +187,14 @@ mod tests {
     use crate::canonical_cbor::{decode, encode};
     use alloc::vec;
 
-    fn fixture() -> (Reader, Envelope, rp::OperationRef, Packet) {
+    fn fixture() -> (Reader, Envelope, rp::OperationId, Packet) {
         let source = Envelope::new(
             Meta::new(MetaSys::root(Id::from_bytes([1; 16]), 1)),
             Data::materialized(Value::Text("request".into())),
         );
         let mut reader = Reader::default();
         reader.envelope(&envelope(&source)).unwrap();
-        let operation = rp::OperationRef::from_id(Id::from_bytes([2; 16]));
+        let operation = rp::OperationId::from_id(Id::from_bytes([2; 16]));
         let packet = Packet {
             context: None,
             facts: vec![Fact::Opened {
@@ -221,13 +221,13 @@ mod tests {
     #[test]
     fn every_retry_tag_round_trips_without_losing_the_pin_or_emission_order() {
         let (mut reader, source, operation, opened) = fixture();
-        let attempt = AttemptRef {
+        let attempt = AttemptId {
             operation,
             ordinal: 1,
         };
         let batch = Batch {
             attempt,
-            call: CallRef::new(Id::from_bytes([5; 16])),
+            call: CallId::new(Id::from_bytes([5; 16])),
             emissions: vec![Id::from_bytes([9; 16]), Id::from_bytes([7; 16])],
         };
         let manager = |facts| Packet {
@@ -275,7 +275,7 @@ mod tests {
                 },
             ]),
             manager(vec![Fact::Close {
-                attempt: AttemptRef {
+                attempt: AttemptId {
                     operation,
                     ordinal: 0,
                 },
@@ -327,13 +327,13 @@ mod tests {
     #[test]
     fn independent_batch_projection_pins_tags_references_and_order() {
         let (_, _, operation, _) = fixture();
-        let attempt = AttemptRef {
+        let attempt = AttemptId {
             operation,
             ordinal: 3,
         };
         let batch = Batch {
             attempt,
-            call: CallRef::new(Id::from_bytes([5; 16])),
+            call: CallId::new(Id::from_bytes([5; 16])),
             emissions: vec![Id::from_bytes([9; 16]), Id::from_bytes([7; 16])],
         };
         for (tag, fact) in [

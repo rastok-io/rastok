@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::boundary::Intent;
-use crate::identity::encoding::meta_tagged;
+use crate::identity::encoding::canonical_meta_value;
 use crate::journal::{Emission, ids, timer_kind, timing::TimerSchedule};
 use alloc::collections::BTreeSet;
 use core::fmt;
@@ -65,7 +65,7 @@ impl core::error::Error for Error {}
 #[derive(Debug)]
 pub struct Opening<'a> {
     /// Exact owner generation of the original delivery.
-    pub instance: &'a InstanceRef,
+    pub instance: &'a InstanceGeneration,
     /// Canonical delivery admitted by the original journal/route authority.
     pub delivery: Id,
     /// Original validated plan hash.
@@ -117,7 +117,7 @@ pub enum Phase {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Operation {
     /// Exact owner, not a key guessed from DATA or an owner-name prefix.
-    pub instance: InstanceRef,
+    pub instance: InstanceGeneration,
     /// Original plan binding.
     pub plan: SemanticHash,
     /// Original exact Contract.
@@ -139,7 +139,7 @@ pub struct Operation {
     /// Current protocol phase.
     pub phase: Phase,
     /// Current Call, never reused by a later attempt.
-    pub call: Option<CallRef>,
+    pub call: Option<CallId>,
     /// Original winning closure instant of this attempt.
     pub closed_at: Option<i64>,
     /// Original deadline, unaffected by a late manager or recovery.
@@ -185,31 +185,31 @@ impl Operation {
 /// Pure fold of accepted operation facts. No Driver or clock is accessible.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Fold {
-    operations: BTreeMap<OperationRef, Operation>,
-    closing: BTreeSet<InstanceRef>,
+    operations: BTreeMap<OperationId, Operation>,
+    closing: BTreeSet<InstanceGeneration>,
 }
 
 impl Fold {
     /// Inspect one exact operation.
     #[must_use]
-    pub fn operation(&self, reference: OperationRef) -> Option<&Operation> {
+    pub fn operation(&self, reference: OperationId) -> Option<&Operation> {
         self.operations.get(&reference)
     }
 
     /// Retained operations in canonical identity order.
-    pub fn operations(&self) -> impl Iterator<Item = (&OperationRef, &Operation)> {
+    pub fn operations(&self) -> impl Iterator<Item = (&OperationId, &Operation)> {
         self.operations.iter()
     }
 
     /// Observe an already-retained exact-generation Closing fact. Ancestor
     /// cascade is resolved by the lifecycle fold, never a string-prefix test.
-    pub fn begin_closing(&mut self, instance: &InstanceRef) {
+    pub fn begin_closing(&mut self, instance: &InstanceGeneration) {
         self.closing.insert(instance.clone());
     }
 
     /// Exact-generation Closing has already won in the retained prefix.
     #[must_use]
-    pub fn is_closing(&self, instance: &InstanceRef) -> bool {
+    pub fn is_closing(&self, instance: &InstanceGeneration) -> bool {
         self.closing.contains(instance)
     }
 
@@ -364,7 +364,7 @@ impl Fold {
         Ok(())
     }
 
-    fn state_mut(&mut self, attempt: AttemptRef) -> Result<&mut Operation, Error> {
+    fn state_mut(&mut self, attempt: AttemptId) -> Result<&mut Operation, Error> {
         let state = self
             .operations
             .get_mut(&attempt.operation)
@@ -418,7 +418,7 @@ impl Fold {
                     || sys.graph_version() != initial.sys().graph_version()
                     || !same_state(envelope, &state.original)
                     || *delivery
-                        != ids::delivery_ref(&admission_edge(attempt.operation, &state.entry), id)
+                        != ids::delivery_id(&admission_edge(attempt.operation, &state.entry), id)
                 {
                     return Err(Error::AdmissionIdentity);
                 }
@@ -450,13 +450,13 @@ impl Fold {
     ///
     /// # Errors
     /// Unadmitted/repeated Call, wrong owner/cursor, or changed pinned material.
-    pub fn open_call(&mut self, attempt: AttemptRef, intent: &Intent) -> Result<(), Error> {
+    pub fn open_call(&mut self, attempt: AttemptId, intent: &Intent) -> Result<(), Error> {
         let state = self.state_mut(attempt)?;
         if state.phase != Phase::Admitted {
             return Err(Error::Transition);
         }
         Self::check_intent(state, intent)?;
-        state.call = Some(intent.call_ref);
+        state.call = Some(intent.call_id);
         state.call_opened_at = Some(intent.logical_time);
         state.phase = Phase::CallOpen;
         Ok(())
@@ -469,8 +469,8 @@ impl Fold {
             || intent.idempotency_key != state.pin.key
             || state.admitted_at.is_none_or(|at| intent.logical_time < at)
             || intent.emitting_id != state.envelope.meta().sys().id()
-            || ids::delivery_ref(&intent.edge, intent.emitting_id) != state.delivery
-            || ids::call_ref(state.delivery, state.pin.prepared.digest()) != intent.call_ref
+            || ids::delivery_id(&intent.edge, intent.emitting_id) != state.delivery
+            || ids::call_id(state.delivery, state.pin.prepared.digest()) != intent.call_id
         {
             return Err(Error::PinnedCall);
         }
@@ -483,11 +483,7 @@ impl Fold {
     ///
     /// # Errors
     /// Nonwinning/mismatched Call, unknown terminal, or inconsistent time/arm.
-    pub fn settle(
-        &mut self,
-        attempt: AttemptRef,
-        settlement: &Settlement<'_>,
-    ) -> Result<(), Error> {
+    pub fn settle(&mut self, attempt: AttemptId, settlement: &Settlement<'_>) -> Result<(), Error> {
         let mut next = self.clone();
         let state = next
             .operations
@@ -495,7 +491,7 @@ impl Fold {
             .ok_or(Error::UnknownOperation)?;
         if state.ordinal != attempt.ordinal
             || state.phase != Phase::CallOpen
-            || state.call != Some(settlement.intent.call_ref)
+            || state.call != Some(settlement.intent.call_id)
             || state.call_opened_at != Some(settlement.intent.logical_time)
         {
             return Err(Error::Transition);
@@ -531,13 +527,13 @@ impl Fold {
                 let [arm] = schedule.arms() else {
                     return Err(Error::Timing);
                 };
-                if arm.kind != timer_kind::LOOP_DELAY
+                if arm.kind != timer_kind::RECURRENCE_DELAY
                     || arm.due_at != due
                     || arm.reference
                         != admission_ref(
                             attempt.operation,
                             attempt.ordinal + 1,
-                            settlement.intent.call_ref,
+                            settlement.intent.call_id,
                         )
                 {
                     return Err(Error::Timing);
@@ -588,7 +584,7 @@ impl Fold {
         Ok(())
     }
 
-    fn close(&mut self, attempt: AttemptRef, reason: CloseReason) -> Result<(), Error> {
+    fn close(&mut self, attempt: AttemptId, reason: CloseReason) -> Result<(), Error> {
         let state = self
             .operations
             .get_mut(&attempt.operation)
@@ -690,9 +686,8 @@ fn same_state(left: &Envelope, right: &Envelope) -> bool {
             .zip([right.meta().app(), right.meta().ext()])
             .all(|(left, right)| {
                 left.len() == right.len()
-                    && left
-                        .iter()
-                        .zip(right)
-                        .all(|((ln, lv), (rn, rv))| ln == rn && meta_tagged(lv) == meta_tagged(rv))
+                    && left.iter().zip(right).all(|((ln, lv), (rn, rv))| {
+                        ln == rn && canonical_meta_value(lv) == canonical_meta_value(rv)
+                    })
             })
 }

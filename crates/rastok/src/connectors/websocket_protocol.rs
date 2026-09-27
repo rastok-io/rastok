@@ -5,9 +5,9 @@
 //! contract ids, shared both-role object and message framing stay put.
 
 use crate::boundary::{
-    InboundConnectorDriver, InboundDecision, InboundProposal, InboundProposalRef,
+    InboundConnectorDriver, InboundDecision, InboundProposal, InboundProposalHandle,
     OutboundConnectorDriver, PreparedRequest, RequestPreparation, SessionConnectorDriver,
-    SessionDriverEvent, SessionOpenIntent, SessionRef, SessionStart, SessionWriteIntent,
+    SessionDriverEvent, SessionId, SessionOpenIntent, SessionStart, SessionWriteIntent,
 };
 use crate::connector::{ConnectorRoles, ContractId};
 use crate::envelope::{Data, Envelope};
@@ -500,7 +500,7 @@ impl WebSocketLabDriver {
             (String::from("codec"), Value::Text(codec)),
         ]);
         Ok(PreparedRequest::seal(crate::canonical_cbor::encode(
-            &crate::identity::encoding::value_tagged(&descriptor),
+            &crate::identity::encoding::canonical_value(&descriptor),
         )))
     }
 
@@ -567,7 +567,7 @@ impl WebSocketLabDriver {
             ),
         ]);
         Ok(PreparedRequest::seal(crate::canonical_cbor::encode(
-            &crate::identity::encoding::value_tagged(&descriptor),
+            &crate::identity::encoding::canonical_value(&descriptor),
         )))
     }
 
@@ -618,7 +618,7 @@ impl InboundConnectorDriver for WebSocketLabDriver {
         None
     }
 
-    fn decide(&mut self, _: InboundProposalRef, _: InboundDecision) {}
+    fn decide(&mut self, _: InboundProposalHandle, _: InboundDecision) {}
 }
 
 impl OutboundConnectorDriver for WebSocketLabDriver {
@@ -663,7 +663,7 @@ impl SessionConnectorDriver for WebSocketLabDriver {
     fn prepare_session_write(
         &mut self,
         connector: &crate::node::Path,
-        _: SessionRef,
+        _: SessionId,
         data: &Data,
         _: &BTreeMap<String, crate::value::Value>,
     ) -> RequestPreparation {

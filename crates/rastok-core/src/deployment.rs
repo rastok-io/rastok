@@ -10,7 +10,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::accounting::{CostProfile, CostProfileRef};
+use crate::accounting::{CostProfile, CostProfileName};
 use crate::canonical_cbor::{Value as Cbor, encode};
 use crate::value::Value;
 
@@ -47,9 +47,9 @@ impl EnvironmentName {
 
 /// One source-visible logical secret reference.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SecretRef(String);
+pub struct SecretName(String);
 
-impl SecretRef {
+impl SecretName {
     /// Builds a slash-separated logical secret reference.
     ///
     /// # Errors
@@ -76,7 +76,7 @@ pub enum BootReference {
     /// A typed value supplied by the deployment environment.
     Environment(EnvironmentName),
     /// Secret material supplied only to an authorized Driver setting.
-    Secret(SecretRef),
+    Secret(SecretName),
 }
 
 /// Stable provider identity selected by deployment, never by graph identity.
@@ -133,7 +133,7 @@ impl SecretVersion {
 /// coordinates. It contains no secret material.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SecretBinding {
-    reference: SecretRef,
+    reference: SecretName,
     provider: SecretProviderId,
     provider_path: String,
     version: SecretVersion,
@@ -146,7 +146,7 @@ impl SecretBinding {
     ///
     /// The provider path must be non-empty, bounded and contain no controls.
     pub fn new(
-        reference: SecretRef,
+        reference: SecretName,
         provider: SecretProviderId,
         provider_path: impl Into<String>,
         version: SecretVersion,
@@ -168,7 +168,7 @@ impl SecretBinding {
 
     /// Logical source reference.
     #[must_use]
-    pub fn reference(&self) -> &SecretRef {
+    pub fn reference(&self) -> &SecretName {
         &self.reference
     }
 
@@ -246,9 +246,9 @@ pub enum SecretProviderError {
     /// The selected provider is unavailable in this deployment image.
     ProviderUnavailable(SecretProviderId),
     /// The logical or physical reference was not found.
-    NotFound(SecretRef),
+    NotFound(SecretName),
     /// The provider could not prove the requested immutable version.
-    VersionMismatch(SecretRef),
+    VersionMismatch(SecretName),
     /// The provider returned no credential bytes.
     EmptyMaterial,
     /// A bounded provider-specific failure class, without secret content.
@@ -285,9 +285,9 @@ impl core::error::Error for SecretProviderError {}
 
 /// Stable reference to one controller-owned privacy profile.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct PrivacyProfileRef(String);
+pub struct PrivacyProfileName(String);
 
-impl PrivacyProfileRef {
+impl PrivacyProfileName {
     /// Builds one stable profile reference.
     ///
     /// # Errors
@@ -310,9 +310,9 @@ impl PrivacyProfileRef {
 
 /// Reference to a controller-owned processing, purpose or legal-policy fact.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct PolicyRef(String);
+pub struct PolicyName(String);
 
-impl PolicyRef {
+impl PolicyName {
     /// Builds one stable policy reference.
     ///
     /// # Errors
@@ -339,7 +339,7 @@ pub enum RecipientPolicy {
     /// No external recipient is declared.
     None,
     /// Stable references to declared recipient classes.
-    Classes(Vec<PolicyRef>),
+    Classes(Vec<PolicyName>),
 }
 
 /// Explicit international-transfer declaration.
@@ -348,7 +348,7 @@ pub enum TransferPolicy {
     /// The activity declares no international transfer.
     None,
     /// Stable references to controller-approved safeguards.
-    Safeguards(Vec<PolicyRef>),
+    Safeguards(Vec<PolicyName>),
 }
 
 /// Retention capability admitted by M1's in-memory runner.
@@ -376,12 +376,12 @@ pub struct PrivacyRequirements {
 /// correct.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrivacyProfile {
-    reference: PrivacyProfileRef,
-    processing_activity: PolicyRef,
-    purposes: Vec<PolicyRef>,
-    legal_bases: Vec<PolicyRef>,
-    special_category_condition: Option<PolicyRef>,
-    criminal_offence_authority: Option<PolicyRef>,
+    reference: PrivacyProfileName,
+    processing_activity: PolicyName,
+    purposes: Vec<PolicyName>,
+    legal_bases: Vec<PolicyName>,
+    special_category_condition: Option<PolicyName>,
+    criminal_offence_authority: Option<PolicyName>,
     recipients: RecipientPolicy,
     transfers: TransferPolicy,
     retention: PrivacyRetention,
@@ -397,12 +397,12 @@ impl PrivacyProfile {
     /// non-empty where selected and contain no duplicates.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        reference: PrivacyProfileRef,
-        processing_activity: PolicyRef,
-        purposes: Vec<PolicyRef>,
-        legal_bases: Vec<PolicyRef>,
-        special_category_condition: Option<PolicyRef>,
-        criminal_offence_authority: Option<PolicyRef>,
+        reference: PrivacyProfileName,
+        processing_activity: PolicyName,
+        purposes: Vec<PolicyName>,
+        legal_bases: Vec<PolicyName>,
+        special_category_condition: Option<PolicyName>,
+        criminal_offence_authority: Option<PolicyName>,
         recipients: RecipientPolicy,
         transfers: TransferPolicy,
         retention: PrivacyRetention,
@@ -439,7 +439,7 @@ impl PrivacyProfile {
 
     /// Stable profile reference.
     #[must_use]
-    pub fn reference(&self) -> &PrivacyProfileRef {
+    pub fn reference(&self) -> &PrivacyProfileName {
         &self.reference
     }
 
@@ -492,7 +492,7 @@ impl PrivacyProfile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrivacyAttestation {
     /// Stable profile reference.
-    pub reference: PrivacyProfileRef,
+    pub reference: PrivacyProfileName,
     /// Digest of all profile facts used at boot.
     pub digest: [u8; 32],
 }
@@ -501,7 +501,7 @@ pub struct PrivacyAttestation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CostProfileAttestation {
     /// Stable deployment profile reference.
-    pub reference: CostProfileRef,
+    pub reference: CostProfileName,
     /// Digest of every price and dimension in force.
     pub digest: [u8; 32],
 }
@@ -533,7 +533,7 @@ pub struct DeploymentAttestation {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DeploymentProfile {
     environment: BTreeMap<EnvironmentName, Value>,
-    secrets: BTreeMap<SecretRef, SecretBinding>,
+    secrets: BTreeMap<SecretName, SecretBinding>,
     privacy: Option<PrivacyProfile>,
     cost_profile: Option<CostProfile>,
 }
@@ -546,7 +546,7 @@ impl DeploymentProfile {
     /// A secret map key must equal its binding's logical reference.
     pub fn new(
         environment: BTreeMap<EnvironmentName, Value>,
-        secrets: BTreeMap<SecretRef, SecretBinding>,
+        secrets: BTreeMap<SecretName, SecretBinding>,
         privacy: Option<PrivacyProfile>,
     ) -> Result<Self, DeploymentError> {
         if secrets
@@ -582,7 +582,7 @@ impl DeploymentProfile {
 /// no `Debug` path.
 pub struct BootBindings {
     environment: BTreeMap<EnvironmentName, Value>,
-    secrets: BTreeMap<SecretRef, SecretMaterial>,
+    secrets: BTreeMap<SecretName, SecretMaterial>,
     privacy: Option<PrivacyProfile>,
     cost_profile: Option<CostProfile>,
     attestation: DeploymentAttestation,
@@ -609,8 +609,10 @@ impl BootBindings {
                 .iter()
                 .map(|(name, value)| EnvironmentAttestation {
                     name: name.clone(),
-                    digest: *blake3::hash(&encode(&crate::identity::encoding::value_tagged(value)))
-                        .as_bytes(),
+                    digest: *blake3::hash(&encode(&crate::identity::encoding::canonical_value(
+                        value,
+                    )))
+                    .as_bytes(),
                 })
                 .collect(),
             secrets: profile.secrets.into_values().collect(),
@@ -655,7 +657,7 @@ impl BootBindings {
 
     /// Secret material for one already-authorized Driver setting.
     #[must_use]
-    pub fn secret(&self, reference: &SecretRef) -> Option<&SecretMaterial> {
+    pub fn secret(&self, reference: &SecretName) -> Option<&SecretMaterial> {
         self.secrets.get(reference)
     }
 
@@ -774,9 +776,9 @@ fn stable_ref_holds(reference: &str) -> bool {
 }
 
 fn canonical_non_empty(
-    mut values: Vec<PolicyRef>,
+    mut values: Vec<PolicyName>,
     name: &'static str,
-) -> Result<Vec<PolicyRef>, DeploymentError> {
+) -> Result<Vec<PolicyName>, DeploymentError> {
     if values.is_empty() {
         return Err(DeploymentError::InvalidPolicyList(name));
     }
@@ -787,7 +789,7 @@ fn canonical_non_empty(
     Ok(values)
 }
 
-fn policy_refs_tree(values: &[PolicyRef]) -> Cbor {
+fn policy_refs_tree(values: &[PolicyName]) -> Cbor {
     Cbor::Array(
         values
             .iter()
@@ -796,7 +798,7 @@ fn policy_refs_tree(values: &[PolicyRef]) -> Cbor {
     )
 }
 
-fn optional_policy_ref_tree(value: Option<&PolicyRef>) -> Cbor {
+fn optional_policy_ref_tree(value: Option<&PolicyName>) -> Cbor {
     value.map_or(Cbor::Null, |value| Cbor::Text(value.as_str().to_string()))
 }
 
@@ -814,13 +816,13 @@ mod tests {
         }
     }
 
-    fn policy(value: &str) -> PolicyRef {
-        PolicyRef::new(value).unwrap_or_else(|error| panic!("policy ref: {error}"))
+    fn policy(value: &str) -> PolicyName {
+        PolicyName::new(value).unwrap_or_else(|error| panic!("policy ref: {error}"))
     }
 
     #[test]
     fn a_secret_reference_never_becomes_a_value_or_debug_output() {
-        let reference = SecretRef::new("providers/openai/token")
+        let reference = SecretName::new("providers/openai/token")
             .unwrap_or_else(|error| panic!("secret ref: {error}"));
         let binding = SecretBinding::new(
             reference.clone(),
@@ -855,7 +857,7 @@ mod tests {
     fn privacy_digest_is_canonical_and_regime_coverage_is_explicit() {
         let build = |purposes| {
             PrivacyProfile::new(
-                PrivacyProfileRef::new("privacy/support@1")
+                PrivacyProfileName::new("privacy/support@1")
                     .unwrap_or_else(|error| panic!("profile ref: {error}")),
                 policy("ropa/support"),
                 purposes,
@@ -890,7 +892,7 @@ mod tests {
             external_disclosure: true,
         }));
         let disclosed = PrivacyProfile::new(
-            PrivacyProfileRef::new("privacy/support-disclosed@1")
+            PrivacyProfileName::new("privacy/support-disclosed@1")
                 .unwrap_or_else(|error| panic!("profile ref: {error}")),
             policy("ropa/support"),
             vec![policy("purpose/support")],
@@ -913,8 +915,8 @@ mod tests {
     #[test]
     fn invalid_or_ambiguous_physical_names_refuse_at_construction() {
         assert!(EnvironmentName::new("9TOKEN").is_err());
-        assert!(SecretRef::new("providers/../token").is_err());
-        assert!(PrivacyProfileRef::new("contains whitespace").is_err());
+        assert!(SecretName::new("providers/../token").is_err());
+        assert!(PrivacyProfileName::new("contains whitespace").is_err());
     }
 
     #[test]

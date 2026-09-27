@@ -424,7 +424,7 @@ pub struct AssetBlob {
 }
 
 impl ExecutionPlan {
-    pub(crate) fn endpoint_matches(&self, endpoint: &Endpoint, physical: &EndpointRef) -> bool {
+    pub(crate) fn endpoint_matches(&self, endpoint: &Endpoint, physical: &EdgeEnd) -> bool {
         endpoint.port == physical.port
             && match (&endpoint.owner, physical.node) {
                 (EndpointOwner::Node(path), Some(slot)) => self
@@ -446,7 +446,7 @@ impl ExecutionPlan {
         }
     }
 
-    pub(crate) fn has_case_routes(&self, source: &EndpointRef) -> bool {
+    pub(crate) fn has_case_routes(&self, source: &EdgeEnd) -> bool {
         self.routes.iter().any(|route| {
             self.endpoint_matches(&route.source, source)
                 && matches!(route.selection, RouteSelection::Cases(_))
@@ -547,7 +547,7 @@ impl ExecutionPlan {
     /// consumed cursors and the budget obligations seal.
     #[must_use]
     pub fn edge_text(&self, edge: &Edge) -> String {
-        let end = |endpoint: &EndpointRef| match endpoint.node {
+        let end = |endpoint: &EdgeEnd| match endpoint.node {
             Some(slot) => format!("{}.{}", self.nodes[slot.index()].path, endpoint.port),
             None => format!(".{}", endpoint.port),
         };
@@ -1085,14 +1085,14 @@ pub struct Edge {
     /// Lexical Graph owner in which this route was declared.
     pub scope: OwnerSlot,
     /// The emitting end.
-    pub from: EndpointRef,
+    pub from: EdgeEnd,
     /// The receiving end; `None` is the explicit discard.
-    pub to: Option<EndpointRef>,
+    pub to: Option<EdgeEnd>,
 }
 
 /// One resolved edge end; a boundary end has no node.
 #[derive(Debug, Clone, PartialEq)]
-pub struct EndpointRef {
+pub struct EdgeEnd {
     /// The node, or `None` for the graph's boundary.
     pub node: Option<Slot>,
     /// The port.

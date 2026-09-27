@@ -8,8 +8,8 @@ use crate::canonical_cbor::Value as Cbor;
 use crate::envelope::{
     Data, Encoding, Envelope, Id, Meta, MetaSys, MetaValue, Namespace, Role, Scalar,
 };
-use crate::identity::encoding::{meta_tagged, value_from_tagged, value_tagged};
-use crate::identity::{InstanceAddress, InstanceRef};
+use crate::identity::encoding::{canonical_meta_value, canonical_value, decode_canonical_value};
+use crate::identity::{InstanceGeneration, InstanceIdentity};
 use crate::journal::loop_protocol as lp;
 use crate::journal::{self, Record};
 use crate::node::{self, Lifecycle, Port, Trigger};
@@ -130,16 +130,16 @@ fn read_owner(value: &Cbor) -> Result<OwnerPath, Error> {
     OwnerPath::new(value.split('.').filter(|value| !value.is_empty()))
         .map_err(|_| Error::Invalid("owner path"))
 }
-fn instance(value: &Cbor) -> Result<InstanceRef, Error> {
+fn instance(value: &Cbor) -> Result<InstanceGeneration, Error> {
     let [address, generation] = array(value)?;
-    Ok(InstanceRef::new(
-        InstanceAddress::decode(bytes(address)?).map_err(Error::Read)?,
+    Ok(InstanceGeneration::new(
+        InstanceIdentity::decode(bytes(address)?).map_err(Error::Read)?,
         uint(generation)?,
     ))
 }
 fn data(value: &Data) -> Cbor {
     match value {
-        Data::Materialized(value) => list([Cbor::Uint(0), value_tagged(value)]),
+        Data::Materialized(value) => list([Cbor::Uint(0), canonical_value(value)]),
         Data::Encoded {
             encoding, bytes, ..
         } => list([
@@ -156,9 +156,9 @@ fn read_data(value: &Cbor) -> Result<Data, Error> {
     let [tag, payload] = array(value)?;
     match uint(tag)? {
         0 => {
-            let value = value_from_tagged(payload).map_err(Error::Read)?;
+            let value = decode_canonical_value(payload).map_err(Error::Read)?;
             value
-                .validate()
+                .check_consistency()
                 .map_err(|_| Error::Invalid("logical value"))?;
             Ok(Data::Materialized(value))
         }
@@ -177,7 +177,7 @@ fn namespace(value: &Namespace) -> Cbor {
     list(
         value
             .iter()
-            .map(|(name, value)| list([word(name), meta_tagged(value)])),
+            .map(|(name, value)| list([word(name), canonical_meta_value(value)])),
     )
 }
 fn scalar(value: Value) -> Result<Scalar, Error> {
@@ -201,7 +201,7 @@ fn read_namespace(value: &Cbor) -> Result<Namespace, Error> {
     let mut namespace = Namespace::new();
     for field in items(value)? {
         let [name, value] = array(field)?;
-        let value = match value_from_tagged(value).map_err(Error::Read)? {
+        let value = match decode_canonical_value(value).map_err(Error::Read)? {
             Value::Array(values) => {
                 MetaValue::Array(values.into_iter().map(scalar).collect::<Result<_, _>>()?)
             }
@@ -286,7 +286,7 @@ fn read_completion(value: &Cbor) -> Result<Completion, Error> {
 }
 fn intent(value: &Intent) -> Cbor {
     list([
-        id(value.call_ref.id()),
+        id(value.call_id.id()),
         id(value.emitting_id),
         word(&value.edge),
         word(&value.connector_path),
@@ -296,7 +296,7 @@ fn intent(value: &Intent) -> Cbor {
             value
                 .resolved_settings
                 .iter()
-                .map(|(name, value)| list([word(name), value_tagged(value)])),
+                .map(|(name, value)| list([word(name), canonical_value(value)])),
         ),
         integer(value.logical_time),
     ])
@@ -309,7 +309,7 @@ fn read_intent(value: &Cbor) -> Result<Intent, Error> {
         if resolved_settings
             .insert(
                 text(name)?.to_owned(),
-                value_from_tagged(value).map_err(Error::Read)?,
+                decode_canonical_value(value).map_err(Error::Read)?,
             )
             .is_some()
         {
@@ -317,7 +317,7 @@ fn read_intent(value: &Cbor) -> Result<Intent, Error> {
         }
     }
     Ok(Intent {
-        call_ref: CallRef::new(read_id(call)?),
+        call_id: CallId::new(read_id(call)?),
         emitting_id: read_id(emitting)?,
         edge: text(edge)?.to_owned(),
         connector_path: read_path(path)?,
@@ -373,8 +373,8 @@ pub fn record(value: &Record) -> Cbor {
                 Cbor::Uint(2),
                 word(&value.owner_path),
                 value.instance.tree(),
-                optional(value.parent_instance.as_ref(), InstanceRef::tree),
-                optional(value.close_scope.as_ref(), InstanceRef::tree),
+                optional(value.parent_instance.as_ref(), InstanceGeneration::tree),
+                optional(value.close_scope.as_ref(), InstanceGeneration::tree),
                 word(&value.trigger),
                 optional(value.cause.as_ref(), |value| id(*value)),
                 optional(value.exchange_exit.as_deref(), |exit| match exit {
@@ -399,7 +399,7 @@ pub fn record(value: &Record) -> Cbor {
                     value
                         .state_delta
                         .iter()
-                        .map(|(name, value)| list([word(name), value_tagged(value)])),
+                        .map(|(name, value)| list([word(name), canonical_value(value)])),
                 ),
                 list(value.emissions.iter().map(|value| {
                     list([
@@ -438,7 +438,7 @@ pub fn record(value: &Record) -> Cbor {
         Record::Outbound(journal::OutboundRecord::Session(value)) => list([
             Cbor::Uint(4),
             word(&value.connector_path),
-            id(value.session_ref.id()),
+            id(value.session_id.id()),
             match &value.status {
                 journal::SessionStatus::Opening(value) => list([
                     Cbor::Uint(1),
@@ -581,7 +581,7 @@ fn loop_fact(value: &lp::Fact) -> Cbor {
 #[derive(Debug, Default)]
 pub struct Reader {
     envelopes: BTreeMap<Id, Envelope>,
-    commands: BTreeMap<Id, lp::CommandRef>,
+    commands: BTreeMap<Id, lp::CommandId>,
 }
 impl Reader {
     fn envelope(&mut self, value: &Cbor) -> Result<Envelope, Error> {
@@ -625,7 +625,7 @@ impl Reader {
         self.envelopes.insert(identity, decoded.clone());
         Ok(decoded)
     }
-    fn command(&self, value: &Cbor) -> Result<lp::CommandRef, Error> {
+    fn command(&self, value: &Cbor) -> Result<lp::CommandId, Error> {
         self.commands
             .get(&read_id(value)?)
             .copied()
@@ -674,16 +674,16 @@ impl Reader {
             Ok(Box::new(match items(value)? {
                 [Cbor::Uint(1), reference, owner, timers] => {
                     journal::InboundExchangeRecord::Call(journal::InboundCallIngressRecord {
-                        reference: InboundCallRef::from_root(read_id(reference)?),
+                        reference: InboundCallId::from_root(read_id(reference)?),
                         instance: instance(owner)?,
                         timers: read_timers(timers)?,
                     })
                 }
                 [Cbor::Uint(2), reference] => journal::InboundExchangeRecord::Session(
-                    journal::SessionIngressRecord::Open(SessionRef::new(read_id(reference)?)),
+                    journal::SessionIngressRecord::Open(SessionId::new(read_id(reference)?)),
                 ),
                 [Cbor::Uint(3), reference] => journal::InboundExchangeRecord::Session(
-                    journal::SessionIngressRecord::Message(SessionRef::new(read_id(reference)?)),
+                    journal::SessionIngressRecord::Message(SessionId::new(read_id(reference)?)),
                 ),
                 _ => return Err(Error::Invalid("inbound exchange")),
             }))
@@ -777,10 +777,10 @@ impl Reader {
             exchange_exit: read_optional(exit, |value| {
                 let [tag, reference] = array(value)?;
                 Ok(Box::new(match uint(tag)? {
-                    1 => journal::InboundExchangeExitRecord::Call(InboundCallRef::from_root(
+                    1 => journal::InboundExchangeExitRecord::Call(InboundCallId::from_root(
                         read_id(reference)?,
                     )),
-                    2 => journal::InboundExchangeExitRecord::Session(SessionRef::new(read_id(
+                    2 => journal::InboundExchangeExitRecord::Session(SessionId::new(read_id(
                         reference,
                     )?)),
                     _ => return Err(Error::Invalid("inbound exit kind")),
@@ -809,7 +809,7 @@ impl Reader {
                     let [name, value] = array(value)?;
                     Ok((
                         text(name)?.to_owned(),
-                        value_from_tagged(value).map_err(Error::Read)?,
+                        decode_canonical_value(value).map_err(Error::Read)?,
                     ))
                 })
                 .collect::<Result<_, Error>>()?,
@@ -860,11 +860,11 @@ impl Reader {
     fn session(&mut self, value: &Cbor) -> Result<Record, Error> {
         let [_, path, reference, status] = array(value)?;
         let connector_path = read_path(path)?;
-        let session_ref = SessionRef::new(read_id(reference)?);
+        let session_id = SessionId::new(read_id(reference)?);
         let status = match items(status)? {
             [Cbor::Uint(1), emitting, prepared] => {
                 journal::SessionStatus::Opening(SessionOpenIntent {
-                    session_ref,
+                    session_id,
                     connector_path: connector_path.clone(),
                     emitting_id: read_id(emitting)?,
                     prepared: PreparedRequest::seal(bytes(prepared)?.to_vec()),
@@ -873,25 +873,25 @@ impl Reader {
             [Cbor::Uint(2)] => journal::SessionStatus::Opened,
             [Cbor::Uint(3), reference, emitting, prepared] => {
                 journal::SessionStatus::WriteOpen(SessionWriteIntent {
-                    session_ref,
+                    session_id,
                     connector_path: connector_path.clone(),
-                    write_ref: SessionWriteRef::new(read_id(reference)?),
+                    write_ref: SessionWriteId::new(read_id(reference)?),
                     emitting_id: read_id(emitting)?,
                     prepared: PreparedRequest::seal(bytes(prepared)?.to_vec()),
                 })
             }
             [Cbor::Uint(4), reference] => {
-                journal::SessionStatus::WriteSettled(SessionWriteRef::new(read_id(reference)?))
+                journal::SessionStatus::WriteSettled(SessionWriteId::new(read_id(reference)?))
             }
             [Cbor::Uint(5), reference] => {
-                journal::SessionStatus::WriteAbandoned(SessionWriteRef::new(read_id(reference)?))
+                journal::SessionStatus::WriteAbandoned(SessionWriteId::new(read_id(reference)?))
             }
             _ => return Err(Error::Invalid("Session status")),
         };
         Ok(Record::Outbound(journal::OutboundRecord::Session(
             Box::new(journal::SessionRecord {
                 connector_path,
-                session_ref,
+                session_id,
                 status,
             }),
         )))
@@ -916,7 +916,7 @@ impl Reader {
                     _ => return Err(Error::Invalid("Loop command")),
                 };
                 let command = lp::CommandProduced::new(
-                    journal::LoopRunRef::new(read_id(run)?),
+                    journal::LoopRunId::new(read_id(run)?),
                     uint(iteration)?,
                     value,
                 );
@@ -953,7 +953,7 @@ impl Reader {
     }
     fn loop_fact(&mut self, value: &Cbor) -> Result<lp::Fact, Error> {
         use lp::Fact;
-        let run = |value: &Cbor| read_id(value).map(journal::LoopRunRef::new);
+        let run = |value: &Cbor| read_id(value).map(journal::LoopRunId::new);
         Ok(match items(value)? {
             [
                 Cbor::Uint(1),
@@ -1025,9 +1025,9 @@ impl Reader {
         })
     }
 }
-fn read_runs(value: &Cbor) -> Result<Vec<journal::LoopRunRef>, Error> {
+fn read_runs(value: &Cbor) -> Result<Vec<journal::LoopRunId>, Error> {
     items(value)?
         .iter()
-        .map(|value| read_id(value).map(journal::LoopRunRef::new))
+        .map(|value| read_id(value).map(journal::LoopRunId::new))
         .collect()
 }

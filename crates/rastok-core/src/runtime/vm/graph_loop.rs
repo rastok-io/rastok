@@ -14,7 +14,7 @@ pub(super) struct BoundaryRoute {
 #[derive(Debug, Clone)]
 struct Admission {
     owner: OwnerSlot,
-    instance: InstanceRef,
+    instance: InstanceGeneration,
     opening: OpeningAdmissionRef,
     delivery: Delivery,
 }
@@ -22,8 +22,8 @@ struct Admission {
 #[derive(Debug, Default)]
 pub(super) struct GraphLoops {
     admissions: BTreeMap<Id, Admission>,
-    sequences: BTreeMap<(String, InstanceRef), u64>,
-    contexts: BTreeMap<Id, Vec<LoopRunRef>>,
+    sequences: BTreeMap<(String, InstanceGeneration), u64>,
+    contexts: BTreeMap<Id, Vec<LoopRunId>>,
 }
 
 struct Selection {
@@ -34,7 +34,7 @@ struct Selection {
 }
 
 impl Vm<'_> {
-    pub(super) fn graph_endpoint(&self, physical: &EndpointRef) -> Endpoint {
+    pub(super) fn graph_endpoint(&self, physical: &EdgeEnd) -> Endpoint {
         Endpoint {
             owner: physical.node.map_or_else(
                 || EndpointOwner::Graph(OwnerPath::root()),
@@ -57,7 +57,7 @@ impl Vm<'_> {
             .ok_or_else(|| graph_error(&path, "a routed endpoint lost its declared owner"))
     }
 
-    fn endpoint_ref(&self, endpoint: &Endpoint) -> Result<EndpointRef, VmError> {
+    fn endpoint_ref(&self, endpoint: &Endpoint) -> Result<EdgeEnd, VmError> {
         let node = match &endpoint.owner {
             EndpointOwner::Graph(_) => None,
             EndpointOwner::Node(path) => Some(
@@ -71,7 +71,7 @@ impl Vm<'_> {
                     })?,
             ),
         };
-        Ok(EndpointRef {
+        Ok(EdgeEnd {
             node,
             port: endpoint.port.clone(),
         })
@@ -197,9 +197,9 @@ impl Vm<'_> {
         &self,
         journal: &dyn InstanceAdmissions,
         source: &Endpoint,
-        source_instance: Option<&InstanceRef>,
+        source_instance: Option<&InstanceGeneration>,
         envelope: &Envelope,
-        candidates: &mut BTreeMap<InstanceRef, InstanceCandidate>,
+        candidates: &mut BTreeMap<InstanceGeneration, InstanceCandidate>,
         expand_entry: bool,
     ) -> Result<Vec<PreparedEdge>, VmError> {
         let destinations =
@@ -276,9 +276,9 @@ impl Vm<'_> {
     pub(super) fn deliver_graph_admission(
         &mut self,
         route: &PreparedEdge,
-        candidates: &BTreeMap<InstanceRef, InstanceCandidate>,
+        candidates: &BTreeMap<InstanceGeneration, InstanceCandidate>,
         envelope: &Envelope,
-        source: Option<&InstanceRef>,
+        source: Option<&InstanceGeneration>,
     ) -> bool {
         let Some(owner) = self.prepared_graph_entry(route) else {
             return false;
@@ -295,7 +295,7 @@ impl Vm<'_> {
         let Some(graph) = self.graph_loops.as_deref_mut() else {
             return false;
         };
-        let reference = ids::delivery_ref(&edge, envelope.meta().sys().id());
+        let reference = ids::delivery_id(&edge, envelope.meta().sys().id());
         let seq = graph
             .sequences
             .entry((edge.clone(), source.clone()))
@@ -341,21 +341,21 @@ impl Vm<'_> {
         })
     }
 
-    pub(super) fn graph_context(&self, delivery: &Delivery) -> &[LoopRunRef] {
-        self.graph_context_for(ids::delivery_ref(
+    pub(super) fn graph_context(&self, delivery: &Delivery) -> &[LoopRunId] {
+        self.graph_context_for(ids::delivery_id(
             &delivery.edge,
             delivery.envelope.meta().sys().id(),
         ))
     }
 
-    pub(super) fn graph_context_for(&self, delivery: Id) -> &[LoopRunRef] {
+    pub(super) fn graph_context_for(&self, delivery: Id) -> &[LoopRunId] {
         self.graph_loops
             .as_deref()
             .and_then(|graph| graph.contexts.get(&delivery))
             .map_or(&[], Vec::as_slice)
     }
 
-    pub(super) fn graph_run_has_work(&self, run: LoopRunRef) -> bool {
+    pub(super) fn graph_run_has_work(&self, run: LoopRunId) -> bool {
         if self.graph_loops.is_none() {
             return false;
         }
@@ -390,7 +390,7 @@ impl Vm<'_> {
 
     pub(super) fn graph_run_awaits_verdict(
         &self,
-        run: LoopRunRef,
+        run: LoopRunId,
         state: &protocol::RunState,
     ) -> bool {
         state.phase == protocol::Phase::Active
@@ -404,7 +404,7 @@ impl Vm<'_> {
 
     pub(super) fn graph_stop_cursors(
         &self,
-        instance: &InstanceRef,
+        instance: &InstanceGeneration,
     ) -> Vec<crate::journal::ConsumedPosition> {
         self.graph_loops
             .as_deref()
@@ -419,7 +419,7 @@ impl Vm<'_> {
             .collect()
     }
 
-    pub(super) fn discard_graph_admissions(&mut self, instance: &InstanceRef) {
+    pub(super) fn discard_graph_admissions(&mut self, instance: &InstanceGeneration) {
         if let Some(graph) = self.graph_loops.as_deref_mut() {
             graph.admissions.retain(|reference, admission| {
                 if admission.instance == *instance {
@@ -490,7 +490,7 @@ impl Vm<'_> {
         self.next_graph_admission().is_some()
     }
 
-    pub(super) fn graph_admission_is_head(&self, run: LoopRunRef) -> bool {
+    pub(super) fn graph_admission_is_head(&self, run: LoopRunId) -> bool {
         let Some(graph) = self.graph_loops.as_deref() else {
             return true;
         };
@@ -527,7 +527,7 @@ impl Vm<'_> {
         &mut self,
         journal: &mut dyn Journal,
         owner: OwnerSlot,
-        run: LoopRunRef,
+        run: LoopRunId,
         current: &protocol::RunState,
         envelope: Envelope,
     ) -> Result<bool, VmError> {
@@ -652,7 +652,7 @@ impl Vm<'_> {
 
     fn graph_route_contexts(
         &self,
-        context: &[LoopRunRef],
+        context: &[LoopRunId],
         routes: &[PreparedEdge],
         envelope: Id,
     ) -> Vec<protocol::RoutedContext> {
@@ -673,7 +673,7 @@ impl Vm<'_> {
                 .collect();
             if !runs.is_empty() {
                 contexts.push(protocol::RoutedContext {
-                    delivery: ids::delivery_ref(&self.prepared_edge_text(route), envelope),
+                    delivery: ids::delivery_id(&self.prepared_edge_text(route), envelope),
                     runs,
                 });
             }
@@ -730,7 +730,7 @@ impl Vm<'_> {
 
     fn graph_verdicts<'e>(
         &self,
-        context: &[LoopRunRef],
+        context: &[LoopRunId],
         sources: impl IntoIterator<Item = (Endpoint, &'e Envelope)>,
     ) -> Result<Vec<protocol::CommandProduced>, VmError> {
         let mut produced = Vec::new();
@@ -805,7 +805,7 @@ impl Vm<'_> {
 
     pub(super) fn graph_entry_verdict(
         &self,
-        run: LoopRunRef,
+        run: LoopRunId,
         current: &protocol::RunState,
     ) -> Result<Option<crate::journal::TransactionRecord>, VmError> {
         if current.phase != protocol::Phase::Active
@@ -861,7 +861,7 @@ impl Vm<'_> {
             .values()
             .flatten()
             .chain(self.pending.values().map(|pending| &pending.delivery))
-            .map(|delivery| ids::delivery_ref(&delivery.edge, delivery.envelope.meta().sys().id()))
+            .map(|delivery| ids::delivery_id(&delivery.edge, delivery.envelope.meta().sys().id()))
             .collect();
         // Consuming an attempt releases its mailbox delivery, not the enclosing
         // Loop obligation. Keep the opening context until the operation closes.
@@ -887,7 +887,7 @@ impl Vm<'_> {
         &self,
         journal: &dyn InstanceAdmissions,
         owner: OwnerSlot,
-        instance: &InstanceRef,
+        instance: &InstanceGeneration,
         record: &crate::journal::TransactionRecord,
     ) -> Result<PreparedEmissions, VmError> {
         let mut candidates = BTreeMap::new();
@@ -930,7 +930,7 @@ impl Vm<'_> {
     pub(super) fn route_graph_emissions(
         &mut self,
         owner: OwnerSlot,
-        instance: &InstanceRef,
+        instance: &InstanceGeneration,
         prepared: PreparedEmissions,
     ) {
         self.enqueue_instance_commands(prepared.commands);
@@ -1241,7 +1241,7 @@ impl Vm<'_> {
                     }
                     if let Some(due_at) = due_at {
                         arms.push(crate::journal::timing::TimerArm {
-                            kind: crate::journal::timer_kind::LOOP_DELAY,
+                            kind: crate::journal::timer_kind::RECURRENCE_DELAY,
                             reference: protocol::admission_ref(run, *to_iteration, *command),
                             due_at: *due_at,
                         });

@@ -3,7 +3,7 @@
 #![allow(clippy::disallowed_methods, clippy::unwrap_used, clippy::expect_used)]
 
 use rastok::accounting::{
-    CostProfile, CostProfileRef, ExactDecimal, UnitPrice, accounting_observations,
+    CostProfile, CostProfileName, ExactDecimal, UnitPrice, accounting_observations,
 };
 use rastok::boundary::{Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence};
 use rastok::compiler::compile;
@@ -187,7 +187,7 @@ graph priced_call : App {
     .expect("the typed Connector probe compiles");
     let model = node::Path::new(["model"]).expect("canonical Connector path");
     let profile = CostProfile::new(
-        CostProfileRef::new("pricing/model@2026-08-30").expect("stable profile ref"),
+        CostProfileName::new("pricing/model@2026-08-30").expect("stable profile ref"),
         vec![
             UnitPrice::new(
                 model.clone(),

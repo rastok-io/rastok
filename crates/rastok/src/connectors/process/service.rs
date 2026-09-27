@@ -183,7 +183,7 @@ impl ConnectorDriverFactory for ProcessServiceFactory {
 
 struct Service {
     bindings: ProcessRequestBindings,
-    resources: BTreeMap<SessionRef, Resource>,
+    resources: BTreeMap<SessionId, Resource>,
     retiring: Vec<std::thread::JoinHandle<()>>,
     events: Vec<SessionDriverEvent>,
     proposal: Option<InboundProposal>,
@@ -199,12 +199,12 @@ struct Resource {
     worker: std::thread::JoinHandle<()>,
 }
 struct WriteFrame {
-    reference: SessionWriteRef,
+    reference: SessionWriteId,
     bytes: Vec<u8>,
 }
 enum Event {
     Opened,
-    Written(SessionWriteRef),
+    Written(SessionWriteId),
     Frame(node::Port, Data),
     Exit(PortOutput),
 }
@@ -244,14 +244,14 @@ impl SessionConnectorDriver for Service {
     fn prepare_session_write(
         &mut self,
         connector: &node::Path,
-        _: SessionRef,
+        _: SessionId,
         data: &Data,
         settings: &BTreeMap<String, Value>,
     ) -> RequestPreparation {
         prepare(&self.bindings, connector, data, settings, false)
     }
     fn open_session(&mut self, intent: &SessionOpenIntent, _: &Envelope) -> SessionStart {
-        if self.resources.contains_key(&intent.session_ref) {
+        if self.resources.contains_key(&intent.session_id) {
             return SessionStart::Started;
         }
         self.reap_finished();
@@ -262,7 +262,7 @@ impl SessionConnectorDriver for Service {
             Ok(opening) => opening,
             Err(error) => {
                 self.events.push(SessionDriverEvent::Exited {
-                    session: intent.session_ref,
+                    session: intent.session_id,
                     exit: failure(ProcessFailure::SpawnFailed {
                         message: error.to_string(),
                     }),
@@ -280,7 +280,7 @@ impl SessionConnectorDriver for Service {
         {
             Ok(worker) => {
                 self.resources.insert(
-                    intent.session_ref,
+                    intent.session_id,
                     Resource {
                         connector: intent.connector_path.clone(),
                         control,
@@ -292,7 +292,7 @@ impl SessionConnectorDriver for Service {
                 );
             }
             Err(error) => self.events.push(SessionDriverEvent::Exited {
-                session: intent.session_ref,
+                session: intent.session_id,
                 exit: failure(ProcessFailure::SpawnFailed {
                     message: error.to_string(),
                 }),
@@ -301,7 +301,7 @@ impl SessionConnectorDriver for Service {
         SessionStart::Started
     }
     fn write_session(&mut self, intent: &SessionWriteIntent, _: &Envelope) -> SessionStart {
-        let Some(resource) = self.resources.get_mut(&intent.session_ref) else {
+        let Some(resource) = self.resources.get_mut(&intent.session_id) else {
             return SessionStart::Pending;
         };
         if resource.control.load(Ordering::Acquire) != 0 {
@@ -315,18 +315,18 @@ impl SessionConnectorDriver for Service {
             Err(_) => SessionStart::Pending,
         }
     }
-    fn close_session(&mut self, reference: SessionRef) -> SessionStart {
+    fn close_session(&mut self, reference: SessionId) -> SessionStart {
         if let Some(resource) = self.resources.get(&reference) {
             resource.control.fetch_max(COOPERATIVE, Ordering::Release);
         }
         SessionStart::Started
     }
-    fn abort_session(&mut self, reference: SessionRef) {
+    fn abort_session(&mut self, reference: SessionId) {
         if let Some(resource) = self.resources.get(&reference) {
             resource.control.fetch_max(FORCED, Ordering::Release);
         }
     }
-    fn release_session(&mut self, reference: SessionRef) {
+    fn release_session(&mut self, reference: SessionId) {
         if let Some(resource) = self.resources.remove(&reference) {
             resource.control.store(RELEASED, Ordering::Release);
             self.retiring.push(resource.worker);
@@ -412,7 +412,7 @@ impl InboundConnectorDriver for Service {
             if let Some(Event::Frame(port, data)) = resource.waiting.front() {
                 self.next_proposal = self.next_proposal.checked_add(1)?;
                 self.proposal = Some(InboundProposal {
-                    reference: InboundProposalRef::new(self.next_proposal),
+                    reference: InboundProposalHandle::new(self.next_proposal),
                     submission: InboundSubmission {
                         provenance: InboundEnvelopeProvenance::single(resource.connector.clone()),
                         port: port.clone(),
@@ -429,7 +429,7 @@ impl InboundConnectorDriver for Service {
         }
         self.proposal.clone()
     }
-    fn decide(&mut self, reference: InboundProposalRef, decision: InboundDecision) {
+    fn decide(&mut self, reference: InboundProposalHandle, decision: InboundDecision) {
         if self
             .proposal
             .as_ref()
@@ -790,7 +790,7 @@ mod tests {
             &crate::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();
-        let reference = SessionRef::new(crate::envelope::Id::from_bytes([7; 16]));
+        let reference = SessionId::new(crate::envelope::Id::from_bytes([7; 16]));
         let (sender, events) = mpsc::sync_channel(FRAME_SLOTS);
         sender.send(Event::Opened).unwrap();
         sender

@@ -5,7 +5,7 @@
 use super::*;
 
 impl Vm<'_> {
-    pub(super) fn pending_stop_receivers(&self, scope: &InstanceRef) -> BTreeSet<Slot> {
+    pub(super) fn pending_stop_receivers(&self, scope: &InstanceGeneration) -> BTreeSet<Slot> {
         let Some(scope_owner) = self.instances.get(scope).map(|instance| instance.owner) else {
             return BTreeSet::new();
         };

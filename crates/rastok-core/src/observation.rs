@@ -5,9 +5,9 @@
 //! projection of this stream; the retained stream itself remains available to
 //! read-only inspection at the selected journal prefix.
 
-use crate::boundary::{CallRef, InboundCallRef, SessionRef, SessionWriteRef};
+use crate::boundary::{CallId, InboundCallId, SessionId, SessionWriteId};
 use crate::envelope::Id;
-use crate::identity::InstanceRef;
+use crate::identity::InstanceGeneration;
 use crate::node;
 use crate::plan::OwnerPath;
 
@@ -40,15 +40,15 @@ pub enum RecordObservationKind {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ExchangeCorrelation {
     /// A graph-to-world bounded Call.
-    OutboundCall(CallRef),
+    OutboundCall(CallId),
     /// A world-to-graph bounded Call.
-    InboundCall(InboundCallRef),
+    InboundCall(InboundCallId),
     /// A long-lived Session and, for write facts, its exact write.
     Session {
         /// Logical Session identity.
-        session: SessionRef,
+        session: SessionId,
         /// Message-write identity, absent for opening and terminal facts.
-        write: Option<SessionWriteRef>,
+        write: Option<SessionWriteId>,
     },
 }
 
@@ -60,7 +60,7 @@ pub enum ExchangeCorrelation {
 pub struct RecordCorrelation {
     origin_id: Option<Id>,
     owner: Option<OwnerPath>,
-    instance: Option<InstanceRef>,
+    instance: Option<InstanceGeneration>,
     connector: Option<node::Path>,
     exchange: Option<ExchangeCorrelation>,
 }
@@ -81,7 +81,7 @@ impl RecordCorrelation {
         self
     }
 
-    pub(crate) fn with_instance(mut self, instance: InstanceRef) -> Self {
+    pub(crate) fn with_instance(mut self, instance: InstanceGeneration) -> Self {
         self.instance = Some(instance);
         self
     }
@@ -110,7 +110,7 @@ impl RecordCorrelation {
 
     /// Exact logical instance generation, when the causal fact owns one.
     #[must_use]
-    pub const fn instance(&self) -> Option<&InstanceRef> {
+    pub const fn instance(&self) -> Option<&InstanceGeneration> {
         self.instance.as_ref()
     }
 

@@ -1107,7 +1107,7 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
                         reason: reason.to_string(),
                     })?;
                 resolved
-                    .validate()
+                    .check_bounds()
                     .map_err(|reason| SheetDefect::InvalidPortType {
                         port: port.name,
                         reason: reason.to_string(),
@@ -1187,7 +1187,7 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
                                 reason: reason.to_string(),
                             })?;
                     resolved
-                        .validate()
+                        .check_bounds()
                         .map_err(|reason| SheetDefect::InvalidPortType {
                             port: port.name,
                             reason: reason.to_string(),

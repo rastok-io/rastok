@@ -51,13 +51,13 @@ impl Vm<'_> {
         {
             return Err(invalid(index, "the retained ingress names no App input"));
         }
-        let from = EndpointRef {
+        let from = EdgeEnd {
             node: source.map(|(slot, _)| slot),
             port: inbound.port.clone(),
         };
         if let Data::Materialized(value) = inbound.envelope.data() {
             value
-                .validate()
+                .check_consistency()
                 .map_err(|_| invalid(index, "ingress contains an invalid value"))?;
             crate::runtime::crossing_pins_hold(self.plan, &from, value)
                 .map_err(|_| invalid(index, "ingress contradicts its resolved pins"))?;
@@ -95,7 +95,7 @@ impl Vm<'_> {
                 let expected_timers = timeout
                     .map(|_| vec![(timer_kind::INBOUND_CALL_TIMEOUT, call.reference.id())])
                     .unwrap_or_default();
-                if call.reference != InboundCallRef::from_root(inbound.envelope.meta().sys().id())
+                if call.reference != InboundCallId::from_root(inbound.envelope.meta().sys().id())
                     || call.instance != selected.reference
                     || call.timers != expected_timers
                     || self.inbound_calls.contains_key(&call.reference)
@@ -124,7 +124,7 @@ impl Vm<'_> {
                     .and_then(|spec| session_opening(&spec.contract, spec.roles, spec.exchange))
                     != Some(SessionOpening::Peer)
                     || *reference
-                        != ids::inbound_session_ref(
+                        != ids::inbound_session_id(
                             &inbound.provenance,
                             inbound.envelope.meta().sys().id(),
                         )
@@ -253,7 +253,7 @@ impl Vm<'_> {
         if let Some(timeout) = timeout {
             arms.push(crate::journal::timing::TimerArm {
                 kind: timer_kind::INBOUND_CALL_TIMEOUT,
-                reference: InboundCallRef::from_root(inbound.envelope.meta().sys().id()).id(),
+                reference: InboundCallId::from_root(inbound.envelope.meta().sys().id()).id(),
                 due_at: self.now.saturating_add(timeout),
             });
         }
@@ -284,7 +284,7 @@ impl Vm<'_> {
                         self.scheduler.arm(
                             self.now.saturating_add(timeout),
                             DatedPayload::InboundCallBudget {
-                                call_ref: call.reference,
+                                call_id: call.reference,
                                 instance: target.reference.clone(),
                             },
                         );
@@ -337,7 +337,7 @@ impl Vm<'_> {
         index: usize,
         slot: Slot,
         envelope: &Envelope,
-        candidates: &mut BTreeMap<InstanceRef, InstanceCandidate>,
+        candidates: &mut BTreeMap<InstanceGeneration, InstanceCandidate>,
     ) -> Result<PreparedTarget, VmError> {
         let scope = self
             .owner_chain(self.plan.nodes[slot.index()].owner)?

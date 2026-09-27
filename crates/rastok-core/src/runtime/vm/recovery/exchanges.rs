@@ -24,14 +24,14 @@ impl Vm<'_> {
         match &record.status {
             SessionStatus::Opening(intent) => {
                 if opening != SessionOpening::Local
-                    || self.sessions.contains_key(&record.session_ref)
+                    || self.sessions.contains_key(&record.session_id)
                     || intent.connector_path != record.connector_path
-                    || intent.session_ref != record.session_ref
-                    || ids::outbound_session_ref(
+                    || intent.session_id != record.session_id
+                    || ids::outbound_session_id(
                         &intent.connector_path,
                         intent.emitting_id,
                         intent.prepared.digest(),
-                    ) != intent.session_ref
+                    ) != intent.session_id
                 {
                     return Err(invalid(
                         index,
@@ -58,7 +58,7 @@ impl Vm<'_> {
                 );
                 self.scheduler.mailboxes.claim(slot, &instance);
                 self.sessions.insert(
-                    record.session_ref,
+                    record.session_id,
                     PendingSession {
                         slot,
                         instance,
@@ -75,7 +75,7 @@ impl Vm<'_> {
             SessionStatus::Opened => {
                 let session = self
                     .sessions
-                    .get_mut(&record.session_ref)
+                    .get_mut(&record.session_id)
                     .filter(|session| {
                         session.slot == slot && !session.opened && session.open_intent.is_some()
                     })
@@ -91,15 +91,15 @@ impl Vm<'_> {
             SessionStatus::WriteOpen(intent) => {
                 let session = self
                     .sessions
-                    .get(&record.session_ref)
+                    .get(&record.session_id)
                     .filter(|session| session.slot == slot && session.opened)
                     .ok_or_else(|| {
                         invalid(index, "a write has no open Session at this Connector")
                     })?;
                 if intent.connector_path != record.connector_path
-                    || intent.session_ref != record.session_ref
-                    || ids::session_write_ref(
-                        intent.session_ref,
+                    || intent.session_id != record.session_id
+                    || ids::session_write_id(
+                        intent.session_id,
                         intent.emitting_id,
                         intent.prepared.digest(),
                     ) != intent.write_ref
@@ -120,7 +120,7 @@ impl Vm<'_> {
                 )?;
                 let selected = self.select_session_ref(spec, &delivery.envelope, &settings)?;
                 if session.instance != instance
-                    || selected.is_some_and(|selected| selected != record.session_ref)
+                    || selected.is_some_and(|selected| selected != record.session_id)
                     || (selected.is_none() && opening == SessionOpening::Peer)
                 {
                     return Err(invalid(
@@ -164,7 +164,7 @@ impl Vm<'_> {
                     .session_writes
                     .remove(reference)
                     .filter(|write| {
-                        write.slot == slot && write.intent.session_ref == record.session_ref
+                        write.slot == slot && write.intent.session_id == record.session_id
                     })
                     .ok_or_else(|| {
                         invalid(index, "a write settlement has no matching pending intent")
@@ -180,7 +180,7 @@ impl Vm<'_> {
         index: usize,
         slot: Slot,
         id: crate::envelope::Id,
-    ) -> Result<(InstanceRef, Delivery), VmError> {
+    ) -> Result<(InstanceGeneration, Delivery), VmError> {
         let mut matches = self.instances.iter().filter_map(|(instance, state)| {
             if state.owner != self.plan.nodes[slot.index()].owner
                 || self.lifecycle.iter().any(|work| {
@@ -304,7 +304,7 @@ impl Vm<'_> {
                 if self
                     .session_writes
                     .values()
-                    .any(|write| write.intent.session_ref == *reference)
+                    .any(|write| write.intent.session_id == *reference)
                 {
                     return Err(invalid(
                         index,
@@ -390,7 +390,7 @@ impl Vm<'_> {
         &self,
         index: usize,
         slot: Slot,
-        instance: &InstanceRef,
+        instance: &InstanceGeneration,
         cursor: &ConsumedPosition,
     ) -> Result<Delivery, VmError> {
         self.scheduler

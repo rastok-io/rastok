@@ -59,7 +59,8 @@ pub fn project_components(document: &str) -> Result<BTreeMap<String, DataType>, 
         active.insert(name.clone());
         let path = field_path("$.components.schemas", name);
         let ty = project_schema(schema, &path, &schemas, &mut active)?;
-        ty.validate().map_err(|error| type_error(&path, error))?;
+        ty.check_bounds()
+            .map_err(|error| type_error(&path, error))?;
         projected.insert(name.clone(), ty);
     }
     Ok(projected)

@@ -10,7 +10,7 @@ impl Vm<'_> {
         &self,
         journal: &dyn InstanceAdmissions,
         source: &Endpoint,
-        source_instance: Option<&InstanceRef>,
+        source_instance: Option<&InstanceGeneration>,
         envelope: &Envelope,
     ) -> Result<Vec<Command>, VmError> {
         if self.instance_commands.is_none() {

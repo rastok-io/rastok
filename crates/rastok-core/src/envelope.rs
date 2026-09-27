@@ -32,7 +32,7 @@ impl Id {
     /// injective framing of `envelope.md` §2:
     ///
     /// ```text
-    /// input    = domain_tag ++ ( u32_le(len(field)) ++ bytes(field) )*
+    /// input    = id_kind ++ ( u32_le(len(field)) ++ bytes(field) )*
     /// id       = first 128 bits of blake3(input)
     /// ```
     ///
@@ -41,9 +41,9 @@ impl Id {
     /// recipe vocabulary (which tag, which fields, their encodings) is
     /// owned by the journal's `ids` module.
     #[must_use]
-    pub fn derive(domain_tag: u8, fields: &[&[u8]]) -> Self {
+    pub fn derive(id_kind: u8, fields: &[&[u8]]) -> Self {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(&[domain_tag]);
+        hasher.update(&[id_kind]);
         for field in fields {
             let len = u32::try_from(field.len())
                 .unwrap_or_else(|_| unreachable!("an identity frame never approaches 4 GiB"));
@@ -246,8 +246,8 @@ impl fmt::Display for Role {
     }
 }
 
-/// Runtime-owned identity and lineage metadata — exactly the five-field
-/// Tier-1 spine of `envelope.md` §1.1. Tier-2 birth stamps join with
+/// Runtime-owned identity and lineage metadata — exactly the five reserved
+/// `sys` fields of `envelope.md` §1.1. Tier-2 birth stamps join with
 /// the aspect work; envelopes born outside an aspect scope carry
 /// nothing.
 ///
@@ -264,8 +264,8 @@ pub struct MetaSys {
 }
 
 impl MetaSys {
-    /// Mints the spine of a root envelope: no parent, and the envelope
-    /// is its own origin (`origin_id == id`).
+    /// Mints the five reserved `sys` fields of a root envelope: no parent,
+    /// and the envelope is its own origin (`origin_id == id`).
     #[must_use]
     pub fn root(id: Id, graph_version: u64) -> Self {
         Self {
@@ -277,8 +277,8 @@ impl MetaSys {
         }
     }
 
-    /// Mints the spine of an emitted envelope: the parent is the cause,
-    /// and the origin is inherited from it unchanged.
+    /// Mints the five reserved `sys` fields of an emitted envelope: the parent
+    /// is the cause, and the origin is inherited from it unchanged.
     #[must_use]
     pub fn emission(id: Id, parent: &MetaSys, graph_version: u64) -> Self {
         Self {
@@ -374,7 +374,7 @@ pub enum WriteTarget {
     Ext(String),
 }
 
-/// Runtime and application metadata: the reserved `sys` spine and
+/// Runtime and application metadata: the five reserved `sys` fields and
 /// the two writable zones — `app` (application-owned) and `ext`
 /// (external-boundary context). Exactly three zones, no other root
 /// (D-2026-08-10-1).
@@ -386,7 +386,7 @@ pub struct Meta {
 }
 
 impl Meta {
-    /// Starts metadata around a minted spine, with empty writable
+    /// Starts metadata around the five minted `sys` fields, with empty writable
     /// namespaces.
     #[must_use]
     pub fn new(sys: MetaSys) -> Self {
@@ -411,7 +411,7 @@ impl Meta {
         self
     }
 
-    /// The reserved, runtime-owned spine.
+    /// The five reserved, runtime-owned `sys` fields.
     #[must_use]
     pub fn sys(&self) -> &MetaSys {
         &self.sys

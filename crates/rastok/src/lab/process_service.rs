@@ -1,9 +1,9 @@
 //! Effectless resident child: the script replaces replies, not Session state.
 use super::*;
 use crate::boundary::{
-    InboundConnectorDriver, InboundDecision, InboundProposal, InboundProposalRef, InboundSession,
-    SessionConnectorDriver, SessionDriverEvent, SessionOpenIntent, SessionRef, SessionStart,
-    SessionWriteIntent,
+    InboundConnectorDriver, InboundDecision, InboundProposal, InboundProposalHandle,
+    InboundSession, SessionConnectorDriver, SessionDriverEvent, SessionId, SessionOpenIntent,
+    SessionStart, SessionWriteIntent,
 };
 use crate::connectors::ProcessRequestBindings;
 use std::collections::VecDeque;
@@ -58,14 +58,14 @@ impl ConnectorDriverFactory for Factory {
 struct World {
     bindings: ProcessRequestBindings,
     evaluator: MockOutboundConnectorDriver,
-    resources: BTreeMap<SessionRef, node::Path>,
-    terminating: std::collections::BTreeSet<SessionRef>,
+    resources: BTreeMap<SessionId, node::Path>,
+    terminating: std::collections::BTreeSet<SessionId>,
     events: VecDeque<SessionDriverEvent>,
     proposals: VecDeque<InboundProposal>,
     next: u64,
 }
 impl World {
-    fn answer(&mut self, session: SessionRef, path: &node::Path, message: &Envelope) {
+    fn answer(&mut self, session: SessionId, path: &node::Path, message: &Envelope) {
         if let Some(outputs) = self.evaluator.answer_outputs(path, None, message) {
             for output in outputs {
                 if output.port.name() == "exit" {
@@ -82,7 +82,7 @@ impl World {
                     };
                     self.next = next;
                     self.proposals.push_back(InboundProposal {
-                        reference: InboundProposalRef::new(next),
+                        reference: InboundProposalHandle::new(next),
                         submission: InboundSubmission {
                             provenance: InboundEnvelopeProvenance::single(path.clone()),
                             port: output.port,
@@ -127,7 +127,7 @@ impl SessionConnectorDriver for World {
     fn prepare_session_write(
         &mut self,
         path: &node::Path,
-        _: SessionRef,
+        _: SessionId,
         data: &Data,
         settings: &BTreeMap<String, Value>,
     ) -> RequestPreparation {
@@ -141,31 +141,31 @@ impl SessionConnectorDriver for World {
         crate::boundary::process_scheduler_completion(completion)
     }
     fn open_session(&mut self, intent: &SessionOpenIntent, message: &Envelope) -> SessionStart {
-        if self.resources.contains_key(&intent.session_ref) {
+        if self.resources.contains_key(&intent.session_id) {
             return SessionStart::Started;
         }
         if self.resources.len() >= 64 {
             return SessionStart::Pending;
         }
         self.resources
-            .insert(intent.session_ref, intent.connector_path.clone());
+            .insert(intent.session_id, intent.connector_path.clone());
         self.events
-            .push_back(SessionDriverEvent::Opened(intent.session_ref));
-        self.answer(intent.session_ref, &intent.connector_path, message);
+            .push_back(SessionDriverEvent::Opened(intent.session_id));
+        self.answer(intent.session_id, &intent.connector_path, message);
         SessionStart::Started
     }
     fn write_session(&mut self, intent: &SessionWriteIntent, message: &Envelope) -> SessionStart {
-        if !self.resources.contains_key(&intent.session_ref)
-            || self.terminating.contains(&intent.session_ref)
+        if !self.resources.contains_key(&intent.session_id)
+            || self.terminating.contains(&intent.session_id)
             || self.proposals.len() >= 8
         {
             return SessionStart::Pending;
         }
         self.events.push_back(SessionDriverEvent::WriteSettled {
-            session: intent.session_ref,
+            session: intent.session_id,
             write: intent.write_ref,
         });
-        self.answer(intent.session_ref, &intent.connector_path, message);
+        self.answer(intent.session_id, &intent.connector_path, message);
         SessionStart::Started
     }
     fn session_events(&mut self) -> Vec<SessionDriverEvent> {
@@ -184,7 +184,7 @@ impl SessionConnectorDriver for World {
     }
     // Silence on system shutdown is explicit: no OS fact is invented by the
     // Lab. An authored quit can return Exited; otherwise Closing wins unknown.
-    fn release_session(&mut self, session: SessionRef) {
+    fn release_session(&mut self, session: SessionId) {
         self.resources.remove(&session);
         self.terminating.remove(&session);
         self.proposals
@@ -214,7 +214,7 @@ impl InboundConnectorDriver for World {
         }
         Some(proposal.clone())
     }
-    fn decide(&mut self, reference: InboundProposalRef, decision: InboundDecision) {
+    fn decide(&mut self, reference: InboundProposalHandle, decision: InboundDecision) {
         if self
             .proposals
             .front()

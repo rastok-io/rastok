@@ -63,7 +63,7 @@ pub fn project(document: &str) -> Result<AvroProjection, ProjectionError> {
     let mut projector = Projector::default();
     projector.collect_names(&root, "$", "")?;
     let ty = projector.schema(&root, "$", "")?;
-    ty.validate().map_err(|error| type_error("$", error))?;
+    ty.check_bounds().map_err(|error| type_error("$", error))?;
     Ok(AvroProjection {
         ty,
         unions: projector.unions,

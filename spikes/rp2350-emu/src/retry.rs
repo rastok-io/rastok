@@ -38,7 +38,7 @@ impl CallConnectorDriver for World {
                 .collect()
         };
         self.ready.push(Response {
-            call_ref: intent.call_ref,
+            call_id: intent.call_id,
             completion: Completion::process(channel(), channel(), ProcessExit::TimeoutExpired),
         });
         CallStart::Started

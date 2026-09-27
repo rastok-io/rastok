@@ -5,12 +5,11 @@
 //! meet only at binding; registration order is never selection policy.
 
 use crate::boundary::{
-    CallConnectorDriver, CallRef, CallStart, Completion, DriverRouteError,
-    InboundCallResponseStart, InboundCallTimeoutStart, InboundConnectorDriver, InboundDecision,
-    InboundExchangeRef, InboundProposal, Intent, OutboundConnectorBindings,
-    OutboundConnectorDriver, RequestPreparation, Response, SchedulerCompletion,
-    SessionConnectorBindings, SessionConnectorDriver, SessionDriverEvent, SessionOpenIntent,
-    SessionRef, SessionWriteIntent,
+    CallConnectorDriver, CallId, CallStart, Completion, DriverRouteError, InboundCallResponseStart,
+    InboundCallTimeoutStart, InboundConnectorDriver, InboundDecision, InboundExchangeRef,
+    InboundProposal, Intent, OutboundConnectorBindings, OutboundConnectorDriver,
+    RequestPreparation, Response, SchedulerCompletion, SessionConnectorBindings,
+    SessionConnectorDriver, SessionDriverEvent, SessionId, SessionOpenIntent, SessionWriteIntent,
 };
 use crate::connector::{ConnectorExchange, ConnectorRoles, ContractId};
 use crate::envelope::{Data, Envelope};
@@ -294,10 +293,10 @@ pub struct RuntimeBindings<'plan> {
     /// backpressured transport from blocking an unrelated family.
     inbound_cursor: Option<ContractId>,
     outbound: BTreeMap<node::Path, ContractId>,
-    calls: BTreeMap<CallRef, ContractId>,
-    inbound_calls: BTreeMap<crate::boundary::InboundCallRef, ContractId>,
+    calls: BTreeMap<CallId, ContractId>,
+    inbound_calls: BTreeMap<crate::boundary::InboundCallId, ContractId>,
     session_outbound: BTreeMap<node::Path, ContractId>,
-    sessions: BTreeMap<SessionRef, ContractId>,
+    sessions: BTreeMap<SessionId, ContractId>,
 }
 
 impl core::fmt::Debug for RuntimeBindings<'_> {
@@ -570,18 +569,17 @@ impl<'plan> RuntimeBindings<'plan> {
         }
         if let InboundDecision::Accepted(accepted) = decision {
             match accepted.exchange {
-                Some(InboundExchangeRef::Call(call_ref)) => {
-                    if let Some(expected) = self.inbound_calls.get(&call_ref)
+                Some(InboundExchangeRef::Call(call_id)) => {
+                    if let Some(expected) = self.inbound_calls.get(&call_id)
                         && expected != &routed.connector
                     {
                         return Err(DriverRouteError::CrossFamilyInboundCall {
-                            call_ref,
+                            call_id,
                             expected: expected.clone(),
                             actual: routed.connector.clone(),
                         });
                     }
-                    self.inbound_calls
-                        .insert(call_ref, routed.connector.clone());
+                    self.inbound_calls.insert(call_id, routed.connector.clone());
                 }
                 Some(InboundExchangeRef::Session(session)) => {
                     if let Some(expected) = self.sessions.get(&session)
@@ -655,11 +653,11 @@ impl<'plan> RuntimeBindings<'plan> {
     ) -> Result<InboundCallResponsePumpReport, DriverRouteError> {
         let mut report = InboundCallResponsePumpReport::default();
         for response in vm.ready_inbound_call_responses() {
-            let Some(id) = self.inbound_calls.get(&response.call_ref).cloned() else {
-                return Err(DriverRouteError::UncorrelatedInboundCall(response.call_ref));
+            let Some(id) = self.inbound_calls.get(&response.call_id).cloned() else {
+                return Err(DriverRouteError::UncorrelatedInboundCall(response.call_id));
             };
             let Some(family) = self.families.get_mut(&id) else {
-                return Err(DriverRouteError::UncorrelatedInboundCall(response.call_ref));
+                return Err(DriverRouteError::UncorrelatedInboundCall(response.call_id));
             };
             if !family.inbound_paths.contains(&response.connector_path) {
                 return Err(DriverRouteError::InboundSourceMismatch {
@@ -676,7 +674,7 @@ impl<'plan> RuntimeBindings<'plan> {
             match driver.start_response(&response) {
                 InboundCallResponseStart::Started => {
                     if !vm.mark_inbound_call_response_started(&response) {
-                        return Err(DriverRouteError::UncorrelatedInboundCall(response.call_ref));
+                        return Err(DriverRouteError::UncorrelatedInboundCall(response.call_id));
                     }
                     report.started = report.started.saturating_add(1);
                 }
@@ -701,11 +699,11 @@ impl<'plan> RuntimeBindings<'plan> {
     ) -> Result<InboundCallTimeoutPumpReport, DriverRouteError> {
         let mut report = InboundCallTimeoutPumpReport::default();
         for timeout in vm.ready_inbound_call_timeouts() {
-            let Some(id) = self.inbound_calls.get(&timeout.call_ref).cloned() else {
-                return Err(DriverRouteError::UncorrelatedInboundCall(timeout.call_ref));
+            let Some(id) = self.inbound_calls.get(&timeout.call_id).cloned() else {
+                return Err(DriverRouteError::UncorrelatedInboundCall(timeout.call_id));
             };
             let Some(family) = self.families.get_mut(&id) else {
-                return Err(DriverRouteError::UncorrelatedInboundCall(timeout.call_ref));
+                return Err(DriverRouteError::UncorrelatedInboundCall(timeout.call_id));
             };
             if !family.inbound_paths.contains(&timeout.connector_path) {
                 return Err(DriverRouteError::InboundSourceMismatch {
@@ -722,7 +720,7 @@ impl<'plan> RuntimeBindings<'plan> {
             match driver.start_timeout(&timeout) {
                 InboundCallTimeoutStart::Started => {
                     if !vm.mark_inbound_call_timeout_started(&timeout) {
-                        return Err(DriverRouteError::UncorrelatedInboundCall(timeout.call_ref));
+                        return Err(DriverRouteError::UncorrelatedInboundCall(timeout.call_id));
                     }
                     report.started = report.started.saturating_add(1);
                 }
@@ -769,21 +767,21 @@ impl<'plan> RuntimeBindings<'plan> {
                 driver.events()
             };
             for event in events {
-                let Some(expected) = self.inbound_calls.get(&event.call_ref).cloned() else {
+                let Some(expected) = self.inbound_calls.get(&event.call_id).cloned() else {
                     report.uncorrelated.push(event);
                     continue;
                 };
                 if expected != id {
                     return Err(DriverRouteError::CrossFamilyInboundCall {
-                        call_ref: event.call_ref,
+                        call_id: event.call_id,
                         expected,
                         actual: id,
                     });
                 }
-                let call_ref = event.call_ref;
+                let call_id = event.call_id;
                 let mut observed = vm.queue_inbound_call_events(core::iter::once(event));
                 if observed.queued == 1 || !observed.uncorrelated.is_empty() {
-                    self.inbound_calls.remove(&call_ref);
+                    self.inbound_calls.remove(&call_id);
                 }
                 report.queued = report.queued.saturating_add(observed.queued);
                 report.discarded.append(&mut observed.discarded);
@@ -861,13 +859,9 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
             .scheduler_completion(connector, completion))
     }
 
-    fn cancel(
-        &mut self,
-        connector: &node::Path,
-        call_ref: &CallRef,
-    ) -> Result<(), DriverRouteError> {
-        self.outbound_driver(connector)?.cancel(call_ref);
-        self.calls.remove(call_ref);
+    fn cancel(&mut self, connector: &node::Path, call_id: &CallId) -> Result<(), DriverRouteError> {
+        self.outbound_driver(connector)?.cancel(call_id);
+        self.calls.remove(call_id);
         Ok(())
     }
 
@@ -882,7 +876,7 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
         };
         let start = self.outbound_driver(connector)?.start(intent, request);
         if start == CallStart::Started {
-            self.calls.insert(intent.call_ref, id);
+            self.calls.insert(intent.call_id, id);
         }
         Ok(start)
     }
@@ -900,16 +894,16 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
                 return Err(DriverRouteError::UnavailableCall(path.clone()));
             };
             for response in driver.events() {
-                if let Some(expected) = self.calls.get(&response.call_ref)
+                if let Some(expected) = self.calls.get(&response.call_id)
                     && expected != id
                 {
                     return Err(DriverRouteError::CrossFamilyResponse {
-                        call_ref: response.call_ref,
+                        call_id: response.call_id,
                         expected: expected.clone(),
                         actual: id.clone(),
                     });
                 }
-                self.calls.remove(&response.call_ref);
+                self.calls.remove(&response.call_id);
                 responses.push(response);
             }
         }
@@ -944,7 +938,7 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
     fn prepare_session_write(
         &mut self,
         connector: &node::Path,
-        session: SessionRef,
+        session: SessionId,
         data: &Data,
         resolved_settings: &BTreeMap<String, crate::value::Value>,
     ) -> Result<RequestPreparation, DriverRouteError> {
@@ -968,7 +962,7 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
     fn close_session(
         &mut self,
         connector: &node::Path,
-        session: SessionRef,
+        session: SessionId,
     ) -> Result<crate::boundary::SessionStart, DriverRouteError> {
         SessionConnectorBindings::close_session(self, connector, session)
     }
@@ -980,12 +974,12 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
     fn abort_session(
         &mut self,
         connector: &node::Path,
-        session: SessionRef,
+        session: SessionId,
     ) -> Result<(), DriverRouteError> {
         SessionConnectorBindings::abort_session(self, connector, session)
     }
 
-    fn forget_session(&mut self, session: SessionRef) -> Result<(), DriverRouteError> {
+    fn forget_session(&mut self, session: SessionId) -> Result<(), DriverRouteError> {
         SessionConnectorBindings::forget_session(self, session)
     }
 }
@@ -1014,7 +1008,7 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
         // Ownership follows the journaled intent, even while local capacity
         // keeps creation Pending. Closing must fence that resource reference
         // without first starting the effect merely to establish correlation.
-        self.sessions.insert(intent.session_ref, id);
+        self.sessions.insert(intent.session_id, id);
         Ok(start)
     }
 
@@ -1032,7 +1026,7 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
     fn prepare_session_write(
         &mut self,
         connector: &node::Path,
-        session: SessionRef,
+        session: SessionId,
         data: &Data,
         resolved_settings: &BTreeMap<String, crate::value::Value>,
     ) -> Result<RequestPreparation, DriverRouteError> {
@@ -1056,12 +1050,12 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
         message: &Envelope,
     ) -> Result<crate::boundary::SessionStart, DriverRouteError> {
         let actual = self.session_family(&intent.connector_path)?;
-        let Some(expected) = self.sessions.get(&intent.session_ref) else {
-            return Err(DriverRouteError::UncorrelatedSession(intent.session_ref));
+        let Some(expected) = self.sessions.get(&intent.session_id) else {
+            return Err(DriverRouteError::UncorrelatedSession(intent.session_id));
         };
         if expected != &actual {
             return Err(DriverRouteError::CrossFamilySession {
-                session: intent.session_ref,
+                session: intent.session_id,
                 expected: expected.clone(),
                 actual,
             });
@@ -1073,7 +1067,7 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
     fn close_session(
         &mut self,
         connector: &node::Path,
-        session: SessionRef,
+        session: SessionId,
     ) -> Result<crate::boundary::SessionStart, DriverRouteError> {
         let actual = self.session_family(connector)?;
         let Some(expected) = self.sessions.get(&session) else {
@@ -1093,7 +1087,7 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
     fn abort_session(
         &mut self,
         connector: &node::Path,
-        session: SessionRef,
+        session: SessionId,
     ) -> Result<(), DriverRouteError> {
         let actual = self.session_family(connector)?;
         let Some(expected) = self.sessions.get(&session) else {
@@ -1145,7 +1139,7 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
         Ok(events)
     }
 
-    fn forget_session(&mut self, session: SessionRef) -> Result<(), DriverRouteError> {
+    fn forget_session(&mut self, session: SessionId) -> Result<(), DriverRouteError> {
         let Some(id) = self.sessions.get(&session) else {
             return Ok(());
         };
@@ -1329,10 +1323,10 @@ mod tests {
         CallConnectorDriver, CallStart, Completion, Draft, HttpServerExit,
         InboundCallConnectorDriver, InboundCallEvent, InboundCallResponse,
         InboundCallResponseStart, InboundDecision, InboundEnvelopeProvenance, InboundExchangeRef,
-        InboundProposal, InboundProposalRef, InboundSubmission, Intent, OutboundConnectorBindings,
-        OutboundConnectorDriver, ProcessExit, RequestPreparation, Response, SchedulerCompletion,
-        SessionConnectorBindings, SessionConnectorDriver, SessionDriverEvent, SessionOpenIntent,
-        SessionRef, SessionWriteIntent, SubmissionSequence,
+        InboundProposal, InboundProposalHandle, InboundSubmission, Intent,
+        OutboundConnectorBindings, OutboundConnectorDriver, ProcessExit, RequestPreparation,
+        Response, SchedulerCompletion, SessionConnectorBindings, SessionConnectorDriver,
+        SessionDriverEvent, SessionId, SessionOpenIntent, SessionWriteIntent, SubmissionSequence,
     };
     use crate::compiler::compile;
     use crate::connector::{ConnectorExchange, ConnectorRoles, ContractId};
@@ -1424,7 +1418,7 @@ mod tests {
             None
         }
 
-        fn decide(&mut self, _: InboundProposalRef, _: InboundDecision) {}
+        fn decide(&mut self, _: InboundProposalHandle, _: InboundDecision) {}
     }
 
     struct RoutingDriver {
@@ -1457,7 +1451,7 @@ mod tests {
                 .unwrap()
                 .push(format!("{}:{}", self.family, intent.connector_path));
             self.answers.push(Response {
-                call_ref: intent.call_ref,
+                call_id: intent.call_id,
                 completion: Completion::process(
                     vec![Data::materialized(Value::Text(self.family.clone()))],
                     Vec::new(),
@@ -1659,7 +1653,7 @@ graph inbound : App {
             None
         }
 
-        fn decide(&mut self, _: InboundProposalRef, _: InboundDecision) {}
+        fn decide(&mut self, _: InboundProposalHandle, _: InboundDecision) {}
 
         fn call(&mut self) -> Option<&mut dyn InboundCallConnectorDriver> {
             Some(self)
@@ -1781,7 +1775,7 @@ graph inbound : App {
     struct SessionDuplexDriver {
         observations: Arc<Mutex<Vec<&'static str>>>,
         events: Vec<SessionDriverEvent>,
-        closed: BTreeSet<SessionRef>,
+        closed: BTreeSet<SessionId>,
     }
 
     impl crate::boundary::InboundConnectorDriver for SessionDuplexDriver {
@@ -1790,7 +1784,7 @@ graph inbound : App {
             None
         }
 
-        fn decide(&mut self, _: InboundProposalRef, _: InboundDecision) {
+        fn decide(&mut self, _: InboundProposalHandle, _: InboundDecision) {
             self.observations.lock().unwrap().push("decision");
         }
     }
@@ -1823,14 +1817,14 @@ graph inbound : App {
         ) -> crate::boundary::SessionStart {
             self.observations.lock().unwrap().push("open");
             self.events
-                .insert(0, SessionDriverEvent::Opened(intent.session_ref));
+                .insert(0, SessionDriverEvent::Opened(intent.session_id));
             crate::boundary::SessionStart::Started
         }
 
         fn prepare_session_write(
             &mut self,
             _: &node::Path,
-            _: SessionRef,
+            _: SessionId,
             data: &Data,
             _: &BTreeMap<String, crate::value::Value>,
         ) -> RequestPreparation {
@@ -1846,14 +1840,14 @@ graph inbound : App {
             self.events.insert(
                 0,
                 SessionDriverEvent::WriteSettled {
-                    session: intent.session_ref,
+                    session: intent.session_id,
                     write: intent.write_ref,
                 },
             );
             crate::boundary::SessionStart::Started
         }
 
-        fn close_session(&mut self, session: SessionRef) -> crate::boundary::SessionStart {
+        fn close_session(&mut self, session: SessionId) -> crate::boundary::SessionStart {
             if self.closed.insert(session) {
                 self.observations.lock().unwrap().push("close");
                 self.events.insert(
@@ -1881,13 +1875,13 @@ graph inbound : App {
             core::mem::take(&mut self.events)
         }
 
-        fn abort_session(&mut self, session: SessionRef) {
+        fn abort_session(&mut self, session: SessionId) {
             if self.closed.insert(session) {
                 self.observations.lock().unwrap().push("abort");
             }
         }
 
-        fn release_session(&mut self, session: SessionRef) {
+        fn release_session(&mut self, session: SessionId) {
             self.observations.lock().unwrap().push("release");
             self.closed.remove(&session);
             self.events.retain(|event| match event {
@@ -1988,7 +1982,7 @@ graph inbound : App {
             let prepared = crate::boundary::PreparedRequest::seal(vec![byte]);
             let emitting_id = crate::envelope::Id::from_bytes([byte; 16]);
             SessionOpenIntent {
-                session_ref: ids::outbound_session_ref(&connector, emitting_id, prepared.digest()),
+                session_id: ids::outbound_session_id(&connector, emitting_id, prepared.digest()),
                 emitting_id,
                 connector_path: connector.clone(),
                 prepared,
@@ -2003,27 +1997,27 @@ graph inbound : App {
         assert_eq!(
             SessionConnectorBindings::session_events(&mut bindings).unwrap(),
             [
-                SessionDriverEvent::Opened(second.session_ref),
-                SessionDriverEvent::Opened(first.session_ref),
+                SessionDriverEvent::Opened(second.session_id),
+                SessionDriverEvent::Opened(first.session_id),
             ],
-            "reverse arrival remains correlated by SessionRef"
+            "reverse arrival remains correlated by SessionId"
         );
-        journal.confirm_session_open(&first.session_ref).unwrap();
-        journal.confirm_session_open(&second.session_ref).unwrap();
+        journal.confirm_session_open(&first.session_id).unwrap();
+        journal.confirm_session_open(&second.session_id).unwrap();
 
-        let write = |session: SessionRef, byte| {
+        let write = |session: SessionId, byte| {
             let prepared = crate::boundary::PreparedRequest::seal(vec![byte]);
             let emitting_id = crate::envelope::Id::from_bytes([byte; 16]);
             SessionWriteIntent {
-                write_ref: ids::session_write_ref(session, emitting_id, prepared.digest()),
-                session_ref: session,
+                write_ref: ids::session_write_id(session, emitting_id, prepared.digest()),
+                session_id: session,
                 emitting_id,
                 connector_path: connector.clone(),
                 prepared,
             }
         };
-        let first_write = write(first.session_ref, 3);
-        let second_write = write(second.session_ref, 4);
+        let first_write = write(first.session_id, 3);
+        let second_write = write(second.session_id, 4);
         for intent in [&first_write, &second_write] {
             journal.open_session_write(intent.clone()).unwrap();
             SessionConnectorBindings::write_session(&mut bindings, intent, &request).unwrap();
@@ -2032,11 +2026,11 @@ graph inbound : App {
             SessionConnectorBindings::session_events(&mut bindings).unwrap(),
             [
                 SessionDriverEvent::WriteSettled {
-                    session: second.session_ref,
+                    session: second.session_id,
                     write: second_write.write_ref,
                 },
                 SessionDriverEvent::WriteSettled {
-                    session: first.session_ref,
+                    session: first.session_id,
                     write: first_write.write_ref,
                 },
             ]
@@ -2046,9 +2040,9 @@ graph inbound : App {
             ["inbound", "open", "open", "write", "write"]
         );
 
-        SessionConnectorBindings::abort_session(&mut bindings, &connector, first.session_ref)
+        SessionConnectorBindings::abort_session(&mut bindings, &connector, first.session_id)
             .unwrap();
-        SessionConnectorBindings::abort_session(&mut bindings, &connector, first.session_ref)
+        SessionConnectorBindings::abort_session(&mut bindings, &connector, first.session_id)
             .unwrap();
         assert_eq!(
             observations
@@ -2059,14 +2053,14 @@ graph inbound : App {
                 .count(),
             1
         );
-        assert!(bindings.sessions.contains_key(&first.session_ref));
+        assert!(bindings.sessions.contains_key(&first.session_id));
         assert!(
             SessionConnectorBindings::session_events(&mut bindings)
                 .unwrap()
                 .is_empty()
         );
-        SessionConnectorBindings::forget_session(&mut bindings, first.session_ref).unwrap();
-        SessionConnectorBindings::forget_session(&mut bindings, first.session_ref).unwrap();
+        SessionConnectorBindings::forget_session(&mut bindings, first.session_id).unwrap();
+        SessionConnectorBindings::forget_session(&mut bindings, first.session_id).unwrap();
         assert_eq!(
             observations
                 .lock()
@@ -2077,11 +2071,11 @@ graph inbound : App {
             1,
             "the owning Driver releases a terminal resource once"
         );
-        assert!(!bindings.sessions.contains_key(&first.session_ref));
-        assert!(bindings.sessions.contains_key(&second.session_ref));
+        assert!(!bindings.sessions.contains_key(&first.session_id));
+        assert!(bindings.sessions.contains_key(&second.session_id));
         assert!(matches!(
-            SessionConnectorBindings::abort_session(&mut bindings, &connector, first.session_ref),
-            Err(crate::boundary::DriverRouteError::UncorrelatedSession(reference)) if reference == first.session_ref
+            SessionConnectorBindings::abort_session(&mut bindings, &connector, first.session_id),
+            Err(crate::boundary::DriverRouteError::UncorrelatedSession(reference)) if reference == first.session_id
         ));
         SessionConnectorBindings::write_session(&mut bindings, &second_write, &request).unwrap();
     }
@@ -2150,7 +2144,7 @@ graph inbound : App {
     #[derive(Default)]
     struct InboundQueueState {
         proposals: VecDeque<InboundProposal>,
-        decisions: Vec<(InboundProposalRef, InboundDecision)>,
+        decisions: Vec<(InboundProposalHandle, InboundDecision)>,
     }
 
     struct RetainedInboundDriver {
@@ -2162,7 +2156,7 @@ graph inbound : App {
             self.state.lock().unwrap().proposals.front().cloned()
         }
 
-        fn decide(&mut self, reference: InboundProposalRef, decision: InboundDecision) {
+        fn decide(&mut self, reference: InboundProposalHandle, decision: InboundDecision) {
             let mut state = self.state.lock().unwrap();
             let retained = state
                 .proposals
@@ -2191,7 +2185,7 @@ graph inbound : App {
     #[derive(Default)]
     struct RetainedCallState {
         proposals: VecDeque<InboundProposal>,
-        decisions: Vec<(InboundProposalRef, InboundDecision)>,
+        decisions: Vec<(InboundProposalHandle, InboundDecision)>,
         events: Vec<InboundCallEvent>,
         responses: Vec<InboundCallResponse>,
         acknowledge_on_accept: bool,
@@ -2207,7 +2201,7 @@ graph inbound : App {
             self.state.lock().unwrap().proposals.front().cloned()
         }
 
-        fn decide(&mut self, reference: InboundProposalRef, decision: InboundDecision) {
+        fn decide(&mut self, reference: InboundProposalHandle, decision: InboundDecision) {
             let mut state = self.state.lock().unwrap();
             let retained = state
                 .proposals
@@ -2217,11 +2211,11 @@ graph inbound : App {
             if state.acknowledge_on_accept
                 && let InboundDecision::Accepted(accepted) = decision
             {
-                let Some(InboundExchangeRef::Call(call_ref)) = accepted.exchange else {
+                let Some(InboundExchangeRef::Call(call_id)) = accepted.exchange else {
                     panic!("an inbound Call acceptance carries its Call ref")
                 };
                 state.events.push(InboundCallEvent {
-                    call_ref,
+                    call_id,
                     completion: Completion::http_server_exit(HttpServerExit::Completed {
                         status: 202,
                     }),
@@ -2244,7 +2238,7 @@ graph inbound : App {
             }
             state.responses.push(response.clone());
             state.events.push(InboundCallEvent {
-                call_ref: response.call_ref,
+                call_id: response.call_id,
                 completion: Completion::http_server_exit(HttpServerExit::Completed { status: 200 }),
             });
             InboundCallResponseStart::Started
@@ -2319,7 +2313,7 @@ graph inbound : App {
 
     fn inbound_proposal(reference: u64, port: &str) -> InboundProposal {
         InboundProposal {
-            reference: InboundProposalRef::new(reference),
+            reference: InboundProposalHandle::new(reference),
             submission: InboundSubmission {
                 provenance: InboundEnvelopeProvenance::single(node::Path::new(["source"]).unwrap()),
                 port: node::Port::new(port).unwrap(),
@@ -2383,7 +2377,7 @@ graph api : App {
                     && edge.to.as_ref().is_some_and(|to| to.node.is_none())
             })
             .expect("the relay boundary response exists");
-        response.to = Some(crate::plan::EndpointRef {
+        response.to = Some(crate::plan::EdgeEnd {
             node: Some(server_slot),
             port: node::Port::new("in").expect("the conventional input name is valid"),
         });
@@ -2429,7 +2423,7 @@ graph api : App {
         ));
         let state = Arc::new(Mutex::new(RetainedCallState {
             proposals: VecDeque::from([InboundProposal {
-                reference: InboundProposalRef::new(1),
+                reference: InboundProposalHandle::new(1),
                 submission: InboundSubmission {
                     provenance: InboundEnvelopeProvenance::single(
                         node::Path::new(["server"]).unwrap(),
@@ -2462,10 +2456,10 @@ graph api : App {
         else {
             panic!("the request must be accepted")
         };
-        let Some(InboundExchangeRef::Call(call_ref)) = accepted.exchange else {
+        let Some(InboundExchangeRef::Call(call_id)) = accepted.exchange else {
             panic!("the accepting fact opens a Call")
         };
-        assert_eq!(journal.open_inbound_calls()[0].reference, call_ref);
+        assert_eq!(journal.open_inbound_calls()[0].reference, call_id);
         assert!(journal.find_envelope(accepted.envelope).is_some());
         assert_eq!(state.lock().unwrap().decisions.len(), 1);
 
@@ -2481,7 +2475,7 @@ graph api : App {
             .filter_map(|record| match record {
                 crate::journal::Record::Transaction(transaction)
                     if transaction.exchange_exit.as_deref()
-                        == Some(&crate::journal::InboundExchangeExitRecord::Call(call_ref)) =>
+                        == Some(&crate::journal::InboundExchangeExitRecord::Call(call_id)) =>
                 {
                     Some(transaction)
                 }
@@ -2507,7 +2501,7 @@ graph api : App {
                         if matches!(
                             inbound.exchange.as_deref(),
                             Some(crate::journal::InboundExchangeRecord::Call(call))
-                                if call.reference == call_ref
+                                if call.reference == call_id
                         )
                 )
             })
@@ -2520,7 +2514,7 @@ graph api : App {
                     record,
                     crate::journal::Record::Transaction(transaction)
                         if transaction.exchange_exit.as_deref()
-                            == Some(&crate::journal::InboundExchangeExitRecord::Call(call_ref))
+                            == Some(&crate::journal::InboundExchangeExitRecord::Call(call_id))
                 )
             })
             .expect("the terminal TRANSACTION fact is present");
@@ -2538,7 +2532,7 @@ graph api : App {
         }
 
         state.lock().unwrap().events.push(InboundCallEvent {
-            call_ref,
+            call_id,
             completion: Completion::http_server_exit(HttpServerExit::Completed { status: 202 }),
         });
         let duplicate = bindings.pump_inbound_call_events(&mut vm).unwrap();
@@ -2551,7 +2545,7 @@ graph api : App {
                     record,
                     crate::journal::Record::Transaction(transaction)
                         if transaction.exchange_exit.as_deref()
-                            == Some(&crate::journal::InboundExchangeExitRecord::Call(call_ref))
+                            == Some(&crate::journal::InboundExchangeExitRecord::Call(call_id))
                 ))
                 .count(),
             1,
@@ -2564,7 +2558,7 @@ graph api : App {
         let plan = inbound_call_response_plan();
         let state = Arc::new(Mutex::new(RetainedCallState {
             proposals: VecDeque::from([InboundProposal {
-                reference: InboundProposalRef::new(1),
+                reference: InboundProposalHandle::new(1),
                 submission: InboundSubmission {
                     provenance: InboundEnvelopeProvenance::single(
                         node::Path::new(["server"]).unwrap(),
@@ -2597,7 +2591,7 @@ graph api : App {
         else {
             panic!("the request must be accepted")
         };
-        let Some(InboundExchangeRef::Call(call_ref)) = accepted.exchange else {
+        let Some(InboundExchangeRef::Call(call_id)) = accepted.exchange else {
             panic!("the accepted request opens one inbound Call")
         };
         let opening_instance =
@@ -2610,7 +2604,7 @@ graph api : App {
                         .as_deref()
                         .and_then(|exchange| match exchange {
                             crate::journal::InboundExchangeRecord::Call(call)
-                                if call.reference == call_ref =>
+                                if call.reference == call_id =>
                             {
                                 Some(call.instance.clone())
                             }
@@ -2640,7 +2634,7 @@ graph api : App {
         assert_eq!(response_target, opening_instance);
 
         state.lock().unwrap().events.push(InboundCallEvent {
-            call_ref,
+            call_id,
             completion: Completion::http_server_exit(HttpServerExit::Completed { status: 200 }),
         });
         let premature = bindings.pump_inbound_call_events(&mut vm).unwrap();
@@ -2655,7 +2649,7 @@ graph api : App {
         {
             let state = state.lock().unwrap();
             assert_eq!(state.responses.len(), 1);
-            assert_eq!(state.responses[0].call_ref, call_ref);
+            assert_eq!(state.responses[0].call_id, call_id);
             assert_eq!(
                 state.responses[0].response.data(),
                 &Data::materialized(Value::Text(String::from("response")))
@@ -2673,7 +2667,7 @@ graph api : App {
             .filter_map(|record| match record {
                 crate::journal::Record::Transaction(transaction)
                     if transaction.exchange_exit.as_deref()
-                        == Some(&crate::journal::InboundExchangeExitRecord::Call(call_ref)) =>
+                        == Some(&crate::journal::InboundExchangeExitRecord::Call(call_id)) =>
                 {
                     Some(transaction)
                 }
@@ -2701,7 +2695,7 @@ graph api : App {
         let plan = inbound_call_response_plan();
         let state = Arc::new(Mutex::new(RetainedCallState {
             proposals: VecDeque::from([InboundProposal {
-                reference: InboundProposalRef::new(1),
+                reference: InboundProposalHandle::new(1),
                 submission: InboundSubmission {
                     provenance: InboundEnvelopeProvenance::single(
                         node::Path::new(["server"]).unwrap(),
@@ -2734,7 +2728,7 @@ graph api : App {
         else {
             panic!("the request must be accepted")
         };
-        let Some(InboundExchangeRef::Call(call_ref)) = accepted.exchange else {
+        let Some(InboundExchangeRef::Call(call_id)) = accepted.exchange else {
             panic!("the accepted request opens one inbound Call")
         };
         assert_eq!(
@@ -2755,7 +2749,7 @@ graph api : App {
                     record,
                     crate::journal::Record::Transaction(transaction)
                         if transaction.exchange_exit.as_deref()
-                            == Some(&crate::journal::InboundExchangeExitRecord::Call(call_ref))
+                            == Some(&crate::journal::InboundExchangeExitRecord::Call(call_id))
                 )
             })
             .count();
@@ -2871,7 +2865,7 @@ graph api : App {
         assert_eq!(
             state.lock().unwrap().decisions,
             [(
-                InboundProposalRef::new(7),
+                InboundProposalHandle::new(7),
                 InboundDecision::Rejected(crate::boundary::InboundRejection::UnknownPort)
             )]
         );

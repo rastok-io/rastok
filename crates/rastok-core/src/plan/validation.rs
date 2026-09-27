@@ -12,7 +12,7 @@ use crate::datatype::{DataType, TypeError};
 use crate::expr;
 use crate::node;
 use crate::plan::{
-    DispatchStep, Emission, EndpointRef, EvaluationSite, ExecutionPlan, InstanceLifetime, Node,
+    DispatchStep, EdgeEnd, Emission, EvaluationSite, ExecutionPlan, InstanceLifetime, Node,
     NodeExecution, OwnerKind, OwnerSlot, Slot,
 };
 use crate::schema_annotation::{AnnotationTable, SchemaAnnotationError};
@@ -1689,7 +1689,7 @@ fn assets_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
 }
 
 fn data_type_at(ty: &DataType, location: String) -> Result<(), PlanValidationError> {
-    ty.validate()
+    ty.check_bounds()
         .map_err(|reason| PlanValidationError::InvalidDataType { location, reason })
 }
 
@@ -3260,7 +3260,7 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         ) {
             return Err(PlanValidationError::InvalidEdgeScope { owner: edge.scope });
         }
-        let endpoint_is_scoped = |endpoint: &EndpointRef| {
+        let endpoint_is_scoped = |endpoint: &EdgeEnd| {
             endpoint.node.is_none_or(|slot| {
                 plan.nodes
                     .get(slot.index())
@@ -4021,7 +4021,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     // edge targeting the boundary feeds a graph OUTPUT — the same
     // rule the checker applies to the surface language.
     let endpoint_ok =
-        |endpoint: &EndpointRef, position: node::Direction| -> Result<(), PlanValidationError> {
+        |endpoint: &EdgeEnd, position: node::Direction| -> Result<(), PlanValidationError> {
             match endpoint.node {
                 Some(slot) => {
                     let node = node_at(slot)?;
@@ -4128,7 +4128,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     // Two PINNED edge ends must agree — the same rule the checker
     // holds the surface to; endpoint slots are proven above, so the
     // lookups dereference safely.
-    let pin_of = |endpoint: &EndpointRef| -> Option<DataType> {
+    let pin_of = |endpoint: &EdgeEnd| -> Option<DataType> {
         match endpoint.node {
             Some(slot) => {
                 let node = &plan.nodes[slot.index()];
@@ -4822,7 +4822,7 @@ fn collect_writable_meta_reads(expression: &expr::Expr, reads: &mut BTreeSet<Wri
 /// construction.
 fn value_expressible(value: &crate::value::Value) -> Result<(), PlanValidationError> {
     value
-        .validate()
+        .check_consistency()
         .map_err(|_| PlanValidationError::UnrepresentableConstant)
 }
 
@@ -4891,7 +4891,7 @@ pub(super) fn expr_canonical(expr: &expr::Expr) -> Result<(), PlanValidationErro
             fields,
         } => {
             DataType::TaggedUnion((**union).clone())
-                .validate()
+                .check_bounds()
                 .map_err(|_| PlanValidationError::UnrepresentableConstant)?;
             let Some(declared) = union
                 .cases()
@@ -5000,7 +5000,7 @@ fn narrow_target_canonical(target: &expr::NarrowTarget) -> Result<(), PlanValida
             payload
         }
     };
-    ty.validate()
+    ty.check_bounds()
         .map_err(|_| PlanValidationError::UnrepresentableConstant)
 }
 

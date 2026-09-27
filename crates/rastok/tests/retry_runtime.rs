@@ -55,7 +55,7 @@ struct World {
     preparations: usize,
     starts: Vec<Intent>,
     responses: Vec<Response>,
-    cancellations: Vec<CallRef>,
+    cancellations: Vec<CallId>,
 }
 
 impl CallConnectorDriver for World {
@@ -75,8 +75,8 @@ impl CallConnectorDriver for World {
     fn events(&mut self) -> Vec<Response> {
         std::mem::take(&mut self.responses)
     }
-    fn cancel(&mut self, call_ref: &CallRef) {
-        self.cancellations.push(*call_ref);
+    fn cancel(&mut self, call_id: &CallId) {
+        self.cancellations.push(*call_id);
     }
     fn scheduler_completion(
         &mut self,
@@ -105,7 +105,7 @@ fn inject(vm: &mut Vm<'_>, journal: &mut MemJournal) {
 
 fn reply(world: &mut World, failure: bool) {
     world.responses.push(Response {
-        call_ref: world.starts.last().unwrap().call_ref,
+        call_id: world.starts.last().unwrap().call_id,
         completion: Completion::process(
             vec![Data::materialized(Value::Text("stdout".into()))],
             vec![Data::materialized(Value::Text("stderr".into()))],
@@ -166,7 +166,7 @@ fn only_the_final_batch_is_routed_and_preparation_runs_once() {
             .windows(2)
             .all(|calls| calls[0].prepared == calls[1].prepared
                 && calls[0].resolved_settings == calls[1].resolved_settings
-                && calls[0].call_ref != calls[1].call_ref
+                && calls[0].call_id != calls[1].call_id
                 && calls[0].emitting_id != calls[1].emitting_id)
     );
     assert_eq!(
@@ -589,7 +589,7 @@ fn recovery_after_held_consumes_once_and_does_not_renew_the_backoff() {
     );
     assert_eq!(world_after.preparations, 0);
     assert_eq!(world_after.starts[0].prepared, world.starts[0].prepared);
-    assert_ne!(world_after.starts[0].call_ref, world.starts[0].call_ref);
+    assert_ne!(world_after.starts[0].call_id, world.starts[0].call_id);
     reply(&mut world_after, false);
     restored.pump(&mut journal, &mut world_after).unwrap();
     restored
@@ -867,7 +867,7 @@ graph app : App {
         .iter()
         .filter_map(|record| match record {
             Record::Outbound(OutboundRecord::Call(call)) => {
-                Some((call.retry_record.as_ref()?.context?, call.intent.call_ref))
+                Some((call.retry_record.as_ref()?.context?, call.intent.call_id))
             }
             _ => None,
         })
@@ -876,8 +876,8 @@ graph app : App {
     openings.sort_by_key(|(attempt, _)| std::cmp::Reverse(attempt.operation));
     world.responses = openings
         .iter()
-        .map(|(_, call_ref)| Response {
-            call_ref: *call_ref,
+        .map(|(_, call_id)| Response {
+            call_id: *call_id,
             completion: Completion::process(vec![], vec![], ProcessExit::TimeoutExpired),
         })
         .collect();
@@ -1349,7 +1349,7 @@ graph app : App {
         vm.pump(&mut journal, &mut world).unwrap();
         assert_eq!(world.starts.len(), 2);
         world.responses.push(Response {
-            call_ref: world.starts[1].call_ref,
+            call_id: world.starts[1].call_id,
             completion: Completion::process(
                 (0..frames)
                     .map(|index| Data::materialized(Value::Text(index.to_string())))
@@ -1491,7 +1491,7 @@ graph app : App {
                 let alice = call.prepared.bytes() == b"alice\n";
                 let failed = alice && now == 0;
                 world.responses.push(Response {
-                    call_ref: call.call_ref,
+                    call_id: call.call_id,
                     completion: Completion::process(
                         if failed {
                             vec![]
@@ -1584,7 +1584,7 @@ graph app : App {
     }
     let before = journal.records().to_vec();
     world.responses.push(Response {
-        call_ref: world.starts[0].call_ref,
+        call_id: world.starts[0].call_id,
         completion: Completion::process(
             vec![],
             vec![],

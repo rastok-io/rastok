@@ -3,7 +3,7 @@
 use super::*;
 use crate::datatype::DataType;
 use crate::envelope::{Data, Envelope, Meta, MetaSys};
-use crate::identity::{InstanceAddress, InstanceFrame};
+use crate::identity::{InstanceIdentity, InstanceSegment};
 use crate::journal::Emission;
 use crate::node::{Path, Port};
 use crate::value::Value;
@@ -18,19 +18,19 @@ fn owner(path: &str) -> OwnerPath {
     }
 }
 
-fn instance(path: &str, tenant: &str, generation: u64) -> InstanceRef {
-    let frame = InstanceFrame::SelectedKey {
-        owner: owner("conversation"),
+fn instance(path: &str, tenant: &str, generation: u64) -> InstanceGeneration {
+    let frame = InstanceSegment::SelectedKey {
+        scope: owner("conversation"),
         ty: DataType::Text,
         value: Value::Text(tenant.into()),
     };
-    InstanceRef::new(
-        InstanceAddress::new(&owner(path), &[frame]).unwrap(),
+    InstanceGeneration::new(
+        InstanceIdentity::new(&owner(path), &[frame]).unwrap(),
         generation,
     )
 }
 
-fn transaction(instance: &InstanceRef, trigger: Trigger) -> TransactionRecord {
+fn transaction(instance: &InstanceGeneration, trigger: Trigger) -> TransactionRecord {
     TransactionRecord {
         instance_commands: None,
         timer_schedule: None,
@@ -53,14 +53,19 @@ fn transaction(instance: &InstanceRef, trigger: Trigger) -> TransactionRecord {
     }
 }
 
-fn start(reference: &InstanceRef, parent: Option<&InstanceRef>) -> Record {
+fn start(reference: &InstanceGeneration, parent: Option<&InstanceGeneration>) -> Record {
     let mut record = transaction(reference, Trigger::Lifecycle(Lifecycle::Start));
     record.parent_instance = parent.cloned();
     Record::Transaction(Box::new(record))
 }
 
-fn initial() -> (Vec<Record>, InstanceRef, InstanceRef, InstanceRef) {
-    let root = InstanceRef::new(InstanceAddress::singleton(&OwnerPath::root()), 0);
+fn initial() -> (
+    Vec<Record>,
+    InstanceGeneration,
+    InstanceGeneration,
+    InstanceGeneration,
+) {
+    let root = InstanceGeneration::new(InstanceIdentity::singleton(&OwnerPath::root()), 0);
     let alice = instance("conversation", "alice", 0);
     let worker = instance("conversation.worker", "alice", 0);
     let decide = instance("conversation.decide", "alice", 0);
@@ -89,9 +94,9 @@ fn target(path: &str) -> InstanceStopTarget {
 }
 
 fn production(
-    source: &InstanceRef,
-    scope: &InstanceRef,
-    target: &InstanceRef,
+    source: &InstanceGeneration,
+    scope: &InstanceGeneration,
+    target: &InstanceGeneration,
     seed: u8,
 ) -> (Record, Command) {
     let port = Port::new("end").unwrap();
@@ -216,18 +221,18 @@ fn closure_is_once_per_generation_and_repeated_commands_are_retained() {
 #[test]
 fn multiple_keyed_children_require_an_exact_source_binding() {
     let (mut records, alice, _, decide) = initial();
-    let sibling_key = InstanceFrame::SelectedKey {
-        owner: owner("conversation.worker"),
+    let sibling_key = InstanceSegment::SelectedKey {
+        scope: owner("conversation.worker"),
         ty: DataType::INT,
         value: Value::Int(2),
     };
-    let parent_key = InstanceFrame::SelectedKey {
-        owner: owner("conversation"),
+    let parent_key = InstanceSegment::SelectedKey {
+        scope: owner("conversation"),
         ty: DataType::Text,
         value: Value::Text("alice".into()),
     };
-    let second = InstanceRef::new(
-        InstanceAddress::new(&owner("conversation.worker"), &[parent_key, sibling_key]).unwrap(),
+    let second = InstanceGeneration::new(
+        InstanceIdentity::new(&owner("conversation.worker"), &[parent_key, sibling_key]).unwrap(),
         0,
     );
     records.push(start(&second, Some(&alice)));

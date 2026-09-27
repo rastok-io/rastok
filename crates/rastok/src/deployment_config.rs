@@ -9,11 +9,11 @@
 //! values. Secret contents are never accepted by this format: a profile names
 //! one process-environment coordinate and its separately attested version.
 
-use crate::accounting::{CostProfile, CostProfileRef, ExactDecimal, UnitPrice};
+use crate::accounting::{CostProfile, CostProfileName, ExactDecimal, UnitPrice};
 use crate::deployment::{
-    BootBindings, DeploymentError, DeploymentProfile, EnvironmentName, PolicyRef, PrivacyProfile,
-    PrivacyProfileRef, PrivacyRetention, RecipientPolicy, SecretBinding, SecretMaterial,
-    SecretProvider, SecretProviderError, SecretProviderId, SecretRef, SecretVersion,
+    BootBindings, DeploymentError, DeploymentProfile, EnvironmentName, PolicyName, PrivacyProfile,
+    PrivacyProfileName, PrivacyRetention, RecipientPolicy, SecretBinding, SecretMaterial,
+    SecretName, SecretProvider, SecretProviderError, SecretProviderId, SecretVersion,
     TransferPolicy,
 };
 use crate::node;
@@ -60,7 +60,7 @@ fn parse(text: &str) -> Result<DeploymentProfile, DeploymentConfigError> {
         SecretProviderId::new(ENV_SECRET_PROVIDER).map_err(DeploymentConfigError::Profile)?;
     let mut secrets = BTreeMap::new();
     for entry in raw.secrets {
-        let reference = SecretRef::new(entry.reference).map_err(DeploymentConfigError::Profile)?;
+        let reference = SecretName::new(entry.reference).map_err(DeploymentConfigError::Profile)?;
         let environment =
             EnvironmentName::new(entry.environment).map_err(DeploymentConfigError::Profile)?;
         EnvironmentName::new(format!("{}_VERSION", environment.as_str()))
@@ -109,7 +109,7 @@ fn cost_profile(raw: RawCostProfile) -> Result<CostProfile, DeploymentConfigErro
         );
     }
     CostProfile::new(
-        CostProfileRef::new(raw.reference).map_err(DeploymentConfigError::Accounting)?,
+        CostProfileName::new(raw.reference).map_err(DeploymentConfigError::Accounting)?,
         rules,
     )
     .map_err(DeploymentConfigError::Accounting)
@@ -156,21 +156,21 @@ fn privacy_profile(raw: RawPrivacy) -> Result<PrivacyProfile, DeploymentConfigEr
     let refs = |values: Vec<String>| {
         values
             .into_iter()
-            .map(PolicyRef::new)
+            .map(PolicyName::new)
             .collect::<Result<Vec<_>, _>>()
             .map_err(DeploymentConfigError::Profile)
     };
     let optional = |value: Option<String>| {
         value
-            .map(PolicyRef::new)
+            .map(PolicyName::new)
             .transpose()
             .map_err(DeploymentConfigError::Profile)
     };
     let recipients = refs(raw.recipients)?;
     let transfers = refs(raw.transfer_safeguards)?;
     PrivacyProfile::new(
-        PrivacyProfileRef::new(raw.reference).map_err(DeploymentConfigError::Profile)?,
-        PolicyRef::new(raw.processing_activity).map_err(DeploymentConfigError::Profile)?,
+        PrivacyProfileName::new(raw.reference).map_err(DeploymentConfigError::Profile)?,
+        PolicyName::new(raw.processing_activity).map_err(DeploymentConfigError::Profile)?,
         refs(raw.purposes)?,
         refs(raw.legal_bases)?,
         optional(raw.special_category_condition)?,
@@ -286,7 +286,7 @@ pub enum DeploymentConfigError {
     /// One environment binding appears more than once.
     DuplicateEnvironment(EnvironmentName),
     /// One logical secret reference appears more than once.
-    DuplicateSecret(SecretRef),
+    DuplicateSecret(SecretName),
     /// M1 admits only run-scoped in-memory personal-data retention.
     UnsupportedRetention(String),
     /// Cost profile contains an invalid typed accounting rule.

@@ -4,7 +4,7 @@ use crate::connector::{
     ConnectorExchange, ConnectorRoles, PROCESS_CONNECTOR_ID, outbound_call_semantics,
 };
 use crate::envelope::{Data, Meta, MetaSys};
-use crate::identity::InstanceAddress;
+use crate::identity::InstanceIdentity;
 use crate::journal::{
     Emission, ids,
     timing::{TimerArm, TimerSchedule},
@@ -33,22 +33,22 @@ fn fixed(ns: i64) -> Option<LoopDelay> {
 }
 
 struct Fixture {
-    instance: InstanceRef,
+    instance: InstanceGeneration,
     contract: ContractId,
     policy: Policy,
     call: CallSemantics,
     envelope: Envelope,
     entry: Port,
     opening: Id,
-    operation: OperationRef,
+    operation: OperationId,
     plan: SemanticHash,
     pin: Pin,
 }
 
 impl Fixture {
     fn new(attempts: u64) -> Self {
-        let instance = InstanceRef::new(
-            InstanceAddress::singleton(&OwnerPath::new(vec![String::from("pay")]).unwrap()),
+        let instance = InstanceGeneration::new(
+            InstanceIdentity::singleton(&OwnerPath::new(vec![String::from("pay")]).unwrap()),
             0,
         );
         let contract = ContractId::parse(PROCESS_CONNECTOR_ID).unwrap();
@@ -72,7 +72,7 @@ impl Fixture {
             Data::materialized(Value::Text("request".into())),
         );
         let entry = Port::new("in").unwrap();
-        let opening = ids::delivery_ref("App.in -> pay.in", envelope.meta().sys().id());
+        let opening = ids::delivery_id("App.in -> pay.in", envelope.meta().sys().id());
         let operation = operation_ref(&instance, &entry, opening);
         let plan = SemanticHash::from_bytes([9; 32]);
         let pin = Pin {
@@ -108,8 +108,8 @@ impl Fixture {
         }
     }
 
-    fn attempt(&self, ordinal: u64) -> AttemptRef {
-        AttemptRef {
+    fn attempt(&self, ordinal: u64) -> AttemptId {
+        AttemptId {
             operation: self.operation,
             ordinal,
         }
@@ -126,7 +126,7 @@ impl Fixture {
         }
     }
 
-    fn admitted(&self, ordinal: u64, previous: Option<(CallRef, Id)>) -> Fact {
+    fn admitted(&self, ordinal: u64, previous: Option<(CallId, Id)>) -> Fact {
         let (envelope, delivery) = match previous {
             None => (self.envelope.clone(), self.opening),
             Some((call, parent)) => {
@@ -140,7 +140,7 @@ impl Fixture {
                 );
                 (
                     envelope,
-                    ids::delivery_ref(&admission_edge(self.operation, &self.entry), id),
+                    ids::delivery_id(&admission_edge(self.operation, &self.entry), id),
                 )
             }
         };
@@ -170,7 +170,7 @@ impl Fixture {
             admission_edge(self.operation, &self.entry)
         };
         Intent {
-            call_ref: ids::call_ref(state.delivery, self.pin.prepared.digest()),
+            call_id: ids::call_id(state.delivery, self.pin.prepared.digest()),
             emitting_id: state.envelope.meta().sys().id(),
             edge,
             connector_path: Path::new(["pay"]).unwrap(),
@@ -202,7 +202,7 @@ impl Fixture {
                     at,
                     vec![TimerArm {
                         kind: 5,
-                        reference: admission_ref(self.operation, ordinal + 1, intent.call_ref),
+                        reference: admission_ref(self.operation, ordinal + 1, intent.call_id),
                         due_at: due,
                     }],
                 )
@@ -255,7 +255,7 @@ impl Fixture {
         .collect();
         let batch = Batch {
             attempt: self.attempt(ordinal),
-            call: intent.call_ref,
+            call: intent.call_id,
             emissions: emissions
                 .iter()
                 .map(|e| e.envelope.meta().sys().id())
@@ -439,7 +439,7 @@ fn exact_delivery_and_generation_separate_operations_with_identical_requests() {
     assert_ne!(
         f.operation,
         operation_ref(
-            &InstanceRef::new(f.instance.address().clone(), 1),
+            &InstanceGeneration::new(f.instance.address().clone(), 1),
             &f.entry,
             f.opening
         )
@@ -461,7 +461,7 @@ fn exact_delivery_and_generation_separate_operations_with_identical_requests() {
     }
     let expected = Id::from_bytes(hasher.finalize().as_bytes()[..16].try_into().unwrap());
     assert_eq!(f.operation.id(), expected);
-    let call = CallRef::new(Id::from_bytes([3; 16]));
+    let call = CallId::new(Id::from_bytes([3; 16]));
     let mut hasher = blake3::Hasher::new();
     hasher.update(&[0x07]);
     for bytes in [
@@ -487,7 +487,7 @@ fn exact_delivery_and_generation_separate_operations_with_identical_requests() {
     );
     assert_ne!(
         admission_ref(f.operation, 2, call),
-        admission_ref(f.operation, 2, CallRef::new(Id::from_bytes([4; 16])))
+        admission_ref(f.operation, 2, CallId::new(Id::from_bytes([4; 16])))
     );
     assert!(admission_edge(f.operation, &f.entry).starts_with("@retry:"));
 }
@@ -515,13 +515,13 @@ fn delayed_receipt_recovers_the_original_due_time_and_never_reopens_the_old_call
     let parent = *batch.emissions.last().unwrap();
     restored
         .apply(
-            &manager(vec![f.admitted(2, Some((first.call_ref, parent)))]),
+            &manager(vec![f.admitted(2, Some((first.call_id, parent)))]),
             None,
             250,
         )
         .unwrap();
     let (second, emissions, batch) = f.settle(&mut restored, 2, "Exited", 260, false);
-    assert_ne!(first.call_ref, second.call_ref);
+    assert_ne!(first.call_id, second.call_id);
     assert_eq!(first.prepared, second.prepared);
     assert_eq!(first.idempotency_key, second.idempotency_key);
     restored
@@ -560,7 +560,7 @@ fn the_bound_publishes_the_last_failure_without_an_extra_attempt_or_wrapper() {
                 fold.apply(
                     &manager(vec![f.admitted(
                         ordinal + 1,
-                        Some((intent.call_ref, *batch.emissions.last().unwrap())),
+                        Some((intent.call_id, *batch.emissions.last().unwrap())),
                     )]),
                     None,
                     at + 100,
@@ -667,7 +667,7 @@ fn atomic_pairs_whole_batch_and_exact_admissions_cannot_be_forged() {
     let early =
         manager(vec![f.admitted(
             2,
-            Some((intent.call_ref, *batch.emissions.last().unwrap())),
+            Some((intent.call_id, *batch.emissions.last().unwrap())),
         )]);
     refuses_unchanged(&mut fold, &early, Error::Transition, 111);
     fold.apply(&advance(&batch), None, 20).unwrap();
@@ -697,7 +697,7 @@ fn pending_initial_stop_has_no_fake_admission_and_successor_generation_is_indepe
     let mut fold = Fold::default();
     fold.apply(&manager(vec![f.opened()]), Some(&f.authority()), 0)
         .unwrap();
-    fold.begin_closing(&InstanceRef::new(f.instance.address().clone(), 1));
+    fold.begin_closing(&InstanceGeneration::new(f.instance.address().clone(), 1));
     refuses_unchanged(
         &mut fold,
         &manager(vec![Fact::Close {
@@ -779,7 +779,7 @@ fn missing_renewed_foreign_and_final_timer_arms_refuse_atomically() {
     let mut fold = f.start();
     let intent = f.intent(&fold);
     fold.open_call(f.attempt(1), &intent).unwrap();
-    let expected = admission_ref(f.operation, 2, intent.call_ref);
+    let expected = admission_ref(f.operation, 2, intent.call_id);
     let valid = TimerArm {
         kind: 5,
         reference: expected,
@@ -926,7 +926,7 @@ fn opening_is_bound_to_original_plan_contract_input_and_exact_identity() {
         } = &mut bad.facts[0]
         {
             match which {
-                0 => *operation = OperationRef::from_id(Id::from_bytes([0; 16])),
+                0 => *operation = OperationId::from_id(Id::from_bytes([0; 16])),
                 1 => *plan = SemanticHash::from_bytes([0; 32]),
                 2 => *contract = ContractId::parse(crate::connector::FILE_CONNECTOR_ID).unwrap(),
                 3 => pin.envelope = Id::from_bytes([0; 16]),
@@ -970,8 +970,8 @@ fn each_algebra_prefix_reconstructs_without_a_saved_manager_or_driver() {
     #[derive(Clone)]
     enum Retained {
         Packet(Packet, i64),
-        Open(Intent, AttemptRef),
-        Settle(Intent, AttemptRef, String, i64, Option<TimerSchedule>),
+        Open(Intent, AttemptId),
+        Settle(Intent, AttemptId, String, i64, Option<TimerSchedule>),
     }
     fn apply(f: &Fixture, fold: &mut Fold, fact: &Retained) {
         match fact {
@@ -1005,7 +1005,7 @@ fn each_algebra_prefix_reconstructs_without_a_saved_manager_or_driver() {
                 at,
                 vec![TimerArm {
                     kind: 5,
-                    reference: admission_ref(f.operation, ordinal + 1, intent.call_ref),
+                    reference: admission_ref(f.operation, ordinal + 1, intent.call_id),
                     due_at: at + 100,
                 }],
             )
@@ -1032,7 +1032,7 @@ fn each_algebra_prefix_reconstructs_without_a_saved_manager_or_driver() {
             history.push(Retained::Packet(packet, at + 250));
             let packet = manager(vec![f.admitted(
                 ordinal + 1,
-                Some((intent.call_ref, *batch.emissions.last().unwrap())),
+                Some((intent.call_id, *batch.emissions.last().unwrap())),
             )]);
             live.apply(&packet, None, at + 250).unwrap();
             history.push(Retained::Packet(packet, at + 250));
@@ -1074,7 +1074,7 @@ fn repeated_travelling_metadata_uses_canonical_nan_and_signed_zero_identity() {
     fold.apply(&held(&batch), None, 10).unwrap();
     fold.apply(&advance(&batch), None, 110).unwrap();
     let terminal = emissions.last().unwrap().envelope.meta().sys().id();
-    let valid = manager(vec![f.admitted(2, Some((intent.call_ref, terminal)))]);
+    let valid = manager(vec![f.admitted(2, Some((intent.call_id, terminal)))]);
     let mut changed = valid.clone();
     if let Fact::Admitted { envelope, .. } = &mut changed.facts[0] {
         let mut app = envelope.meta().app().clone();

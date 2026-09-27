@@ -252,7 +252,7 @@ pub(crate) fn observation_json(
     match correlation.exchange() {
         Some(ExchangeCorrelation::OutboundCall(reference)) => {
             fields.insert(
-                String::from("call_ref"),
+                String::from("call_id"),
                 JsonValue::String(reference.to_string()),
             );
             fields.insert(
@@ -262,7 +262,7 @@ pub(crate) fn observation_json(
         }
         Some(ExchangeCorrelation::InboundCall(reference)) => {
             fields.insert(
-                String::from("call_ref"),
+                String::from("call_id"),
                 JsonValue::String(reference.to_string()),
             );
             fields.insert(
@@ -272,12 +272,12 @@ pub(crate) fn observation_json(
         }
         Some(ExchangeCorrelation::Session { session, write }) => {
             fields.insert(
-                String::from("session_ref"),
+                String::from("session_id"),
                 JsonValue::String(session.to_string()),
             );
             if let Some(write) = write {
                 fields.insert(
-                    String::from("session_write_ref"),
+                    String::from("session_write_id"),
                     JsonValue::String(write.to_string()),
                 );
             }
@@ -337,6 +337,66 @@ mod tests {
             },
             sequence: SubmissionSequence::Next,
         }
+    }
+
+    #[test]
+    fn exchange_logs_use_id_keys_without_reference_aliases() {
+        let catalogue = crate::contract::ContractCatalog::try_m0().expect("valid contracts");
+        let mut seen = [false; 4];
+        for source in [
+            include_str!("../../../examples/echo.rkg"),
+            include_str!("../../../examples/agent-gateway.rkg"),
+            include_str!("../tests/fixtures/lab-http-source.rkg"),
+        ] {
+            let compilation = crate::compiler::compile(&[source], &catalogue).expect("valid graph");
+            for run in crate::lab::run(&compilation.plan, GraphVersion(1), &compilation.labs[0]) {
+                assert!(run.report.passed(), "{:?}", run.report);
+                let journal = MemJournal::from_records(GraphVersion(1), None, &run.records)
+                    .expect("retained records reconstruct");
+                let observations = journal.retained_observations();
+                let (sink, receiver) =
+                    json_log_channel(observations.len()).expect("positive capacity");
+                for observation in &observations {
+                    assert_eq!(sink.try_observation(observation), ProjectionOutcome::Queued);
+                }
+                for (observation, line) in observations.iter().zip(receiver.try_drain()) {
+                    let json: JsonValue = serde_json::from_str(&line).expect("valid JSON log");
+                    assert!(
+                        json.as_object()
+                            .expect("log object")
+                            .keys()
+                            .all(|key| !key.ends_with("_ref"))
+                    );
+                    match observation.correlation().exchange() {
+                        Some(ExchangeCorrelation::OutboundCall(id)) => {
+                            assert_eq!(json["call_id"], id.to_string());
+                            assert_eq!(json["call_direction"], "outbound");
+                            seen[0] = true;
+                        }
+                        Some(ExchangeCorrelation::InboundCall(id)) => {
+                            assert_eq!(json["call_id"], id.to_string());
+                            assert_eq!(json["call_direction"], "inbound");
+                            seen[1] = true;
+                        }
+                        Some(ExchangeCorrelation::Session { session, write }) => {
+                            assert_eq!(json["session_id"], session.to_string());
+                            seen[2] = true;
+                            if let Some(id) = write {
+                                assert_eq!(json["session_write_id"], id.to_string());
+                                seen[3] = true;
+                            } else {
+                                assert!(json.get("session_write_id").is_none());
+                            }
+                        }
+                        None => {}
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            seen, [true; 4],
+            "cover Calls in both directions, Sessions and writes"
+        );
     }
 
     #[test]

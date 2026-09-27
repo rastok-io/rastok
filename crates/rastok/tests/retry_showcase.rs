@@ -75,7 +75,7 @@ fn two_tenants_keep_the_request_fixed_and_only_alice_retries() {
         "no attempt field or request reconstruction"
     );
     assert_eq!(calls[0].resolved_settings, calls[2].resolved_settings);
-    assert_ne!(calls[0].call_ref, calls[2].call_ref);
+    assert_ne!(calls[0].call_id, calls[2].call_id);
     assert_ne!(calls[0].emitting_id, calls[2].emitting_id);
     assert_ne!(
         calls[0].prepared, calls[1].prepared,

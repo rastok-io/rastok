@@ -492,7 +492,7 @@ pub fn verify_session(profile: &SessionProfile<'_>, drivers: &DriverRegistry) ->
         };
         let emitting_id = crate::envelope::Id::from_bytes([(index as u8).saturating_add(1); 16]);
         let intent = SessionOpenIntent {
-            session_ref: journal::ids::outbound_session_ref(
+            session_id: journal::ids::outbound_session_id(
                 &profile.connector,
                 emitting_id,
                 prepared.digest(),
@@ -525,7 +525,7 @@ pub fn verify_session(profile: &SessionProfile<'_>, drivers: &DriverRegistry) ->
                 return report;
             }
         }
-        sessions.push(intent.session_ref);
+        sessions.push(intent.session_id);
     }
     let opening_events = match SessionConnectorBindings::session_events(&mut bindings) {
         Ok(events) => events,
@@ -586,8 +586,8 @@ pub fn verify_session(profile: &SessionProfile<'_>, drivers: &DriverRegistry) ->
         };
         let emitting_id = crate::envelope::Id::from_bytes([(index as u8).saturating_add(11); 16]);
         let intent = SessionWriteIntent {
-            write_ref: journal::ids::session_write_ref(*session, emitting_id, prepared.digest()),
-            session_ref: *session,
+            write_ref: journal::ids::session_write_id(*session, emitting_id, prepared.digest()),
+            session_id: *session,
             emitting_id,
             connector_path: profile.connector.clone(),
             prepared,
@@ -661,8 +661,8 @@ pub fn verify_session(profile: &SessionProfile<'_>, drivers: &DriverRegistry) ->
     if let Ok(RequestPreparation::Prepared(prepared)) = preparation {
         let emitting_id = crate::envelope::Id::from_bytes([21; 16]);
         let intent = SessionWriteIntent {
-            write_ref: journal::ids::session_write_ref(sessions[0], emitting_id, prepared.digest()),
-            session_ref: sessions[0],
+            write_ref: journal::ids::session_write_id(sessions[0], emitting_id, prepared.digest()),
+            session_id: sessions[0],
             emitting_id,
             connector_path: profile.connector.clone(),
             prepared,
@@ -967,7 +967,7 @@ fn audit_journal(journal: &MemJournal, report: &mut Report) {
     let mut any_closed = false;
     for record in journal.records() {
         if let Record::Outbound(OutboundRecord::Call(outbound)) = record {
-            let call = outbound.intent.call_ref;
+            let call = outbound.intent.call_id;
             match &outbound.status {
                 OutboundStatus::Open => {
                     if !open.insert(call) {
@@ -1217,20 +1217,20 @@ fn interleave_battery(
         else {
             return Err(format!(
                 "interleave call {} completed without an out frame; the probe expects echoes",
-                outbound.intent.call_ref
+                outbound.intent.call_id
             ));
         };
         let Some(expected_data) = expected.get(&outbound.intent.connector_path) else {
             return Err(format!(
                 "interleave call {} came from unexpected connector `{}`",
-                outbound.intent.call_ref, outbound.intent.connector_path
+                outbound.intent.call_id, outbound.intent.connector_path
             ));
         };
         if data != expected_data {
             return Err(format!(
                 "call {} on `{}` answered with another call's payload: expected \
                  {expected_data:?}, got {data:?} — the Driver crossed two concurrent replies",
-                outbound.intent.call_ref, outbound.intent.connector_path
+                outbound.intent.call_id, outbound.intent.connector_path
             ));
         }
         answered.insert(outbound.intent.connector_path.clone());

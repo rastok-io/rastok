@@ -17,10 +17,10 @@ use crate::value::Value;
 // file need distinct names.
 use crate::canonical_cbor::{Value as Cbor, encode};
 
-/// The envelope spine, keys 1–9. Absent fields are omitted keys,
+/// The canonical envelope form, keys 1–9. Absent fields are omitted keys,
 /// never nulls.
 #[must_use]
-pub fn envelope_spine(envelope: &Envelope) -> Cbor {
+pub fn canonical_envelope(envelope: &Envelope) -> Cbor {
     let sys = envelope.meta().sys();
     let mut pairs = BTreeMap::from([(1, Cbor::Bytes(sys.id().as_bytes().to_vec()))]);
     if let Some(parent) = sys.parent_id() {
@@ -31,9 +31,9 @@ pub fn envelope_spine(envelope: &Envelope) -> Cbor {
         pairs.insert(4, Cbor::Text(sys.role().to_string()));
     }
     pairs.insert(5, Cbor::Uint(sys.graph_version()));
-    // Spine key 6 is RETIRED (extend-only): the content type moved
+    // Canonical form key 6 is RETIRED (extend-only): the content type moved
     // to the ext zone, sealed in key 9 (D-2026-08-10-4).
-    pairs.insert(8, data_spine(envelope.data()));
+    pairs.insert(8, canonical_data(envelope.data()));
     let mut app_meta = Vec::new();
     for (field, value) in envelope.meta().app() {
         app_meta.push((String::from("app"), field.clone(), value));
@@ -52,7 +52,7 @@ pub fn envelope_spine(envelope: &Envelope) -> Cbor {
                         Cbor::Array(vec![
                             Cbor::Text(namespace),
                             Cbor::Text(field),
-                            meta_tagged(value),
+                            canonical_meta_value(value),
                         ])
                     })
                     .collect(),
@@ -62,13 +62,13 @@ pub fn envelope_spine(envelope: &Envelope) -> Cbor {
     Cbor::Map(pairs)
 }
 
-/// `data` (spine key 8): `[encoding_tag, bytes]`. Encoded payloads
+/// `data` (canonical form key 8): `[encoding_tag, bytes]`. Encoded payloads
 /// seal their original bytes, never re-encoded. A materialized value
 /// has no storage bytes, so its canonical bytes are its own
 /// `tagged_value` CBOR under `raw` — deterministic and injective,
 /// this build's materialization rule.
 #[must_use]
-pub fn data_spine(data: &Data) -> Cbor {
+pub fn canonical_data(data: &Data) -> Cbor {
     match data {
         Data::Encoded {
             encoding, bytes, ..
@@ -82,14 +82,14 @@ pub fn data_spine(data: &Data) -> Cbor {
         ]),
         Data::Materialized(value) => Cbor::Array(vec![
             Cbor::Uint(1),
-            Cbor::Bytes(encode(&value_tagged(value))),
+            Cbor::Bytes(encode(&canonical_value(value))),
         ]),
     }
 }
 
 /// A `tagged_value` for a materialized value: `[type_tag, value]` per
 /// the fixed registry.
-pub fn value_tagged(value: &Value) -> Cbor {
+pub fn canonical_value(value: &Value) -> Cbor {
     match value {
         Value::Null => Cbor::Array(vec![Cbor::Uint(9), Cbor::Null]),
         Value::Bool(v) => Cbor::Array(vec![Cbor::Uint(1), Cbor::Bool(*v)]),
@@ -128,7 +128,7 @@ pub fn value_tagged(value: &Value) -> Cbor {
                     sorted
                         .into_iter()
                         .map(|(field, value)| {
-                            Cbor::Array(vec![Cbor::Text(field.clone()), value_tagged(value)])
+                            Cbor::Array(vec![Cbor::Text(field.clone()), canonical_value(value)])
                         })
                         .collect(),
                 ),
@@ -144,7 +144,7 @@ pub fn value_tagged(value: &Value) -> Cbor {
                     let tagged_key = Cbor::Array(vec![Cbor::Uint(8), Cbor::Text(key.clone())]);
                     (
                         encode(&tagged_key),
-                        Cbor::Array(vec![tagged_key, value_tagged(value)]),
+                        Cbor::Array(vec![tagged_key, canonical_value(value)]),
                     )
                 })
                 .collect();
@@ -158,10 +158,10 @@ pub fn value_tagged(value: &Value) -> Cbor {
             let mut pairs: Vec<(Vec<u8>, Cbor)> = entries
                 .iter()
                 .map(|(key, value)| {
-                    let tagged_key = value_tagged(key);
+                    let tagged_key = canonical_value(key);
                     (
                         encode(&tagged_key),
-                        Cbor::Array(vec![tagged_key, value_tagged(value)]),
+                        Cbor::Array(vec![tagged_key, canonical_value(value)]),
                     )
                 })
                 .collect();
@@ -173,25 +173,25 @@ pub fn value_tagged(value: &Value) -> Cbor {
         }
         Value::Array(items) => Cbor::Array(vec![
             Cbor::Uint(19),
-            Cbor::Array(items.iter().map(value_tagged).collect()),
+            Cbor::Array(items.iter().map(canonical_value).collect()),
         ]),
         Value::Enum(symbol) => Cbor::Array(vec![Cbor::Uint(20), Cbor::Text(symbol.clone())]),
         Value::StructuralUnion { branch, value } => Cbor::Array(vec![
             Cbor::Uint(21),
-            Cbor::Array(vec![Cbor::Uint(u64::from(*branch)), value_tagged(value)]),
+            Cbor::Array(vec![Cbor::Uint(u64::from(*branch)), canonical_value(value)]),
         ]),
         Value::TaggedUnion(tagged) => Cbor::Array(vec![
             Cbor::Uint(21),
             Cbor::Array(vec![
                 Cbor::Text(tagged.case.clone()),
-                value_tagged(&Value::Struct(tagged.payload.clone())),
+                canonical_value(&Value::Struct(tagged.payload.clone())),
             ]),
         ]),
     }
 }
 
 /// A `tagged_value` for writable metadata (flat by type).
-pub fn meta_tagged(value: &crate::envelope::MetaValue) -> Cbor {
+pub fn canonical_meta_value(value: &crate::envelope::MetaValue) -> Cbor {
     match value {
         crate::envelope::MetaValue::Scalar(scalar) => scalar_tagged(scalar),
         crate::envelope::MetaValue::Array(items) => Cbor::Array(vec![
@@ -222,12 +222,12 @@ pub fn meta_tagged(value: &crate::envelope::MetaValue) -> Cbor {
     }
 }
 
-/// Reads a `tagged_value` back into the core value domain — the inverse of the
-/// canon's `value_tagged`, shared by plan and diagnostic-recording readers.
+/// Reads a `tagged_value` back into the core value domain — the inverse of
+/// [`canonical_value`], shared by plan and diagnostic-recording readers.
 ///
 /// # Errors
 /// A malformed tagged value. The enclosing format checks canonical re-encoding.
-pub fn value_from_tagged(tree: &Cbor) -> Result<Value, crate::canonical_cbor::DecodeError> {
+pub fn decode_canonical_value(tree: &Cbor) -> Result<Value, crate::canonical_cbor::DecodeError> {
     match tagged_array(tree, "tagged value")? {
         [Cbor::Uint(1), Cbor::Bool(v)] => Ok(Value::Bool(*v)),
         [Cbor::Uint(2), value] | [Cbor::Uint(3), value] => {
@@ -289,7 +289,7 @@ pub fn value_from_tagged(tree: &Cbor) -> Result<Value, crate::canonical_cbor::De
             for pair in pairs {
                 match tagged_array(pair, "struct field")? {
                     [Cbor::Text(name), value] => {
-                        fields.push((name.clone(), value_from_tagged(value)?));
+                        fields.push((name.clone(), decode_canonical_value(value)?));
                     }
                     _ => return Err(value_decode_error("struct field")),
                 }
@@ -300,17 +300,17 @@ pub fn value_from_tagged(tree: &Cbor) -> Result<Value, crate::canonical_cbor::De
         [Cbor::Uint(19), Cbor::Array(items)] => Ok(Value::Array(
             items
                 .iter()
-                .map(value_from_tagged)
+                .map(decode_canonical_value)
                 .collect::<Result<Vec<_>, _>>()?,
         )),
         [Cbor::Uint(20), Cbor::Text(symbol)] => Ok(Value::Enum(symbol.clone())),
         [Cbor::Uint(21), payload] => match tagged_array(payload, "union value")? {
             [Cbor::Uint(branch), value] => Ok(Value::StructuralUnion {
                 branch: u16::try_from(*branch).map_err(|_| value_decode_error("union branch"))?,
-                value: alloc::boxed::Box::new(value_from_tagged(value)?),
+                value: alloc::boxed::Box::new(decode_canonical_value(value)?),
             }),
             [Cbor::Text(case), value] => {
-                let Value::Struct(payload) = value_from_tagged(value)? else {
+                let Value::Struct(payload) = decode_canonical_value(value)? else {
                     return Err(value_decode_error("tagged-union payload"));
                 };
                 Ok(Value::TaggedUnion(alloc::boxed::Box::new(
@@ -341,9 +341,9 @@ fn map_value_from_tagged(pairs: &[Cbor]) -> Result<Value, crate::canonical_cbor:
         let [key, value] = tagged_array(pair, "map entry")? else {
             return Err(value_decode_error("map entry"));
         };
-        let key = value_from_tagged(key)?;
+        let key = decode_canonical_value(key)?;
         all_text &= matches!(key, Value::Text(_));
-        decoded.push((key, value_from_tagged(value)?));
+        decoded.push((key, decode_canonical_value(value)?));
     }
     if all_text {
         let mut map = BTreeMap::new();
@@ -460,7 +460,7 @@ mod tests {
         let mut entries = std::collections::BTreeMap::new();
         entries.insert(String::from("aa"), crate::value::Value::Bool(true));
         entries.insert(String::from("b"), crate::value::Value::Bool(false));
-        let Cbor::Array(parts) = value_tagged(&crate::value::Value::Map(entries)) else {
+        let Cbor::Array(parts) = canonical_value(&crate::value::Value::Map(entries)) else {
             panic!("a tagged value");
         };
         let Cbor::Array(pairs) = &parts[1] else {
@@ -494,7 +494,7 @@ mod tests {
                 ],
             ),
         ]));
-        let Cbor::Array(tagged) = meta_tagged(&headers) else {
+        let Cbor::Array(tagged) = canonical_meta_value(&headers) else {
             panic!("metadata map has one tagged form");
         };
         assert_eq!(tagged[0], Cbor::Uint(18));
@@ -514,11 +514,11 @@ mod tests {
 
     #[test]
     fn the_two_union_families_seal_their_semantic_discriminant() {
-        let structural = value_tagged(&crate::value::Value::StructuralUnion {
+        let structural = canonical_value(&crate::value::Value::StructuralUnion {
             branch: 2,
             value: alloc::boxed::Box::new(crate::value::Value::Text(String::from("value"))),
         });
-        let tagged = value_tagged(&crate::value::Value::TaggedUnion(alloc::boxed::Box::new(
+        let tagged = canonical_value(&crate::value::Value::TaggedUnion(alloc::boxed::Box::new(
             crate::value::TaggedUnionValue {
                 case: String::from("Exited"),
                 payload: alloc::vec![(String::from("exit_code"), crate::value::Value::Int(0))],
@@ -563,7 +563,7 @@ mod tests {
             ),
         ];
         for (value, expected_tag) in values {
-            let Cbor::Array(tagged) = value_tagged(&value) else {
+            let Cbor::Array(tagged) = canonical_value(&value) else {
                 panic!("a tagged value");
             };
             assert_eq!(tagged.first(), Some(&Cbor::Uint(expected_tag)));

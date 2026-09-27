@@ -315,7 +315,7 @@ impl super::ConnectorDriverFactory for FileFactory {
 
 #[derive(Debug)]
 struct WorkerResult {
-    call_ref: crate::boundary::CallRef,
+    call_id: crate::boundary::CallId,
     completion: Option<Completion>,
 }
 
@@ -330,7 +330,7 @@ pub struct File<'plan> {
     _plan: &'plan crate::plan::ValidatedExecutionPlan,
     root: PathBuf,
     bindings: FileRequestBindings,
-    runs: BTreeMap<crate::boundary::CallRef, Arc<AtomicBool>>,
+    runs: BTreeMap<crate::boundary::CallId, Arc<AtomicBool>>,
     sender: mpsc::Sender<WorkerResult>,
     receiver: mpsc::Receiver<WorkerResult>,
     answers: Vec<Response>,
@@ -393,8 +393,8 @@ impl CallConnectorDriver for File<'_> {
         crate::boundary::file_scheduler_completion(completion)
     }
 
-    fn cancel(&mut self, call_ref: &crate::boundary::CallRef) {
-        if let Some(cancelled) = self.runs.get(call_ref) {
+    fn cancel(&mut self, call_id: &crate::boundary::CallId) {
+        if let Some(cancelled) = self.runs.get(call_id) {
             cancelled.store(true, Ordering::Release);
         }
     }
@@ -402,7 +402,7 @@ impl CallConnectorDriver for File<'_> {
     fn start(&mut self, intent: &Intent, _request: &Envelope) -> CallStart {
         let Some(binding) = self.bindings.get(&intent.connector_path) else {
             self.answers.push(Response {
-                call_ref: intent.call_ref,
+                call_id: intent.call_id,
                 completion: Completion::file_exit(FileExit::IoFailed),
             });
             return CallStart::Started;
@@ -411,7 +411,7 @@ impl CallConnectorDriver for File<'_> {
             Some(operation) => operation,
             None => {
                 self.answers.push(Response {
-                    call_ref: intent.call_ref,
+                    call_id: intent.call_id,
                     completion: Completion::file_exit(FileExit::IoFailed),
                 });
                 return CallStart::Started;
@@ -419,14 +419,14 @@ impl CallConnectorDriver for File<'_> {
         };
         if validate_logical_path(operation.path()).is_err() {
             self.answers.push(Response {
-                call_ref: intent.call_ref,
+                call_id: intent.call_id,
                 completion: Completion::file_exit(FileExit::InvalidPath),
             });
             return CallStart::Started;
         }
         if !binding.admits(&operation, &intent.resolved_settings) {
             self.answers.push(Response {
-                call_ref: intent.call_ref,
+                call_id: intent.call_id,
                 completion: Completion::file_exit(FileExit::IoFailed),
             });
             return CallStart::Started;
@@ -435,23 +435,23 @@ impl CallConnectorDriver for File<'_> {
         let worker_cancelled = Arc::clone(&cancelled);
         let root = self.root.clone();
         let sender = self.sender.clone();
-        let call_ref = intent.call_ref;
+        let call_id = intent.call_id;
         let spawn = std::thread::Builder::new()
             .name(String::from("rastok-file"))
             .spawn(move || {
-                let completion = execute(&root, operation, &worker_cancelled, call_ref);
+                let completion = execute(&root, operation, &worker_cancelled, call_id);
                 let _ = sender.send(WorkerResult {
-                    call_ref,
+                    call_id,
                     completion,
                 });
             });
         if spawn.is_err() {
             self.answers.push(Response {
-                call_ref,
+                call_id,
                 completion: Completion::file_exit(FileExit::IoFailed),
             });
         } else {
-            self.runs.insert(call_ref, cancelled);
+            self.runs.insert(call_id, cancelled);
         }
         CallStart::Started
     }
@@ -459,10 +459,10 @@ impl CallConnectorDriver for File<'_> {
     fn events(&mut self) -> Vec<Response> {
         let mut answers = std::mem::take(&mut self.answers);
         for result in self.receiver.try_iter() {
-            self.runs.remove(&result.call_ref);
+            self.runs.remove(&result.call_id);
             if let Some(completion) = result.completion {
                 answers.push(Response {
-                    call_ref: result.call_ref,
+                    call_id: result.call_id,
                     completion,
                 });
             }
@@ -470,7 +470,7 @@ impl CallConnectorDriver for File<'_> {
         // A single poll may observe several independent worker completions.
         // Their OS scheduling order is not semantic; correlation identity is
         // the stable tie-break before the dispatcher journals them.
-        answers.sort_by_key(|response| response.call_ref);
+        answers.sort_by_key(|response| response.call_id);
         answers
     }
 }
@@ -606,7 +606,7 @@ fn execute(
     root: &Path,
     operation: FileOperation,
     cancelled: &AtomicBool,
-    call_ref: crate::boundary::CallRef,
+    call_id: crate::boundary::CallId,
 ) -> Option<Completion> {
     if cancelled.load(Ordering::Acquire) {
         return None;
@@ -616,7 +616,7 @@ fn execute(
             execute_read(&root.join(path), max_read, cancelled)
         }
         FileOperation::Replace { path, bytes } => {
-            execute_replace(&root.join(path), &bytes, cancelled, call_ref)
+            execute_replace(&root.join(path), &bytes, cancelled, call_id)
         }
     }
 }
@@ -687,7 +687,7 @@ fn execute_replace(
     target: &Path,
     bytes: &[u8],
     cancelled: &AtomicBool,
-    call_ref: crate::boundary::CallRef,
+    call_id: crate::boundary::CallId,
 ) -> Option<Completion> {
     if let Ok(metadata) = std::fs::metadata(target)
         && !metadata.is_file()
@@ -697,7 +697,7 @@ fn execute_replace(
     let Some(parent) = target.parent() else {
         return Some(Completion::file_exit(FileExit::InvalidPath));
     };
-    let (staging, mut file) = match open_staging(parent, target, call_ref) {
+    let (staging, mut file) = match open_staging(parent, target, call_id) {
         Ok(staging) => staging,
         Err(exit) => return Some(Completion::file_exit(exit)),
     };
@@ -732,13 +732,13 @@ fn execute_replace(
 fn open_staging(
     parent: &Path,
     target: &Path,
-    call_ref: crate::boundary::CallRef,
+    call_id: crate::boundary::CallId,
 ) -> Result<(PathBuf, FsFile), FileExit> {
     // `create_new` makes collision handling non-destructive. The explicit
     // target inequality also protects the commit boundary when a user-chosen
     // filename happens to resemble our private staging convention.
     for nonce in 0u8..STAGING_ATTEMPTS {
-        let staging = parent.join(format!(".rastok-{call_ref}-{nonce}.tmp"));
+        let staging = parent.join(format!(".rastok-{call_id}-{nonce}.tmp"));
         if staging == target {
             continue;
         }
@@ -894,7 +894,7 @@ mod tests {
         let target = root.join("artifact.bin");
         std::fs::write(&target, b"before").expect("the seed writes");
         let cancelled = AtomicBool::new(true);
-        let call_ref = crate::boundary::CallRef::new(crate::envelope::Id::from_bytes([7; 16]));
+        let call_id = crate::boundary::CallId::new(crate::envelope::Id::from_bytes([7; 16]));
 
         let completion = execute(
             &root,
@@ -903,7 +903,7 @@ mod tests {
                 bytes: b"after".to_vec(),
             },
             &cancelled,
-            call_ref,
+            call_id,
         );
 
         assert!(completion.is_none());
@@ -922,8 +922,8 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("the test root is writable");
-        let call_ref = crate::boundary::CallRef::new(crate::envelope::Id::from_bytes([8; 16]));
-        let filename = format!(".rastok-{call_ref}-0.tmp");
+        let call_id = crate::boundary::CallId::new(crate::envelope::Id::from_bytes([8; 16]));
+        let filename = format!(".rastok-{call_id}-0.tmp");
         let target = root.join(&filename);
         std::fs::write(&target, b"before").expect("the seed writes");
 
@@ -934,7 +934,7 @@ mod tests {
                 bytes: b"after".to_vec(),
             },
             &AtomicBool::new(false),
-            call_ref,
+            call_id,
         );
 
         assert!(completion.is_some());

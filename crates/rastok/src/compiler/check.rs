@@ -4523,7 +4523,7 @@ impl Checker<'_, '_> {
                 }
             },
         };
-        if let Err(error) = resolved.validate() {
+        if let Err(error) = resolved.check_bounds() {
             self.type_constructor_refusal(ty.span, error);
             return None;
         }
@@ -5291,17 +5291,17 @@ impl Checker<'_, '_> {
                 Diagnostic::new(E_UNION_OVERLAP, Phase::Check, message.clone())
                     .with_field("detail", message)
             }
-            TypeError::MemberBudget { count, .. } => {
+            TypeError::MembersExceeded { count, .. } => {
                 Diagnostic::new(E_TYPE_BUDGET, Phase::Check, message)
                     .with_field("name", "the source type")
                     .with_field("count", count.to_string())
             }
-            TypeError::NodeBudget { nodes, .. } => {
+            TypeError::NodesExceeded { nodes, .. } => {
                 Diagnostic::new(E_TYPE_BUDGET, Phase::Check, message)
                     .with_field("name", "the source type")
                     .with_field("nodes", nodes.to_string())
             }
-            TypeError::NestingBudget { depth, .. } => {
+            TypeError::NestingExceeded { depth, .. } => {
                 Diagnostic::new(E_TYPE_BUDGET, Phase::Check, message)
                     .with_field("name", "the source type")
                     .with_field("depth", depth.to_string())
@@ -6737,12 +6737,12 @@ impl Checker<'_, '_> {
                         self.meta_zone_refusal(
                             span,
                             &format!("meta.sys.{field}"),
-                            "the sys spine has five fields plus the Extension birth stamps — nothing else",
+                            "sys has five reserved fields plus the Extension birth stamps — nothing else",
                         );
                     }
                 }
                 ["meta", "sys", ..] => {
-                    // `meta.sys.id.extra` — a spine field is a LEAF.
+                    // `meta.sys.id.extra` — a reserved `sys` field is a LEAF.
                     self.meta_zone_refusal(
                         span,
                         &segments.join("."),

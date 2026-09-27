@@ -4,7 +4,7 @@
 
 use rastok::boundary::{
     Completion, Draft, HttpServerExit, InboundAdmission, InboundCallEvent,
-    InboundEnvelopeProvenance, InboundExchangeRef, InboundProposal, InboundProposalRef,
+    InboundEnvelopeProvenance, InboundExchangeRef, InboundProposal, InboundProposalHandle,
     InboundSubmission, SubmissionSequence,
 };
 use rastok::compiler;
@@ -24,7 +24,7 @@ fn compile(source: &str) -> plan::ValidatedExecutionPlan {
 
 fn proposal(reference: u64, text: &str) -> InboundProposal {
     InboundProposal {
-        reference: InboundProposalRef::new(reference),
+        reference: InboundProposalHandle::new(reference),
         submission: InboundSubmission {
             provenance: InboundEnvelopeProvenance::single(node::Path::new(["server"]).unwrap()),
             port: node::Port::conventional_out(),
@@ -95,12 +95,12 @@ graph app : App {{
         while vm.step(&mut journal).unwrap() {
             recover(&mut vm, &journal);
         }
-        for call_ref in calls {
+        for call_id in calls {
             let completion = Completion::http_server_exit(HttpServerExit::Completed {
                 status: if respond { 200 } else { 202 },
             });
             let event = InboundCallEvent {
-                call_ref,
+                call_id,
                 completion,
             };
             assert_eq!(vm.queue_inbound_call_events(vec![event.clone()]).queued, 1);

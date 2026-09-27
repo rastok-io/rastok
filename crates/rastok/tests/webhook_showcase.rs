@@ -7,9 +7,10 @@ use rastok::accounting::{ExactDecimal, accounting_observations};
 use rastok::compiler::compile;
 use rastok::contract::ContractCatalog;
 use rastok::deployment::{
-    BootBindings, DeploymentProfile, EnvironmentName, PolicyRef, PrivacyProfile, PrivacyProfileRef,
-    PrivacyRetention, RecipientPolicy, SecretBinding, SecretMaterial, SecretProvider,
-    SecretProviderError, SecretProviderId, SecretRef, SecretVersion, TransferPolicy,
+    BootBindings, DeploymentProfile, EnvironmentName, PolicyName, PrivacyProfile,
+    PrivacyProfileName, PrivacyRetention, RecipientPolicy, SecretBinding, SecretMaterial,
+    SecretName, SecretProvider, SecretProviderError, SecretProviderId, SecretVersion,
+    TransferPolicy,
 };
 use rastok::journal::{OutboundRecord, OutboundStatus, Record};
 use rastok::lab;
@@ -29,10 +30,10 @@ impl SecretProvider for FixtureSecrets {
 }
 
 fn boot(with_privacy: bool) -> BootBindings {
-    let policy = |name| PolicyRef::new(name).unwrap();
+    let policy = |name| PolicyName::new(name).unwrap();
     let privacy = with_privacy.then(|| {
         PrivacyProfile::new(
-            PrivacyProfileRef::new("privacy/showcase-webhook@1").unwrap(),
+            PrivacyProfileName::new("privacy/showcase-webhook@1").unwrap(),
             policy("showcase/fictional-webhook"),
             vec![policy("purpose/local-synthetic-demonstration")],
             vec![policy("basis/synthetic-fixture-not-production-authority")],
@@ -44,7 +45,7 @@ fn boot(with_privacy: bool) -> BootBindings {
         )
         .unwrap()
     });
-    let reference = SecretRef::new("showcase/partner/token").unwrap();
+    let reference = SecretName::new("showcase/partner/token").unwrap();
     BootBindings::resolve(
         DeploymentProfile::new(
             BTreeMap::from([(
@@ -139,7 +140,7 @@ fn the_six_webhook_scenarios_are_deterministic_and_count_real_outbound_calls() {
         );
         assert_eq!(calls[0].resolved_settings, calls[1].resolved_settings);
         assert_eq!(calls[0].idempotency_key, calls[1].idempotency_key);
-        assert_ne!(calls[0].call_ref, calls[1].call_ref);
+        assert_ne!(calls[0].call_id, calls[1].call_id);
     }
     let failures: Vec<_> = first[2]
         .records

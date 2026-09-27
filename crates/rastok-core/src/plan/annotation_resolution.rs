@@ -19,8 +19,8 @@ use crate::schema_annotation::{
 
 use super::type_resolution::ResolvedPortTable;
 use super::{
-    DispatchStep, Emission, Endpoint, EndpointOwner, EndpointRef, ExecutionPlan, Handler,
-    LoopCommand, LoopCommandKind, OwnerKind, OwnerSlot, RouteDestination, RouteSelection, Slot,
+    DispatchStep, EdgeEnd, Emission, Endpoint, EndpointOwner, ExecutionPlan, Handler, LoopCommand,
+    LoopCommandKind, OwnerKind, OwnerSlot, RouteDestination, RouteSelection, Slot,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -953,7 +953,7 @@ fn producer_policy(
     }
 }
 
-fn endpoint_key(endpoint: &EndpointRef) -> PortKey {
+fn endpoint_key(endpoint: &EdgeEnd) -> PortKey {
     match endpoint.node {
         Some(slot) => PortKey::Node(slot, endpoint.port.clone()),
         None => PortKey::Boundary(endpoint.port.clone()),

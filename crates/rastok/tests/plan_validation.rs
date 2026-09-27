@@ -14,7 +14,7 @@ use rastok::datatype::{DataType, StructType, TaggedCase, TaggedUnionType};
 use rastok::expr;
 use rastok::node::{self, Direction, Port};
 use rastok::plan::{
-    self, DispatchStep, Edge, EndpointRef, ExecutionPlan, PlanValidationError, Slot,
+    self, DispatchStep, Edge, EdgeEnd, ExecutionPlan, PlanValidationError, Slot,
     ValidatedExecutionPlan,
 };
 
@@ -1282,11 +1282,11 @@ fn a_boundary_input_cannot_be_an_edge_target() {
         .sort_by(|left, right| left.key().cmp(&right.key()));
     plan.edges.push(Edge {
         scope: plan::OwnerSlot::new(0),
-        from: EndpointRef {
+        from: EdgeEnd {
             node: Some(Slot::new(0)),
             port: port("out"),
         },
-        to: Some(EndpointRef {
+        to: Some(EdgeEnd {
             node: None,
             port: port("request"),
         }),
@@ -1316,11 +1316,11 @@ fn a_boundary_output_cannot_be_an_edge_source() {
         .sort_by(|left, right| left.key().cmp(&right.key()));
     plan.edges.push(Edge {
         scope: plan::OwnerSlot::new(0),
-        from: EndpointRef {
+        from: EdgeEnd {
             node: None,
             port: port("response"),
         },
-        to: Some(EndpointRef {
+        to: Some(EdgeEnd {
             node: Some(Slot::new(0)),
             port: port("in"),
         }),
@@ -1346,11 +1346,11 @@ fn conventional_ports_hold_their_directions() {
     let mut plan = raw_probe();
     plan.edges.push(Edge {
         scope: plan::OwnerSlot::new(0),
-        from: EndpointRef {
+        from: EdgeEnd {
             node: Some(Slot::new(0)),
             port: port("out"),
         },
-        to: Some(EndpointRef {
+        to: Some(EdgeEnd {
             node: None,
             port: port("in"),
         }),
@@ -1372,11 +1372,11 @@ fn conventional_ports_hold_their_directions() {
     let mut plan = raw_probe();
     plan.edges.push(Edge {
         scope: plan::OwnerSlot::new(0),
-        from: EndpointRef {
+        from: EdgeEnd {
             node: None,
             port: port("out"),
         },
-        to: Some(EndpointRef {
+        to: Some(EdgeEnd {
             node: Some(Slot::new(0)),
             port: port("in"),
         }),
@@ -1611,7 +1611,7 @@ fn an_edge_to_an_unknown_port_refuses() {
     let mut plan = raw_probe();
     plan.edges.push(Edge {
         scope: plan::OwnerSlot::new(0),
-        from: EndpointRef {
+        from: EdgeEnd {
             node: Some(Slot::new(0)),
             port: port("ghost"),
         },
@@ -1630,7 +1630,7 @@ fn an_edge_to_an_unknown_port_refuses() {
     let mut plan = raw_probe();
     plan.edges.push(Edge {
         scope: plan::OwnerSlot::new(0),
-        from: EndpointRef {
+        from: EdgeEnd {
             node: None,
             port: port("ghost"),
         },
@@ -1815,7 +1815,7 @@ fn a_forged_executable_cycle_never_earns_the_validated_type() {
             edge.from.node == Some(shell) && edge.to.as_ref().is_some_and(|to| to.node.is_none())
         })
         .expect("the fixture routes shell to the boundary");
-    back_edge.to = Some(EndpointRef {
+    back_edge.to = Some(EdgeEnd {
         node: Some(relay),
         port: Port::new("in").unwrap(),
     });

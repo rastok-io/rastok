@@ -66,7 +66,7 @@ impl Vm<'_> {
                 .into_iter()
                 .flatten()
                 .find(|delivery| {
-                    ids::delivery_ref(&delivery.edge, delivery.envelope.meta().sys().id())
+                    ids::delivery_id(&delivery.edge, delivery.envelope.meta().sys().id())
                         == *opening
                 })
                 .ok_or_else(|| invalid(index, "Retry opening has no exact queued admission"))?
@@ -133,7 +133,7 @@ impl Vm<'_> {
         let policy = super::super::retry_manager::policy(connector, spec)?;
         let authority = opening_delivery.as_ref().map(|delivery| retry::Opening {
             instance: &record.instance,
-            delivery: ids::delivery_ref(&delivery.edge, delivery.envelope.meta().sys().id()),
+            delivery: ids::delivery_id(&delivery.edge, delivery.envelope.meta().sys().id()),
             plan: hash,
             contract: &connector.contract,
             call,
@@ -151,7 +151,7 @@ impl Vm<'_> {
             })
         });
         if let Some((edge, envelope)) = &routed {
-            let reference = ids::delivery_ref(edge, envelope.meta().sys().id());
+            let reference = ids::delivery_id(edge, envelope.meta().sys().id());
             expected_routes.push(RoutedDelivery {
                 delivery: envelope.meta().sys().id(),
                 edge: edge.clone(),

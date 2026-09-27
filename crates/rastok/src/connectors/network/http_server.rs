@@ -2,7 +2,8 @@ use crate::boundary::{
     Draft, HttpServerExit, InboundAcceptance, InboundCallConnectorDriver, InboundCallEvent,
     InboundCallResponse, InboundCallResponseStart, InboundCallTimeout, InboundCallTimeoutStart,
     InboundConnectorDriver, InboundDecision, InboundEnvelopeProvenance, InboundExchangeRef,
-    InboundProposal, InboundProposalRef, InboundRejection, InboundSubmission, SubmissionSequence,
+    InboundProposal, InboundProposalHandle, InboundRejection, InboundSubmission,
+    SubmissionSequence,
 };
 use crate::connectors::http_server::{HttpServerMode, bind_routes};
 use crate::connectors::http_shared::{HttpVersion, decode_body};
@@ -207,7 +208,7 @@ struct RetainedResponse {
 
 #[derive(Debug)]
 struct ServerCommand {
-    call_ref: crate::boundary::InboundCallRef,
+    call_id: crate::boundary::InboundCallId,
     peer: tokio::sync::oneshot::Sender<Response<Full<Bytes>>>,
     response: Response<Full<Bytes>>,
     terminal: HttpServerExit,
@@ -215,7 +216,7 @@ struct ServerCommand {
 
 #[derive(Clone, Copy, Debug)]
 enum ServerDecision {
-    Accepted(crate::boundary::InboundCallRef),
+    Accepted(crate::boundary::InboundCallId),
     Rejected(InboundRejection),
 }
 
@@ -285,8 +286,8 @@ struct HttpServer<'plan> {
     _plan: &'plan crate::plan::ValidatedExecutionPlan,
     engine: HostedNetworkEngine<ServerCommand, ServerCommand, ServerEvent>,
     pending: VecDeque<LiveProposal>,
-    retained: BTreeMap<crate::boundary::InboundCallRef, RetainedResponse>,
-    writing: BTreeSet<crate::boundary::InboundCallRef>,
+    retained: BTreeMap<crate::boundary::InboundCallId, RetainedResponse>,
+    writing: BTreeSet<crate::boundary::InboundCallId>,
     terminals: Vec<InboundCallEvent>,
     #[cfg(test)]
     local_addresses: Vec<SocketAddr>,
@@ -538,7 +539,7 @@ impl<'plan> HttpServer<'plan> {
                     if runtime
                         .emit(
                             ServerEvent::Terminal(InboundCallEvent {
-                                call_ref: command.call_ref,
+                                call_id: command.call_id,
                                 completion: crate::boundary::Completion::http_server_exit(
                                     terminal,
                                 ),
@@ -573,8 +574,8 @@ impl<'plan> HttpServer<'plan> {
                     self.pending.push_back(*proposal);
                 }
                 EventPoll::Event(ServerEvent::Terminal(event)) => {
-                    self.retained.remove(&event.call_ref);
-                    self.writing.remove(&event.call_ref);
+                    self.retained.remove(&event.call_id);
+                    self.writing.remove(&event.call_id);
                     self.terminals.push(event);
                 }
                 EventPoll::Empty | EventPoll::Stopped => break,
@@ -594,7 +595,7 @@ impl InboundConnectorDriver for HttpServer<'_> {
         self.pending.front().map(|pending| pending.proposal.clone())
     }
 
-    fn decide(&mut self, reference: InboundProposalRef, decision: InboundDecision) {
+    fn decide(&mut self, reference: InboundProposalHandle, decision: InboundDecision) {
         let Some(pending) = self.pending.front() else {
             return;
         };
@@ -606,23 +607,23 @@ impl InboundConnectorDriver for HttpServer<'_> {
         };
         let decision = match decision {
             InboundDecision::Accepted(InboundAcceptance {
-                exchange: Some(InboundExchangeRef::Call(call_ref)),
+                exchange: Some(InboundExchangeRef::Call(call_id)),
                 ..
-            }) => ServerDecision::Accepted(call_ref),
+            }) => ServerDecision::Accepted(call_id),
             InboundDecision::Accepted(_) => ServerDecision::Rejected(InboundRejection::UnknownPort),
             InboundDecision::Rejected(reason) => ServerDecision::Rejected(reason),
         };
         match pending.decision.send(decision) {
             Ok(()) => {
-                if let (ServerDecision::Accepted(call_ref), Some(response)) =
+                if let (ServerDecision::Accepted(call_id), Some(response)) =
                     (decision, pending.response)
                 {
-                    self.retained.insert(call_ref, response);
+                    self.retained.insert(call_id, response);
                 }
             }
-            Err(ServerDecision::Accepted(call_ref)) => {
+            Err(ServerDecision::Accepted(call_id)) => {
                 self.terminals.push(InboundCallEvent {
-                    call_ref,
+                    call_id,
                     completion: crate::boundary::Completion::http_server_exit(
                         HttpServerExit::PeerDisconnected,
                     ),
@@ -640,15 +641,15 @@ impl InboundConnectorDriver for HttpServer<'_> {
 impl InboundCallConnectorDriver for HttpServer<'_> {
     fn start_response(&mut self, response: &InboundCallResponse) -> InboundCallResponseStart {
         self.poll_events();
-        if self.writing.contains(&response.call_ref) {
+        if self.writing.contains(&response.call_id) {
             return InboundCallResponseStart::Started;
         }
-        let Some(retained) = self.retained.remove(&response.call_ref) else {
+        let Some(retained) = self.retained.remove(&response.call_id) else {
             // A peer disconnect may already have queued the sole terminal.
             return InboundCallResponseStart::Started;
         };
         if retained.route.node != response.connector_path {
-            self.retained.insert(response.call_ref, retained);
+            self.retained.insert(response.call_id, retained);
             return InboundCallResponseStart::Pending;
         }
         let route = retained.route.clone();
@@ -667,19 +668,19 @@ impl InboundCallConnectorDriver for HttpServer<'_> {
             ),
         };
         let command = ServerCommand {
-            call_ref: response.call_ref,
+            call_id: response.call_id,
             peer: retained.peer,
             response: protocol_response,
             terminal,
         };
         match self.engine.try_submit(command, bytes) {
             Ok(()) => {
-                self.writing.insert(response.call_ref);
+                self.writing.insert(response.call_id);
                 InboundCallResponseStart::Started
             }
             Err(SubmitError::Full(command) | SubmitError::ByteBudget(command)) => {
                 self.retained.insert(
-                    response.call_ref,
+                    response.call_id,
                     RetainedResponse {
                         peer: command.peer,
                         route,
@@ -689,7 +690,7 @@ impl InboundCallConnectorDriver for HttpServer<'_> {
             }
             Err(SubmitError::Oversized { value, .. }) => {
                 let overload = ServerCommand {
-                    call_ref: response.call_ref,
+                    call_id: response.call_id,
                     peer: value.peer,
                     response: response_with_headers(
                         StatusCode::SERVICE_UNAVAILABLE,
@@ -697,7 +698,7 @@ impl InboundCallConnectorDriver for HttpServer<'_> {
                     ),
                     terminal: HttpServerExit::Overloaded,
                 };
-                match self.start_control(response.call_ref, route, overload) {
+                match self.start_control(response.call_id, route, overload) {
                     InboundCallTimeoutStart::Started => InboundCallResponseStart::Started,
                     InboundCallTimeoutStart::Pending => InboundCallResponseStart::Pending,
                 }
@@ -711,29 +712,29 @@ impl InboundCallConnectorDriver for HttpServer<'_> {
 
     fn start_timeout(&mut self, timeout: &InboundCallTimeout) -> InboundCallTimeoutStart {
         self.poll_events();
-        if self.writing.contains(&timeout.call_ref) {
+        if self.writing.contains(&timeout.call_id) {
             return InboundCallTimeoutStart::Started;
         }
-        let Some(retained) = self.retained.remove(&timeout.call_ref) else {
+        let Some(retained) = self.retained.remove(&timeout.call_id) else {
             return InboundCallTimeoutStart::Started;
         };
         if retained.route.node != timeout.connector_path {
-            self.retained.insert(timeout.call_ref, retained);
+            self.retained.insert(timeout.call_id, retained);
             return InboundCallTimeoutStart::Pending;
         }
         let route = retained.route.clone();
         let command = ServerCommand {
-            call_ref: timeout.call_ref,
+            call_id: timeout.call_id,
             peer: retained.peer,
             response: response_with_headers(StatusCode::GATEWAY_TIMEOUT, &route.response_headers),
             terminal: HttpServerExit::RequestExpired,
         };
-        self.start_control(timeout.call_ref, route, command)
+        self.start_control(timeout.call_id, route, command)
     }
 
     fn events(&mut self) -> Vec<InboundCallEvent> {
         self.poll_events();
-        self.terminals.sort_by_key(|event| event.call_ref);
+        self.terminals.sort_by_key(|event| event.call_id);
         std::mem::take(&mut self.terminals)
     }
 }
@@ -747,18 +748,18 @@ enum ServerResponseError {
 impl HttpServer<'_> {
     fn start_control(
         &mut self,
-        call_ref: crate::boundary::InboundCallRef,
+        call_id: crate::boundary::InboundCallId,
         route: BoundRoute,
         command: ServerCommand,
     ) -> InboundCallTimeoutStart {
         match self.engine.try_control(command) {
             Ok(()) => {
-                self.writing.insert(call_ref);
+                self.writing.insert(call_id);
                 InboundCallTimeoutStart::Started
             }
             Err(SubmitError::Full(command) | SubmitError::ByteBudget(command)) => {
                 self.retained.insert(
-                    call_ref,
+                    call_id,
                     RetainedResponse {
                         peer: command.peer,
                         route,
@@ -780,7 +781,7 @@ impl HttpServer<'_> {
             HttpServerExit::PeerDisconnected
         };
         self.terminals.push(InboundCallEvent {
-            call_ref: command.call_ref,
+            call_id: command.call_id,
             completion: crate::boundary::Completion::http_server_exit(terminal),
         });
     }
@@ -1205,7 +1206,7 @@ async fn dispatch_http3_request(
         .emit(ServerEvent::Proposal(Box::new(live)), 0)
         .await
         .map_err(|_| ())?;
-    let ServerDecision::Accepted(call_ref) = accepted.await.map_err(|_| ())? else {
+    let ServerDecision::Accepted(call_id) = accepted.await.map_err(|_| ())? else {
         return Err(());
     };
     let response = match request.route.mode {
@@ -1213,7 +1214,7 @@ async fn dispatch_http3_request(
             let response =
                 response_with_headers(StatusCode::ACCEPTED, &request.route.response_headers);
             let terminal = InboundCallEvent {
-                call_ref,
+                call_id,
                 completion: crate::boundary::Completion::http_server_exit(
                     HttpServerExit::Completed { status: 202 },
                 ),
@@ -1577,11 +1578,11 @@ async fn handle_request(
         return Ok(simple_response(StatusCode::SERVICE_UNAVAILABLE));
     }
     match accepted.await {
-        Ok(ServerDecision::Accepted(call_ref)) => match peer_response {
+        Ok(ServerDecision::Accepted(call_id)) => match peer_response {
             None => {
                 let response = response_with_headers(StatusCode::ACCEPTED, &route.response_headers);
                 let event = ServerEvent::Terminal(InboundCallEvent {
-                    call_ref,
+                    call_id,
                     completion: crate::boundary::Completion::http_server_exit(
                         HttpServerExit::Completed { status: 202 },
                     ),
@@ -1651,13 +1652,13 @@ fn http_request_metadata(
     ext
 }
 
-fn next_reference(references: &AtomicU64) -> Option<InboundProposalRef> {
+fn next_reference(references: &AtomicU64) -> Option<InboundProposalHandle> {
     references
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
             value.checked_add(1)
         })
         .ok()
-        .map(InboundProposalRef::new)
+        .map(InboundProposalHandle::new)
 }
 
 fn authorized(request: &Request<Incoming>, expected: Option<&blake3::Hash>) -> bool {
@@ -1959,7 +1960,7 @@ graph api : App {
         else {
             panic!("the valid request must be accepted")
         };
-        let Some(InboundExchangeRef::Call(call_ref)) = accepted.exchange else {
+        let Some(InboundExchangeRef::Call(call_id)) = accepted.exchange else {
             panic!("an accepted server request opens one Call")
         };
         server.decide(proposal.reference, InboundDecision::Accepted(accepted));
@@ -1975,7 +1976,7 @@ graph api : App {
         );
 
         let terminal = wait_for_terminal(server);
-        assert_eq!(terminal.call_ref, call_ref);
+        assert_eq!(terminal.call_id, call_id);
         let report = vm.queue_inbound_call_events([terminal]);
         assert_eq!(report.queued, 1);
         assert!(report.discarded.is_empty());
@@ -1992,7 +1993,7 @@ graph api : App {
                     record,
                     crate::journal::Record::Transaction(transaction)
                         if transaction.exchange_exit.as_deref()
-                            == Some(&crate::journal::InboundExchangeExitRecord::Call(call_ref))
+                            == Some(&crate::journal::InboundExchangeExitRecord::Call(call_id))
                 ))
                 .count(),
             1,
@@ -2188,7 +2189,7 @@ graph api : App {
         else {
             panic!("the request must be admitted")
         };
-        let Some(InboundExchangeRef::Call(call_ref)) = accepted.exchange else {
+        let Some(InboundExchangeRef::Call(call_id)) = accepted.exchange else {
             panic!("the admitted request opens one Call")
         };
         server.decide(proposal.reference, InboundDecision::Accepted(accepted));
@@ -2217,7 +2218,7 @@ graph api : App {
             }
         );
         let terminal = wait_for_terminal(&mut server);
-        assert_eq!(terminal.call_ref, call_ref);
+        assert_eq!(terminal.call_id, call_id);
         assert_eq!(vm.queue_inbound_call_events([terminal]).queued, 1);
         vm.drain(&mut journal)
             .expect("the one response cursor and Call terminal commit");
@@ -2244,7 +2245,7 @@ graph api : App {
         else {
             panic!("the request must be admitted")
         };
-        let Some(InboundExchangeRef::Call(call_ref)) = accepted.exchange else {
+        let Some(InboundExchangeRef::Call(call_id)) = accepted.exchange else {
             panic!("the admitted request opens one Call")
         };
         server.decide(proposal.reference, InboundDecision::Accepted(accepted));
@@ -2264,7 +2265,7 @@ graph api : App {
         let [timeout] = timeouts.as_slice() else {
             panic!("exactly one request deadline must be due")
         };
-        assert_eq!(timeout.call_ref, call_ref);
+        assert_eq!(timeout.call_id, call_id);
         assert_eq!(
             server.start_timeout(timeout),
             InboundCallTimeoutStart::Started
@@ -2281,7 +2282,7 @@ graph api : App {
             }
         );
         let terminal = wait_for_terminal(&mut server);
-        assert_eq!(terminal.call_ref, call_ref);
+        assert_eq!(terminal.call_id, call_id);
         assert_eq!(vm.queue_inbound_call_events([terminal]).queued, 1);
         vm.drain(&mut journal)
             .expect("the timeout closes the retained response cursor once");

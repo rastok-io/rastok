@@ -9,7 +9,7 @@
 
 use rastok::boundary::{Completion, PortOutput, ProcessExit};
 use rastok::envelope::{Data, Envelope, Meta, MetaSys, MetaValue, Namespace, Scalar};
-use rastok::identity::{InstanceAddress, InstanceFrame, InstanceRef};
+use rastok::identity::{InstanceGeneration, InstanceIdentity, InstanceSegment};
 use rastok::journal::ids;
 use rastok::plan::{GraphVersion, OwnerPath, Slot, ValidatedExecutionPlan};
 use rastok::runtime::{Delivery, Fault, HandlerExecutor, InstanceState, Mailboxes, meta_value};
@@ -82,23 +82,23 @@ fn input(text: &str) -> Delivery {
     }
 }
 
-fn singleton() -> InstanceRef {
+fn singleton() -> InstanceGeneration {
     let owner = OwnerPath::new(["probe"]).expect("valid owner");
-    InstanceRef::new(InstanceAddress::singleton(&owner), 0)
+    InstanceGeneration::new(InstanceIdentity::singleton(&owner), 0)
 }
 
-fn text_key(value: &str) -> InstanceRef {
+fn text_key(value: &str) -> InstanceGeneration {
     let owner = OwnerPath::new(["probe"]).expect("valid owner");
-    let address = InstanceAddress::new(
+    let address = InstanceIdentity::new(
         &owner,
-        &[InstanceFrame::SelectedKey {
-            owner: owner.clone(),
+        &[InstanceSegment::SelectedKey {
+            scope: owner.clone(),
             ty: rastok::datatype::DataType::Text,
             value: rastok::value::Value::Text(String::from(value)),
         }],
     )
     .expect("text is a canonical instance key");
-    InstanceRef::new(address, 0)
+    InstanceGeneration::new(address, 0)
 }
 
 fn trigger_in() -> node::Trigger {
@@ -151,7 +151,7 @@ fn an_identity_emission_inherits_everything_but_its_spine() {
     let emitted = &outcome.record.emissions[0].envelope;
     let sys = emitted.meta().sys();
     let parent = delivery.envelope.meta().sys();
-    // A fresh spine…
+    // Fresh reserved `sys` fields…
     assert_ne!(sys.id(), parent.id());
     assert_eq!(sys.parent_id(), Some(parent.id()));
     assert_eq!(sys.origin_id(), parent.origin_id());
@@ -192,7 +192,7 @@ fn the_meta_projection_carries_the_whole_spine() {
         rastok::value::Value::Text(String::from("default"))
     );
     assert_eq!(sys["graph_version"], rastok::value::Value::Int(3));
-    // The five-field spine carries no content type; the ext zone
+    // The five reserved `sys` fields carry no content type; the ext zone
     // does — and its flat dotted keys NEST in the projection.
     assert!(!sys.contains_key("mime_type"));
     let rastok::value::Value::Map(ext) = &root["ext"] else {

@@ -1129,7 +1129,7 @@ impl DataType {
             }
         }
         let ty = Self::StructuralUnion(StructuralUnionType(flat));
-        ty.validate()?;
+        ty.check_bounds()?;
         Ok(ty)
     }
 
@@ -1148,21 +1148,21 @@ impl DataType {
     /// # Errors
     ///
     /// Returns the first exceeded global budget.
-    pub fn validate(&self) -> Result<(), TypeError> {
+    pub fn check_bounds(&self) -> Result<(), TypeError> {
         let mut stack = alloc::vec![(self, 1_usize)];
         let mut nodes = 0_usize;
         while let Some((ty, depth)) = stack.pop() {
             nodes = nodes.saturating_add(1);
             if nodes > MAX_TYPE_NODES {
-                return Err(TypeError::NodeBudget {
+                return Err(TypeError::NodesExceeded {
                     nodes,
-                    budget: MAX_TYPE_NODES,
+                    bound: MAX_TYPE_NODES,
                 });
             }
             if depth > MAX_TYPE_NESTING {
-                return Err(TypeError::NestingBudget {
+                return Err(TypeError::NestingExceeded {
                     depth,
-                    budget: MAX_TYPE_NESTING,
+                    bound: MAX_TYPE_NESTING,
                 });
             }
             match ty {
@@ -1187,15 +1187,15 @@ impl DataType {
                         let payload_depth = depth + 1;
                         nodes = nodes.saturating_add(1);
                         if nodes > MAX_TYPE_NODES {
-                            return Err(TypeError::NodeBudget {
+                            return Err(TypeError::NodesExceeded {
                                 nodes,
-                                budget: MAX_TYPE_NODES,
+                                bound: MAX_TYPE_NODES,
                             });
                         }
                         if payload_depth > MAX_TYPE_NESTING {
-                            return Err(TypeError::NestingBudget {
+                            return Err(TypeError::NestingExceeded {
                                 depth: payload_depth,
-                                budget: MAX_TYPE_NESTING,
+                                bound: MAX_TYPE_NESTING,
                             });
                         }
                         stack.extend(
@@ -1214,12 +1214,18 @@ impl DataType {
 
     /// Judges one materialized value against this logical type.
     ///
-    /// `None` is conformance. A refusal carries the precise nested path and
+    /// `Ok(())` is conformance. A refusal carries the precise nested path and
     /// preserves the semantic reason for callers that render it differently.
-    #[must_use]
-    pub fn violation(&self, name: &str, value: &Value) -> Option<ConformanceViolation> {
-        if let Err(error) = value.validate() {
-            return Some(ConformanceViolation {
+    ///
+    /// # Errors
+    /// Returns the precise violation for a malformed or non-conforming value.
+    #[allow(
+        clippy::result_large_err,
+        reason = "keep the existing inline violation; using Result must not add an allocation"
+    )]
+    pub fn check_value_type(&self, name: &str, value: &Value) -> Result<(), ConformanceViolation> {
+        if let Err(error) = value.check_consistency() {
+            return Err(ConformanceViolation {
                 name: String::from(name),
                 path: error.path,
                 expected: self.clone(),
@@ -1227,13 +1233,14 @@ impl DataType {
                 reason: ConformanceReason::MalformedValue(error.defect),
             });
         }
-        self.violation_at(name, value, &mut Vec::new())
+        self.check_value_type_at(name, value, &mut Vec::new())
+            .map_or(Ok(()), Err)
     }
 
     /// Whether `value` conforms to this logical type.
     #[must_use]
     pub fn accepts(&self, value: &Value) -> bool {
-        self.violation("value", value).is_none()
+        self.check_value_type("value", value).is_ok()
     }
 
     /// Explicitly narrows one materialized value to this logical type.
@@ -1335,8 +1342,8 @@ impl DataType {
                         case: case.to_string(),
                     })?;
                 let payload_value = Value::Struct(payload.clone());
-                if let Some(violation) =
-                    Self::Struct(selected.payload().clone()).violation("payload", &payload_value)
+                if let Err(violation) = Self::Struct(selected.payload().clone())
+                    .check_value_type("payload", &payload_value)
                 {
                     return Err(NarrowingFailure::CasePayload {
                         case: case.to_string(),
@@ -1385,7 +1392,7 @@ impl DataType {
         }
     }
 
-    fn violation_at(
+    fn check_value_type_at(
         &self,
         name: &str,
         value: &Value,
@@ -1579,7 +1586,7 @@ impl DataType {
                 }
                 for (index, item) in items.iter().enumerate() {
                     path.push(ValuePathSegment::Index(index));
-                    let violation = array.element().violation_at(name, item, path);
+                    let violation = array.element().check_value_type_at(name, item, path);
                     path.pop();
                     if violation.is_some() {
                         return violation;
@@ -1590,7 +1597,7 @@ impl DataType {
             (Self::Map(map), Value::Map(entries)) if map.key() == &Self::Text => {
                 for (key, item) in entries {
                     path.push(ValuePathSegment::MapValue(key.clone()));
-                    let violation = map.value().violation_at(name, item, path);
+                    let violation = map.value().check_value_type_at(name, item, path);
                     path.pop();
                     if violation.is_some() {
                         return violation;
@@ -1602,13 +1609,13 @@ impl DataType {
                 for (key, item) in entries {
                     let label = map_key_label(key);
                     path.push(ValuePathSegment::MapKey(label.clone()));
-                    let violation = map.key().violation_at(name, key, path);
+                    let violation = map.key().check_value_type_at(name, key, path);
                     path.pop();
                     if violation.is_some() {
                         return violation;
                     }
                     path.push(ValuePathSegment::MapValue(label));
-                    let violation = map.value().violation_at(name, item, path);
+                    let violation = map.value().check_value_type_at(name, item, path);
                     path.pop();
                     if violation.is_some() {
                         return violation;
@@ -1630,7 +1637,7 @@ impl DataType {
                         );
                     };
                     path.push(ValuePathSegment::Field(expected.name().to_string()));
-                    let violation = expected.ty().violation_at(name, field_value, path);
+                    let violation = expected.ty().check_value_type_at(name, field_value, path);
                     path.pop();
                     if violation.is_some() {
                         return violation;
@@ -1683,7 +1690,7 @@ impl DataType {
                     );
                 };
                 path.push(ValuePathSegment::UnionBranch(*branch));
-                let violation = branch_type.violation_at(name, selected, path);
+                let violation = branch_type.check_value_type_at(name, selected, path);
                 path.pop();
                 violation
             }
@@ -1701,7 +1708,7 @@ impl DataType {
                         ConformanceReason::UnknownTaggedCase(tagged.case.clone()),
                     );
                 };
-                Self::Struct(selected.payload().clone()).violation_at(
+                Self::Struct(selected.payload().clone()).check_value_type_at(
                     name,
                     &Value::Struct(tagged.payload.clone()),
                     path,
@@ -1976,10 +1983,10 @@ fn duplicate_adjacent<'a>(mut names: impl Iterator<Item = &'a str>) -> Option<&'
 
 fn member_budget(kind: &'static str, count: usize) -> Result<(), TypeError> {
     if count > MAX_TYPE_MEMBERS {
-        Err(TypeError::MemberBudget {
+        Err(TypeError::MembersExceeded {
             kind,
             count,
-            budget: MAX_TYPE_MEMBERS,
+            bound: MAX_TYPE_MEMBERS,
         })
     } else {
         Ok(())
@@ -2058,27 +2065,27 @@ pub enum TypeError {
         right: Box<DataType>,
     },
     /// One composite exceeds its member budget.
-    MemberBudget {
+    MembersExceeded {
         /// Composite member category.
         kind: &'static str,
         /// Observed count.
         count: usize,
         /// Admitted count.
-        budget: usize,
+        bound: usize,
     },
     /// The expanded tree exceeds its node budget.
-    NodeBudget {
+    NodesExceeded {
         /// Observed nodes at refusal.
         nodes: usize,
         /// Admitted nodes.
-        budget: usize,
+        bound: usize,
     },
     /// The expanded tree exceeds its nesting budget.
-    NestingBudget {
+    NestingExceeded {
         /// Observed depth.
         depth: usize,
         /// Admitted depth.
-        budget: usize,
+        bound: usize,
     },
 }
 
@@ -2128,15 +2135,21 @@ impl fmt::Display for TypeError {
                     "structural-union branches `{left}` and `{right}` overlap"
                 )
             }
-            Self::MemberBudget {
+            Self::MembersExceeded {
                 kind,
                 count,
-                budget,
+                bound: budget,
             } => write!(f, "{kind} count {count} exceeds budget {budget}"),
-            Self::NodeBudget { nodes, budget } => {
+            Self::NodesExceeded {
+                nodes,
+                bound: budget,
+            } => {
                 write!(f, "type node count {nodes} exceeds budget {budget}")
             }
-            Self::NestingBudget { depth, budget } => {
+            Self::NestingExceeded {
+                depth,
+                bound: budget,
+            } => {
                 write!(f, "type nesting {depth} exceeds budget {budget}")
             }
         }
@@ -2462,8 +2475,8 @@ mod tests {
         )]));
         let ty = DataType::text_map(DataType::array(DataType::INT));
         let violation = ty
-            .violation("payload", &value)
-            .expect("the text does not conform");
+            .check_value_type("payload", &value)
+            .expect_err("the text does not conform");
         assert_eq!(
             violation.path,
             alloc::vec![
@@ -2488,8 +2501,8 @@ mod tests {
             Value::Text(sentinel.clone()),
         )]));
         let rendered = ty
-            .violation("payload", &value)
-            .expect("text is not int")
+            .check_value_type("payload", &value)
+            .expect_err("text is not int")
             .to_string();
         assert_eq!(
             rendered,
@@ -2630,8 +2643,8 @@ mod tests {
             Value::Text(String::from("wrong signedness")),
         )]);
         let violation = ty
-            .violation("payload", &wrong_key)
-            .expect("the key type is checked recursively");
+            .check_value_type("payload", &wrong_key)
+            .expect_err("the key type is checked recursively");
         assert!(matches!(
             violation.path.as_slice(),
             [ValuePathSegment::MapKey(_)]
@@ -2643,7 +2656,7 @@ mod tests {
                 (Value::Text(String::from("k")), Value::Int(1),)
             ]);
         assert!(matches!(
-            text_in_the_non_text_form.validate(),
+            text_in_the_non_text_form.check_consistency(),
             Err(crate::value::ValueError {
                 defect: ValueDefect::NonCanonicalMapKey(ValueKind::Text),
                 ..
@@ -2655,7 +2668,7 @@ mod tests {
             (Value::Int(1), Value::Bool(false)),
         ]);
         assert!(matches!(
-            duplicate.validate(),
+            duplicate.check_consistency(),
             Err(crate::value::ValueError {
                 defect: ValueDefect::DuplicateMapKey(_),
                 ..
@@ -2779,7 +2792,7 @@ mod tests {
             assert!(
                 ty.accepts(&value),
                 "{profile_row} must be represented exactly: {:?}",
-                ty.violation("payload", &value)
+                ty.check_value_type("payload", &value)
             );
         }
     }
@@ -3130,14 +3143,14 @@ mod tests {
         for _ in 1..MAX_TYPE_NESTING {
             at_limit = DataType::array(at_limit);
         }
-        assert!(at_limit.validate().is_ok());
+        assert!(at_limit.check_bounds().is_ok());
 
         let beyond = DataType::array(at_limit);
         assert!(matches!(
-            beyond.validate(),
-            Err(TypeError::NestingBudget {
+            beyond.check_bounds(),
+            Err(TypeError::NestingExceeded {
                 depth,
-                budget: MAX_TYPE_NESTING,
+                bound: MAX_TYPE_NESTING,
             }) if depth == MAX_TYPE_NESTING + 1
         ));
 
@@ -3150,10 +3163,10 @@ mod tests {
             tagged = DataType::array(tagged);
         }
         assert!(matches!(
-            tagged.validate(),
-            Err(TypeError::NestingBudget {
+            tagged.check_bounds(),
+            Err(TypeError::NestingExceeded {
                 depth,
-                budget: MAX_TYPE_NESTING,
+                bound: MAX_TYPE_NESTING,
             }) if depth == MAX_TYPE_NESTING + 1
         ));
 
@@ -3169,10 +3182,10 @@ mod tests {
             StructType::new(root_fields).expect("the root stays within its member budget"),
         );
         assert!(matches!(
-            too_wide.validate(),
-            Err(TypeError::NodeBudget {
+            too_wide.check_bounds(),
+            Err(TypeError::NodesExceeded {
                 nodes,
-                budget: MAX_TYPE_NODES,
+                bound: MAX_TYPE_NODES,
             }) if nodes == MAX_TYPE_NODES + 1
         ));
     }
@@ -3184,8 +3197,8 @@ mod tests {
             (String::from("same"), Value::Int(2)),
         ]);
         let violation = DataType::Variant
-            .violation("payload", &malformed)
-            .expect("value validity precedes dynamic type admission");
+            .check_value_type("payload", &malformed)
+            .expect_err("value validity precedes dynamic type admission");
         assert!(matches!(
             violation.reason,
             ConformanceReason::MalformedValue(ValueDefect::DuplicateStructField(name))

@@ -49,7 +49,7 @@ pub fn supports_type(ty: &DataType) -> bool {
         }
     }
     // Bound recursion even when called on a manually assembled, unvalidated type.
-    ty.validate().is_ok() && supported(ty)
+    ty.check_bounds().is_ok() && supported(ty)
 }
 
 /// Hydrates an already parsed JSON value using one explicit codec schema.
@@ -85,7 +85,7 @@ pub fn hydrate_with_profile(
     if !supports_type(ty) {
         return Err(refusal(ConformanceReason::TypeMismatch));
     }
-    if let Err(error) = value.validate() {
+    if let Err(error) = value.check_consistency() {
         return Err(refusal(ConformanceReason::MalformedValue(error.defect)));
     }
     hydrate_at(ty, value, profile)
@@ -213,9 +213,9 @@ fn hydrate_at(
             .map_err(|_| refusal(ConformanceReason::TypeMismatch))?,
         (_, value) => value,
     };
-    match ty.violation("data", &value) {
-        Some(error) => Err(Box::new(error)),
-        None => Ok(value),
+    match ty.check_value_type("data", &value) {
+        Err(error) => Err(Box::new(error)),
+        Ok(()) => Ok(value),
     }
 }
 
@@ -344,11 +344,11 @@ mod tests {
         assert!(read(&ty, r#"{"required":"ok"}"#).is_err());
         assert!(read(&ty, r#"{"required":"ok","count":null,"extra":0}"#).is_err());
         assert!(
-            ty.violation(
+            ty.check_value_type(
                 "data",
                 &Value::Struct(vec![("required".into(), Value::Text("ok".into()))])
             )
-            .is_some()
+            .is_err()
         );
     }
 

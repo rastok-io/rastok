@@ -9,12 +9,12 @@
 
 use rastok::boundary::{
     CallConnectorDriver, CallStart, DriverRouteError, InboundAdmission, InboundExchangeRef,
-    InboundProposal, InboundProposalRef, InboundSession, InboundSubmission, Intent,
-    OutboundConnectorBindings, PreparedRequest, SessionDriverEvent, SessionOpenIntent, SessionRef,
-    SessionStart, SessionWriteIntent, SessionWriteRef, WebSocketExit,
+    InboundProposal, InboundProposalHandle, InboundSession, InboundSubmission, Intent,
+    OutboundConnectorBindings, PreparedRequest, SessionDriverEvent, SessionId, SessionOpenIntent,
+    SessionStart, SessionWriteId, SessionWriteIntent, WebSocketExit,
 };
 use rastok::envelope::{Data, Envelope};
-use rastok::identity::{InstanceAddress, InstanceFrame, InstanceRef};
+use rastok::identity::{InstanceGeneration, InstanceIdentity, InstanceSegment};
 use rastok::journal::Journal;
 use rastok::node;
 use rastok::plan::{
@@ -34,7 +34,7 @@ use rastok::journal::{CloseVerdict, MemJournal, OutboundRecord, OutboundStatus, 
 
 fn loop_state(
     journal: &MemJournal,
-    run: rastok::journal::LoopRunRef,
+    run: rastok::journal::LoopRunId,
 ) -> rastok::journal::loop_protocol::RunState {
     LoopFold::from_records(journal.records())
         .unwrap()
@@ -43,7 +43,7 @@ fn loop_state(
         .clone()
 }
 
-fn first_loop(journal: &MemJournal) -> rastok::journal::LoopRunRef {
+fn first_loop(journal: &MemJournal) -> rastok::journal::LoopRunId {
     *LoopFold::from_records(journal.records())
         .unwrap()
         .runs()
@@ -52,12 +52,12 @@ fn first_loop(journal: &MemJournal) -> rastok::journal::LoopRunRef {
         .0
 }
 
-fn int_address(owner: &str, value: i64) -> InstanceAddress {
+fn int_address(owner: &str, value: i64) -> InstanceIdentity {
     let owner = OwnerPath::new([owner]).expect("valid owner path");
-    InstanceAddress::new(
+    InstanceIdentity::new(
         &owner,
-        &[InstanceFrame::SelectedKey {
-            owner: owner.clone(),
+        &[InstanceSegment::SelectedKey {
+            scope: owner.clone(),
             ty: rastok::datatype::DataType::INT,
             value: Value::Int(value),
         }],
@@ -134,12 +134,12 @@ impl OutboundConnectorBindings for ProjectionRefusal {
     fn cancel(
         &mut self,
         connector: &node::Path,
-        call_ref: &rastok::boundary::CallRef,
+        call_id: &rastok::boundary::CallId,
     ) -> Result<(), DriverRouteError> {
         if self.refuse_cancel {
             return Err(DriverRouteError::UnavailableOutbound(connector.clone()));
         }
-        CallConnectorDriver::cancel(&mut self.inner, call_ref);
+        CallConnectorDriver::cancel(&mut self.inner, call_id);
         Ok(())
     }
 
@@ -161,8 +161,8 @@ impl OutboundConnectorBindings for ProjectionRefusal {
 /// silent so bounded settlement has to mint `OutcomeUnknown`.
 #[derive(Default)]
 struct ClosingWorld {
-    started: Vec<rastok::boundary::CallRef>,
-    cancelled: Vec<rastok::boundary::CallRef>,
+    started: Vec<rastok::boundary::CallId>,
+    cancelled: Vec<rastok::boundary::CallId>,
     answers: Vec<Response>,
     confirm_cancel: bool,
 }
@@ -186,15 +186,15 @@ impl CallConnectorDriver for ClosingWorld {
     }
 
     fn start(&mut self, intent: &Intent, _: &Envelope) -> CallStart {
-        self.started.push(intent.call_ref);
+        self.started.push(intent.call_id);
         CallStart::Started
     }
 
-    fn cancel(&mut self, call_ref: &rastok::boundary::CallRef) {
-        self.cancelled.push(*call_ref);
+    fn cancel(&mut self, call_id: &rastok::boundary::CallId) {
+        self.cancelled.push(*call_id);
         if self.confirm_cancel {
             self.answers.push(Response {
-                call_ref: *call_ref,
+                call_id: *call_id,
                 completion: Completion::process(
                     vec![],
                     vec![],
@@ -262,7 +262,7 @@ impl CallConnectorDriver for EchoWorld {
         self.seen
             .drain(..)
             .map(|intent| Response {
-                call_ref: intent.call_ref,
+                call_id: intent.call_id,
                 completion: if self.fail_next {
                     Completion::process(
                         vec![],
@@ -353,7 +353,7 @@ fn text_submission(text: &str) -> InboundSubmission {
 
 fn websocket_proposal(reference: u64, text: &str, session: InboundSession) -> InboundProposal {
     InboundProposal {
-        reference: InboundProposalRef::new(reference),
+        reference: InboundProposalHandle::new(reference),
         submission: InboundSubmission {
             provenance: InboundEnvelopeProvenance::single(
                 node::Path::new(["socket"]).expect("the fixture path is valid"),
@@ -607,14 +607,14 @@ graph rooted : App {
         panic!("the first fact is ingress");
     };
     let root_id = inbound.envelope.meta().sys().id();
-    let frame = InstanceFrame::SelectedKey {
-        owner: OwnerPath::root(),
+    let frame = InstanceSegment::SelectedKey {
+        scope: OwnerPath::root(),
         ty: rastok::datatype::DataType::Text,
         value: Value::Text(root_id.to_string()),
     };
     let expected = |node: &str| {
-        InstanceRef::new(
-            InstanceAddress::new(
+        InstanceGeneration::new(
+            InstanceIdentity::new(
                 &OwnerPath::new([node]).expect("valid owner path"),
                 core::slice::from_ref(&frame),
             )
@@ -754,10 +754,10 @@ graph nested : App {
         .collect();
     assert_eq!(transactions.len(), 2, "the child handler fires twice");
     let session = OwnerPath::new(["sessions"]).expect("valid Graph owner");
-    let expected = InstanceAddress::new(
+    let expected = InstanceIdentity::new(
         &OwnerPath::new(["sessions", "greet"]).expect("valid child owner"),
-        &[InstanceFrame::SelectedKey {
-            owner: session,
+        &[InstanceSegment::SelectedKey {
+            scope: session,
             ty: rastok::datatype::DataType::Text,
             value: Value::Text(String::from("alice")),
         }],
@@ -1752,9 +1752,9 @@ graph lifecycle : App {
             _ => None,
         })
         .collect();
-    let root = InstanceRef::new(InstanceAddress::singleton(&OwnerPath::root()), 0);
-    let seven = InstanceRef::new(int_address("counter", 7), 0);
-    let nine = InstanceRef::new(int_address("counter", 9), 0);
+    let root = InstanceGeneration::new(InstanceIdentity::singleton(&OwnerPath::root()), 0);
+    let seven = InstanceGeneration::new(int_address("counter", 7), 0);
+    let nine = InstanceGeneration::new(int_address("counter", 9), 0);
     assert_eq!(
         lifecycle,
         [
@@ -2065,7 +2065,7 @@ fn silent_cancel_becomes_one_unknown_only_after_settlement() {
         "the invocation exit precedes lifecycle reclamation"
     );
     world.answers.push(Response {
-        call_ref: world.started[0],
+        call_id: world.started[0],
         completion: Completion::process(
             vec![],
             vec![],
@@ -2118,7 +2118,7 @@ fn bounded_closing_interleavings_are_model_checked() {
         vm.pump(&mut journal, &mut world).unwrap();
         let call = world.started[0];
         let reply = || Response {
-            call_ref: call,
+            call_id: call,
             completion: Completion::process(
                 vec![],
                 vec![],
@@ -2168,7 +2168,7 @@ fn bounded_closing_interleavings_are_model_checked() {
                 .filter(|record| matches!(
                     record,
                     Record::Outbound(OutboundRecord::Call(outbound))
-                        if outbound.intent.call_ref == call
+                        if outbound.intent.call_id == call
                 ))
                 .count(),
             2,
@@ -2319,7 +2319,7 @@ graph two_calls : App {
     sorted.sort();
     assert_eq!(
         world.cancelled, sorted,
-        "cancels follow canonical CallRef order"
+        "cancels follow canonical CallId order"
     );
     vm.advance(&mut journal, &mut world, 3_000_000_000).unwrap();
 
@@ -2931,7 +2931,7 @@ fn malformed_terminal_facts_are_refused_loudly() {
     let mut world = ScriptedWorld {
         answers: vec![
             Response {
-                call_ref: open[0].call_ref,
+                call_id: open[0].call_id,
                 completion: Completion::try_new(vec![PortOutput {
                     port: node::Port::conventional_exit(),
                     data: Data::materialized(Value::TaggedUnion(Box::new(
@@ -2945,7 +2945,7 @@ fn malformed_terminal_facts_are_refused_loudly() {
                 .unwrap(),
             },
             Response {
-                call_ref: open[0].call_ref,
+                call_id: open[0].call_id,
                 completion: Completion::try_new(vec![PortOutput {
                     port: node::Port::conventional_exit(),
                     data: Data::encoded(rastok::envelope::Encoding::Raw, b"not a union"),
@@ -3006,18 +3006,18 @@ impl CallConnectorDriver for ScriptedWorld {
 #[derive(Default)]
 struct SessionWorld {
     events: Vec<SessionDriverEvent>,
-    opened: Vec<SessionRef>,
-    close_requests: Vec<SessionRef>,
-    abort_requests: Vec<SessionRef>,
-    released: Vec<SessionRef>,
+    opened: Vec<SessionId>,
+    close_requests: Vec<SessionId>,
+    abort_requests: Vec<SessionId>,
+    released: Vec<SessionId>,
     pending_opens: bool,
     hold_writes: bool,
     hold_closes: bool,
-    writes: Vec<(SessionRef, SessionWriteRef)>,
+    writes: Vec<(SessionId, SessionWriteId)>,
 }
 
 impl SessionWorld {
-    fn close(&mut self, session: SessionRef) {
+    fn close(&mut self, session: SessionId) {
         self.events.push(SessionDriverEvent::Exited {
             session,
             exit: Completion::websocket_exit(WebSocketExit::Closed {
@@ -3057,7 +3057,7 @@ impl OutboundConnectorBindings for SessionWorld {
     fn cancel(
         &mut self,
         connector: &node::Path,
-        _: &rastok::boundary::CallRef,
+        _: &rastok::boundary::CallId,
     ) -> Result<(), DriverRouteError> {
         Err(DriverRouteError::UnboundOutbound(connector.clone()))
     }
@@ -3102,12 +3102,12 @@ impl OutboundConnectorBindings for SessionWorld {
         intent: &SessionOpenIntent,
         _: &Envelope,
     ) -> Result<SessionStart, DriverRouteError> {
-        self.opened.push(intent.session_ref);
+        self.opened.push(intent.session_id);
         if self.pending_opens {
             Ok(SessionStart::Pending)
         } else {
             self.events
-                .push(SessionDriverEvent::Opened(intent.session_ref));
+                .push(SessionDriverEvent::Opened(intent.session_id));
             Ok(SessionStart::Started)
         }
     }
@@ -3115,7 +3115,7 @@ impl OutboundConnectorBindings for SessionWorld {
     fn prepare_session_write(
         &mut self,
         _: &node::Path,
-        _: SessionRef,
+        _: SessionId,
         data: &Data,
         _: &std::collections::BTreeMap<String, rastok::value::Value>,
     ) -> Result<RequestPreparation, DriverRouteError> {
@@ -3131,10 +3131,10 @@ impl OutboundConnectorBindings for SessionWorld {
         intent: &SessionWriteIntent,
         _: &Envelope,
     ) -> Result<SessionStart, DriverRouteError> {
-        self.writes.push((intent.session_ref, intent.write_ref));
+        self.writes.push((intent.session_id, intent.write_ref));
         if !self.hold_writes {
             self.events.push(SessionDriverEvent::WriteSettled {
-                session: intent.session_ref,
+                session: intent.session_id,
                 write: intent.write_ref,
             });
         }
@@ -3144,7 +3144,7 @@ impl OutboundConnectorBindings for SessionWorld {
     fn close_session(
         &mut self,
         _: &node::Path,
-        session: SessionRef,
+        session: SessionId,
     ) -> Result<SessionStart, DriverRouteError> {
         self.close_requests.push(session);
         if !self.hold_closes {
@@ -3157,7 +3157,7 @@ impl OutboundConnectorBindings for SessionWorld {
         Ok(std::mem::take(&mut self.events))
     }
 
-    fn forget_session(&mut self, session: SessionRef) -> Result<(), DriverRouteError> {
+    fn forget_session(&mut self, session: SessionId) -> Result<(), DriverRouteError> {
         self.released.push(session);
         Ok(())
     }
@@ -3165,7 +3165,7 @@ impl OutboundConnectorBindings for SessionWorld {
     fn abort_session(
         &mut self,
         _: &node::Path,
-        session: SessionRef,
+        session: SessionId,
     ) -> Result<(), DriverRouteError> {
         if !self.abort_requests.contains(&session) {
             self.abort_requests.push(session);
@@ -3256,10 +3256,10 @@ fn a_new_input_reopens_only_its_ended_session_without_resending_old_writes() {
         vm.drain_with_bindings(&mut journal, &mut world).unwrap();
         assert_eq!(journal.live_sessions(), vec![bob]);
         assert_eq!(journal.open_session_writes().len(), 1);
-        assert_eq!(journal.open_session_writes()[0].session_ref, bob);
+        assert_eq!(journal.open_session_writes()[0].session_id, bob);
         assert!(journal.records().iter().any(|record| matches!(record,
             Record::Outbound(OutboundRecord::Session(record))
-                if record.session_ref == alice
+                if record.session_id == alice
                     && record.status == SessionStatus::WriteAbandoned(original_writes[0].1))));
         assert!(vm.inspection().instances.iter().any(|instance| {
             instance.reference == alice_instance && instance.phase == InstancePhaseInspection::Open
@@ -3290,7 +3290,7 @@ fn a_new_input_reopens_only_its_ended_session_without_resending_old_writes() {
         }));
         assert!(journal.records().iter().any(|record| matches!(record,
             Record::Outbound(OutboundRecord::Session(record))
-                if record.session_ref == fresh_alice
+                if record.session_id == fresh_alice
                     && matches!(&record.status, SessionStatus::Opening(intent)
                         if intent.emitting_id == fresh_input))));
 
@@ -3481,7 +3481,7 @@ graph app : App {
             let writes = journal.open_session_writes();
             assert_eq!(writes.len(), 1);
             assert_eq!(writes[0].prepared.bytes(), b"quit");
-            assert_eq!(writes[0].session_ref, alice);
+            assert_eq!(writes[0].session_id, alice);
             let quit_write = writes[0].write_ref;
             world.settle_write(0);
             vm.pump(&mut journal, &mut world).unwrap();
@@ -4256,7 +4256,7 @@ graph websocket : App {
             panic!("the uncongested opening must commit")
         };
         let Some(InboundExchangeRef::Session(session)) = accepted.exchange else {
-            panic!("an opening must mint a SessionRef")
+            panic!("an opening must mint a SessionId")
         };
         session
     };
@@ -4370,7 +4370,7 @@ struct FlakyJournal {
     refuse_commits: bool,
     refuse_opens: bool,
     refuse_closes: bool,
-    refuse_call: Option<rastok::boundary::CallRef>,
+    refuse_call: Option<rastok::boundary::CallId>,
     refuse_close_requests: bool,
     recovery_records: Option<Vec<Record>>,
 }
@@ -4441,8 +4441,8 @@ impl Journal for FlakyJournal {
     }
     fn instance_ref_for_admission(
         &self,
-        address: &InstanceAddress,
-    ) -> Result<InstanceRef, rastok::journal::Error> {
+        address: &InstanceIdentity,
+    ) -> Result<InstanceGeneration, rastok::journal::Error> {
         self.inner.instance_ref_for_admission(address)
     }
     fn commit(
@@ -4458,7 +4458,7 @@ impl Journal for FlakyJournal {
     fn open_outbound(
         &mut self,
         intent: Intent,
-        attempt: Option<rastok::journal::retry_protocol::AttemptRef>,
+        attempt: Option<rastok::journal::retry_protocol::AttemptId>,
     ) -> Result<(), rastok::journal::Error> {
         if self.refuse_opens {
             return Err(rastok::journal::Error::Storage(String::from("scripted")));
@@ -4473,7 +4473,7 @@ impl Journal for FlakyJournal {
     }
     fn confirm_session_open(
         &mut self,
-        session: &SessionRef,
+        session: &SessionId,
     ) -> Result<CloseVerdict, rastok::journal::Error> {
         self.inner.confirm_session_open(session)
     }
@@ -4485,39 +4485,39 @@ impl Journal for FlakyJournal {
     }
     fn settle_session_write(
         &mut self,
-        write_ref: &SessionWriteRef,
+        write_ref: &SessionWriteId,
         abandoned: bool,
     ) -> Result<CloseVerdict, rastok::journal::Error> {
         self.inner.settle_session_write(write_ref, abandoned)
     }
     fn close_outbound(
         &mut self,
-        call_ref: &rastok::boundary::CallRef,
+        call_id: &rastok::boundary::CallId,
         closure: rastok::journal::Closure,
         closed_at: i64,
         schedule: Option<Box<rastok::journal::timing::TimerSchedule>>,
     ) -> Result<rastok::journal::CloseVerdict, rastok::journal::Error> {
-        if self.refuse_closes || self.refuse_call.as_ref() == Some(call_ref) {
+        if self.refuse_closes || self.refuse_call.as_ref() == Some(call_id) {
             return Err(rastok::journal::Error::Storage(String::from("scripted")));
         }
         self.inner
-            .close_outbound(call_ref, closure, closed_at, schedule)
+            .close_outbound(call_id, closure, closed_at, schedule)
     }
     fn abandon_outbound(
         &mut self,
-        call_ref: &rastok::boundary::CallRef,
+        call_id: &rastok::boundary::CallId,
         closed_at: i64,
     ) -> Result<rastok::journal::CloseVerdict, rastok::journal::Error> {
         if self.refuse_closes {
             return Err(rastok::journal::Error::Storage(String::from("scripted")));
         }
-        self.inner.abandon_outbound(call_ref, closed_at)
+        self.inner.abandon_outbound(call_id, closed_at)
     }
     fn find_envelope(&self, id: rastok::envelope::Id) -> Option<Envelope> {
         self.inner.find_envelope(id)
     }
-    fn find_call(&self, call_ref: &rastok::boundary::CallRef) -> Option<Intent> {
-        self.inner.find_call(call_ref)
+    fn find_call(&self, call_id: &rastok::boundary::CallId) -> Option<Intent> {
+        self.inner.find_call(call_id)
     }
     fn open_calls(&self) -> Vec<Intent> {
         self.inner.open_calls()
@@ -4525,7 +4525,7 @@ impl Journal for FlakyJournal {
     fn open_inbound_calls(&self) -> Vec<rastok::journal::InboundCallIngressRecord> {
         self.inner.open_inbound_calls()
     }
-    fn live_sessions(&self) -> Vec<SessionRef> {
+    fn live_sessions(&self) -> Vec<SessionId> {
         self.inner.live_sessions()
     }
     fn open_session_writes(&self) -> Vec<SessionWriteIntent> {
@@ -4814,7 +4814,7 @@ fn graph_call_commits_and_openings_are_atomic_under_storage_refusal() {
             vm.pump(&mut journal, &mut world).unwrap();
             if world.started.len() > answered {
                 world.answers.push(Response {
-                    call_ref: world.started[answered],
+                    call_id: world.started[answered],
                     completion: Completion::process(
                         vec![Data::materialized(Value::Text("frame".into()))],
                         vec![],
@@ -4850,7 +4850,7 @@ fn graph_call_recovery_refuses_missing_contexts_and_unsettled_obligations() {
     vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     world.answers.push(Response {
-        call_ref: world.started[0],
+        call_id: world.started[0],
         completion: Completion::process(
             vec![Data::materialized(Value::Text("frame".into()))],
             vec![],
@@ -5098,7 +5098,7 @@ graph app : App {
             vm.pump(&mut journal, &mut world).unwrap();
             assert_eq!(world.started.len(), attempt, "faulted={faulted}, now={now}");
             world.answers.push(Response {
-                call_ref: *world.started.last().unwrap(),
+                call_id: *world.started.last().unwrap(),
                 completion: Completion::process(
                     vec![Data::materialized(Value::Text(format!("stdout {attempt}")))],
                     vec![Data::materialized(Value::Text(format!("stderr {attempt}")))],
@@ -5207,9 +5207,9 @@ graph app : App {
         vm.drain_with_bindings(&mut journal, &mut world).unwrap();
         vm.pump(&mut journal, &mut world).unwrap();
         assert_eq!(world.started.len(), 2);
-        for call_ref in &world.started {
+        for call_id in &world.started {
             world.answers.push(Response {
-                call_ref: *call_ref,
+                call_id: *call_id,
                 completion: Completion::process(
                     vec![Data::materialized(Value::Text("answer".into()))],
                     vec![],
@@ -5224,7 +5224,7 @@ graph app : App {
         world.answers.insert(
             0,
             Response {
-                call_ref: world.started[0],
+                call_id: world.started[0],
                 completion: Completion::process(
                     vec![Data::materialized(Value::Uint(0))],
                     vec![],
@@ -5312,7 +5312,7 @@ graph app : App {
     assert_eq!(world.started.len(), 1);
     let opening = journal.inner.records().to_vec();
     world.answers.push(Response {
-        call_ref: world.started[0],
+        call_id: world.started[0],
         completion: Completion::process(
             vec![],
             vec![],
@@ -5408,7 +5408,7 @@ graph app : App {
     let mut world = ClosingWorld::default();
     vm.inject(&mut journal, text_submission("x")).unwrap();
     vm.drain_with_bindings(&mut journal, &mut world).unwrap();
-    let call = journal.inner.open_calls()[0].call_ref;
+    let call = journal.inner.open_calls()[0].call_id;
     journal
         .inner
         .close_outbound(
@@ -5910,13 +5910,13 @@ fn a_late_answer_is_a_reported_observation_not_a_silence() {
     let mut world = EchoWorld::default();
     vm.inject(&mut journal, submission("salut")).unwrap();
     vm.drain_with_bindings(&mut journal, &mut world).unwrap();
-    let call_ref = journal.open_calls()[0].call_ref;
+    let call_id = journal.open_calls()[0].call_id;
     // The budget expires first…
     vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
     // …then the world answers a closed call.
     let mut late = ScriptedWorld {
         answers: vec![Response {
-            call_ref,
+            call_id,
             completion: Completion::process(
                 vec![Data::encoded(Encoding::Raw, *b"tard")],
                 vec![],
@@ -6195,7 +6195,7 @@ graph countdown : App + Loop {
     assert_eq!(delayed_facts.len(), 2);
     assert!(delayed_facts.iter().all(|transaction| {
         transaction.timers.len() == 1
-            && transaction.timers[0].0 == rastok::journal::timer_kind::LOOP_DELAY
+            && transaction.timers[0].0 == rastok::journal::timer_kind::RECURRENCE_DELAY
     }));
 }
 

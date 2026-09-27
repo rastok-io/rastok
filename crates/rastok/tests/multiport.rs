@@ -2015,7 +2015,7 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
     // referenced row absent from the table refuses by ignorance.
     use rastok::datatype::DataType;
     use rastok::node::Direction;
-    use rastok::plan::{Edge, EndpointRef, PortDecl, Slot, ValidatedExecutionPlan};
+    use rastok::plan::{Edge, EdgeEnd, PortDecl, Slot, ValidatedExecutionPlan};
     let source = "graph g : App {\n  input in: text\n  output out: text\n  connector probe : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    idempotent = true; behavior = deterministic\n  }\n  in -> probe -> out\n  probe.err -> nothing\n  probe.exit -> nothing\n}\n";
     let mut plan = compile(
         &[source],
@@ -2042,11 +2042,11 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
         .sort_by(|left, right| left.key().cmp(&right.key()));
     plan.edges.push(Edge {
         scope: rastok::plan::OwnerSlot::new(0),
-        from: EndpointRef {
+        from: EdgeEnd {
             node: None,
             port: rastok::node::Port::new("in").unwrap(),
         },
-        to: Some(EndpointRef {
+        to: Some(EdgeEnd {
             node: Some(Slot::new(u32::try_from(probe_slot).unwrap())),
             port: rastok::node::Port::new("request").unwrap(),
         }),
@@ -2706,8 +2706,12 @@ fn struct_equality_is_by_name_like_the_seal() {
     // sorted seal in every judge.
     assert_eq!(left, right, "envelope equality is by name");
     assert_eq!(
-        rastok_core::canonical_cbor::encode(&rastok_core::identity::encoding::value_tagged(&left)),
-        rastok_core::canonical_cbor::encode(&rastok_core::identity::encoding::value_tagged(&right)),
+        rastok_core::canonical_cbor::encode(&rastok_core::identity::encoding::canonical_value(
+            &left
+        )),
+        rastok_core::canonical_cbor::encode(&rastok_core::identity::encoding::canonical_value(
+            &right
+        )),
         "the canonical bytes already agreed"
     );
     // The Rastok expression operator agrees too.

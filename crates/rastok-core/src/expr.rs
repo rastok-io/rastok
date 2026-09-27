@@ -1033,7 +1033,7 @@ pub fn parse_boot_reference(
         crate::deployment::EnvironmentName::new(argument.clone())
             .map(crate::deployment::BootReference::Environment)
     } else {
-        crate::deployment::SecretRef::new(argument.clone())
+        crate::deployment::SecretName::new(argument.clone())
             .map(crate::deployment::BootReference::Secret)
     }
     .map_err(|error| {
@@ -1089,7 +1089,7 @@ pub fn boot_reference(
         [_, kind, name] if kind == "env" => crate::deployment::EnvironmentName::new(name.clone())
             .map(crate::deployment::BootReference::Environment)
             .map(Some),
-        [_, kind, name] if kind == "secret" => crate::deployment::SecretRef::new(name.clone())
+        [_, kind, name] if kind == "secret" => crate::deployment::SecretName::new(name.clone())
             .map(crate::deployment::BootReference::Secret)
             .map(Some),
         _ => Err(crate::deployment::DeploymentError::InvalidBootReference),
@@ -1732,7 +1732,7 @@ impl<'a> ExprParser<'_, 'a> {
                 range,
             });
         };
-        if let Err(error) = target.ty().validate() {
+        if let Err(error) = target.ty().check_bounds() {
             return Err(Diagnostic {
                 kind: DiagnosticKind::General,
                 message: format!("`{name}` resolves to an invalid logical type: {error}"),
@@ -1935,7 +1935,7 @@ impl<'a> ExprParser<'_, 'a> {
 /// explicit stack — the walk that bounds every later recursion over
 /// the tree (type-check, hash, lowering, and the exact serialized
 /// walker at validation). Parser literals are scalars, so only the
-/// expression spine counts.
+/// expression tree contributes to nesting.
 pub(crate) fn structural_depth(root: &Expr) -> usize {
     let mut max = 0;
     let mut stack = vec![(root, 1usize)];
@@ -2807,7 +2807,7 @@ fn narrow_case(
             let case = tagged.case;
             let fields = tagged.payload;
             let value = Value::Struct(fields);
-            if let Some(violation) = payload.violation("case payload", &value) {
+            if let Err(violation) = payload.check_value_type("case payload", &value) {
                 Err(NarrowingFailure::CasePayload {
                     case,
                     violation: Box::new(violation),

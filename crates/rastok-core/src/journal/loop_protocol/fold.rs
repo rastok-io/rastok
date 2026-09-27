@@ -6,8 +6,8 @@ use super::{
     run_ref,
 };
 use crate::envelope::{Envelope, Id};
-use crate::identity::InstanceRef;
-use crate::journal::{LoopRunRef, Record, TransactionRecord};
+use crate::identity::InstanceGeneration;
+use crate::journal::{LoopRunId, Record, TransactionRecord};
 use crate::node::{Lifecycle, Port, Trigger};
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
@@ -81,9 +81,9 @@ pub enum Phase {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunState {
     /// Exact enclosing applications retained by the opening transaction.
-    pub enclosing: Vec<LoopRunRef>,
+    pub enclosing: Vec<LoopRunId>,
     /// Exact owner generation.
-    pub instance: InstanceRef,
+    pub instance: InstanceGeneration,
     /// Recurrent host input.
     pub entry: Port,
     /// Current zero-based application.
@@ -107,10 +107,10 @@ pub struct RunState {
 /// Pure replay fold, with no Driver, scheduler, clock or additional ledger.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Fold {
-    runs: BTreeMap<LoopRunRef, RunState>,
+    runs: BTreeMap<LoopRunId, RunState>,
     /// Active parent-generation links from lifecycle records. An owner path
     /// alone cannot distinguish tenants or successive enclosing generations.
-    parents: BTreeMap<InstanceRef, Option<InstanceRef>>,
+    parents: BTreeMap<InstanceGeneration, Option<InstanceGeneration>>,
 }
 
 impl Fold {
@@ -130,12 +130,12 @@ impl Fold {
 
     /// Current state by exact run id, not business origin.
     #[must_use]
-    pub fn run(&self, run: LoopRunRef) -> Option<&RunState> {
+    pub fn run(&self, run: LoopRunId) -> Option<&RunState> {
         self.runs.get(&run)
     }
 
     /// Retained runs in canonical identity order.
-    pub fn runs(&self) -> impl Iterator<Item = (&LoopRunRef, &RunState)> {
+    pub fn runs(&self) -> impl Iterator<Item = (&LoopRunId, &RunState)> {
         self.runs.iter()
     }
 
@@ -224,7 +224,7 @@ impl Fold {
             for route in &packet.routes {
                 candidate.context_chain(&route.runs)?;
                 let mut retained = record.routes.iter().filter(|delivery| {
-                    crate::journal::ids::delivery_ref(&delivery.edge, delivery.delivery)
+                    crate::journal::ids::delivery_id(&delivery.edge, delivery.delivery)
                         == route.delivery
                 });
                 if retained.next().is_none() || retained.next().is_some() {
@@ -239,7 +239,7 @@ impl Fold {
         Ok(())
     }
 
-    fn within(&self, instance: &InstanceRef, scope: &InstanceRef) -> bool {
+    fn within(&self, instance: &InstanceGeneration, scope: &InstanceGeneration) -> bool {
         let mut cursor = instance;
         for _ in 0..self.parents.len() {
             let Some(parent) = self.parents.get(cursor) else {
@@ -254,7 +254,7 @@ impl Fold {
         false
     }
 
-    fn context_chain(&self, context: &[LoopRunRef]) -> Result<(), Error> {
+    fn context_chain(&self, context: &[LoopRunId]) -> Result<(), Error> {
         for pair in context.windows(2) {
             let outer = self.runs.get(&pair[0]).ok_or(Error::UnknownRun)?;
             let inner = self.runs.get(&pair[1]).ok_or(Error::UnknownRun)?;
@@ -265,7 +265,7 @@ impl Fold {
         Ok(())
     }
 
-    fn context(&self, context: &[LoopRunRef]) -> Result<(), Error> {
+    fn context(&self, context: &[LoopRunId]) -> Result<(), Error> {
         let mut unique = BTreeSet::new();
         for run in context {
             if !unique.insert(*run)
@@ -543,7 +543,7 @@ fn expiry_matches(cause: Id, state: &Envelope, output: &Envelope) -> bool {
 mod tests {
     use super::*;
     use crate::envelope::{Data, Meta, MetaSys, Value};
-    use crate::identity::InstanceAddress;
+    use crate::identity::InstanceIdentity;
     use crate::journal::TransactionRecord;
     use crate::node::{Lifecycle, Trigger};
     use crate::plan::OwnerPath;
@@ -559,15 +559,18 @@ mod tests {
         Envelope::new(Meta::new(sys), Data::materialized(Value::Int(value)))
     }
 
-    fn open(fuel: u64) -> (LoopRunRef, InstanceRef, Vec<Packet>) {
-        let instance = InstanceRef::new(
-            InstanceAddress::singleton(&OwnerPath::new(["host"]).unwrap()),
+    fn open(fuel: u64) -> (LoopRunId, InstanceGeneration, Vec<Packet>) {
+        let instance = InstanceGeneration::new(
+            InstanceIdentity::singleton(&OwnerPath::new(["host"]).unwrap()),
             0,
         );
         open_at(instance, fuel)
     }
 
-    fn open_at(instance: InstanceRef, fuel: u64) -> (LoopRunRef, InstanceRef, Vec<Packet>) {
+    fn open_at(
+        instance: InstanceGeneration,
+        fuel: u64,
+    ) -> (LoopRunId, InstanceGeneration, Vec<Packet>) {
         let entry = Port::new("request").unwrap();
         let state = state(2);
         let opening = OpeningAdmissionRef::Ingress {
@@ -600,7 +603,7 @@ mod tests {
         (run, instance, packets)
     }
 
-    fn record(instance: &InstanceRef, packet: Packet) -> Record {
+    fn record(instance: &InstanceGeneration, packet: Packet) -> Record {
         Record::Transaction(Box::new(TransactionRecord {
             owner_path: instance.address().owner().clone(),
             instance: instance.clone(),
@@ -623,7 +626,7 @@ mod tests {
         }))
     }
 
-    fn start(instance: &InstanceRef, parent: Option<&InstanceRef>) -> Record {
+    fn start(instance: &InstanceGeneration, parent: Option<&InstanceGeneration>) -> Record {
         let Record::Transaction(mut transaction) = record(instance, Packet::default()) else {
             unreachable!()
         };
@@ -633,8 +636,8 @@ mod tests {
         Record::Transaction(transaction)
     }
 
-    fn rooted(instance: &InstanceRef) -> Vec<Record> {
-        let root = InstanceRef::new(InstanceAddress::singleton(&OwnerPath::root()), 0);
+    fn rooted(instance: &InstanceGeneration) -> Vec<Record> {
+        let root = InstanceGeneration::new(InstanceIdentity::singleton(&OwnerPath::root()), 0);
         vec![start(&root, None), start(instance, Some(&root))]
     }
 
@@ -728,8 +731,8 @@ mod tests {
         let (run, instance, packets) = open(2);
         let mut records = rooted(&instance);
         records.extend(packets.into_iter().map(|packet| record(&instance, packet)));
-        let child = InstanceRef::new(
-            InstanceAddress::singleton(&OwnerPath::new(["host", "child"]).unwrap()),
+        let child = InstanceGeneration::new(
+            InstanceIdentity::singleton(&OwnerPath::new(["host", "child"]).unwrap()),
             0,
         );
         records.push(start(&child, Some(&instance)));
@@ -743,7 +746,7 @@ mod tests {
         };
         fold.clone().apply_transaction(&valid).unwrap();
 
-        let impostor = InstanceRef::new(child.address().clone(), 1);
+        let impostor = InstanceGeneration::new(child.address().clone(), 1);
         let Record::Transaction(forged) = record(&impostor, context.clone()) else {
             unreachable!()
         };
@@ -761,8 +764,8 @@ mod tests {
         closed.trigger = Trigger::Lifecycle(Lifecycle::Stop);
         let mut expired_parent = fold.clone();
         expired_parent.apply_transaction(closed).unwrap();
-        let successor = InstanceRef::new(instance.address().clone(), 1);
-        let root = InstanceRef::new(InstanceAddress::singleton(&OwnerPath::root()), 0);
+        let successor = InstanceGeneration::new(instance.address().clone(), 1);
+        let root = InstanceGeneration::new(InstanceIdentity::singleton(&OwnerPath::root()), 0);
         let Record::Transaction(successor_start) = start(&successor, Some(&root)) else {
             unreachable!()
         };
@@ -780,8 +783,8 @@ mod tests {
         let (outer, parent, packets) = open(2);
         let mut records = rooted(&parent);
         records.extend(packets.into_iter().map(|packet| record(&parent, packet)));
-        let child = InstanceRef::new(
-            InstanceAddress::singleton(&OwnerPath::new(["host", "child"]).unwrap()),
+        let child = InstanceGeneration::new(
+            InstanceIdentity::singleton(&OwnerPath::new(["host", "child"]).unwrap()),
             0,
         );
         records.push(start(&child, Some(&parent)));
@@ -814,16 +817,16 @@ mod tests {
     #[test]
     fn a_context_cannot_cross_to_a_sibling_tenants_identical_owner_path() {
         use crate::datatype::DataType;
-        use crate::identity::InstanceFrame;
+        use crate::identity::InstanceSegment;
 
         let owner = OwnerPath::new(["host"]).unwrap();
         let child_owner = OwnerPath::new(["host", "child"]).unwrap();
         let tenant = |name: &str, path: &OwnerPath| {
-            InstanceRef::new(
-                InstanceAddress::new(
+            InstanceGeneration::new(
+                InstanceIdentity::new(
                     path,
-                    &[InstanceFrame::SelectedKey {
-                        owner: owner.clone(),
+                    &[InstanceSegment::SelectedKey {
+                        scope: owner.clone(),
                         ty: DataType::Text,
                         value: Value::Text(name.into()),
                     }],
@@ -836,7 +839,7 @@ mod tests {
         let bob = tenant("bob", &owner);
         let alice_child = tenant("alice", &child_owner);
         let bob_child = tenant("bob", &child_owner);
-        let root = InstanceRef::new(InstanceAddress::singleton(&OwnerPath::root()), 0);
+        let root = InstanceGeneration::new(InstanceIdentity::singleton(&OwnerPath::root()), 0);
         let (run, _, packets) = open_at(alice.clone(), 2);
         let mut records = vec![
             start(&root, None),
@@ -873,8 +876,8 @@ mod tests {
         let mut records = rooted(&instance);
         records.extend(packets.into_iter().map(|packet| record(&instance, packet)));
         let fold = Fold::from_records(&records).unwrap();
-        let target = InstanceRef::new(
-            InstanceAddress::singleton(&OwnerPath::new(["host", "child"]).unwrap()),
+        let target = InstanceGeneration::new(
+            InstanceIdentity::singleton(&OwnerPath::new(["host", "child"]).unwrap()),
             0,
         );
         let envelope = state(1);
@@ -884,7 +887,7 @@ mod tests {
             target,
         };
         let context = super::super::RoutedContext {
-            delivery: crate::journal::ids::delivery_ref(&delivery.edge, delivery.delivery),
+            delivery: crate::journal::ids::delivery_id(&delivery.edge, delivery.delivery),
             runs: vec![run],
         };
         let Record::Transaction(mut transaction) = record(

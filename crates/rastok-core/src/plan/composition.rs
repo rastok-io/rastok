@@ -9,7 +9,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::{
-    Endpoint, EndpointOwner, EndpointRef, ExecutionPlan, OwnerKind, OwnerSlot, ResolvedPortTable,
+    EdgeEnd, Endpoint, EndpointOwner, ExecutionPlan, OwnerKind, OwnerSlot, ResolvedPortTable,
     RouteArm, RouteDestination, RouteErrorKind, RouteRule, RouteSelection, RouteValidationError,
     Slot,
 };
@@ -166,7 +166,7 @@ pub(super) fn validate(
     derived.retain(|rule| !matches!(&rule.selection, RouteSelection::All(set) if set.is_empty()));
     let mut actual = plan.routes.clone();
     let mut unconditional = BTreeMap::<Endpoint, Vec<RouteDestination>>::new();
-    let endpoint = |physical: &EndpointRef| Endpoint {
+    let endpoint = |physical: &EdgeEnd| Endpoint {
         owner: physical.node.map_or_else(
             || EndpointOwner::Graph(super::OwnerPath::root()),
             |slot| EndpointOwner::Node(plan.nodes[slot.index()].path.clone()),

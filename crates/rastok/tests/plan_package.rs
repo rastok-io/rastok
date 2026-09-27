@@ -854,7 +854,7 @@ fn an_out_of_bounds_slot_cannot_become_a_validated_plan() {
     // validity claim does not travel through into_inner — the raw
     // plan must re-earn the type, and cannot.
     let mut raw = plan.into_inner();
-    raw.edges[0].to = Some(rastok::plan::EndpointRef {
+    raw.edges[0].to = Some(rastok::plan::EdgeEnd {
         node: Some(rastok::plan::Slot::new(999)),
         port: rastok::node::Port::new("in").unwrap(),
     });

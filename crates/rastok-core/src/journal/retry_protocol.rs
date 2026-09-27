@@ -4,10 +4,10 @@
 //! establish the original plan, exact carrying transaction and spatial context;
 //! a successful protocol fold alone is not permission to execute a Driver.
 
-use crate::boundary::{CallRef, PreparedRequest};
+use crate::boundary::{CallId, PreparedRequest};
 use crate::connector::{CallSemantics, ContractId};
 use crate::envelope::{Envelope, Id};
-use crate::identity::InstanceRef;
+use crate::identity::InstanceGeneration;
 use crate::node::Port;
 use crate::plan::{LoopDelay, SemanticHash};
 use crate::value::Value;
@@ -26,9 +26,9 @@ mod tests;
 
 /// One operation opened by one exact delivery, not its shared business origin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct OperationRef(Id);
+pub struct OperationId(Id);
 
-impl OperationRef {
+impl OperationId {
     /// Retained identity for decoding and inspection; the fold re-derives it.
     #[must_use]
     pub const fn from_id(id: Id) -> Self {
@@ -44,9 +44,9 @@ impl OperationRef {
 
 /// One-based attempt correlation, shared by its Call and completion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AttemptRef {
+pub struct AttemptId {
     /// Original operation.
-    pub operation: OperationRef,
+    pub operation: OperationId,
     /// First attempt is 1; zero is reserved for a never-admitted stopped Close.
     pub ordinal: u64,
 }
@@ -137,9 +137,9 @@ impl Policy {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Batch {
     /// Exact operation and attempt.
-    pub attempt: AttemptRef,
+    pub attempt: AttemptId,
     /// The Call whose unique completion produced every emission below.
-    pub call: CallRef,
+    pub call: CallId,
     /// Entire ordered emission list, including stdout/stderr and terminal.
     pub emissions: Vec<Id>,
 }
@@ -159,7 +159,7 @@ pub enum Fact {
     /// Keep original preparation before an admission can reach the world.
     Opened {
         /// Derived from this instance, entry and exact opening delivery.
-        operation: OperationRef,
+        operation: OperationId,
         /// Canonical delivery identity, not only its EnvelopeId.
         opening: Id,
         /// Original request input.
@@ -174,7 +174,7 @@ pub enum Fact {
     /// First or recurrent request became admissible, with ordinary Call budget.
     Admitted {
         /// One-based admitted attempt.
-        attempt: AttemptRef,
+        attempt: AttemptId,
         /// Complete admitted envelope with its fresh temporal system identity.
         envelope: Envelope,
         /// Exact initial/spatial or subsequent/temporal delivery identity.
@@ -187,18 +187,18 @@ pub enum Fact {
     /// The consumed predecessor selected the following admission.
     Advance {
         /// Attempt whose batch was consumed by this same transaction.
-        from: AttemptRef,
+        from: AttemptId,
         /// Following one-based ordinal.
         to: u64,
         /// Winning Call, also the original timer's causal authority.
-        call: CallRef,
+        call: CallId,
     },
     /// Final batch uses ordinary authored routes, without reminting envelopes.
     Published(Batch),
     /// Publication or exact-instance Closing ends the operation.
     Close {
         /// Last admitted ordinal, or zero only before any admission.
-        attempt: AttemptRef,
+        attempt: AttemptId,
         /// Final or stopped, never Loop exhaustion.
         reason: CloseReason,
     },
@@ -207,7 +207,7 @@ pub enum Fact {
 impl Fact {
     /// Exact operation affected by this fact.
     #[must_use]
-    pub const fn operation(&self) -> OperationRef {
+    pub const fn operation(&self) -> OperationId {
         match self {
             Self::Opened { operation, .. } => *operation,
             Self::Admitted { attempt, .. } | Self::Close { attempt, .. } => attempt.operation,
@@ -223,7 +223,7 @@ impl Fact {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Packet {
     /// Attempt of a Call or Connector completion, absent on manager records.
-    pub context: Option<AttemptRef>,
+    pub context: Option<AttemptId>,
     /// Facts in causal commit order, not sorted by kind.
     pub facts: Vec<Fact>,
 }
@@ -244,7 +244,7 @@ impl Packet {
         encoding::packet_tree(
             self,
             encoding::causal_pin,
-            crate::identity::encoding::envelope_spine,
+            crate::identity::encoding::canonical_envelope,
         )
     }
 
@@ -262,8 +262,8 @@ const ADMISSION_DOMAIN: u8 = 0x07;
 
 /// Derive an operation from its exact opening admission.
 #[must_use]
-pub fn operation_ref(instance: &InstanceRef, entry: &Port, opening: Id) -> OperationRef {
-    OperationRef(Id::derive(
+pub fn operation_ref(instance: &InstanceGeneration, entry: &Port, opening: Id) -> OperationId {
+    OperationId(Id::derive(
         OPERATION_DOMAIN,
         &[
             instance.address().as_bytes(),
@@ -276,7 +276,7 @@ pub fn operation_ref(instance: &InstanceRef, entry: &Port, opening: Id) -> Opera
 
 /// C1's 0x07 domain: operation, following ordinal, previous winning Call.
 #[must_use]
-pub fn admission_ref(operation: OperationRef, ordinal: u64, previous: CallRef) -> Id {
+pub fn admission_ref(operation: OperationId, ordinal: u64, previous: CallId) -> Id {
     Id::derive(
         ADMISSION_DOMAIN,
         &[
@@ -289,6 +289,6 @@ pub fn admission_ref(operation: OperationRef, ordinal: u64, previous: CallRef) -
 
 /// Temporal cursor namespace, distinct from physical edges and `@loop`.
 #[must_use]
-pub fn admission_edge(operation: OperationRef, entry: &Port) -> String {
+pub fn admission_edge(operation: OperationId, entry: &Port) -> String {
     alloc::format!("@retry:{}:{}", operation.id(), entry.name())
 }

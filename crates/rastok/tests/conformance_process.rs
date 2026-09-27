@@ -294,7 +294,7 @@ impl CallConnectorDriver for Liar {
 
     fn start(&mut self, intent: &Intent, _request: &Envelope) -> CallStart {
         self.pending.push(Response {
-            call_ref: intent.call_ref,
+            call_id: intent.call_id,
             completion: Completion::try_new(vec![PortOutput {
                 port: rastok::node::Port::conventional_exit(),
                 data: Data::materialized(Value::TaggedUnion(Box::new(
@@ -409,7 +409,7 @@ impl CallConnectorDriver for Swapper {
         let framed = String::from_utf8_lossy(intent.prepared.bytes());
         let echoed = framed.strip_suffix('\n').unwrap_or(&framed).to_owned();
         self.pending.push(Response {
-            call_ref: intent.call_ref,
+            call_id: intent.call_id,
             completion: Completion::process(
                 vec![Data::materialized(Value::Text(echoed))],
                 vec![],

@@ -115,7 +115,7 @@ fn gallery_keeps_alice_and_bob_resources_separate_and_reopens_only_on_input() {
                 Record::Outbound(OutboundRecord::Session(s))
                     if matches!(s.status, SessionStatus::Opening(_)) =>
                 {
-                    Some(s.session_ref)
+                    Some(s.session_id)
                 }
                 _ => None,
             })

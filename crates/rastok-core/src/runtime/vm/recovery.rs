@@ -203,7 +203,7 @@ impl Vm<'_> {
                         | crate::journal::timer_kind::SESSION_HANDSHAKE
                         | crate::journal::timer_kind::JOIN_WITHIN
                         | crate::journal::timer_kind::INSTANCE_LIFETIME
-                        | crate::journal::timer_kind::LOOP_DELAY
+                        | crate::journal::timer_kind::RECURRENCE_DELAY
                         | crate::journal::timer_kind::INSTANCE_DRAIN
                         | crate::journal::timer_kind::INSTANCE_SETTLEMENT
                 ) || (matches!(
@@ -221,7 +221,7 @@ impl Vm<'_> {
         if record.timers.iter().any(|(kind, _)| {
             !matches!(
                 *kind,
-                crate::journal::timer_kind::LOOP_DELAY
+                crate::journal::timer_kind::RECURRENCE_DELAY
                     | crate::journal::timer_kind::CALL_TIMEOUT
                     | crate::journal::timer_kind::SESSION_HANDSHAKE
                     | crate::journal::timer_kind::JOIN_WITHIN
@@ -470,7 +470,7 @@ impl Vm<'_> {
                     recurrence = Some((state.entry.clone(), edge, envelope.clone()));
                     if !state.enclosing.is_empty() {
                         expected_contexts.push(protocol::RoutedContext {
-                            delivery: ids::delivery_ref(
+                            delivery: ids::delivery_id(
                                 &super::loop_manager::manager_edge(*run, &state.entry),
                                 envelope.meta().sys().id(),
                             ),
@@ -484,7 +484,7 @@ impl Vm<'_> {
                     {
                         expected_arms.push(crate::journal::timing::TimerArm {
                             kind: crate::journal::timer_kind::CALL_TIMEOUT,
-                            reference: ids::delivery_ref(
+                            reference: ids::delivery_id(
                                 &super::loop_manager::manager_edge(*run, &state.entry),
                                 envelope.meta().sys().id(),
                             ),

@@ -2498,7 +2498,7 @@ behavior = deterministic
         (
             "auth_bearer",
             crate::deployment::BootReference::Secret(
-                crate::deployment::SecretRef::new("providers/openai/token")
+                crate::deployment::SecretName::new("providers/openai/token")
                     .expect("logical secret ref"),
             ),
         ),

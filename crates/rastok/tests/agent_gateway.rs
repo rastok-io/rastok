@@ -87,7 +87,7 @@ fn resident_gateway_scenarios_keep_protocol_frames_on_their_socket() {
     let mut writes = BTreeMap::new();
     for record in &statuses {
         if matches!(record.status, SessionStatus::WriteOpen(_)) {
-            *writes.entry(record.session_ref).or_insert(0) += 1;
+            *writes.entry(record.session_id).or_insert(0) += 1;
         }
     }
     let mut counts: Vec<_> = writes.into_values().collect();

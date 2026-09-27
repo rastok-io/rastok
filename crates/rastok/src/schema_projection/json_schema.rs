@@ -28,13 +28,13 @@ pub fn project(document: &str) -> Result<DataType, ProjectionError> {
         .unwrap_or_default();
     let mut active = BTreeSet::new();
     let ty = project_value(&root, "$", &defs, &mut active, true)?;
-    ty.validate().map_err(|error| type_error("$", error))?;
+    ty.check_bounds().map_err(|error| type_error("$", error))?;
     for (name, definition) in &defs {
         active.clear();
         let definition_path = field_path("$.$defs", name);
         let definition_ty = project_value(definition, &definition_path, &defs, &mut active, false)?;
         definition_ty
-            .validate()
+            .check_bounds()
             .map_err(|error| type_error(&definition_path, error))?;
     }
     Ok(ty)

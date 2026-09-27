@@ -27,10 +27,10 @@ use crate::datatype::{
 };
 use crate::envelope::WriteTarget;
 use crate::expr;
-use crate::identity::encoding::value_tagged;
+use crate::identity::encoding::canonical_value;
 use crate::node;
 use crate::plan::{
-    AttrSetting, ClosingPolicy, ConnectorSpec, DispatchStep, Edge, Emission, EndpointRef,
+    AttrSetting, ClosingPolicy, ConnectorSpec, DispatchStep, Edge, EdgeEnd, Emission,
     EvaluationSite, ExecutionPlan, ExtensionSpec, FieldWrite, Handler, InstanceLifetime,
     InstanceSpec, LoopDelay, LoopSpec, Node, NodeExecution, Owner, OwnerKind, OwnerPath, OwnerSlot,
     OwnerValue, PlanConstant, PlanValidationError, PortDecl, SemanticHash, Slot,
@@ -530,7 +530,7 @@ fn loop_delay_tree(delay: &LoopDelay) -> Cbor {
 fn plan_constant_tree(constant: &PlanConstant) -> Cbor {
     Cbor::Array(vec![
         tree_tree(&constant.expr),
-        value_tagged(&constant.resolved),
+        canonical_value(&constant.resolved),
     ])
 }
 
@@ -577,7 +577,7 @@ fn owner_value_tree(value: &OwnerValue) -> Cbor {
         (3, tree_tree(&value.expr)),
     ]);
     if let Some(resolved) = &value.resolved {
-        fields.insert(4, value_tagged(resolved));
+        fields.insert(4, canonical_value(resolved));
     }
     if !value.annotations.is_empty() {
         fields.insert(5, annotation_table_tree(&value.annotations));
@@ -616,7 +616,7 @@ fn spec_tree(spec: &ConnectorSpec) -> Cbor {
 fn attr_tree(setting: &AttrSetting) -> Cbor {
     match setting {
         AttrSetting::Word(word) => Cbor::Array(vec![Cbor::Uint(1), Cbor::Text(word.clone())]),
-        AttrSetting::Value(value) => Cbor::Array(vec![Cbor::Uint(2), value_tagged(value)]),
+        AttrSetting::Value(value) => Cbor::Array(vec![Cbor::Uint(2), canonical_value(value)]),
         AttrSetting::Expr { site, expr } => {
             Cbor::Array(vec![Cbor::Uint(3), site_tree(*site), tree_tree(expr)])
         }
@@ -651,7 +651,7 @@ fn port_decl_tree(decl: &PortDecl) -> Cbor {
 fn var_tree(var: &VarCell) -> Cbor {
     let mut pairs = BTreeMap::from([(1, Cbor::Text(var.name.clone())), (2, type_tree(&var.ty))]);
     if let Some(init) = &var.init {
-        pairs.insert(3, value_tagged(init));
+        pairs.insert(3, canonical_value(init));
     }
     if !var.annotations.is_empty() {
         pairs.insert(4, annotation_table_tree(&var.annotations));
@@ -671,7 +671,7 @@ fn edge_tree(edge: &Edge) -> Cbor {
     ])
 }
 
-fn endpoint_tree(endpoint: &EndpointRef) -> Cbor {
+fn endpoint_tree(endpoint: &EdgeEnd) -> Cbor {
     let slot = match endpoint.node {
         Some(slot) => Cbor::Uint(slot.index() as u64),
         None => Cbor::Null,
@@ -860,7 +860,7 @@ fn annotation_set_tree(set: &AnnotationSet) -> Cbor {
                     }),
                     Cbor::Text(application.definition().to_string()),
                     type_tree(application.argument_type()),
-                    value_tagged(application.arguments()),
+                    canonical_value(application.arguments()),
                 ]),
                 DataAnnotation::Sensitive(level) => Cbor::Array(vec![
                     Cbor::Uint(1),
@@ -1039,7 +1039,7 @@ fn temporal_type_tree(temporal: &TemporalType) -> Cbor {
 
 fn expr_tree(expr: &expr::Expr) -> Cbor {
     match expr {
-        expr::Expr::Literal(value) => Cbor::Array(vec![Cbor::Uint(1), value_tagged(value)]),
+        expr::Expr::Literal(value) => Cbor::Array(vec![Cbor::Uint(1), canonical_value(value)]),
         expr::Expr::Asset(index) => {
             Cbor::Array(vec![Cbor::Uint(10), Cbor::Uint(u64::from(*index))])
         }
@@ -2325,9 +2325,9 @@ fn u32_from(tree: &Cbor, detail: &str) -> Result<u32, DecodeError> {
     u32::try_from(*value).map_err(|_| err(detail))
 }
 
-fn endpoint_from(tree: &Cbor) -> Result<EndpointRef, DecodeError> {
+fn endpoint_from(tree: &Cbor) -> Result<EdgeEnd, DecodeError> {
     match array_of(tree, "endpoint")? {
-        [slot, Cbor::Text(port)] => Ok(EndpointRef {
+        [slot, Cbor::Text(port)] => Ok(EdgeEnd {
             node: match slot {
                 Cbor::Null => None,
                 Cbor::Uint(index) => {
@@ -2567,7 +2567,7 @@ fn type_parts_from(parts: &[Cbor]) -> Result<DataType, DecodeError> {
         ),
         _ => return Err(err("data type")),
     };
-    built.validate().map_err(|_| err("data type budget"))?;
+    built.check_bounds().map_err(|_| err("data type budget"))?;
     Ok(built)
 }
 
@@ -2796,7 +2796,7 @@ fn binop_from(code: u64) -> Result<expr::BinaryOp, DecodeError> {
 }
 
 fn value_from(tree: &Cbor) -> Result<Value, DecodeError> {
-    crate::identity::encoding::value_from_tagged(tree).map_err(DecodeError::Read)
+    crate::identity::encoding::decode_canonical_value(tree).map_err(DecodeError::Read)
 }
 
 fn signed_tree(value: i64) -> Cbor {
@@ -3084,7 +3084,7 @@ mod tests {
             Cbor::Uint(1),
             Cbor::Text(text("note")),
             type_tree(&ty),
-            value_tagged(&value),
+            canonical_value(&value),
         ]);
         let annotation = annotation_from(&wire).expect("explicit descriptive binding");
         let DataAnnotation::Declared(application) = &annotation else {
@@ -3113,14 +3113,14 @@ mod tests {
                     .expect("ordinary nested schema"),
                 )),
             ),
-            (4, value_tagged(&Value::Struct(vec![]))),
+            (4, canonical_value(&Value::Struct(vec![]))),
             (
                 4,
-                value_tagged(&Value::Struct(vec![(text("text"), Value::Int(7))])),
+                canonical_value(&Value::Struct(vec![(text("text"), Value::Int(7))])),
             ),
             (
                 4,
-                value_tagged(&Value::Struct(vec![
+                canonical_value(&Value::Struct(vec![
                     (text("text"), Value::Text(text("a"))),
                     (text("extra"), Value::Null),
                 ])),
@@ -3251,7 +3251,7 @@ mod tests {
             Cbor::Uint(2),
             Cbor::Text(text("rastok/measure@3")),
             type_tree(&ty),
-            value_tagged(&arguments),
+            canonical_value(&arguments),
         ];
         let annotation =
             annotation_from(&Cbor::Array(wire.clone())).expect("supported business consumer");
@@ -3269,7 +3269,7 @@ mod tests {
             (2, Cbor::Text(text("custom_measure"))),
             (2, Cbor::Text(text("rastok/measure@2"))),
             (3, type_tree(&DataType::Variant)),
-            (4, value_tagged(&Value::Struct(vec![]))),
+            (4, canonical_value(&Value::Struct(vec![]))),
         ] {
             let mut altered = wire.clone();
             altered[index] = replacement;
@@ -3291,7 +3291,7 @@ mod tests {
             slot.1 = value;
             let value = Value::Struct(fields);
             let mut altered = wire.clone();
-            altered[4] = value_tagged(&value);
+            altered[4] = canonical_value(&value);
             assert!(annotation_from(&Cbor::Array(altered)).is_err(), "{field}");
         }
         for target in [
@@ -4039,18 +4039,18 @@ mod tests {
             edges: vec![
                 Edge {
                     scope: OwnerSlot::new(0),
-                    from: EndpointRef {
+                    from: EdgeEnd {
                         node: None,
                         port: port("in"),
                     },
-                    to: Some(EndpointRef {
+                    to: Some(EdgeEnd {
                         node: Some(Slot::new(0)),
                         port: port("in"),
                     }),
                 },
                 Edge {
                     scope: OwnerSlot::new(0),
-                    from: EndpointRef {
+                    from: EdgeEnd {
                         node: Some(Slot::new(0)),
                         port: port("extra"),
                     },
@@ -4479,7 +4479,7 @@ mod tests {
             })),
         ];
         for value in values {
-            assert_eq!(value_from(&value_tagged(&value)).unwrap(), value);
+            assert_eq!(value_from(&canonical_value(&value)).unwrap(), value);
         }
     }
 

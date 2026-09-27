@@ -7,12 +7,18 @@ use super::*;
 /// Borrowed dynamically by routing so live and prefix recovery share one
 /// implementation without making later journal facts visible to the prefix.
 pub(crate) trait InstanceAdmissions {
-    fn instance_ref_for_admission(&self, address: &InstanceAddress) -> Result<InstanceRef, Error>;
+    fn instance_ref_for_admission(
+        &self,
+        address: &InstanceIdentity,
+    ) -> Result<InstanceGeneration, Error>;
     fn instance_commands(&self) -> Result<instance_stop::Fold, Error>;
 }
 
 impl<T: Journal + ?Sized> InstanceAdmissions for &T {
-    fn instance_ref_for_admission(&self, address: &InstanceAddress) -> Result<InstanceRef, Error> {
+    fn instance_ref_for_admission(
+        &self,
+        address: &InstanceIdentity,
+    ) -> Result<InstanceGeneration, Error> {
         Journal::instance_ref_for_admission(*self, address)
     }
     fn instance_commands(&self) -> Result<instance_stop::Fold, Error> {
@@ -22,7 +28,7 @@ impl<T: Journal + ?Sized> InstanceAdmissions for &T {
 
 #[derive(Default)]
 pub(crate) struct AdmissionPrefix {
-    lifecycles: BTreeMap<InstanceAddress, InstanceLifecycle>,
+    lifecycles: BTreeMap<InstanceIdentity, InstanceLifecycle>,
     instance_commands: Option<Box<instance_stop::Fold>>,
 }
 
@@ -46,7 +52,7 @@ impl AdmissionPrefix {
             .entry(record.instance.address().clone())
             .or_default();
         let is_start = record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Start);
-        let expected = InstanceRef::new(
+        let expected = InstanceGeneration::new(
             record.instance.address().clone(),
             if is_start {
                 lifecycle.starts
@@ -84,7 +90,7 @@ impl AdmissionPrefix {
         Ok(())
     }
 
-    fn is_closing(&self, reference: &InstanceRef) -> bool {
+    fn is_closing(&self, reference: &InstanceGeneration) -> bool {
         let mut cursor = Some(reference);
         while let Some(reference) = cursor {
             let Some(state) = self.lifecycles.get(reference.address()) else {
@@ -111,15 +117,18 @@ impl InstanceAdmissions for AdmissionPrefix {
                 "instance command prefix was not enabled",
             ))
     }
-    fn instance_ref_for_admission(&self, address: &InstanceAddress) -> Result<InstanceRef, Error> {
+    fn instance_ref_for_admission(
+        &self,
+        address: &InstanceIdentity,
+    ) -> Result<InstanceGeneration, Error> {
         let Some(state) = self.lifecycles.get(address) else {
-            return Ok(InstanceRef::new(address.clone(), 0));
+            return Ok(InstanceGeneration::new(address.clone(), 0));
         };
-        let current = InstanceRef::new(address.clone(), state.starts.saturating_sub(1));
+        let current = InstanceGeneration::new(address.clone(), state.starts.saturating_sub(1));
         if state.active && !self.is_closing(&current) {
             Ok(current)
         } else {
-            Ok(InstanceRef::new(address.clone(), state.starts))
+            Ok(InstanceGeneration::new(address.clone(), state.starts))
         }
     }
 }

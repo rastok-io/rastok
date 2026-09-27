@@ -24,9 +24,9 @@ impl Vm<'_> {
             .connector()
             .filter(|spec| spec.call_semantics().is_some())
             .ok_or_else(|| invalid(index, "a retained Call contradicts its Connector profile"))?;
-        if intent.call_ref
-            != ids::call_ref(
-                ids::delivery_ref(&intent.edge, intent.emitting_id),
+        if intent.call_id
+            != ids::call_id(
+                ids::delivery_id(&intent.edge, intent.emitting_id),
                 intent.prepared.digest(),
             )
         {
@@ -36,7 +36,7 @@ impl Vm<'_> {
             ));
         }
         if record.status == OutboundStatus::Open {
-            if self.pending.contains_key(&intent.call_ref) {
+            if self.pending.contains_key(&intent.call_id) {
                 return Err(invalid(index, "a retained Call opens twice"));
             }
             let (instance, delivery) = self
@@ -108,7 +108,7 @@ impl Vm<'_> {
             );
             self.scheduler.mailboxes.claim(slot, &instance);
             self.pending.insert(
-                intent.call_ref,
+                intent.call_id,
                 PendingCall {
                     slot,
                     delivery,
@@ -119,16 +119,16 @@ impl Vm<'_> {
         }
         let pending = self
             .pending
-            .get(&intent.call_ref)
+            .get(&intent.call_id)
             .ok_or_else(|| invalid(index, "a Call closure has no retained opening"))?;
-        if journal.find_call(&intent.call_ref).as_ref() != Some(intent)
+        if journal.find_call(&intent.call_id).as_ref() != Some(intent)
             || pending.slot != slot
             || pending.delivery.edge != intent.edge
             || pending.delivery.envelope.meta().sys().id() != intent.emitting_id
             || self
                 .settled
                 .iter()
-                .any(|entry| entry.event.call_ref == intent.call_ref)
+                .any(|entry| entry.event.call_id == intent.call_id)
         {
             return Err(invalid(
                 index,
@@ -176,7 +176,7 @@ impl Vm<'_> {
         self.retain_retry_closure(record)?;
         self.settled.push_back(SettledEntry {
             event: BoundaryEvent {
-                call_ref: intent.call_ref,
+                call_id: intent.call_id,
                 connector_path: intent.connector_path.clone(),
                 emitting_id: intent.emitting_id,
                 completion,
@@ -211,7 +211,7 @@ impl Vm<'_> {
         let settled = self
             .settled
             .iter()
-            .position(|entry| entry.event.call_ref == call)
+            .position(|entry| entry.event.call_id == call)
             .ok_or_else(|| invalid(index, "a Call transaction consumes an unsettled request"))?;
         let entry = &self.settled[settled];
         let mut expected = HandlerExecutor::at(self.plan, self.graph_version, self.now)

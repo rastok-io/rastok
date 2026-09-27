@@ -309,7 +309,7 @@ impl ArrowProjection {
 pub fn project(source: &ArrowType) -> Result<ArrowProjection, ProjectionError> {
     let mut projector = Projector::default();
     let ty = projector.ty(source, "$")?;
-    ty.validate().map_err(|error| type_error("$", error))?;
+    ty.check_bounds().map_err(|error| type_error("$", error))?;
     Ok(ArrowProjection {
         ty,
         unions: projector.unions,

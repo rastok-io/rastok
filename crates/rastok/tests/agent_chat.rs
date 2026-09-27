@@ -70,7 +70,7 @@ fn nicknames_own_distinct_reused_children_and_rejected_messages_open_none() {
             && session.connector_path.to_string() == "conversation.model"
             && matches!(session.status, SessionStatus::WriteOpen(_))
         {
-            *writes.entry(session.session_ref).or_insert(0) += 1;
+            *writes.entry(session.session_id).or_insert(0) += 1;
         }
     }
     let mut counts: Vec<_> = writes.into_values().collect();
