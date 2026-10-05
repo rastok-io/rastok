@@ -7,7 +7,8 @@
 use crate::boundary::{CallId, PreparedRequest};
 use crate::connector::{CallSemantics, ContractId};
 use crate::envelope::{Envelope, Id};
-use crate::identity::InstanceGeneration;
+use crate::instance;
+
 use crate::node::Port;
 use crate::plan::{LoopDelay, SemanticHash};
 use crate::value::Value;
@@ -241,11 +242,7 @@ impl Packet {
     /// belong to retention; the seal commits to the prepared digest instead.
     #[must_use]
     pub fn tree(&self) -> crate::canonical_cbor::Value {
-        encoding::packet_tree(
-            self,
-            encoding::causal_pin,
-            crate::identity::encoding::canonical_envelope,
-        )
+        encoding::packet_tree(self, encoding::causal_pin, crate::canonical::envelope)
     }
 
     /// Empty packets have no serialized presence.
@@ -262,7 +259,7 @@ const ADMISSION_DOMAIN: u8 = 0x07;
 
 /// Derive an operation from its exact opening admission.
 #[must_use]
-pub fn operation_ref(instance: &InstanceGeneration, entry: &Port, opening: Id) -> OperationId {
+pub fn operation_ref(instance: &instance::Generation, entry: &Port, opening: Id) -> OperationId {
     OperationId(Id::derive(
         OPERATION_DOMAIN,
         &[

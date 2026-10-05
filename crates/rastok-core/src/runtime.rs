@@ -17,7 +17,7 @@ use crate::boundary::{Completion, InboundCallId, SessionId};
 use crate::datatype::DataType;
 use crate::envelope::{self, Data, Envelope, Meta, MetaSys, MetaValue, Scalar};
 use crate::expr;
-use crate::identity::InstanceGeneration;
+use crate::instance;
 use crate::journal::{ConsumedPosition, Emission, TransactionRecord, ids};
 use crate::node;
 use crate::plan::{
@@ -92,12 +92,13 @@ impl core::error::Error for Fault {}
 
 /// State cells indexed by complete instance reference: successive
 /// generations at one logical address never share mutable state.
+/// Slot validation and lazy defaults come from the validated execution plan.
 #[derive(Debug, Default)]
-pub struct InstanceState {
-    cells: BTreeMap<(Slot, InstanceGeneration), BTreeMap<String, Value>>,
+pub struct State {
+    cells: BTreeMap<(Slot, instance::Generation), BTreeMap<String, Value>>,
 }
 
-impl InstanceState {
+impl State {
     /// Empty state; cells materialize from plan defaults on first
     /// access.
     #[must_use]
@@ -117,7 +118,7 @@ impl InstanceState {
         &self,
         plan: &ValidatedExecutionPlan,
         slot: Slot,
-        instance: &InstanceGeneration,
+        instance: &instance::Generation,
     ) -> Result<BTreeMap<String, Value>, Fault> {
         if plan.nodes.get(slot.index()).is_none() {
             return Err(Fault::UnknownSlot(slot));
@@ -131,7 +132,7 @@ impl InstanceState {
         &self,
         plan: &ExecutionPlan,
         slot: Slot,
-        instance: &InstanceGeneration,
+        instance: &instance::Generation,
     ) -> BTreeMap<String, Value> {
         if let Some(cell) = self.cells.get(&(slot, instance.clone())) {
             return cell.clone();
@@ -155,7 +156,7 @@ impl InstanceState {
         &mut self,
         plan: &ValidatedExecutionPlan,
         slot: Slot,
-        instance: &InstanceGeneration,
+        instance: &instance::Generation,
         delta: &[(String, Value)],
     ) -> Result<(), Fault> {
         if plan.nodes.get(slot.index()).is_none() {
@@ -170,7 +171,7 @@ impl InstanceState {
         &mut self,
         plan: &ExecutionPlan,
         slot: Slot,
-        instance: &InstanceGeneration,
+        instance: &instance::Generation,
         delta: &[(String, Value)],
     ) {
         let mut cell = self.cell_unchecked(plan, slot, instance);
@@ -187,28 +188,12 @@ impl InstanceState {
         &mut self,
         plan: &ExecutionPlan,
         slot: Slot,
-        instance: &InstanceGeneration,
+        instance: &instance::Generation,
     ) -> BTreeMap<String, Value> {
         self.cells
             .remove(&(slot, instance.clone()))
             .unwrap_or_else(|| self.cell_unchecked(plan, slot, instance))
     }
-}
-
-/// One delivery waiting in a mailbox.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Delivery {
-    /// The arrival port — part of the delivery, because one node
-    /// mailbox carries every port in one FIFO.
-    pub port: node::Port,
-    /// The canonical edge text the envelope traveled.
-    pub edge: String,
-    /// The position on that edge — the consumed cursor.
-    pub seq: u64,
-    /// The complete upstream instance reference that owns this cursor.
-    pub source_instance: InstanceGeneration,
-    /// The delivered envelope.
-    pub envelope: Envelope,
 }
 
 /// Bounded per-`(node, instance-ref)` FIFO queues — one mailbox per node
@@ -219,9 +204,9 @@ pub struct Delivery {
 #[derive(Debug)]
 pub struct Mailboxes {
     capacity: usize,
-    queues: BTreeMap<(Slot, InstanceGeneration), VecDeque<Delivery>>,
-    claimed: alloc::collections::BTreeSet<(Slot, InstanceGeneration)>,
-    edge_seq: BTreeMap<(String, InstanceGeneration), u64>,
+    queues: BTreeMap<(Slot, instance::Generation), VecDeque<envelope::Delivery>>,
+    claimed: alloc::collections::BTreeSet<(Slot, instance::Generation)>,
+    edge_seq: BTreeMap<(String, instance::Generation), u64>,
 }
 
 impl Mailboxes {
@@ -240,7 +225,7 @@ impl Mailboxes {
     /// `already` reservations against it — the pre-commit capacity
     /// check.
     #[must_use]
-    pub fn has_room(&self, slot: Slot, instance: &InstanceGeneration, already: usize) -> bool {
+    pub fn has_room(&self, slot: Slot, instance: &instance::Generation, already: usize) -> bool {
         let queued = self
             .queues
             .get(&(slot, instance.clone()))
@@ -258,8 +243,8 @@ impl Mailboxes {
     pub fn deliver(
         &mut self,
         slot: Slot,
-        instance: &InstanceGeneration,
-        source_instance: &InstanceGeneration,
+        instance: &instance::Generation,
+        source_instance: &instance::Generation,
         port: node::Port,
         edge: String,
         envelope: Envelope,
@@ -273,7 +258,7 @@ impl Mailboxes {
             .entry((edge.clone(), source_instance.clone()))
             .or_insert(0);
         *seq += 1;
-        queue.push_back(Delivery {
+        queue.push_back(envelope::Delivery {
             port,
             edge,
             seq: *seq,
@@ -286,7 +271,7 @@ impl Mailboxes {
     /// The first unclaimed non-empty mailbox and a copy of its head —
     /// the reservation: nothing is removed until [`Self::pop`].
     #[must_use]
-    pub fn peek_next(&self) -> Option<(Slot, InstanceGeneration, Delivery)> {
+    pub fn peek_next(&self) -> Option<(Slot, instance::Generation, envelope::Delivery)> {
         self.peek_next_where(|_, _| true)
     }
 
@@ -297,8 +282,8 @@ impl Mailboxes {
     #[must_use]
     pub fn peek_next_where(
         &self,
-        ready: impl Fn(Slot, &InstanceGeneration) -> bool,
-    ) -> Option<(Slot, InstanceGeneration, Delivery)> {
+        ready: impl Fn(Slot, &instance::Generation) -> bool,
+    ) -> Option<(Slot, instance::Generation, envelope::Delivery)> {
         self.queues
             .iter()
             .find(|((slot, key), queue)| {
@@ -317,15 +302,16 @@ impl Mailboxes {
     /// every mailbox on the ordinary one-delivery hot path.
     pub(crate) fn next_runnable_key(
         &self,
-        after: Option<&(Slot, InstanceGeneration)>,
-        ready: impl Fn(Slot, &InstanceGeneration) -> bool,
-    ) -> Option<(Slot, InstanceGeneration, Delivery)> {
-        let accepted = |(key, queue): (&(Slot, InstanceGeneration), &VecDeque<Delivery>)| {
-            let (slot, instance) = key;
-            !queue.is_empty()
-                && !self.claimed.contains(&(*slot, instance.clone()))
-                && ready(*slot, instance)
-        };
+        after: Option<&(Slot, instance::Generation)>,
+        ready: impl Fn(Slot, &instance::Generation) -> bool,
+    ) -> Option<(Slot, instance::Generation, envelope::Delivery)> {
+        let accepted =
+            |(key, queue): (&(Slot, instance::Generation), &VecDeque<envelope::Delivery>)| {
+                let (slot, instance) = key;
+                !queue.is_empty()
+                    && !self.claimed.contains(&(*slot, instance.clone()))
+                    && ready(*slot, instance)
+            };
         let found = match after {
             Some(after) => self
                 .queues
@@ -348,8 +334,8 @@ impl Mailboxes {
     pub(crate) fn queued(
         &self,
         slot: Slot,
-        instance: &InstanceGeneration,
-    ) -> Option<&VecDeque<Delivery>> {
+        instance: &instance::Generation,
+    ) -> Option<&VecDeque<envelope::Delivery>> {
         self.queues.get(&(slot, instance.clone()))
     }
 
@@ -358,7 +344,9 @@ impl Mailboxes {
     /// The clone crosses a physical inspection boundary only. Execution,
     /// replay and mailbox ownership continue to use the queues above.
     #[must_use]
-    pub(crate) fn inspection(&self) -> Vec<(Slot, InstanceGeneration, bool, Vec<Delivery>)> {
+    pub(crate) fn inspection(
+        &self,
+    ) -> Vec<(Slot, instance::Generation, bool, Vec<envelope::Delivery>)> {
         self.queues
             .iter()
             .filter(|(key, queue)| !queue.is_empty() || self.claimed.contains(*key))
@@ -381,10 +369,10 @@ impl Mailboxes {
     pub fn find_by_ref(
         &self,
         slot: Slot,
-        instance: &InstanceGeneration,
+        instance: &instance::Generation,
         edge: &str,
         id: crate::envelope::Id,
-    ) -> Option<&Delivery> {
+    ) -> Option<&envelope::Delivery> {
         self.queues
             .get(&(slot, instance.clone()))?
             .iter()
@@ -401,7 +389,7 @@ impl Mailboxes {
         slot: Slot,
         edge: &str,
         id: crate::envelope::Id,
-    ) -> Option<(InstanceGeneration, &Delivery)> {
+    ) -> Option<(instance::Generation, &envelope::Delivery)> {
         self.queues
             .iter()
             .filter(|((candidate, _), _)| *candidate == slot)
@@ -421,10 +409,10 @@ impl Mailboxes {
     pub fn remove_by_ref(
         &mut self,
         slot: Slot,
-        instance: &InstanceGeneration,
+        instance: &instance::Generation,
         edge: &str,
         id: crate::envelope::Id,
-    ) -> Option<Delivery> {
+    ) -> Option<envelope::Delivery> {
         let queue = self.queues.get_mut(&(slot, instance.clone()))?;
         let position = queue.iter().position(|delivery| {
             delivery.edge == edge && delivery.envelope.meta().sys().id() == id
@@ -439,7 +427,7 @@ impl Mailboxes {
         slot: Slot,
         edge: &str,
         id: crate::envelope::Id,
-    ) -> Option<(InstanceGeneration, Delivery)> {
+    ) -> Option<(instance::Generation, envelope::Delivery)> {
         let key = self
             .queues
             .iter()
@@ -458,25 +446,33 @@ impl Mailboxes {
 
     /// Removes the head of a mailbox — only after the transaction
     /// that consumes it is committed.
-    pub fn pop(&mut self, slot: Slot, instance: &InstanceGeneration) -> Option<Delivery> {
+    pub fn pop(
+        &mut self,
+        slot: Slot,
+        instance: &instance::Generation,
+    ) -> Option<envelope::Delivery> {
         self.queues
             .get_mut(&(slot, instance.clone()))
             .and_then(VecDeque::pop_front)
     }
 
     /// Claims a mailbox for the duration of an external call.
-    pub fn claim(&mut self, slot: Slot, instance: &InstanceGeneration) {
+    pub fn claim(&mut self, slot: Slot, instance: &instance::Generation) {
         self.claimed.insert((slot, instance.clone()));
     }
 
     /// Releases a claim after the call settled.
-    pub fn release(&mut self, slot: Slot, instance: &InstanceGeneration) {
+    pub fn release(&mut self, slot: Slot, instance: &instance::Generation) {
         self.claimed.remove(&(slot, instance.clone()));
     }
 
     /// Removes every queued delivery for one mailbox in FIFO order. Bounded
     /// Closing records these positions on `l:stop`; this is not a silent drop.
-    pub fn take_all(&mut self, slot: Slot, instance: &InstanceGeneration) -> Vec<Delivery> {
+    pub fn take_all(
+        &mut self,
+        slot: Slot,
+        instance: &instance::Generation,
+    ) -> Vec<envelope::Delivery> {
         self.queues
             .remove(&(slot, instance.clone()))
             .map_or_else(Vec::new, |queue| queue.into_iter().collect())
@@ -496,7 +492,7 @@ impl Mailboxes {
 
     /// Whether this exact instance still owns queued or claimed work.
     #[must_use]
-    pub fn has_work(&self, slot: Slot, instance: &InstanceGeneration) -> bool {
+    pub fn has_work(&self, slot: Slot, instance: &instance::Generation) -> bool {
         self.queues
             .get(&(slot, instance.clone()))
             .is_some_and(|queue| !queue.is_empty())
@@ -560,8 +556,8 @@ pub(crate) struct LoopFiring<'a> {
 /// fields prevents a caller from accidentally pairing a child reference with
 /// another generation's parent or cause.
 pub(crate) struct LifecycleFiring<'a> {
-    pub(crate) instance: &'a InstanceGeneration,
-    pub(crate) parent_instance: Option<&'a InstanceGeneration>,
+    pub(crate) instance: &'a instance::Generation,
+    pub(crate) parent_instance: Option<&'a instance::Generation>,
     pub(crate) cause: &'a Envelope,
 }
 
@@ -570,8 +566,8 @@ pub(crate) struct LifecycleFiring<'a> {
 /// first declared input.
 pub(crate) struct JoinCandidate<'a> {
     pub(crate) activation: &'a node::HandlerActivation,
-    pub(crate) trigger: &'a Delivery,
-    pub(crate) inputs: &'a [Delivery],
+    pub(crate) trigger: &'a envelope::Delivery,
+    pub(crate) inputs: &'a [envelope::Delivery],
 }
 
 /// Prepares a handler transaction in scratch isolation. State and emissions
@@ -623,8 +619,8 @@ impl<'plan> HandlerExecutor<'plan> {
     pub fn fire(
         &self,
         slot: Slot,
-        instance: &InstanceGeneration,
-        delivery: &Delivery,
+        instance: &instance::Generation,
+        delivery: &envelope::Delivery,
         state: &BTreeMap<String, Value>,
     ) -> Result<TransactionOutcome, Fault> {
         self.fire_with_bindings(slot, instance, delivery, state, &BTreeMap::new())
@@ -636,8 +632,8 @@ impl<'plan> HandlerExecutor<'plan> {
     pub(crate) fn fire_with_bindings(
         &self,
         slot: Slot,
-        instance: &InstanceGeneration,
-        delivery: &Delivery,
+        instance: &instance::Generation,
+        delivery: &envelope::Delivery,
         state: &BTreeMap<String, Value>,
         instance_values: &BTreeMap<String, Value>,
     ) -> Result<TransactionOutcome, Fault> {
@@ -673,8 +669,8 @@ impl<'plan> HandlerExecutor<'plan> {
     pub(crate) fn fire_in_loop(
         &self,
         slot: Slot,
-        instance: &InstanceGeneration,
-        delivery: &Delivery,
+        instance: &instance::Generation,
+        delivery: &envelope::Delivery,
         state: &BTreeMap<String, Value>,
         instance_values: &BTreeMap<String, Value>,
         application: LoopFiring<'_>,
@@ -763,7 +759,7 @@ impl<'plan> HandlerExecutor<'plan> {
     pub(crate) fn fire_join(
         &self,
         slot: Slot,
-        instance: &InstanceGeneration,
+        instance: &instance::Generation,
         candidate: JoinCandidate<'_>,
         state: &BTreeMap<String, Value>,
         instance_values: &BTreeMap<String, Value>,
@@ -813,8 +809,8 @@ impl<'plan> HandlerExecutor<'plan> {
     pub(crate) fn join_expired(
         &self,
         slot: Slot,
-        instance: &InstanceGeneration,
-        delivery: &Delivery,
+        instance: &instance::Generation,
+        delivery: &envelope::Delivery,
     ) -> Result<TransactionOutcome, Fault> {
         let Some(node) = self.plan.nodes.get(slot.index()) else {
             return Err(Fault::UnknownSlot(slot));
@@ -840,7 +836,7 @@ impl<'plan> HandlerExecutor<'plan> {
             .with_ext(ext);
         Ok(TransactionOutcome {
             record: TransactionRecord {
-                owner_path: crate::plan::OwnerPath::from(&node.path),
+                owner_path: crate::node::OwnerPath::from(&node.path),
                 instance: instance.clone(),
                 parent_instance: None,
                 close_scope: None,
@@ -908,17 +904,17 @@ impl<'plan> HandlerExecutor<'plan> {
     fn fire_activation(
         &self,
         slot: Slot,
-        instance: &InstanceGeneration,
+        instance: &instance::Generation,
         activation: &node::HandlerActivation,
         trigger: &node::Trigger,
         input: &Envelope,
         cause: Option<envelope::Id>,
-        parent_instance: Option<&InstanceGeneration>,
+        parent_instance: Option<&instance::Generation>,
         consumed: Vec<ConsumedPosition>,
         state: &BTreeMap<String, Value>,
         instance_values: &BTreeMap<String, Value>,
         extra_bindings: &BTreeMap<String, expr::EvalValue>,
-        named_inputs: &[Delivery],
+        named_inputs: &[envelope::Delivery],
         application: Option<LoopFiring<'_>>,
     ) -> Result<TransactionOutcome, Fault> {
         // The validated plan proves its own references, not the caller's
@@ -941,7 +937,7 @@ impl<'plan> HandlerExecutor<'plan> {
             }
             return Ok(TransactionOutcome {
                 record: TransactionRecord {
-                    owner_path: crate::plan::OwnerPath::from(&node.path),
+                    owner_path: crate::node::OwnerPath::from(&node.path),
                     instance: instance.clone(),
                     parent_instance: parent_instance.cloned(),
                     close_scope: None,
@@ -1012,7 +1008,7 @@ impl<'plan> HandlerExecutor<'plan> {
                     // Filtered: consumed with no effect.
                     return Ok(TransactionOutcome {
                         record: TransactionRecord {
-                            owner_path: crate::plan::OwnerPath::from(&node.path),
+                            owner_path: crate::node::OwnerPath::from(&node.path),
                             instance: instance.clone(),
                             parent_instance: parent_instance.cloned(),
                             close_scope: None,
@@ -1257,7 +1253,7 @@ impl<'plan> HandlerExecutor<'plan> {
         let timers = self.armed_budgets(slot, &emissions)?;
         Ok(TransactionOutcome {
             record: TransactionRecord {
-                owner_path: crate::plan::OwnerPath::from(&node.path),
+                owner_path: crate::node::OwnerPath::from(&node.path),
                 instance: instance.clone(),
                 parent_instance: parent_instance.cloned(),
                 close_scope: close_requested.then(|| instance.clone()),
@@ -1377,8 +1373,8 @@ impl<'plan> HandlerExecutor<'plan> {
     pub fn connector_completion(
         &self,
         slot: Slot,
-        instance: &InstanceGeneration,
-        delivery: &Delivery,
+        instance: &instance::Generation,
+        delivery: &envelope::Delivery,
         trigger: &node::Trigger,
         completion: &Completion,
     ) -> Result<TransactionOutcome, Fault> {
@@ -1390,7 +1386,7 @@ impl<'plan> HandlerExecutor<'plan> {
             self.completion_emissions(connector_path, &delivery.envelope, trigger, completion);
         Ok(TransactionOutcome {
             record: TransactionRecord {
-                owner_path: crate::plan::OwnerPath::from(connector_path),
+                owner_path: crate::node::OwnerPath::from(connector_path),
                 instance: instance.clone(),
                 parent_instance: None,
                 close_scope: None,
@@ -1426,7 +1422,7 @@ impl<'plan> HandlerExecutor<'plan> {
     pub fn inbound_call_completion(
         &self,
         slot: Slot,
-        instance: &InstanceGeneration,
+        instance: &instance::Generation,
         request: &Envelope,
         call_id: InboundCallId,
         completion: &Completion,
@@ -1438,7 +1434,7 @@ impl<'plan> HandlerExecutor<'plan> {
         let emissions = self.completion_emissions(&planned.path, request, &trigger, completion);
         Ok(TransactionOutcome {
             record: TransactionRecord {
-                owner_path: crate::plan::OwnerPath::from(&planned.path),
+                owner_path: crate::node::OwnerPath::from(&planned.path),
                 instance: instance.clone(),
                 parent_instance: None,
                 close_scope: None,
@@ -1473,9 +1469,9 @@ impl<'plan> HandlerExecutor<'plan> {
     pub fn inbound_call_response_completion(
         &self,
         slot: Slot,
-        instance: &InstanceGeneration,
+        instance: &instance::Generation,
         request: &Envelope,
-        response: &Delivery,
+        response: &envelope::Delivery,
         call_id: InboundCallId,
         completion: &Completion,
     ) -> Result<TransactionOutcome, Fault> {
@@ -1502,11 +1498,11 @@ impl<'plan> HandlerExecutor<'plan> {
     pub fn session_completion(
         &self,
         slot: Slot,
-        instance: &InstanceGeneration,
+        instance: &instance::Generation,
         opening: &Envelope,
         session_id: SessionId,
         completion: &Completion,
-        consumed: &[&Delivery],
+        consumed: &[&envelope::Delivery],
     ) -> Result<TransactionOutcome, Fault> {
         let Some(planned) = self.plan.nodes.get(slot.index()) else {
             return Err(Fault::UnknownSlot(slot));
@@ -1524,7 +1520,7 @@ impl<'plan> HandlerExecutor<'plan> {
         let emissions = self.completion_emissions(&planned.path, opening, &trigger, &completion);
         Ok(TransactionOutcome {
             record: TransactionRecord {
-                owner_path: crate::plan::OwnerPath::from(&planned.path),
+                owner_path: crate::node::OwnerPath::from(&planned.path),
                 instance: instance.clone(),
                 parent_instance: None,
                 close_scope: None,
@@ -2093,7 +2089,7 @@ struct PayloadSlots<'a> {
 }
 
 impl<'a> PayloadSlots<'a> {
-    fn new(input: &'a Envelope, named: &'a [Delivery]) -> Self {
+    fn new(input: &'a Envelope, named: &'a [envelope::Delivery]) -> Self {
         let mut sources = BTreeMap::new();
         for delivery in named {
             sources.insert(
@@ -2424,8 +2420,8 @@ fn decode_encoded(encoding: envelope::Encoding, bytes: &[u8]) -> Result<envelope
 /// Each declared port also receives a complete named envelope binding.
 fn join_context(
     plan: &crate::plan::ExecutionPlan,
-    trigger: &Delivery,
-    inputs: &[Delivery],
+    trigger: &envelope::Delivery,
+    inputs: &[envelope::Delivery],
 ) -> (Envelope, BTreeMap<String, expr::EvalValue>) {
     let common = |zone: fn(&Meta) -> &envelope::Namespace, fields: &[(String, DataType)]| {
         let mut values = envelope::Namespace::new();
@@ -2467,14 +2463,14 @@ fn join_context(
 }
 
 fn bind_loop_state(
-    instance: &InstanceGeneration,
+    instance: &instance::Generation,
     application: &LoopFiring<'_>,
-    named: &mut Vec<Delivery>,
+    named: &mut Vec<envelope::Delivery>,
     bindings: &mut BTreeMap<String, expr::EvalValue>,
 ) -> Result<(), Fault> {
     // This payload slot cannot collide with an authored join input name.
     let binding = String::from("@Loop.state");
-    named.push(Delivery {
+    named.push(envelope::Delivery {
         port: node::Port::new(binding.clone())
             .map_err(|error| Fault::Unrepresentable(error.to_string()))?,
         edge: String::from("@loop.state"),
@@ -2753,14 +2749,12 @@ mod metadata_conformance_tests {
 mod instance_address_tests {
     use super::*;
     use crate::datatype::{DateUnit, EnumType, StructType, TemporalType, TypeField};
-    use crate::identity::{InstanceIdentity, InstanceSegment};
-    use crate::plan::OwnerPath;
 
-    fn address(ty: DataType, value: Value) -> InstanceIdentity {
-        let owner = OwnerPath::new(["node"]).expect("valid owner");
-        InstanceIdentity::new(
+    fn address(ty: DataType, value: Value) -> instance::Identity {
+        let owner = node::OwnerPath::new(["node"]).expect("valid owner");
+        instance::Identity::new(
             &owner,
-            &[InstanceSegment::SelectedKey {
+            &[instance::Segment::SelectedKey {
                 scope: owner.clone(),
                 ty,
                 value,

@@ -12,6 +12,7 @@ use rastok::compiler::compile;
 use rastok::contract::ContractCatalog;
 use rastok::datatype::{DataType, StructType, TaggedCase, TaggedUnionType};
 use rastok::expr;
+use rastok::instance;
 use rastok::node::{self, Direction, Port};
 use rastok::plan::{
     self, DispatchStep, Edge, EdgeEnd, ExecutionPlan, PlanValidationError, Slot,
@@ -346,27 +347,27 @@ fn bare_operator_plan() -> ExecutionPlan {
         routes: vec![],
         owners: vec![
             plan::Owner {
-                path: plan::OwnerPath::root(),
+                path: node::OwnerPath::root(),
                 parent: None,
                 kind: plan::OwnerKind::Graph,
                 ports: vec![],
                 extensions: vec![plan::ExtensionSpec::App],
-                instance: plan::InstanceSpec {
+                instance: instance::Spec {
                     key: None,
-                    lifetime: plan::InstanceLifetime::Persistent,
+                    lifetime: instance::Lifetime::Persistent,
                     closing: None,
                 },
                 vals: vec![],
             },
             plan::Owner {
-                path: plan::OwnerPath::new(["worker"]).unwrap(),
-                parent: Some(plan::OwnerSlot::new(0)),
+                path: node::OwnerPath::new(["worker"]).unwrap(),
+                parent: Some(node::OwnerSlot::new(0)),
                 kind: plan::OwnerKind::Node(Slot::new(0)),
                 ports: vec![],
                 extensions: vec![],
-                instance: plan::InstanceSpec {
+                instance: instance::Spec {
                     key: None,
-                    lifetime: plan::InstanceLifetime::Persistent,
+                    lifetime: instance::Lifetime::Persistent,
                     closing: None,
                 },
                 vals: vec![],
@@ -377,7 +378,7 @@ fn bare_operator_plan() -> ExecutionPlan {
             execution: plan::NodeExecution::Operator,
             ports: vec![],
             vars: vec![],
-            owner: plan::OwnerSlot::new(1),
+            owner: node::OwnerSlot::new(1),
         }],
         boundary: vec![],
         edges: vec![],
@@ -404,7 +405,7 @@ fn owner_mut<'a>(plan: &'a mut ExecutionPlan, node: &str) -> &'a mut plan::Owner
         .expect("its owner exists")
 }
 
-fn owner_slot(plan: &ExecutionPlan, node: &str) -> plan::OwnerSlot {
+fn owner_slot(plan: &ExecutionPlan, node: &str) -> node::OwnerSlot {
     plan.nodes
         .iter()
         .find(|candidate| candidate.path.to_string() == node)
@@ -581,12 +582,12 @@ fn an_unconstrained_raw_port_never_becomes_variant() {
 #[test]
 fn a_raw_instance_requires_a_canonical_key_type() {
     let mut raw = raw_probe();
-    owner_mut(&mut raw, "relay").instance = plan::InstanceSpec {
+    owner_mut(&mut raw, "relay").instance = instance::Spec {
         key: Some(expr::Tree {
             root: expr::Expr::Literal(rastok::value::Value::Int(1)),
             ty: DataType::Variant,
         }),
-        lifetime: plan::InstanceLifetime::Persistent,
+        lifetime: instance::Lifetime::Persistent,
         closing: None,
     };
 
@@ -602,12 +603,12 @@ fn a_raw_instance_requires_a_canonical_key_type() {
 #[test]
 fn every_duration_lifetime_requires_a_positive_value() {
     for lifetime in [
-        plan::InstanceLifetime::Idle(0),
-        plan::InstanceLifetime::Fixed(-1),
-        plan::InstanceLifetime::Tumbling(0),
+        instance::Lifetime::Idle(0),
+        instance::Lifetime::Fixed(-1),
+        instance::Lifetime::Tumbling(0),
     ] {
         let mut raw = raw_probe();
-        owner_mut(&mut raw, "relay").instance = plan::InstanceSpec {
+        owner_mut(&mut raw, "relay").instance = instance::Spec {
             key: Some(expr::Tree {
                 root: expr::Expr::Literal(rastok::value::Value::Int(1)),
                 ty: DataType::INT,
@@ -628,9 +629,9 @@ fn every_duration_lifetime_requires_a_positive_value() {
 #[test]
 fn every_closed_lifetime_profile_validates_once_the_scheduler_supports_it() {
     for lifetime in [
-        plan::InstanceLifetime::Fixed(1),
-        plan::InstanceLifetime::SinglePass,
-        plan::InstanceLifetime::Tumbling(1),
+        instance::Lifetime::Fixed(1),
+        instance::Lifetime::SinglePass,
+        instance::Lifetime::Tumbling(1),
     ] {
         let mut raw = bare_operator_plan();
         raw.owners[1].instance.lifetime = lifetime;
@@ -721,7 +722,7 @@ fn instance_key_type_is_a_derived_fact_not_a_package_claim() {
 #[test]
 fn every_finite_scope_with_a_process_requires_explicit_closing() {
     let mut raw = raw_probe();
-    owner_mut(&mut raw, "shell").instance.lifetime = plan::InstanceLifetime::Idle(1);
+    owner_mut(&mut raw, "shell").instance.lifetime = instance::Lifetime::Idle(1);
     assert_eq!(
         ValidatedExecutionPlan::try_new(raw).unwrap_err(),
         PlanValidationError::MissingClosingPolicy {
@@ -731,7 +732,7 @@ fn every_finite_scope_with_a_process_requires_explicit_closing() {
     );
 
     let mut graph = raw_probe();
-    graph.owners[0].instance.lifetime = plan::InstanceLifetime::Fixed(1);
+    graph.owners[0].instance.lifetime = instance::Lifetime::Fixed(1);
     assert_eq!(
         ValidatedExecutionPlan::try_new(graph).unwrap_err(),
         PlanValidationError::MissingClosingPolicy {
@@ -743,8 +744,8 @@ fn every_finite_scope_with_a_process_requires_explicit_closing() {
 
     let mut bounded = raw_probe();
     let shell = owner_mut(&mut bounded, "shell");
-    shell.instance.lifetime = plan::InstanceLifetime::Idle(1);
-    shell.instance.closing = Some(plan::ClosingPolicy {
+    shell.instance.lifetime = instance::Lifetime::Idle(1);
+    shell.instance.closing = Some(instance::Closing {
         drain_for: 2,
         settle_for: 3,
     });
@@ -755,7 +756,7 @@ fn every_finite_scope_with_a_process_requires_explicit_closing() {
 #[test]
 fn closing_budgets_and_stop_recursion_are_registry_free_invariants() {
     let mut invalid = bare_operator_plan();
-    invalid.owners[1].instance.closing = Some(plan::ClosingPolicy {
+    invalid.owners[1].instance.closing = Some(instance::Closing {
         drain_for: 0,
         settle_for: 1,
     });
@@ -797,13 +798,13 @@ fn a_raw_node_and_owner_must_point_to_each_other() {
         .position(|node| node.path.to_string() == "relay")
         .expect("the relay slot");
     let relay_slot = Slot::new(u32::try_from(relay_index).expect("the plan is small"));
-    raw.nodes[relay_index].owner = plan::OwnerSlot::new(0);
+    raw.nodes[relay_index].owner = node::OwnerSlot::new(0);
 
     assert_eq!(
         ValidatedExecutionPlan::try_new(raw).unwrap_err(),
         PlanValidationError::OwnerNodeMismatch {
             node: relay_slot,
-            owner: plan::OwnerSlot::new(1),
+            owner: node::OwnerSlot::new(1),
         }
     );
 }
@@ -1110,7 +1111,7 @@ fn instance_values_and_authorized_connector_settings_share_one_phase_judge() {
 #[test]
 fn a_raw_instance_key_admits_sys_but_not_destination_context() {
     let mut raw = raw_probe();
-    owner_mut(&mut raw, "relay").instance = plan::InstanceSpec {
+    owner_mut(&mut raw, "relay").instance = instance::Spec {
         key: Some(expr::Tree {
             root: expr::Expr::Path(vec![
                 String::from("meta"),
@@ -1119,7 +1120,7 @@ fn a_raw_instance_key_admits_sys_but_not_destination_context() {
             ]),
             ty: DataType::Text,
         }),
-        lifetime: plan::InstanceLifetime::Persistent,
+        lifetime: instance::Lifetime::Persistent,
         closing: None,
     };
 
@@ -1281,7 +1282,7 @@ fn a_boundary_input_cannot_be_an_edge_target() {
     plan.boundary
         .sort_by(|left, right| left.key().cmp(&right.key()));
     plan.edges.push(Edge {
-        scope: plan::OwnerSlot::new(0),
+        scope: node::OwnerSlot::new(0),
         from: EdgeEnd {
             node: Some(Slot::new(0)),
             port: port("out"),
@@ -1315,7 +1316,7 @@ fn a_boundary_output_cannot_be_an_edge_source() {
     plan.boundary
         .sort_by(|left, right| left.key().cmp(&right.key()));
     plan.edges.push(Edge {
-        scope: plan::OwnerSlot::new(0),
+        scope: node::OwnerSlot::new(0),
         from: EdgeEnd {
             node: None,
             port: port("response"),
@@ -1345,7 +1346,7 @@ fn conventional_ports_hold_their_directions() {
     // inside the graph — refuses.
     let mut plan = raw_probe();
     plan.edges.push(Edge {
-        scope: plan::OwnerSlot::new(0),
+        scope: node::OwnerSlot::new(0),
         from: EdgeEnd {
             node: Some(Slot::new(0)),
             port: port("out"),
@@ -1371,7 +1372,7 @@ fn conventional_ports_hold_their_directions() {
     // Conventional `out` used as a SOURCE refuses likewise.
     let mut plan = raw_probe();
     plan.edges.push(Edge {
-        scope: plan::OwnerSlot::new(0),
+        scope: node::OwnerSlot::new(0),
         from: EdgeEnd {
             node: None,
             port: port("out"),
@@ -1610,7 +1611,7 @@ fn an_edge_to_an_unknown_port_refuses() {
     // — the reference is not usable in the required role.
     let mut plan = raw_probe();
     plan.edges.push(Edge {
-        scope: plan::OwnerSlot::new(0),
+        scope: node::OwnerSlot::new(0),
         from: EdgeEnd {
             node: Some(Slot::new(0)),
             port: port("ghost"),
@@ -1629,7 +1630,7 @@ fn an_edge_to_an_unknown_port_refuses() {
     // A boundary port that exists nowhere refuses by its own name.
     let mut plan = raw_probe();
     plan.edges.push(Edge {
-        scope: plan::OwnerSlot::new(0),
+        scope: node::OwnerSlot::new(0),
         from: EdgeEnd {
             node: None,
             port: port("ghost"),
@@ -2169,9 +2170,9 @@ fn what_the_type_accepts_the_format_reads_back() {
             Err(error) => {
                 assert_eq!(
                     error,
-                    PlanValidationError::NestingBudgetExceeded {
+                    PlanValidationError::NestingExceeded {
                         depth: MAX_NESTING,
-                        budget: MAX_NESTING,
+                        bound: MAX_NESTING,
                     },
                     "the first refusal sits exactly at the reader's bound"
                 );

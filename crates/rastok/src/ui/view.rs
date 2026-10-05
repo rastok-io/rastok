@@ -2,7 +2,8 @@ use super::UiSnapshot;
 use crate::compiler::SourceDefinition;
 use crate::data_policy::is_redacted_path;
 use crate::envelope::{Data, MetaValue, Namespace, Scalar, Value};
-use crate::identity::InstanceGeneration;
+use crate::instance;
+
 use crate::journal::{Journal, MemJournal, OutboundRecord, OutboundStatus, Record, SessionStatus};
 use crate::plan::{NodeExecution, Slot, ValidatedExecutionPlan};
 use crate::runtime::vm::{
@@ -74,7 +75,7 @@ pub struct ActivityView {
     node: Option<String>,
     motion: Option<&'static str>,
     records: Option<(usize, usize)>,
-    instance: Option<InstanceGeneration>,
+    instance: Option<instance::Generation>,
 }
 
 impl ActivityView {
@@ -369,7 +370,7 @@ struct Traffic {
     last_record: Option<usize>,
 }
 
-fn active_instance_lifecycles(journal: &MemJournal) -> BTreeSet<InstanceGeneration> {
+fn active_instance_lifecycles(journal: &MemJournal) -> BTreeSet<instance::Generation> {
     let mut active = BTreeSet::new();
     for record in journal.records() {
         let Record::Transaction(transaction) = record else {
@@ -408,7 +409,7 @@ fn topology(
     definitions: &[SourceDefinition],
     inspection: &VmInspection,
     journal: &MemJournal,
-    active_instances: &BTreeSet<InstanceGeneration>,
+    active_instances: &BTreeSet<instance::Generation>,
     activity: Option<&ActivityView>,
 ) -> JsonValue {
     let mailbox_contents = mailbox_contents(plan, inspection);
@@ -1193,7 +1194,7 @@ fn node_port_annotations<'a>(
 fn instances(
     plan: &ValidatedExecutionPlan,
     inspection: &VmInspection,
-    active_instances: &BTreeSet<InstanceGeneration>,
+    active_instances: &BTreeSet<instance::Generation>,
 ) -> JsonValue {
     let classified = explanation::classified(plan);
     JsonValue::Array(
@@ -1289,7 +1290,7 @@ fn phase(phase: InstancePhaseInspection) -> &'static str {
     }
 }
 
-fn instance_ref_json(reference: &InstanceGeneration) -> JsonValue {
+fn instance_ref_json(reference: &instance::Generation) -> JsonValue {
     json!({
         "address": hex(reference.address().as_bytes()),
         "generation": reference.generation(),
@@ -1298,7 +1299,7 @@ fn instance_ref_json(reference: &InstanceGeneration) -> JsonValue {
 
 fn instance_badge_json(
     instance: &crate::runtime::vm::InstanceInspection,
-    active_instances: &BTreeSet<InstanceGeneration>,
+    active_instances: &BTreeSet<instance::Generation>,
 ) -> Option<JsonValue> {
     active_instances
         .contains(&instance.reference)

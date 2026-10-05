@@ -14,7 +14,7 @@ use super::{Cbor, array_of, emission_from, err, step_from, step_tree, tree_from,
 use crate::plan::{
     ClosedArm, DecodeError, Dispatch, DispatchStep, DispatchValidationError, Endpoint,
     EndpointOwner, InstanceStopTarget, LoopCommand, LoopCommandKind, LoopCommandTarget,
-    MAX_DISPATCH_DEPTH, MultiEmitValues, OpenArm, OwnerPath, RouteArm, RouteDestination, RouteRule,
+    MAX_DISPATCH_DEPTH, MultiEmitValues, OpenArm, RouteArm, RouteDestination, RouteRule,
     RouteSelection, RouteValidationError, validate_dispatch, validate_routing,
 };
 use crate::{canonical_cbor, datatype::DataType, expr, node};
@@ -392,7 +392,7 @@ fn owner_from(tree: &Cbor) -> Result<EndpointOwner, DecodeError> {
             } else {
                 path.split('.').map(String::from).collect()
             };
-            OwnerPath::new(segments)
+            node::OwnerPath::new(segments)
                 .map(EndpointOwner::Graph)
                 .map_err(|_| err("Graph owner path"))
         }

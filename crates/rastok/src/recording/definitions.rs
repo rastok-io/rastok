@@ -2,8 +2,8 @@ use super::{Error, codec};
 use crate::canonical_cbor::Value as Cbor;
 use crate::compiler::{SourceArm, SourceDefinition};
 use crate::diagnostics::SourceId;
+use crate::node;
 use crate::node::Kind;
-use crate::plan::OwnerPath;
 
 pub(super) fn encode(definitions: &[SourceDefinition]) -> Cbor {
     codec::list(definitions.iter().map(|definition| {
@@ -44,7 +44,7 @@ pub(super) fn decode(value: &Cbor) -> Result<Vec<SourceDefinition>, Error> {
             let [owner, kind, source, first, last, code, decisions] = codec::array(value)?;
             let owner = codec::text(owner)?;
             Ok(SourceDefinition {
-                owner: OwnerPath::new(owner.split('.').filter(|segment| !segment.is_empty()))
+                owner: node::OwnerPath::new(owner.split('.').filter(|segment| !segment.is_empty()))
                     .map_err(|_| Error::Invalid("definition owner"))?,
                 kind: match codec::text(kind)? {
                     "graph" => Kind::Graph,

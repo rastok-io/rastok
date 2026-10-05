@@ -29,12 +29,12 @@ function tokenize(text) {
   return { tokens, stack };
 }
 
-test('JSON quoting, raw readers and nested comments return to the host grammar', () => {
+test('JSON quoting, raw readers and block comments return to the host grammar', () => {
   const { tokens } = tokenize(`val first = json! { "text": "} Loop.again // not DSL", "nested": [true, {"n": 2}] }
 val scalar = json! "} stop"
 val bytes = base64!("text/plain") { YQ== }
 val raw = text! { on in { Loop.done } }
-/* outer /* nested */ still comment */
+/* comment */
 model.instance.stop
 Loop.again
 operator after`);
@@ -43,6 +43,42 @@ operator after`);
   assert.ok(tokens.some(t => t.text === 'model.instance.stop' && t.scopes.includes('support.function.instance-command.rkg')));
   assert.ok(tokens.some(t => t.text === 'Loop.again' && t.scopes.includes('support.variable.loop.rkg')));
   assert.ok(tokens.some(t => t.text === 'after' && t.scopes.includes('entity.name.type.rkg')));
+});
+
+test('block comments end at the first closer, even after a nested opener or //', () => {
+  for (const comment of ['/* a // not a line comment */', '/* a /* not a nested comment */']) {
+    const { tokens } = tokenize(`${comment} operator after\noperator next`);
+    for (const name of ['after', 'next']) {
+      assert.ok(tokens.some(t => t.text === name && t.scopes.includes('entity.name.type.rkg')), `${comment}: ${name} is outside the comment`);
+    }
+  }
+});
+
+test('expression single quotes protect DSL-looking content and ordinary strings stop at EOL', () => {
+  const { tokens } = tokenize("val text = 'Loop.again // not a comment'\noperator after");
+  assert.ok(tokens.some(t => t.text.includes('Loop.again // not a comment') && t.scopes.includes('string.quoted.single.rkg')));
+  assert.ok(tokens.some(t => t.text === 'after' && t.scopes.includes('entity.name.type.rkg')));
+  for (const quote of ['"', "'"]) {
+    for (const suffix of ['', '\\']) {
+      const { tokens: recovered } = tokenize(`val broken = ${quote}unterminated${suffix}\noperator recovered`);
+      assert.ok(recovered.some(t => t.text === 'recovered' && t.scopes.includes('entity.name.type.rkg')), `${quote}${suffix}: the next line is not a string`);
+    }
+  }
+});
+
+test('source types, constructor calls, logical time and uint literals have the right scopes', () => {
+  for (const type of ['long', 'double', 'number', 'date', 'time', 'uuid', 'timestamp_ntz', 'table', 'duration', 'decimal']) {
+    const parameters = type === 'table' ? '<struct { n: int }>' : type === 'decimal' ? '(18,6)' : '';
+    const { tokens } = tokenize(`input request: ${type}${parameters}`);
+    assert.ok(tokens.some(t => t.text === type && t.scopes.includes('storage.type.rkg')), `${type}: missing type scope`);
+  }
+  for (const [name, args] of [['now', ''], ['duration', '"1s"'], ['timestamp', '"2026-09-29T00:00:00Z"'], ['media_type', '"text/plain"'], ['decimal', '"1.25", 18, 2']]) {
+    const { tokens } = tokenize(`val result = ${name}(${args})`);
+    assert.ok(tokens.some(t => t.text === name && t.scopes.includes('support.function.rkg')), `${name}: a constructor call is not a type`);
+  }
+  const { tokens } = tokenize('on start { out = 42u }');
+  assert.ok(tokens.some(t => t.text === 'start' && t.scopes.includes('keyword.control.rkg')));
+  assert.ok(tokens.some(t => t.text === '42u' && t.scopes.includes('constant.numeric.rkg')));
 });
 
 test('every shipped example finishes outside a reader, string or block comment', async () => {

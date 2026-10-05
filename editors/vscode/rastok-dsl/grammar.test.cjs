@@ -4,6 +4,17 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const grammar = require("./syntaxes/rkg.tmLanguage.json");
 
+test("the editor bundle registers .rkg against the shared grammar", () => {
+  const manifest = require("./package.json");
+  const language = manifest.contributes.languages.find(language => language.id === "rkg");
+  const registration = manifest.contributes.grammars.find(grammar => grammar.language === language.id);
+  assert.deepEqual(language.extensions, [".rkg"]);
+  assert.ok(language.aliases.includes("Rastok"));
+  assert.equal(registration.scopeName, grammar.scopeName);
+  assert.deepEqual(require(registration.path), grammar);
+  assert.equal(require(`./${language.configuration}`).comments.lineComment, "//");
+});
+
 test("every TextMate regular expression compiles in the shared regex subset", () => {
   function visit(value) {
     if (value && typeof value === "object") {
@@ -39,6 +50,17 @@ test("v19 annotations, Retry and idempotence reflect the executable language", (
   assert.equal(matches("effect", "variable.language.rkg"), false);
   assert.equal(matches("Retry.again", "support.variable.retry.rkg"), false);
   assert.equal(matches("@struct", "storage.modifier.annotation.rkg"), false);
+});
+
+test("the source type vocabulary, lifecycle and unsigned literals are covered", () => {
+  const matches = (word, scope) => grammar.patterns.some(rule => rule.match && rule.name === scope && new RegExp(rule.match).test(word));
+  for (const word of ["long", "double", "number", "date", "time", "uuid", "timestamp_ntz", "table"]) {
+    assert.ok(matches(word, "storage.type.rkg"), word);
+  }
+  for (const word of ["list", "tuple"]) assert.equal(matches(word, "storage.type.rkg"), false, `${word} is not a built-in source type`);
+  assert.ok(matches("start", "keyword.control.rkg"));
+  assert.ok(matches("now()", "support.function.rkg"));
+  assert.ok(matches("42u", "constant.numeric.rkg"));
 });
 
 test("comments, strings and readers precede keyword matching", () => {

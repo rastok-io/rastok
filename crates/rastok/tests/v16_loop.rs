@@ -11,6 +11,7 @@ use rastok::journal::{
     Journal, MemJournal, Record,
     loop_protocol::{Error as LoopError, Fact, Fold, Phase},
 };
+use rastok::node;
 use rastok::plan::{self, GraphVersion};
 use rastok::runtime::vm::Vm;
 
@@ -627,7 +628,7 @@ fn a_loop_packet_cannot_borrow_another_executors_transaction() {
         }
         let mut forged = record.as_ref().clone();
         forged.instance = root.clone();
-        forged.owner_path = plan::OwnerPath::root();
+        forged.owner_path = node::OwnerPath::root();
         assert_loop_record_refused(
             &plan,
             journal.records(),
@@ -797,7 +798,7 @@ fn a_rejected_transaction_does_not_update_the_journal_loop_projection() {
     // The Loop packet is valid; a later journal invariant must still reject
     // the entire transaction without publishing the prepared fold.
     journal.loop_protocol().unwrap().apply(packet).unwrap();
-    transaction.owner_path = plan::OwnerPath::new(["wrong-owner"]).unwrap();
+    transaction.owner_path = node::OwnerPath::new(["wrong-owner"]).unwrap();
     let before = journal.records().to_vec();
     let fold = journal.loop_protocol().unwrap();
     assert!(matches!(

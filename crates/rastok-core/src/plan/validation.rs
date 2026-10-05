@@ -2,6 +2,7 @@
 //! the machine dereferences without checking and every canonical
 //! order the plan documents, held once, at a boundary, by a type.
 
+use crate::instance;
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -12,8 +13,8 @@ use crate::datatype::{DataType, TypeError};
 use crate::expr;
 use crate::node;
 use crate::plan::{
-    DispatchStep, EdgeEnd, Emission, EvaluationSite, ExecutionPlan, InstanceLifetime, Node,
-    NodeExecution, OwnerKind, OwnerSlot, Slot,
+    DispatchStep, EdgeEnd, Emission, EvaluationSite, ExecutionPlan, Node, NodeExecution, OwnerKind,
+    Slot,
 };
 use crate::schema_annotation::{AnnotationTable, SchemaAnnotationError};
 
@@ -55,7 +56,7 @@ pub enum PlanValidationError {
     /// An owner reference indexes past the owner table.
     OwnerOutOfBounds {
         /// The impossible reference.
-        owner: OwnerSlot,
+        owner: node::OwnerSlot,
         /// The table it missed.
         owner_count: usize,
     },
@@ -67,14 +68,14 @@ pub enum PlanValidationError {
     /// One owner does not form a valid parent-linked lexical tree.
     InvalidOwnerTree {
         /// The malformed row.
-        owner: OwnerSlot,
+        owner: node::OwnerSlot,
     },
     /// A Node and its owner row do not point to one another.
     OwnerNodeMismatch {
         /// The Node slot.
         node: Slot,
         /// The claimed owner row.
-        owner: OwnerSlot,
+        owner: node::OwnerSlot,
     },
     /// An owner carries a malformed boundary or Extension contract.
     InvalidGraphContract {
@@ -102,7 +103,7 @@ pub enum PlanValidationError {
     /// An edge's lexical scope is absent or is not a Graph owner.
     InvalidEdgeScope {
         /// The claimed Graph owner.
-        owner: OwnerSlot,
+        owner: node::OwnerSlot,
     },
     /// One owner declares an immutable binding twice.
     DuplicateOwnerValue {
@@ -595,11 +596,11 @@ pub enum PlanValidationError {
     /// The plan's canonical body would nest beyond the format
     /// reader's budget — the one plan `encode` would write that
     /// `decode` could not read back, refused here so it cannot exist.
-    NestingBudgetExceeded {
+    NestingExceeded {
         /// The deepest level the body would reach (root = 0).
         depth: usize,
         /// The reader's budget ([`crate::canonical_cbor::MAX_NESTING`]).
-        budget: usize,
+        bound: usize,
     },
 }
 
@@ -980,7 +981,10 @@ impl core::fmt::Display for PlanValidationError {
             Self::NonCanonicalOrder { collection } => {
                 write!(f, "invalid plan: `{collection}` is not in canonical order")
             }
-            Self::NestingBudgetExceeded { depth, budget } => write!(
+            Self::NestingExceeded {
+                depth,
+                bound: budget,
+            } => write!(
                 f,
                 "invalid plan: the body nests {depth} levels deep; the format reads at most {budget}"
             ),
@@ -1106,9 +1110,9 @@ impl ValidatedExecutionPlan {
         annotations_well_formed(&plan, &resolved_ports)?;
         let depth = super::serialization::deepest_level_with_resolved(&plan, &resolved_ports);
         if depth >= crate::canonical_cbor::MAX_NESTING {
-            return Err(PlanValidationError::NestingBudgetExceeded {
+            return Err(PlanValidationError::NestingExceeded {
                 depth,
-                budget: crate::canonical_cbor::MAX_NESTING,
+                bound: crate::canonical_cbor::MAX_NESTING,
             });
         }
         let handler_context = plan.handlers.iter().map(handler_context_use).collect();
@@ -1229,9 +1233,9 @@ fn verify_instance_key_types(
                 // the scoped crossing routes before transport. The owner tree
                 // preserves the boundary even though the spatial DAG is flat.
                 OwnerKind::Graph => {
-                    let owner = OwnerSlot::new(u32::try_from(index).map_err(|_| {
+                    let owner = node::OwnerSlot::new(u32::try_from(index).map_err(|_| {
                         PlanValidationError::OwnerOutOfBounds {
-                            owner: OwnerSlot::new(u32::MAX),
+                            owner: node::OwnerSlot::new(u32::MAX),
                             owner_count: plan.owners.len(),
                         }
                     })?);
@@ -2684,7 +2688,7 @@ fn owner_values_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationEr
 
 fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     for (owner_index, owner) in plan.owners.iter().enumerate() {
-        let owner_slot = OwnerSlot::new(u32::try_from(owner_index).unwrap_or(u32::MAX));
+        let owner_slot = node::OwnerSlot::new(u32::try_from(owner_index).unwrap_or(u32::MAX));
         let Some(spec) = owner.loop_spec() else {
             continue;
         };
@@ -2984,7 +2988,7 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     let mut paths = BTreeSet::new();
     let mut owned_nodes = BTreeSet::new();
     for (index, owner) in plan.owners.iter().enumerate() {
-        let slot = OwnerSlot::new(u32::try_from(index).unwrap_or(u32::MAX));
+        let slot = node::OwnerSlot::new(u32::try_from(index).unwrap_or(u32::MAX));
         let path = owner.path.to_string();
         if !paths.insert(path.clone()) {
             return Err(PlanValidationError::DuplicateOwnerPath { path });
@@ -3096,10 +3100,10 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         }
 
         let duration = match owner.instance.lifetime {
-            InstanceLifetime::Persistent | InstanceLifetime::SinglePass => None,
-            InstanceLifetime::Idle(value)
-            | InstanceLifetime::Fixed(value)
-            | InstanceLifetime::Tumbling(value) => Some(value),
+            instance::Lifetime::Persistent | instance::Lifetime::SinglePass => None,
+            instance::Lifetime::Idle(value)
+            | instance::Lifetime::Fixed(value)
+            | instance::Lifetime::Tumbling(value) => Some(value),
         };
         if duration.is_some_and(|value| value <= 0) {
             return Err(PlanValidationError::InvalidInstanceLifetime { owner: path });
@@ -3139,7 +3143,7 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     .any(matches_target),
             }
         });
-        if owner.instance.lifetime != InstanceLifetime::Persistent || explicitly_stoppable {
+        if owner.instance.lifetime != instance::Lifetime::Persistent || explicitly_stoppable {
             for node in &plan.nodes {
                 let Some(spec) = node.connector() else {
                     continue;
@@ -3233,13 +3237,13 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         let owner = plan
             .nodes
             .get(missing.index())
-            .map_or(OwnerSlot::new(u32::MAX), |node| node.owner);
+            .map_or(node::OwnerSlot::new(u32::MAX), |node| node.owner);
         return Err(PlanValidationError::OwnerNodeMismatch {
             node: missing,
             owner,
         });
     }
-    let is_descendant = |mut owner: OwnerSlot, ancestor: OwnerSlot| {
+    let is_descendant = |mut owner: node::OwnerSlot, ancestor: node::OwnerSlot| {
         loop {
             if owner == ancestor {
                 return true;
@@ -3277,7 +3281,7 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     Ok(())
 }
 
-fn owner_contains(plan: &ExecutionPlan, ancestor: OwnerSlot, child: OwnerSlot) -> bool {
+fn owner_contains(plan: &ExecutionPlan, ancestor: node::OwnerSlot, child: node::OwnerSlot) -> bool {
     let mut cursor = Some(child);
     while let Some(owner) = cursor {
         if owner == ancestor {
@@ -3294,9 +3298,9 @@ fn owner_contains(plan: &ExecutionPlan, ancestor: OwnerSlot, child: OwnerSlot) -
 fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     let depth = super::serialization::deepest_level(plan);
     if depth >= crate::canonical_cbor::MAX_NESTING {
-        return Err(PlanValidationError::NestingBudgetExceeded {
+        return Err(PlanValidationError::NestingExceeded {
             depth,
-            budget: crate::canonical_cbor::MAX_NESTING,
+            bound: crate::canonical_cbor::MAX_NESTING,
         });
     }
     for (handler, definition) in plan.handlers.iter().enumerate() {

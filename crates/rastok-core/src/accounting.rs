@@ -4,6 +4,7 @@
 //! validated plan. Inspection neither aggregates samples nor calculates prices.
 //! Deployment price-profile data retains its existing attested representation.
 
+use crate::instance;
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -11,11 +12,11 @@ use core::fmt;
 
 use crate::canonical_cbor::{Value as Cbor, encode};
 use crate::envelope::{Id, Value};
-use crate::identity::InstanceGeneration;
+
 use crate::journal::{Record, observations_for_records_from, recorded_envelope};
 use crate::node;
 use crate::observation::{ExchangeCorrelation, RecordCorrelation, RecordObservation};
-use crate::plan::{OwnerKind, OwnerPath, Slot, ValidatedExecutionPlan};
+use crate::plan::{OwnerKind, Slot, ValidatedExecutionPlan};
 use crate::schema_annotation::{
     AnnotationTable, CurrencyCode, DataAnnotation, MeasureId, SchemaPath, SchemaPathSegment,
     is_iso_4217_currency,
@@ -377,8 +378,8 @@ impl MeasureSample {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ObservationScope {
     origin_id: Option<Id>,
-    instance: Option<InstanceGeneration>,
-    owner: Option<OwnerPath>,
+    instance: Option<instance::Generation>,
+    owner: Option<node::OwnerPath>,
     node: Option<node::Path>,
     connector: Option<node::Path>,
     port: node::Port,
@@ -396,13 +397,13 @@ impl ObservationScope {
 
     /// Exact logical instance generation.
     #[must_use]
-    pub const fn instance(&self) -> Option<&InstanceGeneration> {
+    pub const fn instance(&self) -> Option<&instance::Generation> {
         self.instance.as_ref()
     }
 
     /// Transaction owner.
     #[must_use]
-    pub const fn owner(&self) -> Option<&OwnerPath> {
+    pub const fn owner(&self) -> Option<&node::OwnerPath> {
         self.owner.as_ref()
     }
 
@@ -587,7 +588,7 @@ fn inbound_schema<'a>(
 
 fn transaction_schema<'a>(
     plan: &'a ValidatedExecutionPlan,
-    owner_path: &OwnerPath,
+    owner_path: &node::OwnerPath,
     port: &node::Port,
 ) -> Result<PortSchema<'a>, AccountingError> {
     let owner = plan
@@ -896,7 +897,7 @@ fn unit_price_tree(rule: &UnitPrice) -> Cbor {
         Cbor::Text(rule.model().to_string()),
         Cbor::Text(rule.measure().as_str().to_string()),
         Cbor::Uint(rule.units()),
-        crate::identity::encoding::decimal_tagged(
+        crate::canonical::decimal(
             rule.price_money().amount().unscaled(),
             rule.price_money().amount().scale(),
         ),

@@ -58,7 +58,7 @@ impl SecretName {
     pub fn new(reference: impl Into<String>) -> Result<Self, DeploymentError> {
         let reference = reference.into();
         if !logical_path_holds(&reference) {
-            return Err(DeploymentError::InvalidSecretRef(reference));
+            return Err(DeploymentError::InvalidSecretName(reference));
         }
         Ok(Self(reference))
     }
@@ -609,10 +609,7 @@ impl BootBindings {
                 .iter()
                 .map(|(name, value)| EnvironmentAttestation {
                     name: name.clone(),
-                    digest: *blake3::hash(&encode(&crate::identity::encoding::canonical_value(
-                        value,
-                    )))
-                    .as_bytes(),
+                    digest: *blake3::hash(&encode(&crate::canonical::value(value))).as_bytes(),
                 })
                 .collect(),
             secrets: profile.secrets.into_values().collect(),
@@ -707,7 +704,7 @@ pub enum DeploymentError {
     /// Invalid portable environment name.
     InvalidEnvironmentName(String),
     /// Invalid logical secret path.
-    InvalidSecretRef(String),
+    InvalidSecretName(String),
     /// Invalid stable reference or version.
     InvalidStableRef(String),
     /// Invalid provider lookup path.
@@ -726,7 +723,7 @@ impl fmt::Display for DeploymentError {
             Self::InvalidEnvironmentName(name) => {
                 write!(formatter, "`{name}` is not a portable environment name")
             }
-            Self::InvalidSecretRef(reference) => {
+            Self::InvalidSecretName(reference) => {
                 write!(
                     formatter,
                     "`{reference}` is not a canonical logical secret reference"

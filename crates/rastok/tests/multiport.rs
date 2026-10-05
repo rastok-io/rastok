@@ -831,12 +831,12 @@ fn the_braced_record_is_physically_a_struct() {
             let rastok::canonical_cbor::Value::Array(parts) = emission else {
                 continue;
             };
-            let Some(rastok::canonical_cbor::Value::Map(spine)) = parts.last() else {
+            let Some(rastok::canonical_cbor::Value::Map(form)) = parts.last() else {
                 continue;
             };
             // Materialized data seals as [1, bytes(tagged_value)] —
             // the tag lives inside the embedded bytes.
-            if let Some(rastok::canonical_cbor::Value::Array(form)) = spine.get(&8)
+            if let Some(rastok::canonical_cbor::Value::Array(form)) = form.get(&8)
                 && let Some(rastok::canonical_cbor::Value::Bytes(inner)) = form.get(1)
                 && let Ok((rastok::canonical_cbor::Value::Array(tagged), _)) =
                     rastok::canonical_cbor::decode(inner)
@@ -1997,8 +1997,8 @@ lab g {
             continue;
         };
         // The INBOUND record: the Lab draft's data seals as a struct.
-        if let Some(rastok::canonical_cbor::Value::Map(spine)) = pairs.get(&20)
-            && let Some(rastok::canonical_cbor::Value::Array(form)) = spine.get(&8)
+        if let Some(rastok::canonical_cbor::Value::Map(form)) = pairs.get(&20)
+            && let Some(rastok::canonical_cbor::Value::Array(form)) = form.get(&8)
             && let Some(rastok::canonical_cbor::Value::Bytes(inner)) = form.get(1)
             && tagged_struct(inner)
         {
@@ -2041,7 +2041,7 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
         .ports
         .sort_by(|left, right| left.key().cmp(&right.key()));
     plan.edges.push(Edge {
-        scope: rastok::plan::OwnerSlot::new(0),
+        scope: rastok::node::OwnerSlot::new(0),
         from: EdgeEnd {
             node: None,
             port: rastok::node::Port::new("in").unwrap(),
@@ -2706,12 +2706,8 @@ fn struct_equality_is_by_name_like_the_seal() {
     // sorted seal in every judge.
     assert_eq!(left, right, "envelope equality is by name");
     assert_eq!(
-        rastok_core::canonical_cbor::encode(&rastok_core::identity::encoding::canonical_value(
-            &left
-        )),
-        rastok_core::canonical_cbor::encode(&rastok_core::identity::encoding::canonical_value(
-            &right
-        )),
+        rastok_core::canonical_cbor::encode(&rastok_core::canonical::value(&left)),
+        rastok_core::canonical_cbor::encode(&rastok_core::canonical::value(&right)),
         "the canonical bytes already agreed"
     );
     // The Rastok expression operator agrees too.

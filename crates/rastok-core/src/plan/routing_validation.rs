@@ -232,7 +232,7 @@ pub(super) fn validate_plan_routing(
                             return None;
                         }
                         let spec = owner.loop_spec()?;
-                        plan.graph_ports(super::OwnerSlot::new(u32::try_from(index).ok()?))?
+                        plan.graph_ports(crate::node::OwnerSlot::new(u32::try_from(index).ok()?))?
                             .iter()
                             .find(|port| port.port == spec.entry)?
                             .ty
@@ -311,12 +311,12 @@ pub(super) fn valid_instance_stop_target(
     };
     let (path, graph) = match &target.owner {
         super::EndpointOwner::Graph(path) => (path.clone(), true),
-        super::EndpointOwner::Node(path) => (super::OwnerPath::from(path), false),
+        super::EndpointOwner::Node(path) => (crate::node::OwnerPath::from(path), false),
     };
     plan.owners.iter().enumerate().any(|(index, owner)| {
         owner.path == path
             && (owner.kind == super::OwnerKind::Graph) == graph
-            && (index == scope || owner.parent == Some(super::OwnerSlot::new(scope as u32)))
+            && (index == scope || owner.parent == Some(crate::node::OwnerSlot::new(scope as u32)))
     })
 }
 

@@ -3,34 +3,36 @@
 use super::*;
 use crate::datatype::DataType;
 use crate::envelope::{Data, Envelope, Meta, MetaSys};
-use crate::identity::{InstanceIdentity, InstanceSegment};
+use crate::instance;
+use crate::node;
+
 use crate::journal::Emission;
 use crate::node::{Path, Port};
 use crate::value::Value;
 use alloc::boxed::Box;
 use alloc::vec;
 
-fn owner(path: &str) -> OwnerPath {
+fn owner(path: &str) -> node::OwnerPath {
     if path.is_empty() {
-        OwnerPath::root()
+        node::OwnerPath::root()
     } else {
-        OwnerPath::from(&Path::new(path.split('.')).unwrap())
+        node::OwnerPath::from(&Path::new(path.split('.')).unwrap())
     }
 }
 
-fn instance(path: &str, tenant: &str, generation: u64) -> InstanceGeneration {
-    let frame = InstanceSegment::SelectedKey {
+fn instance(path: &str, tenant: &str, generation: u64) -> instance::Generation {
+    let frame = instance::Segment::SelectedKey {
         scope: owner("conversation"),
         ty: DataType::Text,
         value: Value::Text(tenant.into()),
     };
-    InstanceGeneration::new(
-        InstanceIdentity::new(&owner(path), &[frame]).unwrap(),
+    instance::Generation::new(
+        instance::Identity::new(&owner(path), &[frame]).unwrap(),
         generation,
     )
 }
 
-fn transaction(instance: &InstanceGeneration, trigger: Trigger) -> TransactionRecord {
+fn transaction(instance: &instance::Generation, trigger: Trigger) -> TransactionRecord {
     TransactionRecord {
         instance_commands: None,
         timer_schedule: None,
@@ -53,7 +55,7 @@ fn transaction(instance: &InstanceGeneration, trigger: Trigger) -> TransactionRe
     }
 }
 
-fn start(reference: &InstanceGeneration, parent: Option<&InstanceGeneration>) -> Record {
+fn start(reference: &instance::Generation, parent: Option<&instance::Generation>) -> Record {
     let mut record = transaction(reference, Trigger::Lifecycle(Lifecycle::Start));
     record.parent_instance = parent.cloned();
     Record::Transaction(Box::new(record))
@@ -61,11 +63,12 @@ fn start(reference: &InstanceGeneration, parent: Option<&InstanceGeneration>) ->
 
 fn initial() -> (
     Vec<Record>,
-    InstanceGeneration,
-    InstanceGeneration,
-    InstanceGeneration,
+    instance::Generation,
+    instance::Generation,
+    instance::Generation,
 ) {
-    let root = InstanceGeneration::new(InstanceIdentity::singleton(&OwnerPath::root()), 0);
+    let root =
+        instance::Generation::new(instance::Identity::singleton(&node::OwnerPath::root()), 0);
     let alice = instance("conversation", "alice", 0);
     let worker = instance("conversation.worker", "alice", 0);
     let decide = instance("conversation.decide", "alice", 0);
@@ -94,9 +97,9 @@ fn target(path: &str) -> InstanceStopTarget {
 }
 
 fn production(
-    source: &InstanceGeneration,
-    scope: &InstanceGeneration,
-    target: &InstanceGeneration,
+    source: &instance::Generation,
+    scope: &instance::Generation,
+    target: &instance::Generation,
     seed: u8,
 ) -> (Record, Command) {
     let port = Port::new("end").unwrap();
@@ -221,18 +224,18 @@ fn closure_is_once_per_generation_and_repeated_commands_are_retained() {
 #[test]
 fn multiple_keyed_children_require_an_exact_source_binding() {
     let (mut records, alice, _, decide) = initial();
-    let sibling_key = InstanceSegment::SelectedKey {
+    let sibling_key = instance::Segment::SelectedKey {
         scope: owner("conversation.worker"),
         ty: DataType::INT,
         value: Value::Int(2),
     };
-    let parent_key = InstanceSegment::SelectedKey {
+    let parent_key = instance::Segment::SelectedKey {
         scope: owner("conversation"),
         ty: DataType::Text,
         value: Value::Text("alice".into()),
     };
-    let second = InstanceGeneration::new(
-        InstanceIdentity::new(&owner("conversation.worker"), &[parent_key, sibling_key]).unwrap(),
+    let second = instance::Generation::new(
+        instance::Identity::new(&owner("conversation.worker"), &[parent_key, sibling_key]).unwrap(),
         0,
     );
     records.push(start(&second, Some(&alice)));

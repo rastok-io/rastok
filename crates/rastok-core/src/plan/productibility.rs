@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::connector::FrameProduction;
+use crate::node;
 
 pub(super) fn validate(
     plan: &ExecutionPlan,
@@ -72,7 +73,7 @@ pub(super) fn may_produce(plan: &ExecutionPlan, slot: Slot, port: &node::Port) -
 pub(super) fn live_owners(plan: &ExecutionPlan) -> Vec<bool> {
     let mut live = alloc::vec![false; plan.owners.len()];
     live[0] = true;
-    let activate = |owner: OwnerSlot, live: &mut [bool]| {
+    let activate = |owner: node::OwnerSlot, live: &mut [bool]| {
         let mut current = Some(owner);
         let mut changed = false;
         while let Some(slot) = current {
@@ -115,7 +116,7 @@ pub(super) fn live_owners(plan: &ExecutionPlan) -> Vec<bool> {
         }
         for rule in &plan.boundary_routes {
             let source_path = match &rule.source.owner {
-                EndpointOwner::Node(path) => OwnerPath::from(path),
+                EndpointOwner::Node(path) => node::OwnerPath::from(path),
                 EndpointOwner::Graph(path) => path.clone(),
             };
             if !plan
@@ -137,7 +138,7 @@ pub(super) fn live_owners(plan: &ExecutionPlan) -> Vec<bool> {
                 }) = target
                     && let Some(index) = plan.owners.iter().position(|owner| owner.path == *path)
                 {
-                    changed |= activate(OwnerSlot::new(index as u32), &mut live);
+                    changed |= activate(node::OwnerSlot::new(index as u32), &mut live);
                 }
             }
         }

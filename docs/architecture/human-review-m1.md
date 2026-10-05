@@ -32,8 +32,11 @@ format, or touch security; otherwise they become M2 issues. The T1 actions
 that move bytes and are due before the freeze of 3 October land as **one
 format change, v20** (A-T1-1 shared payload bytes, A-T1-1b materialization
 by the reading port's type, A-T1-4 `IdKind`, A-T1-2 role removal), with a
-single re-blessing of goldens and recordings. A-T1-5 (`instance` module) is
-M2. A-T1-6, A-T1-7 and A-T1-9 also move sealed bytes; they are
+single re-blessing of goldens and recordings. A-T1-5 (`instance` module)
+was M2; on 2026-09-28 Yoann pulled it entirely before v20, together with
+the rename residues, with this clarification: a consistent public release
+on 15 October prevails over byte neutrality — a witness that moves is
+re-blessed with its reason, not avoided. A-T1-6, A-T1-7 and A-T1-9 also move sealed bytes; they are
 deliberately not in v20. Yoann's rule (2026-09-26): exactly one byte
 movement before the freeze (v20, the quick T1 actions) and exactly one after
 the 15th (**v21**, carrying those three plus whatever T2 and T4 reveal), with
@@ -431,6 +434,173 @@ call id. Not v20, not v21. **Action A-T2-3** (Yoann, 2026-09-27): the
 `MemJournal` doc says so — a deliberately simple, linear M1 implementation,
 with the M2 fix path — so no reader mistakes it for the intended design.
 Comment only; with v20 or any later touch of the file.
+
+**A-T2-4 — The three record kinds are nouns: INGRESS, TRANSACTION, EGRESS.**
+Decision (Yoann, 2026-10-02): INGRESS replaces INBOUND and EGRESS replaces
+OUTBOUND, because TRANSACTION is a noun and the other two were adjectives.
+Rule: the noun names a journal record kind and the pipeline that writes it;
+the adjectives `inbound` / `outbound` keep naming the direction of an
+exchange or a Connector role. Verified: "ingress" already means admission
+into the graph (the doc of `Record::Inbound` says "born at ingress";
+`VmError::UnknownIngress`, `ingress_port`, `SessionIngressRecord`,
+`InboundCallIngressRecord`), so the word gains no second meaning; "egress"
+is unused. No byte moves: no golden, fixture, `.rkp` or `.trace` spells
+either word, and the gallery pages use them only as adjectives. Visible
+changes: the debugger's History record-type column, about 110 uppercase
+mentions over eight specification files, and log keys that name the record
+kind (not `call_direction`, which is a direction). Proposed application,
+Astra to confirm case by case: `Record::{Inbound, Outbound}` →
+`{Ingress, Egress}`; `InboundRecord` → `IngressRecord`; `OutboundRecord` →
+`EgressRecord`; `prepare_inbound` / `commit_inbound` / `append_inbound` →
+`…_ingress`; `open_outbound` / `close_outbound` / `abandon_outbound` →
+`…_egress`; the admission pipeline `InboundSubmission`, `InboundDecision`,
+`InboundAdmission`, `InboundAcceptance`, `InboundRejection`,
+`InboundProposal`, `InboundProposalHandle`, `InboundEnvelopeProvenance`,
+`PreparedInbound` → `Ingress…`. Kept as adjectives: `InboundCall…`,
+`InboundSession`, `InboundExchange…`, `InboundConnectorDriver`,
+`OutboundConnectorDriver`, `OutboundConnectorBindings`,
+`ConnectorRoles::InboundAndOutbound`, `has_inbound` / `has_outbound`,
+`outbound_call_semantics`, and "inbound Call" / "outbound Call" in prose.
+To classify: `OutboundStatus` (it is the status of one Call fact) and
+`UnboundOutbound`. One sentence owed to delivery-semantics §6: EGRESS means
+an effect the graph initiated; the response of an inbound Call also leaves
+the graph, yet it is retained as the `exchange_exit` of a TRANSACTION
+(`journal.rs:703`), not as an EGRESS record. Owner: Astra, with the
+RustRover rename refactoring. It is visible in the debugger and the
+specification, so it lands before the opening, in the same pass as the
+remaining vocabulary residues.
+
+**A-T2-5 — The journal names deadlines, not timers: `Deadline`, `Deadlines`,
+`DeadlineKind`, `deadline_ids`, `created_at`.** Decisions (Yoann, 2026-10-05).
+(a) The timer-kind registry of `journal.rs:250-268` becomes a closed enum, the
+same action as A-T1-4 for the second byte registry: every other sealed tag in
+the core is a Rust enum projected to its number at the byte boundary
+(`Lifecycle` with `lifecycle_tag`, `serialization.rs:728`; `Record` with kind
+1/2/3), and AGENTS.md asks for algebraic types and exhaustive matches. Verified
+consequences of the constants: `TimerSchedule::try_new` accepts kinds 1 to 9 as
+one range (`journal/timing.rs:101`), so the reserved, unallocated byte 4 passes
+retention validation; `recovery.rs` compares raw kinds at 23 sites, where a
+forgotten branch stays silent today. (b) The vocabulary follows the
+specification, which says "dated obligation" eleven times and "deadline"
+sixty-four times against four "timer schedule": the journal records what is
+owed and when; "timer" and "scheduler" stay on the VM side, which is a
+disposable projection. Proposed application, Astra, in the vocabulary pass
+that already carries `IdKind`:
+
+| Today | Target | Meaning |
+|---|---|---|
+| `timer_kind` constants | `enum DeadlineKind`, nine variants, `TryFrom<u8>` refusing byte 4 and any unknown byte by name, explicit `deadline_kind_tag` for the projection, never the variant order; no `Unknown(u8)` variant | the closed registry |
+| `TimerArm { kind, reference, due_at }` | `Deadline` | one dated obligation: kind, exact obligation id, due instant |
+| `TimerSchedule { armed_at, arms }` | `Deadlines { created_at, items }` | the deadlines one commit creates together; one creation instant, order kept for equal-date ties |
+| `timers: Vec<(u8, Id)>`, sealed key 37 | `deadline_ids: Vec<(DeadlineKind, Id)>` | the identities of the deadlines this record creates; `(kind, id)` identifies a deadline because one subject has at most one per kind |
+| `timer_schedule`, retained key 56 | `deadlines` | the same deadlines with their instants |
+| `armed_at` | `created_at` | the logical commit instant, documented as logical nanoseconds |
+
+Reading sentence: a record seals its deadline ids and retains its deadlines;
+`require_timers` becomes "every sealed deadline id has its retained deadline".
+`identified_deadlines` was considered for key 37 and set aside for the
+existing `*_ids` convention (`envelope_ids`, `reply_ids`, `input_ids`).
+No byte moves: the numbers, the `identity.md` registry labels (not sealed)
+and every golden stay. About 250 mechanical sites in the core, the debugger
+explanation projection and the tests.
+
+**A-T2-6 — One layer per file in the journal's timing and admission code.**
+Confirmed defects (Yoann, 2026-10-05), from reading `journal/timing.rs` and
+`journal/admission.rs`:
+
+1. `timing.rs` mixes three layers and borrows the codec's error for all of
+   them. It is the only journal submodule without its own `Error`
+   (`instance_stop`, `retention`, `loop_protocol/fold`, `retry_protocol/fold`
+   each define one): 24 refusals are `canonical_cbor::DecodeError::Malformed`,
+   of which about fifteen are not about bytes — the constructor `try_new`
+   (`:94-110`) and the cross-record validators `validate_call`,
+   `validate_transaction`, `require_timers` (`:18-66`, `:176-290`). The VM
+   producers `loop_manager.rs:728`, `retry_manager.rs:692` and
+   `vm/timing.rs:293` therefore receive a "decode" error for a value they
+   just computed, and `Malformed(&'static str)` erases the distinction into a
+   string, which AGENTS.md forbids. Target: a typed `timing::Error`
+   (`EmptySchedule`, `DeadlinePrecedesCreation`, `MissingClosureInstant`,
+   `ClosurePrecedesOpening`, `ArmWithoutRetryContext`, `ArmMismatch`,
+   `SealedDeadlineWithoutInstant`, `FiringTimeDisagrees`,
+   `LoopDeadlineMismatch`; the unknown-kind case disappears with A-T2-5);
+   only `decode` additionally wraps a `DecodeError`. The three cross-record
+   validators move to journal acceptance, next to the Loop and Retry folds
+   they already name, so `timing.rs` is what its header says: the type and
+   its codec. `integer`/`signed` join their twins in `retention.rs:55,97`.
+2. The admission-generation rule is written twice with two state
+   representations: `AdmissionPrefix` (`admission.rs:31-110`) and
+   `MemJournal::instance_generation_for_admission` (`journal.rs:2397`), both
+   deciding "current generation if active and not closing, next otherwise".
+   Target: one fold owns the rule; the live journal keeps it as its index and
+   recovery feeds it a prefix, so the two callers cannot diverge.
+3. Residue, cosmetic: `impl InstanceAdmissions for AdmissionPrefix`
+   (`admission.rs:112`) lists its members in the opposite order of the trait
+   (`:10-15`); the IDE flags it, clippy does not.
+
+No byte moves, no golden. Not a pure rename, so by the entry rule of
+2026-09-26 it is not pre-opening work: v21 pass, after 15 October. Owner:
+Astra; regression for each typed error and one prefix-versus-live
+equivalence test for the generation rule.
+
+**A-T2-7 — A field is sealed or unsealed; `journal::retention` becomes
+`journal::codec`.** Decision (Yoann, 2026-10-05). The pair "sealed / retained"
+confused readers because "retained" named three things at once: a category of
+fields outside the causal seal (keys 56 and 59), the ordinary verb "kept"
+(`retain_emission_routes`, `retained_observations`, "the journal retains the
+complete envelope"), and the module `journal/retention.rs`, whose encoding
+contains sealed and unsealed fields alike. Rule: a journal field has one
+property, it enters the causal seal or it does not; the words are **sealed**
+and **unsealed**, as signed and unsigned headers, and the repository already
+uses them (`golden_trace.rs`: "retained call time is unsealed …";
+decisions.md: "outside the seal"). No noun is needed for the unsealed
+category: today it holds exactly two fields, both instants, named by what
+they are (`deadlines`, `closed_at`). Astra's "trace / context" was set aside:
+"trace" already names the sealed projection (`.trace` goldens), and "context"
+already carries four meanings in the code (`RoutedContext`, `ContextOwner`,
+Retry attempt context, `ServerContext`). Proposed application, Astra, in the
+v21 vocabulary pass with A-T2-5 and A-T2-6:
+
+| Today | Target |
+|---|---|
+| `journal::retention` | `journal::codec` — the complete, lossless encoding of a `Record`, sealed and unsealed fields together |
+| `retention::record(&Record) -> Cbor` | `codec::encode` |
+| `retention::Reader` | `codec::Decoder` (stateful: parents and command producers must precede their references) |
+| `retention::Error` | `codec::Error` |
+| "retained field / schedule / instant / time" in `identity.md`, `decisions.md`, `delivery-semantics.md`, code comments | "unsealed …" |
+| "retained" as the verb *kept* | unchanged |
+
+The sweep must distinguish the category noun from the verb: 204 spec
+mentions and about 600 code mentions of "retain" are mostly the verb. The
+sentence for a newcomer: the journal seals what happened; the instants stay
+unsealed so a resume lands on the exact second. No byte moves: the codec's
+bytes, the registry numbers and every golden stay.
+
+## Landed changes
+
+**`f72454a` — Rename identity, canonical-form and check vocabulary
+(2026-09-28, Astra with the RustRover rename refactoring, signed by Yoann).**
+Implements the pure-rename part of A-T1-4 (`id_kind` parameter), A-T1-5
+(`InstanceIdentity`, `InstanceSegment`, `InstanceGeneration`, `scope`),
+A-T1-8 (`canonical_*`, code comments), A-T1-11 (`check_consistency`,
+`check_value_type` returning `Result`, `check_bounds`, `…Exceeded`/`bound`),
+A-T2-1 (`…Id`/`…Name`/`…Handle`, `ids::*_id`, `EdgeEnd`), A-T2-2 (a)
+(`RECURRENCE_DELAY`, `SAGA_TIMEOUT` removed) and A-T2-3 (the `MemJournal`
+comment). Also aligned the pre-public JSON log keys of the observability
+output with the same vocabulary, without legacy aliases (a visible output
+change, acceptable before any release; noted here so it is not mistaken
+for a rename). Verified by Fable on the commit: no golden, fixture,
+example, `.rkp` or `.trace` changed; full gate rerun by Fable on
+`f72454a` (2026-09-28): fmt, strict Clippy and rustdoc pass, 1552 tests
+pass, 0 fail.
+Residual vocabulary left for the v21 naming sweep, none blocking reading:
+`TypeRefusal::NodeBudget` (`compiler/check.rs:124`) and
+`PlanValidationError::NestingBudgetExceeded { budget }` keep the diagnostic
+vocabulary of `E-TYPE-BUDGET`/`E-PLAN-DEPTH`; `DeploymentError::InvalidSecretRef`
+→ `InvalidSecretName`; `vm.rs::select_session_ref` → `select_session_id`;
+`encoding.rs::map_value_from_tagged` → `map_from_canonical`; two test names
+still say "spine" (`machine_executor.rs:109,166`). Still open from those
+actions: the `instance` module move (M2), the `IdKind` enum (v20), the
+specification prose (v21 docs sweep).
 
 ## Parked remarks (outside the current theme)
 

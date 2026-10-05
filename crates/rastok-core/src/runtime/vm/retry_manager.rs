@@ -2,6 +2,8 @@
 //! attempt facts, sharing the Worker's mailbox budget and dated scheduler.
 
 use super::*;
+use crate::envelope;
+use crate::instance;
 use crate::journal::loop_protocol::{Fact as LoopFact, Phase as LoopPhase};
 use crate::journal::retry_protocol::{self as protocol, AttemptId, Fact, Fold, Packet, Phase};
 use crate::journal::timing::{TimerArm, TimerSchedule};
@@ -14,8 +16,8 @@ pub(super) fn error(error: protocol::Error) -> VmError {
 impl Vm<'_> {
     pub(super) fn retry_attempt(
         &self,
-        instance: &InstanceGeneration,
-        delivery: &Delivery,
+        instance: &instance::Generation,
+        delivery: &envelope::Delivery,
     ) -> Option<AttemptId> {
         let reference = ids::delivery_id(&delivery.edge, delivery.envelope.meta().sys().id());
         self.retry_manager
@@ -34,8 +36,8 @@ impl Vm<'_> {
 
     pub(super) fn pinned_retry_intent(
         &self,
-        instance: &InstanceGeneration,
-        delivery: &Delivery,
+        instance: &instance::Generation,
+        delivery: &envelope::Delivery,
     ) -> Option<Intent> {
         let attempt = self.retry_attempt(instance, delivery)?;
         let state = self
@@ -59,8 +61,8 @@ impl Vm<'_> {
         &mut self,
         journal: &mut dyn Journal,
         slot: Slot,
-        instance: &InstanceGeneration,
-        delivery: &Delivery,
+        instance: &instance::Generation,
+        delivery: &envelope::Delivery,
         intent: &Intent,
     ) -> Result<bool, VmError> {
         let node = &self.plan.nodes[slot.index()];
@@ -247,8 +249,8 @@ impl Vm<'_> {
 
     pub(super) fn prepare_retry_completion(
         &self,
-        instance: &InstanceGeneration,
-        delivery: &Delivery,
+        instance: &instance::Generation,
+        delivery: &envelope::Delivery,
         call: CallId,
         record: &mut TransactionRecord,
     ) -> Result<Option<(Box<Fold>, bool)>, VmError> {
@@ -305,7 +307,7 @@ impl Vm<'_> {
         })
     }
 
-    pub(super) fn retry_has_work(&self, instance: Option<&InstanceGeneration>) -> bool {
+    pub(super) fn retry_has_work(&self, instance: Option<&instance::Generation>) -> bool {
         self.retry_manager.as_deref().is_some_and(|fold| {
             fold.operations().any(|(_, state)| {
                 state.phase != Phase::Closed
@@ -749,7 +751,7 @@ pub(super) fn hold_emissions(record: &TransactionRecord) -> PreparedEmissions {
 }
 
 pub(super) fn manager_record(
-    instance: &InstanceGeneration,
+    instance: &instance::Generation,
     cause: Id,
     packet: Packet,
 ) -> TransactionRecord {

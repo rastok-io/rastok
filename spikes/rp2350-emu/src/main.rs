@@ -10,6 +10,7 @@
 
 extern crate alloc;
 
+use rastok_core::node;
 use alloc::string::String;
 use core::mem::MaybeUninit;
 
@@ -26,7 +27,7 @@ use rastok_core::envelope::{Data, Id, Namespace, Value};
 use rastok_core::journal;
 use rastok_core::journal::{MemJournal, Record};
 use rastok_core::node::{Path, Port, Trigger};
-use rastok_core::plan::{GraphVersion, OwnerPath};
+use rastok_core::plan::GraphVersion;
 use rastok_core::runtime::vm::Vm;
 
 #[cfg(feature = "retry-qualification")]
@@ -183,7 +184,7 @@ fn main() -> ! {
     //    turn instead of assuming that one `step` has one static role.
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&plan, GraphVersion(1));
-    let relay_owner = OwnerPath::new(["relay"]).expect("the measured owner path is valid");
+    let relay_owner = node::OwnerPath::new(["relay"]).expect("the measured owner path is valid");
     let relay_trigger = Trigger::Port(Port::new("in").expect("the measured port is valid"));
     let mut tx_ticks_total: u64 = 0;
     let mut tx_min = u64::MAX;

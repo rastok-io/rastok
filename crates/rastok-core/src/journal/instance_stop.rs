@@ -3,9 +3,11 @@
 
 use super::{InboundRecord, Record, TransactionRecord};
 use crate::envelope::Id;
-use crate::identity::InstanceGeneration;
+use crate::instance;
+use crate::node;
+
 use crate::node::{Lifecycle, Trigger};
-use crate::plan::{Endpoint, EndpointOwner, InstanceStopTarget, OwnerPath};
+use crate::plan::{Endpoint, EndpointOwner, InstanceStopTarget};
 use alloc::collections::BTreeMap;
 use alloc::string::ToString;
 use alloc::vec;
@@ -26,11 +28,11 @@ pub struct Command {
     /// Actual source emission (before transparent boundary composition).
     pub source: Endpoint,
     /// Exact emitting owner generation.
-    pub source_instance: InstanceGeneration,
+    pub source_instance: instance::Generation,
     /// Exact lexical wiring Graph generation.
-    pub scope: InstanceGeneration,
+    pub scope: instance::Generation,
     /// Exact generation to close, not a key or a current-owner lookup.
-    pub target: InstanceGeneration,
+    pub target: instance::Generation,
     /// The emitted or inbound envelope which requested closure.
     pub cause: Id,
 }
@@ -41,9 +43,9 @@ impl Command {
     #[must_use]
     pub fn new(
         source: Endpoint,
-        source_instance: InstanceGeneration,
-        scope: InstanceGeneration,
-        target: InstanceGeneration,
+        source_instance: instance::Generation,
+        scope: instance::Generation,
+        target: instance::Generation,
         cause: Id,
     ) -> Self {
         let mut command = Self {
@@ -221,7 +223,7 @@ fn read_id(value: &crate::canonical_cbor::Value) -> Result<Id, Error> {
     ))
 }
 
-fn read_instance(value: &crate::canonical_cbor::Value) -> Result<InstanceGeneration, Error> {
+fn read_instance(value: &crate::canonical_cbor::Value) -> Result<instance::Generation, Error> {
     use crate::canonical_cbor::Value as Cbor;
     let Cbor::Array(row) = value else {
         return Err(Error::PacketShape);
@@ -229,8 +231,8 @@ fn read_instance(value: &crate::canonical_cbor::Value) -> Result<InstanceGenerat
     let [Cbor::Bytes(address), Cbor::Uint(generation)] = row.as_slice() else {
         return Err(Error::PacketShape);
     };
-    Ok(InstanceGeneration::new(
-        crate::identity::InstanceIdentity::decode(address).map_err(|_| Error::Target)?,
+    Ok(instance::Generation::new(
+        crate::instance::Identity::decode(address).map_err(|_| Error::Target)?,
         *generation,
     ))
 }
@@ -255,7 +257,7 @@ pub enum Disposition {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Instance {
-    parent: Option<InstanceGeneration>,
+    parent: Option<instance::Generation>,
     stopped: bool,
     closing: Option<usize>,
 }
@@ -264,7 +266,7 @@ struct Instance {
 /// clock, Driver, latest-generation lookup, or mutable queue is authoritative.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Fold {
-    instances: BTreeMap<InstanceGeneration, Instance>,
+    instances: BTreeMap<instance::Generation, Instance>,
     commands: Vec<(Command, Disposition)>,
     records: usize,
 }
@@ -312,10 +314,10 @@ impl fmt::Display for Error {
 
 impl core::error::Error for Error {}
 
-fn owner_path(owner: &EndpointOwner) -> OwnerPath {
+fn owner_path(owner: &EndpointOwner) -> node::OwnerPath {
     match owner {
         EndpointOwner::Graph(path) => path.clone(),
-        EndpointOwner::Node(path) => OwnerPath::from(path),
+        EndpointOwner::Node(path) => node::OwnerPath::from(path),
     }
 }
 
@@ -352,7 +354,7 @@ impl Fold {
 
     /// The first retained close governing this exact generation, if any.
     #[must_use]
-    pub fn closing_record(&self, instance: &InstanceGeneration) -> Option<usize> {
+    pub fn closing_record(&self, instance: &instance::Generation) -> Option<usize> {
         self.instances.get(instance).and_then(|state| state.closing)
     }
 
@@ -364,9 +366,9 @@ impl Fold {
     /// Missing source context, nonlocal target, absent child or ambiguous child.
     pub fn resolve(
         &self,
-        source: &InstanceGeneration,
+        source: &instance::Generation,
         target: &InstanceStopTarget,
-    ) -> Result<(InstanceGeneration, InstanceGeneration), Error> {
+    ) -> Result<(instance::Generation, instance::Generation), Error> {
         let mut cursor = source;
         let scope = loop {
             let instance = self.instances.get(cursor).ok_or(Error::Source)?;
@@ -504,7 +506,7 @@ impl Fold {
         Ok(())
     }
 
-    fn within(&self, child: &InstanceGeneration, ancestor: &InstanceGeneration) -> bool {
+    fn within(&self, child: &instance::Generation, ancestor: &instance::Generation) -> bool {
         let mut cursor = Some(child);
         while let Some(reference) = cursor {
             if reference == ancestor {
@@ -621,7 +623,7 @@ fn transaction_source(record: &TransactionRecord, command: &Command) -> bool {
 
 fn inbound_source(record: &InboundRecord, command: &Command) -> bool {
     let owner = record.connector_path.as_ref().map_or_else(
-        || EndpointOwner::Graph(OwnerPath::root()),
+        || EndpointOwner::Graph(node::OwnerPath::root()),
         |path| EndpointOwner::Node(path.clone()),
     );
     command.source.owner == owner

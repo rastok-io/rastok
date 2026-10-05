@@ -125,7 +125,7 @@ pub enum RouteDestination {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct InstanceStopTarget {
     /// Graph in which the command was authored.
-    pub scope: super::OwnerPath,
+    pub scope: crate::node::OwnerPath,
     /// That Graph or one of its direct children; never an arbitrary path.
     pub owner: EndpointOwner,
 }
@@ -189,5 +189,5 @@ pub enum EndpointOwner {
     /// One executable Operator or Connector.
     Node(node::Path),
     /// One Graph's input/output boundary, including the root App boundary.
-    Graph(crate::plan::OwnerPath),
+    Graph(crate::node::OwnerPath),
 }

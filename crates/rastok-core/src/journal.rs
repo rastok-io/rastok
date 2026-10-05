@@ -24,12 +24,13 @@ use crate::boundary::{
     SubmissionSequence,
 };
 use crate::envelope::{Envelope, Id, Meta, MetaSys};
-use crate::identity::{InstanceGeneration, InstanceIdentity};
+use crate::instance;
+
 use crate::node;
 use crate::observation::{
     ExchangeCorrelation, RecordCorrelation, RecordObservation, RecordObservationKind,
 };
-use crate::plan::{GraphVersion, OwnerPath};
+use crate::plan::GraphVersion;
 use crate::value::Value;
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, BTreeSet};
@@ -47,10 +48,8 @@ pub mod timing;
 /// Deterministic identity recipes — the injective blake3 framing of
 /// `envelope.md` §2, with its domain tags.
 pub mod ids {
-    use super::{
-        CallId, Id, InboundEnvelopeProvenance, InstanceGeneration, OwnerPath, SessionId,
-        SessionWriteId, node,
-    };
+    use super::{CallId, Id, InboundEnvelopeProvenance, SessionId, SessionWriteId, node};
+    use crate::instance;
     use alloc::string::ToString;
     use alloc::vec::Vec;
 
@@ -119,7 +118,7 @@ pub mod ids {
     /// available to aspect managers and Graph-owned handlers.
     #[must_use]
     pub fn graph_emission_id(
-        owner: &OwnerPath,
+        owner: &node::OwnerPath,
         trigger: &node::Trigger,
         parent: Id,
         port: &node::Port,
@@ -150,7 +149,7 @@ pub mod ids {
 
     /// The stable 16-byte timer reference for one instance generation.
     #[must_use]
-    pub fn instance_lifetime_id(instance: &InstanceGeneration) -> Id {
+    pub fn instance_lifetime_id(instance: &instance::Generation) -> Id {
         Id::derive(
             INSTANCE_LIFETIME,
             &[
@@ -164,7 +163,7 @@ pub mod ids {
     /// extend-only timer-kind number (drain or settlement), so the two
     /// obligations of one generation cannot collide.
     #[must_use]
-    pub fn instance_closing_id(instance: &InstanceGeneration, phase: u8) -> Id {
+    pub fn instance_closing_id(instance: &instance::Generation, phase: u8) -> Id {
         Id::derive(
             INSTANCE_CLOSING,
             &[
@@ -577,7 +576,7 @@ pub struct InboundCallIngressRecord {
     /// Root-derived Call reference.
     pub reference: InboundCallId,
     /// Exact Connector generation that owns the request and its terminal exit.
-    pub instance: InstanceGeneration,
+    pub instance: instance::Generation,
     /// Dated obligations armed by this Call-opening fact. The tuple registry
     /// is shared with transaction timers; ack-mode Calls carry none.
     pub timers: Vec<(u8, Id)>,
@@ -611,7 +610,7 @@ pub struct RouteTarget {
     /// Canonical edge text carrying the envelope.
     pub edge: String,
     /// Complete target instance reference returned by destination admission.
-    pub target: InstanceGeneration,
+    pub target: instance::Generation,
 }
 
 /// One consumed input position — the cursor is per
@@ -622,7 +621,7 @@ pub struct ConsumedPosition {
     /// The graph edge the input arrived on, canonically rendered.
     pub edge: String,
     /// Complete upstream instance reference which owns this edge cursor.
-    pub source: InstanceGeneration,
+    pub source: instance::Generation,
     /// The position on that edge.
     pub seq: u64,
 }
@@ -679,18 +678,18 @@ pub struct TransactionRecord {
     /// The firing lifecycle/transaction owner. Ordinary Node transactions
     /// carry the same segments as their node path; Graph lifecycle records
     /// use the preserved lexical Graph owner, including the empty root path.
-    pub owner_path: OwnerPath,
+    pub owner_path: node::OwnerPath,
     /// Complete firing instance reference. It is mandatory even for a
     /// persistent singleton owner.
-    pub instance: InstanceGeneration,
+    pub instance: instance::Generation,
     /// Enclosing Graph generation, present on a nested owner's `l:start`.
     /// The address carries ancestor key frames but deliberately not ancestor
     /// generations; recovery needs this explicit causal edge.
-    pub parent_instance: Option<InstanceGeneration>,
+    pub parent_instance: Option<instance::Generation>,
     /// A close request won atomically with this firing. The reference is the
     /// root of the closing scope; descendants may finish already-admitted
     /// work, while later external routes reserve the successor generation.
-    pub close_scope: Option<InstanceGeneration>,
+    pub close_scope: Option<instance::Generation>,
     /// What fired it.
     pub trigger: node::Trigger,
     /// Causal envelope for a lifecycle transaction that consumes no mailbox
@@ -750,7 +749,7 @@ pub struct RoutedDelivery {
     /// Canonical edge text carrying it.
     pub edge: String,
     /// Complete target instance reference selected before producer commit.
-    pub target: InstanceGeneration,
+    pub target: instance::Generation,
 }
 
 /// One external-world WAL fact. Call and Session subforms remain under the
@@ -912,7 +911,7 @@ impl PreparedInbound {
     /// A boundary root, Session fact, or second Call marker is contradictory.
     pub(crate) fn into_call(
         mut self,
-        instance: InstanceGeneration,
+        instance: instance::Generation,
         timers: Vec<(u8, Id)>,
     ) -> Result<Self, Error> {
         if self.connector_path.is_none() || self.exchange.is_some() {
@@ -947,23 +946,23 @@ pub enum Error {
     /// from the journal's lifecycle fold for that address.
     InstanceGenerationMismatch {
         /// The journal-derived reference.
-        expected: InstanceGeneration,
+        expected: instance::Generation,
         /// The transported claim.
-        got: InstanceGeneration,
+        got: instance::Generation,
     },
     /// A transaction claims an actor other than the owner sealed into its
     /// instance address.
     InstanceOwnerMismatch {
         /// Owner derived from the instance address.
-        expected: OwnerPath,
+        expected: node::OwnerPath,
         /// Owner transported by the transaction.
-        got: OwnerPath,
+        got: node::OwnerPath,
     },
     /// `l:start` attempted to reopen an active generation, or `l:stop`
     /// attempted to close an address whose generation never started.
     InvalidInstanceLifecycle {
         /// The addressed generation.
-        instance: InstanceGeneration,
+        instance: instance::Generation,
         /// Whether the journal fold was active before the transition.
         active: bool,
     },
@@ -971,35 +970,35 @@ pub enum Error {
     /// enclosing owner. It belongs exactly on a non-root owner's `l:start`.
     InvalidParentInstance {
         /// The child lifecycle reference.
-        instance: InstanceGeneration,
+        instance: instance::Generation,
         /// The transported parent claim, if any.
-        parent: Option<InstanceGeneration>,
+        parent: Option<instance::Generation>,
     },
     /// A parent `l:stop` was attempted while at least one journaled child
     /// lifecycle obligation remained open.
     OpenChildInstances {
         /// Parent generation that must remain active.
-        parent: InstanceGeneration,
+        parent: instance::Generation,
     },
     /// A close request did not name the firing generation itself.
     InvalidCloseScope {
         /// Firing generation.
-        instance: InstanceGeneration,
+        instance: instance::Generation,
         /// Transported close root.
-        scope: InstanceGeneration,
+        scope: instance::Generation,
     },
     /// A second close request tried to govern a generation already covered by
     /// an active durable close root. The first causal request is authoritative.
     InstanceAlreadyClosing {
         /// Generation named by the losing request.
-        instance: InstanceGeneration,
+        instance: instance::Generation,
         /// Existing root whose Closing scope already covers it.
-        scope: InstanceGeneration,
+        scope: instance::Generation,
     },
     /// `l:stop` was attempted before a durable close request existed.
     StopWithoutClose {
         /// Generation whose lifecycle was truncated.
-        instance: InstanceGeneration,
+        instance: instance::Generation,
     },
     /// An r2 command packet contradicts the replay-derived protocol.
     InvalidLoopProtocol(loop_protocol::Error),
@@ -1286,10 +1285,10 @@ pub trait Journal {
     /// Returns the generation a route committing now must seal for this
     /// address. The value is a pure fold of journaled `l:start`/`l:stop`
     /// transactions; no Worker-local counter participates.
-    fn instance_ref_for_admission(
+    fn instance_generation_for_admission(
         &self,
-        address: &InstanceIdentity,
-    ) -> Result<InstanceGeneration, Error>;
+        address: &instance::Identity,
+    ) -> Result<instance::Generation, Error>;
 
     /// Reconstructs the command-based Loop protocol from committed facts.
     ///
@@ -1430,10 +1429,10 @@ pub struct MemJournal {
     next_seq: BTreeMap<InboundEnvelopeProvenance, u64>,
     /// Replay-derived lifecycle fold, maintained atomically with `records`.
     /// It is an index over causal facts, never a second generation authority.
-    instance_lifecycles: BTreeMap<InstanceIdentity, InstanceLifecycle>,
+    instance_lifecycles: BTreeMap<instance::Identity, InstanceLifecycle>,
     /// Active durable close roots. The set is a replay-derived fast rejection:
     /// ordinary admission never walks an owner chain when no close fact exists.
-    active_close_roots: BTreeSet<InstanceGeneration>,
+    active_close_roots: BTreeSet<instance::Generation>,
     /// Replay-derived Session fold. It is an index over the three ordinary
     /// causal record kinds, never a fourth record stream.
     sessions: BTreeMap<SessionId, SessionLifecycle>,
@@ -1449,7 +1448,7 @@ pub struct MemJournal {
 #[derive(Debug, Clone)]
 struct InboundCallLifecycle {
     connector_path: node::Path,
-    instance: InstanceGeneration,
+    instance: instance::Generation,
     timers: Vec<(u8, Id)>,
     open: bool,
 }
@@ -1458,7 +1457,7 @@ struct InboundCallLifecycle {
 struct InstanceLifecycle {
     starts: u64,
     active: bool,
-    parent: Option<InstanceGeneration>,
+    parent: Option<instance::Generation>,
     closing: bool,
 }
 
@@ -1570,19 +1569,18 @@ impl MemJournal {
                         prepared =
                             prepared.into_call(call.instance.clone(), call.timers.clone())?;
                     }
-                    let metadata_equal = prepared.envelope.meta().app().is_empty()
-                        && inbound.envelope.meta().app().is_empty()
-                        && prepared
-                            .envelope
-                            .meta()
-                            .ext()
-                            .iter()
-                            .map(|(name, value)| {
-                                (name, crate::identity::encoding::canonical_meta_value(value))
-                            })
-                            .eq(inbound.envelope.meta().ext().iter().map(|(name, value)| {
-                                (name, crate::identity::encoding::canonical_meta_value(value))
-                            }));
+                    let metadata_equal =
+                        prepared.envelope.meta().app().is_empty()
+                            && inbound.envelope.meta().app().is_empty()
+                            && prepared
+                                .envelope
+                                .meta()
+                                .ext()
+                                .iter()
+                                .map(|(name, value)| (name, crate::canonical::meta_value(value)))
+                                .eq(inbound.envelope.meta().ext().iter().map(|(name, value)| {
+                                    (name, crate::canonical::meta_value(value))
+                                }));
                     if !metadata_equal
                         || prepared.envelope.meta().sys() != inbound.envelope.meta().sys()
                         || prepared.exchange.as_ref() != inbound.exchange.as_deref()
@@ -1695,24 +1693,24 @@ impl MemJournal {
     /// `starts` is also the next generation ordinal whenever no generation is
     /// active. A durable implementation rebuilds the same projection while
     /// replaying `l:start`/`l:stop`; no Worker-local counter participates.
-    fn instance_lifecycle(&self, address: &InstanceIdentity) -> InstanceLifecycle {
+    fn instance_lifecycle(&self, address: &instance::Identity) -> InstanceLifecycle {
         self.instance_lifecycles
             .get(address)
             .cloned()
             .unwrap_or_default()
     }
 
-    fn active_instance_ref(&self, address: &InstanceIdentity) -> Option<InstanceGeneration> {
+    fn active_instance_ref(&self, address: &instance::Identity) -> Option<instance::Generation> {
         let lifecycle = self.instance_lifecycle(address);
         lifecycle
             .active
-            .then(|| InstanceGeneration::new(address.clone(), lifecycle.starts.saturating_sub(1)))
+            .then(|| instance::Generation::new(address.clone(), lifecycle.starts.saturating_sub(1)))
     }
 
     fn instance_is_within(
         &self,
-        child: &InstanceGeneration,
-        ancestor: &InstanceGeneration,
+        child: &instance::Generation,
+        ancestor: &instance::Generation,
     ) -> bool {
         let mut cursor = Some(child.clone());
         while let Some(reference) = cursor {
@@ -1729,7 +1727,7 @@ impl MemJournal {
     }
 
     /// Outermost durable close root governing this active generation.
-    fn closing_scope(&self, instance: &InstanceGeneration) -> Option<InstanceGeneration> {
+    fn closing_scope(&self, instance: &instance::Generation) -> Option<instance::Generation> {
         if self.active_close_roots.is_empty() {
             return None;
         }
@@ -1750,10 +1748,10 @@ impl MemJournal {
 
     fn route_generation_is_valid(
         &self,
-        source: Option<&InstanceGeneration>,
-        target: &InstanceGeneration,
+        source: Option<&instance::Generation>,
+        target: &instance::Generation,
     ) -> Result<bool, Error> {
-        let admission = self.instance_ref_for_admission(target.address())?;
+        let admission = self.instance_generation_for_admission(target.address())?;
         if target == &admission {
             return Ok(true);
         }
@@ -1770,13 +1768,13 @@ impl MemJournal {
         )
     }
 
-    fn has_active_children(&self, parent: &InstanceGeneration) -> bool {
+    fn has_active_children(&self, parent: &instance::Generation) -> bool {
         self.instance_lifecycles
             .values()
             .any(|lifecycle| lifecycle.active && lifecycle.parent.as_ref() == Some(parent))
     }
 
-    fn route_was_reserved(&self, target: &InstanceGeneration) -> bool {
+    fn route_was_reserved(&self, target: &instance::Generation) -> bool {
         self.records.iter().any(|record| match record {
             Record::Inbound(inbound) => {
                 inbound.routes.iter().any(|route| &route.target == target)
@@ -1795,8 +1793,8 @@ impl MemJournal {
 
     fn ancestor_route_was_reserved(
         &self,
-        target: &InstanceGeneration,
-        parent: &InstanceGeneration,
+        target: &instance::Generation,
+        parent: &instance::Generation,
         cause: Option<Id>,
     ) -> bool {
         let Some(cause) = cause else { return false };
@@ -2040,7 +2038,7 @@ impl Journal for MemJournal {
                 if !(call.timers.is_empty() || call.timers.as_slice() == [expected_timeout]) {
                     return Err(Error::CorruptInboundCall);
                 }
-                let expected = self.instance_ref_for_admission(call.instance.address())?;
+                let expected = self.instance_generation_for_admission(call.instance.address())?;
                 if call.instance != expected {
                     return Err(Error::InstanceGenerationMismatch {
                         expected,
@@ -2051,7 +2049,7 @@ impl Journal for MemJournal {
             None => {}
         }
         for route in &routes {
-            let expected = self.instance_ref_for_admission(route.target.address())?;
+            let expected = self.instance_generation_for_admission(route.target.address())?;
             if route.target != expected {
                 return Err(Error::InstanceGenerationMismatch {
                     expected,
@@ -2175,9 +2173,9 @@ impl Journal for MemJournal {
         }
         let mut lifecycle = self.instance_lifecycle(transaction.instance.address());
         let expected = if is_start {
-            InstanceGeneration::new(transaction.instance.address().clone(), lifecycle.starts)
+            instance::Generation::new(transaction.instance.address().clone(), lifecycle.starts)
         } else {
-            InstanceGeneration::new(
+            instance::Generation::new(
                 transaction.instance.address().clone(),
                 lifecycle.starts.saturating_sub(1),
             )
@@ -2273,7 +2271,7 @@ impl Journal for MemJournal {
         }
         for route in &transaction.routes {
             if !self.route_generation_is_valid(Some(&transaction.instance), &route.target)? {
-                let expected = self.instance_ref_for_admission(route.target.address())?;
+                let expected = self.instance_generation_for_admission(route.target.address())?;
                 return Err(Error::InstanceGenerationMismatch {
                     expected,
                     got: route.target.clone(),
@@ -2396,15 +2394,15 @@ impl Journal for MemJournal {
         Ok(())
     }
 
-    fn instance_ref_for_admission(
+    fn instance_generation_for_admission(
         &self,
-        address: &InstanceIdentity,
-    ) -> Result<InstanceGeneration, Error> {
+        address: &instance::Identity,
+    ) -> Result<instance::Generation, Error> {
         let lifecycle = self.instance_lifecycle(address);
         let closing = lifecycle.active
             && !self.active_close_roots.is_empty()
             && self
-                .closing_scope(&InstanceGeneration::new(
+                .closing_scope(&instance::Generation::new(
                     address.clone(),
                     lifecycle.starts.saturating_sub(1),
                 ))
@@ -2414,7 +2412,7 @@ impl Journal for MemJournal {
         } else {
             lifecycle.starts
         };
-        Ok(InstanceGeneration::new(address.clone(), generation))
+        Ok(instance::Generation::new(address.clone(), generation))
     }
 
     fn open_outbound(
@@ -2738,9 +2736,9 @@ mod tests {
     use alloc::string::ToString;
     use alloc::vec;
 
-    fn instance(owner: &str, generation: u64) -> InstanceGeneration {
-        let owner = crate::plan::OwnerPath::new([owner]).expect("valid owner path");
-        InstanceGeneration::new(InstanceIdentity::singleton(&owner), generation)
+    fn instance(owner: &str, generation: u64) -> instance::Generation {
+        let owner = crate::node::OwnerPath::new([owner]).expect("valid owner path");
+        instance::Generation::new(instance::Identity::singleton(&owner), generation)
     }
 
     fn provenance(path: &str) -> InboundEnvelopeProvenance {
@@ -2961,14 +2959,14 @@ mod tests {
     }
 
     fn lifecycle_transaction(
-        instance: InstanceGeneration,
+        instance: instance::Generation,
         lifecycle: node::Lifecycle,
     ) -> TransactionRecord {
         let parent_instance = (lifecycle == node::Lifecycle::Start
             && !instance.address().owner().is_root())
         .then(|| {
-            InstanceGeneration::new(
-                InstanceIdentity::singleton(&crate::plan::OwnerPath::root()),
+            instance::Generation::new(
+                instance::Identity::singleton(&crate::node::OwnerPath::root()),
                 0,
             )
         });
@@ -2995,8 +2993,8 @@ mod tests {
     }
 
     fn activate_root(journal: &mut MemJournal) {
-        let root = InstanceGeneration::new(
-            InstanceIdentity::singleton(&crate::plan::OwnerPath::root()),
+        let root = instance::Generation::new(
+            instance::Identity::singleton(&crate::node::OwnerPath::root()),
             0,
         );
         journal
@@ -3006,11 +3004,10 @@ mod tests {
 
     #[test]
     fn reserved_descendants_prove_ancestor_admission_but_not_another_key_or_generation() {
-        use crate::identity::InstanceSegment;
         let mut journal = MemJournal::new(GraphVersion(1));
         activate_root(&mut journal);
-        let parent = InstanceGeneration::new(
-            InstanceIdentity::singleton(&OwnerPath::new(["window"]).unwrap()),
+        let parent = instance::Generation::new(
+            instance::Identity::singleton(&node::OwnerPath::new(["window"]).unwrap()),
             0,
         );
         journal
@@ -3019,15 +3016,15 @@ mod tests {
                 node::Lifecycle::Start,
             ))
             .unwrap();
-        let source = InstanceGeneration::new(
-            InstanceIdentity::singleton(&OwnerPath::new(["window", "total"]).unwrap()),
+        let source = instance::Generation::new(
+            instance::Identity::singleton(&node::OwnerPath::new(["window", "total"]).unwrap()),
             0,
         );
         let mut start = lifecycle_transaction(source.clone(), node::Lifecycle::Start);
         start.parent_instance = Some(parent.clone());
         journal.commit(start).unwrap();
-        let outside = InstanceGeneration::new(
-            InstanceIdentity::singleton(&OwnerPath::new(["outside"]).unwrap()),
+        let outside = instance::Generation::new(
+            instance::Identity::singleton(&node::OwnerPath::new(["outside"]).unwrap()),
             0,
         );
         journal
@@ -3037,11 +3034,11 @@ mod tests {
             ))
             .unwrap();
         request_close(&mut journal, parent.clone());
-        let owner = OwnerPath::new(["window", "bridge"]).unwrap();
-        let address = |path: &OwnerPath, key: &str| {
-            InstanceIdentity::new(
+        let owner = node::OwnerPath::new(["window", "bridge"]).unwrap();
+        let address = |path: &node::OwnerPath, key: &str| {
+            instance::Identity::new(
                 path,
-                &[InstanceSegment::SelectedKey {
+                &[instance::Segment::SelectedKey {
                     scope: owner.clone(),
                     ty: crate::datatype::DataType::Text,
                     value: crate::value::Value::Text(key.into()),
@@ -3049,10 +3046,10 @@ mod tests {
             )
             .unwrap()
         };
-        let child = InstanceGeneration::new(address(&owner, "alice"), 0);
-        let leaf = InstanceGeneration::new(
+        let child = instance::Generation::new(address(&owner, "alice"), 0);
+        let leaf = instance::Generation::new(
             address(
-                &OwnerPath::new(["window", "bridge", "relay"]).unwrap(),
+                &node::OwnerPath::new(["window", "bridge", "relay"]).unwrap(),
                 "alice",
             ),
             0,
@@ -3079,7 +3076,7 @@ mod tests {
         for wrong_key in [false, true] {
             let mut forged = start.clone();
             if wrong_key {
-                forged.instance = InstanceGeneration::new(address(&owner, "bob"), 0);
+                forged.instance = instance::Generation::new(address(&owner, "bob"), 0);
             } else {
                 forged.cause = Some(Id::from_bytes([2; 16]));
             }
@@ -3094,7 +3091,7 @@ mod tests {
         journal
             .commit(lifecycle_transaction(child.clone(), node::Lifecycle::Stop))
             .unwrap();
-        start.instance = InstanceGeneration::new(child.address().clone(), 1);
+        start.instance = instance::Generation::new(child.address().clone(), 1);
         let before = journal.records().to_vec();
         assert!(
             matches!(
@@ -3108,8 +3105,8 @@ mod tests {
 
     #[test]
     fn observable_time_must_match_the_retained_acceptance_instant() {
-        let reference = InstanceGeneration::new(
-            InstanceIdentity::singleton(&crate::plan::OwnerPath::root()),
+        let reference = instance::Generation::new(
+            instance::Identity::singleton(&crate::node::OwnerPath::root()),
             0,
         );
         let mut record = lifecycle_transaction(reference, node::Lifecycle::Start);
@@ -3135,14 +3132,14 @@ mod tests {
         journal.commit(record).unwrap();
     }
 
-    fn activate(journal: &mut MemJournal, reference: InstanceGeneration) {
+    fn activate(journal: &mut MemJournal, reference: instance::Generation) {
         activate_root(journal);
         journal
             .commit(lifecycle_transaction(reference, node::Lifecycle::Start))
             .expect("the child lifecycle starts under the root");
     }
 
-    fn request_close(journal: &mut MemJournal, reference: InstanceGeneration) {
+    fn request_close(journal: &mut MemJournal, reference: instance::Generation) {
         let mut record = lifecycle_transaction(reference.clone(), node::Lifecycle::Closing);
         record.close_scope = Some(reference);
         journal.commit(record).expect("Closing is durable");
@@ -3231,7 +3228,7 @@ mod tests {
         );
         assert_eq!(
             observations[1].correlation().owner(),
-            Some(&OwnerPath::root())
+            Some(&node::OwnerPath::root())
         );
         let call = &observations[2..4];
         assert_eq!(call[0].kind(), RecordObservationKind::CallOpened);
@@ -3274,20 +3271,23 @@ mod tests {
     #[test]
     fn generations_are_a_journal_fold_and_lifecycle_cannot_double_transition() {
         let mut journal = MemJournal::new(GraphVersion(1));
-        let address = InstanceIdentity::singleton(
-            &crate::plan::OwnerPath::new(["worker"]).expect("valid owner path"),
+        let address = instance::Identity::singleton(
+            &crate::node::OwnerPath::new(["worker"]).expect("valid owner path"),
         );
-        let first = InstanceGeneration::new(address.clone(), 0);
-        assert_eq!(journal.instance_ref_for_admission(&address).unwrap(), first);
+        let first = instance::Generation::new(address.clone(), 0);
+        assert_eq!(
+            journal.instance_generation_for_admission(&address).unwrap(),
+            first
+        );
         activate_root(&mut journal);
 
         let mut wrong_owner = lifecycle_transaction(first.clone(), node::Lifecycle::Start);
-        wrong_owner.owner_path = OwnerPath::new(["other"]).unwrap();
+        wrong_owner.owner_path = node::OwnerPath::new(["other"]).unwrap();
         assert_eq!(
             journal.commit(wrong_owner).unwrap_err(),
             Error::InstanceOwnerMismatch {
-                expected: OwnerPath::new(["worker"]).unwrap(),
-                got: OwnerPath::new(["other"]).unwrap(),
+                expected: node::OwnerPath::new(["worker"]).unwrap(),
+                got: node::OwnerPath::new(["other"]).unwrap(),
             }
         );
 
@@ -3304,8 +3304,8 @@ mod tests {
         journal
             .commit(lifecycle_transaction(first.clone(), node::Lifecycle::Start))
             .unwrap();
-        let root = InstanceGeneration::new(
-            InstanceIdentity::singleton(&crate::plan::OwnerPath::root()),
+        let root = instance::Generation::new(
+            instance::Identity::singleton(&crate::node::OwnerPath::root()),
             0,
         );
         request_close(&mut journal, root.clone());
@@ -3338,9 +3338,9 @@ mod tests {
             },
             "the journal, not scheduler choreography, enforces inner-first stop"
         );
-        let second = InstanceGeneration::new(address.clone(), 1);
+        let second = instance::Generation::new(address.clone(), 1);
         assert_eq!(
-            journal.instance_ref_for_admission(&address).unwrap(),
+            journal.instance_generation_for_admission(&address).unwrap(),
             second,
             "a close request reserves the clean successor before reclamation"
         );
@@ -3359,7 +3359,7 @@ mod tests {
             .commit(lifecycle_transaction(first.clone(), node::Lifecycle::Stop))
             .unwrap();
         assert_eq!(
-            journal.instance_ref_for_admission(&address).unwrap(),
+            journal.instance_generation_for_admission(&address).unwrap(),
             second
         );
         assert_eq!(
@@ -3374,7 +3374,7 @@ mod tests {
         journal
             .commit(lifecycle_transaction(root.clone(), node::Lifecycle::Stop))
             .unwrap();
-        let second_root = InstanceGeneration::new(root.address().clone(), 1);
+        let second_root = instance::Generation::new(root.address().clone(), 1);
         journal
             .commit(lifecycle_transaction(
                 second_root.clone(),
@@ -3385,7 +3385,7 @@ mod tests {
         second_start.parent_instance = Some(second_root.clone());
         journal.commit(second_start).unwrap();
         assert_eq!(
-            journal.instance_ref_for_admission(&address).unwrap(),
+            journal.instance_generation_for_admission(&address).unwrap(),
             second
         );
         request_close(&mut journal, second.clone());
@@ -3401,10 +3401,10 @@ mod tests {
     #[test]
     fn a_committed_route_keeps_its_reserved_generation_until_start_materializes() {
         let mut journal = MemJournal::new(GraphVersion(1));
-        let address = InstanceIdentity::singleton(
-            &crate::plan::OwnerPath::new(["worker"]).expect("valid owner path"),
+        let address = instance::Identity::singleton(
+            &crate::node::OwnerPath::new(["worker"]).expect("valid owner path"),
         );
-        let reserved = InstanceGeneration::new(address.clone(), 0);
+        let reserved = instance::Generation::new(address.clone(), 0);
         activate_root(&mut journal);
         let prepared = journal
             .prepare_inbound(submission("inbound", SubmissionSequence::Next))
@@ -3420,7 +3420,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            journal.instance_ref_for_admission(&address).unwrap(),
+            journal.instance_generation_for_admission(&address).unwrap(),
             reserved,
             "another reservation joins the same not-yet-polled generation"
         );
@@ -3431,7 +3431,7 @@ mod tests {
             ))
             .unwrap();
         assert_eq!(
-            journal.instance_ref_for_admission(&address).unwrap(),
+            journal.instance_generation_for_admission(&address).unwrap(),
             reserved
         );
     }
@@ -3478,11 +3478,11 @@ mod tests {
 
     #[test]
     fn the_instance_lifetime_ref_seals_address_and_generation() {
-        let address = InstanceIdentity::singleton(
-            &crate::plan::OwnerPath::new(["worker"]).expect("valid owner path"),
+        let address = instance::Identity::singleton(
+            &crate::node::OwnerPath::new(["worker"]).expect("valid owner path"),
         );
-        let first = ids::instance_lifetime_id(&InstanceGeneration::new(address.clone(), 0));
-        let second = ids::instance_lifetime_id(&InstanceGeneration::new(address, 1));
+        let first = ids::instance_lifetime_id(&instance::Generation::new(address.clone(), 0));
+        let second = ids::instance_lifetime_id(&instance::Generation::new(address, 1));
         assert_eq!(first.to_string(), "d8977f984e5356cc4df3aca36c442642");
         assert_ne!(
             first, second,
@@ -3732,7 +3732,7 @@ mod tests {
         activate(&mut journal, instance("shout", 0));
         journal
             .commit(TransactionRecord {
-                owner_path: OwnerPath::new(["shout"]).unwrap(),
+                owner_path: node::OwnerPath::new(["shout"]).unwrap(),
                 instance: instance("shout", 0),
                 parent_instance: None,
                 close_scope: None,
@@ -3787,7 +3787,7 @@ mod tests {
             .unwrap();
         journal
             .commit(TransactionRecord {
-                owner_path: OwnerPath::new(["shout"]).unwrap(),
+                owner_path: node::OwnerPath::new(["shout"]).unwrap(),
                 instance: instance("shout", 0),
                 parent_instance: None,
                 close_scope: None,

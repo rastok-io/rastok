@@ -41,13 +41,14 @@
 //! the bytes were canonical (`Trace::from_stored` reads goldens
 //! through it too) — and it changes only when the spec does.
 
+use crate::canonical;
 #[cfg(test)]
 use crate::envelope::{Data, Envelope};
 use crate::journal::{
     Closure, OutboundRecord, OutboundStatus, Record, SessionIngressRecord, SessionStatus,
 };
 use rastok_core::canonical_cbor::{Value as Cbor, decode, encode};
-use rastok_core::identity::encoding::{canonical_data, canonical_envelope, canonical_value};
+
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -248,8 +249,8 @@ fn explain(a: &Cbor, b: &Cbor, path: String) -> (String, String, String) {
                 (decode(left), decode(right))
                 && left_used == left.len()
                 && right_used == right.len()
-                && rastok_core::identity::encoding::decode_canonical_value(&left_tree).is_ok()
-                && rastok_core::identity::encoding::decode_canonical_value(&right_tree).is_ok()
+                && rastok_core::canonical::decode_value(&left_tree).is_ok()
+                && rastok_core::canonical::decode_value(&right_tree).is_ok()
             {
                 return explain(
                     &left_tree,
@@ -466,7 +467,7 @@ fn loop_packet_tree(packet: &crate::journal::loop_protocol::Packet) -> Cbor {
                     .iter()
                     .map(|command| {
                         let value = match &command.value {
-                            CommandValue::Next(state) => canonical_envelope(state),
+                            CommandValue::Next(state) => canonical::envelope(state),
                             CommandValue::Again(cause) => id(*cause),
                             CommandValue::Done { cause, kind } => {
                                 Cbor::Array(vec![id(*cause), Cbor::Uint(u64::from(kind.tag()))])
@@ -531,7 +532,7 @@ fn loop_packet_tree(packet: &crate::journal::loop_protocol::Packet) -> Cbor {
                                     opening,
                                     Cbor::Text(entry.name().into()),
                                     Cbor::Uint(*fuel),
-                                    canonical_envelope(state),
+                                    canonical::envelope(state),
                                 ]
                             }
                             Fact::Advance {
@@ -549,7 +550,7 @@ fn loop_packet_tree(packet: &crate::journal::loop_protocol::Packet) -> Cbor {
                                 Cbor::Uint(*to_iteration),
                                 Cbor::Uint(*remaining),
                                 id(command.id()),
-                                canonical_envelope(state),
+                                canonical::envelope(state),
                             ],
                             Fact::Admit {
                                 run,
@@ -561,7 +562,7 @@ fn loop_packet_tree(packet: &crate::journal::loop_protocol::Packet) -> Cbor {
                                 id(run.id()),
                                 Cbor::Uint(*iteration),
                                 id(*admission),
-                                canonical_envelope(envelope),
+                                canonical::envelope(envelope),
                             ],
                             Fact::Close {
                                 run,
@@ -588,8 +589,8 @@ fn loop_packet_tree(packet: &crate::journal::loop_protocol::Packet) -> Cbor {
                                 id(run.id()),
                                 Cbor::Uint(*iteration),
                                 id(command.id()),
-                                canonical_envelope(last_state),
-                                canonical_envelope(output),
+                                canonical::envelope(last_state),
+                                canonical::envelope(output),
                             ],
                         })
                     })
@@ -605,7 +606,7 @@ fn record_tree(record: &Record) -> Cbor {
         Record::Inbound(inbound) => {
             let mut pairs = BTreeMap::from([
                 (10, Cbor::Uint(1)),
-                (20, canonical_envelope(&inbound.envelope)),
+                (20, canonical::envelope(&inbound.envelope)),
                 (
                     21,
                     Cbor::Text(inbound.provenance.connector_path().to_string()),
@@ -772,7 +773,10 @@ fn record_tree(record: &Record) -> Cbor {
                         delta
                             .iter()
                             .map(|(field, value)| {
-                                Cbor::Array(vec![Cbor::Text(field.clone()), canonical_value(value)])
+                                Cbor::Array(vec![
+                                    Cbor::Text(field.clone()),
+                                    canonical::value(value),
+                                ])
                             })
                             .collect(),
                     ),
@@ -788,7 +792,7 @@ fn record_tree(record: &Record) -> Cbor {
                             Cbor::Array(vec![
                                 Cbor::Text(emission.port.name().to_string()),
                                 Cbor::Uint(u64::from(emission.index)),
-                                canonical_envelope(&emission.envelope),
+                                canonical::envelope(&emission.envelope),
                             ])
                         })
                         .collect(),
@@ -941,7 +945,7 @@ fn completion_form(completion: &crate::boundary::Completion) -> Cbor {
             .map(|output| {
                 Cbor::Array(vec![
                     Cbor::Text(output.port.name().to_string()),
-                    canonical_data(&output.data),
+                    canonical::data(&output.data),
                 ])
             })
             .collect(),
@@ -957,11 +961,9 @@ mod tests {
     #[test]
     fn the_loop_protocol_registry_pins_open_admit_and_observed_time() {
         use crate::journal::loop_protocol::{Fact, OpeningAdmissionRef, Packet, run_ref};
-        let owner = crate::plan::OwnerPath::root();
-        let instance = crate::identity::InstanceGeneration::new(
-            crate::identity::InstanceIdentity::singleton(&owner),
-            0,
-        );
+        let owner = crate::node::OwnerPath::root();
+        let instance =
+            crate::instance::Generation::new(crate::instance::Identity::singleton(&owner), 0);
         let root = crate::envelope::Id::from_bytes([3; 16]);
         let state = Envelope::new(
             crate::envelope::Meta::new(crate::envelope::MetaSys::root(root, 1)),
@@ -1022,7 +1024,7 @@ mod tests {
                     ]),
                     Cbor::Text("in".into()),
                     Cbor::Uint(9),
-                    canonical_envelope(&state),
+                    canonical::envelope(&state),
                 ])])
             )])))
         );
@@ -1066,7 +1068,7 @@ mod tests {
                     Cbor::Bytes(run.id().as_bytes().to_vec()),
                     Cbor::Uint(0),
                     Cbor::Bytes(root.as_bytes().to_vec()),
-                    canonical_envelope(&state),
+                    canonical::envelope(&state),
                 ])])
             )])))
         );

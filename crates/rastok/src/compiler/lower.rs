@@ -12,6 +12,7 @@
 //! values.
 
 use super::routing;
+use crate::instance;
 
 use crate::compiler::hir::{
     AttrValue, Direction, Dispatch as HirDispatch, EdgeTarget, EmitValue, Endpoint, EndpointOwner,
@@ -25,11 +26,10 @@ use crate::datatype::{
 use crate::expr;
 use crate::node;
 use crate::plan::{
-    AttrSetting, ClosingPolicy as PlanClosingPolicy, ConnectorSpec, DispatchStep, Edge, EdgeEnd,
-    Emission, EvaluationSite, ExecutionPlan, ExtensionSpec, FieldWrite, Handler,
-    InstanceLifetime as PlanInstanceLifetime, InstanceSpec, LoopDelay as PlanLoopDelay,
-    LoopSpec as PlanLoopSpec, Node, NodeExecution, Owner, OwnerKind, OwnerPath, OwnerSlot,
-    OwnerValue, PlanConstant, SemanticHash, Slot, SymbolTable, VarCell,
+    AttrSetting, ConnectorSpec, DispatchStep, Edge, EdgeEnd, Emission, EvaluationSite,
+    ExecutionPlan, ExtensionSpec, FieldWrite, Handler, LoopDelay as PlanLoopDelay,
+    LoopSpec as PlanLoopSpec, Node, NodeExecution, Owner, OwnerKind, OwnerValue, PlanConstant,
+    SemanticHash, Slot, SymbolTable, VarCell,
 };
 use crate::schema_annotation::{
     AnnotationTable, DataAnnotation, SchemaPathSegment, SensitivityLevel,
@@ -254,7 +254,7 @@ fn sorted_boundary(hir: &Hir) -> Vec<crate::plan::PortDecl> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FlatEdge {
-    scope: crate::plan::OwnerPath,
+    scope: crate::node::OwnerPath,
     from: crate::compiler::hir::Endpoint,
     to: EdgeTarget,
 }
@@ -340,11 +340,11 @@ fn flatten_from(
     visiting.remove(current);
 }
 
-fn endpoint_scope(endpoint: &crate::compiler::hir::Endpoint) -> crate::plan::OwnerPath {
+fn endpoint_scope(endpoint: &crate::compiler::hir::Endpoint) -> crate::node::OwnerPath {
     match &endpoint.owner {
-        EndpointOwner::Node(path) => crate::plan::OwnerPath::from(path)
+        EndpointOwner::Node(path) => crate::node::OwnerPath::from(path)
             .parent()
-            .unwrap_or_else(crate::plan::OwnerPath::root),
+            .unwrap_or_else(crate::node::OwnerPath::root),
         EndpointOwner::Graph(path) => path.clone(),
     }
 }
@@ -352,7 +352,7 @@ fn endpoint_scope(endpoint: &crate::compiler::hir::Endpoint) -> crate::plan::Own
 fn common_graph_scope(
     left: &crate::compiler::hir::Endpoint,
     right: &crate::compiler::hir::Endpoint,
-) -> crate::plan::OwnerPath {
+) -> crate::node::OwnerPath {
     endpoint_scope(left).common_ancestor(&endpoint_scope(right))
 }
 
@@ -466,14 +466,14 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         Graph(&'hir HirGraph),
         Node(&'hir HirNode),
     }
-    let mut checked_owners: Vec<(OwnerPath, CheckedOwner<'_>)> = sorted_graphs(hir)
+    let mut checked_owners: Vec<(node::OwnerPath, CheckedOwner<'_>)> = sorted_graphs(hir)
         .into_iter()
         .map(|graph| (graph.path.clone(), CheckedOwner::Graph(graph)))
         .collect();
     checked_owners.extend(
         nodes
             .iter()
-            .map(|node| (OwnerPath::from(&node.path), CheckedOwner::Node(node))),
+            .map(|node| (node::OwnerPath::from(&node.path), CheckedOwner::Node(node))),
     );
     checked_owners.sort_by(|left, right| left.0.cmp(&right.0));
 
@@ -484,7 +484,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
             owner: path.to_string(),
             detail: "the owner table exceeds its u32 slot domain",
         })?;
-        let owner_slot = OwnerSlot::new(owner_index);
+        let owner_slot = node::OwnerSlot::new(owner_index);
         let parent_path = path.parent();
         let parent = match parent_path.as_ref() {
             None => None,
@@ -496,7 +496,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         let graph_path = match &checked {
             CheckedOwner::Graph(graph) => graph.path.clone(),
             CheckedOwner::Node(node) => {
-                OwnerPath::from(&node.path)
+                node::OwnerPath::from(&node.path)
                     .parent()
                     .ok_or_else(|| LowerError {
                         owner: node.path.to_string(),
@@ -589,11 +589,13 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
             })?;
         symbols.nodes.push(hir_node.path.to_string());
         let owner_path =
-            OwnerPath::new(hir_node.path.segments().iter().cloned()).map_err(|_| LowerError {
-                owner: hir_node.path.to_string(),
-                detail: "a checked Node path did not form an owner path",
+            node::OwnerPath::new(hir_node.path.segments().iter().cloned()).map_err(|_| {
+                LowerError {
+                    owner: hir_node.path.to_string(),
+                    detail: "a checked Node path did not form an owner path",
+                }
             })?;
-        let graph_path = owner_path.parent().unwrap_or_else(OwnerPath::root);
+        let graph_path = owner_path.parent().unwrap_or_else(node::OwnerPath::root);
         let mut constants = graph_runtime_constant_environment(hir, &graph_path);
         constants.extend(
             hir_node
@@ -674,7 +676,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         // constants deliberately remain owner-value paths so the independent
         // policy pass can prove that dependency instead of losing it in a
         // literal rewrite.
-        let graph_path = OwnerPath::from(&hir_node.path)
+        let graph_path = node::OwnerPath::from(&hir_node.path)
             .parent()
             .ok_or_else(|| LowerError {
                 owner: hir_node.path.to_string(),
@@ -878,11 +880,11 @@ fn lower_instance(
     policy: Option<&InstancePolicy>,
     constants: &std::collections::BTreeMap<String, crate::value::Value>,
     owner: &str,
-) -> Result<InstanceSpec, LowerError> {
+) -> Result<instance::Spec, LowerError> {
     let Some(policy) = policy else {
-        return Ok(InstanceSpec {
+        return Ok(instance::Spec {
             key: None,
-            lifetime: PlanInstanceLifetime::Persistent,
+            lifetime: instance::Lifetime::Persistent,
             closing: None,
         });
     };
@@ -894,13 +896,13 @@ fn lower_instance(
         }),
     };
     let lifetime = match &policy.lifetime {
-        InstanceLifetime::Persistent => PlanInstanceLifetime::Persistent,
-        InstanceLifetime::Idle(value) => PlanInstanceLifetime::Idle(duration(value)?),
-        InstanceLifetime::Fixed(value) => PlanInstanceLifetime::Fixed(duration(value)?),
-        InstanceLifetime::SinglePass => PlanInstanceLifetime::SinglePass,
-        InstanceLifetime::Tumbling(value) => PlanInstanceLifetime::Tumbling(duration(value)?),
+        InstanceLifetime::Persistent => instance::Lifetime::Persistent,
+        InstanceLifetime::Idle(value) => instance::Lifetime::Idle(duration(value)?),
+        InstanceLifetime::Fixed(value) => instance::Lifetime::Fixed(duration(value)?),
+        InstanceLifetime::SinglePass => instance::Lifetime::SinglePass,
+        InstanceLifetime::Tumbling(value) => instance::Lifetime::Tumbling(duration(value)?),
     };
-    Ok(InstanceSpec {
+    Ok(instance::Spec {
         key: policy
             .key
             .as_ref()
@@ -908,7 +910,7 @@ fn lower_instance(
         lifetime,
         closing: match &policy.closing {
             None => None,
-            Some(closing) => Some(PlanClosingPolicy {
+            Some(closing) => Some(instance::Closing {
                 drain_for: duration(&closing.drain_for)?,
                 settle_for: duration(&closing.settle_for)?,
             }),
@@ -1059,7 +1061,7 @@ fn sorted_graphs(hir: &Hir) -> Vec<&HirGraph> {
 
 fn graph_for_path<'hir>(
     graph: &'hir HirGraph,
-    path: &crate::plan::OwnerPath,
+    path: &crate::node::OwnerPath,
 ) -> Option<&'hir HirGraph> {
     if &graph.path == path {
         return Some(graph);
@@ -1072,7 +1074,7 @@ fn graph_for_path<'hir>(
 
 fn graph_constant_environment(
     hir: &Hir,
-    path: &crate::plan::OwnerPath,
+    path: &crate::node::OwnerPath,
 ) -> std::collections::BTreeMap<String, crate::value::Value> {
     let mut values = std::collections::BTreeMap::new();
     let mut cursor = Some(path.clone());
@@ -1101,7 +1103,7 @@ fn graph_constant_environment(
 /// must still be able to derive their policy from that binding.
 fn graph_runtime_constant_environment(
     hir: &Hir,
-    path: &crate::plan::OwnerPath,
+    path: &crate::node::OwnerPath,
 ) -> std::collections::BTreeMap<String, crate::value::Value> {
     let mut values = std::collections::BTreeMap::new();
     let mut cursor = Some(path.clone());
@@ -2173,7 +2175,7 @@ impl Writer<'_> {
                 self.tag(22);
                 let mut sorted: Vec<_> = entries.iter().collect();
                 sorted.sort_by_cached_key(|(key, _)| {
-                    crate::canonical_cbor::encode(&crate::identity::encoding::canonical_value(key))
+                    crate::canonical_cbor::encode(&crate::canonical::value(key))
                 });
                 self.count(sorted.len());
                 for (key, item) in sorted {

@@ -500,7 +500,7 @@ impl WebSocketLabDriver {
             (String::from("codec"), Value::Text(codec)),
         ]);
         Ok(PreparedRequest::seal(crate::canonical_cbor::encode(
-            &crate::identity::encoding::canonical_value(&descriptor),
+            &crate::canonical::value(&descriptor),
         )))
     }
 
@@ -567,7 +567,7 @@ impl WebSocketLabDriver {
             ),
         ]);
         Ok(PreparedRequest::seal(crate::canonical_cbor::encode(
-            &crate::identity::encoding::canonical_value(&descriptor),
+            &crate::canonical::value(&descriptor),
         )))
     }
 

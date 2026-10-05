@@ -19,7 +19,7 @@ fn retained_pin(pin: &Pin) -> Cbor {
         list(
             pin.settings
                 .iter()
-                .map(|(name, value)| list([word(name), canonical_value(value)])),
+                .map(|(name, value)| list([word(name), canonical::value(value)])),
         ),
         optional(pin.key.as_ref(), |value| word(value)),
         integer(pin.opened_at),
@@ -109,7 +109,7 @@ impl Reader {
                     previous = Some(name);
                     resolved.insert(
                         name.to_owned(),
-                        decode_canonical_value(value).map_err(Error::Read)?,
+                        canonical::decode_value(value).map_err(Error::Read)?,
                     );
                 }
                 Ok(Fact::Opened {

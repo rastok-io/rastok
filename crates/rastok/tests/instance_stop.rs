@@ -2,6 +2,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::diagnostics::{Bag, SourceId};
+use rastok::node;
 use rastok::{compiler, contract::ContractCatalog, plan};
 
 fn compile(source: &str) -> Result<compiler::Compilation, rastok::diagnostics::Bag> {
@@ -818,7 +819,7 @@ fn a_forged_boundary_input_cannot_supply_a_nested_closure_context() {
             if set.iter().any(|destination| matches!(destination, plan::RouteDestination::InstanceStop(_)))))
         .unwrap();
     command.source = plan::Endpoint {
-        owner: plan::EndpointOwner::Graph(plan::OwnerPath::new(["conversation"]).unwrap()),
+        owner: plan::EndpointOwner::Graph(node::OwnerPath::new(["conversation"]).unwrap()),
         port: rastok::node::Port::new("in").unwrap(),
     };
     forged

@@ -8,12 +8,14 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use rastok::boundary::{Completion, PortOutput, ProcessExit};
+use rastok::envelope;
 use rastok::envelope::{Data, Envelope, Meta, MetaSys, MetaValue, Namespace, Scalar};
-use rastok::identity::{InstanceGeneration, InstanceIdentity, InstanceSegment};
+use rastok::instance;
+use rastok::node;
+
 use rastok::journal::ids;
-use rastok::plan::{GraphVersion, OwnerPath, Slot, ValidatedExecutionPlan};
-use rastok::runtime::{Delivery, Fault, HandlerExecutor, InstanceState, Mailboxes, meta_value};
-use rastok::{envelope, node};
+use rastok::plan::{GraphVersion, Slot, ValidatedExecutionPlan};
+use rastok::runtime::{Fault, HandlerExecutor, Mailboxes, State, meta_value};
 use std::collections::BTreeMap;
 
 use rastok::compiler::compile;
@@ -63,14 +65,14 @@ fn probe() -> (ValidatedExecutionPlan, Slot) {
     (compilation.plan, slot)
 }
 
-fn input(text: &str) -> Delivery {
+fn input(text: &str) -> envelope::Delivery {
     let mut data = BTreeMap::new();
     data.insert(
         String::from("text"),
         envelope::Value::Text(String::from(text)),
     );
     let id = envelope::Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]);
-    Delivery {
+    envelope::Delivery {
         port: node::Port::new("in").unwrap(),
         edge: String::from(".in>shout.in"),
         seq: 1,
@@ -82,23 +84,23 @@ fn input(text: &str) -> Delivery {
     }
 }
 
-fn singleton() -> InstanceGeneration {
-    let owner = OwnerPath::new(["probe"]).expect("valid owner");
-    InstanceGeneration::new(InstanceIdentity::singleton(&owner), 0)
+fn singleton() -> instance::Generation {
+    let owner = node::OwnerPath::new(["probe"]).expect("valid owner");
+    instance::Generation::new(instance::Identity::singleton(&owner), 0)
 }
 
-fn text_key(value: &str) -> InstanceGeneration {
-    let owner = OwnerPath::new(["probe"]).expect("valid owner");
-    let address = InstanceIdentity::new(
+fn text_key(value: &str) -> instance::Generation {
+    let owner = node::OwnerPath::new(["probe"]).expect("valid owner");
+    let address = instance::Identity::new(
         &owner,
-        &[InstanceSegment::SelectedKey {
+        &[instance::Segment::SelectedKey {
             scope: owner.clone(),
             ty: rastok::datatype::DataType::Text,
             value: rastok::value::Value::Text(String::from(value)),
         }],
     )
     .expect("text is a canonical instance key");
-    InstanceGeneration::new(address, 0)
+    instance::Generation::new(address, 0)
 }
 
 fn trigger_in() -> node::Trigger {
@@ -106,7 +108,7 @@ fn trigger_in() -> node::Trigger {
 }
 
 #[test]
-fn an_identity_emission_inherits_everything_but_its_spine() {
+fn an_identity_emission_inherits_everything_but_its_sys_fields() {
     let source = "graph g : App {\n  input in: variant\n  operator relay {\n    on in { out = . }\n  }\n  in -> relay -> out\n}\n";
     let compilation = compile(
         &[source],
@@ -115,7 +117,7 @@ fn an_identity_emission_inherits_everything_but_its_spine() {
     .expect("a valid plan");
     let executor = HandlerExecutor::new(&compilation.plan, GraphVersion(1));
     let slot = Slot::new(0);
-    let state = InstanceState::new()
+    let state = State::new()
         .cell(&compilation.plan, slot, &singleton())
         .unwrap();
     // An ancestry-rich input: app fields, ext fields, a
@@ -138,7 +140,7 @@ fn an_identity_emission_inherits_everything_but_its_spine() {
     let meta = Meta::new(MetaSys::root(id, 1))
         .with_app(app.clone())
         .with_ext(ext.clone());
-    let delivery = Delivery {
+    let delivery = envelope::Delivery {
         port: node::Port::new("in").unwrap(),
         edge: String::from(".in>relay.in"),
         seq: 1,
@@ -163,7 +165,7 @@ fn an_identity_emission_inherits_everything_but_its_spine() {
 }
 
 #[test]
-fn the_meta_projection_carries_the_whole_spine() {
+fn the_meta_projection_carries_all_sys_fields() {
     let id = envelope::Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]);
     let mut ext = envelope::Namespace::new();
     ext.insert(
@@ -215,9 +217,7 @@ fn the_meta_projection_carries_the_whole_spine() {
 fn the_activation_pattern_is_not_the_causal_trigger() {
     let (plan, slot) = probe();
     let executor = HandlerExecutor::new(&plan, GraphVersion(1));
-    let state = InstanceState::new()
-        .cell(&plan, slot, &singleton())
-        .unwrap();
+    let state = State::new().cell(&plan, slot, &singleton()).unwrap();
     // A handler is *selected* by its declared activation pattern…
     let activation = node::HandlerActivation::Port(node::Port::new("in").unwrap());
     assert!(executor.handler_for(slot, &activation).is_some());
@@ -285,11 +285,11 @@ fn metadata_writes_land_where_the_spec_says() {
     .expect("a valid plan");
     let executor = HandlerExecutor::new(&compilation.plan, GraphVersion(1));
     let slot = Slot::new(0);
-    let state = InstanceState::new()
+    let state = State::new()
         .cell(&compilation.plan, slot, &singleton())
         .unwrap();
     let id = envelope::Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]);
-    let delivery = Delivery {
+    let delivery = envelope::Delivery {
         port: node::Port::new("in").unwrap(),
         edge: String::from(".in>o.in"),
         seq: 1,
@@ -336,9 +336,7 @@ fn metadata_writes_land_where_the_spec_says() {
 fn a_transaction_commits_everything_together() {
     let (plan, slot) = probe();
     let executor = HandlerExecutor::new(&plan, GraphVersion(1));
-    let state = InstanceState::new()
-        .cell(&plan, slot, &singleton())
-        .unwrap();
+    let state = State::new().cell(&plan, slot, &singleton()).unwrap();
     assert_eq!(state.get("count"), Some(&rastok::value::Value::Int(0)));
     let delivery = input("salut");
     let outcome = executor
@@ -375,9 +373,7 @@ fn a_transaction_commits_everything_together() {
 fn execution_is_deterministic() {
     let (plan, slot) = probe();
     let executor = HandlerExecutor::new(&plan, GraphVersion(1));
-    let state = InstanceState::new()
-        .cell(&plan, slot, &singleton())
-        .unwrap();
+    let state = State::new().cell(&plan, slot, &singleton()).unwrap();
     let delivery = input("salut");
     let once = executor
         .fire(slot, &singleton(), &delivery, &state)
@@ -392,9 +388,7 @@ fn execution_is_deterministic() {
 fn a_false_guard_consumes_without_effect() {
     let (plan, slot) = probe();
     let executor = HandlerExecutor::new(&plan, GraphVersion(1));
-    let state = InstanceState::new()
-        .cell(&plan, slot, &singleton())
-        .unwrap();
+    let state = State::new().cell(&plan, slot, &singleton()).unwrap();
     let outcome = executor
         .fire(slot, &singleton(), &input(""), &state)
         .unwrap();
@@ -411,12 +405,10 @@ fn a_false_guard_consumes_without_effect() {
 fn a_faulted_transaction_changes_nothing() {
     let (plan, slot) = probe();
     let executor = HandlerExecutor::new(&plan, GraphVersion(1));
-    let state = InstanceState::new()
-        .cell(&plan, slot, &singleton())
-        .unwrap();
+    let state = State::new().cell(&plan, slot, &singleton()).unwrap();
     // Avro payloads cannot be materialized in this build: the
     // handler faults, and the caller applies nothing.
-    let delivery = Delivery {
+    let delivery = envelope::Delivery {
         port: node::Port::new("in").unwrap(),
         edge: String::from(".in>shout.in"),
         seq: 1,
@@ -440,7 +432,7 @@ fn a_faulted_transaction_changes_nothing() {
 #[test]
 fn state_is_isolated_between_keys() {
     let (plan, slot) = probe();
-    let mut instances = InstanceState::new();
+    let mut instances = State::new();
     let alice = text_key("alice");
     let bob = text_key("bob");
     instances
@@ -669,7 +661,7 @@ fn the_connector_completion_matches_the_reference_trace() {
         .expect("the validated connector slot settles");
     assert_eq!(
         outcome.record.owner_path,
-        rastok_core::plan::OwnerPath::from(&connector_path)
+        rastok_core::node::OwnerPath::from(&connector_path)
     );
     assert_eq!(outcome.record.trigger.to_string(), "p:in");
     assert_eq!(outcome.record.emissions.len(), 4);
@@ -780,13 +772,11 @@ fn a_caller_supplied_slot_is_verified_not_trusted() {
     let (plan, _) = probe();
     let ghost = Slot::new(999);
     assert_eq!(
-        InstanceState::new()
-            .cell(&plan, ghost, &singleton())
-            .unwrap_err(),
+        State::new().cell(&plan, ghost, &singleton()).unwrap_err(),
         Fault::UnknownSlot(ghost)
     );
     assert_eq!(
-        InstanceState::new()
+        State::new()
             .apply(&plan, ghost, &singleton(), &[])
             .unwrap_err(),
         Fault::UnknownSlot(ghost)

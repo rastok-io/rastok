@@ -1,7 +1,7 @@
 use super::*;
 use crate::datatype::{EnumType, StructType, TaggedCase, TaggedUnionType};
 use crate::node;
-use crate::plan::{EndpointOwner, LoopCommandKind, LoopCommandTarget, OwnerPath, RouteArm};
+use crate::plan::{EndpointOwner, LoopCommandKind, LoopCommandTarget, RouteArm};
 use alloc::vec;
 
 fn endpoint(name: &str, port: &str) -> Endpoint {
@@ -17,7 +17,7 @@ fn port(name: &str) -> RouteDestination {
 
 fn command(kind: LoopCommandKind) -> RouteDestination {
     RouteDestination::LoopCommand(LoopCommandTarget {
-        owner: EndpointOwner::Graph(OwnerPath::root()),
+        owner: EndpointOwner::Graph(node::OwnerPath::root()),
         kind,
     })
 }
@@ -320,7 +320,7 @@ fn identical_destinations_on_distinct_source_ports_or_owners_do_not_conflict() {
     let mut other_node = all(vec![RouteDestination::Discard]);
     other_node.source.owner = EndpointOwner::Node(node::Path::new(["other"]).unwrap());
     let mut graph_port = all(vec![RouteDestination::Discard]);
-    graph_port.source.owner = EndpointOwner::Graph(OwnerPath::new(["source"]).unwrap());
+    graph_port.source.owner = EndpointOwner::Graph(node::OwnerPath::new(["source"]).unwrap());
     assert_eq!(
         verify(
             &[all(vec![port("sink")]), other_port, other_node, graph_port],
@@ -334,7 +334,7 @@ fn identical_destinations_on_distinct_source_ports_or_owners_do_not_conflict() {
 fn manager_command_identity_is_not_a_port_with_a_similar_spelling() {
     let done = command(LoopCommandKind::Done);
     let ordinary = RouteDestination::Port(Endpoint {
-        owner: EndpointOwner::Graph(OwnerPath::root()),
+        owner: EndpointOwner::Graph(node::OwnerPath::root()),
         port: node::Port::new("Loop.done").unwrap(),
     });
     assert_ne!(done, ordinary);

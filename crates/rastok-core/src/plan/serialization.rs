@@ -13,6 +13,9 @@
 //! Every refusal is typed; an unknown version is a refusal by name,
 //! never a silent migration.
 
+use crate::canonical;
+use crate::canonical::{type_from, type_tree};
+use crate::instance;
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
@@ -20,20 +23,15 @@ use alloc::vec::Vec;
 use alloc::{format, vec};
 
 use crate::canonical_cbor::{self, Value as Cbor};
-use crate::datatype::{
-    ArrayType, BinaryType, ByteLength, DataType, DateUnit, DecimalType, Discriminator, EnumType,
-    FloatType, IntegerType, IntegerWidth, IntervalUnit, MapType, StructType, TaggedCase,
-    TaggedUnionType, TemporalType, TimeUnit, TimeZone, TypeField,
-};
+use crate::datatype::{DataType, Discriminator};
 use crate::envelope::WriteTarget;
 use crate::expr;
-use crate::identity::encoding::canonical_value;
+
 use crate::node;
 use crate::plan::{
-    AttrSetting, ClosingPolicy, ConnectorSpec, DispatchStep, Edge, EdgeEnd, Emission,
-    EvaluationSite, ExecutionPlan, ExtensionSpec, FieldWrite, Handler, InstanceLifetime,
-    InstanceSpec, LoopDelay, LoopSpec, Node, NodeExecution, Owner, OwnerKind, OwnerPath, OwnerSlot,
-    OwnerValue, PlanConstant, PlanValidationError, PortDecl, SemanticHash, Slot,
+    AttrSetting, ConnectorSpec, DispatchStep, Edge, EdgeEnd, Emission, EvaluationSite,
+    ExecutionPlan, ExtensionSpec, FieldWrite, Handler, LoopDelay, LoopSpec, Node, NodeExecution,
+    Owner, OwnerKind, OwnerValue, PlanConstant, PlanValidationError, PortDecl, SemanticHash, Slot,
     ValidatedExecutionPlan, VarCell,
 };
 use crate::schema_annotation::{
@@ -88,6 +86,12 @@ pub enum DecodeError {
     /// The transported effective-port table disagrees with the table derived
     /// from the plan's own constraints.
     ResolvedPortTableMismatch,
+}
+
+impl From<crate::canonical::TypeDecodeError> for DecodeError {
+    fn from(error: crate::canonical::TypeDecodeError) -> Self {
+        Self::Malformed(error.to_string())
+    }
 }
 
 impl core::fmt::Display for DecodeError {
@@ -530,11 +534,11 @@ fn loop_delay_tree(delay: &LoopDelay) -> Cbor {
 fn plan_constant_tree(constant: &PlanConstant) -> Cbor {
     Cbor::Array(vec![
         tree_tree(&constant.expr),
-        canonical_value(&constant.resolved),
+        canonical::value(&constant.resolved),
     ])
 }
 
-fn instance_tree(instance: &InstanceSpec) -> Cbor {
+fn instance_tree(instance: &instance::Spec) -> Cbor {
     let mut fields = BTreeMap::from([(2, lifetime_tree(&instance.lifetime))]);
     if let Some(key) = &instance.key {
         fields.insert(1, tree_tree(key));
@@ -543,21 +547,27 @@ fn instance_tree(instance: &InstanceSpec) -> Cbor {
         fields.insert(
             3,
             Cbor::Array(vec![
-                signed_tree(closing.drain_for),
-                signed_tree(closing.settle_for),
+                canonical::signed(closing.drain_for),
+                canonical::signed(closing.settle_for),
             ]),
         );
     }
     Cbor::Map(fields)
 }
 
-fn lifetime_tree(lifetime: &InstanceLifetime) -> Cbor {
+fn lifetime_tree(lifetime: &instance::Lifetime) -> Cbor {
     match lifetime {
-        InstanceLifetime::Persistent => Cbor::Array(vec![Cbor::Uint(1)]),
-        InstanceLifetime::Idle(nanos) => Cbor::Array(vec![Cbor::Uint(2), signed_tree(*nanos)]),
-        InstanceLifetime::Fixed(nanos) => Cbor::Array(vec![Cbor::Uint(3), signed_tree(*nanos)]),
-        InstanceLifetime::SinglePass => Cbor::Array(vec![Cbor::Uint(4)]),
-        InstanceLifetime::Tumbling(nanos) => Cbor::Array(vec![Cbor::Uint(5), signed_tree(*nanos)]),
+        instance::Lifetime::Persistent => Cbor::Array(vec![Cbor::Uint(1)]),
+        instance::Lifetime::Idle(nanos) => {
+            Cbor::Array(vec![Cbor::Uint(2), canonical::signed(*nanos)])
+        }
+        instance::Lifetime::Fixed(nanos) => {
+            Cbor::Array(vec![Cbor::Uint(3), canonical::signed(*nanos)])
+        }
+        instance::Lifetime::SinglePass => Cbor::Array(vec![Cbor::Uint(4)]),
+        instance::Lifetime::Tumbling(nanos) => {
+            Cbor::Array(vec![Cbor::Uint(5), canonical::signed(*nanos)])
+        }
     }
 }
 
@@ -577,7 +587,7 @@ fn owner_value_tree(value: &OwnerValue) -> Cbor {
         (3, tree_tree(&value.expr)),
     ]);
     if let Some(resolved) = &value.resolved {
-        fields.insert(4, canonical_value(resolved));
+        fields.insert(4, canonical::value(resolved));
     }
     if !value.annotations.is_empty() {
         fields.insert(5, annotation_table_tree(&value.annotations));
@@ -616,7 +626,7 @@ fn spec_tree(spec: &ConnectorSpec) -> Cbor {
 fn attr_tree(setting: &AttrSetting) -> Cbor {
     match setting {
         AttrSetting::Word(word) => Cbor::Array(vec![Cbor::Uint(1), Cbor::Text(word.clone())]),
-        AttrSetting::Value(value) => Cbor::Array(vec![Cbor::Uint(2), canonical_value(value)]),
+        AttrSetting::Value(value) => Cbor::Array(vec![Cbor::Uint(2), canonical::value(value)]),
         AttrSetting::Expr { site, expr } => {
             Cbor::Array(vec![Cbor::Uint(3), site_tree(*site), tree_tree(expr)])
         }
@@ -651,7 +661,7 @@ fn port_decl_tree(decl: &PortDecl) -> Cbor {
 fn var_tree(var: &VarCell) -> Cbor {
     let mut pairs = BTreeMap::from([(1, Cbor::Text(var.name.clone())), (2, type_tree(&var.ty))]);
     if let Some(init) = &var.init {
-        pairs.insert(3, canonical_value(init));
+        pairs.insert(3, canonical::value(init));
     }
     if !var.annotations.is_empty() {
         pairs.insert(4, annotation_table_tree(&var.annotations));
@@ -696,7 +706,7 @@ fn handler_tree(handler: &Handler) -> Cbor {
                     .map(|port| Cbor::Text(port.name().to_string()))
                     .collect(),
             ),
-            within_ns.map_or(Cbor::Null, signed_tree),
+            within_ns.map_or(Cbor::Null, canonical::signed),
             last.map_or(Cbor::Null, |count| Cbor::Uint(u64::from(count))),
         ]),
         node::HandlerActivation::Lifecycle(lifecycle) => {
@@ -860,7 +870,7 @@ fn annotation_set_tree(set: &AnnotationSet) -> Cbor {
                     }),
                     Cbor::Text(application.definition().to_string()),
                     type_tree(application.argument_type()),
-                    canonical_value(application.arguments()),
+                    canonical::value(application.arguments()),
                 ]),
                 DataAnnotation::Sensitive(level) => Cbor::Array(vec![
                     Cbor::Uint(1),
@@ -888,158 +898,9 @@ fn tree_tree(tree: &expr::Tree) -> Cbor {
     Cbor::Array(vec![type_tree(&tree.ty), expr_tree(&tree.root)])
 }
 
-pub(crate) fn type_tree(ty: &DataType) -> Cbor {
-    match ty {
-        DataType::Null => Cbor::Uint(1),
-        DataType::Bool => Cbor::Uint(2),
-        DataType::Integer(integer) => {
-            let (signedness, width) = match integer {
-                IntegerType::Signed(width) => (1, width.bits()),
-                IntegerType::Unsigned(width) => (2, width.bits()),
-            };
-            Cbor::Array(vec![
-                Cbor::Uint(3),
-                Cbor::Uint(signedness),
-                Cbor::Uint(u64::from(width)),
-            ])
-        }
-        DataType::Float(float) => {
-            Cbor::Array(vec![Cbor::Uint(4), Cbor::Uint(u64::from(float.bits()))])
-        }
-        DataType::Decimal(decimal) => Cbor::Array(vec![
-            Cbor::Uint(5),
-            Cbor::Uint(u64::from(decimal.precision())),
-            signed_tree(i64::from(decimal.scale())),
-        ]),
-        DataType::Number => Cbor::Uint(6),
-        DataType::Text => Cbor::Uint(7),
-        DataType::MediaType => Cbor::Uint(18),
-        DataType::Bytes(binary) => Cbor::Array(vec![
-            Cbor::Uint(8),
-            match binary {
-                BinaryType::Variable => Cbor::Null,
-                BinaryType::Fixed(length) => Cbor::Uint(u64::from(length.get())),
-            },
-        ]),
-        DataType::Temporal(temporal) => temporal_type_tree(temporal),
-        DataType::Uuid => Cbor::Uint(10),
-        DataType::Struct(structure) => {
-            Cbor::Array(vec![Cbor::Uint(11), struct_fields_tree(structure)])
-        }
-        DataType::Map(map) => Cbor::Array(vec![
-            Cbor::Uint(12),
-            type_tree(map.key()),
-            type_tree(map.value()),
-        ]),
-        DataType::Array(array) => Cbor::Array(vec![
-            Cbor::Uint(13),
-            type_tree(array.element()),
-            array
-                .length()
-                .map_or(Cbor::Null, |length| Cbor::Uint(u64::from(length.get()))),
-        ]),
-        DataType::Enum(enumeration) => Cbor::Array(vec![
-            Cbor::Uint(14),
-            Cbor::Array(
-                enumeration
-                    .symbols()
-                    .iter()
-                    .map(|symbol| Cbor::Text(symbol.clone()))
-                    .collect(),
-            ),
-        ]),
-        DataType::StructuralUnion(union) => Cbor::Array(vec![
-            Cbor::Uint(15),
-            Cbor::Array(union.branches().iter().map(type_tree).collect()),
-        ]),
-        DataType::TaggedUnion(union) => Cbor::Array(vec![
-            Cbor::Uint(16),
-            Cbor::Array(
-                union
-                    .cases()
-                    .iter()
-                    .map(|case| {
-                        Cbor::Array(vec![
-                            Cbor::Text(case.name().to_string()),
-                            struct_fields_tree(case.payload()),
-                        ])
-                    })
-                    .collect(),
-            ),
-        ]),
-        DataType::Variant => Cbor::Uint(17),
-    }
-}
-
-fn struct_fields_tree(structure: &StructType) -> Cbor {
-    Cbor::Array(
-        structure
-            .fields()
-            .iter()
-            .map(|field| {
-                Cbor::Array(vec![
-                    Cbor::Text(field.name().to_string()),
-                    type_tree(field.ty()),
-                ])
-            })
-            .collect(),
-    )
-}
-
-fn temporal_type_tree(temporal: &TemporalType) -> Cbor {
-    let time_unit = |unit: TimeUnit| {
-        Cbor::Uint(match unit {
-            TimeUnit::Second => 1,
-            TimeUnit::Millisecond => 2,
-            TimeUnit::Microsecond => 3,
-            TimeUnit::Nanosecond => 4,
-        })
-    };
-    let mut parts = vec![Cbor::Uint(9)];
-    match temporal {
-        TemporalType::Date(unit) => {
-            parts.push(Cbor::Uint(1));
-            parts.push(Cbor::Uint(match unit {
-                DateUnit::Day => 1,
-                DateUnit::Millisecond => 2,
-            }));
-        }
-        TemporalType::Time(unit) => {
-            parts.push(Cbor::Uint(2));
-            parts.push(time_unit(*unit));
-        }
-        TemporalType::Timestamp { unit, zone } => {
-            parts.push(Cbor::Uint(3));
-            parts.push(time_unit(*unit));
-            parts.push(match zone {
-                TimeZone::Utc => Cbor::Null,
-                TimeZone::Named(name) => Cbor::Text(name.as_str().to_string()),
-            });
-        }
-        TemporalType::TimestampNtz(unit) => {
-            parts.push(Cbor::Uint(4));
-            parts.push(time_unit(*unit));
-        }
-        TemporalType::Duration(unit) => {
-            parts.push(Cbor::Uint(5));
-            parts.push(time_unit(*unit));
-        }
-        TemporalType::Interval(unit) => {
-            parts.push(Cbor::Uint(6));
-            parts.push(Cbor::Uint(match unit {
-                IntervalUnit::YearMonth => 1,
-                IntervalUnit::DayTime => 2,
-                IntervalUnit::MonthDayNano => 3,
-                IntervalUnit::MonthDayMillisUnsigned => 4,
-            }));
-        }
-    }
-    Cbor::Array(parts)
-}
-
 fn expr_tree(expr: &expr::Expr) -> Cbor {
     match expr {
-        expr::Expr::Literal(value) => Cbor::Array(vec![Cbor::Uint(1), canonical_value(value)]),
+        expr::Expr::Literal(value) => Cbor::Array(vec![Cbor::Uint(1), canonical::value(value)]),
         expr::Expr::Asset(index) => {
             Cbor::Array(vec![Cbor::Uint(10), Cbor::Uint(u64::from(*index))])
         }
@@ -1893,7 +1754,7 @@ fn node_from(tree: &Cbor) -> Result<Node, DecodeError> {
         .iter()
         .map(var_from)
         .collect::<Result<Vec<_>, _>>()?;
-    let owner = OwnerSlot::new(u32_from(get(pairs, 5, "node owner")?, "node owner")?);
+    let owner = node::OwnerSlot::new(u32_from(get(pairs, 5, "node owner")?, "node owner")?);
     Ok(Node {
         path,
         execution,
@@ -1911,10 +1772,10 @@ fn owner_from(tree: &Cbor) -> Result<Owner, DecodeError> {
     } else {
         path_text.split('.').map(ToString::to_string).collect()
     };
-    let path = OwnerPath::new(segments).map_err(|_| err("owner path"))?;
+    let path = node::OwnerPath::new(segments).map_err(|_| err("owner path"))?;
     let parent = match get(fields, 2, "owner parent")? {
         Cbor::Null => None,
-        value => Some(OwnerSlot::new(u32_from(value, "owner parent")?)),
+        value => Some(node::OwnerSlot::new(u32_from(value, "owner parent")?)),
     };
     let kind = match array_of(get(fields, 3, "owner kind")?, "owner kind")? {
         [Cbor::Uint(1)] => OwnerKind::Graph,
@@ -2047,18 +1908,18 @@ fn plan_constant_from(tree: &Cbor) -> Result<PlanConstant, DecodeError> {
     }
 }
 
-fn instance_from(tree: &Cbor) -> Result<InstanceSpec, DecodeError> {
+fn instance_from(tree: &Cbor) -> Result<instance::Spec, DecodeError> {
     let fields = map_of(tree, "instance")?;
-    Ok(InstanceSpec {
+    Ok(instance::Spec {
         key: find(fields, 1).map(tree_from).transpose()?,
         lifetime: lifetime_from(get(fields, 2, "instance lifetime")?)?,
         closing: find(fields, 3).map(closing_from).transpose()?,
     })
 }
 
-fn closing_from(tree: &Cbor) -> Result<ClosingPolicy, DecodeError> {
+fn closing_from(tree: &Cbor) -> Result<instance::Closing, DecodeError> {
     match array_of(tree, "instance closing")? {
-        [drain_for, settle_for] => Ok(ClosingPolicy {
+        [drain_for, settle_for] => Ok(instance::Closing {
             drain_for: signed_from(drain_for)?,
             settle_for: signed_from(settle_for)?,
         }),
@@ -2066,13 +1927,13 @@ fn closing_from(tree: &Cbor) -> Result<ClosingPolicy, DecodeError> {
     }
 }
 
-fn lifetime_from(tree: &Cbor) -> Result<InstanceLifetime, DecodeError> {
+fn lifetime_from(tree: &Cbor) -> Result<instance::Lifetime, DecodeError> {
     match array_of(tree, "instance lifetime")? {
-        [Cbor::Uint(1)] => Ok(InstanceLifetime::Persistent),
-        [Cbor::Uint(2), nanos] => Ok(InstanceLifetime::Idle(signed_from(nanos)?)),
-        [Cbor::Uint(3), nanos] => Ok(InstanceLifetime::Fixed(signed_from(nanos)?)),
-        [Cbor::Uint(4)] => Ok(InstanceLifetime::SinglePass),
-        [Cbor::Uint(5), nanos] => Ok(InstanceLifetime::Tumbling(signed_from(nanos)?)),
+        [Cbor::Uint(1)] => Ok(instance::Lifetime::Persistent),
+        [Cbor::Uint(2), nanos] => Ok(instance::Lifetime::Idle(signed_from(nanos)?)),
+        [Cbor::Uint(3), nanos] => Ok(instance::Lifetime::Fixed(signed_from(nanos)?)),
+        [Cbor::Uint(4)] => Ok(instance::Lifetime::SinglePass),
+        [Cbor::Uint(5), nanos] => Ok(instance::Lifetime::Tumbling(signed_from(nanos)?)),
         _ => Err(err("instance lifetime")),
     }
 }
@@ -2305,12 +2166,12 @@ fn var_from(tree: &Cbor) -> Result<VarCell, DecodeError> {
 fn edge_from(tree: &Cbor) -> Result<Edge, DecodeError> {
     match array_of(tree, "edge")? {
         [scope, from, Cbor::Null] => Ok(Edge {
-            scope: OwnerSlot::new(u32_from(scope, "edge scope")?),
+            scope: node::OwnerSlot::new(u32_from(scope, "edge scope")?),
             from: endpoint_from(from)?,
             to: None,
         }),
         [scope, from, to] => Ok(Edge {
-            scope: OwnerSlot::new(u32_from(scope, "edge scope")?),
+            scope: node::OwnerSlot::new(u32_from(scope, "edge scope")?),
             from: endpoint_from(from)?,
             to: Some(endpoint_from(to)?),
         }),
@@ -2477,169 +2338,6 @@ fn tree_from(tree: &Cbor) -> Result<expr::Tree, DecodeError> {
     }
 }
 
-pub(crate) fn type_from(tree: &Cbor) -> Result<DataType, DecodeError> {
-    match tree {
-        Cbor::Uint(1) => Ok(DataType::Null),
-        Cbor::Uint(2) => Ok(DataType::Bool),
-        Cbor::Uint(6) => Ok(DataType::Number),
-        Cbor::Uint(7) => Ok(DataType::Text),
-        Cbor::Uint(18) => Ok(DataType::MediaType),
-        Cbor::Uint(10) => Ok(DataType::Uuid),
-        Cbor::Uint(17) => Ok(DataType::Variant),
-        Cbor::Array(parts) => type_parts_from(parts),
-        _ => Err(err("data type")),
-    }
-}
-
-fn type_parts_from(parts: &[Cbor]) -> Result<DataType, DecodeError> {
-    let built = match parts {
-        [Cbor::Uint(3), Cbor::Uint(signedness), Cbor::Uint(width)] => {
-            let width = integer_width_from(*width)?;
-            DataType::Integer(match signedness {
-                1 => IntegerType::Signed(width),
-                2 => IntegerType::Unsigned(width),
-                _ => return Err(err("integer signedness")),
-            })
-        }
-        [Cbor::Uint(4), Cbor::Uint(width)] => DataType::Float(match width {
-            16 => FloatType::Binary16,
-            32 => FloatType::Binary32,
-            64 => FloatType::Binary64,
-            _ => return Err(err("float width")),
-        }),
-        [Cbor::Uint(5), Cbor::Uint(precision), scale] => {
-            let precision = u32::try_from(*precision).map_err(|_| err("decimal precision"))?;
-            let scale = i32::try_from(int_from(scale)?).map_err(|_| err("decimal scale"))?;
-            DataType::Decimal(DecimalType::new(precision, scale).map_err(|_| err("decimal type"))?)
-        }
-        [Cbor::Uint(8), length] => DataType::Bytes(match length {
-            Cbor::Null => BinaryType::Variable,
-            Cbor::Uint(length) => BinaryType::Fixed(
-                ByteLength::new(u32::try_from(*length).map_err(|_| err("byte length"))?)
-                    .map_err(|_| err("byte length"))?,
-            ),
-            _ => return Err(err("byte length")),
-        }),
-        [Cbor::Uint(9), ..] => DataType::Temporal(temporal_type_from(parts)?),
-        [Cbor::Uint(11), fields] => DataType::Struct(struct_fields_from(fields)?),
-        [Cbor::Uint(12), key, value] => DataType::Map(
-            MapType::new(type_from(key)?, type_from(value)?).map_err(|_| err("map type"))?,
-        ),
-        [Cbor::Uint(13), element, length] => DataType::Array(match length {
-            Cbor::Null => ArrayType::variable(type_from(element)?),
-            Cbor::Uint(length) => ArrayType::fixed(
-                type_from(element)?,
-                u32::try_from(*length).map_err(|_| err("array length"))?,
-            )
-            .map_err(|_| err("array length"))?,
-            _ => return Err(err("array length")),
-        }),
-        [Cbor::Uint(14), Cbor::Array(symbols)] => DataType::Enum(
-            EnumType::new(
-                symbols
-                    .iter()
-                    .map(|symbol| Ok(text_of(symbol, "enum symbol")?.to_string()))
-                    .collect::<Result<Vec<_>, DecodeError>>()?,
-            )
-            .map_err(|_| err("enum type"))?,
-        ),
-        [Cbor::Uint(15), Cbor::Array(branches)] => DataType::structural_union(
-            branches
-                .iter()
-                .map(type_from)
-                .collect::<Result<Vec<_>, _>>()?,
-        )
-        .map_err(|_| err("structural union"))?,
-        [Cbor::Uint(16), Cbor::Array(cases)] => DataType::TaggedUnion(
-            TaggedUnionType::new(
-                cases
-                    .iter()
-                    .map(|case| match array_of(case, "tagged-union case")? {
-                        [Cbor::Text(name), fields] => {
-                            TaggedCase::new(name.clone(), struct_fields_from(fields)?)
-                                .map_err(|_| err("tagged-union case"))
-                        }
-                        _ => Err(err("tagged-union case")),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?,
-            )
-            .map_err(|_| err("tagged union"))?,
-        ),
-        _ => return Err(err("data type")),
-    };
-    built.check_bounds().map_err(|_| err("data type budget"))?;
-    Ok(built)
-}
-
-fn integer_width_from(width: u64) -> Result<IntegerWidth, DecodeError> {
-    match width {
-        8 => Ok(IntegerWidth::Bits8),
-        16 => Ok(IntegerWidth::Bits16),
-        32 => Ok(IntegerWidth::Bits32),
-        64 => Ok(IntegerWidth::Bits64),
-        _ => Err(err("integer width")),
-    }
-}
-
-fn struct_fields_from(tree: &Cbor) -> Result<StructType, DecodeError> {
-    StructType::new(
-        array_of(tree, "struct fields")?
-            .iter()
-            .map(|field| match array_of(field, "struct field type")? {
-                [Cbor::Text(name), ty] => Ok(TypeField::new(name.clone(), type_from(ty)?)),
-                _ => Err(err("struct field type")),
-            })
-            .collect::<Result<Vec<_>, _>>()?,
-    )
-    .map_err(|_| err("struct type"))
-}
-
-fn temporal_type_from(parts: &[Cbor]) -> Result<TemporalType, DecodeError> {
-    let time_unit = |code: u64| match code {
-        1 => Ok(TimeUnit::Second),
-        2 => Ok(TimeUnit::Millisecond),
-        3 => Ok(TimeUnit::Microsecond),
-        4 => Ok(TimeUnit::Nanosecond),
-        _ => Err(err("time unit")),
-    };
-    match parts {
-        [Cbor::Uint(9), Cbor::Uint(1), Cbor::Uint(unit)] => Ok(TemporalType::Date(match unit {
-            1 => DateUnit::Day,
-            2 => DateUnit::Millisecond,
-            _ => return Err(err("date unit")),
-        })),
-        [Cbor::Uint(9), Cbor::Uint(2), Cbor::Uint(unit)] => {
-            Ok(TemporalType::Time(time_unit(*unit)?))
-        }
-        [Cbor::Uint(9), Cbor::Uint(3), Cbor::Uint(unit), zone] => Ok(TemporalType::Timestamp {
-            unit: time_unit(*unit)?,
-            zone: match zone {
-                Cbor::Null => TimeZone::Utc,
-                Cbor::Text(name) => {
-                    TimeZone::named(name.clone()).map_err(|_| err("timestamp timezone"))?
-                }
-                _ => return Err(err("timestamp timezone")),
-            },
-        }),
-        [Cbor::Uint(9), Cbor::Uint(4), Cbor::Uint(unit)] => {
-            Ok(TemporalType::TimestampNtz(time_unit(*unit)?))
-        }
-        [Cbor::Uint(9), Cbor::Uint(5), Cbor::Uint(unit)] => {
-            Ok(TemporalType::Duration(time_unit(*unit)?))
-        }
-        [Cbor::Uint(9), Cbor::Uint(6), Cbor::Uint(unit)] => {
-            Ok(TemporalType::Interval(match unit {
-                1 => IntervalUnit::YearMonth,
-                2 => IntervalUnit::DayTime,
-                3 => IntervalUnit::MonthDayNano,
-                4 => IntervalUnit::MonthDayMillisUnsigned,
-                _ => return Err(err("interval unit")),
-            }))
-        }
-        _ => Err(err("temporal type")),
-    }
-}
-
 fn expr_from(tree: &Cbor) -> Result<expr::Expr, DecodeError> {
     let parts = array_of(tree, "expression")?;
     match parts {
@@ -2796,15 +2494,7 @@ fn binop_from(code: u64) -> Result<expr::BinaryOp, DecodeError> {
 }
 
 fn value_from(tree: &Cbor) -> Result<Value, DecodeError> {
-    crate::identity::encoding::decode_canonical_value(tree).map_err(DecodeError::Read)
-}
-
-fn signed_tree(value: i64) -> Cbor {
-    if value >= 0 {
-        Cbor::Uint(value.unsigned_abs())
-    } else {
-        Cbor::Negative((-1 - value).unsigned_abs())
-    }
+    crate::canonical::decode_value(tree).map_err(DecodeError::Read)
 }
 
 fn signed_from(value: &Cbor) -> Result<i64, DecodeError> {
@@ -2815,19 +2505,6 @@ fn signed_from(value: &Cbor) -> Result<i64, DecodeError> {
             i64::try_from(-1_i128 - magnitude).map_err(|_| err("signed integer"))
         }
         _ => Err(err("signed integer")),
-    }
-}
-
-fn int_from(tree: &Cbor) -> Result<i64, DecodeError> {
-    match tree {
-        Cbor::Uint(v) => i64::try_from(*v).map_err(|_| err("integer range")),
-        // Major type 1 carries −1−n; the tables bound their integers
-        // to i64, so an argument beyond it refuses HERE — a table
-        // policy, not a byte-discipline rule.
-        Cbor::Negative(n) => i64::try_from(*n)
-            .map(|magnitude| -1 - magnitude)
-            .map_err(|_| err("integer range")),
-        _ => Err(err("integer")),
     }
 }
 
@@ -2865,6 +2542,11 @@ fn text_of<'a>(tree: &'a Cbor, what: &str) -> Result<&'a str, DecodeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datatype::{
+        ArrayType, BinaryType, ByteLength, DataType, DateUnit, DecimalType, EnumType, FloatType,
+        IntegerType, IntegerWidth, IntervalUnit, StructType, TaggedCase, TaggedUnionType,
+        TemporalType, TimeUnit, TimeZone, TypeField,
+    };
     use alloc::boxed::Box;
 
     /// The actual deepest level of a built tree — the ground truth
@@ -2950,14 +2632,14 @@ mod tests {
 
     fn root_owner() -> Owner {
         Owner {
-            path: OwnerPath::root(),
+            path: node::OwnerPath::root(),
             parent: None,
             kind: OwnerKind::Graph,
             ports: vec![],
             extensions: vec![ExtensionSpec::App],
-            instance: InstanceSpec {
+            instance: instance::Spec {
                 key: None,
-                lifetime: InstanceLifetime::Persistent,
+                lifetime: instance::Lifetime::Persistent,
                 closing: None,
             },
             vals: vec![],
@@ -2966,14 +2648,14 @@ mod tests {
 
     fn node_owner(name: &str, slot: u32) -> Owner {
         Owner {
-            path: OwnerPath::new([name]).unwrap(),
-            parent: Some(OwnerSlot::new(0)),
+            path: node::OwnerPath::new([name]).unwrap(),
+            parent: Some(node::OwnerSlot::new(0)),
             kind: OwnerKind::Node(Slot::new(slot)),
             ports: vec![],
             extensions: vec![],
-            instance: InstanceSpec {
+            instance: instance::Spec {
                 key: None,
-                lifetime: InstanceLifetime::Persistent,
+                lifetime: instance::Lifetime::Persistent,
                 closing: None,
             },
             vals: vec![],
@@ -2982,12 +2664,12 @@ mod tests {
 
     fn instance_package() -> Vec<u8> {
         let mut instance_owner = node_owner("worker", 0);
-        instance_owner.instance = InstanceSpec {
+        instance_owner.instance = instance::Spec {
             key: Some(expr::Tree {
                 root: expr::Expr::Path(vec![text("meta"), text("sys"), text("id")]),
                 ty: DataType::Text,
             }),
-            lifetime: InstanceLifetime::Idle(10),
+            lifetime: instance::Lifetime::Idle(10),
             closing: None,
         };
         let validated = ValidatedExecutionPlan::try_new(ExecutionPlan {
@@ -2999,7 +2681,7 @@ mod tests {
                 execution: NodeExecution::Operator,
                 ports: vec![],
                 vars: vec![],
-                owner: OwnerSlot::new(1),
+                owner: node::OwnerSlot::new(1),
             }],
             boundary: vec![],
             edges: vec![],
@@ -3084,7 +2766,7 @@ mod tests {
             Cbor::Uint(1),
             Cbor::Text(text("note")),
             type_tree(&ty),
-            canonical_value(&value),
+            canonical::value(&value),
         ]);
         let annotation = annotation_from(&wire).expect("explicit descriptive binding");
         let DataAnnotation::Declared(application) = &annotation else {
@@ -3113,14 +2795,14 @@ mod tests {
                     .expect("ordinary nested schema"),
                 )),
             ),
-            (4, canonical_value(&Value::Struct(vec![]))),
+            (4, canonical::value(&Value::Struct(vec![]))),
             (
                 4,
-                canonical_value(&Value::Struct(vec![(text("text"), Value::Int(7))])),
+                canonical::value(&Value::Struct(vec![(text("text"), Value::Int(7))])),
             ),
             (
                 4,
-                canonical_value(&Value::Struct(vec![
+                canonical::value(&Value::Struct(vec![
                     (text("text"), Value::Text(text("a"))),
                     (text("extra"), Value::Null),
                 ])),
@@ -3251,7 +2933,7 @@ mod tests {
             Cbor::Uint(2),
             Cbor::Text(text("rastok/measure@3")),
             type_tree(&ty),
-            canonical_value(&arguments),
+            canonical::value(&arguments),
         ];
         let annotation =
             annotation_from(&Cbor::Array(wire.clone())).expect("supported business consumer");
@@ -3269,7 +2951,7 @@ mod tests {
             (2, Cbor::Text(text("custom_measure"))),
             (2, Cbor::Text(text("rastok/measure@2"))),
             (3, type_tree(&DataType::Variant)),
-            (4, canonical_value(&Value::Struct(vec![]))),
+            (4, canonical::value(&Value::Struct(vec![]))),
         ] {
             let mut altered = wire.clone();
             altered[index] = replacement;
@@ -3291,7 +2973,7 @@ mod tests {
             slot.1 = value;
             let value = Value::Struct(fields);
             let mut altered = wire.clone();
-            altered[4] = canonical_value(&value);
+            altered[4] = canonical::value(&value);
             assert!(annotation_from(&Cbor::Array(altered)).is_err(), "{field}");
         }
         for target in [
@@ -3558,9 +3240,9 @@ mod tests {
     fn v15_sabotage_cannot_detach_graph_policy_from_its_type() {
         let mut nested = root_owner();
         nested.extensions.clear();
-        nested.path =
-            OwnerPath::new(["nested"]).unwrap_or_else(|error| panic!("nested owner path: {error}"));
-        nested.parent = Some(OwnerSlot::new(0));
+        nested.path = node::OwnerPath::new(["nested"])
+            .unwrap_or_else(|error| panic!("nested owner path: {error}"));
+        nested.parent = Some(node::OwnerSlot::new(0));
         nested.ports = vec![PortDecl {
             port: port("in"),
             direction: node::Direction::Input,
@@ -3813,23 +3495,23 @@ mod tests {
     #[test]
     fn v15_retains_one_spelling_for_owner_lifetimes_sites_and_dynamic_attributes() {
         let lifetimes = [
-            InstanceLifetime::Persistent,
-            InstanceLifetime::Idle(1),
-            InstanceLifetime::Fixed(2),
-            InstanceLifetime::SinglePass,
-            InstanceLifetime::Tumbling(3),
+            instance::Lifetime::Persistent,
+            instance::Lifetime::Idle(1),
+            instance::Lifetime::Fixed(2),
+            instance::Lifetime::SinglePass,
+            instance::Lifetime::Tumbling(3),
         ];
         for lifetime in lifetimes {
             assert_eq!(lifetime_from(&lifetime_tree(&lifetime)).unwrap(), lifetime);
         }
-        let closing = ClosingPolicy {
+        let closing = instance::Closing {
             drain_for: 5,
             settle_for: 7,
         };
         assert_eq!(
             closing_from(&Cbor::Array(vec![
-                signed_tree(closing.drain_for),
-                signed_tree(closing.settle_for),
+                canonical::signed(closing.drain_for),
+                canonical::signed(closing.settle_for),
             ]))
             .unwrap(),
             closing
@@ -3854,17 +3536,17 @@ mod tests {
         assert_eq!(attr_from(&attr_tree(&setting)).unwrap(), setting);
 
         let owner = Owner {
-            path: OwnerPath::new(["workspace"]).unwrap(),
-            parent: Some(OwnerSlot::new(0)),
+            path: node::OwnerPath::new(["workspace"]).unwrap(),
+            parent: Some(node::OwnerSlot::new(0)),
             kind: OwnerKind::Graph,
             ports: vec![],
             extensions: vec![],
-            instance: InstanceSpec {
+            instance: instance::Spec {
                 key: Some(expr::Tree {
                     root: expr::Expr::Path(vec![text("meta"), text("app"), text("workspace")]),
                     ty: DataType::Text,
                 }),
-                lifetime: InstanceLifetime::Fixed(30),
+                lifetime: instance::Lifetime::Fixed(30),
                 closing: Some(closing),
             },
             vals: vec![OwnerValue {
@@ -3920,7 +3602,7 @@ mod tests {
         );
 
         let zero_lifetime = mutate_package_body(&package, |body| {
-            instance_mut(body).insert(2, lifetime_tree(&InstanceLifetime::Idle(0)));
+            instance_mut(body).insert(2, lifetime_tree(&instance::Lifetime::Idle(0)));
         });
         assert_eq!(
             decode(&zero_lifetime).unwrap_err(),
@@ -3930,7 +3612,10 @@ mod tests {
         );
 
         let zero_closing = mutate_package_body(&package, |body| {
-            instance_mut(body).insert(3, Cbor::Array(vec![signed_tree(0), signed_tree(1)]));
+            instance_mut(body).insert(
+                3,
+                Cbor::Array(vec![canonical::signed(0), canonical::signed(1)]),
+            );
         });
         assert_eq!(
             decode(&zero_closing).unwrap_err(),
@@ -4000,7 +3685,7 @@ mod tests {
                         init: Some(map_value.clone()),
                         annotations: AnnotationTable::empty(),
                     }],
-                    owner: OwnerSlot::new(1),
+                    owner: node::OwnerSlot::new(1),
                 },
                 Node {
                     path: node::Path::new(["shell"]).unwrap(),
@@ -4023,7 +3708,7 @@ mod tests {
                     }),
                     ports: vec![],
                     vars: vec![],
-                    owner: OwnerSlot::new(2),
+                    owner: node::OwnerSlot::new(2),
                 },
             ],
             boundary: vec![
@@ -4038,7 +3723,7 @@ mod tests {
             ],
             edges: vec![
                 Edge {
-                    scope: OwnerSlot::new(0),
+                    scope: node::OwnerSlot::new(0),
                     from: EdgeEnd {
                         node: None,
                         port: port("in"),
@@ -4049,7 +3734,7 @@ mod tests {
                     }),
                 },
                 Edge {
-                    scope: OwnerSlot::new(0),
+                    scope: node::OwnerSlot::new(0),
                     from: EdgeEnd {
                         node: Some(Slot::new(0)),
                         port: port("extra"),
@@ -4128,7 +3813,7 @@ mod tests {
                 execution: NodeExecution::Operator,
                 ports: vec![],
                 vars: vec![],
-                owner: OwnerSlot::new(1),
+                owner: node::OwnerSlot::new(1),
             }],
             boundary: vec![],
             edges: vec![],
@@ -4479,7 +4164,7 @@ mod tests {
             })),
         ];
         for value in values {
-            assert_eq!(value_from(&canonical_value(&value)).unwrap(), value);
+            assert_eq!(value_from(&canonical::value(&value)).unwrap(), value);
         }
     }
 

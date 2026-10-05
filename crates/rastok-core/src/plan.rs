@@ -6,6 +6,7 @@
 //! taken earlier, over the canonical HIR (`identity.md` §1), and rides
 //! beside the plan as [`SemanticHash`].
 
+use crate::instance;
 mod annotation_resolution;
 mod call_loop;
 mod case_partition;
@@ -43,7 +44,6 @@ pub use routing_validation::{
 };
 pub use serialization::fields;
 pub use serialization::{DecodeError, FORMAT_VERSION, MAGIC, decode, encode};
-pub(crate) use serialization::{type_from, type_tree};
 
 /// Standard `meta.ext` leaves known to every graph without travelling in the
 /// plan schema. They are protocol context, not fields owned by one Connector
@@ -511,9 +511,9 @@ impl ExecutionPlan {
     }
 
     /// Resolves one owner reference without trusting a freely constructed
-    /// [`OwnerSlot`].
+    /// [`node::OwnerSlot`].
     #[must_use]
-    pub fn owner(&self, slot: OwnerSlot) -> Option<&Owner> {
+    pub fn owner(&self, slot: node::OwnerSlot) -> Option<&Owner> {
         self.owners.get(slot.index())
     }
 
@@ -524,7 +524,7 @@ impl ExecutionPlan {
     /// row because composition removes their boundary endpoints from the
     /// flattened edge table.
     #[must_use]
-    pub fn graph_ports(&self, slot: OwnerSlot) -> Option<&[PortDecl]> {
+    pub fn graph_ports(&self, slot: node::OwnerSlot) -> Option<&[PortDecl]> {
         let owner = self.owner(slot)?;
         if owner.kind != OwnerKind::Graph {
             return None;
@@ -538,7 +538,7 @@ impl ExecutionPlan {
 
     /// The instance policy owned by one executable Node.
     #[must_use]
-    pub fn node_instance(&self, slot: Slot) -> Option<&InstanceSpec> {
+    pub fn node_instance(&self, slot: Slot) -> Option<&instance::Spec> {
         let node = self.nodes.get(slot.index())?;
         self.owner(node.owner).map(|owner| &owner.instance)
     }
@@ -590,7 +590,7 @@ pub struct Node {
     pub vars: Vec<VarCell>,
     /// The owner row for this Node. Validation proves that the row is a
     /// [`OwnerKind::Node`] carrying this exact Node slot.
-    pub owner: OwnerSlot,
+    pub owner: node::OwnerSlot,
 }
 
 impl Node {
@@ -624,100 +624,6 @@ impl Node {
     }
 }
 
-/// Compile-time resolved owner reference. Like [`Slot`], the freely
-/// constructible value carries no validity claim until it sits in a
-/// [`ValidatedExecutionPlan`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct OwnerSlot(u32);
-
-impl OwnerSlot {
-    /// Wraps an owner-table index.
-    #[must_use]
-    pub const fn new(index: u32) -> Self {
-        Self(index)
-    }
-
-    /// The index inside [`ExecutionPlan::owners`].
-    #[must_use]
-    pub const fn index(self) -> usize {
-        self.0 as usize
-    }
-}
-
-/// Root-relative lexical owner path. The root App Graph is the empty path;
-/// every nested Graph or Node appends one non-empty segment. This differs
-/// deliberately from [`node::Path`], whose empty form is never a Node.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct OwnerPath(Vec<String>);
-
-impl OwnerPath {
-    /// The root App Graph path.
-    #[must_use]
-    pub const fn root() -> Self {
-        Self(Vec::new())
-    }
-
-    /// Builds a root-relative owner path.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`node::InvalidName`] when a segment is empty or contains `.`.
-    pub fn new<I, S>(segments: I) -> Result<Self, node::InvalidName>
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        let segments: Vec<String> = segments.into_iter().map(Into::into).collect();
-        if segments.is_empty() {
-            return Ok(Self::root());
-        }
-        node::Path::new(segments.clone())?;
-        Ok(Self(segments))
-    }
-
-    /// The path segments, outermost first.
-    #[must_use]
-    pub fn segments(&self) -> &[String] {
-        &self.0
-    }
-
-    /// Whether this is the root App Graph.
-    #[must_use]
-    pub fn is_root(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    /// Enclosing lexical Graph path. The root has no parent.
-    #[must_use]
-    pub fn parent(&self) -> Option<Self> {
-        (!self.0.is_empty()).then(|| Self(self.0[..self.0.len() - 1].to_vec()))
-    }
-
-    /// Deepest lexical path shared by both owners.
-    #[must_use]
-    pub fn common_ancestor(&self, other: &Self) -> Self {
-        let length = self
-            .0
-            .iter()
-            .zip(&other.0)
-            .take_while(|(left, right)| left == right)
-            .count();
-        Self(self.0[..length].to_vec())
-    }
-}
-
-impl From<&node::Path> for OwnerPath {
-    fn from(path: &node::Path) -> Self {
-        Self(path.segments().to_vec())
-    }
-}
-
-impl fmt::Display for OwnerPath {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0.join("."))
-    }
-}
-
 /// The declaration represented by one owner row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OwnerKind {
@@ -731,9 +637,9 @@ pub enum OwnerKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Owner {
     /// Root-relative static owner path.
-    pub path: OwnerPath,
+    pub path: node::OwnerPath,
     /// Enclosing Graph owner. Only the root App Graph has no parent.
-    pub parent: Option<OwnerSlot>,
+    pub parent: Option<node::OwnerSlot>,
     /// The declaration this row preserves after DAG flattening.
     pub kind: OwnerKind,
     /// A nested Graph's complete boundary contract in canonical order. Node
@@ -744,7 +650,7 @@ pub struct Owner {
     /// Complete Extension specifications in canonical order.
     pub extensions: Vec<ExtensionSpec>,
     /// Orthogonal logical addressing and lifetime policy.
-    pub instance: InstanceSpec,
+    pub instance: instance::Spec,
     /// Immutable bindings owned by this scope, in canonical name order.
     pub vals: Vec<OwnerValue>,
 }
@@ -902,47 +808,6 @@ impl LoopDelay {
     }
 }
 
-/// One owner's logical instance policy. A missing key selects the singleton
-/// address inside the parent instance; persistent remains an explicit value
-/// in the categorical plan even when its source spelling was omitted.
-#[derive(Debug, Clone, PartialEq)]
-pub struct InstanceSpec {
-    /// Expression and inferred type of the selected key, when keyed.
-    pub key: Option<expr::Tree>,
-    /// When the selected instance closes automatically.
-    pub lifetime: InstanceLifetime,
-    /// Finite drain and settlement budgets. Absence is valid only when this
-    /// owner's closure can never hold an external invocation open.
-    pub closing: Option<ClosingPolicy>,
-}
-
-/// The one bounded Closing protocol. Actions are fixed by the runtime:
-/// drain admitted work, cancel calls, settle observed exits, then abandon
-/// every still-unknown outcome. Only the two explicit budgets are policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ClosingPolicy {
-    /// Nanoseconds available to drain already-admitted work.
-    pub drain_for: i64,
-    /// Nanoseconds available for cancelled calls to publish an observed exit.
-    pub settle_for: i64,
-}
-
-/// Closed transport vocabulary for lifetime policies. The scheduler admits
-/// each profile only when its corresponding runtime gate has landed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InstanceLifetime {
-    /// No automatic expiry.
-    Persistent,
-    /// Expire after this many nanoseconds without activity.
-    Idle(i64),
-    /// Expire this many nanoseconds after `l:start`.
-    Fixed(i64),
-    /// Admit one root delivery, then close after its work quiesces.
-    SinglePass,
-    /// Epoch-aligned processing-time boxes of this many nanoseconds.
-    Tumbling(i64),
-}
-
 /// The point at which an immutable expression becomes a value. Ordering is
 /// semantic: later sites may depend on every earlier one.
 #[repr(u8)]
@@ -1083,7 +948,7 @@ pub struct Handler {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Edge {
     /// Lexical Graph owner in which this route was declared.
-    pub scope: OwnerSlot,
+    pub scope: node::OwnerSlot,
     /// The emitting end.
     pub from: EdgeEnd,
     /// The receiving end; `None` is the explicit discard.

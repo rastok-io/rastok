@@ -2,7 +2,10 @@
 //! The attached manager owns these bounded deliveries; Graphs stay scopes.
 
 use super::*;
+use crate::envelope;
+use crate::instance;
 use crate::journal::loop_protocol::{self as protocol, Fact, OpeningAdmissionRef, Packet};
+use crate::node;
 use crate::plan::{Endpoint, EndpointOwner, LoopCommandTarget, RouteDestination, RouteSelection};
 
 #[derive(Debug, Clone)]
@@ -13,23 +16,23 @@ pub(super) struct BoundaryRoute {
 
 #[derive(Debug, Clone)]
 struct Admission {
-    owner: OwnerSlot,
-    instance: InstanceGeneration,
+    owner: node::OwnerSlot,
+    instance: instance::Generation,
     opening: OpeningAdmissionRef,
-    delivery: Delivery,
+    delivery: envelope::Delivery,
 }
 
 #[derive(Debug, Default)]
 pub(super) struct GraphLoops {
     admissions: BTreeMap<Id, Admission>,
-    sequences: BTreeMap<(String, InstanceGeneration), u64>,
+    sequences: BTreeMap<(String, instance::Generation), u64>,
     contexts: BTreeMap<Id, Vec<LoopRunId>>,
 }
 
 struct Selection {
     destinations: BTreeSet<Endpoint>,
     commands: Vec<LoopCommandTarget>,
-    terminals: BTreeSet<OwnerSlot>,
+    terminals: BTreeSet<node::OwnerSlot>,
     instance_stops: Vec<crate::plan::InstanceStopTarget>,
 }
 
@@ -37,23 +40,23 @@ impl Vm<'_> {
     pub(super) fn graph_endpoint(&self, physical: &EdgeEnd) -> Endpoint {
         Endpoint {
             owner: physical.node.map_or_else(
-                || EndpointOwner::Graph(OwnerPath::root()),
+                || EndpointOwner::Graph(node::OwnerPath::root()),
                 |slot| EndpointOwner::Node(self.plan.nodes[slot.index()].path.clone()),
             ),
             port: physical.port.clone(),
         }
     }
 
-    fn endpoint_owner(&self, endpoint: &Endpoint) -> Result<OwnerSlot, VmError> {
+    fn endpoint_owner(&self, endpoint: &Endpoint) -> Result<node::OwnerSlot, VmError> {
         let path = match &endpoint.owner {
-            EndpointOwner::Node(path) => OwnerPath::from(path),
+            EndpointOwner::Node(path) => node::OwnerPath::from(path),
             EndpointOwner::Graph(path) => path.clone(),
         };
         self.plan
             .owners
             .iter()
             .position(|owner| owner.path == path)
-            .map(|index| OwnerSlot::new(index as u32))
+            .map(|index| node::OwnerSlot::new(index as u32))
             .ok_or_else(|| graph_error(&path, "a routed endpoint lost its declared owner"))
     }
 
@@ -67,7 +70,10 @@ impl Vm<'_> {
                     .position(|node| node.path == *path)
                     .map(|index| Slot::new(index as u32))
                     .ok_or_else(|| {
-                        graph_error(&OwnerPath::from(path), "a route names no executable Node")
+                        graph_error(
+                            &node::OwnerPath::from(path),
+                            "a route names no executable Node",
+                        )
                     })?,
             ),
         };
@@ -77,7 +83,7 @@ impl Vm<'_> {
         })
     }
 
-    fn graph_entry(&self, endpoint: &Endpoint) -> Option<OwnerSlot> {
+    fn graph_entry(&self, endpoint: &Endpoint) -> Option<node::OwnerSlot> {
         let EndpointOwner::Graph(path) = &endpoint.owner else {
             return None;
         };
@@ -90,7 +96,7 @@ impl Vm<'_> {
                     && owner
                         .loop_spec()
                         .is_some_and(|spec| spec.entry == endpoint.port))
-                .then_some(OwnerSlot::new(index as u32))
+                .then_some(node::OwnerSlot::new(index as u32))
             })
     }
 
@@ -111,7 +117,7 @@ impl Vm<'_> {
         while let Some(endpoint) = pending.pop() {
             if !visited.insert(endpoint.clone()) {
                 return Err(graph_error(
-                    &OwnerPath::root(),
+                    &node::OwnerPath::root(),
                     "a selected boundary route repeats a crossing",
                 ));
             }
@@ -132,10 +138,13 @@ impl Vm<'_> {
                         }
                         rule.selection
                             .selected(value.as_ref().ok_or_else(|| {
-                                graph_error(&OwnerPath::root(), "a case route has no value")
+                                graph_error(&node::OwnerPath::root(), "a case route has no value")
                             })?)
                             .ok_or_else(|| {
-                                graph_error(&OwnerPath::root(), "a produced case has no route")
+                                graph_error(
+                                    &node::OwnerPath::root(),
+                                    "a produced case has no route",
+                                )
                             })?
                     }
                 };
@@ -197,9 +206,9 @@ impl Vm<'_> {
         &self,
         journal: &dyn InstanceAdmissions,
         source: &Endpoint,
-        source_instance: Option<&InstanceGeneration>,
+        source_instance: Option<&instance::Generation>,
         envelope: &Envelope,
-        candidates: &mut BTreeMap<InstanceGeneration, InstanceCandidate>,
+        candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
         expand_entry: bool,
     ) -> Result<Vec<PreparedEdge>, VmError> {
         let destinations =
@@ -220,7 +229,9 @@ impl Vm<'_> {
                 .take_while(|(left, right)| left == right)
                 .map(|(owner, _)| *owner)
                 .last()
-                .ok_or_else(|| graph_error(&OwnerPath::root(), "a route has no common scope"))?;
+                .ok_or_else(|| {
+                    graph_error(&node::OwnerPath::root(), "a route has no common scope")
+                })?;
             let from = self.endpoint_ref(source)?;
             let to = self.endpoint_ref(&destination)?;
             let target = if to.node.is_some() || self.graph_entry(&destination).is_some() {
@@ -266,7 +277,7 @@ impl Vm<'_> {
         )
     }
 
-    pub(super) fn prepared_graph_entry(&self, prepared: &PreparedEdge) -> Option<OwnerSlot> {
+    pub(super) fn prepared_graph_entry(&self, prepared: &PreparedEdge) -> Option<node::OwnerSlot> {
         prepared
             .boundary
             .as_ref()
@@ -276,9 +287,9 @@ impl Vm<'_> {
     pub(super) fn deliver_graph_admission(
         &mut self,
         route: &PreparedEdge,
-        candidates: &BTreeMap<InstanceGeneration, InstanceCandidate>,
+        candidates: &BTreeMap<instance::Generation, InstanceCandidate>,
         envelope: &Envelope,
-        source: Option<&InstanceGeneration>,
+        source: Option<&instance::Generation>,
     ) -> bool {
         let Some(owner) = self.prepared_graph_entry(route) else {
             return false;
@@ -314,7 +325,7 @@ impl Vm<'_> {
                 } else {
                     OpeningAdmissionRef::Delivery(reference)
                 },
-                delivery: Delivery {
+                delivery: envelope::Delivery {
                     port: to.port.clone(),
                     edge,
                     seq: *seq,
@@ -341,7 +352,7 @@ impl Vm<'_> {
         })
     }
 
-    pub(super) fn graph_context(&self, delivery: &Delivery) -> &[LoopRunId] {
+    pub(super) fn graph_context(&self, delivery: &envelope::Delivery) -> &[LoopRunId] {
         self.graph_context_for(ids::delivery_id(
             &delivery.edge,
             delivery.envelope.meta().sys().id(),
@@ -396,7 +407,7 @@ impl Vm<'_> {
         state.phase == protocol::Phase::Active
             && state.pending.is_none()
             && self.instances.get(&state.instance).is_some_and(|instance| {
-                matches!(instance.phase, InstancePhase::Open)
+                matches!(instance.phase, instance::Phase::Open)
                     && self.plan.owners[instance.owner.index()].kind == OwnerKind::Graph
             })
             && !self.graph_run_has_work(run)
@@ -404,7 +415,7 @@ impl Vm<'_> {
 
     pub(super) fn graph_stop_cursors(
         &self,
-        instance: &InstanceGeneration,
+        instance: &instance::Generation,
     ) -> Vec<crate::journal::ConsumedPosition> {
         self.graph_loops
             .as_deref()
@@ -419,7 +430,7 @@ impl Vm<'_> {
             .collect()
     }
 
-    pub(super) fn discard_graph_admissions(&mut self, instance: &InstanceGeneration) {
+    pub(super) fn discard_graph_admissions(&mut self, instance: &instance::Generation) {
         if let Some(graph) = self.graph_loops.as_deref_mut() {
             graph.admissions.retain(|reference, admission| {
                 if admission.instance == *instance {
@@ -514,7 +525,7 @@ impl Vm<'_> {
             graph.admissions.values().find(|admission| {
                 self.instances
                     .get(&admission.instance)
-                    .is_some_and(|instance| matches!(instance.phase, InstancePhase::Open))
+                    .is_some_and(|instance| matches!(instance.phase, instance::Phase::Open))
                     && self.loop_manager.as_deref().is_none_or(|fold| {
                         fold.run(protocol::run_ref(&admission.instance, &admission.opening))
                             .is_none()
@@ -526,7 +537,7 @@ impl Vm<'_> {
     pub(super) fn admit_graph_loop(
         &mut self,
         journal: &mut dyn Journal,
-        owner: OwnerSlot,
+        owner: node::OwnerSlot,
         run: LoopRunId,
         current: &protocol::RunState,
         envelope: Envelope,
@@ -813,7 +824,7 @@ impl Vm<'_> {
             || !self
                 .instances
                 .get(&current.instance)
-                .is_some_and(|instance| matches!(instance.phase, InstancePhase::Open))
+                .is_some_and(|instance| matches!(instance.phase, instance::Phase::Open))
             || !self.plan.owners.iter().any(|owner| {
                 owner.path == *current.instance.address().owner() && owner.kind == OwnerKind::Graph
             })
@@ -886,8 +897,8 @@ impl Vm<'_> {
     pub(super) fn prepare_graph_emissions(
         &self,
         journal: &dyn InstanceAdmissions,
-        owner: OwnerSlot,
-        instance: &InstanceGeneration,
+        owner: node::OwnerSlot,
+        instance: &instance::Generation,
         record: &crate::journal::TransactionRecord,
     ) -> Result<PreparedEmissions, VmError> {
         let mut candidates = BTreeMap::new();
@@ -929,8 +940,8 @@ impl Vm<'_> {
 
     pub(super) fn route_graph_emissions(
         &mut self,
-        owner: OwnerSlot,
-        instance: &InstanceGeneration,
+        owner: node::OwnerSlot,
+        instance: &instance::Generation,
         prepared: PreparedEmissions,
     ) {
         self.enqueue_instance_commands(prepared.commands);
@@ -968,7 +979,7 @@ impl Vm<'_> {
         journal: &dyn Journal,
         admissions: &dyn InstanceAdmissions,
         index: usize,
-        owner: OwnerSlot,
+        owner: node::OwnerSlot,
         record: &crate::journal::TransactionRecord,
         resume_at: i64,
     ) -> Result<(), VmError> {
@@ -1302,7 +1313,7 @@ fn endpoint_text(endpoint: &Endpoint) -> String {
     }
 }
 
-fn graph_error(owner: &OwnerPath, reason: &'static str) -> VmError {
+fn graph_error(owner: &node::OwnerPath, reason: &'static str) -> VmError {
     VmError::InvalidLoopDecision {
         owner: owner.clone(),
         reason,

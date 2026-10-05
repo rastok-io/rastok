@@ -3,6 +3,8 @@
 
 use super::*;
 use crate::connector::{CallSemantics, FrameProduction};
+use crate::instance;
+use crate::node;
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::ToString;
 use alloc::{format, vec};
@@ -14,7 +16,7 @@ struct Outcome {
     again: BTreeSet<Endpoint>,
     visible_calls: BTreeSet<node::Path>,
     joins: BTreeMap<Endpoint, u8>,
-    retries: BTreeSet<OwnerPath>,
+    retries: BTreeSet<node::OwnerPath>,
 }
 
 type Outcomes = BTreeSet<Outcome>;
@@ -167,7 +169,7 @@ pub(super) fn validate(
     if plan.owners.iter().any(|child| {
         child.path != owner.path
             && child.path.segments().starts_with(owner.path.segments())
-            && child.instance.lifetime != InstanceLifetime::Persistent
+            && child.instance.lifetime != instance::Lifetime::Persistent
     }) {
         return Err(error(
             "closing".into(),
@@ -321,7 +323,7 @@ pub(super) fn validate(
                                 RouteDestination::LoopCommand(command) => {
                                     let target = match &command.owner {
                                         EndpointOwner::Graph(path) => path.clone(),
-                                        EndpointOwner::Node(path) => OwnerPath::from(path),
+                                        EndpointOwner::Node(path) => node::OwnerPath::from(path),
                                     };
                                     if !target.segments().starts_with(owner.path.segments()) {
                                         return Err(error("command".into(), "a command escapes its active Loop context"));
@@ -527,7 +529,7 @@ fn sets(selection: &RouteSelection) -> Vec<&[RouteDestination]> {
 
 fn dependency(
     destination: &RouteDestination,
-    scope: &OwnerPath,
+    scope: &node::OwnerPath,
     case: Option<&str>,
 ) -> Option<Work> {
     let RouteDestination::Port(target) = destination else {
@@ -648,7 +650,7 @@ fn nested_host<'a>(plan: &'a ExecutionPlan, scope: &Owner, work: &Work) -> Optio
     };
     let path = match &endpoint.owner {
         EndpointOwner::Graph(path) => path.clone(),
-        EndpointOwner::Node(path) => OwnerPath::from(path),
+        EndpointOwner::Node(path) => node::OwnerPath::from(path),
     };
     plan.owners.iter().find(|owner| {
         owner.path == path
@@ -761,14 +763,16 @@ mod tests {
             let mut selected = empty().pop_first().unwrap();
             selected
                 .retries
-                .insert(OwnerPath::new([format!("child{index}")]).unwrap());
+                .insert(node::OwnerPath::new([format!("child{index}")]).unwrap());
             choice.insert(selected);
             accumulated = combine(&accumulated, &choice).unwrap();
             assert_eq!(accumulated.len(), 1 << (index + 1));
         }
         let mut choice = empty();
         let mut selected = empty().pop_first().unwrap();
-        selected.retries.insert(OwnerPath::new(["extra"]).unwrap());
+        selected
+            .retries
+            .insert(node::OwnerPath::new(["extra"]).unwrap());
         choice.insert(selected);
         assert!(combine(&accumulated, &choice).is_none());
         assert_eq!(accumulated.len(), MAX_GRAPH_LOOP_OUTCOMES);

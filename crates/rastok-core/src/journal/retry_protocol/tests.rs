@@ -4,13 +4,15 @@ use crate::connector::{
     ConnectorExchange, ConnectorRoles, PROCESS_CONNECTOR_ID, outbound_call_semantics,
 };
 use crate::envelope::{Data, Meta, MetaSys};
-use crate::identity::InstanceIdentity;
+use crate::instance;
+use crate::node;
+
 use crate::journal::{
     Emission, ids,
     timing::{TimerArm, TimerSchedule},
 };
 use crate::node::Path;
-use crate::plan::{OwnerPath, PlanConstant};
+use crate::plan::PlanConstant;
 use alloc::boxed::Box;
 use alloc::string::ToString;
 use alloc::{format, vec};
@@ -33,7 +35,7 @@ fn fixed(ns: i64) -> Option<LoopDelay> {
 }
 
 struct Fixture {
-    instance: InstanceGeneration,
+    instance: instance::Generation,
     contract: ContractId,
     policy: Policy,
     call: CallSemantics,
@@ -47,8 +49,10 @@ struct Fixture {
 
 impl Fixture {
     fn new(attempts: u64) -> Self {
-        let instance = InstanceGeneration::new(
-            InstanceIdentity::singleton(&OwnerPath::new(vec![String::from("pay")]).unwrap()),
+        let instance = instance::Generation::new(
+            instance::Identity::singleton(
+                &node::OwnerPath::new(vec![String::from("pay")]).unwrap(),
+            ),
             0,
         );
         let contract = ContractId::parse(PROCESS_CONNECTOR_ID).unwrap();
@@ -439,7 +443,7 @@ fn exact_delivery_and_generation_separate_operations_with_identical_requests() {
     assert_ne!(
         f.operation,
         operation_ref(
-            &InstanceGeneration::new(f.instance.address().clone(), 1),
+            &instance::Generation::new(f.instance.address().clone(), 1),
             &f.entry,
             f.opening
         )
@@ -697,7 +701,7 @@ fn pending_initial_stop_has_no_fake_admission_and_successor_generation_is_indepe
     let mut fold = Fold::default();
     fold.apply(&manager(vec![f.opened()]), Some(&f.authority()), 0)
         .unwrap();
-    fold.begin_closing(&InstanceGeneration::new(f.instance.address().clone(), 1));
+    fold.begin_closing(&instance::Generation::new(f.instance.address().clone(), 1));
     refuses_unchanged(
         &mut fold,
         &manager(vec![Fact::Close {

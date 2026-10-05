@@ -2,6 +2,7 @@
 //! in addition to the journal's independent protocol algebra.
 
 use super::*;
+use crate::instance;
 use protocol::{Fact, OpeningAdmissionRef, Phase};
 
 impl Vm<'_> {
@@ -160,7 +161,7 @@ impl Vm<'_> {
                                 .instances
                                 .get(&record.instance)
                                 .is_some_and(|instance| {
-                                    matches!(instance.phase, InstancePhase::Open)
+                                    matches!(instance.phase, instance::Phase::Open)
                                 })
                                 || !packet.consumed.is_empty()
                             {

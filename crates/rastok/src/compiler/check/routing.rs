@@ -1,6 +1,7 @@
 //! Static endpoint resolution, case routes and destination validation.
 
 use super::*;
+use crate::node;
 use crate::plan::InstanceStopTarget;
 
 impl Checker<'_, '_> {
@@ -103,7 +104,7 @@ impl Checker<'_, '_> {
     pub(super) fn reject_loop_next_edge(&mut self, graph: &Graph, edge: &Edge, span: Span) -> bool {
         fn graph_at<'graph>(
             graph: &'graph Graph,
-            path: &crate::plan::OwnerPath,
+            path: &crate::node::OwnerPath,
         ) -> Option<&'graph Graph> {
             if &graph.path == path {
                 return Some(graph);

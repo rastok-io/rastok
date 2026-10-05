@@ -522,7 +522,7 @@ fn struct_fields_eq(
 /// v7 plan package transports this same complete value registry; map-key
 /// ordering therefore has one byte authority in plans and journals.
 pub(crate) fn canonical_value_bytes(value: &Value) -> Vec<u8> {
-    crate::canonical_cbor::encode(&crate::identity::encoding::canonical_value(value))
+    crate::canonical_cbor::encode(&crate::canonical::value(value))
 }
 
 pub(crate) fn map_key_label(value: &Value) -> String {

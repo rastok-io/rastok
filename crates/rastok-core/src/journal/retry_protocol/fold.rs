@@ -3,7 +3,9 @@
 
 use super::*;
 use crate::boundary::Intent;
-use crate::identity::encoding::canonical_meta_value;
+use crate::canonical;
+use crate::instance;
+
 use crate::journal::{Emission, ids, timer_kind, timing::TimerSchedule};
 use alloc::collections::BTreeSet;
 use core::fmt;
@@ -65,7 +67,7 @@ impl core::error::Error for Error {}
 #[derive(Debug)]
 pub struct Opening<'a> {
     /// Exact owner generation of the original delivery.
-    pub instance: &'a InstanceGeneration,
+    pub instance: &'a instance::Generation,
     /// Canonical delivery admitted by the original journal/route authority.
     pub delivery: Id,
     /// Original validated plan hash.
@@ -117,7 +119,7 @@ pub enum Phase {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Operation {
     /// Exact owner, not a key guessed from DATA or an owner-name prefix.
-    pub instance: InstanceGeneration,
+    pub instance: instance::Generation,
     /// Original plan binding.
     pub plan: SemanticHash,
     /// Original exact Contract.
@@ -186,7 +188,7 @@ impl Operation {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Fold {
     operations: BTreeMap<OperationId, Operation>,
-    closing: BTreeSet<InstanceGeneration>,
+    closing: BTreeSet<instance::Generation>,
 }
 
 impl Fold {
@@ -203,13 +205,13 @@ impl Fold {
 
     /// Observe an already-retained exact-generation Closing fact. Ancestor
     /// cascade is resolved by the lifecycle fold, never a string-prefix test.
-    pub fn begin_closing(&mut self, instance: &InstanceGeneration) {
+    pub fn begin_closing(&mut self, instance: &instance::Generation) {
         self.closing.insert(instance.clone());
     }
 
     /// Exact-generation Closing has already won in the retained prefix.
     #[must_use]
-    pub fn is_closing(&self, instance: &InstanceGeneration) -> bool {
+    pub fn is_closing(&self, instance: &instance::Generation) -> bool {
         self.closing.contains(instance)
     }
 
@@ -687,7 +689,7 @@ fn same_state(left: &Envelope, right: &Envelope) -> bool {
             .all(|(left, right)| {
                 left.len() == right.len()
                     && left.iter().zip(right).all(|((ln, lv), (rn, rv))| {
-                        ln == rn && canonical_meta_value(lv) == canonical_meta_value(rv)
+                        ln == rn && canonical::meta_value(lv) == canonical::meta_value(rv)
                     })
             })
 }

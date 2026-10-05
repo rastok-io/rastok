@@ -26,18 +26,20 @@ use crate::boundary::{
     SessionWriteId, SessionWriteIntent,
 };
 use crate::connector::{ConnectorExchange, SessionOpening, session_opening};
+use crate::envelope;
 use crate::envelope::{Data, Envelope, Id, Meta, MetaSys};
-use crate::identity::{InstanceGeneration, InstanceIdentity, InstanceSegment};
+use crate::instance;
+
 use crate::journal::admission::InstanceAdmissions;
 use crate::journal::{Emission, Journal, LoopRunId, RouteTarget, RoutedDelivery, ids};
 use crate::node;
 use crate::plan::{
-    AttrSetting, Edge, EdgeEnd, EvaluationSite, GraphVersion, InstanceLifetime, NodeExecution,
-    OwnerKind, OwnerPath, OwnerSlot, Slot, ValidatedExecutionPlan,
+    AttrSetting, Edge, EdgeEnd, EvaluationSite, GraphVersion, NodeExecution, OwnerKind, Slot,
+    ValidatedExecutionPlan,
 };
 use crate::runtime::{
-    DataSlot, Delivery, Fault, HandlerExecutor, InstanceState, JoinCandidate, LifecycleFiring,
-    Mailboxes, eval_lazy, meta_value, resolve_payload,
+    DataSlot, Fault, HandlerExecutor, JoinCandidate, LifecycleFiring, Mailboxes, State, eval_lazy,
+    meta_value, resolve_payload,
 };
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -95,7 +97,7 @@ pub enum VmError {
     /// It must refuse before any effect, never ignore the Extension.
     UnsupportedExtension {
         /// Node carrying the Extension.
-        owner: OwnerPath,
+        owner: node::OwnerPath,
         /// Unsupported Extension.
         extension: node::Extension,
     },
@@ -114,7 +116,7 @@ pub enum VmError {
     /// Exact-instance closure cannot select a unique retained target.
     InstanceCommand {
         /// Static target which refused; no payload values enter the error.
-        owner: OwnerPath,
+        owner: node::OwnerPath,
         /// Missing, ambiguous, or inconsistent instance authority.
         reason: crate::journal::instance_stop::Error,
     },
@@ -131,13 +133,13 @@ pub enum VmError {
     /// The shared recurrence budget cannot admit another Loop run or Retry operation.
     RecurrenceQueueFull {
         /// Owner whose opening cannot be reserved.
-        owner: OwnerPath,
+        owner: node::OwnerPath,
     },
     /// Runtime defense for a control decision the validated L3 proof says is
     /// impossible.
     InvalidLoopDecision {
         /// Loop owner whose traversal contradicted the proof.
-        owner: OwnerPath,
+        owner: node::OwnerPath,
         /// Stable invariant description.
         reason: &'static str,
     },
@@ -146,13 +148,13 @@ pub enum VmError {
     /// route into the closing generation.
     InstanceClosing {
         /// Owner refusing new external admission.
-        owner: OwnerPath,
+        owner: node::OwnerPath,
     },
     /// A processing-time box has already closed. Its address has no second
     /// forward generation, so retry cannot reopen or spill it.
     ClosedTimeBox {
         /// Tumbling owner whose box is closed.
-        owner: OwnerPath,
+        owner: node::OwnerPath,
         /// Canonical start of the closed box.
         start_ns: i64,
     },
@@ -394,8 +396,8 @@ impl PumpReport {
 #[derive(Debug, Clone, PartialEq)]
 struct PendingCall {
     slot: Slot,
-    delivery: Delivery,
-    instance: InstanceGeneration,
+    delivery: envelope::Delivery,
+    instance: instance::Generation,
 }
 
 /// One accepted inbound Call held until its Driver reports the sole terminal
@@ -405,7 +407,7 @@ struct PendingCall {
 struct PendingInboundCall {
     slot: Slot,
     request: Envelope,
-    instance: InstanceGeneration,
+    instance: instance::Generation,
     response: Option<PendingInboundCallResponse>,
     timeout: Option<PendingInboundCallTimeout>,
 }
@@ -414,7 +416,7 @@ struct PendingInboundCall {
 /// until its protocol terminal observation commits `l:reply`.
 #[derive(Debug, Clone, PartialEq)]
 struct PendingInboundCallResponse {
-    delivery: Delivery,
+    delivery: envelope::Delivery,
     started: bool,
 }
 
@@ -431,7 +433,7 @@ struct PendingInboundCallTimeout {
 #[derive(Debug, Clone, PartialEq)]
 struct PendingSession {
     slot: Slot,
-    instance: InstanceGeneration,
+    instance: instance::Generation,
     opening: Envelope,
     /// Present only for an outbound opening whose exact prepared bytes may
     /// need to be re-offered after bounded Driver pressure.
@@ -439,7 +441,7 @@ struct PendingSession {
     /// Outbound client openings retain their graph cursor through the sole
     /// terminal Session transaction. Inbound peer openings are roots and
     /// therefore carry no consumed cursor.
-    opening_delivery: Option<Delivery>,
+    opening_delivery: Option<envelope::Delivery>,
     opened: bool,
     opening_started: bool,
     opening_claimed: bool,
@@ -452,8 +454,8 @@ struct PendingSession {
 struct PendingSessionWrite {
     intent: SessionWriteIntent,
     slot: Slot,
-    instance: InstanceGeneration,
-    delivery: Delivery,
+    instance: instance::Generation,
+    delivery: envelope::Delivery,
     started: bool,
 }
 
@@ -462,8 +464,8 @@ struct PendingSessionWrite {
 /// prepared for one instance and retained from another.
 struct SessionDispatch<'a> {
     slot: Slot,
-    instance: &'a InstanceGeneration,
-    delivery: &'a Delivery,
+    instance: &'a instance::Generation,
+    delivery: &'a envelope::Delivery,
 }
 
 /// One accepted terminal observation waiting for its atomic Connector
@@ -475,55 +477,17 @@ struct SettledSession {
     /// A preparation refusal can terminate a Session before a write intent
     /// opens. Its causing graph cursor is consumed by the terminal
     /// transaction together with the opening cursor.
-    terminal_delivery: Option<Delivery>,
-}
-
-/// One selected owner generation and its immutable instance bundle.
-#[derive(Debug, Clone)]
-struct Instance {
-    owner: OwnerSlot,
-    parent: Option<InstanceGeneration>,
-    frames: Vec<InstanceSegment>,
-    values: BTreeMap<String, crate::value::Value>,
-    settings: BTreeMap<String, crate::value::Value>,
-    created_by: Envelope,
-    last_activity: Envelope,
-    /// Deliveries discarded only after the drain budget expired. Their cursor
-    /// positions are sealed by this instance's eventual `l:stop`.
-    residual: Vec<Delivery>,
-    phase: InstancePhase,
-}
-
-/// Admission and closure are mutually exclusive states. The first close
-/// request owns the causal envelope; later expiries are stale observations.
-#[derive(Debug, Clone)]
-enum InstancePhase {
-    Open,
-    Closing {
-        cause: Envelope,
-        scope: InstanceGeneration,
-        stage: ClosingStage,
-    },
-    Stopping {
-        cause: Envelope,
-        scope: InstanceGeneration,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ClosingStage {
-    Draining,
-    Settling,
+    terminal_delivery: Option<envelope::Delivery>,
 }
 
 /// Pure instance construction. Installation happens only after the producer
 /// route commits.
 #[derive(Debug, Clone)]
 struct InstanceCandidate {
-    owner: OwnerSlot,
-    reference: InstanceGeneration,
-    parent: Option<InstanceGeneration>,
-    frames: Vec<InstanceSegment>,
+    owner: node::OwnerSlot,
+    reference: instance::Generation,
+    parent: Option<instance::Generation>,
+    frames: Vec<instance::Segment>,
     values: BTreeMap<String, crate::value::Value>,
     settings: BTreeMap<String, crate::value::Value>,
     /// Root admission claimed by a single-pass owner. Reuse is legal only for
@@ -544,12 +508,12 @@ struct WaitingInstance {
 
 #[derive(Debug, Clone)]
 struct PreparedTarget {
-    reference: InstanceGeneration,
-    scope: InstanceGeneration,
-    chain: Vec<InstanceGeneration>,
+    reference: instance::Generation,
+    scope: instance::Generation,
+    chain: Vec<instance::Generation>,
     /// Owners whose boundary this route crosses. Sticky ancestors are not
     /// re-admitted and therefore do not move an idle deadline.
-    admitted: Vec<InstanceGeneration>,
+    admitted: Vec<instance::Generation>,
 }
 
 /// Lifecycle work owns its causal envelope and names the lexical owner. The
@@ -557,9 +521,9 @@ struct PreparedTarget {
 /// their complete source chain; reclamation follows the successful commit.
 #[derive(Debug, Clone)]
 struct LifecycleWork {
-    owner: OwnerSlot,
-    instance: InstanceGeneration,
-    parent_instance: Option<InstanceGeneration>,
+    owner: node::OwnerSlot,
+    instance: instance::Generation,
+    parent_instance: Option<instance::Generation>,
     lifecycle: node::Lifecycle,
     cause: Envelope,
 }
@@ -587,7 +551,7 @@ struct PreparedEmission {
 #[derive(Debug)]
 struct PreparedEmissions {
     emissions: Vec<PreparedEmission>,
-    candidates: BTreeMap<InstanceGeneration, InstanceCandidate>,
+    candidates: BTreeMap<instance::Generation, InstanceCandidate>,
     contexts: Vec<crate::journal::loop_protocol::RoutedContext>,
     commands: Vec<crate::journal::instance_stop::Command>,
 }
@@ -597,13 +561,13 @@ struct PreparedEmissions {
 /// commits; an eviction follows the same reserve/commit/remove discipline.
 #[derive(Debug, Clone)]
 enum OperatorWork {
-    Single(Delivery),
+    Single(envelope::Delivery),
     Join {
         activation: node::HandlerActivation,
-        trigger: Delivery,
-        inputs: Vec<Delivery>,
+        trigger: envelope::Delivery,
+        inputs: Vec<envelope::Delivery>,
     },
-    Evict(Delivery),
+    Evict(envelope::Delivery),
 }
 
 fn consider_operator_work(
@@ -832,9 +796,9 @@ pub enum InstancePhaseInspection {
 #[derive(Debug, Clone, PartialEq)]
 pub struct InstanceInspection {
     /// Canonical logical address plus journal-derived generation.
-    pub reference: InstanceGeneration,
+    pub reference: instance::Generation,
     /// Static lexical owner.
-    pub owner: OwnerPath,
+    pub owner: node::OwnerPath,
     /// Current replay-derivable lifecycle phase.
     pub phase: InstancePhaseInspection,
     /// Executable Node at this owner, absent for a Graph owner.
@@ -849,11 +813,11 @@ pub struct MailboxInspection {
     /// Executable Node that owns this FIFO.
     pub node: node::Path,
     /// Exact logical instance generation owning the FIFO.
-    pub instance: InstanceGeneration,
+    pub instance: instance::Generation,
     /// Whether execution has reserved the mailbox head for an open protocol.
     pub claimed: bool,
     /// Current FIFO contents in delivery order.
-    pub deliveries: Vec<Delivery>,
+    pub deliveries: Vec<envelope::Delivery>,
 }
 
 /// Direction of one retained Call obligation.
@@ -884,7 +848,7 @@ pub struct CallInspection {
     /// Connector owning the protocol.
     pub connector: node::Path,
     /// Exact logical instance generation.
-    pub instance: InstanceGeneration,
+    pub instance: instance::Generation,
     /// Whether the terminal observation is retained but not yet consumed.
     pub completion_retained: bool,
 }
@@ -908,7 +872,7 @@ pub struct SessionInspection {
     /// Connector owning the protocol.
     pub connector: node::Path,
     /// Exact logical instance generation.
-    pub instance: InstanceGeneration,
+    pub instance: instance::Generation,
     /// Whether the opening handshake completed.
     pub opened: bool,
     /// Journaled writes not yet locally settled.
@@ -1018,7 +982,7 @@ pub struct Vm<'plan> {
     expected_deployment: Option<crate::deployment::DeploymentAttestation>,
     /// Plan-derived owner chains, indexed once so route selection allocates
     /// only the dynamic reference chain it must commit.
-    owner_chains: Vec<Option<Vec<OwnerSlot>>>,
+    owner_chains: Vec<Option<Vec<node::OwnerSlot>>>,
     /// Whether any activation can retain a partial presence set. The common
     /// no-join plan can keep FIFO dispatch on its original direct path.
     has_join_activations: bool,
@@ -1033,7 +997,7 @@ pub struct Vm<'plan> {
     has_single_pass: bool,
     graph_version: GraphVersion,
     scheduler: Scheduler,
-    state: InstanceState,
+    state: State,
     dispatcher: Dispatcher,
     /// Requests delivered to a connector, held until their call
     /// settles: the completion transaction consumes this cursor, and the
@@ -1053,13 +1017,13 @@ pub struct Vm<'plan> {
     /// Session terminal observations waiting for their causal transaction.
     settled_sessions: VecDeque<SettledSession>,
     /// Live keyed/singleton instances whose lifecycle is observable.
-    instances: BTreeMap<InstanceGeneration, Instance>,
+    instances: BTreeMap<instance::Generation, instance::Live>,
     /// Selected successor generations not yet allowed to start.
-    waiting: BTreeMap<InstanceGeneration, WaitingInstance>,
+    waiting: BTreeMap<instance::Generation, WaitingInstance>,
     /// Rebuildable index of instances that have won a close request but have
-    /// not yet queued `l:stop`. `InstancePhase` remains the authority; this
+    /// not yet queued `l:stop`. `instance::Phase` remains the authority; this
     /// set keeps open-only traffic off the closure scan.
-    closing: BTreeSet<InstanceGeneration>,
+    closing: BTreeSet<instance::Generation>,
     /// Journal-before-next-work lifecycle transitions. This queue outranks
     /// ordinary deliveries so `l:start` precedes the creating arrival and a
     /// detached `l:stop` precedes the following generation.
@@ -1248,7 +1212,11 @@ impl<'plan> Vm<'plan> {
         Ok(())
     }
 
-    fn loop_delay_for(&self, owner: OwnerSlot, iteration: u64) -> Result<Option<i64>, VmError> {
+    fn loop_delay_for(
+        &self,
+        owner: node::OwnerSlot,
+        iteration: u64,
+    ) -> Result<Option<i64>, VmError> {
         let path = self.plan.owners[owner.index()].path.clone();
         let Some(spec) = self.plan.owners[owner.index()].loop_spec() else {
             return Err(VmError::InvalidLoopDecision {
@@ -1364,9 +1332,10 @@ impl<'plan> Vm<'plan> {
         logical_time: i64,
         boot: Option<&crate::deployment::BootBindings>,
     ) -> Self {
-        let mut owner_chains: Vec<Option<Vec<OwnerSlot>>> = Vec::with_capacity(plan.owners.len());
+        let mut owner_chains: Vec<Option<Vec<node::OwnerSlot>>> =
+            Vec::with_capacity(plan.owners.len());
         for (index, owner) in plan.owners.iter().enumerate() {
-            let slot = OwnerSlot::new(u32::try_from(index).unwrap_or(u32::MAX));
+            let slot = node::OwnerSlot::new(u32::try_from(index).unwrap_or(u32::MAX));
             let mut chain = match owner.parent {
                 None => Some(Vec::new()),
                 Some(parent) => owner_chains.get(parent.index()).cloned().flatten(),
@@ -1422,18 +1391,18 @@ impl<'plan> Vm<'plan> {
             has_lifetime_deadlines: plan.owners.iter().any(|owner| {
                 matches!(
                     owner.instance.lifetime,
-                    InstanceLifetime::Idle(_)
-                        | InstanceLifetime::Fixed(_)
-                        | InstanceLifetime::Tumbling(_)
+                    instance::Lifetime::Idle(_)
+                        | instance::Lifetime::Fixed(_)
+                        | instance::Lifetime::Tumbling(_)
                 )
             }),
             has_single_pass: plan
                 .owners
                 .iter()
-                .any(|owner| matches!(owner.instance.lifetime, InstanceLifetime::SinglePass)),
+                .any(|owner| matches!(owner.instance.lifetime, instance::Lifetime::SinglePass)),
             graph_version,
             scheduler: Scheduler::new(WORKER_MAILBOX_CAPACITY),
-            state: InstanceState::new(),
+            state: State::new(),
             dispatcher: Dispatcher::new(),
             pending: BTreeMap::new(),
             inbound_calls: BTreeMap::new(),
@@ -1654,8 +1623,8 @@ impl<'plan> Vm<'plan> {
     fn inbound_call_timeout(
         &self,
         source: Slot,
-        instance: &InstanceGeneration,
-        candidates: &BTreeMap<InstanceGeneration, InstanceCandidate>,
+        instance: &instance::Generation,
+        candidates: &BTreeMap<instance::Generation, InstanceCandidate>,
     ) -> Result<Option<i64>, VmError> {
         let planned = &self.plan.nodes[source.index()];
         let spec = planned.connector().ok_or_else(|| VmError::PlanInvariant {
@@ -2223,12 +2192,12 @@ impl<'plan> Vm<'plan> {
                 self.scheduler.mailboxes.peek_next_where(|_, reference| {
                     matches!(
                         instances.get(reference),
-                        Some(Instance {
-                            phase: InstancePhase::Open,
+                        Some(instance::Live {
+                            phase: instance::Phase::Open,
                             ..
-                        }) | Some(Instance {
-                            phase: InstancePhase::Closing {
-                                stage: ClosingStage::Draining,
+                        }) | Some(instance::Live {
+                            phase: instance::Phase::Closing {
+                                stage: instance::ClosingStage::Draining,
                                 ..
                             },
                             ..
@@ -2271,12 +2240,12 @@ impl<'plan> Vm<'plan> {
                 .next_runnable_key(after.as_ref(), |_, reference| {
                     matches!(
                         self.instances.get(reference),
-                        Some(Instance {
-                            phase: InstancePhase::Open,
+                        Some(instance::Live {
+                            phase: instance::Phase::Open,
                             ..
-                        }) | Some(Instance {
-                            phase: InstancePhase::Closing {
-                                stage: ClosingStage::Draining,
+                        }) | Some(instance::Live {
+                            phase: instance::Phase::Closing {
+                                stage: instance::ClosingStage::Draining,
                                 ..
                             },
                             ..
@@ -2601,9 +2570,9 @@ impl<'plan> Vm<'plan> {
                         .is_some_and(|instance| {
                             matches!(
                                 instance.phase,
-                                InstancePhase::Open
-                                    | InstancePhase::Closing {
-                                        stage: ClosingStage::Draining,
+                                instance::Phase::Open
+                                    | instance::Phase::Closing {
+                                        stage: instance::ClosingStage::Draining,
                                         ..
                                     }
                             )
@@ -2651,9 +2620,9 @@ impl<'plan> Vm<'plan> {
                     && self.instances.get(&write.instance).is_some_and(|instance| {
                         matches!(
                             instance.phase,
-                            InstancePhase::Open
-                                | InstancePhase::Closing {
-                                    stage: ClosingStage::Draining,
+                            instance::Phase::Open
+                                | instance::Phase::Closing {
+                                    stage: instance::ClosingStage::Draining,
                                     ..
                                 }
                         )
@@ -2699,8 +2668,8 @@ impl<'plan> Vm<'plan> {
                         .is_some_and(|instance| {
                             matches!(
                                 instance.phase,
-                                InstancePhase::Closing {
-                                    stage: ClosingStage::Settling,
+                                instance::Phase::Closing {
+                                    stage: instance::ClosingStage::Settling,
                                     ..
                                 }
                             )
@@ -3139,7 +3108,7 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
         slot: Slot,
-        instance: InstanceGeneration,
+        instance: instance::Generation,
         edge: &str,
         delivery: Id,
     ) -> Result<(), VmError> {
@@ -3298,14 +3267,14 @@ impl<'plan> Vm<'plan> {
     fn expire_instance(
         &mut self,
         journal: &mut dyn Journal,
-        owner: OwnerSlot,
-        reference: InstanceGeneration,
+        owner: node::OwnerSlot,
+        reference: instance::Generation,
         cause: Id,
         deadline: InstanceDeadline,
     ) -> Result<(), VmError> {
         let current = self.instances.get(&reference).filter(|instance| {
             instance.owner == owner
-                && matches!(instance.phase, InstancePhase::Open)
+                && matches!(instance.phase, instance::Phase::Open)
                 && match deadline {
                     InstanceDeadline::Idle => instance.last_activity.meta().sys().id() == cause,
                     InstanceDeadline::Fixed | InstanceDeadline::Tumbling => {
@@ -3391,16 +3360,16 @@ impl<'plan> Vm<'plan> {
                     ),
                 };
                 let phase = match instance.phase {
-                    InstancePhase::Open => InstancePhaseInspection::Open,
-                    InstancePhase::Closing {
-                        stage: ClosingStage::Draining,
+                    instance::Phase::Open => InstancePhaseInspection::Open,
+                    instance::Phase::Closing {
+                        stage: instance::ClosingStage::Draining,
                         ..
                     } => InstancePhaseInspection::Draining,
-                    InstancePhase::Closing {
-                        stage: ClosingStage::Settling,
+                    instance::Phase::Closing {
+                        stage: instance::ClosingStage::Settling,
                         ..
                     } => InstancePhaseInspection::Settling,
-                    InstancePhase::Stopping { .. } => InstancePhaseInspection::Stopping,
+                    instance::Phase::Stopping { .. } => InstancePhaseInspection::Stopping,
                 };
                 InstanceInspection {
                     reference: reference.clone(),
@@ -3532,12 +3501,12 @@ impl<'plan> Vm<'plan> {
                 .next_runnable_key(after.as_ref(), |_, reference| {
                     matches!(
                         self.instances.get(reference),
-                        Some(Instance {
-                            phase: InstancePhase::Open,
+                        Some(instance::Live {
+                            phase: instance::Phase::Open,
                             ..
-                        }) | Some(Instance {
-                            phase: InstancePhase::Closing {
-                                stage: ClosingStage::Draining,
+                        }) | Some(instance::Live {
+                            phase: instance::Phase::Closing {
+                                stage: instance::ClosingStage::Draining,
                                 ..
                             },
                             ..
@@ -3609,12 +3578,12 @@ impl<'plan> Vm<'plan> {
                 .peek_next_where(|_, reference| {
                     matches!(
                         self.instances.get(reference),
-                        Some(Instance {
-                            phase: InstancePhase::Open,
+                        Some(instance::Live {
+                            phase: instance::Phase::Open,
                             ..
-                        }) | Some(Instance {
-                            phase: InstancePhase::Closing {
-                                stage: ClosingStage::Draining,
+                        }) | Some(instance::Live {
+                            phase: instance::Phase::Closing {
+                                stage: instance::ClosingStage::Draining,
                                 ..
                             },
                             ..
@@ -3630,12 +3599,12 @@ impl<'plan> Vm<'plan> {
                 .next_runnable_key(after.as_ref(), |_, reference| {
                     matches!(
                         self.instances.get(reference),
-                        Some(Instance {
-                            phase: InstancePhase::Open,
+                        Some(instance::Live {
+                            phase: instance::Phase::Open,
                             ..
-                        }) | Some(Instance {
-                            phase: InstancePhase::Closing {
-                                stage: ClosingStage::Draining,
+                        }) | Some(instance::Live {
+                            phase: instance::Phase::Closing {
+                                stage: instance::ClosingStage::Draining,
                                 ..
                             },
                             ..
@@ -3675,7 +3644,7 @@ impl<'plan> Vm<'plan> {
             || !self.session_writes.is_empty()
     }
 
-    fn instance_has_direct_work(&self, reference: &InstanceGeneration) -> bool {
+    fn instance_has_direct_work(&self, reference: &instance::Generation) -> bool {
         let Some(instance) = self.instances.get(reference) else {
             return false;
         };
@@ -3709,15 +3678,15 @@ impl<'plan> Vm<'plan> {
                 .any(|work| work.instance == *reference)
     }
 
-    fn single_pass_close(&self) -> Option<(&InstanceGeneration, &Envelope)> {
+    fn single_pass_close(&self) -> Option<(&instance::Generation, &Envelope)> {
         if !self.has_single_pass {
             return None;
         }
         self.instances.iter().find_map(|(reference, instance)| {
-            (matches!(instance.phase, InstancePhase::Open)
+            (matches!(instance.phase, instance::Phase::Open)
                 && matches!(
                     self.plan.owners[instance.owner.index()].instance.lifetime,
-                    InstanceLifetime::SinglePass
+                    instance::Lifetime::SinglePass
                 )
                 && !self.lifecycle.iter().any(|work| {
                     work.instance == *reference && work.lifecycle == node::Lifecycle::Start
@@ -3728,8 +3697,8 @@ impl<'plan> Vm<'plan> {
 
     fn is_descendant_instance(
         &self,
-        child: &InstanceGeneration,
-        ancestor: &InstanceGeneration,
+        child: &instance::Generation,
+        ancestor: &instance::Generation,
     ) -> bool {
         let mut cursor = self
             .instances
@@ -3749,19 +3718,19 @@ impl<'plan> Vm<'plan> {
 
     fn is_within_instance(
         &self,
-        candidate: &InstanceGeneration,
-        scope: &InstanceGeneration,
+        candidate: &instance::Generation,
+        scope: &instance::Generation,
     ) -> bool {
         candidate == scope || self.is_descendant_instance(candidate, scope)
     }
 
-    fn instance_has_descendants(&self, reference: &InstanceGeneration) -> bool {
+    fn instance_has_descendants(&self, reference: &instance::Generation) -> bool {
         self.instances.keys().any(|candidate| {
             candidate != reference && self.is_descendant_instance(candidate, reference)
         })
     }
 
-    fn closing_timers(&self, reference: &InstanceGeneration) -> Vec<(u8, Id)> {
+    fn closing_timers(&self, reference: &instance::Generation) -> Vec<(u8, Id)> {
         let Some(instance) = self.instances.get(reference) else {
             return Vec::new();
         };
@@ -3783,7 +3752,7 @@ impl<'plan> Vm<'plan> {
         ]
     }
 
-    fn arm_closing_deadlines(&mut self, reference: &InstanceGeneration, cause: Id) {
+    fn arm_closing_deadlines(&mut self, reference: &instance::Generation, cause: Id) {
         let Some(instance) = self.instances.get(reference) else {
             return;
         };
@@ -3815,14 +3784,14 @@ impl<'plan> Vm<'plan> {
     fn request_close(
         &mut self,
         journal: &mut dyn Journal,
-        reference: &InstanceGeneration,
+        reference: &instance::Generation,
         cause: Envelope,
         command: Option<Id>,
     ) -> Result<(), VmError> {
         if !self
             .instances
             .get(reference)
-            .is_some_and(|instance| matches!(instance.phase, InstancePhase::Open))
+            .is_some_and(|instance| matches!(instance.phase, instance::Phase::Open))
         {
             return Ok(());
         }
@@ -3862,11 +3831,11 @@ impl<'plan> Vm<'plan> {
     /// The first close request wins causally. A Graph request marks every live
     /// descendant, but reclamation remains inner-first: the parent cannot
     /// queue `l:stop` while a child bundle or child stop fact is outstanding.
-    fn activate_close(&mut self, reference: &InstanceGeneration, cause: Envelope) {
+    fn activate_close(&mut self, reference: &instance::Generation, cause: Envelope) {
         let closes_subtree = self.instances.get(reference).is_some_and(|instance| {
             self.plan.owners[instance.owner.index()].kind == OwnerKind::Graph
         });
-        let targets: Vec<InstanceGeneration> = self
+        let targets: Vec<instance::Generation> = self
             .instances
             .keys()
             .filter(|candidate| {
@@ -3883,7 +3852,7 @@ impl<'plan> Vm<'plan> {
                 .instances
                 .get(&target)
                 .and_then(|instance| match &instance.phase {
-                    InstancePhase::Closing { scope, .. }
+                    instance::Phase::Closing { scope, .. }
                         if self.is_within_instance(scope, reference) =>
                     {
                         Some(true)
@@ -3892,18 +3861,18 @@ impl<'plan> Vm<'plan> {
                 });
             if let Some(instance) = self.instances.get_mut(&target) {
                 match &mut instance.phase {
-                    InstancePhase::Open => {
-                        instance.phase = InstancePhase::Closing {
+                    instance::Phase::Open => {
+                        instance.phase = instance::Phase::Closing {
                             cause: cause.clone(),
                             scope: reference.clone(),
-                            stage: ClosingStage::Draining,
+                            stage: instance::ClosingStage::Draining,
                         };
                         self.closing.insert(target);
                     }
-                    InstancePhase::Closing { scope, .. } if widen == Some(true) => {
+                    instance::Phase::Closing { scope, .. } if widen == Some(true) => {
                         *scope = reference.clone();
                     }
-                    InstancePhase::Closing { .. } | InstancePhase::Stopping { .. } => {}
+                    instance::Phase::Closing { .. } | instance::Phase::Stopping { .. } => {}
                 }
             }
         }
@@ -3911,7 +3880,7 @@ impl<'plan> Vm<'plan> {
             queue.retain(|command| {
                 self.instances
                     .get(&command.target)
-                    .is_some_and(|instance| matches!(instance.phase, InstancePhase::Open))
+                    .is_some_and(|instance| matches!(instance.phase, instance::Phase::Open))
             });
         }
     }
@@ -3921,7 +3890,7 @@ impl<'plan> Vm<'plan> {
             return;
         }
         let mut stop_receivers = BTreeMap::new();
-        let mut ready: Vec<(usize, InstanceGeneration)> = self
+        let mut ready: Vec<(usize, instance::Generation)> = self
             .closing
             .iter()
             .filter_map(|reference| {
@@ -3931,7 +3900,7 @@ impl<'plan> Vm<'plan> {
             })
             .filter(|(reference, _)| {
                 let scope = match &self.instances[*reference].phase {
-                    InstancePhase::Closing { scope, .. } => scope,
+                    instance::Phase::Closing { scope, .. } => scope,
                     _ => return false,
                 };
                 !self.scope_has_work(scope)
@@ -3961,14 +3930,14 @@ impl<'plan> Vm<'plan> {
         }
     }
 
-    fn scope_has_work(&self, scope: &InstanceGeneration) -> bool {
+    fn scope_has_work(&self, scope: &instance::Generation) -> bool {
         self.instances.keys().any(|reference| {
             self.is_within_instance(reference, scope) && self.instance_has_direct_work(reference)
         })
     }
 
-    fn residualize_scope(&mut self, scope: &InstanceGeneration) {
-        let targets: Vec<(Slot, InstanceGeneration)> = self
+    fn residualize_scope(&mut self, scope: &instance::Generation) {
+        let targets: Vec<(Slot, instance::Generation)> = self
             .instances
             .iter()
             .filter(|(reference, _)| self.is_within_instance(reference, scope))
@@ -3987,7 +3956,7 @@ impl<'plan> Vm<'plan> {
         }
     }
 
-    fn begin_settlement(&mut self, scope: &InstanceGeneration) {
+    fn begin_settlement(&mut self, scope: &instance::Generation) {
         self.residualize_scope(scope);
         let targets: Vec<_> = self
             .instances
@@ -3997,9 +3966,9 @@ impl<'plan> Vm<'plan> {
             .collect();
         for target in targets {
             if let Some(instance) = self.instances.get_mut(&target)
-                && let InstancePhase::Closing { stage, .. } = &mut instance.phase
+                && let instance::Phase::Closing { stage, .. } = &mut instance.phase
             {
-                *stage = ClosingStage::Settling;
+                *stage = instance::ClosingStage::Settling;
             }
         }
     }
@@ -4008,7 +3977,7 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
-        reference: &InstanceGeneration,
+        reference: &instance::Generation,
         cause: Id,
         deadline: ClosingDeadline,
     ) -> Result<(), VmError> {
@@ -4016,20 +3985,20 @@ impl<'plan> Vm<'plan> {
             .instances
             .get(reference)
             .and_then(|instance| match &instance.phase {
-                InstancePhase::Closing {
+                instance::Phase::Closing {
                     cause: current_cause,
                     scope,
                     stage,
                 } if scope == reference && current_cause.meta().sys().id() == cause => Some(*stage),
-                InstancePhase::Open
-                | InstancePhase::Closing { .. }
-                | InstancePhase::Stopping { .. } => None,
+                instance::Phase::Open
+                | instance::Phase::Closing { .. }
+                | instance::Phase::Stopping { .. } => None,
             });
         let Some(stage) = current else {
             return Ok(());
         };
         match deadline {
-            ClosingDeadline::Drain if stage == ClosingStage::Draining => {
+            ClosingDeadline::Drain if stage == instance::ClosingStage::Draining => {
                 self.begin_settlement(reference);
                 let calls: Vec<CallId> = self
                     .pending
@@ -4180,17 +4149,17 @@ impl<'plan> Vm<'plan> {
         Ok(())
     }
 
-    fn begin_stop(&mut self, reference: &InstanceGeneration) {
+    fn begin_stop(&mut self, reference: &instance::Generation) {
         let Some(bundle) = self.instances.get_mut(reference) else {
             return;
         };
-        let InstancePhase::Closing { cause, scope, .. } = &bundle.phase else {
+        let instance::Phase::Closing { cause, scope, .. } = &bundle.phase else {
             return;
         };
         let cause = cause.clone();
         let scope = scope.clone();
         self.closing.remove(reference);
-        bundle.phase = InstancePhase::Stopping {
+        bundle.phase = instance::Phase::Stopping {
             cause: cause.clone(),
             scope,
         };
@@ -4309,7 +4278,7 @@ impl<'plan> Vm<'plan> {
                     &record.state_delta,
                 );
             }
-            if matches!(owner.instance.lifetime, InstanceLifetime::SinglePass) {
+            if matches!(owner.instance.lifetime, instance::Lifetime::SinglePass) {
                 self.request_close(journal, &work.instance, work.cause.clone(), None)?;
             }
         }
@@ -4346,7 +4315,7 @@ impl<'plan> Vm<'plan> {
                     continue;
                 }
                 let expected = journal
-                    .instance_ref_for_admission(reference.address())
+                    .instance_generation_for_admission(reference.address())
                     .map_err(VmError::Journal)?;
                 if expected == *reference {
                     ready.push((
@@ -4368,7 +4337,7 @@ impl<'plan> Vm<'plan> {
             let owner = waiting.candidate.owner;
             self.instances.insert(
                 reference.clone(),
-                Instance {
+                instance::Live {
                     owner,
                     parent: waiting.candidate.parent.clone(),
                     frames: waiting.candidate.frames,
@@ -4377,7 +4346,7 @@ impl<'plan> Vm<'plan> {
                     created_by: waiting.created_by.clone(),
                     last_activity: waiting.last_activity.clone(),
                     residual: Vec::new(),
-                    phase: InstancePhase::Open,
+                    phase: instance::Phase::Open,
                 },
             );
             self.lifecycle.push_back(LifecycleWork {
@@ -4602,7 +4571,7 @@ impl<'plan> Vm<'plan> {
     fn operator_work(
         &self,
         slot: Slot,
-        instance: &InstanceGeneration,
+        instance: &instance::Generation,
     ) -> Result<Option<OperatorWork>, VmError> {
         let Some(queue) = self.scheduler.mailboxes.queued(slot, instance) else {
             return Ok(None);
@@ -4675,7 +4644,7 @@ impl<'plan> Vm<'plan> {
                 let Some(trigger_port) = ports.iter().position(|port| port == &trigger.port) else {
                     continue;
                 };
-                let mut options: Vec<Vec<Delivery>> = Vec::with_capacity(ports.len());
+                let mut options: Vec<Vec<envelope::Delivery>> = Vec::with_capacity(ports.len());
                 for (port_index, port) in ports.iter().enumerate() {
                     let candidates = if port_index == trigger_port {
                         vec![trigger.clone()]
@@ -4705,7 +4674,7 @@ impl<'plan> Vm<'plan> {
                 // first predicate match for this presence-completing arrival.
                 let mut choice = vec![0usize; options.len()];
                 loop {
-                    let inputs: Vec<Delivery> = options
+                    let inputs: Vec<envelope::Delivery> = options
                         .iter()
                         .zip(&choice)
                         .map(|(candidates, index)| candidates[*index].clone())
@@ -4763,8 +4732,8 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         slot: Slot,
-        instance: &InstanceGeneration,
-        delivery: &Delivery,
+        instance: &instance::Generation,
+        delivery: &envelope::Delivery,
     ) -> Result<(), VmError> {
         let executor = HandlerExecutor::at(self.plan, self.graph_version, self.now);
         let state = self.state.cell_unchecked(self.plan.plan(), slot, instance);
@@ -4847,8 +4816,8 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
         slot: Slot,
-        instance: &InstanceGeneration,
-        delivery: &Delivery,
+        instance: &instance::Generation,
+        delivery: &envelope::Delivery,
     ) -> Result<(), VmError> {
         let planned = &self.plan.nodes[slot.index()];
         let NodeExecution::Connector(spec) = &planned.execution else {
@@ -4878,10 +4847,10 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         slot: Slot,
-        instance: &InstanceGeneration,
+        instance: &instance::Generation,
         activation: &node::HandlerActivation,
-        trigger: &Delivery,
-        inputs: &[Delivery],
+        trigger: &envelope::Delivery,
+        inputs: &[envelope::Delivery],
     ) -> Result<(), VmError> {
         let context = self.graph_context(trigger);
         if inputs
@@ -4976,8 +4945,8 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         slot: Slot,
-        instance: &InstanceGeneration,
-        delivery: &Delivery,
+        instance: &instance::Generation,
+        delivery: &envelope::Delivery,
     ) -> Result<(), VmError> {
         let executor = HandlerExecutor::at(self.plan, self.graph_version, self.now);
         let mut outcome = executor
@@ -5019,8 +4988,8 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         slot: Slot,
-        instance: &InstanceGeneration,
-        delivery: &Delivery,
+        instance: &instance::Generation,
+        delivery: &envelope::Delivery,
     ) -> Result<(), VmError> {
         let planned = &self.plan.nodes[slot.index()];
         let NodeExecution::Connector(spec) = &planned.execution else {
@@ -5083,12 +5052,12 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         slot: Slot,
-        instance: &InstanceGeneration,
-        delivery: &Delivery,
+        instance: &instance::Generation,
+        delivery: &envelope::Delivery,
     ) -> Result<(), VmError> {
         let planned = &self.plan.nodes[slot.index()];
         let record = crate::journal::TransactionRecord {
-            owner_path: OwnerPath::from(&planned.path),
+            owner_path: node::OwnerPath::from(&planned.path),
             instance: instance.clone(),
             parent_instance: None,
             close_scope: None,
@@ -5132,8 +5101,8 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
         slot: Slot,
-        instance: &InstanceGeneration,
-        delivery: &Delivery,
+        instance: &instance::Generation,
+        delivery: &envelope::Delivery,
     ) -> Result<(), VmError> {
         let planned = &self.plan.nodes[slot.index()];
         let NodeExecution::Connector(spec) = &planned.execution else {
@@ -5157,7 +5126,7 @@ impl<'plan> Vm<'plan> {
             })?;
         let settings =
             self.resolve_invocation_settings(instance, spec, &planned.path, &delivery.envelope)?;
-        let selected = self.select_session_ref(spec, &delivery.envelope, &settings)?;
+        let selected = self.select_session_id(spec, &delivery.envelope, &settings)?;
         if let Some(session_id) = selected {
             return if self.sessions.get(&session_id).is_some_and(|session| {
                 session.slot == slot && session.instance == *instance && session.opened
@@ -5226,7 +5195,7 @@ impl<'plan> Vm<'plan> {
         }
     }
 
-    fn select_session_ref(
+    fn select_session_id(
         &self,
         spec: &crate::plan::ConnectorSpec,
         envelope: &Envelope,
@@ -5272,8 +5241,8 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
         slot: Slot,
-        instance: &InstanceGeneration,
-        delivery: &Delivery,
+        instance: &instance::Generation,
+        delivery: &envelope::Delivery,
         settings: &BTreeMap<String, crate::value::Value>,
     ) -> Result<(), VmError> {
         let planned = &self.plan.nodes[slot.index()];
@@ -5462,8 +5431,8 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         slot: Slot,
-        instance: &InstanceGeneration,
-        delivery: &Delivery,
+        instance: &instance::Generation,
+        delivery: &envelope::Delivery,
         completion: &Completion,
     ) -> Result<(), VmError> {
         let executor = HandlerExecutor::at(self.plan, self.graph_version, self.now);
@@ -5485,8 +5454,8 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         slot: Slot,
-        instance: &InstanceGeneration,
-        delivery: &Delivery,
+        instance: &instance::Generation,
+        delivery: &envelope::Delivery,
     ) -> Result<(), VmError> {
         self.discard_inbound_call_response(journal, slot, instance, delivery)
     }
@@ -5501,8 +5470,8 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
         slot: Slot,
-        instance: &InstanceGeneration,
-        delivery: &Delivery,
+        instance: &instance::Generation,
+        delivery: &envelope::Delivery,
     ) -> Result<(), VmError> {
         // A recovered mailbox can be ready after its retained budget is
         // already due. Settle that exact delivery before handing any intent
@@ -5595,8 +5564,8 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         slot: Slot,
-        instance: &InstanceGeneration,
-        delivery: &Delivery,
+        instance: &instance::Generation,
+        delivery: &envelope::Delivery,
         intent: Intent,
     ) -> Result<(), VmError> {
         let attempt = self.retry_attempt(instance, delivery);
@@ -5654,7 +5623,7 @@ impl<'plan> Vm<'plan> {
         &self,
         journal: &dyn InstanceAdmissions,
         slot: Slot,
-        source_instance: &InstanceGeneration,
+        source_instance: &instance::Generation,
         record: &crate::runtime::TransactionRecord,
     ) -> Result<PreparedEmissions, VmError> {
         let mut prepared = Vec::with_capacity(record.emissions.len());
@@ -5719,9 +5688,9 @@ impl<'plan> Vm<'plan> {
         &self,
         journal: &dyn InstanceAdmissions,
         from: &EdgeEnd,
-        source_instance: Option<&InstanceGeneration>,
+        source_instance: Option<&instance::Generation>,
         envelope: &Envelope,
-        candidates: &mut BTreeMap<InstanceGeneration, InstanceCandidate>,
+        candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
     ) -> Result<Vec<PreparedEdge>, VmError> {
         if self.graph_loops.is_some() {
             return self.prepare_graph_routes(
@@ -5794,8 +5763,8 @@ impl<'plan> Vm<'plan> {
     /// different instance and make the recorded route a lie.
     fn prepare_direct_inbound_call_response_target(
         &self,
-        edge_scope: OwnerSlot,
-        source_instance: Option<&InstanceGeneration>,
+        edge_scope: node::OwnerSlot,
+        source_instance: Option<&instance::Generation>,
         target: Slot,
         envelope: &Envelope,
     ) -> Result<Option<PreparedTarget>, VmError> {
@@ -5857,7 +5826,7 @@ impl<'plan> Vm<'plan> {
                 reason: "an open inbound Call has an instance chain inconsistent with its owner",
             });
         }
-        let chain: Vec<InstanceGeneration> = selected
+        let chain: Vec<instance::Generation> = selected
             .into_iter()
             .map(|(_, reference)| reference)
             .collect();
@@ -5976,11 +5945,11 @@ impl<'plan> Vm<'plan> {
     fn prepare_target(
         &self,
         journal: &dyn InstanceAdmissions,
-        scope: OwnerSlot,
-        source_instance: Option<&InstanceGeneration>,
+        scope: node::OwnerSlot,
+        source_instance: Option<&instance::Generation>,
         target: Slot,
         envelope: &Envelope,
-        candidates: &mut BTreeMap<InstanceGeneration, InstanceCandidate>,
+        candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
     ) -> Result<PreparedTarget, VmError> {
         let target_owner = self.plan.nodes[target.index()].owner;
         self.prepare_owner_target(
@@ -5996,11 +5965,11 @@ impl<'plan> Vm<'plan> {
     fn prepare_owner_target(
         &self,
         journal: &dyn InstanceAdmissions,
-        scope: OwnerSlot,
-        source_instance: Option<&InstanceGeneration>,
-        target_owner: OwnerSlot,
+        scope: node::OwnerSlot,
+        source_instance: Option<&instance::Generation>,
+        target_owner: node::OwnerSlot,
         envelope: &Envelope,
-        candidates: &mut BTreeMap<InstanceGeneration, InstanceCandidate>,
+        candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
     ) -> Result<PreparedTarget, VmError> {
         let refusal = |reason| match self.plan.owners[target_owner.index()].kind {
             OwnerKind::Node(slot) => VmError::PlanInvariant {
@@ -6056,7 +6025,7 @@ impl<'plan> Vm<'plan> {
         })
     }
 
-    fn owner_chain(&self, owner: OwnerSlot) -> Result<&[OwnerSlot], VmError> {
+    fn owner_chain(&self, owner: node::OwnerSlot) -> Result<&[node::OwnerSlot], VmError> {
         self.owner_chains
             .get(owner.index())
             .and_then(Option::as_deref)
@@ -6069,9 +6038,9 @@ impl<'plan> Vm<'plan> {
 
     fn source_instance_for_owner(
         &self,
-        source: Option<&InstanceGeneration>,
-        owner: OwnerSlot,
-    ) -> Result<Option<InstanceGeneration>, VmError> {
+        source: Option<&instance::Generation>,
+        owner: node::OwnerSlot,
+    ) -> Result<Option<instance::Generation>, VmError> {
         let mut cursor = source.cloned();
         while let Some(reference) = cursor {
             let Some(instance) = self.instances.get(&reference) else {
@@ -6091,18 +6060,18 @@ impl<'plan> Vm<'plan> {
 
     fn closing_generation_for_internal_route(
         &self,
-        address: &InstanceIdentity,
-        source: Option<&InstanceGeneration>,
-        lifetime: &InstanceLifetime,
-    ) -> Option<InstanceGeneration> {
-        if self.closing.is_empty() || matches!(lifetime, InstanceLifetime::SinglePass) {
+        address: &instance::Identity,
+        source: Option<&instance::Generation>,
+        lifetime: &instance::Lifetime,
+    ) -> Option<instance::Generation> {
+        if self.closing.is_empty() || matches!(lifetime, instance::Lifetime::SinglePass) {
             return None;
         }
-        let first = InstanceGeneration::new(address.clone(), 0);
-        let last = InstanceGeneration::new(address.clone(), u64::MAX);
+        let first = instance::Generation::new(address.clone(), 0);
+        let last = instance::Generation::new(address.clone(), u64::MAX);
         let reference = self.closing.range(first..=last).next_back()?;
         let instance = self.instances.get(reference)?;
-        let InstancePhase::Closing { scope, .. } = &instance.phase else {
+        let instance::Phase::Closing { scope, .. } = &instance.phase else {
             return None;
         };
         source
@@ -6113,12 +6082,12 @@ impl<'plan> Vm<'plan> {
     fn candidate_owner(
         &self,
         journal: &dyn InstanceAdmissions,
-        owner_slot: OwnerSlot,
-        parent: Option<&InstanceGeneration>,
-        source: Option<&InstanceGeneration>,
+        owner_slot: node::OwnerSlot,
+        parent: Option<&instance::Generation>,
+        source: Option<&instance::Generation>,
         envelope: &Envelope,
-        candidates: &mut BTreeMap<InstanceGeneration, InstanceCandidate>,
-    ) -> Result<InstanceGeneration, VmError> {
+        candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
+    ) -> Result<instance::Generation, VmError> {
         let owner = self
             .plan
             .owner(owner_slot)
@@ -6135,20 +6104,20 @@ impl<'plan> Vm<'plan> {
         // falls through to the journal-derived successor generation for
         // idle/fixed/single-pass.
         if owner.instance.key.is_none()
-            && !matches!(owner.instance.lifetime, InstanceLifetime::Tumbling(_))
+            && !matches!(owner.instance.lifetime, instance::Lifetime::Tumbling(_))
         {
             if let Some((reference, instance)) = self.instances.iter().find(|(_, instance)| {
                 instance.owner == owner_slot && instance.parent.as_ref() == parent
             }) {
                 let accepts = match &instance.phase {
-                    InstancePhase::Open => {
-                        !matches!(owner.instance.lifetime, InstanceLifetime::SinglePass)
+                    instance::Phase::Open => {
+                        !matches!(owner.instance.lifetime, instance::Lifetime::SinglePass)
                     }
-                    InstancePhase::Closing { scope, .. } => {
+                    instance::Phase::Closing { scope, .. } => {
                         source.is_some_and(|source| self.is_within_instance(source, scope))
-                            && !matches!(owner.instance.lifetime, InstanceLifetime::SinglePass)
+                            && !matches!(owner.instance.lifetime, instance::Lifetime::SinglePass)
                     }
-                    InstancePhase::Stopping { .. } => false,
+                    instance::Phase::Stopping { .. } => false,
                 };
                 if accepts {
                     return Ok(reference.clone());
@@ -6159,7 +6128,7 @@ impl<'plan> Vm<'plan> {
             if let Some(waiting) = self.waiting.values().find(|waiting| {
                 waiting.candidate.owner == owner_slot && waiting.candidate.parent.as_ref() == parent
             }) {
-                if matches!(owner.instance.lifetime, InstanceLifetime::SinglePass)
+                if matches!(owner.instance.lifetime, instance::Lifetime::SinglePass)
                     && waiting.candidate.single_pass_root != Some(envelope.meta().sys().id())
                 {
                     return Err(VmError::InstanceClosing {
@@ -6171,7 +6140,7 @@ impl<'plan> Vm<'plan> {
             if let Some(candidate) = candidates.values().find(|candidate| {
                 candidate.owner == owner_slot && candidate.parent.as_ref() == parent
             }) {
-                if matches!(owner.instance.lifetime, InstanceLifetime::SinglePass)
+                if matches!(owner.instance.lifetime, instance::Lifetime::SinglePass)
                     && candidate.single_pass_root != Some(envelope.meta().sys().id())
                 {
                     return Err(VmError::InstanceClosing {
@@ -6216,7 +6185,7 @@ impl<'plan> Vm<'plan> {
                     &data,
                 )
                 .map_err(VmError::Fault)?;
-                frames.push(InstanceSegment::SelectedKey {
+                frames.push(instance::Segment::SelectedKey {
                     scope: owner.path.clone(),
                     ty: key.ty.clone(),
                     value: value.clone(),
@@ -6225,7 +6194,7 @@ impl<'plan> Vm<'plan> {
             }
         };
         let time_box_start = match owner.instance.lifetime {
-            InstanceLifetime::Tumbling(every) => {
+            instance::Lifetime::Tumbling(every) => {
                 let start = self
                     .now
                     .div_euclid(every)
@@ -6235,7 +6204,7 @@ impl<'plan> Vm<'plan> {
                             .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                         reason: "a validated tumbling duration overflowed its epoch box",
                     })?;
-                frames.push(InstanceSegment::ProcessingTimeBox {
+                frames.push(instance::Segment::ProcessingTimeBox {
                     scope: owner.path.clone(),
                     start_ns: start,
                 });
@@ -6243,7 +6212,7 @@ impl<'plan> Vm<'plan> {
             }
             _ => None,
         };
-        let address = InstanceIdentity::new(&owner.path, &frames)
+        let address = instance::Identity::new(&owner.path, &frames)
             .map_err(|error| VmError::Fault(Fault::Unrepresentable(error.to_string())))?;
         // The journal normally selects the current generation. Only Closing
         // is different: external traffic belongs to the reserved successor,
@@ -6256,7 +6225,7 @@ impl<'plan> Vm<'plan> {
             return Ok(reference);
         }
         let reference = journal
-            .instance_ref_for_admission(&address)
+            .instance_generation_for_admission(&address)
             .map_err(VmError::Journal)?;
         if let Some(start_ns) = time_box_start
             && reference.generation() != 0
@@ -6268,14 +6237,14 @@ impl<'plan> Vm<'plan> {
         }
         if let Some(instance) = self.instances.get(&reference) {
             let accepts = match &instance.phase {
-                InstancePhase::Open => {
-                    !matches!(owner.instance.lifetime, InstanceLifetime::SinglePass)
+                instance::Phase::Open => {
+                    !matches!(owner.instance.lifetime, instance::Lifetime::SinglePass)
                 }
-                InstancePhase::Closing { scope, .. } => {
+                instance::Phase::Closing { scope, .. } => {
                     source.is_some_and(|source| self.is_within_instance(source, scope))
-                        && !matches!(owner.instance.lifetime, InstanceLifetime::SinglePass)
+                        && !matches!(owner.instance.lifetime, instance::Lifetime::SinglePass)
                 }
-                InstancePhase::Stopping { .. } => false,
+                instance::Phase::Stopping { .. } => false,
             };
             if accepts {
                 return Ok(reference);
@@ -6285,7 +6254,7 @@ impl<'plan> Vm<'plan> {
             });
         }
         if let Some(waiting) = self.waiting.get(&reference) {
-            if matches!(owner.instance.lifetime, InstanceLifetime::SinglePass)
+            if matches!(owner.instance.lifetime, instance::Lifetime::SinglePass)
                 && waiting.candidate.single_pass_root != Some(envelope.meta().sys().id())
             {
                 return Err(VmError::InstanceClosing {
@@ -6295,7 +6264,7 @@ impl<'plan> Vm<'plan> {
             return Ok(waiting.candidate.reference.clone());
         }
         if let Some(candidate) = candidates.get(&reference) {
-            if matches!(owner.instance.lifetime, InstanceLifetime::SinglePass)
+            if matches!(owner.instance.lifetime, instance::Lifetime::SinglePass)
                 && candidate.single_pass_root != Some(envelope.meta().sys().id())
             {
                 return Err(VmError::InstanceClosing {
@@ -6318,7 +6287,7 @@ impl<'plan> Vm<'plan> {
             frames,
             values,
             settings,
-            single_pass_root: matches!(owner.instance.lifetime, InstanceLifetime::SinglePass)
+            single_pass_root: matches!(owner.instance.lifetime, instance::Lifetime::SinglePass)
                 .then_some(envelope.meta().sys().id()),
         };
         candidates.insert(reference.clone(), candidate);
@@ -6327,7 +6296,7 @@ impl<'plan> Vm<'plan> {
 
     fn evaluate_owner_values(
         &self,
-        owner_slot: OwnerSlot,
+        owner_slot: node::OwnerSlot,
         inherited: &BTreeMap<String, crate::value::Value>,
         selected_key: Option<&crate::value::Value>,
         envelope: &Envelope,
@@ -6373,7 +6342,7 @@ impl<'plan> Vm<'plan> {
     #[allow(clippy::too_many_arguments)]
     fn evaluate_owner_value_at(
         &self,
-        owner_slot: OwnerSlot,
+        owner_slot: node::OwnerSlot,
         index: usize,
         inherited: &BTreeMap<String, crate::value::Value>,
         selected_key: Option<&crate::value::Value>,
@@ -6464,7 +6433,7 @@ impl<'plan> Vm<'plan> {
 
     fn evaluate_instance_settings(
         &self,
-        owner_slot: OwnerSlot,
+        owner_slot: node::OwnerSlot,
         values: &BTreeMap<String, crate::value::Value>,
         selected_key: Option<&crate::value::Value>,
         envelope: &Envelope,
@@ -6499,7 +6468,7 @@ impl<'plan> Vm<'plan> {
 
     fn resolve_invocation_settings(
         &self,
-        instance: &InstanceGeneration,
+        instance: &instance::Generation,
         spec: &crate::plan::ConnectorSpec,
         node: &node::Path,
         envelope: &Envelope,
@@ -6590,7 +6559,7 @@ impl<'plan> Vm<'plan> {
     where
         PreparedEdge: 'a,
     {
-        let mut needed: BTreeMap<(Slot, InstanceGeneration), usize> = BTreeMap::new();
+        let mut needed: BTreeMap<(Slot, instance::Generation), usize> = BTreeMap::new();
         let mut loop_admissions = 0usize;
         let mut loop_owner = None;
         for routes in routes {
@@ -6662,7 +6631,7 @@ impl<'plan> Vm<'plan> {
     fn route_emissions(
         &mut self,
         slot: Slot,
-        source_instance: &InstanceGeneration,
+        source_instance: &instance::Generation,
         prepared: PreparedEmissions,
     ) {
         let PreparedEmissions {
@@ -6697,9 +6666,9 @@ impl<'plan> Vm<'plan> {
     fn route_prepared(
         &mut self,
         routes: Vec<PreparedEdge>,
-        candidates: &BTreeMap<InstanceGeneration, InstanceCandidate>,
+        candidates: &BTreeMap<instance::Generation, InstanceCandidate>,
         envelope: &Envelope,
-        source_instance: Option<&InstanceGeneration>,
+        source_instance: Option<&instance::Generation>,
     ) -> usize {
         let claimed = routes.len();
         for route in routes {
@@ -6760,7 +6729,7 @@ impl<'plan> Vm<'plan> {
     fn install_target(
         &mut self,
         target: &PreparedTarget,
-        candidates: &BTreeMap<InstanceGeneration, InstanceCandidate>,
+        candidates: &BTreeMap<instance::Generation, InstanceCandidate>,
         envelope: &Envelope,
     ) {
         let deadlines =
@@ -6810,29 +6779,31 @@ impl<'plan> Vm<'plan> {
                         self.instances
                             .get(parent)
                             .and_then(|instance| match &instance.phase {
-                                InstancePhase::Open => None,
-                                InstancePhase::Closing {
+                                instance::Phase::Open => None,
+                                instance::Phase::Closing {
                                     cause,
                                     scope,
                                     stage,
                                 } => Some((cause.clone(), scope.clone(), *stage)),
-                                InstancePhase::Stopping { cause, scope } => {
-                                    Some((cause.clone(), scope.clone(), ClosingStage::Settling))
-                                }
+                                instance::Phase::Stopping { cause, scope } => Some((
+                                    cause.clone(),
+                                    scope.clone(),
+                                    instance::ClosingStage::Settling,
+                                )),
                             })
                     });
                     let phase =
-                        inherited_close.map_or(InstancePhase::Open, |(cause, scope, stage)| {
-                            InstancePhase::Closing {
+                        inherited_close.map_or(instance::Phase::Open, |(cause, scope, stage)| {
+                            instance::Phase::Closing {
                                 cause,
                                 scope,
                                 stage,
                             }
                         });
-                    let is_closing = matches!(phase, InstancePhase::Closing { .. });
+                    let is_closing = matches!(phase, instance::Phase::Closing { .. });
                     self.instances.insert(
                         reference.clone(),
-                        Instance {
+                        instance::Live {
                             owner: candidate.owner,
                             parent: candidate.parent.clone(),
                             frames: candidate.frames.clone(),

@@ -1,7 +1,8 @@
 use super::{Batch, CloseReason, Fact, Packet, Pin};
+use crate::canonical;
 use crate::canonical_cbor::Value as Cbor;
 use crate::envelope::{Envelope, Id};
-use crate::identity::encoding::canonical_value;
+
 use alloc::collections::BTreeMap;
 use alloc::string::ToString;
 use alloc::vec;
@@ -18,7 +19,7 @@ pub(super) fn causal_pin(pin: &Pin) -> Cbor {
             pin.settings
                 .iter()
                 .map(|(name, value)| {
-                    Cbor::Array(vec![Cbor::Text(name.clone()), canonical_value(value)])
+                    Cbor::Array(vec![Cbor::Text(name.clone()), canonical::value(value)])
                 })
                 .collect(),
         ),

@@ -3,9 +3,10 @@
 //! handler may still feed it, including through an intermediate Graph.
 
 use super::*;
+use crate::instance;
 
 impl Vm<'_> {
-    pub(super) fn pending_stop_receivers(&self, scope: &InstanceGeneration) -> BTreeSet<Slot> {
+    pub(super) fn pending_stop_receivers(&self, scope: &instance::Generation) -> BTreeSet<Slot> {
         let Some(scope_owner) = self.instances.get(scope).map(|instance| instance.owner) else {
             return BTreeSet::new();
         };

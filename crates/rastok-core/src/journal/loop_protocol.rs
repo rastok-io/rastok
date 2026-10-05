@@ -3,7 +3,8 @@
 
 use super::LoopRunId;
 use crate::envelope::{Envelope, Id};
-use crate::identity::InstanceGeneration;
+use crate::instance;
+
 use crate::node::Port;
 use alloc::vec::Vec;
 
@@ -139,7 +140,7 @@ pub enum Fact {
         /// Derived run identity.
         run: LoopRunId,
         /// Exact owner generation.
-        instance: InstanceGeneration,
+        instance: instance::Generation,
         /// The admission disambiguating sibling deliveries of one origin.
         opening: OpeningAdmissionRef,
         /// The host input to which every recurrence returns.
@@ -282,7 +283,7 @@ const ADMISSION: u8 = 0x06;
 
 /// `rastok.loop-run.r2`: instance plus the exact opening admission.
 #[must_use]
-pub fn run_ref(instance: &InstanceGeneration, opening: &OpeningAdmissionRef) -> LoopRunId {
+pub fn run_ref(instance: &instance::Generation, opening: &OpeningAdmissionRef) -> LoopRunId {
     let (tag, reference, port) = match opening {
         OpeningAdmissionRef::Ingress { inbound, port } => (1, *inbound, port.name().as_bytes()),
         OpeningAdmissionRef::Delivery(delivery) => (2, *delivery, &[][..]),
@@ -333,13 +334,12 @@ pub fn admission_ref(run: LoopRunId, iteration: u64, command: CommandId) -> Id {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::InstanceIdentity;
-    use crate::plan::OwnerPath;
+    use crate::node;
 
     #[test]
     fn sibling_deliveries_of_one_origin_open_distinct_runs() {
-        let owner = OwnerPath::new(["loop"]).unwrap();
-        let instance = InstanceGeneration::new(InstanceIdentity::singleton(&owner), 0);
+        let owner = node::OwnerPath::new(["loop"]).unwrap();
+        let instance = instance::Generation::new(instance::Identity::singleton(&owner), 0);
         let envelope = Id::derive(1, &[b"same-origin"]);
         let left =
             OpeningAdmissionRef::Delivery(super::super::ids::delivery_id("left>loop.in", envelope));
@@ -375,7 +375,7 @@ mod tests {
                 ))
             );
         }
-        let successor = InstanceGeneration::new(instance.address().clone(), 1);
+        let successor = instance::Generation::new(instance.address().clone(), 1);
         assert_ne!(run_ref(&instance, &left), run_ref(&successor, &left));
         assert_eq!(run_ref(&instance, &left), refs[0]);
     }

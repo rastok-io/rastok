@@ -13,10 +13,11 @@ use crate::datatype::{
     DataType, EnumType, StructType, TaggedCase, TaggedUnionType, TypeError, TypeField,
 };
 use crate::envelope::{self, Envelope};
-use crate::identity::InstanceGeneration;
+use crate::instance;
+
 use crate::journal::{CloseVerdict, Closure, Journal};
 use crate::node;
-use crate::plan::OwnerSlot;
+
 use alloc::boxed::Box;
 use alloc::collections::{BTreeSet, VecDeque};
 use alloc::string::String;
@@ -1906,7 +1907,7 @@ pub enum DatedPayload {
         /// id.
         delivery: envelope::Id,
         /// Exact connector instance owning the mailbox/call obligation.
-        instance: InstanceGeneration,
+        instance: instance::Generation,
     },
     /// An admitted inbound Call reached the request deadline published by
     /// its Connector contract. The Driver owns the protocol-side timeout
@@ -1915,7 +1916,7 @@ pub enum DatedPayload {
         /// Stable reference of the admitted root Call.
         call_id: InboundCallId,
         /// Exact source generation retaining the request.
-        instance: InstanceGeneration,
+        instance: instance::Generation,
     },
     /// One retained join candidate reached its `within` bound. The full
     /// delivery reference makes a consumed candidate's stale event harmless.
@@ -1927,16 +1928,16 @@ pub enum DatedPayload {
         /// Envelope-id half of the buffered-delivery reference.
         delivery: envelope::Id,
         /// Exact Operator generation that retained it.
-        instance: InstanceGeneration,
+        instance: instance::Generation,
     },
     /// One committed Loop continuation reached its re-admission date. The
     /// journal fold remains authoritative for the state, ordinal and fuel;
     /// these fields only identify the exact obligation to re-check.
     LoopDelay {
         /// Graph owner carrying the Loop aspect.
-        owner: OwnerSlot,
+        owner: node::OwnerSlot,
         /// Exact generation in which the continuation was selected.
-        instance: InstanceGeneration,
+        instance: instance::Generation,
         /// Durable Loop run whose fold must still be open.
         run: crate::journal::LoopRunId,
         /// Ordinal of the manager-produced state awaiting admission.
@@ -1947,7 +1948,7 @@ pub enum DatedPayload {
     /// Original closure-based eligibility, on the same dated scheduler as Loop.
     RetryDelay {
         /// Exact generation retaining the operation.
-        instance: InstanceGeneration,
+        instance: instance::Generation,
         /// Predecessor whose winning closure armed this deadline.
         attempt: crate::journal::retry_protocol::AttemptId,
         /// Following admission reference (timer kind 5).
@@ -1959,9 +1960,9 @@ pub enum DatedPayload {
     /// `l:start`.
     InstanceLifetime {
         /// Plan owner whose policy armed the event.
-        owner: OwnerSlot,
+        owner: node::OwnerSlot,
         /// Exact generation whose deadline is being observed.
-        instance: InstanceGeneration,
+        instance: instance::Generation,
         /// Envelope whose arrival armed this deadline and causes `l:stop`.
         cause: envelope::Id,
         /// Which profile determines the stale-event rule.
@@ -1970,7 +1971,7 @@ pub enum DatedPayload {
     /// One phase boundary of the explicit bounded Closing protocol.
     InstanceClosing {
         /// Root generation whose policy owns the whole closing subtree.
-        instance: InstanceGeneration,
+        instance: instance::Generation,
         /// Envelope that won the close request.
         cause: envelope::Id,
         /// Drain or settlement deadline.

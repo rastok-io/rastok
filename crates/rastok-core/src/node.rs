@@ -92,6 +92,100 @@ impl fmt::Display for Path {
     }
 }
 
+/// Root-relative lexical owner path. The root App Graph is the empty path;
+/// every nested Graph or Node appends one non-empty segment. This differs
+/// deliberately from [`Path`], whose empty form is never a Node.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct OwnerPath(Vec<String>);
+
+impl OwnerPath {
+    /// The root App Graph path.
+    #[must_use]
+    pub const fn root() -> Self {
+        Self(Vec::new())
+    }
+
+    /// Builds a root-relative owner path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidName`] when a segment is empty or contains `.`.
+    pub fn new<I, S>(segments: I) -> Result<Self, InvalidName>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let segments: Vec<String> = segments.into_iter().map(Into::into).collect();
+        if segments.is_empty() {
+            return Ok(Self::root());
+        }
+        Path::new(segments.clone())?;
+        Ok(Self(segments))
+    }
+
+    /// The path segments, outermost first.
+    #[must_use]
+    pub fn segments(&self) -> &[String] {
+        &self.0
+    }
+
+    /// Whether this is the root App Graph.
+    #[must_use]
+    pub fn is_root(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Enclosing lexical Graph path. The root has no parent.
+    #[must_use]
+    pub fn parent(&self) -> Option<Self> {
+        (!self.0.is_empty()).then(|| Self(self.0[..self.0.len() - 1].to_vec()))
+    }
+
+    /// Deepest lexical path shared by both owners.
+    #[must_use]
+    pub fn common_ancestor(&self, other: &Self) -> Self {
+        let length = self
+            .0
+            .iter()
+            .zip(&other.0)
+            .take_while(|(left, right)| left == right)
+            .count();
+        Self(self.0[..length].to_vec())
+    }
+}
+
+impl From<&Path> for OwnerPath {
+    fn from(path: &Path) -> Self {
+        Self(path.segments().to_vec())
+    }
+}
+
+impl fmt::Display for OwnerPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0.join("."))
+    }
+}
+
+/// Compile-time resolved owner reference. Like [`crate::plan::Slot`], the freely
+/// constructible value carries no validity claim until it sits in a
+/// [`crate::plan::ValidatedExecutionPlan`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct OwnerSlot(u32);
+
+impl OwnerSlot {
+    /// Wraps an owner-table index.
+    #[must_use]
+    pub const fn new(index: u32) -> Self {
+        Self(index)
+    }
+
+    /// The index inside [`crate::plan::ExecutionPlan::owners`].
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 /// Named node endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Port {

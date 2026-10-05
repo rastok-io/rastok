@@ -20,7 +20,7 @@ use crate::schema_annotation::{
 use super::type_resolution::ResolvedPortTable;
 use super::{
     DispatchStep, EdgeEnd, Emission, Endpoint, EndpointOwner, ExecutionPlan, Handler, LoopCommand,
-    LoopCommandKind, OwnerKind, OwnerSlot, RouteDestination, RouteSelection, Slot,
+    LoopCommandKind, OwnerKind, RouteDestination, RouteSelection, Slot,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,7 +33,7 @@ pub(super) struct ResolutionError {
 enum PortKey {
     Boundary(node::Port),
     Node(Slot, node::Port),
-    Graph(OwnerSlot, node::Port),
+    Graph(node::OwnerSlot, node::Port),
 }
 
 #[derive(Debug, Clone)]
@@ -61,7 +61,7 @@ struct VarState {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ValueKey {
-    owner: OwnerSlot,
+    owner: node::OwnerSlot,
     name: String,
 }
 
@@ -123,7 +123,7 @@ impl<'a> Solver<'a> {
             if owner.path.is_root() || owner.kind != OwnerKind::Graph {
                 continue;
             }
-            let slot = OwnerSlot::new(u32::try_from(index).unwrap_or(u32::MAX));
+            let slot = node::OwnerSlot::new(u32::try_from(index).unwrap_or(u32::MAX));
             for port in &owner.ports {
                 let Some(ty) = &port.ty else {
                     continue;
@@ -162,7 +162,7 @@ impl<'a> Solver<'a> {
         }
         let mut values = BTreeMap::new();
         for (index, owner) in plan.owners.iter().enumerate() {
-            let owner_slot = OwnerSlot::new(u32::try_from(index).unwrap_or(u32::MAX));
+            let owner_slot = node::OwnerSlot::new(u32::try_from(index).unwrap_or(u32::MAX));
             for value in &owner.vals {
                 let key = ValueKey {
                     owner: owner_slot,
@@ -374,7 +374,7 @@ impl<'a> Solver<'a> {
             let Some(expiry) = owner.loop_spec().and_then(|spec| spec.expired.as_ref()) else {
                 continue;
             };
-            let owner_slot = OwnerSlot::new(u32::try_from(index).unwrap_or(u32::MAX));
+            let owner_slot = node::OwnerSlot::new(u32::try_from(index).unwrap_or(u32::MAX));
             let input = self.loop_input_key(owner_slot)?;
             let expired = self.owner_port_key(owner_slot, expiry.port.name())?;
             let wrapped = nest(
@@ -567,7 +567,7 @@ impl<'a> Solver<'a> {
         producers: &mut BTreeMap<ValueKey, Vec<AnnotationTable>>,
     ) -> Result<(), ResolutionError> {
         for index in 0..self.plan.owners.len() {
-            let owner_slot = OwnerSlot::new(u32::try_from(index).unwrap_or(u32::MAX));
+            let owner_slot = node::OwnerSlot::new(u32::try_from(index).unwrap_or(u32::MAX));
             let inputs = self.owner_inputs(owner_slot);
             if inputs.is_empty() {
                 self.derive_owner_values_for_input(owner_slot, None, producers)?;
@@ -582,7 +582,7 @@ impl<'a> Solver<'a> {
 
     fn derive_owner_values_for_input(
         &self,
-        owner: OwnerSlot,
+        owner: node::OwnerSlot,
         input: Option<&PortState>,
         producers: &mut BTreeMap<ValueKey, Vec<AnnotationTable>>,
     ) -> Result<(), ResolutionError> {
@@ -606,7 +606,7 @@ impl<'a> Solver<'a> {
         Ok(())
     }
 
-    fn owner_inputs(&self, owner: OwnerSlot) -> Vec<&PortState> {
+    fn owner_inputs(&self, owner: node::OwnerSlot) -> Vec<&PortState> {
         match self.plan.owners[owner.index()].kind {
             OwnerKind::Node(slot) => self
                 .ports
@@ -626,7 +626,7 @@ impl<'a> Solver<'a> {
 
     fn owner_environment(
         &self,
-        owner: OwnerSlot,
+        owner: node::OwnerSlot,
         input: Option<&PortState>,
     ) -> Result<Environment, ResolutionError> {
         let mut environment = Environment::new()
@@ -655,7 +655,7 @@ impl<'a> Solver<'a> {
 
     fn instance_key_policy(
         &self,
-        owner: OwnerSlot,
+        owner: node::OwnerSlot,
     ) -> Result<Option<(DataType, AnnotationTable)>, ResolutionError> {
         let Some(key) = &self.plan.owners[owner.index()].instance.key else {
             return Ok(None);
@@ -849,7 +849,7 @@ impl<'a> Solver<'a> {
         Ok(key)
     }
 
-    fn loop_owner(&self, handler: &Handler) -> Option<OwnerSlot> {
+    fn loop_owner(&self, handler: &Handler) -> Option<node::OwnerSlot> {
         if matches!(handler.activation, node::HandlerActivation::Lifecycle(_)) {
             return None;
         }
@@ -863,7 +863,7 @@ impl<'a> Solver<'a> {
         None
     }
 
-    fn loop_input_key(&self, owner: OwnerSlot) -> Result<PortKey, ResolutionError> {
+    fn loop_input_key(&self, owner: node::OwnerSlot) -> Result<PortKey, ResolutionError> {
         let spec = self.plan.owners[owner.index()]
             .loop_spec()
             .ok_or_else(|| ResolutionError {
@@ -873,16 +873,16 @@ impl<'a> Solver<'a> {
         self.owner_port_key(owner, spec.entry.name())
     }
 
-    fn endpoint_owner(&self, endpoint: &EndpointOwner) -> Result<OwnerSlot, ResolutionError> {
+    fn endpoint_owner(&self, endpoint: &EndpointOwner) -> Result<node::OwnerSlot, ResolutionError> {
         let path = match endpoint {
-            EndpointOwner::Node(path) => super::OwnerPath::from(path),
+            EndpointOwner::Node(path) => crate::node::OwnerPath::from(path),
             EndpointOwner::Graph(path) => path.clone(),
         };
         self.plan
             .owners
             .iter()
             .position(|owner| owner.path == path)
-            .map(|index| OwnerSlot::new(index as u32))
+            .map(|index| node::OwnerSlot::new(index as u32))
             .ok_or_else(|| ResolutionError {
                 location: path.to_string(),
                 reason: PropagationError::UnknownBinding(path.to_string()),
@@ -893,7 +893,11 @@ impl<'a> Solver<'a> {
         self.owner_port_key(self.endpoint_owner(&endpoint.owner)?, endpoint.port.name())
     }
 
-    fn owner_port_key(&self, owner: OwnerSlot, name: &str) -> Result<PortKey, ResolutionError> {
+    fn owner_port_key(
+        &self,
+        owner: node::OwnerSlot,
+        name: &str,
+    ) -> Result<PortKey, ResolutionError> {
         let port = node::Port::new(name).map_err(|_| ResolutionError {
             location: format!("Graph `{}`", self.plan.owners[owner.index()].path),
             reason: PropagationError::UnknownBinding(name.into()),
@@ -909,7 +913,7 @@ impl<'a> Solver<'a> {
         Ok(key)
     }
 
-    fn graph_port_states(&self, owner: OwnerSlot) -> Vec<&PortState> {
+    fn graph_port_states(&self, owner: node::OwnerSlot) -> Vec<&PortState> {
         if self.plan.owners[owner.index()].path.is_root() {
             self.ports
                 .values()

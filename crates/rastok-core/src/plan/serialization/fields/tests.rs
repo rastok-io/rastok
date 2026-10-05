@@ -1,4 +1,5 @@
 use super::*;
+use crate::node;
 use crate::plan::{DispatchErrorKind, Emission, FieldWrite, RouteErrorKind};
 use crate::schema_annotation::{AnnotationSet, AnnotationTable, SchemaPath};
 use crate::value::Value;
@@ -486,16 +487,16 @@ fn routing_roundtrip_keeps_graph_boundaries_and_commands_distinct() {
         },
     ];
     rules.push(RouteRule {
-        source: endpoint(EndpointOwner::Graph(OwnerPath::root()), "in"),
+        source: endpoint(EndpointOwner::Graph(node::OwnerPath::root()), "in"),
         selection: RouteSelection::All(vec![sink("pay")]),
     });
     rules.push(RouteRule {
         source: endpoint(
-            EndpointOwner::Graph(OwnerPath::new(["inner"]).unwrap()),
+            EndpointOwner::Graph(node::OwnerPath::new(["inner"]).unwrap()),
             "out",
         ),
         selection: RouteSelection::All(vec![RouteDestination::Port(endpoint(
-            EndpointOwner::Graph(OwnerPath::root()),
+            EndpointOwner::Graph(node::OwnerPath::root()),
             "out",
         ))]),
     });

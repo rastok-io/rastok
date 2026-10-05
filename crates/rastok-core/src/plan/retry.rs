@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::connector::{ConnectorExchange, FILE_CONNECTOR_ID};
+use crate::node;
 use alloc::string::ToString;
 
 pub(super) fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
@@ -125,7 +126,7 @@ pub(super) fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct LoopRepeatWarning {
     /// Loop whose application contains both the decision and the Call.
-    pub owner: OwnerPath,
+    pub owner: node::OwnerPath,
     /// Exact source routed to that Loop's Again command.
     pub source: Endpoint,
     /// Call without a sufficient original-plan idempotence guarantee.

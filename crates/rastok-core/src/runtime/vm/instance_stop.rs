@@ -2,7 +2,9 @@
 //! of accepted packets; recovery reconstructs it from the same journal prefix.
 
 use super::*;
+use crate::instance;
 use crate::journal::instance_stop::{Command, Disposition, Error, Packet};
+use crate::node;
 use crate::plan::{Endpoint, InstanceStopTarget, RouteDestination};
 
 impl Vm<'_> {
@@ -10,7 +12,7 @@ impl Vm<'_> {
         &self,
         journal: &dyn InstanceAdmissions,
         source: &Endpoint,
-        source_instance: Option<&InstanceGeneration>,
+        source_instance: Option<&instance::Generation>,
         envelope: &Envelope,
     ) -> Result<Vec<Command>, VmError> {
         if self.instance_commands.is_none() {
@@ -38,9 +40,11 @@ impl Vm<'_> {
                         }
                         rule.selection
                             .selected(value.as_ref().ok_or_else(|| {
-                                self.command_error(&OwnerPath::root(), Error::Source)
+                                self.command_error(&node::OwnerPath::root(), Error::Source)
                             })?)
-                            .ok_or_else(|| self.command_error(&OwnerPath::root(), Error::Source))?
+                            .ok_or_else(|| {
+                                self.command_error(&node::OwnerPath::root(), Error::Source)
+                            })?
                     }
                 };
                 targets.extend(set.iter().filter_map(|destination| match destination {
@@ -58,20 +62,20 @@ impl Vm<'_> {
         } else {
             let owner = match &source.owner {
                 crate::plan::EndpointOwner::Graph(path) => path.clone(),
-                crate::plan::EndpointOwner::Node(path) => OwnerPath::from(path),
+                crate::plan::EndpointOwner::Node(path) => node::OwnerPath::from(path),
             };
             let slot = self
                 .plan
                 .owners
                 .iter()
                 .position(|entry| entry.path == owner)
-                .map(|index| OwnerSlot::new(index as u32))
+                .map(|index| node::OwnerSlot::new(index as u32))
                 .ok_or_else(|| self.command_error(&owner, Error::Source))?;
             // This is a pure selection. The bundle is not installed: a target
             // absent from the retained lifecycle prefix still refuses below.
             self.prepare_owner_target(
                 journal,
-                OwnerSlot::new(0),
+                node::OwnerSlot::new(0),
                 None,
                 slot,
                 envelope,
@@ -97,7 +101,7 @@ impl Vm<'_> {
         Ok(commands)
     }
 
-    fn command_error(&self, owner: &OwnerPath, reason: Error) -> VmError {
+    fn command_error(&self, owner: &node::OwnerPath, reason: Error) -> VmError {
         VmError::InstanceCommand {
             owner: owner.clone(),
             reason,
@@ -132,7 +136,7 @@ impl Vm<'_> {
             queue.extend(commands.into_iter().filter(|command| {
                 self.instances
                     .get(&command.target)
-                    .is_some_and(|instance| matches!(instance.phase, InstancePhase::Open))
+                    .is_some_and(|instance| matches!(instance.phase, instance::Phase::Open))
             }));
         }
     }
@@ -142,7 +146,7 @@ impl Vm<'_> {
             queue.iter().any(|command| {
                 self.instances
                     .get(&command.target)
-                    .is_some_and(|instance| matches!(instance.phase, InstancePhase::Open))
+                    .is_some_and(|instance| matches!(instance.phase, instance::Phase::Open))
             })
         })
     }
@@ -163,7 +167,7 @@ impl Vm<'_> {
             let active = self
                 .instances
                 .get(&command.target)
-                .is_some_and(|instance| matches!(instance.phase, InstancePhase::Open));
+                .is_some_and(|instance| matches!(instance.phase, instance::Phase::Open));
             if active {
                 let mut cause = None;
                 journal

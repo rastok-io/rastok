@@ -19,6 +19,7 @@ extern crate std;
 
 pub mod accounting;
 pub mod boundary;
+pub mod canonical;
 pub mod canonical_cbor;
 pub mod connector;
 pub mod data_policy;
@@ -26,7 +27,7 @@ pub mod datatype;
 pub mod deployment;
 pub mod envelope;
 pub mod expr;
-pub mod identity;
+pub mod instance;
 pub mod journal;
 pub mod json;
 pub mod loop_proof;

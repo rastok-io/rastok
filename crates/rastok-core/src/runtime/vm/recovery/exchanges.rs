@@ -1,6 +1,8 @@
 //! Exchange WAL and terminal cursors. Reconstructing an intent never re-offers it.
 
 use super::*;
+use crate::envelope;
+use crate::instance;
 use crate::journal::{ConsumedPosition, InboundExchangeExitRecord, SessionRecord, SessionStatus};
 
 impl Vm<'_> {
@@ -118,7 +120,7 @@ impl Vm<'_> {
                     &record.connector_path,
                     &delivery.envelope,
                 )?;
-                let selected = self.select_session_ref(spec, &delivery.envelope, &settings)?;
+                let selected = self.select_session_id(spec, &delivery.envelope, &settings)?;
                 if session.instance != instance
                     || selected.is_some_and(|selected| selected != record.session_id)
                     || (selected.is_none() && opening == SessionOpening::Peer)
@@ -180,7 +182,7 @@ impl Vm<'_> {
         index: usize,
         slot: Slot,
         id: crate::envelope::Id,
-    ) -> Result<(InstanceGeneration, Delivery), VmError> {
+    ) -> Result<(instance::Generation, envelope::Delivery), VmError> {
         let mut matches = self.instances.iter().filter_map(|(instance, state)| {
             if state.owner != self.plan.nodes[slot.index()].owner
                 || self.lifecycle.iter().any(|work| {
@@ -334,7 +336,7 @@ impl Vm<'_> {
                         &delivery.envelope,
                     )?;
                     if self
-                        .select_session_ref(spec, &delivery.envelope, &settings)?
+                        .select_session_id(spec, &delivery.envelope, &settings)?
                         .is_some_and(|selected| selected != *reference)
                     {
                         return Err(invalid(
@@ -390,9 +392,9 @@ impl Vm<'_> {
         &self,
         index: usize,
         slot: Slot,
-        instance: &InstanceGeneration,
+        instance: &instance::Generation,
         cursor: &ConsumedPosition,
-    ) -> Result<Delivery, VmError> {
+    ) -> Result<envelope::Delivery, VmError> {
         self.scheduler
             .mailboxes
             .queued(slot, instance)

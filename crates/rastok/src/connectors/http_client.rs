@@ -307,8 +307,7 @@ impl HttpClientRequestBindings {
                 Value::Text(self.text(connector, spec, resolved, "url")?),
             ),
         ]);
-        let bytes =
-            crate::canonical_cbor::encode(&crate::identity::encoding::canonical_value(&request));
+        let bytes = crate::canonical_cbor::encode(&crate::canonical::value(&request));
         Ok(PreparedRequest::seal(bytes))
     }
 

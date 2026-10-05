@@ -3,12 +3,13 @@
 
 use super::*;
 use crate::envelope::{Envelope, Id};
+use crate::instance;
 use crate::journal::{ConsumedPosition, TransactionRecord, loop_protocol as protocol, timer_kind};
 use crate::node::{HandlerActivation, Lifecycle, Trigger};
 use crate::plan::{
     Dispatch, DispatchStep, Endpoint, EndpointOwner, RouteDestination, RouteSelection,
 };
-use crate::runtime::{DataSlot, InstanceState, LazyBindings};
+use crate::runtime::{DataSlot, LazyBindings, State};
 
 pub(super) fn future(inspection: &VmInspection, records: &[Record]) -> JsonValue {
     let arms: BTreeMap<_, _> = records
@@ -208,7 +209,7 @@ pub(super) fn edge_cases(
 
 /// A display key is decoded from the address's retained frames, never guessed
 /// from a convenient DATA field such as `tenant`. Classified keys stay hidden.
-pub(super) fn instance_label(instance: &InstanceGeneration, classified: bool) -> String {
+pub(super) fn instance_label(instance: &instance::Generation, classified: bool) -> String {
     if classified {
         return "classified instance".into();
     }
@@ -281,8 +282,8 @@ pub(super) struct HistoryExplanation {
 pub(super) fn history(plan: &ValidatedExecutionPlan, records: &[Record]) -> HistoryExplanation {
     let protected = classified(plan);
     let mut envelopes = BTreeMap::<Id, (&Envelope, usize)>::new();
-    let mut positions = BTreeMap::<(String, InstanceGeneration), Vec<Id>>::new();
-    let mut state = InstanceState::new();
+    let mut positions = BTreeMap::<(String, instance::Generation), Vec<Id>>::new();
+    let mut state = State::new();
     let mut fold = protocol::Fold::default();
     let mut context_valid = true;
     let mut output = Vec::new();
@@ -345,7 +346,7 @@ pub(super) fn history(plan: &ValidatedExecutionPlan, records: &[Record]) -> Hist
                 let slot = plan
                     .nodes
                     .iter()
-                    .position(|node| crate::plan::OwnerPath::from(&node.path) == tx.owner_path)
+                    .position(|node| crate::node::OwnerPath::from(&node.path) == tx.owner_path)
                     .map(|slot| Slot::new(slot as u32));
                 if let Some(slot) = slot {
                     extra["decision"] = if context_valid {
@@ -472,7 +473,7 @@ pub(super) fn history(plan: &ValidatedExecutionPlan, records: &[Record]) -> Hist
 }
 
 fn consumed_id(
-    positions: &BTreeMap<(String, InstanceGeneration), Vec<Id>>,
+    positions: &BTreeMap<(String, instance::Generation), Vec<Id>>,
     position: &ConsumedPosition,
 ) -> Option<Id> {
     positions
@@ -486,7 +487,7 @@ fn decision(
     tx: &TransactionRecord,
     slot: Slot,
     inputs: &[&Envelope],
-    state: &InstanceState,
+    state: &State,
     fold: &protocol::Fold,
     protected: bool,
 ) -> JsonValue {

@@ -4,16 +4,17 @@
 //! checksums, policy and I/O belong to the hosted recorder, not this codec.
 
 use crate::boundary::*;
+use crate::canonical;
 use crate::canonical_cbor::Value as Cbor;
 use crate::envelope::{
     Data, Encoding, Envelope, Id, Meta, MetaSys, MetaValue, Namespace, Role, Scalar,
 };
-use crate::identity::encoding::{canonical_meta_value, canonical_value, decode_canonical_value};
-use crate::identity::{InstanceGeneration, InstanceIdentity};
+use crate::instance;
+
 use crate::journal::loop_protocol as lp;
 use crate::journal::{self, Record};
 use crate::node::{self, Lifecycle, Port, Trigger};
-use crate::plan::OwnerPath;
+
 use crate::value::Value;
 use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
@@ -125,21 +126,21 @@ fn read_port(value: &Cbor) -> Result<Port, Error> {
 fn read_path(value: &Cbor) -> Result<node::Path, Error> {
     node::Path::new(text(value)?.split('.')).map_err(|_| Error::Invalid("node path"))
 }
-fn read_owner(value: &Cbor) -> Result<OwnerPath, Error> {
+fn read_owner(value: &Cbor) -> Result<node::OwnerPath, Error> {
     let value = text(value)?;
-    OwnerPath::new(value.split('.').filter(|value| !value.is_empty()))
+    node::OwnerPath::new(value.split('.').filter(|value| !value.is_empty()))
         .map_err(|_| Error::Invalid("owner path"))
 }
-fn instance(value: &Cbor) -> Result<InstanceGeneration, Error> {
+fn instance(value: &Cbor) -> Result<instance::Generation, Error> {
     let [address, generation] = array(value)?;
-    Ok(InstanceGeneration::new(
-        InstanceIdentity::decode(bytes(address)?).map_err(Error::Read)?,
+    Ok(instance::Generation::new(
+        instance::Identity::decode(bytes(address)?).map_err(Error::Read)?,
         uint(generation)?,
     ))
 }
 fn data(value: &Data) -> Cbor {
     match value {
-        Data::Materialized(value) => list([Cbor::Uint(0), canonical_value(value)]),
+        Data::Materialized(value) => list([Cbor::Uint(0), canonical::value(value)]),
         Data::Encoded {
             encoding, bytes, ..
         } => list([
@@ -156,7 +157,7 @@ fn read_data(value: &Cbor) -> Result<Data, Error> {
     let [tag, payload] = array(value)?;
     match uint(tag)? {
         0 => {
-            let value = decode_canonical_value(payload).map_err(Error::Read)?;
+            let value = canonical::decode_value(payload).map_err(Error::Read)?;
             value
                 .check_consistency()
                 .map_err(|_| Error::Invalid("logical value"))?;
@@ -177,7 +178,7 @@ fn namespace(value: &Namespace) -> Cbor {
     list(
         value
             .iter()
-            .map(|(name, value)| list([word(name), canonical_meta_value(value)])),
+            .map(|(name, value)| list([word(name), canonical::meta_value(value)])),
     )
 }
 fn scalar(value: Value) -> Result<Scalar, Error> {
@@ -201,7 +202,7 @@ fn read_namespace(value: &Cbor) -> Result<Namespace, Error> {
     let mut namespace = Namespace::new();
     for field in items(value)? {
         let [name, value] = array(field)?;
-        let value = match decode_canonical_value(value).map_err(Error::Read)? {
+        let value = match canonical::decode_value(value).map_err(Error::Read)? {
             Value::Array(values) => {
                 MetaValue::Array(values.into_iter().map(scalar).collect::<Result<_, _>>()?)
             }
@@ -296,7 +297,7 @@ fn intent(value: &Intent) -> Cbor {
             value
                 .resolved_settings
                 .iter()
-                .map(|(name, value)| list([word(name), canonical_value(value)])),
+                .map(|(name, value)| list([word(name), canonical::value(value)])),
         ),
         integer(value.logical_time),
     ])
@@ -309,7 +310,7 @@ fn read_intent(value: &Cbor) -> Result<Intent, Error> {
         if resolved_settings
             .insert(
                 text(name)?.to_owned(),
-                decode_canonical_value(value).map_err(Error::Read)?,
+                canonical::decode_value(value).map_err(Error::Read)?,
             )
             .is_some()
         {
@@ -373,8 +374,8 @@ pub fn record(value: &Record) -> Cbor {
                 Cbor::Uint(2),
                 word(&value.owner_path),
                 value.instance.tree(),
-                optional(value.parent_instance.as_ref(), InstanceGeneration::tree),
-                optional(value.close_scope.as_ref(), InstanceGeneration::tree),
+                optional(value.parent_instance.as_ref(), instance::Generation::tree),
+                optional(value.close_scope.as_ref(), instance::Generation::tree),
                 word(&value.trigger),
                 optional(value.cause.as_ref(), |value| id(*value)),
                 optional(value.exchange_exit.as_deref(), |exit| match exit {
@@ -399,7 +400,7 @@ pub fn record(value: &Record) -> Cbor {
                     value
                         .state_delta
                         .iter()
-                        .map(|(name, value)| list([word(name), canonical_value(value)])),
+                        .map(|(name, value)| list([word(name), canonical::value(value)])),
                 ),
                 list(value.emissions.iter().map(|value| {
                     list([
@@ -809,7 +810,7 @@ impl Reader {
                     let [name, value] = array(value)?;
                     Ok((
                         text(name)?.to_owned(),
-                        decode_canonical_value(value).map_err(Error::Read)?,
+                        canonical::decode_value(value).map_err(Error::Read)?,
                     ))
                 })
                 .collect::<Result<_, Error>>()?,

@@ -2,15 +2,16 @@
 //! acceptance and when installing the scheduler projection after commit.
 
 use super::*;
+use crate::instance;
 use crate::journal::timing::{TimerArm, TimerSchedule};
 
 impl Vm<'_> {
     pub(super) fn admission_deadlines(
         &self,
         target: &PreparedTarget,
-        candidates: &BTreeMap<InstanceGeneration, InstanceCandidate>,
+        candidates: &BTreeMap<instance::Generation, InstanceCandidate>,
         envelope: &Envelope,
-        activity: &mut BTreeMap<InstanceGeneration, Id>,
+        activity: &mut BTreeMap<instance::Generation, Id>,
     ) -> Vec<(TimerArm, DatedPayload)> {
         if !self.has_lifetime_deadlines {
             return Vec::new();
@@ -29,7 +30,7 @@ impl Vm<'_> {
             let lifetime = &self.plan.owners[owner.index()].instance.lifetime;
             if matches!(
                 lifetime,
-                InstanceLifetime::Persistent | InstanceLifetime::SinglePass
+                instance::Lifetime::Persistent | instance::Lifetime::SinglePass
             ) {
                 continue;
             }
@@ -41,13 +42,13 @@ impl Vm<'_> {
             let cause = envelope.meta().sys().id();
             activity.insert(reference.clone(), cause);
             let (due_at, deadline) = match lifetime {
-                InstanceLifetime::Idle(after) if previous != Some(cause) => {
+                instance::Lifetime::Idle(after) if previous != Some(cause) => {
                     (self.now.saturating_add(*after), InstanceDeadline::Idle)
                 }
-                InstanceLifetime::Fixed(after) if previous.is_none() => {
+                instance::Lifetime::Fixed(after) if previous.is_none() => {
                     (self.now.saturating_add(*after), InstanceDeadline::Fixed)
                 }
-                InstanceLifetime::Tumbling(every) if previous.is_none() => (
+                instance::Lifetime::Tumbling(every) if previous.is_none() => (
                     self.now
                         .div_euclid(*every)
                         .saturating_mul(*every)
@@ -77,7 +78,7 @@ impl Vm<'_> {
         &self,
         route: &PreparedEdge,
         target: &PreparedTarget,
-        candidates: &BTreeMap<InstanceGeneration, InstanceCandidate>,
+        candidates: &BTreeMap<instance::Generation, InstanceCandidate>,
         envelope: &Envelope,
     ) -> Vec<(TimerArm, DatedPayload)> {
         let Some(to) = &route.edge.to else {
@@ -180,7 +181,7 @@ impl Vm<'_> {
     pub(super) fn route_timer_arms(
         &self,
         routes: &[PreparedEdge],
-        candidates: &BTreeMap<InstanceGeneration, InstanceCandidate>,
+        candidates: &BTreeMap<instance::Generation, InstanceCandidate>,
         envelope: &Envelope,
     ) -> Vec<TimerArm> {
         self.route_timer_arms_with_activity(routes, candidates, envelope, &mut BTreeMap::new())
@@ -189,9 +190,9 @@ impl Vm<'_> {
     pub(super) fn route_timer_arms_with_activity(
         &self,
         routes: &[PreparedEdge],
-        candidates: &BTreeMap<InstanceGeneration, InstanceCandidate>,
+        candidates: &BTreeMap<instance::Generation, InstanceCandidate>,
         envelope: &Envelope,
-        activity: &mut BTreeMap<InstanceGeneration, Id>,
+        activity: &mut BTreeMap<instance::Generation, Id>,
     ) -> Vec<TimerArm> {
         let mut arms = Vec::new();
         for route in routes {
@@ -246,7 +247,7 @@ impl Vm<'_> {
         self.retain_timer_arms(record, arms)
     }
 
-    pub(super) fn closing_timer_arms(&self, reference: &InstanceGeneration) -> Vec<TimerArm> {
+    pub(super) fn closing_timer_arms(&self, reference: &instance::Generation) -> Vec<TimerArm> {
         let Some(instance) = self.instances.get(reference) else {
             return Vec::new();
         };

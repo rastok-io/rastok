@@ -2,9 +2,12 @@
 //! committed journal facts; preparation never consumes a command or a cursor.
 
 use super::*;
+use crate::envelope;
+use crate::instance;
 use crate::journal::loop_protocol::{
     self as protocol, CloseReason, CommandValue, Fact, Packet, Phase,
 };
+use crate::node;
 
 impl Vm<'_> {
     /// A delayed run still owns its future command slot. Count retained runs
@@ -47,7 +50,7 @@ impl Vm<'_> {
 
     pub(super) fn close_instance_loops(
         &self,
-        instance: &InstanceGeneration,
+        instance: &instance::Generation,
         record: &mut crate::journal::TransactionRecord,
     ) -> Result<(), VmError> {
         let Some(fold) = self.loop_manager.as_deref() else {
@@ -98,8 +101,8 @@ impl Vm<'_> {
 
     pub(super) fn loop_application(
         &self,
-        instance: &InstanceGeneration,
-        delivery: &Delivery,
+        instance: &instance::Generation,
+        delivery: &envelope::Delivery,
     ) -> Option<(LoopRunId, &protocol::RunState)> {
         let fold = self.loop_manager.as_deref()?;
         let reference = ids::delivery_id(&delivery.edge, delivery.envelope.meta().sys().id());
@@ -125,8 +128,8 @@ impl Vm<'_> {
         &mut self,
         journal: &mut dyn Journal,
         slot: Slot,
-        instance: &InstanceGeneration,
-        delivery: &Delivery,
+        instance: &instance::Generation,
+        delivery: &envelope::Delivery,
     ) -> Result<bool, VmError> {
         let owner = &self.plan.owners[self.plan.nodes[slot.index()].owner.index()];
         let Some(spec) = owner.loop_spec() else {
@@ -198,7 +201,7 @@ impl Vm<'_> {
         &mut self,
         journal: &mut dyn Journal,
         slot: Slot,
-        instance: &InstanceGeneration,
+        instance: &instance::Generation,
         edge: &str,
         envelope: Id,
     ) -> Result<(), VmError> {
@@ -326,8 +329,8 @@ impl Vm<'_> {
     pub(super) fn prepare_call_completion(
         &self,
         slot: Slot,
-        instance: &InstanceGeneration,
-        delivery: &Delivery,
+        instance: &instance::Generation,
+        delivery: &envelope::Delivery,
         record: &mut crate::journal::TransactionRecord,
     ) -> Result<(), VmError> {
         let terminal = self.validate_call_completion(slot, record)?;
@@ -467,7 +470,7 @@ impl Vm<'_> {
             .find_map(|(index, owner)| {
                 (owner.path == *current.instance.address().owner()).then(|| {
                     (
-                        OwnerSlot::new(index as u32),
+                        node::OwnerSlot::new(index as u32),
                         match owner.kind {
                             OwnerKind::Node(slot) => Some(slot),
                             OwnerKind::Graph => None,
@@ -480,7 +483,7 @@ impl Vm<'_> {
             self.instances
                 .get(&current.instance)
                 .map(|instance| &instance.phase),
-            Some(InstancePhase::Open)
+            Some(instance::Phase::Open)
         ) {
             let record = manager_record(
                 &current.instance,
@@ -767,7 +770,7 @@ impl Vm<'_> {
 pub(super) fn entry_measure_budget(
     proof: &crate::loop_proof::Certificate,
     envelope: &Envelope,
-    instance: &InstanceGeneration,
+    instance: &instance::Generation,
 ) -> Result<u64, VmError> {
     let invalid = || {
         loop_error(
@@ -833,7 +836,7 @@ pub(super) fn application_envelope(
     ))
 }
 
-fn loop_error(instance: &InstanceGeneration, reason: &'static str) -> VmError {
+fn loop_error(instance: &instance::Generation, reason: &'static str) -> VmError {
     VmError::InvalidLoopDecision {
         owner: instance.address().owner().clone(),
         reason,
@@ -841,7 +844,7 @@ fn loop_error(instance: &InstanceGeneration, reason: &'static str) -> VmError {
 }
 
 pub(super) fn manager_record(
-    instance: &InstanceGeneration,
+    instance: &instance::Generation,
     cause: Id,
     packet: Packet,
 ) -> crate::journal::TransactionRecord {

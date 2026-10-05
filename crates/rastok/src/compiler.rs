@@ -85,7 +85,7 @@ pub struct ScenarioDefinition {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceDefinition {
     /// Root-relative owner path. The App Graph uses the empty root path.
-    pub owner: crate::plan::OwnerPath,
+    pub owner: crate::node::OwnerPath,
     /// Structural declaration kind.
     pub kind: node::Kind,
     /// Source table index handed to [`compile`].
@@ -242,7 +242,10 @@ pub fn compile_with_assets(
         // The one validation refusal a USER causes: a program deep
         // enough that its plan would outgrow the format reader's
         // nesting budget. Every other refusal is a compiler defect.
-        Err(PlanValidationError::NestingBudgetExceeded { depth, budget }) => {
+        Err(PlanValidationError::NestingExceeded {
+            depth,
+            bound: budget,
+        }) => {
             bag.push(
                 Diagnostic::new(
                     E_PLAN_DEPTH,
@@ -388,7 +391,7 @@ fn source_definitions(unit: &Unit, sources: &[&str]) -> Vec<SourceDefinition> {
         };
         collect_graph_definitions(
             app,
-            crate::plan::OwnerPath::root(),
+            crate::node::OwnerPath::root(),
             sources,
             &mut definitions,
         );
@@ -398,7 +401,7 @@ fn source_definitions(unit: &Unit, sources: &[&str]) -> Vec<SourceDefinition> {
 
 fn collect_graph_definitions(
     graph: &syntax::GraphDecl,
-    path: crate::plan::OwnerPath,
+    path: crate::node::OwnerPath,
     sources: &[&str],
     definitions: &mut Vec<SourceDefinition>,
 ) {
@@ -496,15 +499,15 @@ fn collect_graph_definitions(
     }
 }
 
-fn child_owner_path(parent: &crate::plan::OwnerPath, name: &str) -> Option<crate::plan::OwnerPath> {
+fn child_owner_path(parent: &crate::node::OwnerPath, name: &str) -> Option<crate::node::OwnerPath> {
     let mut segments = parent.segments().to_vec();
     segments.push(name.to_owned());
-    crate::plan::OwnerPath::new(segments).ok()
+    crate::node::OwnerPath::new(segments).ok()
 }
 
 fn push_source_definition(
     definitions: &mut Vec<SourceDefinition>,
-    owner: crate::plan::OwnerPath,
+    owner: crate::node::OwnerPath,
     kind: node::Kind,
     span: crate::diagnostics::Span,
     sources: &[&str],
@@ -971,7 +974,7 @@ graph finite_singleton : App {
                 .node_instance(crate::plan::Slot::new(0))
                 .expect("relay has one owner")
                 .lifetime,
-            crate::plan::InstanceLifetime::Fixed(30_000_000_000)
+            crate::instance::Lifetime::Fixed(30_000_000_000)
         );
     }
 

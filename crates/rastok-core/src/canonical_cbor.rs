@@ -1,13 +1,23 @@
-//! The canonical byte discipline — deterministic CBOR per the
-//! RFC 8949 §4.2 profile of `identity.md` §3: shortest-form
-//! integers, definite lengths, fixed unsigned map keys emitted in
-//! table order, binary64 held at fixed width with the one canonical
-//! NaN. One implementation serves every canonical form in the
-//! project: the golden projection (std layer, evidence) and the
-//! plan package (this kernel, transport). The rationale for a
-//! hand-rolled codec over a library lives with the golden
-//! projection's documentation and in `decisions.md`
-//! (D-2026-08-03-1).
+//! The canonical byte discipline, independent of Rastok's tag registry.
+//!
+//! CBOR is a binary item model: each item starts with a head byte identifying
+//! its kind and an argument (a value or length). Our profile uses shortest-form
+//! arguments, definite lengths and sorted unsigned map keys. Binary64 has a
+//! fixed width and one canonical NaN; `-0.0` remains distinct from `+0.0`.
+//! These are the precise choices in [identity.md §3], based on RFC 8949 §4.2.
+//!
+//! Rastok uses this standard, schema-free substrate so every hashed artifact
+//! can be audited without Rastok's code. The reader refuses non-canonical
+//! forms: the item ↔ bytes bijection is the stability guarantee behind ids,
+//! causal seals, plan hashes and goldens. The codec is handwritten because
+//! a third-party library can change its legal encoding choices on an upgrade;
+//! each such change would move a seal. [D-2026-08-03-1] records that decision.
+//!
+//! This module knows no Rastok tags. [`crate::canonical`] maps Rastok's
+//! types and values onto these items; one byte discipline serves them all.
+//!
+//! [identity.md §3]: https://github.com/rastok-io/rastok/blob/main/docs/spec/identity.md#3-the-canonical-record-form
+//! [D-2026-08-03-1]: https://github.com/rastok-io/rastok/blob/main/docs/spec/decisions.md#d-2026-08-03-1--canonical-bytes-are-hand-rolled-deterministic-cbor
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;

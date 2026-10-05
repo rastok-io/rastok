@@ -2,6 +2,8 @@
 //! handler. Unsupported physical obligations refuse before replacing the VM.
 
 use super::*;
+use crate::envelope;
+use crate::instance;
 use crate::journal::{Record, TransactionRecord, loop_protocol as protocol};
 
 mod calls;
@@ -600,7 +602,7 @@ impl Vm<'_> {
             .filter(|_| record.trigger != node::Trigger::Lifecycle(node::Lifecycle::Stop))
             .enumerate()
         {
-            let matches = |delivery: &&Delivery| {
+            let matches = |delivery: &&envelope::Delivery| {
                 delivery.edge == consumed.edge
                     && delivery.source_instance == consumed.source
                     && delivery.seq == consumed.seq
@@ -678,7 +680,7 @@ impl Vm<'_> {
                 .instances
                 .get(&record.instance)
                 .and_then(|instance| match &instance.phase {
-                    InstancePhase::Closing { scope, .. } => Some(scope.clone()),
+                    instance::Phase::Closing { scope, .. } => Some(scope.clone()),
                     _ => None,
                 })
                 .ok_or_else(|| invalid(index, "a stop has no retained close request"))?;
@@ -728,7 +730,7 @@ impl Vm<'_> {
             || !self
                 .instances
                 .get(scope)
-                .is_some_and(|instance| matches!(instance.phase, InstancePhase::Open))
+                .is_some_and(|instance| matches!(instance.phase, instance::Phase::Open))
         {
             return Err(invalid(
                 index,

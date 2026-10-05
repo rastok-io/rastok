@@ -121,7 +121,7 @@ enum TypeRefusal {
     DuplicateSymbol { name: String, span: Span },
     DuplicateCase { name: String, span: Span },
     DepthBudget { measured: usize },
-    NodeBudget { measured: usize },
+    NodesExceeded { measured: usize },
     WidthBudget { what: &'static str, measured: usize },
 }
 
@@ -535,7 +535,7 @@ struct PendingConnectorAttribute {
 
 #[derive(Clone)]
 enum InstanceOwner {
-    Graph(crate::plan::OwnerPath),
+    Graph(crate::node::OwnerPath),
     Node(node::Path),
 }
 
@@ -1578,7 +1578,7 @@ impl Checker<'_, '_> {
         let signature = self.unit_signature(&expr::Signature::new());
         self.graph_at(
             decl,
-            crate::plan::OwnerPath::root(),
+            crate::node::OwnerPath::root(),
             &signature,
             &BTreeMap::new(),
             true,
@@ -1588,7 +1588,7 @@ impl Checker<'_, '_> {
     fn graph_at(
         &mut self,
         decl: &GraphDecl,
-        path: crate::plan::OwnerPath,
+        path: crate::node::OwnerPath,
         inherited_signature: &expr::Signature,
         inherited_consts: &BTreeMap<String, crate::value::Value>,
         is_root: bool,
@@ -1870,7 +1870,7 @@ impl Checker<'_, '_> {
                 GraphItem::Graph(nested) => {
                     let mut segments = path.segments().to_vec();
                     segments.push(nested.name.text.clone());
-                    match crate::plan::OwnerPath::new(segments) {
+                    match crate::node::OwnerPath::new(segments) {
                         Ok(nested_path) => {
                             let checked = self.graph_at(
                                 nested,
@@ -2985,7 +2985,7 @@ impl Checker<'_, '_> {
     fn operator(
         &mut self,
         decl: &OperatorDecl,
-        owner: &crate::plan::OwnerPath,
+        owner: &crate::node::OwnerPath,
         graph_signature: &expr::Signature,
         graph_consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<Node> {
@@ -3033,7 +3033,7 @@ impl Checker<'_, '_> {
     fn connector(
         &mut self,
         decl: &ConnectorDecl,
-        owner: &crate::plan::OwnerPath,
+        owner: &crate::node::OwnerPath,
         graph_signature: &expr::Signature,
         graph_consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<Node> {
@@ -3806,7 +3806,7 @@ impl Checker<'_, '_> {
 
     fn node_path(
         &mut self,
-        owner: &crate::plan::OwnerPath,
+        owner: &crate::node::OwnerPath,
         name: &str,
         span: Span,
     ) -> Option<node::Path> {
@@ -5665,7 +5665,7 @@ impl Checker<'_, '_> {
                 .with_span(decl.name.span)
                 .with_field("name", decl.name.text.clone())
                 .with_field("depth", measured.to_string()),
-                TypeRefusal::NodeBudget { measured } => Diagnostic::new(
+                TypeRefusal::NodesExceeded { measured } => Diagnostic::new(
                     E_TYPE_BUDGET,
                     Phase::Check,
                     format!(
@@ -5733,7 +5733,7 @@ impl Checker<'_, '_> {
             if !matches!(base, BaseType::Named(_)) {
                 *nodes += 1;
                 if *nodes > MAX_NODES {
-                    return Err(TypeRefusal::NodeBudget { measured: *nodes });
+                    return Err(TypeRefusal::NodesExceeded { measured: *nodes });
                 }
             }
             match base {
@@ -5835,7 +5835,7 @@ impl Checker<'_, '_> {
                         // including a unit case's empty payload.
                         *nodes += 1;
                         if *nodes > MAX_NODES {
-                            return Err(TypeRefusal::NodeBudget { measured: *nodes });
+                            return Err(TypeRefusal::NodesExceeded { measured: *nodes });
                         }
                         for (field_index, field) in case.fields.iter().enumerate() {
                             if case.fields[..field_index]
@@ -7493,7 +7493,7 @@ impl Checker<'_, '_> {
 
 fn graph_at_path<'graph>(
     graph: &'graph Graph,
-    path: &crate::plan::OwnerPath,
+    path: &crate::node::OwnerPath,
 ) -> Option<&'graph Graph> {
     if &graph.path == path {
         return Some(graph);
@@ -7506,7 +7506,7 @@ fn graph_at_path<'graph>(
 
 fn graph_at_path_mut<'graph>(
     graph: &'graph mut Graph,
-    path: &crate::plan::OwnerPath,
+    path: &crate::node::OwnerPath,
 ) -> Option<&'graph mut Graph> {
     if &graph.path == path {
         return Some(graph);

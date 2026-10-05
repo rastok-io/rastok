@@ -7,9 +7,9 @@
 
 use crate::boundary::{CallId, InboundCallId, SessionId, SessionWriteId};
 use crate::envelope::Id;
-use crate::identity::InstanceGeneration;
+use crate::instance;
+
 use crate::node;
-use crate::plan::OwnerPath;
 
 /// The causal transition summarized by one retained observation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,8 +59,8 @@ pub enum ExchangeCorrelation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordCorrelation {
     origin_id: Option<Id>,
-    owner: Option<OwnerPath>,
-    instance: Option<InstanceGeneration>,
+    owner: Option<node::OwnerPath>,
+    instance: Option<instance::Generation>,
     connector: Option<node::Path>,
     exchange: Option<ExchangeCorrelation>,
 }
@@ -76,12 +76,12 @@ impl RecordCorrelation {
         }
     }
 
-    pub(crate) fn with_owner(mut self, owner: OwnerPath) -> Self {
+    pub(crate) fn with_owner(mut self, owner: node::OwnerPath) -> Self {
         self.owner = Some(owner);
         self
     }
 
-    pub(crate) fn with_instance(mut self, instance: InstanceGeneration) -> Self {
+    pub(crate) fn with_instance(mut self, instance: instance::Generation) -> Self {
         self.instance = Some(instance);
         self
     }
@@ -104,13 +104,13 @@ impl RecordCorrelation {
 
     /// Logical owner of a transaction, when this is a transaction fact.
     #[must_use]
-    pub const fn owner(&self) -> Option<&OwnerPath> {
+    pub const fn owner(&self) -> Option<&node::OwnerPath> {
         self.owner.as_ref()
     }
 
     /// Exact logical instance generation, when the causal fact owns one.
     #[must_use]
-    pub const fn instance(&self) -> Option<&InstanceGeneration> {
+    pub const fn instance(&self) -> Option<&instance::Generation> {
         self.instance.as_ref()
     }
 

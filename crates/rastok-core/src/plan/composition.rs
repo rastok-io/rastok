@@ -1,6 +1,7 @@
 //! Compose static routing through transparent Graph boundaries without
 //! erasing the inventory that proves each boundary's dispositions.
 
+use crate::node;
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
@@ -9,9 +10,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::{
-    EdgeEnd, Endpoint, EndpointOwner, ExecutionPlan, OwnerKind, OwnerSlot, ResolvedPortTable,
-    RouteArm, RouteDestination, RouteErrorKind, RouteRule, RouteSelection, RouteValidationError,
-    Slot,
+    EdgeEnd, Endpoint, EndpointOwner, ExecutionPlan, OwnerKind, ResolvedPortTable, RouteArm,
+    RouteDestination, RouteErrorKind, RouteRule, RouteSelection, RouteValidationError, Slot,
 };
 use crate::datatype::DataType;
 use crate::node::Direction;
@@ -102,7 +102,7 @@ pub(super) fn validate(
                         Some(path.clone())
                     }
                     EndpointOwner::Graph(path) => path.parent(),
-                    EndpointOwner::Node(path) => super::OwnerPath::from(path).parent(),
+                    EndpointOwner::Node(path) => crate::node::OwnerPath::from(path).parent(),
                 };
                 if !super::routing_validation::valid_instance_stop_target(plan, target)
                     || lexical.as_ref() != Some(&target.scope)
@@ -116,7 +116,7 @@ pub(super) fn validate(
                     (EndpointOwner::Graph(owner), source) => {
                         let source = match source {
                             EndpointOwner::Graph(path) => path.clone(),
-                            EndpointOwner::Node(path) => super::OwnerPath::from(path),
+                            EndpointOwner::Node(path) => crate::node::OwnerPath::from(path),
                         };
                         source.segments().starts_with(owner.segments())
                             && plan.owners.iter().any(|candidate| {
@@ -168,7 +168,7 @@ pub(super) fn validate(
     let mut unconditional = BTreeMap::<Endpoint, Vec<RouteDestination>>::new();
     let endpoint = |physical: &EdgeEnd| Endpoint {
         owner: physical.node.map_or_else(
-            || EndpointOwner::Graph(super::OwnerPath::root()),
+            || EndpointOwner::Graph(crate::node::OwnerPath::root()),
             |slot| EndpointOwner::Node(plan.nodes[slot.index()].path.clone()),
         ),
         port: physical.port.clone(),
@@ -281,7 +281,7 @@ fn port<'a>(
                 .owners
                 .iter()
                 .position(|owner| owner.path == *path && owner.kind == OwnerKind::Graph)?;
-            plan.graph_ports(OwnerSlot::new(u32::try_from(index).ok()?))?
+            plan.graph_ports(node::OwnerSlot::new(u32::try_from(index).ok()?))?
                 .iter()
                 .find(|port| port.port == endpoint.port)
                 .map(|port| (port.direction, port.ty.as_ref()))
@@ -541,14 +541,13 @@ fn resolve(
 mod tests {
     use super::*;
     use crate::node::Port;
-    use crate::plan::OwnerPath;
 
     fn graph(name: &str, port: &str) -> Endpoint {
         Endpoint {
             owner: EndpointOwner::Graph(if name.is_empty() {
-                OwnerPath::root()
+                node::OwnerPath::root()
             } else {
-                OwnerPath::new([name]).unwrap()
+                node::OwnerPath::new([name]).unwrap()
             }),
             port: Port::new(port).unwrap(),
         }

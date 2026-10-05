@@ -54,7 +54,7 @@ pub struct Graph {
     pub loop_spec: Option<LoopSpec>,
     /// Root-relative lexical owner path. The App owns the empty path; nested
     /// Graphs append their declared name to their parent's path.
-    pub path: crate::plan::OwnerPath,
+    pub path: crate::node::OwnerPath,
     /// Boundary ports declared on the graph itself; the defaults `in`
     /// and `out` exist implicitly. Identity material.
     pub boundary: Vec<crate::plan::PortDecl>,

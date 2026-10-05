@@ -439,7 +439,7 @@ graph g : App {
     );
     assert!(matches!(
         before.lifetime,
-        rastok::plan::InstanceLifetime::Idle(30_000_000_000)
+        rastok::instance::Lifetime::Idle(30_000_000_000)
     ));
     assert!(compilation.plan.plan().handlers.iter().any(|handler| {
         handler.activation

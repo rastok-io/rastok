@@ -14,12 +14,11 @@ use rastok::boundary::{
     SessionStart, SessionWriteId, SessionWriteIntent, WebSocketExit,
 };
 use rastok::envelope::{Data, Envelope};
-use rastok::identity::{InstanceGeneration, InstanceIdentity, InstanceSegment};
+use rastok::instance;
+
 use rastok::journal::Journal;
 use rastok::node;
-use rastok::plan::{
-    AttrSetting, EvaluationSite, GraphVersion, OwnerPath, OwnerValue, ValidatedExecutionPlan,
-};
+use rastok::plan::{AttrSetting, EvaluationSite, GraphVersion, OwnerValue, ValidatedExecutionPlan};
 use rastok::runtime::vm::{Vm, VmError};
 
 use rastok::boundary::{
@@ -52,11 +51,11 @@ fn first_loop(journal: &MemJournal) -> rastok::journal::LoopRunId {
         .0
 }
 
-fn int_address(owner: &str, value: i64) -> InstanceIdentity {
-    let owner = OwnerPath::new([owner]).expect("valid owner path");
-    InstanceIdentity::new(
+fn int_address(owner: &str, value: i64) -> instance::Identity {
+    let owner = node::OwnerPath::new([owner]).expect("valid owner path");
+    instance::Identity::new(
         &owner,
-        &[InstanceSegment::SelectedKey {
+        &[instance::Segment::SelectedKey {
             scope: owner.clone(),
             ty: rastok::datatype::DataType::INT,
             value: Value::Int(value),
@@ -607,15 +606,15 @@ graph rooted : App {
         panic!("the first fact is ingress");
     };
     let root_id = inbound.envelope.meta().sys().id();
-    let frame = InstanceSegment::SelectedKey {
-        scope: OwnerPath::root(),
+    let frame = instance::Segment::SelectedKey {
+        scope: node::OwnerPath::root(),
         ty: rastok::datatype::DataType::Text,
         value: Value::Text(root_id.to_string()),
     };
     let expected = |node: &str| {
-        InstanceGeneration::new(
-            InstanceIdentity::new(
-                &OwnerPath::new([node]).expect("valid owner path"),
+        instance::Generation::new(
+            instance::Identity::new(
+                &node::OwnerPath::new([node]).expect("valid owner path"),
                 core::slice::from_ref(&frame),
             )
             .expect("the root frame belongs to each child"),
@@ -753,10 +752,10 @@ graph nested : App {
         })
         .collect();
     assert_eq!(transactions.len(), 2, "the child handler fires twice");
-    let session = OwnerPath::new(["sessions"]).expect("valid Graph owner");
-    let expected = InstanceIdentity::new(
-        &OwnerPath::new(["sessions", "greet"]).expect("valid child owner"),
-        &[InstanceSegment::SelectedKey {
+    let session = node::OwnerPath::new(["sessions"]).expect("valid Graph owner");
+    let expected = instance::Identity::new(
+        &node::OwnerPath::new(["sessions", "greet"]).expect("valid child owner"),
+        &[instance::Segment::SelectedKey {
             scope: session,
             ty: rastok::datatype::DataType::Text,
             value: Value::Text(String::from("alice")),
@@ -1752,9 +1751,10 @@ graph lifecycle : App {
             _ => None,
         })
         .collect();
-    let root = InstanceGeneration::new(InstanceIdentity::singleton(&OwnerPath::root()), 0);
-    let seven = InstanceGeneration::new(int_address("counter", 7), 0);
-    let nine = InstanceGeneration::new(int_address("counter", 9), 0);
+    let root =
+        instance::Generation::new(instance::Identity::singleton(&node::OwnerPath::root()), 0);
+    let seven = instance::Generation::new(int_address("counter", 7), 0);
+    let nine = instance::Generation::new(int_address("counter", 9), 0);
     assert_eq!(
         lifecycle,
         [
@@ -4439,11 +4439,11 @@ impl Journal for FlakyJournal {
     ) -> Result<rastok::journal::CommittedInbound, rastok::journal::Error> {
         self.inner.commit_inbound(prepared, routes)
     }
-    fn instance_ref_for_admission(
+    fn instance_generation_for_admission(
         &self,
-        address: &InstanceIdentity,
-    ) -> Result<InstanceGeneration, rastok::journal::Error> {
-        self.inner.instance_ref_for_admission(address)
+        address: &instance::Identity,
+    ) -> Result<instance::Generation, rastok::journal::Error> {
+        self.inner.instance_generation_for_admission(address)
     }
     fn commit(
         &mut self,

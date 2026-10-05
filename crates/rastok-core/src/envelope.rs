@@ -13,6 +13,8 @@
 //!
 //! [`envelope.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/envelope.md
 
+use crate::instance;
+use crate::node;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -458,6 +460,22 @@ impl Envelope {
     pub fn data(&self) -> &Data {
         &self.data
     }
+}
+
+/// One delivery waiting in a mailbox.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Delivery {
+    /// The arrival port — part of the delivery, because one node
+    /// mailbox carries every port in one FIFO.
+    pub port: node::Port,
+    /// The canonical edge text the envelope traveled.
+    pub edge: String,
+    /// The position on that edge — the consumed cursor.
+    pub seq: u64,
+    /// The complete upstream instance reference that owns this cursor.
+    pub source_instance: instance::Generation,
+    /// The delivered envelope.
+    pub envelope: Envelope,
 }
 
 #[cfg(test)]

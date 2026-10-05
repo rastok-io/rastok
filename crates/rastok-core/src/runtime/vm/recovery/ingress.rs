@@ -1,6 +1,7 @@
 //! Reconstruct external admissions from their actual source, not provenance spelling.
 
 use super::*;
+use crate::instance;
 use crate::journal::{InboundExchangeRecord, InboundRecord, SessionIngressRecord, timer_kind};
 
 impl Vm<'_> {
@@ -337,7 +338,7 @@ impl Vm<'_> {
         index: usize,
         slot: Slot,
         envelope: &Envelope,
-        candidates: &mut BTreeMap<InstanceGeneration, InstanceCandidate>,
+        candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
     ) -> Result<PreparedTarget, VmError> {
         let scope = self
             .owner_chain(self.plan.nodes[slot.index()].owner)?

@@ -10,9 +10,9 @@
 // `rastok::envelope`, `rastok::runtime::vm` — keeps resolving; the
 // crate boundary is real, the surface is unchanged.
 pub use rastok_core::{
-    accounting, boundary, canonical_cbor, connector, data_policy, datatype, deployment, envelope,
-    expr, identity, journal, loop_proof, node, observation, plan, runtime, schema_annotation,
-    value,
+    accounting, boundary, canonical, canonical_cbor, connector, data_policy, datatype, deployment,
+    envelope, expr, instance, journal, loop_proof, node, observation, plan, runtime,
+    schema_annotation, value,
 };
 
 pub mod compiler;
