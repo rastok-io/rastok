@@ -34,12 +34,12 @@ Both crates inherit the three standard Cargo URL fields from the workspace.
 Their readmes and the root README carry the release link; the latter is
 included in binary archives by the prepared artifact workflow. The repository
 is to be created privately and opened only on Yoann's instruction on
-15 October. The unowned bare GitHub handle is not a release destination.
+5 November. The unowned bare GitHub handle is not a release destination.
 `publish = false` remains in force.
 
 **Still open:** before crate publication, `docs.rastok.com` must resolve to
 usable documentation. Prefer the minimal Starlight quickstart and six gallery
-chapters on 15 October, with the rest following in November. The fallback is a
+chapters on 5 November, with the rest following in November. The fallback is a
 301 to the actual gallery page on `www.rastok.com`, replaced by the documentation
 site in November; the separate site repository must confirm that target path.
 The bare `rastok.com` domain is intended to redirect with 301 to `www.rastok.com`.
@@ -80,7 +80,7 @@ have not been performed. The artifact builds above precede this URL-only
 metadata update and are not claimed to contain it.
 
 The 10 September M1 opening brief makes the debugger visual/interaction pass
-**blocking for 15 October**. The three protocol/contribution rows are
+**blocking for 5 November**. The three protocol/contribution rows are
 **non-blocking, still unqualified**: they must remain disclosed in the README
 and release evidence. This reclassification is not a passing result.
 

@@ -6,7 +6,7 @@ use crate::boundary::Intent;
 use crate::canonical;
 use crate::instance;
 
-use crate::journal::{Emission, ids, timer_kind, timing::TimerSchedule};
+use crate::journal::{DeadlineKind, Emission, ids, timing::Deadlines};
 use alloc::collections::BTreeSet;
 use core::fmt;
 
@@ -82,7 +82,7 @@ pub struct Opening<'a> {
     pub envelope: &'a Envelope,
 }
 
-/// Winning OUTBOUND closure inputs, before its Connector transaction exists.
+/// Winning EGRESS closure inputs, before its Connector transaction exists.
 #[derive(Debug)]
 pub struct Settlement<'a> {
     /// Call's retained preparation; later attempt expressions are never used.
@@ -92,7 +92,7 @@ pub struct Settlement<'a> {
     /// Explicit VM logical instant accepted with this winning closure.
     pub closed_at: i64,
     /// Exact original retained arm, or absence for a final/non-delayed attempt.
-    pub schedule: Option<&'a TimerSchedule>,
+    pub schedule: Option<&'a Deadlines>,
 }
 
 /// Reconstructed phase; only a journal transition can move to its successor.
@@ -100,9 +100,9 @@ pub struct Settlement<'a> {
 pub enum Phase {
     /// Opened but never admitted.
     Initial,
-    /// Admitted, no OUTBOUND open yet.
+    /// Admitted, no EGRESS open yet.
     Admitted,
-    /// OUTBOUND open; recovery must not recall this effect.
+    /// EGRESS open; recovery must not recall this effect.
     CallOpen,
     /// Winning closure retained, completion not yet committed.
     Settled,
@@ -159,7 +159,7 @@ pub struct Operation {
 }
 
 impl Operation {
-    /// Original retained instant of this attempt's admission.
+    /// Original unsealed instant of this attempt's admission.
     #[must_use]
     pub const fn admitted_at(&self) -> Option<i64> {
         self.admitted_at
@@ -447,7 +447,7 @@ impl Fold {
         Ok(())
     }
 
-    /// Accept the admitted attempt's first OUTBOUND open. Recovery never calls
+    /// Accept the admitted attempt's first EGRESS open. Recovery never calls
     /// this as permission to offer the same effect to a Driver again.
     ///
     /// # Errors
@@ -525,11 +525,11 @@ impl Fold {
             .flatten();
         match (due, settlement.schedule) {
             (None, None) => {}
-            (Some(due), Some(schedule)) if schedule.armed_at() == settlement.closed_at => {
-                let [arm] = schedule.arms() else {
+            (Some(due), Some(schedule)) if schedule.created_at() == settlement.closed_at => {
+                let [arm] = schedule.items() else {
                     return Err(Error::Timing);
                 };
-                if arm.kind != timer_kind::RECURRENCE_DELAY
+                if arm.kind != DeadlineKind::RecurrenceDelay
                     || arm.due_at != due
                     || arm.reference
                         != admission_ref(

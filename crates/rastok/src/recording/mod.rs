@@ -76,11 +76,11 @@ impl fmt::Display for Error {
 }
 impl std::error::Error for Error {}
 
-impl From<crate::journal::retention::Error> for Error {
-    fn from(error: crate::journal::retention::Error) -> Self {
+impl From<crate::journal::codec::Error> for Error {
+    fn from(error: crate::journal::codec::Error) -> Self {
         match error {
-            crate::journal::retention::Error::Invalid(reason) => Self::Invalid(reason),
-            crate::journal::retention::Error::Read(error) => Self::Read(error),
+            crate::journal::codec::Error::Invalid(reason) => Self::Invalid(reason),
+            crate::journal::codec::Error::Read(error) => Self::Read(error),
         }
     }
 }
@@ -228,7 +228,7 @@ impl Recording {
                 &codec::list([
                     Cbor::Uint(1),
                     codec::integer(at),
-                    codec::list(self.records[start..end].iter().map(codec::record)),
+                    codec::list(self.records[start..end].iter().map(codec::encode)),
                 ]),
                 &mut seal,
             )?);
@@ -263,7 +263,7 @@ impl Recording {
             return Err(Error::Invalid("deployment header"));
         };
         validate_capture(&plan, None)?;
-        let mut reader = codec::Reader::default();
+        let mut reader = codec::Decoder::default();
         let mut records = Vec::new();
         let mut final_time = None;
         let mut finished = false;
@@ -282,8 +282,8 @@ impl Recording {
                         return Err(Error::TooLarge);
                     }
                     for row in rows {
-                        let record = reader.record(row)?;
-                        if codec::record(&record) != *row {
+                        let record = reader.decode(row)?;
+                        if codec::encode(&record) != *row {
                             return Err(Error::Invalid("non-canonical or lossy record"));
                         }
                         records.push(record);
@@ -337,7 +337,7 @@ impl Recording {
         if prefix
             .iter()
             .zip(journal.records())
-            .any(|(before, after)| codec::record(before) != codec::record(after))
+            .any(|(before, after)| codec::encode(before) != codec::encode(after))
         {
             return Err(Error::Invalid("journal acceptance changed a retained fact"));
         }
@@ -510,7 +510,7 @@ impl Recorder {
         self.append(&codec::list([
             Cbor::Uint(1),
             codec::integer(now),
-            codec::list(suffix.iter().map(codec::record)),
+            codec::list(suffix.iter().map(codec::encode)),
         ]))?;
         self.written = journal.records().len();
         self.checkpointed = true;

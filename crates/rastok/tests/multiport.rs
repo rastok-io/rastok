@@ -186,7 +186,7 @@ fn the_machine_verifies_the_ingress_port() {
     // that is not a graph input refuses typed, before any journal
     // append.
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
@@ -200,8 +200,8 @@ fn the_machine_verifies_the_ingress_port() {
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-    let submission = |port: &str| InboundSubmission {
-        provenance: InboundEnvelopeProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
+    let submission = |port: &str| IngressSubmission {
+        provenance: IngressEnvelopeProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
         port: rastok::node::Port::new(port).unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Text(String::from("go"))),
@@ -225,7 +225,7 @@ fn the_machine_verifies_the_ingress_port() {
 #[test]
 fn the_inbound_record_carries_its_port_and_omits_the_default() {
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::canonical_cbor::{Value as Cbor, decode};
     use rastok::envelope::{Data, Encoding, Namespace};
@@ -233,8 +233,8 @@ fn the_inbound_record_carries_its_port_and_omits_the_default() {
     use rastok::plan::GraphVersion;
 
     let mut journal = MemJournal::new(GraphVersion(1));
-    let submission = |port: &str| InboundSubmission {
-        provenance: InboundEnvelopeProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
+    let submission = |port: &str| IngressSubmission {
+        provenance: IngressEnvelopeProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
         port: rastok::node::Port::new(port).unwrap(),
         draft: Draft {
             data: Data::encoded(Encoding::Raw, *b"go"),
@@ -242,8 +242,8 @@ fn the_inbound_record_carries_its_port_and_omits_the_default() {
         },
         sequence: SubmissionSequence::Next,
     };
-    journal.append_inbound(submission("in")).unwrap();
-    journal.append_inbound(submission("alpha")).unwrap();
+    journal.append_ingress(submission("in")).unwrap();
+    journal.append_ingress(submission("alpha")).unwrap();
     let trace = rastok::golden::project(journal.records());
     let key_24 = |index: usize| {
         let bytes = trace.record_bytes(index).expect("a projected record");
@@ -776,7 +776,7 @@ fn the_braced_record_is_physically_a_struct() {
     // on the envelope itself for all three interpreters' shared
     // path, and on the canonical seal below.
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
@@ -793,8 +793,8 @@ fn the_braced_record_is_physically_a_struct() {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
         &mut journal,
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 rastok::node::Path::new(["probe"]).unwrap(),
             ),
             port: rastok::node::Port::new("in").unwrap(),
@@ -892,7 +892,7 @@ fn an_empty_brace_is_an_empty_record() {
     // `{}` builds an EMPTY struct — never an identity (identity is
     // `.`). The injected payload must not leak through.
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
@@ -909,8 +909,8 @@ fn an_empty_brace_is_an_empty_record() {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
         &mut journal,
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 rastok::node::Path::new(["probe"]).unwrap(),
             ),
             port: rastok::node::Port::new("in").unwrap(),
@@ -935,7 +935,7 @@ fn a_whole_data_write_is_the_payload_itself() {
     // `{data = 1}` is the ENVELOPE form: the payload becomes the
     // integer 1 — never a struct with a field named `data`.
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
@@ -952,8 +952,8 @@ fn a_whole_data_write_is_the_payload_itself() {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
         &mut journal,
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 rastok::node::Path::new(["probe"]).unwrap(),
             ),
             port: rastok::node::Port::new("in").unwrap(),
@@ -1043,7 +1043,7 @@ fn identity_re_emits_the_materialized_envelope_whole() {
     // metadata cross untouched. (The encoded twin lives in
     // `data_materializes_only_on_demand`.)
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};
     use rastok::journal::MemJournal;
@@ -1067,8 +1067,8 @@ fn identity_re_emits_the_materialized_envelope_whole() {
     );
     vm.inject(
         &mut journal,
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 rastok::node::Path::new(["probe"]).unwrap(),
             ),
             port: rastok::node::Port::new("in").unwrap(),
@@ -1102,7 +1102,7 @@ fn an_empty_nested_record_is_a_value_not_an_absence() {
     // leaf-splice alone would write nothing and the field would
     // vanish. Every nesting and both braced forms hold it.
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
@@ -1122,8 +1122,8 @@ fn an_empty_nested_record_is_a_value_not_an_absence() {
         let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
         vm.inject(
             &mut journal,
-            InboundSubmission {
-                provenance: InboundEnvelopeProvenance::single(
+            IngressSubmission {
+                provenance: IngressEnvelopeProvenance::single(
                     rastok::node::Path::new(["probe"]).unwrap(),
                 ),
                 port: rastok::node::Port::new("in").unwrap(),
@@ -1342,7 +1342,7 @@ fn boundary_outputs_carry_their_port() {
     // answers (port, envelope) pairs, not an anonymous stream the
     // caller would have to re-derive from the plan.
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
@@ -1359,8 +1359,8 @@ fn boundary_outputs_carry_their_port() {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
         &mut journal,
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 rastok::node::Path::new(["probe"]).unwrap(),
             ),
             port: rastok::node::Port::new("in").unwrap(),
@@ -1399,7 +1399,7 @@ fn a_raw_ingress_holds_the_pin_before_any_append() {
     // draft and JOURNALED it. The pins are judged before any append
     // — replay never meets a record a pin refuses.
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
@@ -1414,8 +1414,8 @@ fn a_raw_ingress_holds_the_pin_before_any_append() {
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-    let submission = InboundSubmission {
-        provenance: InboundEnvelopeProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
+    let submission = IngressSubmission {
+        provenance: IngressEnvelopeProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
         port: rastok::node::Port::new("alpha").unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Text(String::from("wrong"))),
@@ -1830,7 +1830,7 @@ lab g {
 #[test]
 fn the_bare_data_relay_preserves_the_logical_type() {
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
@@ -1849,8 +1849,8 @@ fn the_bare_data_relay_preserves_the_logical_type() {
         let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
         vm.inject(
             &mut journal,
-            InboundSubmission {
-                provenance: InboundEnvelopeProvenance::single(
+            IngressSubmission {
+                provenance: IngressEnvelopeProvenance::single(
                     rastok::node::Path::new(["probe"]).unwrap(),
                 ),
                 port: rastok::node::Port::new("in").unwrap(),
@@ -1886,7 +1886,7 @@ fn the_bare_data_relay_preserves_the_logical_type() {
 #[test]
 fn an_ingress_pin_violation_is_a_named_error() {
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
@@ -1904,8 +1904,8 @@ fn an_ingress_pin_violation_is_a_named_error() {
     let error = vm
         .inject(
             &mut journal,
-            InboundSubmission {
-                provenance: InboundEnvelopeProvenance::single(
+            IngressSubmission {
+                provenance: IngressEnvelopeProvenance::single(
                     rastok::node::Path::new(["probe"]).unwrap(),
                 ),
                 port: rastok::node::Port::new("alpha").unwrap(),
@@ -1996,7 +1996,7 @@ lab g {
         let rastok::canonical_cbor::Value::Map(pairs) = tree else {
             continue;
         };
-        // The INBOUND record: the Lab draft's data seals as a struct.
+        // The INGRESS record: the Lab draft's data seals as a struct.
         if let Some(rastok::canonical_cbor::Value::Map(form)) = pairs.get(&20)
             && let Some(rastok::canonical_cbor::Value::Array(form)) = form.get(&8)
             && let Some(rastok::canonical_cbor::Value::Bytes(inner)) = form.get(1)
@@ -2092,7 +2092,7 @@ fn the_struct_witness_survives_every_equivalent_spelling() {
     // an AST special case: a local binding and a ternary preserve it
     // exactly like the bare relay.
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
@@ -2113,8 +2113,8 @@ fn the_struct_witness_survives_every_equivalent_spelling() {
         let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
         vm.inject(
             &mut journal,
-            InboundSubmission {
-                provenance: InboundEnvelopeProvenance::single(
+            IngressSubmission {
+                provenance: IngressEnvelopeProvenance::single(
                     rastok::node::Path::new(["probe"]).unwrap(),
                 ),
                 port: rastok::node::Port::new("in").unwrap(),
@@ -2212,7 +2212,7 @@ fn an_encoded_bare_relay_passes_the_representation_through() {
     // before any Rastok expression binding materializes. An Avro relay therefore
     // works; reading an Avro FIELD still faults, typed.
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, Encoding};
     use rastok::journal::MemJournal;
@@ -2229,8 +2229,8 @@ fn an_encoded_bare_relay_passes_the_representation_through() {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
         &mut journal,
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 rastok::node::Path::new(["probe"]).unwrap(),
             ),
             port: rastok::node::Port::new("in").unwrap(),
@@ -2365,7 +2365,7 @@ fn data_materializes_only_on_demand() {
     // opaque payload to decode: a `true` guard, a state write, and
     // an identity emission all leave Avro bytes untouched.
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, Encoding};
     use rastok::journal::MemJournal;
@@ -2382,8 +2382,8 @@ fn data_materializes_only_on_demand() {
         let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
         vm.inject(
             &mut journal,
-            InboundSubmission {
-                provenance: InboundEnvelopeProvenance::single(
+            IngressSubmission {
+                provenance: IngressEnvelopeProvenance::single(
                     rastok::node::Path::new(["probe"]).unwrap(),
                 ),
                 port: rastok::node::Port::new("in").unwrap(),
@@ -2453,7 +2453,7 @@ fn short_circuits_never_demand_the_data() {
     // tree: a branch the evaluation never takes must never force an
     // opaque payload to decode, even though `data` appears in it.
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, Encoding, Value};
     use rastok::journal::MemJournal;
@@ -2470,8 +2470,8 @@ fn short_circuits_never_demand_the_data() {
         let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
         vm.inject(
             &mut journal,
-            InboundSubmission {
-                provenance: InboundEnvelopeProvenance::single(
+            IngressSubmission {
+                provenance: IngressEnvelopeProvenance::single(
                     rastok::node::Path::new(["probe"]).unwrap(),
                 ),
                 port: rastok::node::Port::new("in").unwrap(),
@@ -2543,7 +2543,7 @@ fn the_carry_is_as_lazy_as_the_name() {
     // payload ships its REPRESENTATION (bytes, encoding, MIME),
     // opaque or not, however the carry is written.
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, Encoding, Namespace};
     use rastok::journal::MemJournal;
@@ -2563,8 +2563,8 @@ fn the_carry_is_as_lazy_as_the_name() {
         let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
         vm.inject(
             &mut journal,
-            InboundSubmission {
-                provenance: InboundEnvelopeProvenance::single(
+            IngressSubmission {
+                provenance: IngressEnvelopeProvenance::single(
                     rastok::node::Path::new(["probe"]).unwrap(),
                 ),
                 port: rastok::node::Port::new("in").unwrap(),
@@ -2647,7 +2647,7 @@ fn an_inspection_then_identity_ships_the_filled_cell() {
     // demand is a cache read — once per envelope, not once per
     // transaction.
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, Encoding, Namespace};
     use rastok::journal::MemJournal;
@@ -2664,8 +2664,8 @@ fn an_inspection_then_identity_ships_the_filled_cell() {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
         &mut journal,
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 rastok::node::Path::new(["probe"]).unwrap(),
             ),
             port: rastok::node::Port::new("in").unwrap(),
@@ -2742,7 +2742,7 @@ fn struct_equality_is_by_name_like_the_seal() {
 #[test]
 fn a_duplicated_struct_field_refuses_at_the_door() {
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
@@ -2760,8 +2760,8 @@ fn a_duplicated_struct_field_refuses_at_the_door() {
     let error = vm
         .inject(
             &mut journal,
-            InboundSubmission {
-                provenance: InboundEnvelopeProvenance::single(
+            IngressSubmission {
+                provenance: IngressEnvelopeProvenance::single(
                     rastok::node::Path::new(["probe"]).unwrap(),
                 ),
                 port: rastok::node::Port::new("in").unwrap(),
@@ -2790,7 +2790,7 @@ fn a_duplicated_struct_field_refuses_at_the_door() {
 #[test]
 fn the_conformance_judgement_is_matchable() {
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
@@ -2806,8 +2806,8 @@ fn the_conformance_judgement_is_matchable() {
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-    let submission = |data: Value| InboundSubmission {
-        provenance: InboundEnvelopeProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
+    let submission = |data: Value| IngressSubmission {
+        provenance: IngressEnvelopeProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
         port: rastok::node::Port::new("alpha").unwrap(),
         draft: Draft {
             data: Data::materialized(data),

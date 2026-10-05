@@ -437,14 +437,14 @@ before formatting; payload content is omitted by default.
 
 The hosted runner exposes structural logs through `--json-logs` on a
 separate thread. Its terminal I/O never runs in the VM producer. Event names
-remain `rastok.inbound.committed`, `rastok.transaction.committed`,
+remain `rastok.ingress.committed`, `rastok.transaction.committed`,
 `rastok.call.*` and `rastok.session.*`. The later OpenTelemetry exporter
-still requires exact retained timing evidence; it cannot invent span times.
+still requires exact unsealed timing evidence; it cannot invent span times.
 Neither that exporter nor a measurement report is an M1 completion gate.
 
 ### 7.1 Individual measurement inspection
 
-`accounting_observations` reads INBOUND and each original TRANSACTION
+`accounting_observations` reads INGRESS and each original TRANSACTION
 emission. Each observation retains the record correlation, envelope id,
 canonical annotation path, exact value and provenance: origin, instance
 generation, owner, Node, Connector, port and typed exchange. It does not

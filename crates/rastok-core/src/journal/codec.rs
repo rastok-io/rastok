@@ -1,4 +1,4 @@
-//! Lossless retained record carrier, shared by journal tooling and diagnostics.
+//! Lossless record codec, shared by journal tooling and diagnostics.
 //! These rows are not the causal seal: encoded DATA, Completion metadata,
 //! prepared bytes and deadlines survive. File framing, version negotiation,
 //! checksums, policy and I/O belong to the hosted recorder, not this codec.
@@ -233,31 +233,36 @@ fn envelope(value: &Envelope) -> Cbor {
         data(value.data()),
     ])
 }
-fn timers(values: &[(u8, Id)]) -> Cbor {
-    list(
-        values
-            .iter()
-            .map(|(kind, reference)| list([Cbor::Uint(u64::from(*kind)), id(*reference)])),
-    )
+fn deadline_ids(values: &[(journal::DeadlineKind, Id)]) -> Cbor {
+    list(values.iter().map(|(kind, reference)| {
+        list([
+            Cbor::Uint(u64::from(journal::deadline_kind_tag(*kind))),
+            id(*reference),
+        ])
+    }))
 }
-fn read_timers(value: &Cbor) -> Result<Vec<(u8, Id)>, Error> {
+fn read_deadline_ids(value: &Cbor) -> Result<Vec<(journal::DeadlineKind, Id)>, Error> {
     items(value)?
         .iter()
         .map(|value| {
             let [kind, reference] = array(value)?;
             Ok((
-                u8::try_from(uint(kind)?).map_err(|_| Error::Invalid("timer kind"))?,
+                journal::DeadlineKind::try_from(
+                    u8::try_from(uint(kind)?)
+                        .map_err(|_| Error::Invalid("deadline kind exceeds u8"))?,
+                )
+                .map_err(|_| Error::Invalid("unknown deadline kind"))?,
                 read_id(reference)?,
             ))
         })
         .collect()
 }
-fn schedule(value: Option<&journal::timing::TimerSchedule>) -> Cbor {
+fn schedule(value: Option<&journal::timing::Deadlines>) -> Cbor {
     optional(value, |value| Cbor::Bytes(value.encode()))
 }
-fn read_schedule(value: &Cbor) -> Result<Option<Box<journal::timing::TimerSchedule>>, Error> {
+fn read_schedule(value: &Cbor) -> Result<Option<Box<journal::timing::Deadlines>>, Error> {
     read_optional(value, |value| {
-        journal::timing::TimerSchedule::decode(bytes(value)?)
+        journal::timing::Deadlines::decode(bytes(value)?)
             .map(Box::new)
             .map_err(Error::Read)
     })
@@ -329,11 +334,11 @@ fn read_intent(value: &Cbor) -> Result<Intent, Error> {
     })
 }
 
-/// Encode the complete retained fields, without file framing or a causal seal.
+/// Encode the complete record, sealed and unsealed fields, without file framing.
 #[must_use]
-pub fn record(value: &Record) -> Cbor {
+pub fn encode(value: &Record) -> Cbor {
     match value {
-        Record::Inbound(value) => list([
+        Record::Ingress(value) => list([
             Cbor::Uint(1),
             word(value.provenance.connector_path()),
             Cbor::Uint(value.provenance.replica()),
@@ -352,7 +357,7 @@ pub fn record(value: &Record) -> Cbor {
                     Cbor::Uint(1),
                     id(call.reference.id()),
                     call.instance.tree(),
-                    timers(&call.timers),
+                    deadline_ids(&call.deadline_ids),
                 ]),
                 journal::InboundExchangeRecord::Session(session) => match session {
                     journal::SessionIngressRecord::Open(reference) => {
@@ -363,7 +368,7 @@ pub fn record(value: &Record) -> Cbor {
                     }
                 },
             }),
-            schedule(value.timer_schedule.as_deref()),
+            schedule(value.deadlines.as_deref()),
             optional(
                 value.instance_commands.as_deref(),
                 journal::instance_stop::Packet::tree,
@@ -412,8 +417,8 @@ pub fn record(value: &Record) -> Cbor {
                 list(value.routes.iter().map(|value| {
                     list([id(value.delivery), word(&value.edge), value.target.tree()])
                 })),
-                timers(&value.timers),
-                schedule(value.timer_schedule.as_deref()),
+                deadline_ids(&value.deadline_ids),
+                schedule(value.deadlines.as_deref()),
                 optional(
                     value.instance_commands.as_deref(),
                     journal::instance_stop::Packet::tree,
@@ -421,22 +426,22 @@ pub fn record(value: &Record) -> Cbor {
                 optional(value.retry_record.as_deref(), retry_packet),
             ])
         }
-        Record::Outbound(journal::OutboundRecord::Call(value)) => list([
+        Record::Egress(journal::EgressRecord::Call(value)) => list([
             Cbor::Uint(3),
             intent(&value.intent),
             match &value.status {
-                journal::OutboundStatus::Open => list([Cbor::Uint(1)]),
-                journal::OutboundStatus::Closed(journal::Closure::Response(value)) => {
+                journal::CallStatus::Open => list([Cbor::Uint(1)]),
+                journal::CallStatus::Closed(journal::Closure::Response(value)) => {
                     list([Cbor::Uint(2), completion(value)])
                 }
-                journal::OutboundStatus::Closed(journal::Closure::Timeout) => list([Cbor::Uint(3)]),
-                journal::OutboundStatus::Abandoned => list([Cbor::Uint(4)]),
+                journal::CallStatus::Closed(journal::Closure::Timeout) => list([Cbor::Uint(3)]),
+                journal::CallStatus::Abandoned => list([Cbor::Uint(4)]),
             },
             optional(value.closed_at.as_ref(), |value| integer(*value)),
-            schedule(value.timer_schedule.as_deref()),
+            schedule(value.deadlines.as_deref()),
             optional(value.retry_record.as_deref(), retry_packet),
         ]),
-        Record::Outbound(journal::OutboundRecord::Session(value)) => list([
+        Record::Egress(journal::EgressRecord::Session(value)) => list([
             Cbor::Uint(4),
             word(&value.connector_path),
             id(value.session_id.id()),
@@ -506,9 +511,10 @@ fn loop_fact(value: &lp::Fact) -> Cbor {
             id(run.id()),
             instance.tree(),
             match opening {
-                lp::OpeningAdmissionRef::Ingress { inbound, port } => {
-                    list([Cbor::Uint(1), id(*inbound), word(port)])
-                }
+                lp::OpeningAdmissionRef::Ingress {
+                    inbound: ingress,
+                    port,
+                } => list([Cbor::Uint(1), id(*ingress), word(port)]),
                 lp::OpeningAdmissionRef::Delivery(value) => list([Cbor::Uint(2), id(*value)]),
             },
             word(entry),
@@ -580,11 +586,11 @@ fn loop_fact(value: &lp::Fact) -> Cbor {
 /// their references. Discard a reader after an error; decoded records still
 /// require independent journal and plan validation before use.
 #[derive(Debug, Default)]
-pub struct Reader {
+pub struct Decoder {
     envelopes: BTreeMap<Id, Envelope>,
     commands: BTreeMap<Id, lp::CommandId>,
 }
-impl Reader {
+impl Decoder {
     fn envelope(&mut self, value: &Cbor) -> Result<Envelope, Error> {
         let [identity, parent, origin, role, version, app, ext, data] = array(value)?;
         let identity = read_id(identity)?;
@@ -637,7 +643,7 @@ impl Reader {
     /// # Errors
     /// Unknown/malformed rows, missing parents/producers, contradictory repeated
     /// envelopes or invalid typed values. No physical Driver is reachable.
-    pub fn record(&mut self, value: &Cbor) -> Result<Record, Error> {
+    pub fn decode(&mut self, value: &Cbor) -> Result<Record, Error> {
         let record = match items(value)?.first().map(uint).transpose()? {
             Some(1) => self.inbound(value),
             Some(2) => self.transaction(value),
@@ -677,7 +683,7 @@ impl Reader {
                     journal::InboundExchangeRecord::Call(journal::InboundCallIngressRecord {
                         reference: InboundCallId::from_root(read_id(reference)?),
                         instance: instance(owner)?,
-                        timers: read_timers(timers)?,
+                        deadline_ids: read_deadline_ids(timers)?,
                     })
                 }
                 [Cbor::Uint(2), reference] => journal::InboundExchangeRecord::Session(
@@ -689,14 +695,14 @@ impl Reader {
                 _ => return Err(Error::Invalid("inbound exchange")),
             }))
         })?;
-        Ok(Record::Inbound(Box::new(journal::InboundRecord {
-            provenance: InboundEnvelopeProvenance::single(read_path(provenance)?),
+        Ok(Record::Ingress(Box::new(journal::IngressRecord {
+            provenance: IngressEnvelopeProvenance::single(read_path(provenance)?),
             port: read_port(port)?,
             connector_path: read_optional(connector, read_path)?,
             seq: uint(seq)?,
             envelope,
             exchange,
-            timer_schedule: read_schedule(schedule)?,
+            deadlines: read_schedule(schedule)?,
             instance_commands: read_optional(instance_commands, |value| {
                 journal::instance_stop::Packet::from_tree(value)
                     .map(Box::new)
@@ -826,8 +832,8 @@ impl Reader {
                     })
                 })
                 .collect::<Result<_, Error>>()?,
-            timers: read_timers(timers)?,
-            timer_schedule: read_schedule(schedule)?,
+            deadline_ids: read_deadline_ids(timers)?,
+            deadlines: read_schedule(schedule)?,
             instance_commands: read_optional(instance_commands, |value| {
                 journal::instance_stop::Packet::from_tree(value)
                     .map(Box::new)
@@ -838,23 +844,23 @@ impl Reader {
     fn call(&mut self, value: &Cbor) -> Result<Record, Error> {
         let [_, intent, status, closed_at, schedule, retry] = array(value)?;
         let status = match items(status)? {
-            [Cbor::Uint(1)] => journal::OutboundStatus::Open,
-            [Cbor::Uint(2), completion] => journal::OutboundStatus::Closed(
-                journal::Closure::Response(read_completion(completion)?),
-            ),
-            [Cbor::Uint(3)] => journal::OutboundStatus::Closed(journal::Closure::Timeout),
-            [Cbor::Uint(4)] => journal::OutboundStatus::Abandoned,
+            [Cbor::Uint(1)] => journal::CallStatus::Open,
+            [Cbor::Uint(2), completion] => journal::CallStatus::Closed(journal::Closure::Response(
+                read_completion(completion)?,
+            )),
+            [Cbor::Uint(3)] => journal::CallStatus::Closed(journal::Closure::Timeout),
+            [Cbor::Uint(4)] => journal::CallStatus::Abandoned,
             _ => return Err(Error::Invalid("Call status")),
         };
         let record = journal::CallRecord {
             intent: read_intent(intent)?,
             status,
             closed_at: read_optional(closed_at, signed)?,
-            timer_schedule: read_schedule(schedule)?,
+            deadlines: read_schedule(schedule)?,
             retry_record: read_optional(retry, |value| self.retry_packet(value).map(Box::new))?,
         };
         journal::timing::validate_call(&record).map_err(Error::Read)?;
-        Ok(Record::Outbound(journal::OutboundRecord::Call(Box::new(
+        Ok(Record::Egress(journal::EgressRecord::Call(Box::new(
             record,
         ))))
     }
@@ -889,13 +895,13 @@ impl Reader {
             }
             _ => return Err(Error::Invalid("Session status")),
         };
-        Ok(Record::Outbound(journal::OutboundRecord::Session(
-            Box::new(journal::SessionRecord {
+        Ok(Record::Egress(journal::EgressRecord::Session(Box::new(
+            journal::SessionRecord {
                 connector_path,
                 session_id,
                 status,
-            }),
-        )))
+            },
+        ))))
     }
     fn loop_packet(&mut self, value: &Cbor) -> Result<lp::Packet, Error> {
         let [context, routes, produced, consumed, facts] = array(value)?;

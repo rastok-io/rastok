@@ -11,6 +11,14 @@
 
 ## Reading order: from the promise outward
 
+**Current schedule — 5 October amendment.** The opening is **5 November
+2026**, with a real freeze on **24 October**. The consolidated T1/T2 brief
+supersedes the earlier v20/v21 split below: byte-neutral vocabulary first,
+then byte-neutral structure, then one reviewed v20 cutover and one bless.
+Lot 1 stops for Fable's review; the cutover stops for Fable and Yoann before
+any witness blessing. The older dated paragraphs remain review evidence.
+The release-number TODO is recorded with the no-legacy decision below.
+
 Rastok promises that the same validated plan and the same journaled inputs
 produce the same execution, identities and trace. The review reads what
 carries that promise first (identity, journal, validated plan, VM), then what
@@ -574,6 +582,49 @@ mentions and about 600 code mentions of "retain" are mostly the verb. The
 sentence for a newcomer: the journal seals what happened; the instants stay
 unsealed so a resume lands on the exact second. No byte moves: the codec's
 bytes, the registry numbers and every golden stay.
+
+**Decision — keep v20 during the work; format 1 before opening, no legacy.** (Yoann,
+2026-10-05.) The written valve applied: v20 was not blessed on 3 October, so
+the opening moves to **5 November 2026**, real freeze on 24 October. Every
+approved action of T1 and T2-so-far lands before that freeze in **one** byte
+movement. The current chantier keeps the name and planned number **v20**.
+**Release TODO:** renumber the public format to **1** before publication;
+apply the corresponding recording-version choice in that same release step,
+not in the byte-neutral lots. The first public format carries the first number.
+The executable package stays v19 until the reviewed cutover. In that cutover no
+registry keeps a retired, reserved or historical row — envelope key 6, key 53,
+deadline-kind byte 4, the `role` slot, retired `ExtensionSpec` tags, the
+`rastok.loop.r1` and `rastok.aspects.r1` domains all disappear and the numbers
+compact; no reader for an earlier version, no alias for an old spelling; old
+packages, recordings and goldens are regenerated once with their reasons, never
+converted. The extend-only discipline (append, never renumber, never reuse)
+starts at format 1. Dated reports under `docs/architecture/` stay as evidence;
+no live specification describes an earlier format. The consolidated brief
+handed to Astra on 2026-10-05 carries the lots and the cutover protocol.
+
+## Implementation follow-up — 2026-10-05, lot 1
+
+The consolidated brief's vocabulary lot lands on `eb3f396` in the commit
+**Align identity, journal and deadline vocabulary**, introducing this entry.
+[Its report](human-review-lot1.md) records the exact scope and qualification:
+1,554 tests pass with no failures or ignored tests, plus fmt, strict Clippy,
+rustdoc and the `thumbv7m-none-eabi` core check. This is the Fable review stop
+before lot 2. The dated entries above keep the original review evidence,
+not the current scheduling of unfinished work.
+
+| Action | Current disposition | Named remainder |
+|---|---|---|
+| A-T1-4 | Landed in this lot: closed `IdKind`, explicit byte projection and named unknown-byte refusal; fourteen existing recipes, unchanged bytes | Pre-public compaction and the future decoder-domain allocation belong to the cutover |
+| A-T2-4 | Landed in this lot: journal nouns, admission pipeline, History record types and structured log event; `CallStatus`; outbound binding names remain directional | No compatibility aliases |
+| A-T2-5 | Landed in this lot: typed deadline kinds, dated obligations, `created_at`, sealed ids and unsealed deadlines | Eight allocated kinds, not nine; byte 4 refuses. Compaction waits for the cutover |
+| A-T2-7 | Landed in this lot: lossless `journal::codec`, `encode`, `Decoder`, sealed/unsealed field terminology | Retained prefixes, envelopes and observations remain ordinary kept evidence, not an unsealed-field category |
+| A-T2-6(3) | Landed in this lot: admission-prefix members follow trait order | A-T2-6(1)/(2), typed timing validation and a single admission fold, remain lot 2 |
+| A-T1-5 / A-T1-8 residues | Prior `eb3f396` code spellings verified; remaining UI local and live prose aligned | No repeat of the already-landed instance/canonical module moves |
+
+No payload sharing, role removal, materialization change, `std/` migration
+or numerical renumbering is part of this lot. The package remains v19 and
+recording v3. The **public-format-1 TODO** is retained above, not implemented
+early. Nothing is pushed and no external reviewer is invoked.
 
 ## Landed changes
 

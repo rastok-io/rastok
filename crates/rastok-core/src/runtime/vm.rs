@@ -19,8 +19,8 @@
 
 use crate::boundary::{
     BoundaryEvent, CallId, ClosingDeadline, Completion, CompletionGate, DatedPayload, Dispatcher,
-    InboundAcceptance, InboundAdmission, InboundCallEvent, InboundCallId, InboundCallResponse,
-    InboundCallTimeout, InboundProposal, InboundRejection, InboundSession, InboundSubmission,
+    InboundCallEvent, InboundCallId, InboundCallResponse, InboundCallTimeout, InboundSession,
+    IngressAcceptance, IngressAdmission, IngressProposal, IngressRejection, IngressSubmission,
     InstanceDeadline, Intent, OutboundConnectorBindings, RequestPreparation, Response,
     SchedulerCompletion, SessionDriverEvent, SessionId, SessionOpenIntent, SessionStart,
     SessionWriteId, SessionWriteIntent,
@@ -1440,7 +1440,7 @@ impl<'plan> Vm<'plan> {
     pub fn inject(
         &mut self,
         journal: &mut dyn Journal,
-        submission: InboundSubmission,
+        submission: IngressSubmission,
     ) -> Result<Id, VmError> {
         self.inject_submission(journal, submission, None, None)
             .map(|accepted| accepted.envelope)
@@ -1453,12 +1453,12 @@ impl<'plan> Vm<'plan> {
     /// # Errors
     ///
     /// Storage failures and machine-integrity faults remain fail-stop errors;
-    /// portable peer/data refusals are represented by [`InboundAdmission`].
-    pub fn admit_inbound(
+    /// portable peer/data refusals are represented by [`IngressAdmission`].
+    pub fn admit_ingress(
         &mut self,
         journal: &mut dyn Journal,
-        proposal: &InboundProposal,
-    ) -> Result<InboundAdmission, VmError> {
+        proposal: &IngressProposal,
+    ) -> Result<IngressAdmission, VmError> {
         let connector_path = proposal.submission.provenance.connector_path().clone();
         match self.inject_submission(
             journal,
@@ -1466,21 +1466,21 @@ impl<'plan> Vm<'plan> {
             proposal.session,
             Some(connector_path),
         ) {
-            Ok(accepted) => Ok(InboundAdmission::Accepted(accepted)),
+            Ok(accepted) => Ok(IngressAdmission::Accepted(accepted)),
             Err(VmError::MailboxFull { .. } | VmError::InstanceClosing { .. }) => {
-                Ok(InboundAdmission::Pending)
+                Ok(IngressAdmission::Pending)
             }
             Err(VmError::UnknownIngress(_) | VmError::UnknownInboundSource { .. }) => {
-                Ok(InboundAdmission::Rejected(InboundRejection::UnknownPort))
+                Ok(IngressAdmission::Rejected(IngressRejection::UnknownPort))
             }
             Err(VmError::IngressPinViolation { .. }) => {
-                Ok(InboundAdmission::Rejected(InboundRejection::InvalidPayload))
+                Ok(IngressAdmission::Rejected(IngressRejection::InvalidPayload))
             }
-            Err(VmError::IngressMetadataViolation { .. }) => Ok(InboundAdmission::Rejected(
-                InboundRejection::InvalidMetadata,
+            Err(VmError::IngressMetadataViolation { .. }) => Ok(IngressAdmission::Rejected(
+                IngressRejection::InvalidMetadata,
             )),
             Err(VmError::Journal(crate::journal::Error::UnknownSession)) => Ok(
-                InboundAdmission::Rejected(InboundRejection::SessionUnavailable),
+                IngressAdmission::Rejected(IngressRejection::SessionUnavailable),
             ),
             Err(error) => Err(error),
         }
@@ -1674,10 +1674,10 @@ impl<'plan> Vm<'plan> {
     fn inject_submission(
         &mut self,
         journal: &mut dyn Journal,
-        submission: InboundSubmission,
+        submission: IngressSubmission,
         session: Option<InboundSession>,
         connector_path: Option<node::Path>,
-    ) -> Result<InboundAcceptance, VmError> {
+    ) -> Result<IngressAcceptance, VmError> {
         self.preflight(journal)?;
         let session_admission = session;
         // Boundary injection and Connector-origin roots are distinct causal
@@ -1785,15 +1785,15 @@ impl<'plan> Vm<'plan> {
         // admission and the accepting record commit only after this complete
         // envelope has selected every route.
         let mut inbound = match (connector_path, session_admission) {
-            (Some(_), session) => journal.prepare_connector_inbound(submission, session),
-            (None, Some(session)) => journal.prepare_session_inbound(submission, session),
-            (None, None) => journal.prepare_inbound(submission),
+            (Some(_), session) => journal.prepare_connector_ingress(submission, session),
+            (None, Some(session)) => journal.prepare_session_ingress(submission, session),
+            (None, None) => journal.prepare_ingress(submission),
         }
         .map_err(VmError::Journal)?;
         let mut candidates = BTreeMap::new();
         // A Call root opens an obligation on the exact source Connector
         // generation. Select that instance in the same pure preparation as
-        // downstream routing; the accepting INBOUND record seals both before
+        // downstream routing; the accepting INGRESS record seals both before
         // either bundle or delivery becomes visible.
         let source_target = match inbound_source {
             Some((source, ConnectorExchange::Call)) => {
@@ -1829,7 +1829,7 @@ impl<'plan> Vm<'plan> {
                 let timers = timeout
                     .map(|_| {
                         vec![(
-                            crate::journal::timer_kind::INBOUND_CALL_TIMEOUT,
+                            crate::journal::DeadlineKind::InboundCallTimeout,
                             call_id.id(),
                         )]
                     })
@@ -2004,8 +2004,8 @@ impl<'plan> Vm<'plan> {
             );
         }
         if let Some((_, _, Some(timeout))) = &source_target {
-            arms.push(crate::journal::timing::TimerArm {
-                kind: crate::journal::timer_kind::INBOUND_CALL_TIMEOUT,
+            arms.push(crate::journal::timing::Deadline {
+                kind: crate::journal::DeadlineKind::InboundCallTimeout,
                 reference: InboundCallId::from_root(inbound.envelope().meta().sys().id()).id(),
                 due_at: self.now.saturating_add(*timeout),
             });
@@ -2017,10 +2017,10 @@ impl<'plan> Vm<'plan> {
             &mut activity,
         ));
         if !arms.is_empty() {
-            inbound = inbound.with_timer_schedule(Self::timer_schedule(self.now, arms)?);
+            inbound = inbound.with_deadlines(Self::create_deadlines(self.now, arms)?);
         }
         let committed = journal
-            .commit_inbound(inbound, recorded_routes)
+            .commit_ingress(inbound, recorded_routes)
             .map_err(VmError::Journal)?;
         self.enqueue_instance_commands(commands);
         let id = committed.envelope.meta().sys().id();
@@ -2092,7 +2092,7 @@ impl<'plan> Vm<'plan> {
             );
         }
         self.route_prepared(prepared, &candidates, &committed.envelope, source_instance);
-        Ok(InboundAcceptance {
+        Ok(IngressAcceptance {
             envelope: id,
             exchange,
         })
@@ -2840,11 +2840,11 @@ impl<'plan> Vm<'plan> {
             let mut closed = false;
             journal
                 .visit_records(&mut |record| {
-                    if let crate::journal::Record::Outbound(crate::journal::OutboundRecord::Call(
+                    if let crate::journal::Record::Egress(crate::journal::EgressRecord::Call(
                         call,
                     )) = record
                         && call.intent.call_id == call_id
-                        && call.status != crate::journal::OutboundStatus::Open
+                        && call.status != crate::journal::CallStatus::Open
                     {
                         closed = true;
                     }
@@ -2878,7 +2878,7 @@ impl<'plan> Vm<'plan> {
             )
             .map_err(retry_manager::error)?;
             match journal
-                .close_outbound(
+                .close_egress(
                     &call_id,
                     crate::journal::Closure::Timeout,
                     self.now,
@@ -3044,7 +3044,7 @@ impl<'plan> Vm<'plan> {
                             .map_err(retry_manager::error)?;
                     }
                     journal
-                        .open_outbound(intent.clone(), attempt)
+                        .open_egress(intent.clone(), attempt)
                         .map_err(VmError::Journal)?;
                     self.retry_manager = next;
                 }
@@ -3056,7 +3056,7 @@ impl<'plan> Vm<'plan> {
                 )
                 .map_err(retry_manager::error)?;
                 match journal
-                    .close_outbound(
+                    .close_egress(
                         &call_id,
                         crate::journal::Closure::Timeout,
                         self.now,
@@ -3730,7 +3730,10 @@ impl<'plan> Vm<'plan> {
         })
     }
 
-    fn closing_timers(&self, reference: &instance::Generation) -> Vec<(u8, Id)> {
+    fn closing_timers(
+        &self,
+        reference: &instance::Generation,
+    ) -> Vec<(crate::journal::DeadlineKind, Id)> {
         let Some(instance) = self.instances.get(reference) else {
             return Vec::new();
         };
@@ -3739,14 +3742,14 @@ impl<'plan> Vm<'plan> {
         };
         vec![
             (
-                crate::journal::timer_kind::INSTANCE_DRAIN,
-                ids::instance_closing_id(reference, crate::journal::timer_kind::INSTANCE_DRAIN),
+                crate::journal::DeadlineKind::InstanceDrain,
+                ids::instance_closing_id(reference, crate::journal::DeadlineKind::InstanceDrain),
             ),
             (
-                crate::journal::timer_kind::INSTANCE_SETTLEMENT,
+                crate::journal::DeadlineKind::InstanceSettlement,
                 ids::instance_closing_id(
                     reference,
-                    crate::journal::timer_kind::INSTANCE_SETTLEMENT,
+                    crate::journal::DeadlineKind::InstanceSettlement,
                 ),
             ),
         ]
@@ -3805,7 +3808,7 @@ impl<'plan> Vm<'plan> {
             retry_record: None,
             loop_record: None,
             logical_time: None,
-            timer_schedule: None,
+            deadlines: None,
             instance_commands: command.map(|id| {
                 Box::new(crate::journal::instance_stop::Packet {
                     produced: Vec::new(),
@@ -3819,7 +3822,7 @@ impl<'plan> Vm<'plan> {
             state_delta: vec![],
             emissions: vec![],
             routes: vec![],
-            timers: self.closing_timers(reference),
+            deadline_ids: self.closing_timers(reference),
         };
         self.retain_timer_arms(&mut record, self.closing_timer_arms(reference))?;
         journal.commit(record).map_err(VmError::Journal)?;
@@ -4065,7 +4068,7 @@ impl<'plan> Vm<'plan> {
                         .map_err(crate::boundary::DispatchError::Driver)
                         .map_err(VmError::Dispatch)?;
                     match journal
-                        .abandon_outbound(&call_id, self.now)
+                        .abandon_egress(&call_id, self.now)
                         .map_err(VmError::Journal)?
                     {
                         crate::journal::CloseVerdict::AlreadyClosed => {}
@@ -4191,7 +4194,7 @@ impl<'plan> Vm<'plan> {
                     retry_record: None,
                     loop_record: None,
                     logical_time: None,
-                    timer_schedule: None,
+                    deadlines: None,
                     instance_commands: None,
                     trigger: node::Trigger::Lifecycle(work.lifecycle),
                     cause: Some(work.cause.meta().sys().id()),
@@ -4200,7 +4203,7 @@ impl<'plan> Vm<'plan> {
                     state_delta: vec![],
                     emissions: vec![],
                     routes: vec![],
-                    timers: vec![],
+                    deadline_ids: vec![],
                 },
                 None,
                 None,
@@ -4783,7 +4786,10 @@ impl<'plan> Vm<'plan> {
         self.retain_graph_verdicts(&mut outcome.record)?;
         let close_request = outcome.record.close_scope.clone();
         if let Some(scope) = &close_request {
-            outcome.record.timers.extend(self.closing_timers(scope));
+            outcome
+                .record
+                .deadline_ids
+                .extend(self.closing_timers(scope));
         }
         let prepared =
             self.validate_and_prepare_emissions(&&*journal, slot, instance, &outcome.record)?;
@@ -4897,7 +4903,10 @@ impl<'plan> Vm<'plan> {
         self.retain_graph_verdicts(&mut outcome.record)?;
         let close_request = outcome.record.close_scope.clone();
         if let Some(scope) = &close_request {
-            outcome.record.timers.extend(self.closing_timers(scope));
+            outcome
+                .record
+                .deadline_ids
+                .extend(self.closing_timers(scope));
         }
         let prepared =
             self.validate_and_prepare_emissions(&&*journal, slot, instance, &outcome.record)?;
@@ -5067,7 +5076,7 @@ impl<'plan> Vm<'plan> {
             retry_record: None,
             loop_record: None,
             logical_time: None,
-            timer_schedule: None,
+            deadlines: None,
             instance_commands: None,
             consumed: vec![crate::journal::ConsumedPosition {
                 edge: delivery.edge.clone(),
@@ -5078,7 +5087,7 @@ impl<'plan> Vm<'plan> {
             state_delta: vec![],
             emissions: vec![],
             routes: vec![],
-            timers: vec![],
+            deadline_ids: vec![],
         };
         journal.commit(record).map_err(VmError::Journal)?;
         if self.scheduler.mailboxes.pop(slot, instance).is_none() {
@@ -5576,7 +5585,7 @@ impl<'plan> Vm<'plan> {
         }
         let call_id = intent.call_id;
         journal
-            .open_outbound(intent, attempt)
+            .open_egress(intent, attempt)
             .map_err(VmError::Journal)?;
         self.retry_manager = retry;
         let delivery = self

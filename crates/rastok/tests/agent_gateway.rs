@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use rastok::journal::{OutboundRecord, Record, SessionStatus};
+use rastok::journal::{EgressRecord, Record, SessionStatus};
 use rastok::{compiler::compile, contract::ContractCatalog, plan::GraphVersion};
 
 const GATEWAY: &str = include_str!("../../../examples/agent-gateway.rkg");
@@ -68,7 +68,7 @@ fn resident_gateway_scenarios_keep_protocol_frames_on_their_socket() {
         .records
         .iter()
         .filter_map(|record| match record {
-            Record::Outbound(OutboundRecord::Session(session))
+            Record::Egress(EgressRecord::Session(session))
                 if session.connector_path.to_string() == "conversation.model" =>
             {
                 Some(session)

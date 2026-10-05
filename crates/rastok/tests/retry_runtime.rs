@@ -8,7 +8,7 @@ use rastok::{
     contract::ContractCatalog,
     envelope::{Data, Namespace, Value},
     journal::retry_protocol::Fact,
-    journal::{MemJournal, OutboundRecord, Record},
+    journal::{EgressRecord, MemJournal, Record},
     node,
     plan::{self, GraphVersion},
     runtime::vm::Vm,
@@ -90,8 +90,8 @@ impl CallConnectorDriver for World {
 fn inject(vm: &mut Vm<'_>, journal: &mut MemJournal) {
     vm.inject(
         journal,
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(node::Path::new(["test"]).unwrap()),
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(node::Path::new(["test"]).unwrap()),
             port: node::Port::new("in").unwrap(),
             sequence: SubmissionSequence::Next,
             draft: Draft {
@@ -207,16 +207,16 @@ fn only_the_final_batch_is_routed_and_preparation_runs_once() {
         .records()
         .iter()
         .filter_map(|record| match record {
-            Record::Outbound(OutboundRecord::Call(call)) if call.closed_at.is_some() => Some(call),
+            Record::Egress(EgressRecord::Call(call)) if call.closed_at.is_some() => Some(call),
             _ => None,
         })
         .collect();
     assert_eq!(closed.len(), 3);
     assert_eq!(
-        closed[0].timer_schedule.as_ref().unwrap().arms()[0].due_at,
+        closed[0].deadlines.as_ref().unwrap().items()[0].due_at,
         100_000_000
     );
-    assert!(closed[2].timer_schedule.is_none());
+    assert!(closed[2].deadlines.is_none());
 }
 
 #[test]
@@ -260,7 +260,7 @@ fn real_timeout_retains_its_original_backoff_and_queue_time() {
         .records()
         .iter()
         .filter_map(|r| match r {
-            Record::Outbound(OutboundRecord::Call(call)) if call.closed_at.is_some() => Some(call),
+            Record::Egress(EgressRecord::Call(call)) if call.closed_at.is_some() => Some(call),
             _ => None,
         })
         .collect();
@@ -272,7 +272,7 @@ fn real_timeout_retains_its_original_backoff_and_queue_time() {
     assert!(
         closures
             .iter()
-            .all(|call| call.timer_schedule.as_ref().unwrap().arms()[0].due_at == 1_100_000_000)
+            .all(|call| call.deadlines.as_ref().unwrap().items()[0].due_at == 1_100_000_000)
     );
     vm.advance(&mut journal, &mut world, 1_099_999_999).unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
@@ -355,8 +355,8 @@ graph app : App {{
         if lifetime == "persistent" {
             vm.inject(
                 &mut journal,
-                InboundSubmission {
-                    provenance: InboundEnvelopeProvenance::single(
+                IngressSubmission {
+                    provenance: IngressEnvelopeProvenance::single(
                         node::Path::new(["test"]).unwrap(),
                     ),
                     port: node::Port::new("close").unwrap(),
@@ -392,7 +392,7 @@ graph app : App {{
         assert!(
             journal.records().iter().all(|record| match record {
                 Record::Transaction(record) => record.retry_record.is_none(),
-                Record::Outbound(OutboundRecord::Call(call)) => call.retry_record.is_none(),
+                Record::Egress(EgressRecord::Call(call)) => call.retry_record.is_none(),
                 _ => true,
             }),
             "drain does not fabricate a Retry operation or attempt"
@@ -495,10 +495,10 @@ fn recovery_cannot_bypass_retry_without_the_exact_retained_closing() {
         .iter()
         .filter_map(|record| match record {
             Record::Transaction(record) if record.retry_record.is_some() => None,
-            Record::Outbound(OutboundRecord::Call(call)) => {
+            Record::Egress(EgressRecord::Call(call)) => {
                 let mut call = call.clone();
                 call.retry_record = None;
-                Some(Record::Outbound(OutboundRecord::Call(call)))
+                Some(Record::Egress(EgressRecord::Call(call)))
             }
             _ => Some(record.clone()),
         })
@@ -866,7 +866,7 @@ graph app : App {
         .records()
         .iter()
         .filter_map(|record| match record {
-            Record::Outbound(OutboundRecord::Call(call)) => {
+            Record::Egress(EgressRecord::Call(call)) => {
                 Some((call.retry_record.as_ref()?.context?, call.intent.call_id))
             }
             _ => None,
@@ -964,8 +964,8 @@ graph app : App {
         for port in order {
             vm.inject(
                 &mut journal,
-                InboundSubmission {
-                    provenance: InboundEnvelopeProvenance::single(
+                IngressSubmission {
+                    provenance: IngressEnvelopeProvenance::single(
                         node::Path::new(["test"]).unwrap(),
                     ),
                     port: node::Port::new(port).unwrap(),
@@ -1029,9 +1029,9 @@ graph app : App {
             let mut restored = Vm::boot_program(&plan, hash, GraphVersion(1), resume_at, None);
             let mut resumed_world = World::default();
             let already_closed = retained.records().iter().any(|record| {
-                matches!(record, Record::Outbound(OutboundRecord::Call(call))
+                matches!(record, Record::Egress(EgressRecord::Call(call))
                     if call.intent.connector_path.to_string() == "silent"
-                        && call.status != rastok::journal::OutboundStatus::Open)
+                        && call.status != rastok::journal::CallStatus::Open)
             });
             restored
                 .recover_with_bindings(&retained, &mut resumed_world)
@@ -1120,8 +1120,8 @@ graph app : App {
             for port in order {
                 vm.inject(
                     &mut journal,
-                    InboundSubmission {
-                        provenance: InboundEnvelopeProvenance::single(
+                    IngressSubmission {
+                        provenance: IngressEnvelopeProvenance::single(
                             node::Path::new(["test"]).unwrap(),
                         ),
                         port: node::Port::new(port).unwrap(),
@@ -1228,8 +1228,8 @@ graph app : App {{
             for port in order {
                 vm.inject(
                     &mut journal,
-                    InboundSubmission {
-                        provenance: InboundEnvelopeProvenance::single(
+                    IngressSubmission {
+                        provenance: IngressEnvelopeProvenance::single(
                             node::Path::new(["test"]).unwrap(),
                         ),
                         port: node::Port::new(port).unwrap(),
@@ -1249,8 +1249,8 @@ graph app : App {{
                 } else {
                     vm.inject(
                         &mut journal,
-                        InboundSubmission {
-                            provenance: InboundEnvelopeProvenance::single(
+                        IngressSubmission {
+                            provenance: IngressEnvelopeProvenance::single(
                                 node::Path::new(["test"]).unwrap(),
                             ),
                             port: node::Port::new("close").unwrap(),
@@ -1466,8 +1466,8 @@ graph app : App {
     for key in ["alice", "bob"] {
         vm.inject(
             &mut journal,
-            InboundSubmission {
-                provenance: InboundEnvelopeProvenance::single(node::Path::new(["test"]).unwrap()),
+            IngressSubmission {
+                provenance: IngressEnvelopeProvenance::single(node::Path::new(["test"]).unwrap()),
                 port: node::Port::new("in").unwrap(),
                 sequence: SubmissionSequence::Next,
                 draft: Draft {
@@ -1638,8 +1638,8 @@ graph app : App {
             assert!(vm.step_with_bindings(&mut journal, &mut world).unwrap());
         }
         match (steps_after_closure, journal.records().last().unwrap()) {
-            (0, Record::Outbound(OutboundRecord::Call(call))) => {
-                assert_ne!(call.status, rastok::journal::OutboundStatus::Open);
+            (0, Record::Egress(EgressRecord::Call(call))) => {
+                assert_ne!(call.status, rastok::journal::CallStatus::Open);
             }
             (1 | 2, Record::Transaction(record)) => {
                 let facts = &record.retry_record.as_deref().unwrap().facts;
@@ -1652,8 +1652,8 @@ graph app : App {
         }
         vm.inject(
             &mut journal,
-            InboundSubmission {
-                provenance: InboundEnvelopeProvenance::single(node::Path::new(["test"]).unwrap()),
+            IngressSubmission {
+                provenance: IngressEnvelopeProvenance::single(node::Path::new(["test"]).unwrap()),
                 port: node::Port::new("close").unwrap(),
                 sequence: SubmissionSequence::Next,
                 draft: Draft {

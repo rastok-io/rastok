@@ -302,8 +302,8 @@ fn malformed_native_or_unhydrated_data_cannot_enter_the_outbound_journal() {
         let mut journal = MemJournal::new(GraphVersion(1));
         vm.inject(
             &mut journal,
-            InboundSubmission {
-                provenance: InboundEnvelopeProvenance::single(
+            IngressSubmission {
+                provenance: IngressEnvelopeProvenance::single(
                     node::Path::new(["probe"]).expect("path"),
                 ),
                 port: node::Port::new("in").expect("port"),

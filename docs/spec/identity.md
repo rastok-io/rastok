@@ -35,7 +35,7 @@
 > Connector semantic hashes and every package to v11, and leaves pre-session
 > causal records byte-identical because the new session keys are omitted.
 > H5 first adds source Connector key 27, then the generic inbound Call fold
-> under D-2026-08-26-5 with INBOUND key 28 and TRANSACTION key 52. H5.1 binds
+> under D-2026-08-26-5 with INGRESS key 28 and TRANSACTION key 52. H5.1 binds
 > live H1–2 ack traffic without allocating another form. H5.2 permits the
 > existing consumed-position key 33 beside cause key 39 and Call-exit key 52
 > for a graph response; no key or recipe is added. All three allocated H5 keys
@@ -72,7 +72,7 @@
 >
 > D-2026-09-05-1 and R4 allocate the v16 ledger in §1.1. The current
 > package tables live in [plan-package.md](../architecture/plan-package.md);
-> §3 includes r2 journal key 55 and retained timer key 56. Key 53 stays
+> §3 includes r2 journal key 55 and unsealed timer key 56. Key 53 stays
 > historical, never reinterpreted. [R9 qualification](../architecture/rework-r9-qualification.md)
 > records the single blessing and unchanged causal witnesses.
 
@@ -247,7 +247,7 @@ extending a package merely to name a library or negotiated wire version.
 
 **M1.6 H4 live-HttpClient checkpoint (2026-08-26).** The live Driver consumes
 the exact H2 sheet and H1 Call forms. Prepared request bytes already own the
-OUTBOUND digest; selected HTTP version and response headers/status are external
+EGRESS digest; selected HTTP version and response headers/status are external
 observations on newly minted output envelopes. D-2026-08-30-3 later narrows
 “request bytes” to the complete logical descriptor when an attested secret is
 used: its logical reference is sealed while physical material is fixed by the
@@ -281,7 +281,7 @@ WebSocketClient `d4f92e15…`, and WebSocketServer `d36bcbf4…`. Compiler probe
 v11→v12 envelope version and checksum; no stored causal trace moves.
 
 **M1.6 H5 generic inbound-Call checkpoint (2026-08-26).**
-D-2026-08-26-4/-5 allocate optional INBOUND source key 27, inbound-Call key
+D-2026-08-26-4/-5 allocate optional INGRESS source key 27, inbound-Call key
 28, ordinary TRANSACTION terminal key 52, and internal lifecycle tag 9
 (`reply`). No source handler may carry that tag. The fields occur only for new
 Connector-origin facts, so every existing package, semantic hash and causal
@@ -311,7 +311,7 @@ pre-admission `MalformedRequest` and `AuthFailed` branches from
 `d4f92e15…`, WebSocketServer `d36bcbf4…`, compiler/echo/JSONL and the gauge
 `0d3ad43d…` remain fixed. This is a semantic and package-body move only for
 graphs whose resolved HttpServer exit type changes; the categorical package
-format remains v12. New respond-mode INBOUND facts may add timer kind 8 with
+format remains v12. New respond-mode INGRESS facts may add timer kind 8 with
 the `InboundCallRef` as reference. It is omitted from ack and every old fact,
 so existing causal traces do not move.
 
@@ -455,7 +455,7 @@ algebra; R9 blessed the three independently validated package witnesses once. Th
   `PhysicalEdge`;
 - manager-command destinations and Loop r2 Produced/Consumed facts;
 - exact `OpeningAdmissionRef`, `LoopRunRef`, and routed LoopContext;
-- retained timer schedules, key 56, outside the causal projection as decided
+- unsealed timer schedules, key 56, outside the causal projection as decided
   in D-2026-09-07-2; allocation is part of this cutover, not a second R7 bump;
 - productibility evidence re-derived by the validator;
 - executable ordered multi-emission;
@@ -552,7 +552,7 @@ the producer's record retains only production. A competing retained closure
 settles redundant requests without fabricating another transaction.
 
 Diagnostic recording **v2** adds the lossless optional packet at the end of
-INBOUND and TRANSACTION rows. Older recordings refuse by version. No other
+INGRESS and TRANSACTION rows. Older recordings refuse by version. No other
 record species, close-scope ownership, timer schedule or existing seal changes.
 The [implementation ledger](../architecture/instance-stop-command.md) records
 qualification separately from this allocation, before fixture re-blessing.
@@ -672,7 +672,7 @@ unchanged by v17, extended sparsely at key 57 by v18 and at key 58 by v19.
 Historical key 53 is retained in the registry solely to prevent reuse; active
 Loop state uses key 55 and Retry uses key 58. Required timer dates (key 56)
 and outbound Call closure times (key 59) are retained separately, outside the
-causal seal. Retry OUTBOUND closures may also carry causal timer references
+causal seal. Retry EGRESS closures may also carry causal timer references
 at the existing key 37.
 
 Two byte formats exist and are never the same object : the **durable
@@ -701,15 +701,23 @@ canonical records ; record-by-record comparison exists to *explain* a
 failure (`rastok trace dump` renders the form for review — derived,
 non-normative).
 
+**Vocabulary and staging (5 October).** Record kinds are INGRESS,
+TRANSACTION and EGRESS; inbound/outbound describe exchange direction.
+The current tables still pin the executable v19 bytes. Names change in the
+byte-neutral vocabulary lot; numerical compaction and removal of unpublished
+slots occur together at the reviewed v20 cutover, before its one bless
+([D-2026-10-05-1](decisions.md#d-2026-10-05-1--align-the-human-review-vocabulary-before-one-public-cutover)).
+The release-number change to format 1 is a separate pre-publication TODO.
+
 **Per-species tables.** A single flat table would conflate the three
 record kinds and omit fields that distinguish them : two semantically
 different journals could project to the same bytes. The canonical form is a
-**shared spine + one extension table per kind**, so that *every
+**shared canonical form + one extension table per kind**, so that *every
 causal fact a record carries has a key*. All tables are extend-only
 (append, never renumber, never reuse) ; an absent field is an
 omitted key.
 
-**The envelope spine** (keys `1–9`) — how any envelope referenced by
+**The canonical envelope form** (keys `1–9`) — how any envelope referenced by
 a record is canonicalized (its full `meta.sys`, per envelope.md §1) :
 
 | Key | Field | CBOR type | Notes |
@@ -728,7 +736,7 @@ a record is canonicalized (its full `meta.sys`, per envelope.md §1) :
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
-| 10 | kind | uint | 1 = INBOUND · 2 = TRANSACTION · 3 = OUTBOUND |
+| 10 | kind | uint | 1 = INGRESS · 2 = TRANSACTION · 3 = EGRESS |
 
 **A raw scheduler timestamp is NOT generally a sealed field**, consistently with
 simulation-semantics §6.1, which excludes an obligation's arming and due
@@ -749,20 +757,20 @@ observe the transaction-fixed logical instant, key 54 seals that explicit
 input. Omitting it would allow two different control-flow inputs to share one
 causal record.
 
-**INBOUND** (kind 1 — an envelope entered) — keys `20–28` and sparse `57`:
+**INGRESS** (kind 1 — an envelope entered) — keys `20–28` and sparse `57`:
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
-| 20 | envelope | map | the spine (keys 1–9) of the entering envelope |
+| 20 | envelope | map | the canonical form (keys 1–9) of the entering envelope |
 | 21 | connector_path | text | the ingress node's root-relative path (root recipe input, envelope.md §2) |
 | 22 | inbound_seq | uint | the atomic sequence for `(connector_path, replica)` — minted by the owning shard's leader ; root recipe input |
-| 23 | replica | uint | the logical inbound Connector replica in `InboundEnvelopeProvenance`; sealed so the record autonomously reconstructs `(connector_path, replica, inbound_seq)`. It may be allocated by the leader responsible for that inbound Connector, but is never the target-routing shard and never changes when a destination moves Workers. |
+| 23 | replica | uint | the logical inbound Connector replica in `IngressEnvelopeProvenance`; sealed so the record autonomously reconstructs `(connector_path, replica, inbound_seq)`. It may be allocated by the leader responsible for that inbound Connector, but is never the target-routing shard and never changes when a destination moves Workers. |
 | 24 | ingress_port | text | the source port the envelope entered through: an App input when key 27 is absent, otherwise the named Connector output; **omitted for the conventional `in`** (absent = omitted), so pre-multiport records remain byte-identical (D-2026-08-08-2) |
-| 25 | routes | array | target admissions made before the inbound commit, each `[edge (text), target_instance_ref]`, sorted by canonical `(edge, target_instance_ref)`; omitted only when this ingress produces no routed delivery. The destination reservation returns the generation, so delayed transport cannot enter a successor. The entering envelope is implicit in the INBOUND record. `@loop.in` is the reserved internal edge spelling for root admission into a Loop manager; it records selection but is never a spatial plan edge. |
+| 25 | routes | array | target admissions made before the inbound commit, each `[edge (text), target_instance_ref]`, sorted by canonical `(edge, target_instance_ref)`; omitted only when this ingress produces no routed delivery. The destination reservation returns the generation, so delayed transport cannot enter a successor. The entering envelope is implicit in the INGRESS record. `@loop.in` is the reserved internal edge spelling for root admission into a Loop manager; it records selection but is never a spatial plan edge. |
 | 26 | session_ingress | array | present only for Session ingress: `[1, session_ref (bytes16)]` opens a session and `[2, session_ref (bytes16)]` admits one message into an already-open session. Omitted for Event and Call facts, preserving every pre-H1 record byte. |
-| 27 | source_connector_path | array | lexical UTF-8 path segments of the inbound Connector whose output introduced this root. Omitted exactly for an explicit App-boundary injection. Derived from the proposal's single `InboundEnvelopeProvenance` authority at acceptance; its presence and structural spelling are the replay-routing fact. |
-| 28 | inbound_call | array | present exactly when this Connector-origin root opens an inbound Call: `[inbound_call_ref (bytes16), source_instance_ref]`. The reference is the root id behind a direction-specific type; the instance is selected and reserved before this same INBOUND commit. Omitted for Event, Session and App-boundary facts. |
-| 57 | instance_commands | map | Sparse exact-instance closure production, as defined below. Omitted without commands; never consumption on INBOUND. |
+| 27 | source_connector_path | array | lexical UTF-8 path segments of the inbound Connector whose output introduced this root. Omitted exactly for an explicit App-boundary injection. Derived from the proposal's single `IngressEnvelopeProvenance` authority at acceptance; its presence and structural spelling are the replay-routing fact. |
+| 28 | inbound_call | array | present exactly when this Connector-origin root opens an inbound Call: `[inbound_call_ref (bytes16), source_instance_ref]`. The reference is the root id behind a direction-specific type; the instance is selected and reserved before this same INGRESS commit. Omitted for Event, Session and App-boundary facts. |
+| 57 | instance_commands | map | Sparse exact-instance closure production, as defined below. Omitted without commands; never consumption on INGRESS. |
 
 **TRANSACTION** (kind 2 — one Executor/manager firing or one controller-owned
 Node lifecycle fact;
@@ -775,21 +783,21 @@ execution-model §1) — keys `30–39`, `48–52`, `54–55` and sparse `57–5
 | 31 | instance_ref | array | `[instance_address (bytes), generation (uint)]`, mandatory for every firing; generation is the zero-based journal-derived `l:start` ordinal for that address |
 | 32 | trigger | text | namespaced `p:<port>` / `l:<lifecycle>` (envelope.md §3 ; closed `l:` registry) |
 | 33 | consumed | array | the consumed input **positions** — each a fixed tuple `[edge (text), source_instance_ref, seq (uint)]` (the cursor key, delivery-semantics §2 — per `(graph-edge × source instance reference)`, NOT per port: several edges feed one port, so `(port, seq)` is not injective); **array sorted by canonical `(edge, source_instance_ref, seq)`** |
-| 34 | join_inputs | array | for a join trigger, the presence-completing set (envelope.md §3), each a spine-`id` (bytes 16), **in the handler's declared port order**; this array is deliberately not lexicographically re-sorted, because tuple order is identity; omitted otherwise |
+| 34 | join_inputs | array | for a join trigger, the presence-completing set (envelope.md §3), each a envelope `id` (bytes 16), **in the handler's declared port order**; this array is deliberately not lexicographically re-sorted, because tuple order is identity; omitted otherwise |
 | 35 | state_delta | array | canonical **sorted pair list** `[field_path (text), tagged_value]` of the firing Node's private `var` changes `state → state'` (sub-form below; fields sorted by `field_path`); omitted when empty |
-| 36 | emissions | array | **in text/`emission_index` order** (execution-model §4) ; each entry a fixed tuple `[port (text), emission_index (uint), envelope (spine 1–9)]` |
-| 37 | timers | array | dated obligations armed by a transaction, accepting INBOUND fact or Retry OUTBOUND closure — each a fixed tuple `[kind (uint), ref (bytes)]`, sorted by `(kind, ref)`. The extend-only kinds are `1 = call timeout`, `2 = join within`, `3 = instance lifetime`, `4 = Saga timeout (reserved)`, `5 = temporal recurrence delay (Loop or Retry)`, `6 = instance drain`, `7 = instance settlement`, `8 = inbound Call request timeout`, `9 = outbound Session handshake timeout`. Kind 3 uses domain `0x21`; kind 5 names the exact next admission (Loop domain `0x06`, Retry domain `0x07`); kinds 6/7 use domain `0x22` plus their kind; kind 8 uses the already-derived `InboundCallRef`; kind 9 uses the candidate `SessionRef`. The due instant is NOT sealed (retained separately for recovery). |
+| 36 | emissions | array | **in text/`emission_index` order** (execution-model §4) ; each entry a fixed tuple `[port (text), emission_index (uint), envelope (canonical keys 1–9)]` |
+| 37 | deadline_ids | array | dated obligations armed by a transaction, accepting INGRESS fact or Retry EGRESS closure — each a fixed tuple `[kind (uint), ref (bytes)]`, sorted by `(kind, ref)`. The currently allocated kinds are `1 = call timeout`, `2 = join within`, `3 = instance lifetime`, `5 = temporal recurrence delay (Loop or Retry)`, `6 = instance drain`, `7 = instance settlement`, `8 = inbound Call request timeout`, `9 = outbound Session handshake timeout`. Kind 3 uses domain `0x21`; kind 5 names the exact next admission (Loop domain `0x06`, Retry domain `0x07`); kinds 6/7 use domain `0x22` plus their kind; kind 8 uses the already-derived `InboundCallRef`; kind 9 uses the candidate `SessionRef`. The due instant is NOT sealed (retained separately for recovery). |
 | 38 | routes | array | target admissions made before commit, each `[delivery_id (bytes16), edge (text), target_instance_ref]`, sorted by canonical tuple; omitted only when the transaction creates no routed delivery. This is the recovery authority for a delivery not yet consumed by its target; replay never re-evaluates `instance.key` and never substitutes a later generation. |
 | 39 | cause_id | bytes(16) | causal envelope of a lifecycle transaction. Normally key 33 identifies the same cause and this field is omitted; `l:start`, `l:stop` and later `l:evict` have no consumed cursor, while a graph-response `l:reply` deliberately carries both: key 33 names the response delivery and key 39 preserves the distinct opening root as causal parent. This keeps lifecycle causality autonomous rather than relying on record order. |
-| 48 | parent_instance_ref | array | present exactly on `l:start` for a non-root owner; the fixed `[instance_address, generation]` of the enclosing Graph instance. It opens the replayable parent/child lifecycle obligation and is omitted only for the root App owner. A logical child address contains ancestor key/time frames but not ancestor generations, so this fact is not derivable from key 31. |
+| 48 | parent_instance_ref | array | present exactly on `l:start` for a non-root owner; the fixed `[instance_address, generation]` of the enclosing Graph instance. It opens the replayable parent/child lifecycle obligation and is omitted only for the root App owner. A logical child address contains ancestor key/time segments but not ancestor generations, so this fact is not derivable from key 31. |
 | 49 | close_scope_ref | array | present exactly on the transaction whose close request wins (`l:closing`, or a handler transaction containing bare `stop`); the fixed instance reference of the root of the Closing scope. Descendant work may drain under this reference, and later external admission reserves its successor. Omitted on ordinary firings. |
 | 50 | session_exit_ref | bytes(16) | present exactly on the Connector transaction that terminates a Session. That transaction emits exactly one conventional `exit`, last; its envelope projects the same reference as `meta.ext.session_id`. The fold refuses a second exit, an exit with an open write, or any later message/write. |
-| 52 | inbound_call_exit_ref | bytes(16) | present exactly on the Connector `l:reply` transaction that terminates the inbound Call opened by INBOUND key 28. Its cause is the root request; fixed ack consumes zero positions, while a graph response consumes exactly its one real delivery position. Owner/instance equal the opening source and exactly one conventional `exit` is last. The fold refuses an unmatched trigger or any second terminal. |
+| 52 | inbound_call_exit_ref | bytes(16) | present exactly on the Connector `l:reply` transaction that terminates the inbound Call opened by INGRESS key 28. Its cause is the root request; fixed ack consumes zero positions, while a graph response consumes exactly its one real delivery position. Owner/instance equal the opening source and exactly one conventional `exit` is last. The fold refuses an unmatched trigger or any second terminal. |
 | 53 | retired loop_fact | array | Historical r1 form, never emitted or reinterpreted by v16. |
 | 54 | logical_time | int | the signed nanosecond logical instant since the Unix epoch, present exactly when a checked firing handler can observe `now()`; fixed across guard selection and body evaluation, omitted otherwise. This is an explicit transaction input, not a scheduler due date or host `committed_at`. |
 | 55 | loop_protocol | map | Sparse r2 packet: 1 context, 2 routed contexts, 3 produced commands, 4 consumed commands, 5 manager facts. Exact forms below; absent for unrelated transactions. |
 | 57 | instance_commands | map | Production or winning target-owned consumption; exact shape below. Absent without commands; separate from Loop r2. |
-| 58 | retry_protocol | map | Sparse Retry packet, also carried on its outbound Call facts. Correlation and Opened/Admitted/Held/Consumed/Advance/Published/Close use the [C1 exact packet](../architecture/retry-c1-identity.md#4-shared-journal-distinct-causes), checked against the retained prefix. Absent on unrelated records, INBOUND and Sessions. |
+| 58 | retry_protocol | map | Sparse Retry packet, also carried on its outbound Call facts. Correlation and Opened/Admitted/Held/Consumed/Advance/Published/Close use the [C1 exact packet](../architecture/retry-c1-identity.md#4-shared-journal-distinct-causes), checked against the retained prefix. Absent on unrelated records, INGRESS and Sessions. |
 
 **Instance closure packet — key 57.** This is causal, unlike scheduler metadata
 at key 56. Exactly one field: `1: [command+]` for production, or
@@ -812,31 +820,31 @@ these claims to exact committed admissions and independently checks the fold.
 packet := {1: [run_ref*]?, 2: [[delivery_id, [run_ref+]]*]?,
            3: [command_produced*]?, 4: [command_ref*]?, 5: [fact*]?}
 command_produced := [command_ref, run_ref, iteration, command_value]
-command_value := [1, state_spine]                  // Next
+command_value := [1, state_form]                  // Next
                | [2, cause_id]                    // Again
                | [3, [cause_id, done_kind]]        // Done
 done_kind := 1 natural | 2 explicit
-fact := [1, run_ref, instance_ref, opening, entry, fuel, state_spine]
-      | [2, run_ref, from_iteration, to_iteration, remaining, command_ref, state_spine]
-      | [3, run_ref, iteration, admission_id, admitted_spine]
+fact := [1, run_ref, instance_ref, opening, entry, fuel, state_form]
+      | [2, run_ref, from_iteration, to_iteration, remaining, command_ref, state_form]
+      | [3, run_ref, iteration, admission_id, admitted_form]
       | [4, run_ref, iteration, close_reason]
-      | [5, run_ref, iteration, command_ref, last_state_spine, expired_spine]
+      | [5, run_ref, iteration, command_ref, last_state_form, expired_form]
 opening := [1, inbound_id, entry_port] | [2, delivery_id]
 close_reason := 1 natural | 2 explicit_done | 3 stopped
 ```
 
-Fact tags are Open/Advance/Admit/Close/Expired. Retained Advance also owns its
+Fact tags are Open/Advance/Admit/Close/Expired. Advance also retains its
 optional due instant, excluded from this causal form and checked against key 56.
 Domains are run `0x14`, command `0x15` and re-admission `0x06`; exact opening
 admission, not only business origin, identifies a run. See [Loop](loop.md).
 
-**Retained scheduler metadata — not part of the causal seal**
+**Unsealed scheduler metadata — not part of the causal seal**
 (D-2026-09-07-2):
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
-| 56 | timer_schedule | array | `[armed_at_ns, [[kind, reference_bytes16, due_at_ns], ...]]`, retained atomically beside the accepting INBOUND, TRANSACTION or Retry OUTBOUND closure. Instants are signed i64 logical nanoseconds; due ≥ armed-at. Kinds use the existing 1–9 registry (4 remains reserved). Arms retain actual order, including ordered renewals, never sort by reference. Empty schedules are omitted. |
-| 59 | closed_at | int | Original signed logical nanoseconds of every winning outbound Call closure, including non-Retry Calls. Absent on Open and on INBOUND/TRANSACTION/Session facts. A Retry delay arm uses this instant as its key-56 `armed_at`; recovery never substitutes restart time. |
+| 56 | deadlines | array | `[created_at_ns, [[kind, reference_bytes16, due_at_ns], ...]]`, retained atomically beside the accepting INGRESS, TRANSACTION or Retry EGRESS closure. Instants are signed i64 logical nanoseconds; due ≥ created-at. The eight admitted kinds are 1, 2, 3, 5, 6, 7, 8 and 9; byte 4 and all unknown bytes refuse. Arms retain actual order, including ordered renewals, never sort by reference. Empty schedules are omitted. |
+| 59 | closed_at | int | Original signed logical nanoseconds of every winning outbound Call closure, including non-Retry Calls. Absent on Open and on INGRESS/TRANSACTION/Session facts. A Retry delay arm uses this instant as its key-56 `created_at`; recovery never substitutes restart time. |
 
 Storage integrity must cover this required recovery evidence independently of
 the causal seal. Key 37 keeps its existing sealed timer references; key 54
@@ -847,9 +855,9 @@ recovery restores Calls, joins, lifetimes, Closing, Loop and Retry wakes from ac
 prefixes. Missing dates never default to restart time. Storage is still an
 in-memory implementation; this is not a durable-backend claim.
 
-**OUTBOUND / Call** (kind 3 — one external call's WAL record ;
+**EGRESS / Call** (kind 3 — one external call's WAL record ;
 delivery-semantics §4) — keys `40–47`, plus sparse `37` and `58` for Retry;
-retained-only `56` and `59` are described above:
+unsealed `56` and `59` are described above:
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
@@ -865,11 +873,11 @@ retained-only `56` and `59` are described above:
 Every outbound Call closure also retains **key 59**, `closed_at` as signed
 logical nanoseconds; an Open has no value. This field is outside the causal
 projection. Retry closures may carry causal timer references at key 37,
-retained schedule key 56 (`armed_at = closed_at`) and correlation key 58.
+unsealed schedule key 56 (`created_at = closed_at`) and correlation key 58.
 The next-admission reference names the Retry operation/ordinal/preceding Call,
 not a Loop command. Recovery never restarts that delay from reboot time.
 
-**OUTBOUND / Session** (kind 3 — opening and message-write WAL facts;
+**EGRESS / Session** (kind 3 — opening and message-write WAL facts;
 delivery-semantics §4.5) — key `51` only. The value is one closed array form:
 
 | Tag | Fact | Exact array |
@@ -883,11 +891,11 @@ delivery-semantics §4.5) — key `51` only. The value is one closed array form:
 Call and Session subforms are distinguishable without inspecting a contract:
 a Call record carries keys 40–47 and never key 51; a Session record carries
 key 51 and none of keys 40–47. An inbound Session terminal is represented by
-the ordinary Connector TRANSACTION key 50. An inbound Call uses INBOUND key
-28 plus ordinary Connector TRANSACTION key 52 and **never** an OUTBOUND Call
+the ordinary Connector TRANSACTION key 50. An inbound Call uses INGRESS key
+28 plus ordinary Connector TRANSACTION key 52 and **never** an EGRESS Call
 record. Neither exchange adds a fourth record kind.
 
-Key 44's `status` is the internal state of the OUTBOUND WAL record, not a
+Key 44's `status` is the internal state of the EGRESS WAL record, not a
 graph port and not a payload union. M1.3's conventional `exit` port therefore
 does not rename this concept by implication. B7 changed the closure payload to
 an ordered multi-output completion; B8 changed only the plan package's logical
@@ -898,7 +906,7 @@ compound value in the tables above has a fixed shape and, where it is
 a tagged union, a **numeric discriminant** — so two implementations
 cannot diverge on bytes for the same journal :
 
-- **`tier2` (spine key 7)** = the fixed birth-stamp fields
+- **`tier2` (envelope key 7)** = the fixed birth-stamp fields
   (envelope.md §1.2), each present only when born in scope, encoded as
   a canonical sorted list of pairs `[stamp_kind (uint), value]` sorted
   by `stamp_kind`, from the EXACT set :
@@ -962,19 +970,19 @@ cannot diverge on bytes for the same journal :
   `tagged_value` bytes. All temporal logical types share the Arrow
   nanosecond convention — no µs anywhere in the seal.)
 - **`instance_address`** is the canonical CBOR
-  bytes of `[owner_path (array<text segment>), frames (array)]`. Segment
+  bytes of `[owner_path (array<text segment>), segments (array)]`. Segment
   boundaries are identity: no dotted display rendering is ever sealed.
-  `frames` is ordered from
-  outermost to innermost owner. Each frame is
-  `[frame_owner_path (array<text segment>), frame_kind (uint), payload]`, with the
+  `segments` is ordered from
+  outermost to innermost owner. Each segment is
+  `[segment_scope_path (array<text segment>), segment_kind (uint), payload]`, with the
   extend-only kinds `1 = selected_key` (payload = `[resolved_key_type,
   tagged_value]`, using the plan's canonical `DataType` sub-form and the value
   registry above) and `2 = processing_time_box` (payload = the epoch-aligned
   box-start timestamp in signed nanoseconds). The type is required because a
   materialized `Value` deliberately does not duplicate integer width, temporal
   unit, decimal precision, enum domain, or struct field types. When one owner contributes both
-  frames, selected-key precedes time-box. Singleton ownership contributes no
-  frame; the static `owner_path` still distinguishes Nodes. Generation,
+  segments, selected-key precedes time-box. Singleton ownership contributes no
+  segment; the static `owner_path` still distinguishes Nodes. Generation,
   virtual shard, Worker, Host, lease, and leader epoch are never address
   fields. An **`instance_ref`** is the fixed array `[instance_address (bytes),
   generation (uint)]`. Generation is the zero-based ordinal of `l:start` for
@@ -991,7 +999,7 @@ cannot diverge on bytes for the same journal :
   excludes a JSON tag) ; `json / protobuf / parquet / msgpack` are
   *boundary* codecs a Connector speaks on the wire, never internal
   `data` representations — so two runtimes cannot seal the same JSON as
-  `[raw,…]` vs `[json,…]`. `data` (spine key 8) is
+  `[raw,…]` vs `[json,…]`. `data` (envelope key 8) is
   `[encoding_tag (uint), bytes]` — the bytes are opaque, compared
   as-is, never re-encoded.
 - **`state_delta` (TX key 35)** = a canonical sorted list of pairs
@@ -1014,20 +1022,20 @@ cannot diverge on bytes for the same journal :
   `(5, reentry_envelope_id)` in key 37, so recovery can re-arm the same
   obligation without changing causal identity. V16 does not extend or reuse
   this shape; the current r2 form uses key 55 below.
-- **`app_meta` values (spine key 9)** : each triple's third element is
+- **`app_meta` values (envelope key 9)** : each triple's third element is
   a `tagged_value` (per the registry above).
-- **`timers` (TX key 37)** = tuples `[timer_kind (uint), ref (bytes 16)]`,
-  `timer_kind` from `1 = call_timeout · 2 = join_within ·
-  `3 = instance_lifetime · 4 = saga_timeout · 5 = loop_delay ·
+- **`deadline_ids` (key 37)** = tuples `[deadline_kind (uint), ref (bytes 16)]`,
+  `DeadlineKind` from `1 = call_timeout · 2 = join_within ·
+  3 = instance_lifetime · 5 = recurrence_delay ·
   6 = instance_drain · 7 = instance_settlement ·
   8 = inbound_call_timeout · 9 = session_handshake`
-  (extend-only), `ref` = the obligation's derived 16-byte identity —
+  (byte 4 and unknown bytes refuse), `ref` = the obligation's derived identity —
   for a call budget, the `delivery_ref` of the arming delivery
   (envelope.md §2); kind 3 derives under domain `0x21` from
-  `(instance_address, generation)`, kind 5 reuses the exact `l:next` envelope
-  id, while kinds 6/7 derive under domain
-  `0x22` from `(instance_address, generation, timer_kind)`. The signed
-  nanosecond due instant is never sealed (annotation).
+  `(instance_address, generation)`, kind 5 names the exact next Loop or Retry
+  admission, while kinds 6/7 derive under domain
+  `0x22` from `(instance_address, generation, deadline_kind)`. The signed
+  nanosecond due instant is unsealed and retained in `deadlines` (key 56).
 - **`session_ref` and `session_write_ref`** use the same injective framed
   derivation as every other identity in this registry: one domain byte, then
   for each listed component `u32_le(length) ‖ bytes`. Owner path segments are
@@ -1040,7 +1048,7 @@ cannot diverge on bytes for the same journal :
   order never enter these recipes. Their lowercase hexadecimal text spelling
   is the sole `meta.ext.session_id` projection; causal record fields always
   carry the raw 16 bytes.
-- **`closure` (OUTBOUND key 45) — the EXACT byteshapes.**
+- **`closure` (EGRESS key 45) — the EXACT byteshapes.**
   The rule is « one call = exactly one closure ». The SEALED
   causal `status` (key 44) is exactly `1 open · 2 closed · 4 abandoned`
   (value `3 discarded` is NOT a sealed status — see below). Key 45 is
@@ -1061,7 +1069,7 @@ cannot diverge on bytes for the same journal :
     These are the two supervision paths that may mint that declared case.
   - `discarded` (a LATE response arriving AFTER closure —
     delivery-semantics §4 / execution-model §6.3, **graph-invisible**) is
-    **NOT a sealed OUTBOUND status** : it is a separate
+    **NOT a sealed EGRESS status** : it is a separate
     NON-CAUSAL observability record, never part of the seal. Its payload
     (the late completion) is a diagnostic
     annotation, so two runs seal identically regardless of a discarded
@@ -1083,8 +1091,8 @@ logical/provider coordinates and version are attested.
 
 **Collision guarantee.** Two records
 differ in bytes **iff** they differ in any causal fact : the kind,
-any referenced envelope's spine (incl. the namespaced `app_meta`
-triples and `tier2` stamps), the INBOUND `(connector_path, replica,
+any referenced envelope's canonical form (incl. the namespaced `app_meta`
+triples and `tier2` stamps), the INGRESS `(connector_path, replica,
 inbound_seq)` root recipe, the firing node/key/trigger, the consumed
 positions, the typed `state_delta`, the ordered emissions, the call
 key/digest/status and the discriminated `closure`, or the Session opening,

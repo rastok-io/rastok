@@ -83,7 +83,7 @@ pub(super) fn operations(vm: &Vm<'_>, records: &[Record]) -> JsonValue {
                             }
                         }
                     }
-                    Record::Outbound(OutboundRecord::Call(call)) => {
+                    Record::Egress(EgressRecord::Call(call)) => {
                         let Some(context) = call
                             .retry_record
                             .as_ref()
@@ -97,7 +97,7 @@ pub(super) fn operations(vm: &Vm<'_>, records: &[Record]) -> JsonValue {
                             .or_insert_with(|| json!({"ordinal": context.ordinal.to_string()}));
                         row["call"] = json!(call.intent.call_id.to_string());
                         match call.status {
-                            OutboundStatus::Open => row["opened_record"] = json!(index),
+                            CallStatus::Open => row["opened_record"] = json!(index),
                             _ => {
                                 row["closed_record"] = json!(index);
                                 row["closed_at_ns"] =
@@ -105,7 +105,7 @@ pub(super) fn operations(vm: &Vm<'_>, records: &[Record]) -> JsonValue {
                             }
                         }
                     }
-                    Record::Inbound(_) | Record::Outbound(_) => {}
+                    Record::Ingress(_) | Record::Egress(_) => {}
                 }
             }
             json!({

@@ -146,12 +146,12 @@ fn inject_at(
     value: rastok::envelope::Value,
 ) -> Result<rastok::envelope::Id, rastok::runtime::vm::VmError> {
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     vm.inject(
         journal,
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 rastok::node::Path::new(["instance-stop-test"]).unwrap(),
             ),
             port: rastok::node::Port::new(port).unwrap(),
@@ -567,8 +567,8 @@ lab app {{
             .records
             .iter()
             .filter_map(|record| match record {
-                Record::Outbound(rastok::journal::OutboundRecord::Call(call))
-                    if call.status == rastok::journal::OutboundStatus::Open =>
+                Record::Egress(rastok::journal::EgressRecord::Call(call))
+                    if call.status == rastok::journal::CallStatus::Open =>
                 {
                     Some(&call.intent)
                 }

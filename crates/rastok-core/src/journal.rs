@@ -19,11 +19,11 @@
 //! [`identity.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/identity.md
 
 use crate::boundary::{
-    CallId, Completion, InboundCallId, InboundEnvelopeProvenance, InboundSession,
-    InboundSubmission, Intent, SessionId, SessionOpenIntent, SessionWriteId, SessionWriteIntent,
+    CallId, Completion, InboundCallId, InboundSession, IngressEnvelopeProvenance,
+    IngressSubmission, Intent, SessionId, SessionOpenIntent, SessionWriteId, SessionWriteIntent,
     SubmissionSequence,
 };
-use crate::envelope::{Envelope, Id, Meta, MetaSys};
+use crate::envelope::{Envelope, Id, IdKind, Meta, MetaSys};
 use crate::instance;
 
 use crate::node;
@@ -39,48 +39,28 @@ use alloc::vec::Vec;
 use core::fmt;
 
 pub(crate) mod admission;
+pub mod codec;
 pub mod instance_stop;
 pub mod loop_protocol;
-pub mod retention;
 pub mod retry_protocol;
 pub mod timing;
 
 /// Deterministic identity recipes — the injective blake3 framing of
 /// `envelope.md` §2, with its domain tags.
 pub mod ids {
-    use super::{CallId, Id, InboundEnvelopeProvenance, SessionId, SessionWriteId, node};
+    use super::{CallId, Id, IdKind, IngressEnvelopeProvenance, SessionId, SessionWriteId, node};
     use crate::instance;
     use alloc::string::ToString;
     use alloc::vec::Vec;
-
-    /// Domain tag of a root derivation: 2 fields.
-    const ROOT: u8 = 0x01;
-    /// Domain tag of an emission derivation: 5 fields.
-    const EMISSION: u8 = 0x02;
-    /// Domain tag of the internal call-identity derivation. Outside
-    /// the envelope id domains (`0x01`–`0x05` are reserved by the
-    /// spec); a call ref is never an envelope id.
-    const CALL: u8 = 0x10;
-    /// Domain tag of a logical session reference.
-    const SESSION: u8 = 0x11;
-    /// Domain tag of one write obligation within a session.
-    const SESSION_WRITE: u8 = 0x12;
-    /// Domain tag of a delivery reference.
-    const DELIVERY: u8 = 0x20;
-    /// Domain tag of an instance-lifetime obligation. Outside envelope-id
-    /// domains; the reference couples address and journal-derived generation.
-    const INSTANCE_LIFETIME: u8 = 0x21;
-    /// Domain tag of one bounded Closing phase reference.
-    const INSTANCE_CLOSING: u8 = 0x22;
 
     /// The root id of an inbound envelope:
     /// `blake3(connector_path ‖ inbound_seq)`. The single-process
     /// recipe; a non-zero replica joins the derivation when multi-host
     /// semantics land.
     #[must_use]
-    pub fn root_id(provenance: &InboundEnvelopeProvenance, seq: u64) -> Id {
+    pub fn root_id(provenance: &IngressEnvelopeProvenance, seq: u64) -> Id {
         Id::derive(
-            ROOT,
+            IdKind::Root,
             &[
                 provenance.connector_path().to_string().as_bytes(),
                 &seq.to_le_bytes(),
@@ -101,7 +81,7 @@ pub mod ids {
         index: u32,
     ) -> Id {
         Id::derive(
-            EMISSION,
+            IdKind::Emission,
             &[
                 node_path.to_string().as_bytes(),
                 trigger.to_string().as_bytes(),
@@ -125,7 +105,7 @@ pub mod ids {
         index: u32,
     ) -> Id {
         Id::derive(
-            EMISSION,
+            IdKind::Emission,
             &[
                 owner.to_string().as_bytes(),
                 trigger.to_string().as_bytes(),
@@ -138,20 +118,20 @@ pub mod ids {
 
     /// The delivery reference (envelope.md §2): one envelope delivered
     /// along one canonical edge is one delivery, and this is its
-    /// identity — what `timers` (identity.md §3 key 37) seals, what
+    /// identity — what `deadline_ids` (identity.md §3 key 37) seals, what
     /// the scheduler resolves, and what the call identity derives
     /// from. A fan-out of one envelope is one distinct reference per
     /// receiving edge, two ports of one connector included.
     #[must_use]
     pub fn delivery_id(edge: &str, delivery: Id) -> Id {
-        Id::derive(DELIVERY, &[edge.as_bytes(), delivery.as_bytes()])
+        Id::derive(IdKind::Delivery, &[edge.as_bytes(), delivery.as_bytes()])
     }
 
     /// The stable 16-byte timer reference for one instance generation.
     #[must_use]
     pub fn instance_lifetime_id(instance: &instance::Generation) -> Id {
         Id::derive(
-            INSTANCE_LIFETIME,
+            IdKind::InstanceLifetime,
             &[
                 instance.address().as_bytes(),
                 &instance.generation().to_le_bytes(),
@@ -163,13 +143,13 @@ pub mod ids {
     /// extend-only timer-kind number (drain or settlement), so the two
     /// obligations of one generation cannot collide.
     #[must_use]
-    pub fn instance_closing_id(instance: &instance::Generation, phase: u8) -> Id {
+    pub fn instance_closing_id(instance: &instance::Generation, phase: super::DeadlineKind) -> Id {
         Id::derive(
-            INSTANCE_CLOSING,
+            IdKind::InstanceClosing,
             &[
                 instance.address().as_bytes(),
                 &instance.generation().to_le_bytes(),
-                &[phase],
+                &[super::deadline_kind_tag(phase)],
             ],
         )
     }
@@ -177,20 +157,23 @@ pub mod ids {
     /// The internal identity of an outbound call (envelope.md §2):
     /// one delivery carrying one prepared request — derived from the
     /// delivery reference and the digest of the exact prepared bytes,
-    /// recomputable from any record that carries them (OUTBOUND keys
+    /// recomputable from any record that carries them (EGRESS keys
     /// 40, 43, 47), never stored as a new causal field. The digest
     /// says WHAT was sent; the reference says BY WHERE — routing
     /// never salts the digest.
     #[must_use]
     pub fn call_id(delivery_id: Id, request_digest: &[u8; 32]) -> CallId {
-        CallId::new(Id::derive(CALL, &[delivery_id.as_bytes(), request_digest]))
+        CallId::new(Id::derive(
+            IdKind::Call,
+            &[delivery_id.as_bytes(), request_digest],
+        ))
     }
 
     /// Logical reference of one inbound-opened session. The opening root is
     /// already journal-derived; the subtype frame keeps the recipe disjoint
     /// from outbound openings under the shared session domain.
     #[must_use]
-    pub fn inbound_session_id(provenance: &InboundEnvelopeProvenance, opening: Id) -> SessionId {
+    pub fn inbound_session_id(provenance: &IngressEnvelopeProvenance, opening: Id) -> SessionId {
         let subtype = [1];
         let mut parts = Vec::with_capacity(
             provenance
@@ -208,7 +191,7 @@ pub mod ids {
                 .map(|segment| segment.as_bytes()),
         );
         parts.push(opening.as_bytes());
-        SessionId::new(Id::derive(SESSION, &parts))
+        SessionId::new(Id::derive(IdKind::Session, &parts))
     }
 
     /// Logical reference of one outbound-opened session.
@@ -229,7 +212,7 @@ pub mod ids {
         );
         parts.push(emitting.as_bytes());
         parts.push(request_digest);
-        SessionId::new(Id::derive(SESSION, &parts))
+        SessionId::new(Id::derive(IdKind::Session, &parts))
     }
 
     /// Identity of one graph-to-world session write.
@@ -240,31 +223,78 @@ pub mod ids {
         message_digest: &[u8; 32],
     ) -> SessionWriteId {
         SessionWriteId::new(Id::derive(
-            SESSION_WRITE,
+            IdKind::SessionWrite,
             &[session.id().as_bytes(), emitting.as_bytes(), message_digest],
         ))
     }
 }
 
-/// Extend-only timer-kind registry stored in transaction key 37.
-pub mod timer_kind {
+/// The closed kinds of dated obligations recorded in key 37.
+/// Their encoded numbers are defined by [`deadline_kind_tag`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum DeadlineKind {
     /// One delivered Connector call budget.
-    pub const CALL_TIMEOUT: u8 = 1;
-    /// One join correlation bound (reserved until joins execute).
-    pub const JOIN_WITHIN: u8 = 2;
+    CallTimeout = 1,
+    /// One join correlation bound.
+    JoinWithin = 2,
     /// One logical instance generation lifetime.
-    pub const INSTANCE_LIFETIME: u8 = 3;
-    // byte 4 is reserved by identity.md, not allocated here
+    InstanceLifetime = 3,
     /// One Loop or Retry delayed re-entry wakeup, keyed by its admission id.
-    pub const RECURRENCE_DELAY: u8 = 5;
+    RecurrenceDelay = 5,
     /// End of an instance's admitted-work drain interval.
-    pub const INSTANCE_DRAIN: u8 = 6;
+    InstanceDrain = 6,
     /// End of an instance's cancellation settlement interval.
-    pub const INSTANCE_SETTLEMENT: u8 = 7;
+    InstanceSettlement = 7,
     /// One admitted inbound Call response deadline.
-    pub const INBOUND_CALL_TIMEOUT: u8 = 8;
+    InboundCallTimeout = 8,
     /// One client Session opening-handshake deadline.
-    pub const SESSION_HANDSHAKE: u8 = 9;
+    SessionHandshake = 9,
+}
+
+/// Projects a deadline kind to its specified byte, independently of order.
+#[must_use]
+pub const fn deadline_kind_tag(kind: DeadlineKind) -> u8 {
+    match kind {
+        DeadlineKind::CallTimeout => 1,
+        DeadlineKind::JoinWithin => 2,
+        DeadlineKind::InstanceLifetime => 3,
+        DeadlineKind::RecurrenceDelay => 5,
+        DeadlineKind::InstanceDrain => 6,
+        DeadlineKind::InstanceSettlement => 7,
+        DeadlineKind::InboundCallTimeout => 8,
+        DeadlineKind::SessionHandshake => 9,
+    }
+}
+
+/// A byte which does not name an allocated deadline kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnknownDeadlineKind(pub u8);
+
+impl fmt::Display for UnknownDeadlineKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unknown deadline kind byte {}", self.0)
+    }
+}
+
+impl core::error::Error for UnknownDeadlineKind {}
+
+impl TryFrom<u8> for DeadlineKind {
+    type Error = UnknownDeadlineKind;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::CallTimeout),
+            2 => Ok(Self::JoinWithin),
+            3 => Ok(Self::InstanceLifetime),
+            5 => Ok(Self::RecurrenceDelay),
+            6 => Ok(Self::InstanceDrain),
+            7 => Ok(Self::InstanceSettlement),
+            8 => Ok(Self::InboundCallTimeout),
+            9 => Ok(Self::SessionHandshake),
+            other => Err(UnknownDeadlineKind(other)),
+        }
+    }
 }
 
 /// One causal record. Each owned packet is indirect so journal growth reserves
@@ -273,12 +303,12 @@ pub mod timer_kind {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Record {
     /// The world entered: an envelope was born at ingress.
-    Inbound(Box<InboundRecord>),
+    Ingress(Box<IngressRecord>),
     /// One node fired: the atomic commit packet.
     Transaction(Box<TransactionRecord>),
     /// The graph acted on the world: one fact of a call's WAL — the
     /// open, then separately its closure. The past never rewrites.
-    Outbound(OutboundRecord),
+    Egress(EgressRecord),
 }
 
 impl Record {
@@ -286,19 +316,19 @@ impl Record {
     /// observation and never enters the causal seal. Outbound effects inherit
     /// budgets armed by their accepting delivery, not their Driver start.
     #[must_use]
-    pub fn timer_schedule(&self) -> Option<&timing::TimerSchedule> {
+    pub fn deadlines(&self) -> Option<&timing::Deadlines> {
         match self {
-            Self::Inbound(record) => record.timer_schedule.as_deref(),
-            Self::Transaction(record) => record.timer_schedule.as_deref(),
-            Self::Outbound(OutboundRecord::Call(record)) => record.timer_schedule.as_deref(),
-            Self::Outbound(_) => None,
+            Self::Ingress(record) => record.deadlines.as_deref(),
+            Self::Transaction(record) => record.deadlines.as_deref(),
+            Self::Egress(EgressRecord::Call(record)) => record.deadlines.as_deref(),
+            Self::Egress(_) => None,
         }
     }
 }
 
 pub(crate) fn recorded_envelope(records: &[Record], id: Id) -> Option<&Envelope> {
     records.iter().find_map(|record| match record {
-        Record::Inbound(inbound) if inbound.envelope.meta().sys().id() == id => {
+        Record::Ingress(inbound) if inbound.envelope.meta().sys().id() == id => {
             Some(&inbound.envelope)
         }
         Record::Transaction(transaction) => transaction
@@ -320,7 +350,7 @@ pub(crate) fn recorded_envelope(records: &[Record], id: Id) -> Option<&Envelope>
                         .find(|envelope| envelope.meta().sys().id() == id)
                 })
             }),
-        Record::Inbound(_) | Record::Outbound(_) => None,
+        Record::Ingress(_) | Record::Egress(_) => None,
     })
 }
 
@@ -333,7 +363,7 @@ fn inbound_exchange_context(
     exchange: InboundExchangeExitRecord,
 ) -> (Option<Id>, Option<node::Path>) {
     let inbound = records.iter().rev().find_map(|record| {
-        let Record::Inbound(inbound) = record else {
+        let Record::Ingress(inbound) = record else {
             return None;
         };
         let matches = match (exchange, inbound.exchange.as_deref()) {
@@ -363,7 +393,7 @@ fn inbound_exchange_context(
         return (None, None);
     };
     let connector = records.iter().rev().find_map(|record| match record {
-        Record::Outbound(OutboundRecord::Session(recorded)) if recorded.session_id == session => {
+        Record::Egress(EgressRecord::Session(recorded)) if recorded.session_id == session => {
             Some(recorded.connector_path.clone())
         }
         _ => None,
@@ -377,7 +407,7 @@ fn session_origin(
     write: Option<SessionWriteId>,
 ) -> Option<Id> {
     records.iter().rev().find_map(|record| {
-        let Record::Outbound(OutboundRecord::Session(recorded)) = record else {
+        let Record::Egress(EgressRecord::Session(recorded)) = record else {
             return None;
         };
         if recorded.session_id != session {
@@ -420,7 +450,7 @@ fn transaction_origin(records: &[Record], transaction: &TransactionRecord) -> Op
 
 fn observation_for_record(records: &[Record], record: &Record) -> RecordObservation {
     match record {
-        Record::Inbound(inbound) => {
+        Record::Ingress(inbound) => {
             let mut correlation =
                 RecordCorrelation::new(Some(inbound.envelope.meta().sys().origin_id()))
                     .with_connector(inbound.connector_path.clone());
@@ -440,7 +470,7 @@ fn observation_for_record(records: &[Record], record: &Record) -> RecordObservat
                 }
                 None => {}
             }
-            RecordObservation::new(RecordObservationKind::InboundCommitted, correlation)
+            RecordObservation::new(RecordObservationKind::IngressCommitted, correlation)
         }
         Record::Transaction(transaction) => {
             let exchange = transaction
@@ -466,11 +496,11 @@ fn observation_for_record(records: &[Record], record: &Record) -> RecordObservat
                 .with_exchange(exchange);
             RecordObservation::new(RecordObservationKind::TransactionCommitted, correlation)
         }
-        Record::Outbound(OutboundRecord::Call(call)) => {
+        Record::Egress(EgressRecord::Call(call)) => {
             let kind = match call.status {
-                OutboundStatus::Open => RecordObservationKind::CallOpened,
-                OutboundStatus::Closed(_) => RecordObservationKind::CallClosed,
-                OutboundStatus::Abandoned => RecordObservationKind::CallAbandoned,
+                CallStatus::Open => RecordObservationKind::CallOpened,
+                CallStatus::Closed(_) => RecordObservationKind::CallClosed,
+                CallStatus::Abandoned => RecordObservationKind::CallAbandoned,
             };
             let correlation =
                 RecordCorrelation::new(recorded_origin(records, call.intent.emitting_id))
@@ -478,7 +508,7 @@ fn observation_for_record(records: &[Record], record: &Record) -> RecordObservat
                     .with_exchange(Some(ExchangeCorrelation::OutboundCall(call.intent.call_id)));
             RecordObservation::new(kind, correlation)
         }
-        Record::Outbound(OutboundRecord::Session(session)) => {
+        Record::Egress(EgressRecord::Session(session)) => {
             let (kind, write, direct_emitting) = match &session.status {
                 SessionStatus::Opening(intent) => (
                     RecordObservationKind::SessionOpening,
@@ -532,14 +562,14 @@ pub(crate) fn observations_for_records_from(
 /// keys 20–28). The record autonomously reconstructs its root id from
 /// `(connector_path, replica, seq)`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct InboundRecord {
+pub struct IngressRecord {
     /// Exact-instance commands retained atomically with this root (key 57).
     pub instance_commands: Option<Box<instance_stop::Packet>>,
     /// Retained arm instants and deadlines (key 56), atomically accepted with
-    /// this ingress. Omitted when this record arms no retained schedule.
-    pub timer_schedule: Option<Box<timing::TimerSchedule>>,
+    /// this ingress. Omitted when this record arms no unsealed schedule.
+    pub deadlines: Option<Box<timing::Deadlines>>,
     /// Stable provenance of the external root stream.
-    pub provenance: InboundEnvelopeProvenance,
+    pub provenance: IngressEnvelopeProvenance,
     /// Source port of the root: an App input when [`Self::connector_path`] is
     /// absent, otherwise that Connector's output. Replay re-routes from this
     /// causal fact. Projects as key 24, omitted for conventional `in`.
@@ -579,7 +609,7 @@ pub struct InboundCallIngressRecord {
     pub instance: instance::Generation,
     /// Dated obligations armed by this Call-opening fact. The tuple registry
     /// is shared with transaction timers; ack-mode Calls carry none.
-    pub timers: Vec<(u8, Id)>,
+    pub deadline_ids: Vec<(DeadlineKind, Id)>,
 }
 
 /// Exchange-specific terminal reference carried by one Connector transaction.
@@ -674,7 +704,7 @@ pub struct TransactionRecord {
     pub instance_commands: Option<Box<instance_stop::Packet>>,
     /// Retained arm instants and deadlines (key 56), outside causal identity.
     /// Absence is not evidence from which recovery may invent a deadline.
-    pub timer_schedule: Option<Box<timing::TimerSchedule>>,
+    pub deadlines: Option<Box<timing::Deadlines>>,
     /// The firing lifecycle/transaction owner. Ordinary Node transactions
     /// carry the same segments as their node path; Graph lifecycle records
     /// use the preserved lexical Graph owner, including the empty root path.
@@ -724,12 +754,12 @@ pub struct TransactionRecord {
     /// record committed. The envelope id disambiguates repeated emissions on
     /// the same port and edge.
     pub routes: Vec<RoutedDelivery>,
-    /// The dated obligations this firing arms — `(timer_kind, ref)`
+    /// The dated obligations this firing creates — `(DeadlineKind, id)`
     /// per identity.md §3 key 37: kind 1 = call budget, ref = the
     /// derived budget identity `budget_ref(edge, envelope_id)`
     /// (erratum E-2026-08-04-2). Sorted at commit; the due instant
     /// is never sealed.
-    pub timers: Vec<(u8, crate::envelope::Id)>,
+    pub deadline_ids: Vec<(DeadlineKind, crate::envelope::Id)>,
 }
 
 impl TransactionRecord {
@@ -753,9 +783,9 @@ pub struct RoutedDelivery {
 }
 
 /// One external-world WAL fact. Call and Session subforms remain under the
-/// same OUTBOUND causal record kind; neither can be mistaken for the other.
+/// same EGRESS causal record kind; neither can be mistaken for the other.
 #[derive(Debug, Clone, PartialEq)]
-pub enum OutboundRecord {
+pub enum EgressRecord {
     /// One fact of a Call's open/close WAL.
     Call(Box<CallRecord>),
     /// One fact of a Session opening or message-write WAL.
@@ -768,17 +798,17 @@ pub enum OutboundRecord {
 pub struct CallRecord {
     /// Attempt correlation (causal key 58), absent outside Retry.
     pub retry_record: Option<Box<retry_protocol::Packet>>,
-    /// Winning logical closure instant (retained key 59); absent only on Open.
+    /// Winning logical closure instant (unsealed key 59); absent only on Open.
     pub closed_at: Option<i64>,
-    /// Original closure-based recurrence arm (retained 56, causal presence 37).
-    pub timer_schedule: Option<Box<timing::TimerSchedule>>,
+    /// Original closure-based recurrence arm (unsealed 56, causal presence 37).
+    pub deadlines: Option<Box<timing::Deadlines>>,
     /// The canonical call fields.
     pub intent: Intent,
     /// Which fact this record states.
-    pub status: OutboundStatus,
+    pub status: CallStatus,
 }
 
-/// One causal OUTBOUND fact inside the Session fold.
+/// One causal EGRESS fact inside the Session fold.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionRecord {
     /// Connector that owns the logical session.
@@ -809,7 +839,7 @@ pub enum SessionStatus {
 /// closure is a discarded observation — recorded elsewhere, never a
 /// sealed status.
 #[derive(Debug, Clone, PartialEq)]
-pub enum OutboundStatus {
+pub enum CallStatus {
     /// The effect may be executing; its outcome is not yet causal.
     Open,
     /// The single causal closure.
@@ -842,13 +872,13 @@ pub enum CloseVerdict {
 
 /// The result of one accepting inbound transaction.
 #[derive(Debug, Clone, PartialEq)]
-pub struct CommittedInbound {
+pub struct CommittedIngress {
     /// The allocated or validated sequence.
     pub seq: u64,
     /// The envelope born here — its five reserved `sys` fields minted by the runtime.
     pub envelope: Envelope,
     /// The committed record.
-    pub record: InboundRecord,
+    pub record: IngressRecord,
 }
 
 /// A complete ingress envelope whose causal identity is fixed but whose
@@ -856,19 +886,19 @@ pub struct CommittedInbound {
 ///
 /// This token lets routing evaluate `meta.sys` without either inventing a
 /// provisional identity or mutating the journal before destination admission
-/// succeeds. [`Journal::commit_inbound`] revalidates the sequence atomically.
+/// succeeds. [`Journal::commit_ingress`] revalidates the sequence atomically.
 #[derive(Debug, Clone, PartialEq)]
-pub struct PreparedInbound {
+pub struct PreparedIngress {
     instance_commands: Option<Box<instance_stop::Packet>>,
-    submission: InboundSubmission,
+    submission: IngressSubmission,
     connector_path: Option<node::Path>,
     seq: u64,
     envelope: Envelope,
     exchange: Option<InboundExchangeRecord>,
-    timer_schedule: Option<Box<timing::TimerSchedule>>,
+    deadlines: Option<Box<timing::Deadlines>>,
 }
 
-impl PreparedInbound {
+impl PreparedIngress {
     /// Retain commands with their accepting root, never in a Worker-only queue.
     #[must_use]
     pub fn with_instance_commands(mut self, packet: instance_stop::Packet) -> Self {
@@ -878,8 +908,8 @@ impl PreparedInbound {
     /// Attach validated timing evidence before committing the accepting fact.
     /// A durable Journal stores it atomically with the root and its routes.
     #[must_use]
-    pub fn with_timer_schedule(mut self, schedule: timing::TimerSchedule) -> Self {
-        self.timer_schedule = Some(Box::new(schedule));
+    pub fn with_deadlines(mut self, schedule: timing::Deadlines) -> Self {
+        self.deadlines = Some(Box::new(schedule));
         self
     }
     /// The sequence reserved by the current journal view.
@@ -912,7 +942,7 @@ impl PreparedInbound {
     pub(crate) fn into_call(
         mut self,
         instance: instance::Generation,
-        timers: Vec<(u8, Id)>,
+        deadline_ids: Vec<(DeadlineKind, Id)>,
     ) -> Result<Self, Error> {
         if self.connector_path.is_none() || self.exchange.is_some() {
             return Err(Error::CorruptInboundCall);
@@ -920,7 +950,7 @@ impl PreparedInbound {
         self.exchange = Some(InboundExchangeRecord::Call(InboundCallIngressRecord {
             reference: InboundCallId::from_root(self.envelope.meta().sys().id()),
             instance,
-            timers,
+            deadline_ids,
         }));
         Ok(self)
     }
@@ -1007,7 +1037,7 @@ pub enum Error {
     /// An exact-instance command contradicts its source, target or close fact.
     InvalidInstanceCommand(instance_stop::Error),
     /// Retained scheduler evidence contradicts the accepted obligations.
-    InvalidTimerSchedule(crate::canonical_cbor::DecodeError),
+    InvalidDeadlines(crate::canonical_cbor::DecodeError),
     /// A Call carrier contradicts its closure time or Retry correlation.
     InvalidCallRetention(crate::canonical_cbor::DecodeError),
     /// A call ref matching no journaled call.
@@ -1115,7 +1145,7 @@ impl fmt::Display for Error {
             Self::InvalidLoopProtocol(error) => error.fmt(f),
             Self::InvalidRetryProtocol(error) => error.fmt(f),
             Self::InvalidInstanceCommand(error) => error.fmt(f),
-            Self::InvalidTimerSchedule(error) => write!(f, "invalid timer schedule: {error}"),
+            Self::InvalidDeadlines(error) => write!(f, "invalid timer schedule: {error}"),
             Self::InvalidCallRetention(error) => write!(f, "invalid Call retention: {error}"),
             Self::UnknownCall => f.write_str("no outbound record for this call"),
             Self::CorruptInboundCall => {
@@ -1205,13 +1235,13 @@ pub trait Journal {
     }
 
     /// Mints the complete ingress envelope without committing it. The result
-    /// is a read-only reservation: only [`Self::commit_inbound`] consumes the
+    /// is a read-only reservation: only [`Self::commit_ingress`] consumes the
     /// sequence.
     ///
     /// # Errors
     ///
-    /// Sequence mismatch or exhaustion, as for [`Self::append_inbound`].
-    fn prepare_inbound(&self, submission: InboundSubmission) -> Result<PreparedInbound, Error>;
+    /// Sequence mismatch or exhaustion, as for [`Self::append_ingress`].
+    fn prepare_ingress(&self, submission: IngressSubmission) -> Result<PreparedIngress, Error>;
 
     /// Mints a Connector-origin root without committing it. The source node
     /// is derived from the typed provenance and recorded separately so replay
@@ -1219,13 +1249,13 @@ pub trait Journal {
     ///
     /// # Errors
     ///
-    /// The same sequence failures as [`Self::prepare_inbound`], plus Session
+    /// The same sequence failures as [`Self::prepare_ingress`], plus Session
     /// lifecycle refusals when `session` carries framing.
-    fn prepare_connector_inbound(
+    fn prepare_connector_ingress(
         &self,
-        submission: InboundSubmission,
+        submission: IngressSubmission,
         session: Option<InboundSession>,
-    ) -> Result<PreparedInbound, Error>;
+    ) -> Result<PreparedIngress, Error>;
 
     /// Mints one session opening/message envelope without committing it. The
     /// journal derives or verifies the logical session ref and overwrites the
@@ -1233,13 +1263,13 @@ pub trait Journal {
     ///
     /// # Errors
     ///
-    /// The same sequence failures as [`Self::prepare_inbound`], or an unknown,
+    /// The same sequence failures as [`Self::prepare_ingress`], or an unknown,
     /// terminal, or duplicate session transition.
-    fn prepare_session_inbound(
+    fn prepare_session_ingress(
         &self,
-        submission: InboundSubmission,
+        submission: IngressSubmission,
         session: InboundSession,
-    ) -> Result<PreparedInbound, Error>;
+    ) -> Result<PreparedIngress, Error>;
 
     /// Atomically commits one prepared ingress and its destination routes.
     /// A durable implementation must compare-and-advance the prepared
@@ -1248,11 +1278,11 @@ pub trait Journal {
     /// # Errors
     ///
     /// A stale sequence, a forged instance generation, or storage failure.
-    fn commit_inbound(
+    fn commit_ingress(
         &mut self,
-        prepared: PreparedInbound,
+        prepared: PreparedIngress,
         routes: Vec<RouteTarget>,
-    ) -> Result<CommittedInbound, Error>;
+    ) -> Result<CommittedIngress, Error>;
 
     /// The one accepting transaction of an inbound submission:
     /// allocate or validate the sequence, derive the root id, mint
@@ -1265,21 +1295,21 @@ pub trait Journal {
     /// [`Error::SequenceMismatch`] when an explicit sequence diverges
     /// from the journal; [`Error::SequenceOverflow`] when monotonicity
     /// cannot continue.
-    fn append_inbound(&mut self, submission: InboundSubmission) -> Result<CommittedInbound, Error> {
-        self.append_inbound_routed(submission, Vec::new())
+    fn append_ingress(&mut self, submission: IngressSubmission) -> Result<CommittedIngress, Error> {
+        self.append_ingress_routed(submission, Vec::new())
     }
 
     /// Accepts an inbound envelope together with every non-singleton target
     /// selected before the fact commits. This is the runtime entry point;
-    /// [`Self::append_inbound`] is the route-free convenience used by journal
+    /// [`Self::append_ingress`] is the route-free convenience used by journal
     /// tests and callers whose plan has no keyed destination.
-    fn append_inbound_routed(
+    fn append_ingress_routed(
         &mut self,
-        submission: InboundSubmission,
+        submission: IngressSubmission,
         routes: Vec<RouteTarget>,
-    ) -> Result<CommittedInbound, Error> {
-        let prepared = self.prepare_inbound(submission)?;
-        self.commit_inbound(prepared, routes)
+    ) -> Result<CommittedIngress, Error> {
+        let prepared = self.prepare_ingress(submission)?;
+        self.commit_ingress(prepared, routes)
     }
 
     /// Returns the generation a route committing now must seal for this
@@ -1329,7 +1359,7 @@ pub trait Journal {
     /// [`Error::DuplicateOpen`] when the call is already journaled;
     /// [`Error::CorruptIntent`] when the call ref does not derive from
     /// the intent's own canonical fields.
-    fn open_outbound(
+    fn open_egress(
         &mut self,
         intent: Intent,
         attempt: Option<retry_protocol::AttemptId>,
@@ -1377,19 +1407,18 @@ pub trait Journal {
     /// # Errors
     ///
     /// [`Error::UnknownCall`] when no record carries this call ref.
-    fn close_outbound(
+    fn close_egress(
         &mut self,
         call_id: &CallId,
         closure: Closure,
         closed_at: i64,
-        schedule: Option<Box<timing::TimerSchedule>>,
+        schedule: Option<Box<timing::Deadlines>>,
     ) -> Result<CloseVerdict, Error>;
 
     /// Declares that bounded Closing could not establish an observed
     /// terminal outcome. This participates in the same close-once race as a
     /// response or timeout and appends an `abandoned` fact on success.
-    fn abandon_outbound(&mut self, call_id: &CallId, closed_at: i64)
-    -> Result<CloseVerdict, Error>;
+    fn abandon_egress(&mut self, call_id: &CallId, closed_at: i64) -> Result<CloseVerdict, Error>;
 
     /// The envelope carrying `id`, wherever the history recorded it.
     fn find_envelope(&self, id: Id) -> Option<Envelope>;
@@ -1426,7 +1455,7 @@ pub struct MemJournal {
     graph_version: GraphVersion,
     deployment_attestation: Option<crate::deployment::DeploymentAttestation>,
     records: Vec<Record>,
-    next_seq: BTreeMap<InboundEnvelopeProvenance, u64>,
+    next_seq: BTreeMap<IngressEnvelopeProvenance, u64>,
     /// Replay-derived lifecycle fold, maintained atomically with `records`.
     /// It is an index over causal facts, never a second generation authority.
     instance_lifecycles: BTreeMap<instance::Identity, InstanceLifecycle>,
@@ -1436,7 +1465,7 @@ pub struct MemJournal {
     /// Replay-derived Session fold. It is an index over the three ordinary
     /// causal record kinds, never a fourth record stream.
     sessions: BTreeMap<SessionId, SessionLifecycle>,
-    /// Replay-derived inbound Call fold. The opening INBOUND fact and terminal
+    /// Replay-derived inbound Call fold. The opening INGRESS fact and terminal
     /// TRANSACTION remain the only authorities.
     inbound_calls: BTreeMap<InboundCallId, InboundCallLifecycle>,
     /// Replay-derived Loop fold, replaced only with the committed record.
@@ -1449,7 +1478,7 @@ pub struct MemJournal {
 struct InboundCallLifecycle {
     connector_path: node::Path,
     instance: instance::Generation,
-    timers: Vec<(u8, Id)>,
+    deadline_ids: Vec<(DeadlineKind, Id)>,
     open: bool,
 }
 
@@ -1541,8 +1570,8 @@ impl MemJournal {
         for record in records {
             let previous = journal.records.len();
             match record {
-                Record::Inbound(inbound) => {
-                    let submission = InboundSubmission {
+                Record::Ingress(inbound) => {
+                    let submission = IngressSubmission {
                         provenance: inbound.provenance.clone(),
                         port: inbound.port.clone(),
                         draft: crate::boundary::Draft {
@@ -1560,14 +1589,14 @@ impl MemJournal {
                         ))) => Some(InboundSession::Message(*reference)),
                         _ => None,
                     };
-                    let mut prepared = journal.prepare_inbound_fact(
+                    let mut prepared = journal.prepare_ingress_fact(
                         submission,
                         session,
                         inbound.connector_path.clone(),
                     )?;
                     if let Some(InboundExchangeRecord::Call(call)) = inbound.exchange.as_deref() {
                         prepared =
-                            prepared.into_call(call.instance.clone(), call.timers.clone())?;
+                            prepared.into_call(call.instance.clone(), call.deadline_ids.clone())?;
                     }
                     let metadata_equal =
                         prepared.envelope.meta().app().is_empty()
@@ -1587,21 +1616,21 @@ impl MemJournal {
                     {
                         return Err(Error::InvalidRetainedRecord("ingress identity or exchange"));
                     }
-                    if let Some(schedule) = inbound.timer_schedule.as_deref() {
-                        prepared = prepared.with_timer_schedule(schedule.clone());
+                    if let Some(schedule) = inbound.deadlines.as_deref() {
+                        prepared = prepared.with_deadlines(schedule.clone());
                     }
                     if let Some(packet) = inbound.instance_commands.as_deref() {
                         prepared = prepared.with_instance_commands(packet.clone());
                     }
-                    journal.commit_inbound(prepared, inbound.routes.clone())?;
+                    journal.commit_ingress(prepared, inbound.routes.clone())?;
                 }
                 Record::Transaction(transaction) => journal.commit(*transaction.clone())?,
-                Record::Outbound(OutboundRecord::Call(call)) => {
+                Record::Egress(EgressRecord::Call(call)) => {
                     timing::validate_call(call).map_err(Error::InvalidCallRetention)?;
-                    if call.status != OutboundStatus::Open {
+                    if call.status != CallStatus::Open {
                         let Some(original) =
                             journal.records.iter().find_map(|record| match record {
-                                Record::Outbound(OutboundRecord::Call(open))
+                                Record::Egress(EgressRecord::Call(open))
                                     if open.intent.call_id == call.intent.call_id =>
                                 {
                                     Some(open)
@@ -1620,13 +1649,13 @@ impl MemJournal {
                         }
                     }
                     match &call.status {
-                        OutboundStatus::Open => journal.open_outbound(
+                        CallStatus::Open => journal.open_egress(
                             call.intent.clone(),
                             call.retry_record
                                 .as_deref()
                                 .and_then(|packet| packet.context),
                         )?,
-                        OutboundStatus::Closed(closure) => {
+                        CallStatus::Closed(closure) => {
                             let at = call.closed_at.ok_or({
                                 Error::InvalidCallRetention(
                                     crate::canonical_cbor::DecodeError::Malformed(
@@ -1634,14 +1663,14 @@ impl MemJournal {
                                     ),
                                 )
                             })?;
-                            journal.close_outbound(
+                            journal.close_egress(
                                 &call.intent.call_id,
                                 closure.clone(),
                                 at,
-                                call.timer_schedule.clone(),
+                                call.deadlines.clone(),
                             )?;
                         }
-                        OutboundStatus::Abandoned => {
+                        CallStatus::Abandoned => {
                             let at = call.closed_at.ok_or({
                                 Error::InvalidCallRetention(
                                     crate::canonical_cbor::DecodeError::Malformed(
@@ -1649,11 +1678,11 @@ impl MemJournal {
                                     ),
                                 )
                             })?;
-                            journal.abandon_outbound(&call.intent.call_id, at)?;
+                            journal.abandon_egress(&call.intent.call_id, at)?;
                         }
                     }
                 }
-                Record::Outbound(OutboundRecord::Session(session)) => match &session.status {
+                Record::Egress(EgressRecord::Session(session)) => match &session.status {
                     SessionStatus::Opening(intent) => {
                         journal.open_outbound_session(intent.clone())?
                     }
@@ -1678,11 +1707,9 @@ impl MemJournal {
         Ok(journal)
     }
 
-    fn statuses_of(&self, call_id: &CallId) -> impl Iterator<Item = &OutboundStatus> {
+    fn statuses_of(&self, call_id: &CallId) -> impl Iterator<Item = &CallStatus> {
         self.records.iter().filter_map(move |record| match record {
-            Record::Outbound(OutboundRecord::Call(outbound))
-                if outbound.intent.call_id == *call_id =>
-            {
+            Record::Egress(EgressRecord::Call(outbound)) if outbound.intent.call_id == *call_id => {
                 Some(&outbound.status)
             }
             _ => None,
@@ -1776,7 +1803,7 @@ impl MemJournal {
 
     fn route_was_reserved(&self, target: &instance::Generation) -> bool {
         self.records.iter().any(|record| match record {
-            Record::Inbound(inbound) => {
+            Record::Ingress(inbound) => {
                 inbound.routes.iter().any(|route| &route.target == target)
                     || matches!(
                         inbound.exchange.as_deref(),
@@ -1787,7 +1814,7 @@ impl MemJournal {
                 .routes
                 .iter()
                 .any(|route| &route.target == target),
-            Record::Outbound(_) => false,
+            Record::Egress(_) => false,
         })
     }
 
@@ -1855,12 +1882,12 @@ impl MemJournal {
             })
     }
 
-    fn prepare_inbound_fact(
+    fn prepare_ingress_fact(
         &self,
-        submission: InboundSubmission,
+        submission: IngressSubmission,
         session: Option<InboundSession>,
         connector_path: Option<node::Path>,
-    ) -> Result<PreparedInbound, Error> {
+    ) -> Result<PreparedIngress, Error> {
         let next = self
             .next_seq
             .get(&submission.provenance)
@@ -1918,13 +1945,13 @@ impl MemJournal {
         }
         let sys = MetaSys::root(id, self.graph_version.0);
         let envelope = Envelope::new(Meta::new(sys).with_ext(ext), submission.draft.data.clone());
-        Ok(PreparedInbound {
+        Ok(PreparedIngress {
             submission,
             connector_path,
             seq,
             envelope,
             exchange: resolved_exchange,
-            timer_schedule: None,
+            deadlines: None,
             instance_commands: None,
         })
     }
@@ -1961,37 +1988,37 @@ impl Journal for MemJournal {
         observations_for_records_from(&self.records, start)
     }
 
-    fn prepare_inbound(&self, submission: InboundSubmission) -> Result<PreparedInbound, Error> {
-        self.prepare_inbound_fact(submission, None, None)
+    fn prepare_ingress(&self, submission: IngressSubmission) -> Result<PreparedIngress, Error> {
+        self.prepare_ingress_fact(submission, None, None)
     }
 
-    fn prepare_connector_inbound(
+    fn prepare_connector_ingress(
         &self,
-        submission: InboundSubmission,
+        submission: IngressSubmission,
         session: Option<InboundSession>,
-    ) -> Result<PreparedInbound, Error> {
+    ) -> Result<PreparedIngress, Error> {
         let connector_path = submission.provenance.connector_path().clone();
-        self.prepare_inbound_fact(submission, session, Some(connector_path))
+        self.prepare_ingress_fact(submission, session, Some(connector_path))
     }
 
-    fn prepare_session_inbound(
+    fn prepare_session_ingress(
         &self,
-        submission: InboundSubmission,
+        submission: IngressSubmission,
         session: InboundSession,
-    ) -> Result<PreparedInbound, Error> {
-        self.prepare_inbound_fact(submission, Some(session), None)
+    ) -> Result<PreparedIngress, Error> {
+        self.prepare_ingress_fact(submission, Some(session), None)
     }
 
-    fn commit_inbound(
+    fn commit_ingress(
         &mut self,
-        prepared: PreparedInbound,
+        prepared: PreparedIngress,
         mut routes: Vec<RouteTarget>,
-    ) -> Result<CommittedInbound, Error> {
-        if let (Some(schedule), Some(InboundExchangeRecord::Call(call))) = (
-            prepared.timer_schedule.as_deref(),
-            prepared.exchange.as_ref(),
-        ) {
-            timing::require_timers(schedule, &call.timers).map_err(Error::InvalidTimerSchedule)?;
+    ) -> Result<CommittedIngress, Error> {
+        if let (Some(schedule), Some(InboundExchangeRecord::Call(call))) =
+            (prepared.deadlines.as_deref(), prepared.exchange.as_ref())
+        {
+            timing::require_deadline_instants(schedule, &call.deadline_ids)
+                .map_err(Error::InvalidDeadlines)?;
         }
         let expected = self
             .next_seq
@@ -2034,8 +2061,10 @@ impl Journal for MemJournal {
                 if self.inbound_calls.contains_key(&call.reference) {
                     return Err(Error::DuplicateInboundCall);
                 }
-                let expected_timeout = (timer_kind::INBOUND_CALL_TIMEOUT, call.reference.id());
-                if !(call.timers.is_empty() || call.timers.as_slice() == [expected_timeout]) {
+                let expected_timeout = (DeadlineKind::InboundCallTimeout, call.reference.id());
+                if !(call.deadline_ids.is_empty()
+                    || call.deadline_ids.as_slice() == [expected_timeout])
+                {
                     return Err(Error::CorruptInboundCall);
                 }
                 let expected = self.instance_generation_for_admission(call.instance.address())?;
@@ -2058,9 +2087,9 @@ impl Journal for MemJournal {
             }
         }
         routes.sort();
-        let record = InboundRecord {
+        let record = IngressRecord {
             instance_commands: prepared.instance_commands,
-            timer_schedule: prepared.timer_schedule,
+            deadlines: prepared.deadlines,
             provenance: prepared.submission.provenance.clone(),
             port: prepared.submission.port,
             connector_path: prepared.connector_path,
@@ -2074,7 +2103,7 @@ impl Journal for MemJournal {
         };
         if record.instance_commands.is_some() {
             self.instance_commands()?
-                .apply(&Record::Inbound(Box::new(record.clone())))
+                .apply(&Record::Ingress(Box::new(record.clone())))
                 .map_err(Error::InvalidInstanceCommand)?;
         }
         match prepared.exchange {
@@ -2094,7 +2123,7 @@ impl Journal for MemJournal {
                     InboundCallLifecycle {
                         connector_path: prepared.submission.provenance.connector_path().clone(),
                         instance: call.instance,
-                        timers: call.timers,
+                        deadline_ids: call.deadline_ids,
                         open: true,
                     },
                 );
@@ -2103,8 +2132,8 @@ impl Journal for MemJournal {
         }
         self.next_seq
             .insert(prepared.submission.provenance, following);
-        self.records.push(Record::Inbound(Box::new(record.clone())));
-        Ok(CommittedInbound {
+        self.records.push(Record::Ingress(Box::new(record.clone())));
+        Ok(CommittedIngress {
             seq: prepared.seq,
             envelope: prepared.envelope,
             record,
@@ -2113,7 +2142,7 @@ impl Journal for MemJournal {
 
     fn commit(&mut self, mut transaction: TransactionRecord) -> Result<(), Error> {
         retry_protocol::validate_transaction(&transaction).map_err(Error::InvalidRetryProtocol)?;
-        timing::validate_transaction(&transaction).map_err(Error::InvalidTimerSchedule)?;
+        timing::validate_transaction(&transaction).map_err(Error::InvalidDeadlines)?;
         if transaction.instance_commands.is_some() {
             self.instance_commands()?
                 .apply(&Record::Transaction(Box::new(transaction.clone())))
@@ -2355,7 +2384,7 @@ impl Journal for MemJournal {
         transaction.consumed.sort();
         transaction.state_delta.sort_by(|a, b| a.0.cmp(&b.0));
         transaction.routes.sort();
-        transaction.timers.sort();
+        transaction.deadline_ids.sort();
         if is_start {
             lifecycle.starts = lifecycle
                 .starts
@@ -2415,7 +2444,7 @@ impl Journal for MemJournal {
         Ok(instance::Generation::new(address.clone(), generation))
     }
 
-    fn open_outbound(
+    fn open_egress(
         &mut self,
         intent: Intent,
         attempt: Option<retry_protocol::AttemptId>,
@@ -2434,9 +2463,9 @@ impl Journal for MemJournal {
         }
         let record = CallRecord {
             intent,
-            status: OutboundStatus::Open,
+            status: CallStatus::Open,
             closed_at: None,
-            timer_schedule: None,
+            deadlines: None,
             retry_record: attempt.map(|context| {
                 Box::new(retry_protocol::Packet {
                     context: Some(context),
@@ -2446,7 +2475,7 @@ impl Journal for MemJournal {
         };
         timing::validate_call(&record).map_err(Error::InvalidCallRetention)?;
         self.records
-            .push(Record::Outbound(OutboundRecord::Call(Box::new(record))));
+            .push(Record::Egress(EgressRecord::Call(Box::new(record))));
         Ok(())
     }
 
@@ -2465,7 +2494,7 @@ impl Journal for MemJournal {
         let reference = intent.session_id;
         let connector_path = intent.connector_path.clone();
         self.records
-            .push(Record::Outbound(OutboundRecord::Session(Box::new(
+            .push(Record::Egress(EgressRecord::Session(Box::new(
                 SessionRecord {
                     connector_path: connector_path.clone(),
                     session_id: reference,
@@ -2494,7 +2523,7 @@ impl Journal for MemJournal {
         }
         let connector_path = session.connector_path.clone();
         self.records
-            .push(Record::Outbound(OutboundRecord::Session(Box::new(
+            .push(Record::Egress(EgressRecord::Session(Box::new(
                 SessionRecord {
                     connector_path,
                     session_id: *session_id,
@@ -2524,7 +2553,7 @@ impl Journal for MemJournal {
         }
         session.writes.insert(intent.write_ref, false);
         self.records
-            .push(Record::Outbound(OutboundRecord::Session(Box::new(
+            .push(Record::Egress(EgressRecord::Session(Box::new(
                 SessionRecord {
                     connector_path: intent.connector_path.clone(),
                     session_id: intent.session_id,
@@ -2559,7 +2588,7 @@ impl Journal for MemJournal {
             SessionStatus::WriteSettled(*write_ref)
         };
         self.records
-            .push(Record::Outbound(OutboundRecord::Session(Box::new(
+            .push(Record::Egress(EgressRecord::Session(Box::new(
                 SessionRecord {
                     connector_path: session.connector_path.clone(),
                     session_id: *session_id,
@@ -2569,26 +2598,26 @@ impl Journal for MemJournal {
         Ok(CloseVerdict::Won)
     }
 
-    fn close_outbound(
+    fn close_egress(
         &mut self,
         call_id: &CallId,
         closure: Closure,
         closed_at: i64,
-        schedule: Option<Box<timing::TimerSchedule>>,
+        schedule: Option<Box<timing::Deadlines>>,
     ) -> Result<CloseVerdict, Error> {
         let mut intent = None;
         for record in &self.records {
-            let Record::Outbound(OutboundRecord::Call(outbound)) = record else {
+            let Record::Egress(EgressRecord::Call(outbound)) = record else {
                 continue;
             };
             if outbound.intent.call_id != *call_id {
                 continue;
             }
             match outbound.status {
-                OutboundStatus::Open => {
+                CallStatus::Open => {
                     intent = Some((outbound.intent.clone(), outbound.retry_record.clone()))
                 }
-                OutboundStatus::Closed(_) | OutboundStatus::Abandoned => {
+                CallStatus::Closed(_) | CallStatus::Abandoned => {
                     return Ok(CloseVerdict::AlreadyClosed);
                 }
             }
@@ -2600,35 +2629,31 @@ impl Journal for MemJournal {
         // byte-identical — the attempt trace survives.
         let record = CallRecord {
             intent,
-            status: OutboundStatus::Closed(closure),
+            status: CallStatus::Closed(closure),
             closed_at: Some(closed_at),
-            timer_schedule: schedule,
+            deadlines: schedule,
             retry_record,
         };
         timing::validate_call(&record).map_err(Error::InvalidCallRetention)?;
         self.records
-            .push(Record::Outbound(OutboundRecord::Call(Box::new(record))));
+            .push(Record::Egress(EgressRecord::Call(Box::new(record))));
         Ok(CloseVerdict::Won)
     }
 
-    fn abandon_outbound(
-        &mut self,
-        call_id: &CallId,
-        closed_at: i64,
-    ) -> Result<CloseVerdict, Error> {
+    fn abandon_egress(&mut self, call_id: &CallId, closed_at: i64) -> Result<CloseVerdict, Error> {
         let mut intent = None;
         for record in &self.records {
-            let Record::Outbound(OutboundRecord::Call(outbound)) = record else {
+            let Record::Egress(EgressRecord::Call(outbound)) = record else {
                 continue;
             };
             if outbound.intent.call_id != *call_id {
                 continue;
             }
             match outbound.status {
-                OutboundStatus::Open => {
+                CallStatus::Open => {
                     intent = Some((outbound.intent.clone(), outbound.retry_record.clone()))
                 }
-                OutboundStatus::Closed(_) | OutboundStatus::Abandoned => {
+                CallStatus::Closed(_) | CallStatus::Abandoned => {
                     return Ok(CloseVerdict::AlreadyClosed);
                 }
             }
@@ -2638,14 +2663,14 @@ impl Journal for MemJournal {
         };
         let record = CallRecord {
             intent,
-            status: OutboundStatus::Abandoned,
+            status: CallStatus::Abandoned,
             closed_at: Some(closed_at),
-            timer_schedule: None,
+            deadlines: None,
             retry_record,
         };
         timing::validate_call(&record).map_err(Error::InvalidCallRetention)?;
         self.records
-            .push(Record::Outbound(OutboundRecord::Call(Box::new(record))));
+            .push(Record::Egress(EgressRecord::Call(Box::new(record))));
         Ok(CloseVerdict::Won)
     }
 
@@ -2655,9 +2680,7 @@ impl Journal for MemJournal {
 
     fn find_call(&self, call_id: &CallId) -> Option<Intent> {
         self.records.iter().find_map(|record| match record {
-            Record::Outbound(OutboundRecord::Call(outbound))
-                if outbound.intent.call_id == *call_id =>
-            {
+            Record::Egress(EgressRecord::Call(outbound)) if outbound.intent.call_id == *call_id => {
                 Some(outbound.intent.clone())
             }
             _ => None,
@@ -2667,12 +2690,12 @@ impl Journal for MemJournal {
     fn open_calls(&self) -> Vec<Intent> {
         let mut open: Vec<Intent> = Vec::new();
         for record in &self.records {
-            let Record::Outbound(OutboundRecord::Call(outbound)) = record else {
+            let Record::Egress(EgressRecord::Call(outbound)) = record else {
                 continue;
             };
             match outbound.status {
-                OutboundStatus::Open => open.push(outbound.intent.clone()),
-                OutboundStatus::Closed(_) | OutboundStatus::Abandoned => {
+                CallStatus::Open => open.push(outbound.intent.clone()),
+                CallStatus::Closed(_) | CallStatus::Abandoned => {
                     open.retain(|intent| intent.call_id != outbound.intent.call_id);
                 }
             }
@@ -2687,7 +2710,7 @@ impl Journal for MemJournal {
             .map(|(reference, lifecycle)| InboundCallIngressRecord {
                 reference: *reference,
                 instance: lifecycle.instance.clone(),
-                timers: lifecycle.timers.clone(),
+                deadline_ids: lifecycle.deadline_ids.clone(),
             })
             .collect()
     }
@@ -2715,7 +2738,7 @@ impl Journal for MemJournal {
         self.records
             .iter()
             .filter_map(|record| match record {
-                Record::Outbound(OutboundRecord::Session(session)) => match &session.status {
+                Record::Egress(EgressRecord::Session(session)) => match &session.status {
                     SessionStatus::WriteOpen(intent) if open.contains(&intent.write_ref) => {
                         Some(intent.clone())
                     }
@@ -2741,12 +2764,12 @@ mod tests {
         instance::Generation::new(instance::Identity::singleton(&owner), generation)
     }
 
-    fn provenance(path: &str) -> InboundEnvelopeProvenance {
-        InboundEnvelopeProvenance::single(node::Path::new([path]).unwrap())
+    fn provenance(path: &str) -> IngressEnvelopeProvenance {
+        IngressEnvelopeProvenance::single(node::Path::new([path]).unwrap())
     }
 
-    fn submission(path: &str, sequence: SubmissionSequence) -> InboundSubmission {
-        InboundSubmission {
+    fn submission(path: &str, sequence: SubmissionSequence) -> IngressSubmission {
+        IngressSubmission {
             provenance: provenance(path),
             port: node::Port::new("in").unwrap(),
             draft: Draft {
@@ -2782,7 +2805,7 @@ mod tests {
 
     fn intent(connector: &str, digest: u8) -> Intent {
         let connector_path = node::Path::new([connector]).unwrap();
-        let emitting_id = Id::derive(0x02, &[b"cause"]);
+        let emitting_id = Id::derive(crate::envelope::IdKind::Emission, &[b"cause"]);
         let edge = alloc::format!("shout.out>{connector}.in");
         let prepared = crate::boundary::PreparedRequest::seal(vec![digest; 4]);
         Intent {
@@ -2803,34 +2826,34 @@ mod tests {
             let mut journal = MemJournal::new(GraphVersion(1));
             let original = intent("clocked", 3);
             let call = original.call_id;
-            journal.open_outbound(original, None).unwrap();
+            journal.open_egress(original, None).unwrap();
             let open = journal.records()[0].clone();
             if abandoned {
-                journal.abandon_outbound(&call, 17).unwrap();
+                journal.abandon_egress(&call, 17).unwrap();
             } else {
                 journal
-                    .close_outbound(&call, Closure::Timeout, 17, None)
+                    .close_egress(&call, Closure::Timeout, 17, None)
                     .unwrap();
             }
             assert_eq!(journal.records()[0], open);
-            let Record::Outbound(OutboundRecord::Call(closed)) = &journal.records()[1] else {
+            let Record::Egress(EgressRecord::Call(closed)) = &journal.records()[1] else {
                 unreachable!()
             };
             assert_eq!(closed.closed_at, Some(17));
             assert!(closed.retry_record.is_none());
-            assert!(closed.timer_schedule.is_none());
+            assert!(closed.deadlines.is_none());
             assert_eq!(
                 journal
-                    .close_outbound(&call, Closure::Timeout, 29, None)
+                    .close_egress(&call, Closure::Timeout, 29, None)
                     .unwrap(),
                 CloseVerdict::AlreadyClosed
             );
             let recovered =
                 MemJournal::from_records(GraphVersion(1), None, journal.records()).unwrap();
             assert_eq!(recovered.records(), journal.records());
-            let mut reader = retention::Reader::default();
+            let mut reader = codec::Decoder::default();
             for record in journal.records() {
-                assert_eq!(reader.record(&retention::record(record)).unwrap(), *record);
+                assert_eq!(reader.decode(&codec::encode(record)).unwrap(), *record);
             }
         }
     }
@@ -2841,18 +2864,18 @@ mod tests {
         let mut original = intent("clocked", 4);
         original.logical_time = 11;
         let call = original.call_id;
-        journal.open_outbound(original, None).unwrap();
+        journal.open_egress(original, None).unwrap();
         assert!(matches!(
-            journal.close_outbound(&call, Closure::Timeout, 10, None),
+            journal.close_egress(&call, Closure::Timeout, 10, None),
             Err(Error::InvalidCallRetention(_))
         ));
         assert_eq!(journal.records().len(), 1);
         journal
-            .close_outbound(&call, Closure::Timeout, 11, None)
+            .close_egress(&call, Closure::Timeout, 11, None)
             .unwrap();
         for mutation in 0..3 {
             let mut records = journal.records().to_vec();
-            let Record::Outbound(OutboundRecord::Call(closed)) = &mut records[1] else {
+            let Record::Egress(EgressRecord::Call(closed)) = &mut records[1] else {
                 unreachable!()
             };
             match mutation {
@@ -2872,12 +2895,12 @@ mod tests {
             }
             assert!(MemJournal::from_records(GraphVersion(1), None, &records).is_err());
         }
-        let mut encoded = retention::record(&journal.records()[1]);
+        let mut encoded = codec::encode(&journal.records()[1]);
         let crate::canonical_cbor::Value::Array(fields) = &mut encoded else {
             unreachable!()
         };
         fields[3] = crate::canonical_cbor::Value::Null;
-        assert!(retention::Reader::default().record(&encoded).is_err());
+        assert!(codec::Decoder::default().decode(&encoded).is_err());
     }
 
     #[test]
@@ -2889,16 +2912,16 @@ mod tests {
             operation,
             ordinal: 1,
         };
-        let arm = timing::TimerArm {
-            kind: timer_kind::RECURRENCE_DELAY,
+        let arm = timing::Deadline {
+            kind: DeadlineKind::RecurrenceDelay,
             reference: retry_protocol::admission_ref(operation, 2, call),
             due_at: 110,
         };
-        let schedule = timing::TimerSchedule::try_new(10, vec![arm]).unwrap();
+        let schedule = timing::Deadlines::try_new(10, vec![arm]).unwrap();
         let mut journal = MemJournal::new(GraphVersion(1));
-        journal.open_outbound(original.clone(), None).unwrap();
+        journal.open_egress(original.clone(), None).unwrap();
         assert!(matches!(
-            journal.close_outbound(
+            journal.close_egress(
                 &call,
                 Closure::Timeout,
                 10,
@@ -2907,35 +2930,38 @@ mod tests {
             Err(Error::InvalidCallRetention(_))
         ));
         let mut journal = MemJournal::new(GraphVersion(1));
-        journal.open_outbound(original, Some(attempt)).unwrap();
+        journal.open_egress(original, Some(attempt)).unwrap();
         for mutation in 0..2 {
             let mut wrong = arm;
             if mutation == 0 {
                 wrong.reference = Id::from_bytes([9; 16]);
             } else {
-                wrong.kind = timer_kind::CALL_TIMEOUT;
+                wrong.kind = DeadlineKind::CallTimeout;
             }
-            let wrong = timing::TimerSchedule::try_new(10, vec![wrong]).unwrap();
+            let wrong = timing::Deadlines::try_new(10, vec![wrong]).unwrap();
             assert!(
                 journal
-                    .close_outbound(&call, Closure::Timeout, 10, Some(Box::new(wrong)))
+                    .close_egress(&call, Closure::Timeout, 10, Some(Box::new(wrong)))
                     .is_err()
             );
         }
         journal
-            .close_outbound(&call, Closure::Timeout, 10, Some(Box::new(schedule)))
+            .close_egress(&call, Closure::Timeout, 10, Some(Box::new(schedule)))
             .unwrap();
         let recovered = MemJournal::from_records(GraphVersion(1), None, journal.records()).unwrap();
         assert_eq!(recovered.records(), journal.records());
-        let mut reader = retention::Reader::default();
+        let mut reader = codec::Decoder::default();
         for record in journal.records() {
-            assert_eq!(reader.record(&retention::record(record)).unwrap(), *record);
+            assert_eq!(reader.decode(&codec::encode(record)).unwrap(), *record);
         }
     }
 
     fn session_open(connector: &str, digest: u8) -> SessionOpenIntent {
         let connector_path = node::Path::new([connector]).unwrap();
-        let emitting_id = Id::derive(0x02, &[b"session-cause", &[digest]]);
+        let emitting_id = Id::derive(
+            crate::envelope::IdKind::Emission,
+            &[b"session-cause", &[digest]],
+        );
         let prepared = crate::boundary::PreparedRequest::seal(vec![digest; 4]);
         SessionOpenIntent {
             session_id: ids::outbound_session_id(&connector_path, emitting_id, prepared.digest()),
@@ -2947,7 +2973,10 @@ mod tests {
 
     fn session_write(session_id: SessionId, connector: &str, digest: u8) -> SessionWriteIntent {
         let connector_path = node::Path::new([connector]).unwrap();
-        let emitting_id = Id::derive(0x02, &[b"message-cause", &[digest]]);
+        let emitting_id = Id::derive(
+            crate::envelope::IdKind::Emission,
+            &[b"message-cause", &[digest]],
+        );
         let prepared = crate::boundary::PreparedRequest::seal(vec![digest; 3]);
         SessionWriteIntent {
             write_ref: ids::session_write_id(session_id, emitting_id, prepared.digest()),
@@ -2979,7 +3008,7 @@ mod tests {
             retry_record: None,
             loop_record: None,
             logical_time: None,
-            timer_schedule: None,
+            deadlines: None,
             instance_commands: None,
             trigger: node::Trigger::Lifecycle(lifecycle),
             cause: None,
@@ -2988,7 +3017,7 @@ mod tests {
             state_delta: vec![],
             emissions: vec![],
             routes: vec![],
-            timers: vec![],
+            deadline_ids: vec![],
         }
     }
 
@@ -3111,11 +3140,11 @@ mod tests {
         );
         let mut record = lifecycle_transaction(reference, node::Lifecycle::Start);
         record.logical_time = Some(7);
-        record.timer_schedule = Some(Box::new(
-            timing::TimerSchedule::try_new(
+        record.deadlines = Some(Box::new(
+            timing::Deadlines::try_new(
                 8,
-                vec![timing::TimerArm {
-                    kind: timer_kind::JOIN_WITHIN,
+                vec![timing::Deadline {
+                    kind: DeadlineKind::JoinWithin,
                     reference: Id::from_bytes([1; 16]),
                     due_at: 10,
                 }],
@@ -3125,7 +3154,7 @@ mod tests {
         let mut journal = MemJournal::new(GraphVersion(1));
         assert!(matches!(
             journal.commit(record.clone()),
-            Err(Error::InvalidTimerSchedule(_))
+            Err(Error::InvalidDeadlines(_))
         ));
         assert!(journal.records().is_empty());
         record.logical_time = Some(8);
@@ -3149,7 +3178,7 @@ mod tests {
     fn retained_observations_correlate_records_without_entering_causal_history() {
         let mut journal = MemJournal::new(GraphVersion(1));
         let inbound = journal
-            .append_inbound(submission("cli", SubmissionSequence::Next))
+            .append_ingress(submission("cli", SubmissionSequence::Next))
             .expect("the root commits");
         let origin = inbound.envelope.meta().sys().origin_id();
         activate_root(&mut journal);
@@ -3162,7 +3191,7 @@ mod tests {
             prepared.digest(),
         );
         journal
-            .open_outbound(
+            .open_egress(
                 Intent {
                     call_id,
                     emitting_id: inbound.envelope.meta().sys().id(),
@@ -3177,7 +3206,7 @@ mod tests {
             )
             .expect("the Call opens");
         journal
-            .abandon_outbound(&call_id, 0)
+            .abandon_egress(&call_id, 0)
             .expect("the Call closes abandoned");
 
         let prepared = crate::boundary::PreparedRequest::seal(vec![4, 5, 6]);
@@ -3220,7 +3249,7 @@ mod tests {
         assert_eq!(journal.records().len(), observations.len());
         assert_eq!(
             observations[0].kind(),
-            RecordObservationKind::InboundCommitted
+            RecordObservationKind::IngressCommitted
         );
         assert_eq!(
             observations[1].kind(),
@@ -3407,10 +3436,10 @@ mod tests {
         let reserved = instance::Generation::new(address.clone(), 0);
         activate_root(&mut journal);
         let prepared = journal
-            .prepare_inbound(submission("inbound", SubmissionSequence::Next))
+            .prepare_ingress(submission("inbound", SubmissionSequence::Next))
             .unwrap();
         journal
-            .commit_inbound(
+            .commit_ingress(
                 prepared,
                 vec![RouteTarget {
                     edge: String::from(".in>worker.in"),
@@ -3575,7 +3604,7 @@ mod tests {
     fn an_accepted_inbound_is_its_own_origin() {
         let mut journal = MemJournal::new(GraphVersion(1));
         let committed = journal
-            .append_inbound(submission("inbound", SubmissionSequence::Next))
+            .append_ingress(submission("inbound", SubmissionSequence::Next))
             .unwrap();
         let sys = committed.envelope.meta().sys();
         assert_eq!(sys.id(), ids::root_id(&provenance("inbound"), 0));
@@ -3596,12 +3625,12 @@ mod tests {
         let mut journal = MemJournal::new(GraphVersion(1));
         for expected in 0..3 {
             let committed = journal
-                .append_inbound(submission("inbound", SubmissionSequence::Next))
+                .append_ingress(submission("inbound", SubmissionSequence::Next))
                 .unwrap();
             assert_eq!(committed.seq, expected);
         }
         let other = journal
-            .append_inbound(submission("webhook", SubmissionSequence::Next))
+            .append_ingress(submission("webhook", SubmissionSequence::Next))
             .unwrap();
         assert_eq!(other.seq, 0, "authorities count independently");
     }
@@ -3610,10 +3639,10 @@ mod tests {
     fn explicit_sequences_replay_or_refuse() {
         let mut journal = MemJournal::new(GraphVersion(1));
         journal
-            .append_inbound(submission("inbound", SubmissionSequence::Explicit(0)))
+            .append_ingress(submission("inbound", SubmissionSequence::Explicit(0)))
             .unwrap();
         let diverged = journal
-            .append_inbound(submission("inbound", SubmissionSequence::Explicit(5)))
+            .append_ingress(submission("inbound", SubmissionSequence::Explicit(5)))
             .unwrap_err();
         assert_eq!(
             diverged,
@@ -3628,7 +3657,7 @@ mod tests {
     fn replay_re_derives_identical_ids() {
         let run = |mut journal: MemJournal| {
             journal
-                .append_inbound(submission("inbound", SubmissionSequence::Next))
+                .append_ingress(submission("inbound", SubmissionSequence::Next))
                 .unwrap()
                 .envelope
                 .meta()
@@ -3646,11 +3675,11 @@ mod tests {
         let mut journal = MemJournal::new(GraphVersion(1));
         let echo_intent = intent("echo", 7);
         let call = echo_intent.call_id;
-        journal.open_outbound(echo_intent.clone(), None).unwrap();
+        journal.open_egress(echo_intent.clone(), None).unwrap();
         let open_before = journal.records()[0].clone();
         assert_eq!(
             journal
-                .close_outbound(&call, Closure::Timeout, 0, None)
+                .close_egress(&call, Closure::Timeout, 0, None)
                 .unwrap(),
             CloseVerdict::Won
         );
@@ -3658,21 +3687,21 @@ mod tests {
         // byte-identical to what it was before the closure.
         assert_eq!(journal.records().len(), 2);
         assert_eq!(journal.records()[0], open_before);
-        let Record::Outbound(OutboundRecord::Call(open)) = &journal.records()[0] else {
+        let Record::Egress(EgressRecord::Call(open)) = &journal.records()[0] else {
             panic!("expected the open fact");
         };
-        assert_eq!(open.status, OutboundStatus::Open);
-        let Record::Outbound(OutboundRecord::Call(closed)) = &journal.records()[1] else {
+        assert_eq!(open.status, CallStatus::Open);
+        let Record::Egress(EgressRecord::Call(closed)) = &journal.records()[1] else {
             panic!("expected the closure fact");
         };
-        assert_eq!(closed.status, OutboundStatus::Closed(Closure::Timeout));
+        assert_eq!(closed.status, CallStatus::Closed(Closure::Timeout));
         assert_eq!(closed.intent.call_id, call);
         // The fold answers "open?" correctly.
         assert!(journal.open_calls().is_empty());
         // The race: every later closure loses and appends nothing.
         assert_eq!(
             journal
-                .close_outbound(&call, Closure::Timeout, 0, None)
+                .close_egress(&call, Closure::Timeout, 0, None)
                 .unwrap(),
             CloseVerdict::AlreadyClosed
         );
@@ -3683,32 +3712,32 @@ mod tests {
             &[0; 32],
         );
         assert_eq!(
-            journal.close_outbound(&ghost, Closure::Timeout, 0, None),
+            journal.close_egress(&ghost, Closure::Timeout, 0, None),
             Err(Error::UnknownCall)
         );
 
         let abandoned_intent = intent("slow", 8);
         let abandoned = abandoned_intent.call_id;
-        journal.open_outbound(abandoned_intent, None).unwrap();
+        journal.open_egress(abandoned_intent, None).unwrap();
         assert_eq!(
-            journal.abandon_outbound(&abandoned, 0).unwrap(),
+            journal.abandon_egress(&abandoned, 0).unwrap(),
             CloseVerdict::Won
         );
         assert_eq!(
             journal
-                .close_outbound(&abandoned, Closure::Timeout, 0, None)
+                .close_egress(&abandoned, Closure::Timeout, 0, None)
                 .unwrap(),
             CloseVerdict::AlreadyClosed,
             "an observed response or timeout cannot supersede abandonment"
         );
         assert_eq!(
-            journal.abandon_outbound(&abandoned, 0).unwrap(),
+            journal.abandon_egress(&abandoned, 0).unwrap(),
             CloseVerdict::AlreadyClosed
         );
         assert!(matches!(
             journal.records().last(),
-            Some(Record::Outbound(OutboundRecord::Call(call)))
-                if call.status == OutboundStatus::Abandoned
+            Some(Record::Egress(EgressRecord::Call(call)))
+                if call.status == CallStatus::Abandoned
         ));
     }
 
@@ -3721,7 +3750,7 @@ mod tests {
             &[1; 32],
         );
         assert_eq!(
-            journal.open_outbound(forged, None).unwrap_err(),
+            journal.open_egress(forged, None).unwrap_err(),
             Error::CorruptIntent
         );
     }
@@ -3740,7 +3769,7 @@ mod tests {
                 retry_record: None,
                 loop_record: None,
                 logical_time: None,
-                timer_schedule: None,
+                deadlines: None,
                 instance_commands: None,
                 trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
                 cause: None,
@@ -3763,9 +3792,9 @@ mod tests {
                 ],
                 emissions: vec![],
                 routes: vec![],
-                timers: vec![
-                    (timer_kind::RECURRENCE_DELAY, Id::from_bytes([2; 16])),
-                    (timer_kind::CALL_TIMEOUT, Id::from_bytes([1; 16])),
+                deadline_ids: vec![
+                    (DeadlineKind::RecurrenceDelay, Id::from_bytes([2; 16])),
+                    (DeadlineKind::CallTimeout, Id::from_bytes([1; 16])),
                 ],
             })
             .unwrap();
@@ -3774,7 +3803,7 @@ mod tests {
         };
         assert_eq!(transaction.consumed[0].edge, "a");
         assert_eq!(transaction.state_delta[0].0, "a");
-        assert_eq!(transaction.timers[0].0, timer_kind::CALL_TIMEOUT);
+        assert_eq!(transaction.deadline_ids[0].0, DeadlineKind::CallTimeout);
     }
 
     #[test]
@@ -3783,7 +3812,7 @@ mod tests {
         activate(&mut journal, instance("shout", 0));
         let first_observed = journal.records().len();
         let committed = journal
-            .append_inbound(submission("inbound", SubmissionSequence::Next))
+            .append_ingress(submission("inbound", SubmissionSequence::Next))
             .unwrap();
         journal
             .commit(TransactionRecord {
@@ -3795,7 +3824,7 @@ mod tests {
                 retry_record: None,
                 loop_record: None,
                 logical_time: None,
-                timer_schedule: None,
+                deadlines: None,
                 instance_commands: None,
                 trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
                 cause: None,
@@ -3812,18 +3841,18 @@ mod tests {
                     envelope: committed.envelope.clone(),
                 }],
                 routes: vec![],
-                timers: vec![],
+                deadline_ids: vec![],
             })
             .unwrap();
-        journal.open_outbound(intent("echo", 1), None).unwrap();
+        journal.open_egress(intent("echo", 1), None).unwrap();
         let kinds: Vec<u8> = journal
             .records()
             .iter()
             .skip(first_observed)
             .map(|record| match record {
-                Record::Inbound(_) => 1,
+                Record::Ingress(_) => 1,
                 Record::Transaction(_) => 2,
-                Record::Outbound(_) => 3,
+                Record::Egress(_) => 3,
             })
             .collect();
         assert_eq!(kinds, [1, 2, 3]);
@@ -3841,12 +3870,12 @@ mod tests {
     fn inbound_sessions_are_concurrent_correlated_and_silent_after_exit() {
         let mut journal = MemJournal::new(GraphVersion(1));
         let first = journal
-            .prepare_session_inbound(
+            .prepare_session_ingress(
                 submission("socket", SubmissionSequence::Next),
                 InboundSession::Open,
             )
             .unwrap();
-        let first = journal.commit_inbound(first, vec![]).unwrap();
+        let first = journal.commit_ingress(first, vec![]).unwrap();
         let Some(InboundExchangeRecord::Session(SessionIngressRecord::Open(first_ref))) =
             first.record.exchange.as_deref().cloned()
         else {
@@ -3861,12 +3890,12 @@ mod tests {
         );
 
         let second = journal
-            .prepare_session_inbound(
+            .prepare_session_ingress(
                 submission("socket", SubmissionSequence::Next),
                 InboundSession::Open,
             )
             .unwrap();
-        let second = journal.commit_inbound(second, vec![]).unwrap();
+        let second = journal.commit_ingress(second, vec![]).unwrap();
         let Some(InboundExchangeRecord::Session(SessionIngressRecord::Open(second_ref))) =
             second.record.exchange.as_deref().cloned()
         else {
@@ -3875,12 +3904,12 @@ mod tests {
         assert_ne!(first_ref, second_ref);
 
         let message = journal
-            .prepare_session_inbound(
+            .prepare_session_ingress(
                 submission("socket", SubmissionSequence::Next),
                 InboundSession::Message(first_ref),
             )
             .unwrap();
-        let message = journal.commit_inbound(message, vec![]).unwrap();
+        let message = journal.commit_ingress(message, vec![]).unwrap();
         assert_eq!(
             message.record.exchange.as_deref().cloned(),
             Some(InboundExchangeRecord::Session(
@@ -3906,7 +3935,7 @@ mod tests {
         journal.commit(terminal).unwrap();
         assert_eq!(journal.live_sessions(), vec![second_ref]);
         assert_eq!(
-            journal.prepare_session_inbound(
+            journal.prepare_session_ingress(
                 submission("socket", SubmissionSequence::Next),
                 InboundSession::Message(first_ref),
             ),
@@ -3917,44 +3946,44 @@ mod tests {
 
     #[test]
     fn an_ingress_schedule_commits_atomically_with_its_exact_obligations() {
-        use timing::{TimerArm, TimerSchedule};
+        use timing::{Deadline, Deadlines};
         let mut journal = MemJournal::new(GraphVersion(1));
         let prepared = journal
-            .prepare_connector_inbound(submission("server", SubmissionSequence::Next), None)
+            .prepare_connector_ingress(submission("server", SubmissionSequence::Next), None)
             .unwrap();
         let root = prepared.envelope().meta().sys().id();
-        let timer = (timer_kind::INBOUND_CALL_TIMEOUT, root);
+        let timer = (DeadlineKind::InboundCallTimeout, root);
         let prepared = prepared
             .into_call(instance("server", 0), vec![timer])
             .unwrap();
-        let mut arm = TimerArm {
+        let mut arm = Deadline {
             kind: timer.0,
             reference: root,
             due_at: 12,
         };
-        let schedule = TimerSchedule::try_new(7, vec![arm]).unwrap();
+        let schedule = Deadlines::try_new(7, vec![arm]).unwrap();
         arm.reference = Id::from_bytes([255; 16]);
         let forged = prepared
             .clone()
-            .with_timer_schedule(TimerSchedule::try_new(7, vec![arm]).unwrap());
+            .with_deadlines(Deadlines::try_new(7, vec![arm]).unwrap());
         assert!(matches!(
-            journal.commit_inbound(forged, vec![]),
-            Err(Error::InvalidTimerSchedule(_))
+            journal.commit_ingress(forged, vec![]),
+            Err(Error::InvalidDeadlines(_))
         ));
         assert!(journal.records().is_empty());
         assert!(journal.open_inbound_calls().is_empty());
-        let accepted = prepared.with_timer_schedule(schedule.clone());
+        let accepted = prepared.with_deadlines(schedule.clone());
         let stale = accepted.clone();
-        let committed = journal.commit_inbound(accepted, vec![]).unwrap();
+        let committed = journal.commit_ingress(accepted, vec![]).unwrap();
         assert_eq!(
             committed.seq, 0,
             "failed timing validation spends no sequence"
         );
-        assert_eq!(committed.record.timer_schedule.as_deref(), Some(&schedule));
-        assert_eq!(journal.records()[0].timer_schedule(), Some(&schedule));
+        assert_eq!(committed.record.deadlines.as_deref(), Some(&schedule));
+        assert_eq!(journal.records()[0].deadlines(), Some(&schedule));
         let before = journal.records().to_vec();
         assert!(matches!(
-            journal.commit_inbound(stale, vec![]),
+            journal.commit_ingress(stale, vec![]),
             Err(Error::SequenceMismatch { .. })
         ));
         assert_eq!(
@@ -3969,19 +3998,19 @@ mod tests {
         let mut journal = MemJournal::new(GraphVersion(1));
         let source = instance("server", 0);
         let prepared = journal
-            .prepare_connector_inbound(submission("server", SubmissionSequence::Next), None)
+            .prepare_connector_ingress(submission("server", SubmissionSequence::Next), None)
             .unwrap()
             .into_call(source.clone(), vec![])
             .unwrap();
         let root = prepared.envelope().meta().sys().id();
         let call_id = InboundCallId::from_root(root);
-        let committed = journal.commit_inbound(prepared, vec![]).unwrap();
+        let committed = journal.commit_ingress(prepared, vec![]).unwrap();
         assert_eq!(
             journal.open_inbound_calls(),
             [InboundCallIngressRecord {
                 reference: call_id,
                 instance: source.clone(),
-                timers: vec![],
+                deadline_ids: vec![],
             }]
         );
         assert_eq!(
@@ -3989,7 +4018,7 @@ mod tests {
             Some(&InboundExchangeRecord::Call(InboundCallIngressRecord {
                 reference: call_id,
                 instance: source.clone(),
-                timers: vec![],
+                deadline_ids: vec![],
             }))
         );
 
@@ -4070,7 +4099,7 @@ mod tests {
 
         activate(&mut journal, instance("socket", 0));
         let envelope = journal
-            .append_inbound(submission("world", SubmissionSequence::Next))
+            .append_ingress(submission("world", SubmissionSequence::Next))
             .unwrap()
             .envelope;
         let mut terminal = lifecycle_transaction(instance("socket", 0), node::Lifecycle::Exit);

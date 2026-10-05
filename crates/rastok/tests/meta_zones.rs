@@ -293,7 +293,7 @@ fn content_type_follows_the_payload_not_the_merge() {
     // witness keeps it, fresh data strikes it, an explicit write
     // wins — variables and ternaries included.
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};
     use rastok::journal::MemJournal;
@@ -318,8 +318,8 @@ fn content_type_follows_the_payload_not_the_merge() {
         );
         vm.inject(
             &mut journal,
-            InboundSubmission {
-                provenance: InboundEnvelopeProvenance::single(
+            IngressSubmission {
+                provenance: IngressEnvelopeProvenance::single(
                     rastok::node::Path::new(["probe"]).unwrap(),
                 ),
                 port: rastok::node::Port::new("in").unwrap(),

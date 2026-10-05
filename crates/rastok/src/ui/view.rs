@@ -4,7 +4,7 @@ use crate::data_policy::is_redacted_path;
 use crate::envelope::{Data, MetaValue, Namespace, Scalar, Value};
 use crate::instance;
 
-use crate::journal::{Journal, MemJournal, OutboundRecord, OutboundStatus, Record, SessionStatus};
+use crate::journal::{CallStatus, EgressRecord, Journal, MemJournal, Record, SessionStatus};
 use crate::plan::{NodeExecution, Slot, ValidatedExecutionPlan};
 use crate::runtime::vm::{
     CallDirectionInspection, CallReferenceInspection, InstancePhaseInspection,
@@ -130,7 +130,7 @@ impl ActivityView {
         let changed = &journal.records()[records.0..=records.1];
         if let Some(transaction) = changed.iter().rev().find_map(|record| match record {
             Record::Transaction(transaction) => Some(transaction),
-            Record::Inbound(_) | Record::Outbound(_) => None,
+            Record::Ingress(_) | Record::Egress(_) => None,
         }) {
             let owner = transaction.owner_path.to_string();
             let kind = match &transaction.trigger {
@@ -149,10 +149,10 @@ impl ActivityView {
         }
         if let Some((kind, node, motion, detail)) =
             changed.iter().rev().find_map(|record| match record {
-                Record::Outbound(OutboundRecord::Call(call)) => {
+                Record::Egress(EgressRecord::Call(call)) => {
                     let motion = match &call.status {
-                        OutboundStatus::Open => "outbound",
-                        OutboundStatus::Closed(_) | OutboundStatus::Abandoned => "inbound",
+                        CallStatus::Open => "outbound",
+                        CallStatus::Closed(_) | CallStatus::Abandoned => "inbound",
                     };
                     let (_, _, detail) = history_record_description(record);
                     Some((
@@ -162,7 +162,7 @@ impl ActivityView {
                         detail,
                     ))
                 }
-                Record::Outbound(OutboundRecord::Session(session)) => {
+                Record::Egress(EgressRecord::Session(session)) => {
                     let motion = match &session.status {
                         SessionStatus::Opening(_) | SessionStatus::WriteOpen(_) => "outbound",
                         SessionStatus::Opened
@@ -177,7 +177,7 @@ impl ActivityView {
                         detail,
                     ))
                 }
-                Record::Inbound(_) | Record::Transaction(_) => None,
+                Record::Ingress(_) | Record::Transaction(_) => None,
             })
         {
             return Some(Self {
@@ -192,7 +192,7 @@ impl ActivityView {
         }
         let (kind, detail) = if changed
             .iter()
-            .any(|record| matches!(record, Record::Inbound(_)))
+            .any(|record| matches!(record, Record::Ingress(_)))
         {
             (
                 "inbound",
@@ -445,7 +445,7 @@ fn topology(
             .and_then(|activity| activity.records)
             .is_some_and(|(from, through)| (from..=through).contains(&record_index));
         match record {
-            Record::Inbound(inbound) => {
+            Record::Ingress(inbound) => {
                 for route in &inbound.routes {
                     if belongs_to_activity {
                         record_activity_route(&mut activity_routes, &route.edge, "admitted");
@@ -485,7 +485,7 @@ fn topology(
                     }
                 }
             }
-            Record::Outbound(_) => {}
+            Record::Egress(_) => {}
         }
     }
 
@@ -975,7 +975,7 @@ fn history(plan: &ValidatedExecutionPlan, vm: &Vm<'_>, journal: &MemJournal) -> 
         .iter()
         .enumerate()
         .filter_map(|(index, record)| {
-            let Record::Inbound(root) = record else {
+            let Record::Ingress(root) = record else {
                 return None;
             };
             Some(json!({
@@ -1015,7 +1015,7 @@ fn history(plan: &ValidatedExecutionPlan, vm: &Vm<'_>, journal: &MemJournal) -> 
 
 fn history_record_description(record: &Record) -> (&'static str, Option<String>, String) {
     match record {
-        Record::Inbound(inbound) => {
+        Record::Ingress(inbound) => {
             let source = inbound.connector_path.as_ref().map_or_else(
                 || String::from("App input"),
                 |connector| format!("Inbound · {connector}"),
@@ -1064,11 +1064,11 @@ fn history_record_description(record: &Record) -> (&'static str, Option<String>,
                 transaction_summary(transaction),
             )
         }
-        Record::Outbound(OutboundRecord::Call(call)) => {
+        Record::Egress(EgressRecord::Call(call)) => {
             let (kind, verb) = match &call.status {
-                OutboundStatus::Open => ("call-opened", "Call opened"),
-                OutboundStatus::Closed(_) => ("call-closed", "Call closed"),
-                OutboundStatus::Abandoned => ("call-abandoned", "Call abandoned"),
+                CallStatus::Open => ("call-opened", "Call opened"),
+                CallStatus::Closed(_) => ("call-closed", "Call closed"),
+                CallStatus::Abandoned => ("call-abandoned", "Call abandoned"),
             };
             (
                 kind,
@@ -1076,7 +1076,7 @@ fn history_record_description(record: &Record) -> (&'static str, Option<String>,
                 format!("{verb} · {}", call.intent.connector_path),
             )
         }
-        Record::Outbound(OutboundRecord::Session(session)) => {
+        Record::Egress(EgressRecord::Session(session)) => {
             let (kind, verb) = match &session.status {
                 SessionStatus::Opening(_) => ("session-opening", "Session opening"),
                 SessionStatus::Opened => ("session-opened", "Session opened"),
@@ -1682,6 +1682,16 @@ mod tests {
         );
         assert!(saw_held && saw_wait);
         let final_view = &frames.last().unwrap().1;
+        let record_types: std::collections::BTreeSet<_> = final_view["history"]["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|record| record["record_type"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            record_types,
+            std::collections::BTreeSet::from(["INGRESS", "TRANSACTION", "EGRESS"])
+        );
         let operation = &final_view["retry_operations"][0];
         assert_eq!(operation["phase"], "Closed");
         assert_eq!(operation["attempt"], "2");

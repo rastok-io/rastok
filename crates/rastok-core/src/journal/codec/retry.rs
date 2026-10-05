@@ -52,7 +52,7 @@ fn batch(operation: &Cbor, ordinal: &Cbor, call: &Cbor, emissions: &Cbor) -> Res
     })
 }
 
-impl Reader {
+impl Decoder {
     /// Decode a sparse Retry packet using the same envelope prefix as records.
     ///
     /// # Errors
@@ -187,12 +187,12 @@ mod tests {
     use crate::canonical_cbor::{decode, encode};
     use alloc::vec;
 
-    fn fixture() -> (Reader, Envelope, rp::OperationId, Packet) {
+    fn fixture() -> (Decoder, Envelope, rp::OperationId, Packet) {
         let source = Envelope::new(
             Meta::new(MetaSys::root(Id::from_bytes([1; 16]), 1)),
             Data::materialized(Value::Text("request".into())),
         );
-        let mut reader = Reader::default();
+        let mut reader = Decoder::default();
         reader.envelope(&envelope(&source)).unwrap();
         let operation = rp::OperationId::from_id(Id::from_bytes([2; 16]));
         let packet = Packet {
@@ -426,7 +426,7 @@ mod tests {
             ])),
         ];
         for tree in invalid {
-            assert!(Reader::default().retry_packet(&tree).is_err(), "{tree:?}");
+            assert!(Decoder::default().retry_packet(&tree).is_err(), "{tree:?}");
         }
     }
 
@@ -434,7 +434,7 @@ mod tests {
     fn retry_pins_require_a_retained_source_and_canonical_settings() {
         let (_, _, _, packet) = fixture();
         assert_eq!(
-            Reader::default().retry_packet(&retry_packet(&packet)),
+            Decoder::default().retry_packet(&retry_packet(&packet)),
             Err(Error::Invalid(
                 "Retry pin envelope is not in retained prefix"
             ))

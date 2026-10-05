@@ -124,7 +124,7 @@ The type stored beside the key is never trusted or silently repaired. Source
 lowering has one explicit privilege: after total port inference it materializes
 the type of a key that reads `data`. A free raw plan and a decoded package must
 already carry the exact type re-derived from the expression, every admitting
-input, the transported `app`/`ext` schemas, the fixed `sys` spine, and visible
+input, the transported `app`/`ext` schemas, the fixed reserved `sys` fields, and visible
 ancestor `val`s. A different claim is a validation error even when both types
 belong to the legal key domain.
 
@@ -178,7 +178,7 @@ optional fields, interval, `variant`, union, array, map, table, and opaque
 values refuse. A missing key or missing struct field is an error, never a
 distinguished `missing` key.
 
-Struct field order in source is not identity. The selected-key frame seals the
+Struct field order in source is not identity. The selected-key segment seals the
 complete resolved key `DataType` beside its value; canonical struct encoding
 sorts fields by name at every level. Thus field names, resolved leaf types and
 canonical values are all identity, and these select the same instance:
@@ -198,8 +198,8 @@ An instance's logical address is the canonical outermost-to-innermost stack:
 
 ```text
 static owner path
-+ every dynamic ancestor frame
-+ the owner's local selected-key and/or time-box frame, when present
++ every dynamic ancestor segment
++ the owner's local selected-key and/or time-box segment, when present
 ```
 
 Example:
@@ -208,14 +208,14 @@ Example:
 tenant="acme" / session="s-42" / summarize
 ```
 
-Singleton ownership contributes no dynamic frame; the static owner path still
-distinguishes Nodes. The exact canonical CBOR sub-form and extend-only frame
+Singleton ownership contributes no dynamic segment; the static owner path still
+distinguishes Nodes. The exact canonical CBOR sub-form and extend-only segment
 kinds live in [identity.md](identity.md).
 
 Compilation may flatten composition to validate the spatial DAG, but the
 validated plan preserves every Graph, Operator, and Connector as an owner and
 preserves the parent relation between them. A route retains its lexical Graph
-scope. The runtime can therefore derive which owner frames a delivery leaves
+scope. The runtime can therefore derive which owner segments a delivery leaves
 and enters from the route plus the owner tree; it never reverse-engineers
 containment from dotted path text.
 
@@ -233,7 +233,7 @@ messages, and old ownership. It is not part of the logical address, call
 identity, or source vocabulary.
 
 A processing-time-box address has at most one forward-execution generation:
-the next tumbling box has a different address frame. Idle, fixed, single-pass,
+the next tumbling box has a different address segment. Idle, fixed, single-pass,
 and explicit stop may instead close an address that a later admission reuses
 with the next generation.
 
@@ -368,7 +368,7 @@ undefined and cannot be observed through shared mutable state, because none
 exists between Nodes.
 
 An unkeyed Node is a singleton inside each enclosing Graph instance. It does
-not re-evaluate an ancestor's key; the ancestor frames already occur in its
+not re-evaluate an ancestor's key; the ancestor segments already occur in its
 address.
 
 ## 6. Lifetime
@@ -448,7 +448,7 @@ This is not permission to open a Retry manager in a closing generation.
 ### 6.5 Tumbling
 
 Processing-time boxes are epoch-aligned at `epoch + k·every`. The runtime adds
-the canonical window start as a runtime-owned address frame; it is not a field
+the canonical window start as a runtime-owned address segment; it is not a field
 the source author fabricates. One envelope belongs to exactly the box open at
 its admission. A lifetime without `instance.key` is therefore a true temporal
 singleton in each enclosing Graph address, rather than a fake constant-key
@@ -457,7 +457,7 @@ partition; it is App-global only when every ancestor is singleton.
 Each box address admits generation zero at most once in forward execution. A
 route committed before box closure remains old-box work and drains there; an
 attempt after closure cannot reopen that address as generation one or spill
-into the next box. The next epoch boundary creates a different address frame.
+into the next box. The next epoch boundary creates a different address segment.
 
 Sliding windows remain a named deferred feature: overlap maps one envelope to
 several instances and therefore requires explicit one-to-many admission.
@@ -551,7 +551,7 @@ Closing then follows this sequence:
 2. At the drain deadline, unconsumed internal deliveries become residuals of
    the closing generation. Their consumed cursor positions are sealed by its
    final stop transaction, so they are visible and cannot leak into the
-   successor. Open calls are cancelled in canonical `CallRef` order.
+   successor. Open calls are cancelled in canonical `CallId` order.
 3. During `settle_for`, an observed completion still wins the ordinary
    close-once race and publishes its normal typed `exit`.
 4. At the settlement deadline, each call still open is atomically marked
@@ -568,7 +568,7 @@ Closing then follows this sequence:
 An observed cancellation result is not rewritten as `OutcomeUnknown`: for
 `Process`, a confirmed kill normally yields `Exited { ... }`. The unknown case
 means only that no terminal outcome was confirmed before settlement expired.
-It has no `reason` payload; its causal trigger and the abandoned OUTBOUND fact
+It has no `reason` payload; its causal trigger and the abandoned EGRESS fact
 carry the provenance.
 
 Loop commands and wakeups are generation-bound and die with their instance.
@@ -630,7 +630,7 @@ the command does not require an authored key.
 
 These destinations are commands, not ports or spatial edges. The routed
 envelope provides the cause, not a dynamic owner name or OS process id. The
-target's complete `InstanceRef` is sealed before producer commit; commands
+target's complete `instance::Generation` is sealed before producer commit; commands
 never create an instance or choose a newer generation. An ambiguous target
 refuses. Bare Operator `stop` retains §7's local meaning.
 

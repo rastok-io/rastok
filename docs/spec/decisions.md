@@ -5,6 +5,54 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-10-05-1 — Align the human-review vocabulary before one public cutover
+
+Yoann approves the consolidated T1 and T2-through-codec brief. The first lot
+changes vocabulary and closes the two byte registries without changing any
+allocated value, identity recipe, package, recording or causal trace:
+
+- `IdKind` owns the implemented identity domains and has an explicit byte
+  projection and a named refusal for unknown bytes. Scattered constants go.
+- Journal kinds are `Ingress`, `Transaction`, `Egress`; their admission
+  types and APIs follow. Inbound/outbound remain exchange directions.
+  `OutboundStatus` becomes `CallStatus`; `UnboundOutbound` remains a missing
+  outbound Driver binding, not a kind of record. An inbound Call response
+  is a transaction's `exchange_exit`, not an Egress Call opened backwards.
+- `DeadlineKind`, `Deadline`, `Deadlines { created_at, items }`,
+  `deadline_ids` and `deadlines` distinguish obligations from their disposable
+  scheduler. Creation and due instants are signed logical nanoseconds.
+  **Contact correction:** there are eight allocated kinds, not nine;
+  unallocated byte 4 and all other unknown bytes refuse. Their current
+  numbers stay unchanged in this lot.
+- `journal::codec::{encode, Decoder, Error}` owns the lossless record codec.
+  A field outside the causal seal is **unsealed**, not a second category
+  called retained. Retain remains the ordinary verb for evidence the journal
+  keeps, including sealed facts. The lossless codec includes both kinds.
+- The admission-prefix implementation follows its trait's declaration order.
+  Sharing the generation fold and moving timing validation are the next lot,
+  not hidden work in this one.
+
+The byte-neutral structural lot follows review. One later **v20** cutover
+groups role removal, type-directed materialization, ccbor graph-born values,
+`std/` contract/decoder names and pre-public registry compaction. It supersedes
+the affected representation clauses of D-2026-09-05-1, D-2026-09-08-1,
+D-2026-09-14-4 and D-2026-09-15-1/-2; it does not change Loop/Retry decisions
+or reopen their accepted closure rules. The byte-neutral lot does not claim
+those changes are already executable. The current package/recording versions
+remain 19/3 until that cutover.
+
+No pre-public compatibility readers, aliases or retired/reserved slots survive
+the cutover. Registries compact once; old artifacts regenerate, not convert.
+The identity inventory precedes every bless, with Fable's review and Yoann's
+approval. Dated reports retain their original terminology as evidence.
+Extend-only begins with the first public format, not the unpublished drafts.
+
+The written date valve applies: opening **5 November 2026**, freeze
+**24 October**. Keep the chantier and target named/numbered v20 for now.
+**Pre-publication TODO:** number the first public format 1, with recording
+numbering settled in the same release step. No push, tag, publication or
+external review invocation is authorized by this decision.
+
 ## D-2026-09-18-2 — Reserve Budget governance for a post-M1 Extension
 
 Yoann confirms that future budget governance is the `Budget` Extension,

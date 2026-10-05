@@ -37,7 +37,7 @@ modules and public types of the current build.
   reachable syntax produces an explicit diagnostic, never an accident;
   `later`: absent, no stub.
 
-## 1. The data spine
+## 1. The data flow
 
 The system is a chain of owned, immutable forms. Every module below is
 defined by the form it produces or consumes.
@@ -58,7 +58,7 @@ executable plan (tables + expression trees — data, not code)
 envelopes, effect intents, response events
   │ record (runtime mechanics only)
   ▼
-typed journal records (INBOUND / TRANSACTION / OUTBOUND)
+typed journal records (INGRESS / TRANSACTION / EGRESS)
   │ project
   ▼
 canonical record projection ─▶ golden compare
@@ -70,8 +70,8 @@ canonical record projection ─▶ golden compare
 | HIR | `compiler` (check) | canonicalize, lower | desugared, name-resolved, typed — the hash input ([identity.md §1](../spec/identity.md)); spans live in side tables; **the entire lab is excluded from the hash** |
 | canonical bytes, `plan::SemanticHash` | `compiler` (canonicalize) | `plan::Manifest`, golden headers | byte-stable across formatting, file order, and sugar spelling ([identity.md §1](../spec/identity.md)) |
 | `plan::ValidatedExecutionPlan` | `compiler` (lower, then validate) or `plan::decode` | `runtime`, `lab`, `plan::encode` | the only executable/package boundary: an immutable `ExecutionPlan` whose tables, `expr::Tree`s, slots, contracts, and structural budgets have already passed the plan gate |
-| `boundary::{Intent,SessionOpenIntent,SessionWriteIntent}` (open OUTBOUND) | `runtime` | dispatcher/bindings → exchange-specific `boundary::OutboundConnectorDriver` views | canonical Call or Session effect fields and already-resolved non-plan settings; each causal open/write record seals its emitting id, connector path and exact request/message digest before Driver effect, while settings remain execution material rather than a parallel causal field ([delivery-semantics.md §4](../spec/delivery-semantics.md); [identity.md §3](../spec/identity.md)) |
-| `boundary::Completion` | `connectors` or the Lab's mock Driver | `runtime` (as an input event) | returns ordered ordinary port drafts plus one final typed `exit`, correlated by the internal `CallRef` — never by the business key; a Driver only answers and never decides a timeout or mints journal records |
+| `boundary::{Intent,SessionOpenIntent,SessionWriteIntent}` (open EGRESS) | `runtime` | dispatcher/bindings → exchange-specific `boundary::OutboundConnectorDriver` views | canonical Call or Session effect fields and already-resolved non-plan settings; each causal open/write record seals its emitting id, connector path and exact request/message digest before Driver effect, while settings remain execution material rather than a parallel causal field ([delivery-semantics.md §4](../spec/delivery-semantics.md); [identity.md §3](../spec/identity.md)) |
+| `boundary::Completion` | `connectors` or the Lab's mock Driver | `runtime` (as an input event) | returns ordered ordinary port drafts plus one final typed `exit`, correlated by the internal `CallId` — never by the business key; a Driver only answers and never decides a timeout or mints journal records |
 | `journal::Record` | **runtime mechanics only** | recovery, `golden::Trace` | Drivers and mocks supply events, never records; causal core and observation annotations kept separable ([identity.md §3](../spec/identity.md)) |
 | `observation::RecordObservation` | semantic journal query | deterministic reports and disposable hosted projections | typed correlation is derived only from causal history, retained outside its seal, and never consulted by execution or replay ([observability.md §6–7](../spec/observability.md)) |
 | `accounting::AccountingObservation` | read-only journal/schema inspection | individual measurement inspection | original exact samples, basis, currency and causal provenance; no grouping, pricing or subset arithmetic in M1 ([observability.md §7.1](../spec/observability.md)) |
@@ -312,10 +312,10 @@ the same VM surface; authored Lab crash/restart actions remain deferred.
 | **Mailboxes** | per-instance-reference FIFO order, arrival-order capture (the race outcome is journaled), bounded capacity | envelopes → ordered delivery within one address generation | [execution-model.md §2–3](../spec/execution-model.md) | M0 base; M1.4 R3 hierarchical rebase landed |
 | **HandlerExecutor** | the atomic node transaction: consumed input, state delta, emissions, and records commit together; scratch isolation while a handler runs | firing → transaction commit + emissions | [execution-model.md §1](../spec/execution-model.md) | M0 |
 | **EmissionBuffer** | per-port emission identity in text order (`emission_index`) | handler body → ordered emissions | [execution-model.md §4](../spec/execution-model.md) | M0 |
-| **Boundary completion** | one correlated completion closes a Call and carries ordered ordinary output drafts plus one final typed `exit`; the VM mints and commits all output envelopes atomically. Outbound Calls consume a delivery and close an OUTBOUND record; inbound Calls close their committed root through `l:reply`: fixed ack consumes no cursor, while a graph response consumes its one already-journaled delivery. The orthogonal Session path journals opening and individual write obligations, then publishes one terminal exit. | completion drafts or session facts → causal records and routed envelopes | [types.md](../spec/types.md); [m1.3 backlog](m1.3-type-system-backlog.md); [M1.6 backlog](m1.6-http-websocket-backlog.md) | M1.3 B7 outbound Call; M1.6 H1 Session fold; H5/H5.2 generic inbound Call |
+| **Boundary completion** | one correlated completion closes a Call and carries ordered ordinary output drafts plus one final typed `exit`; the VM mints and commits all output envelopes atomically. Outbound Calls consume a delivery and close an EGRESS record; inbound Calls close their committed root through `l:reply`: fixed ack consumes no cursor, while a graph response consumes its one already-journaled delivery. The orthogonal Session path journals opening and individual write obligations, then publishes one terminal exit. | completion drafts or session facts → causal records and routed envelopes | [types.md](../spec/types.md); [m1.3 backlog](m1.3-type-system-backlog.md); [M1.6 backlog](m1.6-http-websocket-backlog.md) | M1.3 B7 outbound Call; M1.6 H1 Session fold; H5/H5.2 generic inbound Call |
 | **Instance Closing** | durable close-scope arbitration; successor-generation admission; bounded drain, canonical cancellation and settlement; residual cursor retirement; inner-first stop and state reclamation | `closing` policy + lifecycle cause + journal fold → terminal exits and `l:stop` | [instances.md §7](../spec/instances.md); [execution-model.md §2.1](../spec/execution-model.md) | M1.4 R5 |
 | **`GuestExecutor`** | the existing runtime seam future guest engines implement: `run(&[u8], value, budget)` — pure, deterministic, budgeted, inside the node transaction; the bytes become a typed/versioned `GuestProgram` only when that slice lands | opaque program bytes → value or typed error | [stdlib.md §5](../spec/stdlib.md) | seam only; no engine/program type yet |
-| **`deployment::BootBindings`** | exact environment values, opaque SecretRef/version bindings and privacy/price attestations; clear material stays at the Driver boundary | plan + typed deployment profile → bound settings and run attestation | [observability.md](../spec/observability.md) | M1.8 A4, narrow HttpClient sites |
+| **`deployment::BootBindings`** | exact environment values, opaque SecretName/version bindings and privacy/price attestations; clear material stays at the Driver boundary | plan + typed deployment profile → bound settings and run attestation | [observability.md](../spec/observability.md) | M1.8 A4, narrow HttpClient sites |
 
 ### 3.5 The boundary (`boundary`) — host interfaces and explicit time
 
@@ -333,15 +333,15 @@ a declared host seam rather than an object the M1 VM consumes directly.
 
 | Interface | Owns | Real side | Lab side | Spec | Status |
 |---|---|---|---|---|---|
-| **`InboundConnectorDriver`** | one retained `InboundProposal` — draft, provenance, sequence request and optional Session framing — until the runtime answers accepted-after-commit or rejected; pending admission makes no callback and therefore applies bounded backpressure. It never births an envelope: only the journal's accepting transaction mints root/exchange identity. Call bindings expose retained acknowledgement/response; Session bindings correlate each admitted message to the committed logical `SessionRef`. | live HttpServer and WebSocketServer over H1/H2/H3 | Contract-owned fake Drivers; direct scenario injection remains available through `Vm::inject` | [envelope.md §1.1, §2](../spec/envelope.md); [delivery-semantics.md §3, §4.4.1, §4.5, §6](../spec/delivery-semantics.md); [simulation-semantics.md](../spec/simulation-semantics.md) | M1.6 H1 generic protocol; H5 Calls; H6 Sessions |
-| **`OutboundConnectorDriver`** | categorical exchange view: `CallConnectorDriver` launches journaled `Intent`s and answers by `CallRef`; `SessionConnectorDriver` launches journaled open/write intents and reports by `SessionRef`/`SessionWriteRef`. Cancellation/timeout remain runtime policy and no Driver writes causal records. | Process/File/HttpClient Calls; WebSocketClient/Server Sessions | Contract-specific Call and Session mocks plus generic conformance batteries | [delivery-semantics.md §4](../spec/delivery-semantics.md); [execution-model.md §6.1, §6.6](../spec/execution-model.md); [M1.6 backlog](m1.6-http-websocket-backlog.md) | Call semantics M1.3 B7; role name M1.5 C0; live Sessions M1.6 H6 |
+| **`InboundConnectorDriver`** | one retained `IngressProposal` — draft, provenance, sequence request and optional Session framing — until the runtime answers accepted-after-commit or rejected; pending admission makes no callback and therefore applies bounded backpressure. It never births an envelope: only the journal's accepting transaction mints root/exchange identity. Call bindings expose retained acknowledgement/response; Session bindings correlate each admitted message to the committed logical `SessionId`. | live HttpServer and WebSocketServer over H1/H2/H3 | Contract-owned fake Drivers; direct scenario injection remains available through `Vm::inject` | [envelope.md §1.1, §2](../spec/envelope.md); [delivery-semantics.md §3, §4.4.1, §4.5, §6](../spec/delivery-semantics.md); [simulation-semantics.md](../spec/simulation-semantics.md) | M1.6 H1 generic protocol; H5 Calls; H6 Sessions |
+| **`OutboundConnectorDriver`** | categorical exchange view: `CallConnectorDriver` launches journaled `Intent`s and answers by `CallId`; `SessionConnectorDriver` launches journaled open/write intents and reports by `SessionId`/`SessionWriteId`. Cancellation/timeout remain runtime policy and no Driver writes causal records. | Process/File/HttpClient Calls; WebSocketClient/Server Sessions | Contract-specific Call and Session mocks plus generic conformance batteries | [delivery-semantics.md §4](../spec/delivery-semantics.md); [execution-model.md §6.1, §6.6](../spec/execution-model.md); [M1.6 backlog](m1.6-http-websocket-backlog.md) | Call semantics M1.3 B7; role name M1.5 C0; live Sessions M1.6 H6 |
 | **Logical-time input** | `Vm::boot_at` fixes an origin and `Vm::advance(journal, driver, target)` advances one deterministic timeline. A hosted runner uses one wall-clock sample plus monotonic elapsed time; a microcontroller with no RTC may use zero or a supplied origin. `now()` observes the firing's fixed instant and seals it only when used. | hosted time source | scenario origin + `advance` | [execution-model.md §5, §8](../spec/execution-model.md); D-2026-08-28-5 | target-driven VM; handler observation current |
 | **`Supervisor`** | process lifecycle: boot, crash, restart; recovery must never require a clean shutdown | host lifecycle | not built; fault steps remain guarded | [delivery-semantics.md §4.4](../spec/delivery-semantics.md); [simulation-semantics.md §5.4](../spec/simulation-semantics.md) | declared seam; current wiring boots only |
 
 The **`Dispatcher`** (owned here) is the loop between the journal and
-Outbound Connector Drivers: it takes OUTBOUND records the VM opened, drives
+Outbound Connector Drivers: it takes EGRESS records the VM opened, drives
 the selected binding, and settles answers through
-`journal::close_outbound(call_ref, …) → Won | AlreadyClosed`. Before
+`journal::close_egress(call_id, …) → Won | AlreadyClosed`. Before
 any closure, the **`CompletionGate`** judges every output against the resolved
 port contract — a refused reply never becomes
 a causal fact: it returns in `PumpBatch::rejected` with its reason,
@@ -358,7 +358,7 @@ Ownership rules that the types must make unrepresentable:
 - an Outbound Connector Driver **answers or stays silent** — it never returns a timeout
   (the scheduler's dated event decides that) and never returns
   `OutcomeUnknown` (recovery or bounded Closing supervision mints it);
-- call identity is the internal `CallRef` — a **deterministic
+- call identity is the internal `CallId` — a **deterministic
   derivation of the canonical call fields**, never a new serialized
   causal field; the business/idempotency key names the *operation* for
   retries and cooperative external-side dedup — the two are never
@@ -367,7 +367,7 @@ Ownership rules that the types must make unrepresentable:
   the Inbound Connector Driver supplies a draft; only the journal can mint a root id
   (the envelope is immutable and `meta.sys` runtime-owned);
 - Drivers and mocks produce **events**; the runtime mechanics alone
-  write records — a mocked call still gets its OUTBOUND record because
+  write records — a mocked call still gets its EGRESS record because
   the VM writes it before any Driver, real or scripted, is invoked;
 - response and timeout can race, but **exactly one wins** the closure;
   the loser is recorded as a **discarded observation**, never a causal
@@ -377,7 +377,7 @@ Ownership rules that the types must make unrepresentable:
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`Journal`** | the typed logical records and their order plus retained typed `RecordObservation` correlation outside the causal seal; `MemJournal` in-memory first | **semantic operations**, not bare appends: `prepare_inbound` mints the final root envelope without consuming its sequence; `commit_inbound` atomically advances that sequence with producer-sealed routes; `instance_ref_for_admission` folds lifecycle history; `commit(Transaction)` verifies firing/parent/route/closing generations; `open_outbound` is journal-before-effect; `close_outbound` and `abandon_outbound` return `Won \| AlreadyClosed`; `retained_observations` feeds reports/export without exposing physical layout; individual annotated values are read without aggregation or a second ledger | [delivery-semantics.md §1, §4, §6](../spec/delivery-semantics.md); [observability.md §6–7](../spec/observability.md); [envelope.md §2, §5](../spec/envelope.md); [instances.md](../spec/instances.md) | M0 base; M1.4 R5 closing; M1.8 observation and accounting planes |
+| **`Journal`** | the typed logical records and their order plus retained typed `RecordObservation` correlation outside the causal seal; `MemJournal` in-memory first | **semantic operations**, not bare appends: `prepare_ingress` mints the final root envelope without consuming its sequence; `commit_ingress` atomically advances that sequence with producer-sealed routes; `instance_generation_for_admission` folds lifecycle history; `commit(Transaction)` verifies firing/parent/route/closing generations; `open_egress` is journal-before-effect; `close_egress` and `abandon_egress` return `Won \| AlreadyClosed`; `retained_observations` feeds reports/export without exposing physical layout; individual annotated values are read without aggregation or a second ledger | [delivery-semantics.md §1, §4, §6](../spec/delivery-semantics.md); [observability.md §6–7](../spec/observability.md); [envelope.md §2, §5](../spec/envelope.md); [instances.md](../spec/instances.md) | M0 base; M1.4 R5 closing; M1.8 observation and accounting planes |
 | **Id derivation** | derived envelope and record ids — zero per-envelope randomness | recipe inputs → `envelope::Id` | [envelope.md §2–3](../spec/envelope.md) | M0 |
 | **Spatial/Loop recovery** | `runtime/vm/recovery` reconstructs generations, deltas, pending deliveries/cursors, Calls/Sessions, retained original deadlines and r2 runs/commands; physical effects are never replayed by reconstruction | journal prefix + optional pure Contract projections → recovered VM, or unchanged original VM on refusal | [delivery-semantics.md](../spec/delivery-semantics.md); [loop.md](../spec/loop.md) | R7–R9 executable; no disk backend |
 | *(golden projection)* | moved to its own `golden` module as built — see §3.6b | | | |
@@ -394,8 +394,8 @@ shared canonical CBOR reader/writer, so a mismatch diffs structurally
 against the STORED golden; the workflow (compare, explicit `--bless`)
 is driven by the lab's returned records, the golden tests, and `main`.
 
-`InboundRecord` carries the full root recipe — the opaque
-`InboundEnvelopeProvenance` (wrapping exactly the normative
+`IngressRecord` carries the full root recipe — the opaque
+`IngressEnvelopeProvenance` (wrapping exactly the normative
 `(connector_path, replica)` pair) plus the sequence — so a record autonomously
 reconstructs its root id ([identity.md §3](../spec/identity.md)). The
 projection lives here because it also serves production replay and
@@ -451,7 +451,7 @@ A Driver set plus the production machine — never a second engine.
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
 | **`lab::run`** | driving the production `Vm` through each checked scenario: inject, advance, settle, expectation windows over the machine's observation log, the three quantifiers; every uncovered call, faulting predicate or guard, and unsettled machine is a named failure | `hir::Lab` + plan → `Vec<ScenarioRun { report, records }>` — the records feed the golden workflow | [simulation-semantics.md §2, §5–6](../spec/simulation-semantics.md) | M0 |
-| **The scripted world** | as built, leaner than sketched: the *fixture* IS the scenario's steps (injections through `Vm::inject` — no `Fixture` type); the *virtual timeline* IS `Vm::advance` (no separate time-source type); explicit mock factories bind by the same exact Contract id/roles and reuse each Contract's pure request protocol — replies only, the VM still writes every OUTBOUND; the fault injector stays `next` | the scripted external world | [simulation-semantics.md §2, §5](../spec/simulation-semantics.md) | M0; multi-Contract registry parity M1.5 C5 |
+| **The scripted world** | as built, leaner than sketched: the *fixture* IS the scenario's steps (injections through `Vm::inject` — no `Fixture` type); the *virtual timeline* IS `Vm::advance` (no separate time-source type); explicit mock factories bind by the same exact Contract id/roles and reuse each Contract's pure request protocol — replies only, the VM still writes every EGRESS; the fault injector stays `next` | the scripted external world | [simulation-semantics.md §2, §5](../spec/simulation-semantics.md) | M0; multi-Contract registry parity M1.5 C5 |
 | **Coverage** | the statically enumerable failure-space checklist | plan + scenarios → coverage report | [simulation-semantics.md §7](../spec/simulation-semantics.md) | later |
 | **Unsupported surfaces** | `integration`, `theorem`, `experiment`: parse, then refuse explicitly | reachable syntax → `unsupported` diagnostic | [simulation-semantics.md §10–11](../spec/simulation-semantics.md) | guarded |
 
@@ -464,7 +464,7 @@ second parser and no second engine.
 | Component | Owns | Spec | Status |
 |---|---|---|---|
 | **`node`** | shared path, port, effect, Connector `behavior`, trigger and closed `Extension` vocabulary; Executor is a semantic category, not a public trait | [grammar.md](../spec/grammar.md); [extensions.md](../spec/extensions.md); [effects-and-sagas.md](../spec/effects-and-sagas.md); [stdlib.md §2](../spec/stdlib.md); [envelope.md §3](../spec/envelope.md) | R3 vocabulary executable |
-| **`envelope`** | `Envelope { meta, data }` with the five-field Tier-1 spine, optional Extension birth-context fields, and encoded/materialized data; Loop context and manager commands remain journal facts rather than new envelope fields | [envelope.md](../spec/envelope.md) | M0 core retained; Loop r2 causal context at R7 |
+| **`envelope`** | `Envelope { meta, data }` with the five reserved Tier-1 sys fields, optional Extension birth-context fields, and encoded/materialized data; Loop context and manager commands remain journal facts rather than new envelope fields | [envelope.md](../spec/envelope.md) | M0 core retained; Loop r2 causal context at R7 |
 | **`diagnostics`** | stable codes, severity, the registry's **phase vocabulary** (`parse`, `resolve`, `check`, `plan`, `run`, `replay`, `sim`), multi-span, structured fields; a check ships with its code, its negative test, and its registry row in the same change | [diagnostics.md](../spec/diagnostics.md) | M0 |
 | **`main`** | the `check` / `run` / `simulate` verbs, wiring (Drivers, dispatcher, stdlib contracts), rendering; owns nothing semantic | — | M0 |
 
@@ -479,7 +479,7 @@ main (bin)
                                                          │                     ▼
         connectors ── implement ─────────────────────────┘                 journal
         future guest engines ── implement GuestExecutor ▶ runtime               ▲
-        boundary::Dispatcher ── drives open OUTBOUNDs, closes ─────────────────┘
+        boundary::Dispatcher ── drives open EGRESS facts, closes ───────────────┘
 
 compiler ──▶ plan (the execution plan) ◀── interprets ──────────────────── runtime
     │    └─▶ stdlib (contract sheets)
@@ -527,7 +527,7 @@ items still constrain later slices.
   semantic operations over typed records. Segment files,
   snapshots-on-disk, and retention arrive later behind the same trait
   (`ARCHITECTURE.md`, boundary rule 5).
-- **Opaque inbound provenance.** `boundary::InboundEnvelopeProvenance` wraps
+- **Opaque ingress provenance.** `boundary::IngressEnvelopeProvenance` wraps
   exactly the normative `(connector_path, replica)` pair
   ([identity.md §3](../spec/identity.md)) but stays opaque: M0 code
   never assumes the replica component is a constant it may inline. The value

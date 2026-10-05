@@ -5,7 +5,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::boundary::{
-    Dispatcher, Draft, InboundEnvelopeProvenance, InboundSubmission, OpenGate, SubmissionSequence,
+    Dispatcher, Draft, IngressEnvelopeProvenance, IngressSubmission, OpenGate, SubmissionSequence,
 };
 use rastok::compiler::compile;
 use rastok::connectors::{DriverRegistry, FileFactory, RuntimeBindings};
@@ -74,9 +74,9 @@ graph file_probe : App {{
     )
 }
 
-fn submission(data: Data) -> InboundSubmission {
-    InboundSubmission {
-        provenance: InboundEnvelopeProvenance::single(
+fn submission(data: Data) -> IngressSubmission {
+    IngressSubmission {
+        provenance: IngressEnvelopeProvenance::single(
             node::Path::new(["test"]).expect("a valid test provenance"),
         ),
         port: node::Port::new("in").expect("the conventional port"),
@@ -291,7 +291,7 @@ fn an_invalid_logical_path_refuses_before_an_outbound_open() {
         journal
             .records()
             .iter()
-            .all(|record| !matches!(record, Record::Outbound(_))),
+            .all(|record| !matches!(record, Record::Egress(_))),
         "pure preparation refusal opens no external obligation"
     );
 }
@@ -309,7 +309,7 @@ fn filesystem_observation_begins_only_after_the_outbound_open() {
         .expect("the trigger is admitted");
 
     vm.drain_with_bindings(&mut journal, &mut bindings)
-        .expect("request preparation and OUTBOUND open succeed");
+        .expect("request preparation and EGRESS open succeed");
     assert_eq!(journal.open_calls().len(), 1);
     assert!(
         !target.exists(),

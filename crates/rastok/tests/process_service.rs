@@ -68,7 +68,7 @@ fn resident_mock_keeps_one_session_across_writes() {
         .records
         .iter()
         .filter_map(|r| match r {
-            rastok::journal::Record::Outbound(rastok::journal::OutboundRecord::Session(record)) => {
+            rastok::journal::Record::Egress(rastok::journal::EgressRecord::Session(record)) => {
                 Some(&record.status)
             }
             _ => None,
@@ -92,7 +92,7 @@ fn resident_mock_keeps_one_session_across_writes() {
 
 #[test]
 fn gallery_keeps_alice_and_bob_resources_separate_and_reopens_only_on_input() {
-    use rastok::journal::{OutboundRecord, Record, SessionStatus};
+    use rastok::journal::{EgressRecord, Record, SessionStatus};
     let compilation = compile(
         &[include_str!("../../../examples/agent-dialogue.rkg")],
         &ContractCatalog::try_m0().unwrap(),
@@ -112,7 +112,7 @@ fn gallery_keeps_alice_and_bob_resources_separate_and_reopens_only_on_input() {
             .records
             .iter()
             .filter_map(|r| match r {
-                Record::Outbound(OutboundRecord::Session(s))
+                Record::Egress(EgressRecord::Session(s))
                     if matches!(s.status, SessionStatus::Opening(_)) =>
                 {
                     Some(s.session_id)
@@ -232,14 +232,14 @@ mod real {
         boundary::*,
         connectors::{RuntimeBindings, hosted_registry},
         envelope::*,
-        journal::{MemJournal, OutboundRecord, Record, SessionStatus},
+        journal::{EgressRecord, MemJournal, Record, SessionStatus},
         plan::GraphVersion,
         runtime::vm::Vm,
     };
 
-    fn input(port: &str, text: &str) -> InboundSubmission {
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+    fn input(port: &str, text: &str) -> IngressSubmission {
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 rastok::node::Path::new(["test"]).unwrap(),
             ),
             port: rastok::node::Port::new(port).unwrap(),
@@ -274,7 +274,7 @@ mod real {
         }
     }
     fn openings(journal: &MemJournal) -> usize {
-        journal.records().iter().filter(|r| matches!(r, Record::Outbound(OutboundRecord::Session(s)) if matches!(s.status, SessionStatus::Opening(_)))).count()
+        journal.records().iter().filter(|r| matches!(r, Record::Egress(EgressRecord::Session(s)) if matches!(s.status, SessionStatus::Opening(_)))).count()
     }
 
     /// Marked OS integration: no network and no model; only a local child.

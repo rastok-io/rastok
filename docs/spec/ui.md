@@ -82,7 +82,7 @@ R = journal record index. These are different things. The interface spells out
 `action · transition · record` and `LIVE · Main · transition 9`; B remains an
 internal ordinal, not a public label. A transition may contain several
 indivisible records. History shows `record 14 · transition 16` and the exact
-record type, `INBOUND`, `TRANSACTION` or `OUTBOUND`. Transaction never means
+record type, `INGRESS`, `TRANSACTION` or `EGRESS`. Transaction never means
 an arbitrary debugger step. The word boundary is not used for time navigation.
 Journal rows stay single-line; the table scrolls horizontally in a narrow
 inspector instead of clipping record/transition positions. Summaries have full
@@ -234,7 +234,7 @@ not a fabricated id. To change it, edit the RKG on disk and restart the CLI.
 The App input pin is topology, not an Inject button.
 For a source-Connector fixture, the inspector names `listener.out`, not
 `App.out`, and uses that source's resolved type and policy. Once admitted,
-the root is inspected from INBOUND (`history.sources`), without pretending it
+the root is inspected from INGRESS (`history.sources`), without pretending it
 was another VM delivery or emission transaction. Tests: the pending-injection
 projection test and the HttpServer source case in `browser.test.cjs`.
 If the plan contains classified data, the raw source DATA is withheld in both
@@ -309,7 +309,7 @@ append a record or modify the live machine.
   A case-routed pipe highlights the case of its selected/latest source envelope.
 - **Causal links.** Envelope selection highlights the retained origin lineage in
   pipes, nodes and journal rows. Origin and parent links navigate to retained
-  envelopes; a spine without a DATA observation says so. Command links explicitly
+  envelopes; system metadata without a DATA observation says so. Command links explicitly
   connect `CommandProduced`, `CommandConsumed`, and the resulting `Admit` through
   the r2 command reference and `(run, iteration)`, not by matching a convenient
   business key. A Done command has no Admit link. Nothing beyond the selected
@@ -320,10 +320,10 @@ append a record or modify the live machine.
   position. This uses the controller's existing action index, not source parsing
   in JavaScript.
 - **Pending work.** The dotted Pending control beside the timeline head lists
-  queued deliveries, their retained deadline facts, active lifetime/Closing
+  queued deliveries, their unsealed deadline facts, active lifetime/Closing
   deadlines, and Loop readmissions waiting on a recorded due instant. Call
   closures remove cancelled timeouts even while the claimed head awaits
-  consumption. Times come from `timer_schedule`, never timeout-duration arithmetic
+  consumption. Times come from `deadlines`, never timeout-duration arithmetic
   performed at inspection time. The list is an inventory, not a predicted order
   of future transactions. A Session handshake already removed from its mailbox
   is not projected until its precise opening-delivery correlation is exposed;

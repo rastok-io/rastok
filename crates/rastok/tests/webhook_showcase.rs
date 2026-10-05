@@ -12,7 +12,7 @@ use rastok::deployment::{
     SecretName, SecretProvider, SecretProviderError, SecretProviderId, SecretVersion,
     TransferPolicy,
 };
-use rastok::journal::{OutboundRecord, OutboundStatus, Record};
+use rastok::journal::{CallStatus, EgressRecord, Record};
 use rastok::lab;
 use rastok::plan::GraphVersion;
 use rastok::value::Value;
@@ -94,8 +94,8 @@ fn the_six_webhook_scenarios_are_deterministic_and_count_real_outbound_calls() {
                 .records
                 .iter()
                 .filter(
-                    |record| matches!(record, Record::Outbound(OutboundRecord::Call(outbound))
-                    if matches!(outbound.status, OutboundStatus::Open))
+                    |record| matches!(record, Record::Egress(EgressRecord::Call(outbound))
+                    if matches!(outbound.status, CallStatus::Open))
                 )
                 .count(),
             calls,
@@ -103,7 +103,7 @@ fn the_six_webhook_scenarios_are_deterministic_and_count_real_outbound_calls() {
             scenario.report.scenario
         );
         for record in &scenario.records {
-            if let Record::Inbound(inbound) = record {
+            if let Record::Ingress(inbound) = record {
                 assert_eq!(inbound.provenance.connector_path().to_string(), "listener");
                 assert_eq!(inbound.port.name(), "out");
             }
@@ -125,8 +125,8 @@ fn the_six_webhook_scenarios_are_deterministic_and_count_real_outbound_calls() {
             .records
             .iter()
             .filter_map(|record| match record {
-                Record::Outbound(OutboundRecord::Call(call))
-                    if matches!(call.status, OutboundStatus::Open) =>
+                Record::Egress(EgressRecord::Call(call))
+                    if matches!(call.status, CallStatus::Open) =>
                 {
                     Some(&call.intent)
                 }

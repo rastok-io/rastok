@@ -6,8 +6,8 @@ use crate::envelope;
 use crate::instance;
 use crate::journal::loop_protocol::{Fact as LoopFact, Phase as LoopPhase};
 use crate::journal::retry_protocol::{self as protocol, AttemptId, Fact, Fold, Packet, Phase};
-use crate::journal::timing::{TimerArm, TimerSchedule};
-use crate::journal::{CallRecord, Closure, OutboundStatus, Record, TransactionRecord};
+use crate::journal::timing::{Deadline, Deadlines};
+use crate::journal::{CallRecord, CallStatus, Closure, Record, TransactionRecord};
 
 pub(super) fn error(error: protocol::Error) -> VmError {
     VmError::Journal(crate::journal::Error::InvalidRetryProtocol(error))
@@ -163,7 +163,7 @@ impl Vm<'_> {
         Ok(())
     }
 
-    /// All closure information comes from the winning retained OUTBOUND, not
+    /// All closure information comes from the winning retained EGRESS, not
     /// the later completion transaction. In particular Closing cannot turn a
     /// previously held batch into a graph publication.
     pub(super) fn synchronize_retry_closures(
@@ -187,8 +187,8 @@ impl Vm<'_> {
         let mut closures = Vec::new();
         journal
             .visit_records(&mut |record| {
-                if let Record::Outbound(crate::journal::OutboundRecord::Call(record)) = record
-                    && record.status != OutboundStatus::Open
+                if let Record::Egress(crate::journal::EgressRecord::Call(record)) = record
+                    && record.status != CallStatus::Open
                     && pending.contains(&record.intent.call_id)
                 {
                     closures.push(record.clone());
@@ -225,15 +225,15 @@ impl Vm<'_> {
                 closed_at: record
                     .closed_at
                     .ok_or_else(|| error(protocol::Error::Timing))?,
-                schedule: record.timer_schedule.as_deref(),
+                schedule: record.deadlines.as_deref(),
             },
         )
         .map_err(error)?;
-        if let Some(schedule) = record.timer_schedule.as_deref() {
+        if let Some(schedule) = record.deadlines.as_deref() {
             let state = fold
                 .operation(attempt.operation)
                 .ok_or_else(|| error(protocol::Error::UnknownOperation))?;
-            for arm in schedule.arms() {
+            for arm in schedule.items() {
                 self.scheduler.arm(
                     arm.due_at,
                     DatedPayload::RetryDelay {
@@ -362,11 +362,11 @@ impl Vm<'_> {
         let mut head = None;
         journal
             .visit_records(&mut |record| {
-                let Some(schedule) = record.timer_schedule() else {
+                let Some(schedule) = record.deadlines() else {
                     return;
                 };
-                for arm in schedule.arms().iter().filter(|arm| {
-                    arm.kind == crate::journal::timer_kind::RECURRENCE_DELAY
+                for arm in schedule.items().iter().filter(|arm| {
+                    arm.kind == crate::journal::DeadlineKind::RecurrenceDelay
                         && arm.due_at <= self.now
                 }) {
                     let eligible = match record {
@@ -386,7 +386,7 @@ impl Vm<'_> {
                                 })
                             })
                         }
-                        Record::Outbound(crate::journal::OutboundRecord::Call(call)) => call
+                        Record::Egress(crate::journal::EgressRecord::Call(call)) => call
                             .retry_record
                             .as_deref()
                             .and_then(|packet| packet.context)
@@ -430,8 +430,8 @@ impl Vm<'_> {
         let mut index = 0usize;
         journal
             .visit_records(&mut |record| {
-                if let Record::Outbound(crate::journal::OutboundRecord::Call(call)) = record
-                    && call.status != OutboundStatus::Open
+                if let Record::Egress(crate::journal::EgressRecord::Call(call)) = record
+                    && call.status != CallStatus::Open
                     && let Some(attempt) = call
                         .retry_record
                         .as_deref()
@@ -447,8 +447,11 @@ impl Vm<'_> {
                         || closing
                         || state.due_at.is_none()
                         || dated_admission.is_none_or(|reference| {
-                            call.timer_schedule.as_deref().is_some_and(|schedule| {
-                                schedule.arms().iter().any(|arm| arm.reference == reference)
+                            call.deadlines.as_deref().is_some_and(|schedule| {
+                                schedule
+                                    .items()
+                                    .iter()
+                                    .any(|arm| arm.reference == reference)
                             })
                         });
                     if ready && in_turn {
@@ -588,12 +591,12 @@ impl Vm<'_> {
             });
             let ns = timeout.ok_or_else(|| error(protocol::Error::Policy))?;
             record
-                .timers
-                .push((crate::journal::timer_kind::CALL_TIMEOUT, reference));
+                .deadline_ids
+                .push((crate::journal::DeadlineKind::CallTimeout, reference));
             self.retain_timer_arms(
                 &mut record,
-                vec![TimerArm {
-                    kind: crate::journal::timer_kind::CALL_TIMEOUT,
+                vec![Deadline {
+                    kind: crate::journal::DeadlineKind::CallTimeout,
                     reference,
                     due_at: self.now.saturating_add(ns),
                 }],
@@ -662,7 +665,7 @@ pub(super) fn closure_schedule(
     intent: &Intent,
     completion: &Completion,
     now: i64,
-) -> Result<Option<Box<TimerSchedule>>, protocol::Error> {
+) -> Result<Option<Box<Deadlines>>, protocol::Error> {
     let Some(fold) = fold else { return Ok(None) };
     let Some((op, state)) = fold
         .operations()
@@ -689,10 +692,10 @@ pub(super) fn closure_schedule(
         .policy()
         .due_after(state.ordinal, now)
         .map(|due_at| {
-            TimerSchedule::try_new(
+            Deadlines::try_new(
                 now,
-                vec![TimerArm {
-                    kind: crate::journal::timer_kind::RECURRENCE_DELAY,
+                vec![Deadline {
+                    kind: crate::journal::DeadlineKind::RecurrenceDelay,
                     reference: protocol::admission_ref(*op, state.ordinal + 1, intent.call_id),
                     due_at,
                 }],
@@ -705,10 +708,10 @@ pub(super) fn closure_schedule(
 
 pub(super) fn closure_case<'a>(
     connector: &crate::plan::ConnectorSpec,
-    status: &'a OutboundStatus,
+    status: &'a CallStatus,
 ) -> Result<&'a str, VmError> {
     match status {
-        OutboundStatus::Closed(Closure::Response(completion)) => {
+        CallStatus::Closed(Closure::Response(completion)) => {
             let call = connector
                 .call_semantics()
                 .ok_or_else(|| error(protocol::Error::Policy))?;
@@ -720,9 +723,9 @@ pub(super) fn closure_case<'a>(
                 .and_then(|value| call.terminal_case(value))
                 .ok_or_else(|| error(protocol::Error::Terminal))
         }
-        OutboundStatus::Closed(Closure::Timeout) => Ok("TimeoutExpired"),
-        OutboundStatus::Abandoned => Ok("OutcomeUnknown"),
-        OutboundStatus::Open => Err(error(protocol::Error::Transition)),
+        CallStatus::Closed(Closure::Timeout) => Ok("TimeoutExpired"),
+        CallStatus::Abandoned => Ok("OutcomeUnknown"),
+        CallStatus::Open => Err(error(protocol::Error::Transition)),
     }
 }
 
@@ -766,13 +769,13 @@ pub(super) fn manager_record(
         loop_record: None,
         instance_commands: None,
         retry_record: Some(Box::new(packet)),
-        timer_schedule: None,
+        deadlines: None,
         logical_time: None,
         consumed: vec![],
         join_inputs: vec![],
         state_delta: vec![],
         emissions: vec![],
         routes: vec![],
-        timers: vec![],
+        deadline_ids: vec![],
     }
 }

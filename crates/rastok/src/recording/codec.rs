@@ -2,7 +2,7 @@
 
 use super::Error;
 use crate::canonical_cbor::Value as Cbor;
-pub(super) use crate::journal::retention::{Reader, record};
+pub(super) use crate::journal::codec::{Decoder, encode};
 
 pub(super) fn list(items: impl IntoIterator<Item = Cbor>) -> Cbor {
     Cbor::Array(items.into_iter().collect())

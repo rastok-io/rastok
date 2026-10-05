@@ -1,7 +1,7 @@
 //! Exact-instance closure requests. Production and the winning `l:closing`
 //! are separate facts; losing requests are settled by that same close fact.
 
-use super::{InboundRecord, Record, TransactionRecord};
+use super::{IngressRecord, Record, TransactionRecord};
 use crate::envelope::Id;
 use crate::instance;
 use crate::node;
@@ -13,9 +13,6 @@ use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt;
-
-/// A command is not an envelope, delivery, Call, or Loop command.
-const INSTANCE_STOP: u8 = 0x23;
 
 /// Extend-only field in the canonical causal projection.
 pub const CAUSAL_KEY: u64 = 57;
@@ -66,7 +63,7 @@ impl Command {
             EndpointOwner::Node(_) => 2,
         };
         Id::derive(
-            INSTANCE_STOP,
+            crate::envelope::IdKind::InstanceStop,
             &[
                 &[kind],
                 self.source.port.name().as_bytes(),
@@ -423,7 +420,7 @@ impl Fold {
 
     fn apply_inner(&mut self, record: &Record) -> Result<(), Error> {
         match record {
-            Record::Inbound(inbound) => {
+            Record::Ingress(inbound) => {
                 if let Some(packet) = inbound.instance_commands.as_deref() {
                     if packet.consumed.is_some() {
                         return Err(Error::Consumption);
@@ -500,7 +497,7 @@ impl Fold {
                     instance.stopped = true;
                 }
             }
-            Record::Outbound(_) => {}
+            Record::Egress(_) => {}
         }
         self.records += 1;
         Ok(())
@@ -621,7 +618,7 @@ fn transaction_source(record: &TransactionRecord, command: &Command) -> bool {
         })
 }
 
-fn inbound_source(record: &InboundRecord, command: &Command) -> bool {
+fn inbound_source(record: &IngressRecord, command: &Command) -> bool {
     let owner = record.connector_path.as_ref().map_or_else(
         || EndpointOwner::Graph(node::OwnerPath::root()),
         |path| EndpointOwner::Node(path.clone()),

@@ -2753,8 +2753,8 @@ graph app : App {
         .expect("sensitive policy is executable after A3");
         let mut vm = crate::runtime::vm::Vm::boot(&compilation.plan, GraphVersion(1));
         let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
-        let submission = crate::boundary::InboundSubmission {
-            provenance: crate::boundary::InboundEnvelopeProvenance::single(
+        let submission = crate::boundary::IngressSubmission {
+            provenance: crate::boundary::IngressEnvelopeProvenance::single(
                 node::Path::new(["test"]).expect("valid provenance path"),
             ),
             port: node::Port::new("in").expect("valid port"),
@@ -2861,8 +2861,8 @@ graph app : App {
             crate::journal::Journal::privacy_retention(&attested_journal),
             Some(crate::deployment::PrivacyRetention::RunScoped)
         );
-        let submission = crate::boundary::InboundSubmission {
-            provenance: crate::boundary::InboundEnvelopeProvenance::single(
+        let submission = crate::boundary::IngressSubmission {
+            provenance: crate::boundary::IngressEnvelopeProvenance::single(
                 node::Path::new(["test"]).expect("valid provenance path"),
             ),
             port: node::Port::new("in").expect("valid port"),

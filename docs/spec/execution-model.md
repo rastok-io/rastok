@@ -91,9 +91,9 @@ whole set visible; only then may an effect command reach a Driver.
 ### 1.2 Connector activations
 
 A world-originated Event, inbound Call, Session open, or inbound Session
-message is admitted and journaled as INBOUND before the Connector transaction
+message is admitted and journaled as INGRESS before the Connector transaction
 which consumes it. A result correlated with an already-open outbound Call or
-Session write is not another root: it settles that OUTBOUND obligation and
+Session write is not another root: it settles that EGRESS obligation and
 enters the bounded Connector activation path with the existing causal
 reference. Both paths produce ordinary core-owned Connector transactions.
 The Driver never writes the journal or semantic state directly.
@@ -234,10 +234,10 @@ descendants close inner-first. The phases are:
 2. drain already admitted work, including internal deliveries and call
    completions, for `drain_for`;
 3. seal remaining internal deliveries as residual cursor consumption and
-   cancel open calls in canonical `CallRef` order;
+   cancel open calls in canonical `CallId` order;
 4. settle for `settle_for`; an observed completion still publishes its normal
    typed exit and wins close-once;
-5. mark every still-open OUTBOUND `abandoned`, publish one empty
+5. mark every still-open EGRESS `abandoned`, publish one empty
    `OutcomeUnknown` on its typed exit port with trigger `l:recover`, then
    discard any late partner response as a non-causal observation;
 6. run an Operator's `on stop`, or the corresponding Connector's Contract-defined
@@ -475,7 +475,7 @@ resource scope nested inside the owning Node instance:
 session open ── message in/out* ── one typed session exit
 ```
 
-The journal-derived `SessionRef` correlates the whole scope. Each outbound
+The journal-derived `SessionId` correlates the whole scope. Each outbound
 message still obeys journal-before-effect, but settling its local write
 obligation does not publish a call `exit`. Only clean close, protocol
 failure, transport loss, session timeout, or bounded-Closing uncertainty
@@ -484,7 +484,7 @@ publishes the sole typed session `exit`; no message may follow it.
 Node-instance `stop` remains the outer boundary. M1.6 extends the bounded
 Closing fold to open sessions: stop closes admission, drains already admitted
 session messages, requests protocol close/cancellation in canonical
-`SessionRef` order, settles observations, emits the typed terminal or empty
+`SessionId` order, settles observations, emits the typed terminal or empty
 `OutcomeUnknown`, and only then permits `on stop`. This reuses the phases in
 §2.1 and does not let a session terminal replace the Node's `l:stop`.
 
@@ -500,7 +500,7 @@ transfers exactly once. The Driver then reports correlated opened,
 write-settled, inbound-message and terminal facts. The terminal projects as
 `l:exit`, after which the fold accepts neither another message nor another
 exit. Handshake timeout uses timer kind 9 and is fenced by the logical
-`SessionRef`, never a socket or task handle.
+`SessionId`, never a socket or task handle.
 
 At the retained Closing settlement deadline, a Session without an observed
 terminal receives `abort_session`: an idempotent forced-cleanup handoff for
@@ -528,7 +528,7 @@ exact opening instance, then retained as one real Connector delivery; its
 terminal `l:reply` consumes that position atomically. The transaction may
 publish ordinary typed outputs and must publish exactly one final `exit`. The
 root id remains the Call reference and causal parent, while the source
-`InstanceRef` is the generation fence.
+`instance::Generation` is the generation fence.
 
 The obligation participates in stability, finite capacity and instance
 Closing exactly like other admitted work. Closing cannot reach `l:stop` while
@@ -672,12 +672,12 @@ The processing-time tumbling contract has four rules:
 
 1. an envelope belongs to the box open at mailbox admission;
 2. boundaries are `epoch + k·every`, never relative to the first envelope;
-3. the canonical box start is a runtime-owned address frame, not application
+3. the canonical box start is a runtime-owned address segment, not application
    data fabricated by the author;
 4. box expiry follows the same Closing protocol and `on stop` ordering as any
    finite instance.
 
-The box-start frame is part of the logical address. One box address admits
+The box-start segment is part of the logical address. One box address admits
 only generation zero in forward execution: a delayed pre-close route remains
 in that box, while a post-close route refuses until time selects the next box
 address. It never creates generation one for an expired box.

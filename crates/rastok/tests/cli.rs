@@ -938,13 +938,13 @@ graph app : App {{
     assert!(original.status.success(), "{original:?}");
     let captured = rastok::recording::Recording::read(&recording).unwrap();
     assert!(captured.finished());
-    use rastok::journal::{OutboundRecord, OutboundStatus, Record, retry_protocol::Fact};
+    use rastok::journal::{CallStatus, EgressRecord, Record, retry_protocol::Fact};
     assert_eq!(
         captured
             .records()
             .iter()
             .filter(|record| matches!(record,
-        Record::Outbound(OutboundRecord::Call(call)) if call.status == OutboundStatus::Open))
+        Record::Egress(EgressRecord::Call(call)) if call.status == CallStatus::Open))
             .count(),
         2
     );
@@ -1423,7 +1423,7 @@ fn simulate_blesses_then_verifies_a_golden_directory() {
         stdout.contains("expected \"autre\"; got \"salut\""),
         "{stdout}"
     );
-    assert!(stdout.contains("cause: INBOUND"), "{stdout}");
+    assert!(stdout.contains("cause: INGRESS"), "{stdout}");
     assert!(stdout.contains("sequence 0"), "{stdout}");
     assert!(
         stdout.contains("data(8)"),

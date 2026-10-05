@@ -5,7 +5,7 @@
 use rastok::accounting::{
     CostProfile, CostProfileName, ExactDecimal, UnitPrice, accounting_observations,
 };
-use rastok::boundary::{Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence};
+use rastok::boundary::{Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence};
 use rastok::compiler::{Compilation, compile};
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
@@ -41,8 +41,8 @@ fn execute(compiled: &Compilation) -> MemJournal {
     let mut vm = Vm::boot(&compiled.plan, version);
     vm.inject(
         &mut journal,
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 node::Path::new(["business-test"]).expect("provenance"),
             ),
             port: node::Port::new("in").expect("input"),

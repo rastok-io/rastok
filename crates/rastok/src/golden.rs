@@ -45,7 +45,7 @@ use crate::canonical;
 #[cfg(test)]
 use crate::envelope::{Data, Envelope};
 use crate::journal::{
-    Closure, OutboundRecord, OutboundStatus, Record, SessionIngressRecord, SessionStatus,
+    CallStatus, Closure, EgressRecord, Record, SessionIngressRecord, SessionStatus,
 };
 use rastok_core::canonical_cbor::{Value as Cbor, decode, encode};
 
@@ -324,7 +324,7 @@ fn record_context(tree: &Cbor) -> String {
     };
     match fields.get(&10) {
         Some(Cbor::Uint(1)) => format!(
-            "INBOUND {} · port {} · sequence {}",
+            "INGRESS {} · port {} · sequence {}",
             field(21),
             fields
                 .get(&24)
@@ -339,7 +339,7 @@ fn record_context(tree: &Cbor) -> String {
             field(39),
         ),
         Some(Cbor::Uint(3)) => format!(
-            "OUTBOUND {} · emitting_id {} · call_key {}",
+            "EGRESS {} · emitting_id {} · call_key {}",
             field(41),
             field(40),
             field(42),
@@ -603,7 +603,7 @@ fn loop_packet_tree(packet: &crate::journal::loop_protocol::Packet) -> Cbor {
 
 fn record_tree(record: &Record) -> Cbor {
     match record {
-        Record::Inbound(inbound) => {
+        Record::Ingress(inbound) => {
             let mut pairs = BTreeMap::from([
                 (10, Cbor::Uint(1)),
                 (20, canonical::envelope(&inbound.envelope)),
@@ -645,13 +645,15 @@ fn record_tree(record: &Record) -> Cbor {
                             Cbor::Bytes(call.reference.id().as_bytes().to_vec()),
                             call.instance.tree(),
                         ];
-                        if !call.timers.is_empty() {
+                        if !call.deadline_ids.is_empty() {
                             fields.push(Cbor::Array(
-                                call.timers
+                                call.deadline_ids
                                     .iter()
                                     .map(|(kind, reference)| {
                                         Cbor::Array(vec![
-                                            Cbor::Uint(u64::from(*kind)),
+                                            Cbor::Uint(u64::from(
+                                                crate::journal::deadline_kind_tag(*kind),
+                                            )),
                                             Cbor::Bytes(reference.as_bytes().to_vec()),
                                         ])
                                     })
@@ -798,8 +800,8 @@ fn record_tree(record: &Record) -> Cbor {
                         .collect(),
                 ),
             );
-            if !transaction.timers.is_empty() {
-                let mut timers: Vec<_> = transaction.timers.iter().collect();
+            if !transaction.deadline_ids.is_empty() {
+                let mut timers: Vec<_> = transaction.deadline_ids.iter().collect();
                 timers.sort();
                 pairs.insert(
                     37,
@@ -808,7 +810,7 @@ fn record_tree(record: &Record) -> Cbor {
                             .into_iter()
                             .map(|(kind, reference)| {
                                 Cbor::Array(vec![
-                                    Cbor::Uint(u64::from(*kind)),
+                                    Cbor::Uint(u64::from(crate::journal::deadline_kind_tag(*kind))),
                                     Cbor::Bytes(reference.as_bytes().to_vec()),
                                 ])
                             })
@@ -837,7 +839,7 @@ fn record_tree(record: &Record) -> Cbor {
             }
             Cbor::Map(pairs)
         }
-        Record::Outbound(OutboundRecord::Call(outbound)) => {
+        Record::Egress(EgressRecord::Call(outbound)) => {
             let mut pairs = BTreeMap::from([
                 (10, Cbor::Uint(3)),
                 (
@@ -851,18 +853,16 @@ fn record_tree(record: &Record) -> Cbor {
             }
             pairs.insert(43, Cbor::Bytes(outbound.intent.request_digest().to_vec()));
             let (status, closure) = match &outbound.status {
-                OutboundStatus::Open => (1, None),
-                OutboundStatus::Closed(Closure::Response(completion)) => (
+                CallStatus::Open => (1, None),
+                CallStatus::Closed(Closure::Response(completion)) => (
                     2,
                     Some(Cbor::Array(vec![
                         Cbor::Uint(1),
                         completion_form(completion),
                     ])),
                 ),
-                OutboundStatus::Closed(Closure::Timeout) => {
-                    (2, Some(Cbor::Array(vec![Cbor::Uint(2)])))
-                }
-                OutboundStatus::Abandoned => (4, Some(Cbor::Array(Vec::new()))),
+                CallStatus::Closed(Closure::Timeout) => (2, Some(Cbor::Array(vec![Cbor::Uint(2)]))),
+                CallStatus::Abandoned => (4, Some(Cbor::Array(Vec::new()))),
             };
             pairs.insert(44, Cbor::Uint(status));
             if let Some(closure) = closure {
@@ -875,16 +875,18 @@ fn record_tree(record: &Record) -> Cbor {
             if let Some(packet) = outbound.retry_record.as_deref() {
                 pairs.insert(58, packet.tree());
             }
-            if let Some(schedule) = outbound.timer_schedule.as_deref() {
+            if let Some(schedule) = outbound.deadlines.as_deref() {
                 pairs.insert(
                     37,
                     Cbor::Array(
                         schedule
-                            .arms()
+                            .items()
                             .iter()
                             .map(|arm| {
                                 Cbor::Array(vec![
-                                    Cbor::Uint(u64::from(arm.kind)),
+                                    Cbor::Uint(u64::from(crate::journal::deadline_kind_tag(
+                                        arm.kind,
+                                    ))),
                                     Cbor::Bytes(arm.reference.as_bytes().to_vec()),
                                 ])
                             })
@@ -894,7 +896,7 @@ fn record_tree(record: &Record) -> Cbor {
             }
             Cbor::Map(pairs)
         }
-        Record::Outbound(OutboundRecord::Session(session)) => {
+        Record::Egress(EgressRecord::Session(session)) => {
             let fact = match &session.status {
                 SessionStatus::Opening(intent) => Cbor::Array(vec![
                     Cbor::Uint(1),
@@ -996,14 +998,14 @@ mod tests {
                 ..Packet::default()
             })),
             logical_time: None,
-            timer_schedule: None,
+            deadlines: None,
             instance_commands: None,
             consumed: Vec::new(),
             join_inputs: Vec::new(),
             state_delta: Vec::new(),
             emissions: Vec::new(),
             routes: Vec::new(),
-            timers: Vec::new(),
+            deadline_ids: Vec::new(),
         }));
 
         let Cbor::Map(tree) = record_tree(&record) else {
@@ -1078,10 +1080,10 @@ mod tests {
     fn a_connector_root_seals_its_structural_source_path_under_key_27() {
         let source = crate::node::Path::new(["api", "listener"]).unwrap();
         let id = crate::envelope::Id::from_bytes([7; 16]);
-        let record = Record::Inbound(Box::new(crate::journal::InboundRecord {
-            timer_schedule: None,
+        let record = Record::Ingress(Box::new(crate::journal::IngressRecord {
+            deadlines: None,
             instance_commands: None,
-            provenance: crate::boundary::InboundEnvelopeProvenance::single(source.clone()),
+            provenance: crate::boundary::IngressEnvelopeProvenance::single(source.clone()),
             port: crate::node::Port::new("out").unwrap(),
             connector_path: Some(source),
             seq: 0,

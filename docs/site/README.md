@@ -12,7 +12,7 @@ homepage is `https://www.rastok.com`. The source and release destinations are
 recorded in the [release inventory](../architecture/release-qualification.md#public-destinations-and-opening-gate).
 No front-matter field changes with this handoff.
 
-For the authorized 15 October opening, prefer a minimal Starlight deployment
+For the authorized 5 November opening, prefer a minimal Starlight deployment
 serving the quickstart and six gallery chapters. If that cannot be ready,
 serve a 301 from the documentation domain to the actual gallery page on
 `www.rastok.com`, replacing it with the documentation site in November. The

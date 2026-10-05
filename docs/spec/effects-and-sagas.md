@@ -36,12 +36,12 @@ An external command follows one order:
 1. pure preparation resolves every setting, request byte, operation identity,
    target instance, and required capacity;
 2. the producing Executor transaction commits;
-3. an OUTBOUND open is retained when the exchange requires one;
+3. an EGRESS open is retained when the exchange requires one;
 4. only then may the Driver make bytes or another effect visible.
 
 The Driver never mutates semantic state or the journal. A correlated outcome
 returns through the bounded Connector activation path and closes the existing
-OUTBOUND obligation; it is not fabricated as a second INBOUND root.
+EGRESS obligation; it is not fabricated as a second INGRESS root.
 
 Open effects whose outcome cannot be proved after recovery close loudly as
 `OutcomeUnknown`. Delivery semantics, idempotency-key stability, and
@@ -164,7 +164,7 @@ and the no-Connector-code rule.
 
 - [extensions.md](extensions.md) — Extension ownership and admission.
 - [loop.md](loop.md) — finite recurrence and advisory repetition warnings.
-- [delivery-semantics.md](delivery-semantics.md) — OUTBOUND WAL, recovery,
+- [delivery-semantics.md](delivery-semantics.md) — EGRESS WAL, recovery,
   close-once, and unknown outcomes.
 - [stdlib.md](stdlib.md) — exact Contracts, roles and idempotence profiles.
 - [instances.md](instances.md) — lifetime, Closing, and journal-derived

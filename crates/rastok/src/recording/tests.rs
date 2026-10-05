@@ -12,7 +12,7 @@ fn echo_retention_bytes_are_pinned_independently_of_the_codec_location() {
     let bytes = canonical_cbor::encode(&codec::list(compilation.labs.iter().flat_map(|world| {
         lab::run(&compilation.plan, GraphVersion(1), world)
             .into_iter()
-            .map(|run| codec::list(run.records.iter().map(codec::record)))
+            .map(|run| codec::list(run.records.iter().map(codec::encode)))
     })));
     // Recording v3 removes Intent.effect and retains the winning closure time.
     // The tuple moves separately from the unchanged causal-seal witnesses;
@@ -158,7 +158,7 @@ fn keyed_retries_loops_and_bounded_joins_survive_recording_and_prefix_reconstruc
 #[test]
 fn encoded_data_and_nan_metadata_are_lossless_not_a_golden_only_projection() {
     use crate::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use crate::envelope::{Data, Encoding, MetaValue, Scalar};
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -170,8 +170,8 @@ fn encoded_data_and_nan_metadata_are_lossless_not_a_golden_only_projection() {
         }),
     ] {
         journal
-            .append_inbound(InboundSubmission {
-                provenance: InboundEnvelopeProvenance::single(
+            .append_ingress(IngressSubmission {
+                provenance: IngressEnvelopeProvenance::single(
                     crate::node::Path::new(["test"]).unwrap(),
                 ),
                 port: crate::node::Port::new("in").unwrap(),
@@ -186,18 +186,18 @@ fn encoded_data_and_nan_metadata_are_lossless_not_a_golden_only_projection() {
             })
             .unwrap();
     }
-    let mut reader = codec::Reader::default();
+    let mut reader = codec::Decoder::default();
     let decoded: Vec<_> = journal
         .records()
         .iter()
-        .map(|record| reader.record(&codec::record(record)).unwrap())
+        .map(|record| reader.decode(&codec::encode(record)).unwrap())
         .collect();
     let restored = MemJournal::from_records(GraphVersion(1), None, &decoded).unwrap();
     for (before, after) in journal.records().iter().zip(restored.records()) {
-        assert_eq!(codec::record(before), codec::record(after));
+        assert_eq!(codec::encode(before), codec::encode(after));
     }
     assert!(
-        matches!(&decoded[0], Record::Inbound(value) if matches!(value.envelope.data(), Data::Encoded { .. }))
+        matches!(&decoded[0], Record::Ingress(value) if matches!(value.envelope.data(), Data::Encoded { .. }))
     );
 }
 
@@ -237,14 +237,14 @@ fn repeated_envelope_ids_cannot_change_their_content() {
     let original = run
         .records
         .iter()
-        .find(|record| matches!(record, Record::Inbound(_)))
+        .find(|record| matches!(record, Record::Ingress(_)))
         .unwrap();
-    let row = codec::record(original);
-    let mut reader = codec::Reader::default();
-    reader.record(&row).unwrap();
-    reader.record(&row).unwrap();
+    let row = codec::encode(original);
+    let mut reader = codec::Decoder::default();
+    reader.decode(&row).unwrap();
+    reader.decode(&row).unwrap();
     let mut changed = original.clone();
-    let Record::Inbound(inbound) = &mut changed else {
+    let Record::Ingress(inbound) = &mut changed else {
         panic!("inbound fixture")
     };
     inbound.envelope = crate::envelope::Envelope::new(
@@ -252,7 +252,7 @@ fn repeated_envelope_ids_cannot_change_their_content() {
         crate::envelope::Data::Materialized(crate::value::Value::Text("forged".into())),
     );
     assert!(matches!(
-        reader.record(&codec::record(&changed)).map_err(Error::from),
+        reader.decode(&codec::encode(&changed)).map_err(Error::from),
         Err(Error::Invalid("inconsistent repeated envelope"))
     ));
 }

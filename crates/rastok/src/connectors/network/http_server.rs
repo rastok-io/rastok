@@ -1,8 +1,8 @@
 use crate::boundary::{
-    Draft, HttpServerExit, InboundAcceptance, InboundCallConnectorDriver, InboundCallEvent,
-    InboundCallResponse, InboundCallResponseStart, InboundCallTimeout, InboundCallTimeoutStart,
-    InboundConnectorDriver, InboundDecision, InboundEnvelopeProvenance, InboundExchangeRef,
-    InboundProposal, InboundProposalHandle, InboundRejection, InboundSubmission,
+    Draft, HttpServerExit, InboundCallConnectorDriver, InboundCallEvent, InboundCallResponse,
+    InboundCallResponseStart, InboundCallTimeout, InboundCallTimeoutStart, InboundConnectorDriver,
+    InboundExchangeRef, IngressAcceptance, IngressDecision, IngressEnvelopeProvenance,
+    IngressProposal, IngressProposalHandle, IngressRejection, IngressSubmission,
     SubmissionSequence,
 };
 use crate::connectors::http_server::{HttpServerMode, bind_routes};
@@ -194,7 +194,7 @@ struct ListenerGroup {
 
 #[derive(Debug)]
 struct LiveProposal {
-    proposal: InboundProposal,
+    proposal: IngressProposal,
     decision: tokio::sync::oneshot::Sender<ServerDecision>,
     response: Option<RetainedResponse>,
     _reservation: EventReservation,
@@ -217,7 +217,7 @@ struct ServerCommand {
 #[derive(Clone, Copy, Debug)]
 enum ServerDecision {
     Accepted(crate::boundary::InboundCallId),
-    Rejected(InboundRejection),
+    Rejected(IngressRejection),
 }
 
 #[derive(Debug)]
@@ -590,12 +590,12 @@ impl<'plan> HttpServer<'plan> {
 }
 
 impl InboundConnectorDriver for HttpServer<'_> {
-    fn proposal(&mut self) -> Option<InboundProposal> {
+    fn proposal(&mut self) -> Option<IngressProposal> {
         self.poll_events();
         self.pending.front().map(|pending| pending.proposal.clone())
     }
 
-    fn decide(&mut self, reference: InboundProposalHandle, decision: InboundDecision) {
+    fn decide(&mut self, reference: IngressProposalHandle, decision: IngressDecision) {
         let Some(pending) = self.pending.front() else {
             return;
         };
@@ -606,12 +606,12 @@ impl InboundConnectorDriver for HttpServer<'_> {
             return;
         };
         let decision = match decision {
-            InboundDecision::Accepted(InboundAcceptance {
+            IngressDecision::Accepted(IngressAcceptance {
                 exchange: Some(InboundExchangeRef::Call(call_id)),
                 ..
             }) => ServerDecision::Accepted(call_id),
-            InboundDecision::Accepted(_) => ServerDecision::Rejected(InboundRejection::UnknownPort),
-            InboundDecision::Rejected(reason) => ServerDecision::Rejected(reason),
+            IngressDecision::Accepted(_) => ServerDecision::Rejected(IngressRejection::UnknownPort),
+            IngressDecision::Rejected(reason) => ServerDecision::Rejected(reason),
         };
         match pending.decision.send(decision) {
             Ok(()) => {
@@ -1181,10 +1181,10 @@ async fn dispatch_http3_request(
         request.path,
         HttpVersion::Http3,
     );
-    let proposal = InboundProposal {
+    let proposal = IngressProposal {
         reference,
-        submission: InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(request.route.node.clone()),
+        submission: IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(request.route.node.clone()),
             port: crate::node::Port::conventional_out(),
             draft: Draft { data, ext },
             sequence: SubmissionSequence::Next,
@@ -1544,10 +1544,10 @@ async fn handle_request(
         parts.uri.to_string(),
         version,
     );
-    let proposal = InboundProposal {
+    let proposal = IngressProposal {
         reference,
-        submission: InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(route.node.clone()),
+        submission: IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(route.node.clone()),
             port: crate::node::Port::conventional_out(),
             draft: Draft { data, ext },
             sequence: SubmissionSequence::Next,
@@ -1652,13 +1652,13 @@ fn http_request_metadata(
     ext
 }
 
-fn next_reference(references: &AtomicU64) -> Option<InboundProposalHandle> {
+fn next_reference(references: &AtomicU64) -> Option<IngressProposalHandle> {
     references
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
             value.checked_add(1)
         })
         .ok()
-        .map(InboundProposalHandle::new)
+        .map(IngressProposalHandle::new)
 }
 
 fn authorized(request: &Request<Incoming>, expected: Option<&blake3::Hash>) -> bool {
@@ -1707,12 +1707,12 @@ fn header_bytes(headers: &http::HeaderMap) -> Option<usize> {
     })
 }
 
-fn rejection_status(rejection: InboundRejection) -> StatusCode {
+fn rejection_status(rejection: IngressRejection) -> StatusCode {
     match rejection {
-        InboundRejection::UnknownPort | InboundRejection::SessionUnavailable => {
+        IngressRejection::UnknownPort | IngressRejection::SessionUnavailable => {
             StatusCode::SERVICE_UNAVAILABLE
         }
-        InboundRejection::InvalidPayload | InboundRejection::InvalidMetadata => {
+        IngressRejection::InvalidPayload | IngressRejection::InvalidMetadata => {
             StatusCode::BAD_REQUEST
         }
     }
@@ -1741,7 +1741,7 @@ fn response_with_headers(status: StatusCode, headers: &http::HeaderMap) -> Respo
 )]
 mod tests {
     use super::*;
-    use crate::boundary::{InboundAdmission, InboundExchangeRef};
+    use crate::boundary::{InboundExchangeRef, IngressAdmission};
     use crate::compiler::compile;
     use crate::contract::ContractCatalog;
     use crate::journal::{Journal, MemJournal};
@@ -1882,7 +1882,7 @@ graph api : App {
             .expect("the HTTP/3-only respond plan remains Registry-free valid")
     }
 
-    fn wait_for_proposal(server: &mut HttpServer<'_>) -> InboundProposal {
+    fn wait_for_proposal(server: &mut HttpServer<'_>) -> IngressProposal {
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
             if let Some(proposal) = server.proposal() {
@@ -1954,8 +1954,8 @@ graph api : App {
             Err(TryRecvError::Empty),
             "the peer cannot observe 202 before causal admission"
         );
-        let InboundAdmission::Accepted(accepted) = vm
-            .admit_inbound(journal, &proposal)
+        let IngressAdmission::Accepted(accepted) = vm
+            .admit_ingress(journal, &proposal)
             .expect("the request reaches atomic admission")
         else {
             panic!("the valid request must be accepted")
@@ -1963,7 +1963,7 @@ graph api : App {
         let Some(InboundExchangeRef::Call(call_id)) = accepted.exchange else {
             panic!("an accepted server request opens one Call")
         };
-        server.decide(proposal.reference, InboundDecision::Accepted(accepted));
+        server.decide(proposal.reference, IngressDecision::Accepted(accepted));
         assert_eq!(
             response
                 .recv_timeout(Duration::from_secs(3))
@@ -2183,8 +2183,8 @@ graph api : App {
         let proposal = wait_for_proposal(&mut server);
         let mut vm = Vm::boot(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
-        let InboundAdmission::Accepted(accepted) = vm
-            .admit_inbound(&mut journal, &proposal)
+        let IngressAdmission::Accepted(accepted) = vm
+            .admit_ingress(&mut journal, &proposal)
             .expect("the request reaches causal admission")
         else {
             panic!("the request must be admitted")
@@ -2192,7 +2192,7 @@ graph api : App {
         let Some(InboundExchangeRef::Call(call_id)) = accepted.exchange else {
             panic!("the admitted request opens one Call")
         };
-        server.decide(proposal.reference, InboundDecision::Accepted(accepted));
+        server.decide(proposal.reference, IngressDecision::Accepted(accepted));
         assert_eq!(response.try_recv(), Err(TryRecvError::Empty));
 
         vm.drain(&mut journal)
@@ -2239,8 +2239,8 @@ graph api : App {
         let proposal = wait_for_proposal(&mut server);
         let mut vm = Vm::boot(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
-        let InboundAdmission::Accepted(accepted) = vm
-            .admit_inbound(&mut journal, &proposal)
+        let IngressAdmission::Accepted(accepted) = vm
+            .admit_ingress(&mut journal, &proposal)
             .expect("the request reaches causal admission")
         else {
             panic!("the request must be admitted")
@@ -2248,7 +2248,7 @@ graph api : App {
         let Some(InboundExchangeRef::Call(call_id)) = accepted.exchange else {
             panic!("the admitted request opens one Call")
         };
-        server.decide(proposal.reference, InboundDecision::Accepted(accepted));
+        server.decide(proposal.reference, IngressDecision::Accepted(accepted));
 
         let registry = crate::connectors::DriverRegistry::default()
             .try_with(Box::new(
@@ -2318,13 +2318,13 @@ graph api : App {
         let proposal = wait_for_proposal(&mut server);
         let mut vm = Vm::boot(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
-        let InboundAdmission::Accepted(accepted) = vm
-            .admit_inbound(&mut journal, &proposal)
+        let IngressAdmission::Accepted(accepted) = vm
+            .admit_ingress(&mut journal, &proposal)
             .expect("the HTTP/3 request reaches causal admission")
         else {
             panic!("the HTTP/3 request must be admitted")
         };
-        server.decide(proposal.reference, InboundDecision::Accepted(accepted));
+        server.decide(proposal.reference, IngressDecision::Accepted(accepted));
         vm.drain(&mut journal)
             .expect("the graph produces the HTTP/3 response");
         let ready = vm.ready_inbound_call_responses();
@@ -2408,15 +2408,15 @@ graph api : App {
         assert_eq!(first.try_recv(), Err(TryRecvError::Empty));
         assert_eq!(second.try_recv(), Err(TryRecvError::Empty));
 
-        let InboundAdmission::Accepted(accepted) = vm
-            .admit_inbound(&mut journal, &first_proposal)
+        let IngressAdmission::Accepted(accepted) = vm
+            .admit_ingress(&mut journal, &first_proposal)
             .expect("the first request reaches admission")
         else {
             panic!("the first request must be admitted")
         };
         server.decide(
             first_proposal.reference,
-            InboundDecision::Accepted(accepted),
+            IngressDecision::Accepted(accepted),
         );
         assert_eq!(
             first
@@ -2480,13 +2480,13 @@ graph api : App {
         };
         let mut vm = Vm::boot(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
-        let InboundAdmission::Accepted(accepted) = vm
-            .admit_inbound(&mut journal, &proposal)
+        let IngressAdmission::Accepted(accepted) = vm
+            .admit_ingress(&mut journal, &proposal)
             .expect("the first retained request reaches admission")
         else {
             panic!("the first retained request must be accepted")
         };
-        server.decide(proposal.reference, InboundDecision::Accepted(accepted));
+        server.decide(proposal.reference, IngressDecision::Accepted(accepted));
         assert_eq!(
             accepted_response
                 .recv_timeout(Duration::from_secs(3))
@@ -2513,7 +2513,7 @@ graph api : App {
             .reference;
         server.decide(
             second_reference,
-            InboundDecision::Rejected(InboundRejection::UnknownPort),
+            IngressDecision::Rejected(IngressRejection::UnknownPort),
         );
         assert_eq!(
             rejected_response

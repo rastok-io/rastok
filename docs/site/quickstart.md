@@ -34,7 +34,7 @@ this quickstart is qualified for opening. No elapsed-time claim is made yet.
 
 ## After the public opening
 
-The planned 15 October 2026 download location is
+The planned 5 November 2026 download location is
 [Rastok releases](https://github.com/rastok-io/rastok/releases): macOS arm64,
 macOS x86-64 and Linux x86-64, with `hosted-ui,hosted-websocket`. Once the
 repository and `v0.1.0-alpha` tag have been published on Yoann's instruction,

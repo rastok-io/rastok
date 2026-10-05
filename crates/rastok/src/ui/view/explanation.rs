@@ -4,7 +4,9 @@
 use super::*;
 use crate::envelope::{Envelope, Id};
 use crate::instance;
-use crate::journal::{ConsumedPosition, TransactionRecord, loop_protocol as protocol, timer_kind};
+use crate::journal::{
+    ConsumedPosition, DeadlineKind, TransactionRecord, loop_protocol as protocol,
+};
 use crate::node::{HandlerActivation, Lifecycle, Trigger};
 use crate::plan::{
     Dispatch, DispatchStep, Endpoint, EndpointOwner, RouteDestination, RouteSelection,
@@ -14,8 +16,8 @@ use crate::runtime::{DataSlot, LazyBindings, State};
 pub(super) fn future(inspection: &VmInspection, records: &[Record]) -> JsonValue {
     let arms: BTreeMap<_, _> = records
         .iter()
-        .filter_map(Record::timer_schedule)
-        .flat_map(|schedule| schedule.arms())
+        .filter_map(Record::deadlines)
+        .flat_map(|schedule| schedule.items())
         .map(|arm| ((arm.kind, arm.reference), arm.due_at))
         .collect();
     let mut result = Vec::new();
@@ -26,23 +28,23 @@ pub(super) fn future(inspection: &VmInspection, records: &[Record]) -> JsonValue
                 "port": delivery.port.name(), "envelope_id": id.to_string(), "instance": instance_ref_json(&mailbox.instance) }));
             let reference = crate::journal::ids::delivery_id(&delivery.edge, id);
             for (kind, label) in [
-                (timer_kind::CALL_TIMEOUT, "l:timeout"),
-                (timer_kind::JOIN_WITHIN, "join expiry"),
-                (timer_kind::SESSION_HANDSHAKE, "handshake timeout"),
+                (DeadlineKind::CallTimeout, "l:timeout"),
+                (DeadlineKind::JoinWithin, "join expiry"),
+                (DeadlineKind::SessionHandshake, "handshake timeout"),
             ] {
                 // A won Call closure keeps its head claimed until consumption;
                 // its timeout is already cancelled, not a future obligation.
                 let settled = records.iter().any(|record| {
                     matches!(record,
-                    Record::Outbound(OutboundRecord::Call(call)) if call.intent.emitting_id == id
-                        && call.intent.edge == delivery.edge && call.status != OutboundStatus::Open)
+                    Record::Egress(EgressRecord::Call(call)) if call.intent.emitting_id == id
+                        && call.intent.edge == delivery.edge && call.status != CallStatus::Open)
                 });
-                let stale_handshake = kind == timer_kind::SESSION_HANDSHAKE
+                let stale_handshake = kind == DeadlineKind::SessionHandshake
                     && inspection.sessions.iter().any(|session| {
                         session.connector == mailbox.node && session.instance == mailbox.instance
                     });
                 if let Some(due) = arms.get(&(kind, reference))
-                    && !(kind == timer_kind::CALL_TIMEOUT && settled)
+                    && !(kind == DeadlineKind::CallTimeout && settled)
                     && !stale_handshake
                 {
                     result.push(json!({ "kind": label, "owner": mailbox.node.to_string(), "due_at_ns": due.to_string(), "envelope_id": id.to_string() }));
@@ -53,33 +55,33 @@ pub(super) fn future(inspection: &VmInspection, records: &[Record]) -> JsonValue
     for instance in &inspection.instances {
         let scheduled = match instance.phase {
             InstancePhaseInspection::Open => vec![(
-                timer_kind::INSTANCE_LIFETIME,
+                DeadlineKind::InstanceLifetime,
                 crate::journal::ids::instance_lifetime_id(&instance.reference),
                 "l:closing",
             )],
             InstancePhaseInspection::Draining => vec![
                 (
-                    timer_kind::INSTANCE_DRAIN,
+                    DeadlineKind::InstanceDrain,
                     crate::journal::ids::instance_closing_id(
                         &instance.reference,
-                        timer_kind::INSTANCE_DRAIN,
+                        DeadlineKind::InstanceDrain,
                     ),
                     "drain deadline",
                 ),
                 (
-                    timer_kind::INSTANCE_SETTLEMENT,
+                    DeadlineKind::InstanceSettlement,
                     crate::journal::ids::instance_closing_id(
                         &instance.reference,
-                        timer_kind::INSTANCE_SETTLEMENT,
+                        DeadlineKind::InstanceSettlement,
                     ),
                     "settlement deadline",
                 ),
             ],
             InstancePhaseInspection::Settling => vec![(
-                timer_kind::INSTANCE_SETTLEMENT,
+                DeadlineKind::InstanceSettlement,
                 crate::journal::ids::instance_closing_id(
                     &instance.reference,
-                    timer_kind::INSTANCE_SETTLEMENT,
+                    DeadlineKind::InstanceSettlement,
                 ),
                 "settlement deadline",
             )],
@@ -302,9 +304,9 @@ pub(super) fn history(plan: &ValidatedExecutionPlan, records: &[Record]) -> Hist
         })
         .collect();
     for (index, record) in records.iter().enumerate() {
-        let mut extra = json!({ "record_type": match record { Record::Inbound(_) => "INBOUND", Record::Transaction(_) => "TRANSACTION", Record::Outbound(_) => "OUTBOUND" } });
+        let mut extra = json!({ "record_type": match record { Record::Ingress(_) => "INGRESS", Record::Transaction(_) => "TRANSACTION", Record::Egress(_) => "EGRESS" } });
         match record {
-            Record::Inbound(inbound) => {
+            Record::Ingress(inbound) => {
                 let id = inbound.envelope.meta().sys().id();
                 envelopes.entry(id).or_insert((&inbound.envelope, index));
                 extra["envelope_ids"] = json!([id.to_string()]);
@@ -460,10 +462,10 @@ pub(super) fn history(plan: &ValidatedExecutionPlan, records: &[Record]) -> Hist
                         .push(route.delivery);
                 }
             }
-            Record::Outbound(OutboundRecord::Call(call)) => {
+            Record::Egress(EgressRecord::Call(call)) => {
                 extra["envelope_ids"] = json!([call.intent.emitting_id.to_string()])
             }
-            Record::Outbound(_) => {}
+            Record::Egress(_) => {}
         }
         output.push(extra);
     }

@@ -91,9 +91,9 @@ carrying an existing recurrence reference continues that run. The stable
 identity is:
 
 ```text
-LoopRunRef =
+LoopRunId =
   derive(rastok.loop.r2,
-         InstanceRef,
+         instance::Generation,
          OpeningAdmissionRef)
 ```
 
@@ -114,12 +114,12 @@ observes normal deterministic instance serialization.
 ## 4. Loop.state
 
 `Loop.state` is the complete envelope admitted at the beginning of the
-current application. It is immutable and bound to one `LoopRunRef`.
+current application. It is immutable and bound to one `LoopRunId`.
 
 Advance selects the proposed state (Next) or retains the current state
 (Again). Admit then creates the next application envelope: DATA and the
 travelling `meta.app`/`meta.ext` zones are preserved, `origin_id` remains the
-business lineage, and the system spine receives the recurrence admission id
+business lineage, and the system metadata receives the recurrence admission id
 and the command's causal parent. The admitted envelope is retained in the
 Admit fact. “Again retains state” never means reusing an application's
 causal id: that would repeat emission and Call identities on identical retries.

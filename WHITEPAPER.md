@@ -445,7 +445,7 @@ Three distinctions matter:
   ingress root. Restoring a socket's return coordinate does not rewrite its
   `origin_id` into a previous request's cause. Application request/turn ids,
   not the number of Session writes, identify agent jobs.
-- **An OUTBOUND record is not a price.** Annotated quantities and amounts
+- **An EGRESS record is not a price.** Annotated quantities and amounts
   remain in their original journaled envelopes with their causal provenance.
   Missing consumption is unknown, never inferred from the number of calls.
   M1 implements no report, automatic pricing or subset arithmetic; OTLP export
@@ -610,7 +610,7 @@ Every message flowing through the graph is an **envelope** = `meta + data`:
 single carried payload. The postal metaphor fits: `meta` is what's written
 *on* the envelope, `data` is what's *inside*.
 
-`meta` has exactly three zones. `meta.sys` is the runtime's read-only spine —
+`meta` has exactly three zones. `meta.sys` holds the runtime's read-only reserved fields —
 identity, lineage, role; five fields, minted fresh at every hop.
 `meta.app` is the application's writable zone — its fields inferred
 from the graph's own writes, with types unified across writers — and
@@ -921,7 +921,7 @@ operator settle {
 
 The simulator controls the VM timeline directly. A call to `now()` receives
 that timeline's one fixed value for the whole firing, and a declared `Timer`
-turns selected instants into ordinary INBOUND roots. Neither Operators nor
+turns selected instants into ordinary INGRESS roots. Neither Operators nor
 mocks read the host clock. A real Connector may observe time in an external
 system — for example, a Postgres query may call `NOW()` — but its controlled
 Lab Driver script must return a declared outcome instead of repeating that external

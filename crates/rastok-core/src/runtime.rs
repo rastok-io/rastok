@@ -844,7 +844,7 @@ impl<'plan> HandlerExecutor<'plan> {
                 retry_record: None,
                 loop_record: None,
                 logical_time: None,
-                timer_schedule: None,
+                deadlines: None,
                 instance_commands: None,
                 trigger,
                 cause: Some(delivery.envelope.meta().sys().id()),
@@ -861,7 +861,7 @@ impl<'plan> HandlerExecutor<'plan> {
                     envelope: Envelope::new(meta, Data::materialized(value)),
                 }],
                 routes: vec![],
-                timers: vec![],
+                deadline_ids: vec![],
             },
         })
     }
@@ -945,7 +945,7 @@ impl<'plan> HandlerExecutor<'plan> {
                     retry_record: None,
                     loop_record: None,
                     logical_time: None,
-                    timer_schedule: None,
+                    deadlines: None,
                     instance_commands: None,
                     trigger: trigger.clone(),
                     cause,
@@ -954,7 +954,7 @@ impl<'plan> HandlerExecutor<'plan> {
                     state_delta: vec![],
                     emissions: vec![],
                     routes: vec![],
-                    timers: vec![],
+                    deadline_ids: vec![],
                 },
             });
         };
@@ -1016,7 +1016,7 @@ impl<'plan> HandlerExecutor<'plan> {
                             retry_record: None,
                             loop_record: None,
                             logical_time: guard_logical_time,
-                            timer_schedule: None,
+                            deadlines: None,
                             instance_commands: None,
                             trigger: trigger.clone(),
                             cause,
@@ -1025,7 +1025,7 @@ impl<'plan> HandlerExecutor<'plan> {
                             state_delta: vec![],
                             emissions: vec![],
                             routes: vec![],
-                            timers: vec![],
+                            deadline_ids: vec![],
                         },
                     });
                 }
@@ -1268,7 +1268,7 @@ impl<'plan> HandlerExecutor<'plan> {
                 }),
                 logical_time,
                 trigger: trigger.clone(),
-                timer_schedule: None,
+                deadlines: None,
                 instance_commands: None,
                 cause,
                 consumed,
@@ -1276,7 +1276,7 @@ impl<'plan> HandlerExecutor<'plan> {
                 state_delta,
                 emissions,
                 routes: vec![],
-                timers,
+                deadline_ids: timers,
             },
         })
     }
@@ -1290,7 +1290,7 @@ impl<'plan> HandlerExecutor<'plan> {
         &self,
         slot: Slot,
         emissions: &[Emission],
-    ) -> Result<Vec<(u8, envelope::Id)>, Fault> {
+    ) -> Result<Vec<(crate::journal::DeadlineKind, envelope::Id)>, Fault> {
         let mut timers = Vec::new();
         for emission in emissions {
             let source = crate::plan::EdgeEnd {
@@ -1319,9 +1319,9 @@ impl<'plan> HandlerExecutor<'plan> {
                     .connector()
                     .and_then(|spec| {
                         if spec.attribute("timeout").is_some() {
-                            Some(crate::journal::timer_kind::CALL_TIMEOUT)
+                            Some(crate::journal::DeadlineKind::CallTimeout)
                         } else if spec.attribute("handshake_timeout").is_some() {
-                            Some(crate::journal::timer_kind::SESSION_HANDSHAKE)
+                            Some(crate::journal::DeadlineKind::SessionHandshake)
                         } else {
                             None
                         }
@@ -1347,7 +1347,7 @@ impl<'plan> HandlerExecutor<'plan> {
                 });
                 if join_within.is_some() {
                     timers.push((
-                        crate::journal::timer_kind::JOIN_WITHIN,
+                        crate::journal::DeadlineKind::JoinWithin,
                         ids::delivery_id(
                             &self.plan.edge_text(edge),
                             emission.envelope.meta().sys().id(),
@@ -1394,7 +1394,7 @@ impl<'plan> HandlerExecutor<'plan> {
                 retry_record: None,
                 loop_record: None,
                 logical_time: None,
-                timer_schedule: None,
+                deadlines: None,
                 instance_commands: None,
                 trigger: trigger.clone(),
                 cause: None,
@@ -1405,7 +1405,7 @@ impl<'plan> HandlerExecutor<'plan> {
                 }],
                 join_inputs: vec![],
                 state_delta: vec![],
-                timers: vec![],
+                deadline_ids: vec![],
                 emissions,
                 routes: vec![],
             },
@@ -1414,7 +1414,7 @@ impl<'plan> HandlerExecutor<'plan> {
 
     /// Builds the terminal Connector transaction of one admitted inbound
     /// Call. The root opened the obligation, so no mailbox cursor is consumed;
-    /// the transaction instead closes the Call reference carried by INBOUND.
+    /// the transaction instead closes the Call reference carried by INGRESS.
     ///
     /// # Errors
     ///
@@ -1444,14 +1444,14 @@ impl<'plan> HandlerExecutor<'plan> {
                 retry_record: None,
                 loop_record: None,
                 logical_time: None,
-                timer_schedule: None,
+                deadlines: None,
                 instance_commands: None,
                 trigger,
                 cause: Some(request.meta().sys().id()),
                 consumed: vec![],
                 join_inputs: vec![],
                 state_delta: vec![],
-                timers: vec![],
+                deadline_ids: vec![],
                 emissions,
                 routes: vec![],
             },
@@ -1461,7 +1461,7 @@ impl<'plan> HandlerExecutor<'plan> {
     /// Builds the terminal transaction of an inbound Call whose response was
     /// produced by the graph. Unlike fixed acknowledgement, this form closes
     /// the Call and consumes the real response delivery atomically; it still
-    /// creates no OUTBOUND record or synthetic cursor.
+    /// creates no EGRESS record or synthetic cursor.
     ///
     /// # Errors
     ///
@@ -1530,7 +1530,7 @@ impl<'plan> HandlerExecutor<'plan> {
                 retry_record: None,
                 loop_record: None,
                 logical_time: None,
-                timer_schedule: None,
+                deadlines: None,
                 instance_commands: None,
                 trigger,
                 cause: Some(opening.meta().sys().id()),
@@ -1544,7 +1544,7 @@ impl<'plan> HandlerExecutor<'plan> {
                     .collect(),
                 join_inputs: vec![],
                 state_delta: vec![],
-                timers: vec![],
+                deadline_ids: vec![],
                 emissions,
                 routes: vec![],
             },

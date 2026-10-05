@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::instance;
-use crate::journal::timing::{TimerArm, TimerSchedule};
+use crate::journal::timing::{Deadline, Deadlines};
 
 impl Vm<'_> {
     pub(super) fn admission_deadlines(
@@ -12,7 +12,7 @@ impl Vm<'_> {
         candidates: &BTreeMap<instance::Generation, InstanceCandidate>,
         envelope: &Envelope,
         activity: &mut BTreeMap<instance::Generation, Id>,
-    ) -> Vec<(TimerArm, DatedPayload)> {
+    ) -> Vec<(Deadline, DatedPayload)> {
         if !self.has_lifetime_deadlines {
             return Vec::new();
         }
@@ -58,8 +58,8 @@ impl Vm<'_> {
                 _ => continue,
             };
             arms.push((
-                TimerArm {
-                    kind: crate::journal::timer_kind::INSTANCE_LIFETIME,
+                Deadline {
+                    kind: crate::journal::DeadlineKind::InstanceLifetime,
                     reference: ids::instance_lifetime_id(reference),
                     due_at,
                 },
@@ -80,7 +80,7 @@ impl Vm<'_> {
         target: &PreparedTarget,
         candidates: &BTreeMap<instance::Generation, InstanceCandidate>,
         envelope: &Envelope,
-    ) -> Vec<(TimerArm, DatedPayload)> {
+    ) -> Vec<(Deadline, DatedPayload)> {
         let Some(to) = &route.edge.to else {
             return Vec::new();
         };
@@ -106,8 +106,8 @@ impl Vm<'_> {
         });
         if let Some(within) = within {
             deadlines.push((
-                TimerArm {
-                    kind: crate::journal::timer_kind::JOIN_WITHIN,
+                Deadline {
+                    kind: crate::journal::DeadlineKind::JoinWithin,
                     reference,
                     due_at: self.now.saturating_add(within),
                 },
@@ -158,11 +158,11 @@ impl Vm<'_> {
                 spec.attribute("timeout").is_none() && spec.attribute("handshake_timeout").is_some()
             });
             deadlines.push((
-                TimerArm {
+                Deadline {
                     kind: if handshake {
-                        crate::journal::timer_kind::SESSION_HANDSHAKE
+                        crate::journal::DeadlineKind::SessionHandshake
                     } else {
-                        crate::journal::timer_kind::CALL_TIMEOUT
+                        crate::journal::DeadlineKind::CallTimeout
                     },
                     reference,
                     due_at: self.now.saturating_add(budget),
@@ -183,7 +183,7 @@ impl Vm<'_> {
         routes: &[PreparedEdge],
         candidates: &BTreeMap<instance::Generation, InstanceCandidate>,
         envelope: &Envelope,
-    ) -> Vec<TimerArm> {
+    ) -> Vec<Deadline> {
         self.route_timer_arms_with_activity(routes, candidates, envelope, &mut BTreeMap::new())
     }
 
@@ -193,7 +193,7 @@ impl Vm<'_> {
         candidates: &BTreeMap<instance::Generation, InstanceCandidate>,
         envelope: &Envelope,
         activity: &mut BTreeMap<instance::Generation, Id>,
-    ) -> Vec<TimerArm> {
+    ) -> Vec<Deadline> {
         let mut arms = Vec::new();
         for route in routes {
             if let Some(target) = &route.target {
@@ -212,7 +212,7 @@ impl Vm<'_> {
         arms
     }
 
-    pub(super) fn emission_timer_arms(&self, prepared: &PreparedEmissions) -> Vec<TimerArm> {
+    pub(super) fn emission_timer_arms(&self, prepared: &PreparedEmissions) -> Vec<Deadline> {
         let mut activity = BTreeMap::new();
         prepared
             .emissions
@@ -247,7 +247,7 @@ impl Vm<'_> {
         self.retain_timer_arms(record, arms)
     }
 
-    pub(super) fn closing_timer_arms(&self, reference: &instance::Generation) -> Vec<TimerArm> {
+    pub(super) fn closing_timer_arms(&self, reference: &instance::Generation) -> Vec<Deadline> {
         let Some(instance) = self.instances.get(reference) else {
             return Vec::new();
         };
@@ -256,14 +256,14 @@ impl Vm<'_> {
         };
         let drain = self.now.saturating_add(policy.drain_for);
         [
-            (crate::journal::timer_kind::INSTANCE_DRAIN, drain),
+            (crate::journal::DeadlineKind::InstanceDrain, drain),
             (
-                crate::journal::timer_kind::INSTANCE_SETTLEMENT,
+                crate::journal::DeadlineKind::InstanceSettlement,
                 drain.saturating_add(policy.settle_for),
             ),
         ]
         .into_iter()
-        .map(|(kind, due_at)| TimerArm {
+        .map(|(kind, due_at)| Deadline {
             kind,
             reference: ids::instance_closing_id(reference, kind),
             due_at,
@@ -274,23 +274,23 @@ impl Vm<'_> {
     pub(super) fn retain_timer_arms(
         &self,
         record: &mut crate::journal::TransactionRecord,
-        arms: Vec<TimerArm>,
+        arms: Vec<Deadline>,
     ) -> Result<(), VmError> {
         if arms.is_empty() {
             return Ok(());
         }
         let mut combined = record
-            .timer_schedule
+            .deadlines
             .as_ref()
-            .map(|schedule| schedule.arms().to_vec())
+            .map(|schedule| schedule.items().to_vec())
             .unwrap_or_default();
         combined.extend(arms);
-        record.timer_schedule = Some(Box::new(Self::timer_schedule(self.now, combined)?));
+        record.deadlines = Some(Box::new(Self::create_deadlines(self.now, combined)?));
         Ok(())
     }
 
-    pub(super) fn timer_schedule(at: i64, arms: Vec<TimerArm>) -> Result<TimerSchedule, VmError> {
-        TimerSchedule::try_new(at, arms)
-            .map_err(|error| VmError::Journal(crate::journal::Error::InvalidTimerSchedule(error)))
+    pub(super) fn create_deadlines(at: i64, arms: Vec<Deadline>) -> Result<Deadlines, VmError> {
+        Deadlines::try_new(at, arms)
+            .map_err(|error| VmError::Journal(crate::journal::Error::InvalidDeadlines(error)))
     }
 }

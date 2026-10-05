@@ -4,7 +4,7 @@
 use rastok::compiler::compile;
 use rastok::contract::ContractCatalog;
 use rastok::journal::retry_protocol::Fact;
-use rastok::journal::{OutboundRecord, OutboundStatus, Record};
+use rastok::journal::{CallStatus, EgressRecord, Record};
 use rastok::plan::GraphVersion;
 
 #[test]
@@ -54,9 +54,7 @@ fn two_tenants_keep_the_request_fixed_and_only_alice_retries() {
         .records
         .iter()
         .filter_map(|record| match record {
-            Record::Outbound(OutboundRecord::Call(call))
-                if matches!(call.status, OutboundStatus::Open) =>
-            {
+            Record::Egress(EgressRecord::Call(call)) if matches!(call.status, CallStatus::Open) => {
                 Some(&call.intent)
             }
             _ => None,

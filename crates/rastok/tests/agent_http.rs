@@ -11,7 +11,7 @@ use rastok::deployment::{
     SecretProvider, SecretProviderError, SecretProviderId, SecretVersion,
 };
 use rastok::envelope::Value;
-use rastok::journal::{MemJournal, OutboundRecord, OutboundStatus, Record};
+use rastok::journal::{CallStatus, EgressRecord, MemJournal, Record};
 use rastok::plan::GraphVersion;
 use rastok::recording::Recording;
 
@@ -83,8 +83,14 @@ fn responses_keep_original_job_samples_without_inventing_missing_usage_or_prices
         assert!(run.report.passed(), "{:?}", run.report);
         let samples = accounting_observations(&compilation.plan, &run.records, None).unwrap();
         assert_eq!(samples.len(), count, "{:?}", run.report.scenario);
-        assert_eq!(run.records.iter().filter(|record| matches!(record,
-            Record::Outbound(OutboundRecord::Call(call)) if matches!(call.status, OutboundStatus::Open))).count(), calls);
+        assert_eq!(
+            run.records
+                .iter()
+                .filter(|record| matches!(record,
+            Record::Egress(EgressRecord::Call(call)) if matches!(call.status, CallStatus::Open)))
+                .count(),
+            calls
+        );
         for sample in &samples {
             assert!(
                 sample

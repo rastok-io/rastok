@@ -493,7 +493,7 @@ pub fn accounting_observations(
         // envelope which is being observed now, even in a hostile record set.
         let committed = &records[..=index];
         match record {
-            Record::Inbound(inbound) => {
+            Record::Ingress(inbound) => {
                 let schema = inbound_schema(plan, inbound.connector_path.as_ref(), &inbound.port)?;
                 let lineage_connector =
                     nearest_causal_connector(plan, committed, &inbound.envelope);
@@ -533,7 +533,7 @@ pub fn accounting_observations(
                     )?;
                 }
             }
-            Record::Outbound(_) => {}
+            Record::Egress(_) => {}
         }
     }
     Ok(result)
@@ -701,7 +701,7 @@ fn connector_which_emitted(
     envelope: Id,
 ) -> Option<node::Path> {
     records.iter().rev().find_map(|record| match record {
-        Record::Inbound(inbound) if inbound.envelope.meta().sys().id() == envelope => {
+        Record::Ingress(inbound) if inbound.envelope.meta().sys().id() == envelope => {
             inbound.connector_path.clone()
         }
         Record::Transaction(transaction)
@@ -721,7 +721,7 @@ fn connector_which_emitted(
             let planned = plan.plan().nodes.get(slot.index())?;
             planned.connector().map(|_| planned.path.clone())
         }
-        Record::Inbound(_) | Record::Transaction(_) | Record::Outbound(_) => None,
+        Record::Ingress(_) | Record::Transaction(_) | Record::Egress(_) => None,
     })
 }
 

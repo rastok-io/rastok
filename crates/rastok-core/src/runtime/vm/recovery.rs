@@ -62,8 +62,8 @@ impl Vm<'_> {
             .visit_records(&mut |record| {
                 if result.is_ok() {
                     let instant = record
-                        .timer_schedule()
-                        .map(|schedule| schedule.armed_at())
+                        .deadlines()
+                        .map(|schedule| schedule.created_at())
                         .or_else(|| match record {
                             Record::Transaction(record) => record.logical_time.or_else(|| {
                                 record
@@ -78,7 +78,7 @@ impl Vm<'_> {
                                         _ => None,
                                     })
                             }),
-                            Record::Outbound(crate::journal::OutboundRecord::Call(record)) => {
+                            Record::Egress(crate::journal::EgressRecord::Call(record)) => {
                                 record.closed_at.or(Some(record.intent.logical_time))
                             }
                             _ => None,
@@ -146,9 +146,9 @@ impl Vm<'_> {
     ) -> Result<(), VmError> {
         if self.instance_commands.is_none()
             && match record {
-                Record::Inbound(record) => record.instance_commands.is_some(),
+                Record::Ingress(record) => record.instance_commands.is_some(),
                 Record::Transaction(record) => record.instance_commands.is_some(),
-                Record::Outbound(_) => false,
+                Record::Egress(_) => false,
             }
         {
             return Err(invalid(
@@ -157,7 +157,7 @@ impl Vm<'_> {
             ));
         }
         match record {
-            Record::Inbound(inbound) => self.restore_ingress(admissions, index, inbound),
+            Record::Ingress(inbound) => self.restore_ingress(admissions, index, inbound),
             Record::Transaction(transaction) => {
                 self.restore_transaction(journal, admissions, index, transaction, resume_at)?;
                 if self.has_loops {
@@ -170,10 +170,10 @@ impl Vm<'_> {
                 }
                 Ok(())
             }
-            Record::Outbound(crate::journal::OutboundRecord::Call(record)) => {
+            Record::Egress(crate::journal::EgressRecord::Call(record)) => {
                 self.restore_call(journal, bindings, index, record)
             }
-            Record::Outbound(crate::journal::OutboundRecord::Session(record)) => {
+            Record::Egress(crate::journal::EgressRecord::Session(record)) => {
                 self.restore_session(index, record)
             }
         }
@@ -193,25 +193,25 @@ impl Vm<'_> {
             return self.restore_retry_manager(index, record);
         }
         crate::journal::timing::validate_transaction(record)
-            .map_err(|_| invalid(index, "retained deadlines contradict the accepting record"))?;
+            .map_err(|_| invalid(index, "unsealed deadlines contradict the accepting record"))?;
         if record
-            .timer_schedule
+            .deadlines
             .iter()
-            .flat_map(|schedule| schedule.arms())
+            .flat_map(|schedule| schedule.items())
             .any(|arm| {
                 !matches!(
                     arm.kind,
-                    crate::journal::timer_kind::CALL_TIMEOUT
-                        | crate::journal::timer_kind::SESSION_HANDSHAKE
-                        | crate::journal::timer_kind::JOIN_WITHIN
-                        | crate::journal::timer_kind::INSTANCE_LIFETIME
-                        | crate::journal::timer_kind::RECURRENCE_DELAY
-                        | crate::journal::timer_kind::INSTANCE_DRAIN
-                        | crate::journal::timer_kind::INSTANCE_SETTLEMENT
+                    crate::journal::DeadlineKind::CallTimeout
+                        | crate::journal::DeadlineKind::SessionHandshake
+                        | crate::journal::DeadlineKind::JoinWithin
+                        | crate::journal::DeadlineKind::InstanceLifetime
+                        | crate::journal::DeadlineKind::RecurrenceDelay
+                        | crate::journal::DeadlineKind::InstanceDrain
+                        | crate::journal::DeadlineKind::InstanceSettlement
                 ) || (matches!(
                     arm.kind,
-                    crate::journal::timer_kind::INSTANCE_DRAIN
-                        | crate::journal::timer_kind::INSTANCE_SETTLEMENT
+                    crate::journal::DeadlineKind::InstanceDrain
+                        | crate::journal::DeadlineKind::InstanceSettlement
                 ) && record.close_scope.is_none())
             })
         {
@@ -220,15 +220,15 @@ impl Vm<'_> {
                 "a retained timer has no admitted transaction obligation",
             ));
         }
-        if record.timers.iter().any(|(kind, _)| {
+        if record.deadline_ids.iter().any(|(kind, _)| {
             !matches!(
                 *kind,
-                crate::journal::timer_kind::RECURRENCE_DELAY
-                    | crate::journal::timer_kind::CALL_TIMEOUT
-                    | crate::journal::timer_kind::SESSION_HANDSHAKE
-                    | crate::journal::timer_kind::JOIN_WITHIN
-                    | crate::journal::timer_kind::INSTANCE_DRAIN
-                    | crate::journal::timer_kind::INSTANCE_SETTLEMENT
+                crate::journal::DeadlineKind::RecurrenceDelay
+                    | crate::journal::DeadlineKind::CallTimeout
+                    | crate::journal::DeadlineKind::SessionHandshake
+                    | crate::journal::DeadlineKind::JoinWithin
+                    | crate::journal::DeadlineKind::InstanceDrain
+                    | crate::journal::DeadlineKind::InstanceSettlement
             )
         }) {
             return Err(invalid(
@@ -320,7 +320,7 @@ impl Vm<'_> {
                         "a passive Graph lifecycle carries executable work",
                     ));
                 }
-                self.check_recovered_delivery_timers(index, record.timer_schedule.as_deref(), &[])?;
+                self.check_recovered_delivery_timers(index, record.deadlines.as_deref(), &[])?;
                 self.restore_instance_closure(journal, index, record, None)?;
                 if record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Stop) {
                     self.discard_graph_admissions(&record.instance);
@@ -484,8 +484,8 @@ impl Vm<'_> {
                             .connector()
                             .and_then(|spec| spec.attribute("timeout"))
                     {
-                        expected_arms.push(crate::journal::timing::TimerArm {
-                            kind: crate::journal::timer_kind::CALL_TIMEOUT,
+                        expected_arms.push(crate::journal::timing::Deadline {
+                            kind: crate::journal::DeadlineKind::CallTimeout,
                             reference: ids::delivery_id(
                                 &super::loop_manager::manager_edge(*run, &state.entry),
                                 envelope.meta().sys().id(),
@@ -514,11 +514,7 @@ impl Vm<'_> {
                 "the retained deliveries differ from the selected routes",
             ));
         }
-        self.check_recovered_delivery_timers(
-            index,
-            record.timer_schedule.as_deref(),
-            &expected_arms,
-        )?;
+        self.check_recovered_delivery_timers(index, record.deadlines.as_deref(), &expected_arms)?;
         self.state.apply_unchecked(
             self.plan.plan(),
             slot,
@@ -553,7 +549,7 @@ impl Vm<'_> {
         if let Some((port, edge, envelope)) = recurrence {
             let timer = expected_arms
                 .last()
-                .filter(|arm| arm.kind == crate::journal::timer_kind::CALL_TIMEOUT);
+                .filter(|arm| arm.kind == crate::journal::DeadlineKind::CallTimeout);
             if let Some(timer) = timer {
                 self.scheduler.arm(
                     timer.due_at,
@@ -743,7 +739,7 @@ impl Vm<'_> {
             .visit_records(&mut |earlier| {
                 if position < index {
                     match earlier {
-                        Record::Inbound(inbound)
+                        Record::Ingress(inbound)
                             if Some(inbound.envelope.meta().sys().id()) == record.cause =>
                         {
                             cause = Some(inbound.envelope.clone())
@@ -765,14 +761,14 @@ impl Vm<'_> {
             .ok_or_else(|| invalid(index, "a close request has no earlier causal envelope"))?;
         let expected = self.closing_timer_arms(scope);
         let retained: Vec<_> = record
-            .timer_schedule
+            .deadlines
             .iter()
-            .flat_map(|schedule| schedule.arms())
+            .flat_map(|schedule| schedule.items())
             .filter(|arm| {
                 matches!(
                     arm.kind,
-                    crate::journal::timer_kind::INSTANCE_DRAIN
-                        | crate::journal::timer_kind::INSTANCE_SETTLEMENT
+                    crate::journal::DeadlineKind::InstanceDrain
+                        | crate::journal::DeadlineKind::InstanceSettlement
                 )
             })
             .copied()
@@ -791,19 +787,19 @@ impl Vm<'_> {
     pub(super) fn check_recovered_delivery_timers(
         &self,
         index: usize,
-        schedule: Option<&crate::journal::timing::TimerSchedule>,
-        expected: &[crate::journal::timing::TimerArm],
+        schedule: Option<&crate::journal::timing::Deadlines>,
+        expected: &[crate::journal::timing::Deadline],
     ) -> Result<(), VmError> {
         let retained: Vec<_> = schedule
             .into_iter()
-            .flat_map(|schedule| schedule.arms())
+            .flat_map(|schedule| schedule.items())
             .filter(|arm| {
                 matches!(
                     arm.kind,
-                    crate::journal::timer_kind::CALL_TIMEOUT
-                        | crate::journal::timer_kind::JOIN_WITHIN
-                        | crate::journal::timer_kind::SESSION_HANDSHAKE
-                        | crate::journal::timer_kind::INSTANCE_LIFETIME
+                    crate::journal::DeadlineKind::CallTimeout
+                        | crate::journal::DeadlineKind::JoinWithin
+                        | crate::journal::DeadlineKind::SessionHandshake
+                        | crate::journal::DeadlineKind::InstanceLifetime
                 )
             })
             .copied()

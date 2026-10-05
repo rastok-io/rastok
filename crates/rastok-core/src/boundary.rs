@@ -32,12 +32,12 @@ use core::fmt;
 /// keeping the replica opaque here leaves multi-host placement out of causal
 /// identity. In single-process execution the replica is 0.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct InboundEnvelopeProvenance {
+pub struct IngressEnvelopeProvenance {
     connector_path: node::Path,
     replica: u64,
 }
 
-impl InboundEnvelopeProvenance {
+impl IngressEnvelopeProvenance {
     /// The single-process provenance of one inbound Connector.
     #[must_use]
     pub fn single(connector_path: node::Path) -> Self {
@@ -1240,7 +1240,7 @@ pub struct Intent {
     /// evaluate expressions.
     pub resolved_settings: alloc::collections::BTreeMap<String, crate::value::Value>,
     /// Logical instant fixed by the VM for the causing transaction. This is
-    /// execution context for scripted Drivers, not an OUTBOUND identity field
+    /// execution context for scripted Drivers, not an EGRESS identity field
     /// and never an invitation for a Driver to read the host clock.
     pub logical_time: i64,
 }
@@ -1569,11 +1569,11 @@ pub enum DriverRouteError {
     UnavailableInboundCall(crate::connector::ContractId),
     /// A caller attempted to decide a proposal other than the one retained
     /// by that Connector family.
-    UnknownInboundProposal {
+    UnknownIngressProposal {
         /// Family whose retained proposal was addressed.
         connector: crate::connector::ContractId,
         /// Proposal reference supplied by the caller.
-        reference: InboundProposalHandle,
+        reference: IngressProposalHandle,
     },
     /// The inbound proposal's session framing contradicts the bound
     /// contract's categorical exchange lifecycle.
@@ -1653,7 +1653,7 @@ impl fmt::Display for DriverRouteError {
                 formatter,
                 "the inbound Call Driver bound for `{id}` is no longer available"
             ),
-            Self::UnknownInboundProposal {
+            Self::UnknownIngressProposal {
                 connector,
                 reference,
             } => write!(
@@ -1759,9 +1759,9 @@ pub enum SubmissionSequence {
 /// A draft proposed for atomic acceptance: inbound Drivers propose drafts,
 /// never envelopes — a root envelope cannot pre-exist its sequence.
 #[derive(Debug, Clone, PartialEq)]
-pub struct InboundSubmission {
+pub struct IngressSubmission {
     /// Stable external origin shared by roots from this logical replica.
-    pub provenance: InboundEnvelopeProvenance,
+    pub provenance: IngressEnvelopeProvenance,
     /// Source port of the draft. Direct App injection uses `in` or another
     /// boundary input; a Driver proposal uses one output of the Connector
     /// named by [`Self::provenance`]. Journaled for exact replay.
@@ -1787,9 +1787,9 @@ pub enum InboundSession {
 /// until the runtime decides it, while the accepting journal transaction
 /// mints the envelope and any Call or Session reference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct InboundProposalHandle(u64);
+pub struct IngressProposalHandle(u64);
 
-impl InboundProposalHandle {
+impl IngressProposalHandle {
     /// Creates one Driver-local proposal reference.
     #[must_use]
     pub const fn new(value: u64) -> Self {
@@ -1805,13 +1805,13 @@ impl InboundProposalHandle {
 
 /// One bounded world fact offered without pre-minting an envelope.
 #[derive(Debug, Clone, PartialEq)]
-pub struct InboundProposal {
+pub struct IngressProposal {
     /// Stable while the proposal remains pending in the Driver.
-    pub reference: InboundProposalHandle,
+    pub reference: IngressProposalHandle,
     /// Draft and provenance to commit if admission succeeds. The provenance
     /// names the exact Connector node whose output introduces the root; the
     /// runtime verifies it against the bound family before committing.
-    pub submission: InboundSubmission,
+    pub submission: IngressSubmission,
     /// Session framing when this fact opens or belongs to a session. `None`
     /// is an Event or Call ingress.
     pub session: Option<InboundSession>,
@@ -1819,7 +1819,7 @@ pub struct InboundProposal {
 
 /// Positive result returned only after the accepting journal commit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InboundAcceptance {
+pub struct IngressAcceptance {
     /// Id of the committed root envelope.
     pub envelope: envelope::Id,
     /// Exchange-specific reference created by the accepting fact. Event
@@ -1838,7 +1838,7 @@ pub enum InboundExchangeRef {
 
 /// Portable contract-level reasons why a proposed fact was not accepted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InboundRejection {
+pub enum IngressRejection {
     /// The proposed graph boundary input does not exist.
     UnknownPort,
     /// The payload violates an ingress or destination type.
@@ -1851,24 +1851,24 @@ pub enum InboundRejection {
 
 /// A final decision delivered to the Driver for its retained proposal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InboundDecision {
+pub enum IngressDecision {
     /// The causal fact committed; peer-visible application acceptance may now
     /// be sent.
-    Accepted(InboundAcceptance),
+    Accepted(IngressAcceptance),
     /// The proposal was refused without minting an envelope.
-    Rejected(InboundRejection),
+    Rejected(IngressRejection),
 }
 
 /// Result of attempting one proposal against bounded runtime admission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InboundAdmission {
+pub enum IngressAdmission {
     /// The causal fact committed.
-    Accepted(InboundAcceptance),
+    Accepted(IngressAcceptance),
     /// No causal fact committed; the Driver must retain the proposal and
     /// withhold its application acknowledgement.
     Pending,
     /// No causal fact committed; the Driver receives a terminal refusal.
-    Rejected(InboundRejection),
+    Rejected(IngressRejection),
 }
 
 /// The payload and birth metadata of a submission; the runtime mints
@@ -2016,11 +2016,11 @@ pub enum LifecycleEvent {
 pub trait InboundConnectorDriver {
     /// The next retained proposal, if one is waiting. Repeated polls before a
     /// decision must describe the same proposal reference and bytes.
-    fn proposal(&mut self) -> Option<InboundProposal>;
+    fn proposal(&mut self) -> Option<IngressProposal>;
 
     /// Releases one retained proposal after a committed acceptance or a
     /// contract rejection. Pending admission deliberately makes no callback.
-    fn decide(&mut self, reference: InboundProposalHandle, decision: InboundDecision);
+    fn decide(&mut self, reference: IngressProposalHandle, decision: IngressDecision);
 
     /// Inbound Call completion view, when this bound contract is Call-shaped.
     /// Event and Session Drivers leave the default absent.
@@ -2677,7 +2677,7 @@ impl Dispatcher {
             &Intent,
             &Completion,
         ) -> Result<
-            Option<alloc::boxed::Box<crate::journal::timing::TimerSchedule>>,
+            Option<alloc::boxed::Box<crate::journal::timing::Deadlines>>,
             DispatchError,
         >,
     ) -> Result<PumpBatch, DispatchError> {
@@ -2736,7 +2736,7 @@ impl Dispatcher {
             let closure = Closure::Response(response.completion.clone());
             let verdict = timing(intent, &response.completion).and_then(|schedule| {
                 journal
-                    .close_outbound(&response.call_id, closure, now, schedule)
+                    .close_egress(&response.call_id, closure, now, schedule)
                     .map_err(DispatchError::Journal)
             });
             let verdict = match verdict {
@@ -2863,7 +2863,7 @@ mod tests {
 
     #[test]
     fn inbound_provenance_stays_opaque_but_answers_the_recipes() {
-        let provenance = InboundEnvelopeProvenance::single(node::Path::new(["inbound"]).unwrap());
+        let provenance = IngressEnvelopeProvenance::single(node::Path::new(["inbound"]).unwrap());
         assert_eq!(provenance.connector_path().to_string(), "inbound");
         assert_eq!(provenance.replica(), 0);
     }
@@ -2964,8 +2964,8 @@ mod tests {
     fn seeded_journal() -> (MemJournal, Intent) {
         let mut journal = MemJournal::new(GraphVersion(1));
         let committed = journal
-            .append_inbound(InboundSubmission {
-                provenance: InboundEnvelopeProvenance::single(
+            .append_ingress(IngressSubmission {
+                provenance: IngressEnvelopeProvenance::single(
                     node::Path::new(["inbound"]).unwrap(),
                 ),
                 port: node::Port::new("in").unwrap(),
@@ -2990,7 +2990,7 @@ mod tests {
             resolved_settings: alloc::collections::BTreeMap::new(),
             logical_time: 0,
         };
-        journal.open_outbound(intent.clone(), None).unwrap();
+        journal.open_egress(intent.clone(), None).unwrap();
         (journal, intent)
     }
 
@@ -3083,7 +3083,7 @@ mod tests {
             .unwrap();
         assert!(dispatcher.started.contains(&intent.call_id));
         journal
-            .close_outbound(&intent.call_id, Closure::Timeout, 0, None)
+            .close_egress(&intent.call_id, Closure::Timeout, 0, None)
             .unwrap();
 
         dispatcher

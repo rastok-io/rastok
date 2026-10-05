@@ -1076,8 +1076,8 @@ impl Vm<'_> {
                     || !record.emissions.is_empty()
                     || !packet.routes.is_empty()
                     || !packet.consumed.is_empty()
-                    || !record.timers.is_empty()
-                    || record.timer_schedule.is_some()
+                    || !record.deadline_ids.is_empty()
+                    || record.deadlines.is_some()
                 {
                     return Err(invalid(
                         "a Graph Open contradicts its admission or plan fuel",
@@ -1102,7 +1102,7 @@ impl Vm<'_> {
                     || record.cause != Some(envelope.meta().sys().id())
                     || !record.emissions.is_empty()
                     || !packet.consumed.is_empty()
-                    || !record.timers.is_empty()
+                    || !record.deadline_ids.is_empty()
                     || current.due_at.is_some_and(|due| due > resume_at)
                     || *envelope
                         != super::loop_manager::application_envelope(
@@ -1190,7 +1190,7 @@ impl Vm<'_> {
                 }
                 self.check_recovered_delivery_timers(
                     index,
-                    record.timer_schedule.as_deref(),
+                    record.deadlines.as_deref(),
                     &self.route_timer_arms(&routes, &candidates, envelope),
                 )?;
                 if let Some(graph) = self.graph_loops.as_deref_mut() {
@@ -1251,8 +1251,8 @@ impl Vm<'_> {
                         return Err(invalid("a Graph recurrence changed its logical delay"));
                     }
                     if let Some(due_at) = due_at {
-                        arms.push(crate::journal::timing::TimerArm {
-                            kind: crate::journal::timer_kind::RECURRENCE_DELAY,
+                        arms.push(crate::journal::timing::Deadline {
+                            kind: crate::journal::DeadlineKind::RecurrenceDelay,
                             reference: protocol::admission_ref(run, *to_iteration, *command),
                             due_at: *due_at,
                         });
@@ -1271,9 +1271,9 @@ impl Vm<'_> {
                 }
                 arms.extend(self.emission_timer_arms(&prepared));
                 if record
-                    .timer_schedule
+                    .deadlines
                     .as_deref()
-                    .map_or(&[][..], |schedule| schedule.arms())
+                    .map_or(&[][..], |schedule| schedule.items())
                     != arms
                 {
                     return Err(invalid(

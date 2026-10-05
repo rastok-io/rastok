@@ -6,8 +6,8 @@
 
 use crate::boundary::{
     CallConnectorDriver, CallId, CallStart, Completion, DriverRouteError, InboundCallResponseStart,
-    InboundCallTimeoutStart, InboundConnectorDriver, InboundDecision, InboundExchangeRef,
-    InboundProposal, Intent, OutboundConnectorBindings, OutboundConnectorDriver,
+    InboundCallTimeoutStart, InboundConnectorDriver, InboundExchangeRef, IngressDecision,
+    IngressProposal, Intent, OutboundConnectorBindings, OutboundConnectorDriver,
     RequestPreparation, Response, SchedulerCompletion, SessionConnectorBindings,
     SessionConnectorDriver, SessionDriverEvent, SessionId, SessionOpenIntent, SessionWriteIntent,
 };
@@ -16,7 +16,7 @@ use crate::envelope::{Data, Envelope};
 use crate::node;
 use crate::plan::ValidatedExecutionPlan;
 use crate::runtime::vm::{InboundCallPumpReport, Vm, VmError};
-use crate::{boundary::InboundAdmission, journal::Journal};
+use crate::{boundary::IngressAdmission, journal::Journal};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// One bound implementation object, potentially exposing both roles over the
@@ -214,7 +214,7 @@ struct BoundFamily<'plan> {
     uses_inbound: bool,
     inbound_paths: BTreeSet<node::Path>,
     exchange: ConnectorExchange,
-    pending_inbound: Option<InboundProposal>,
+    pending_inbound: Option<IngressProposal>,
     outbound_path: Option<node::Path>,
     session_path: Option<node::Path>,
 }
@@ -223,7 +223,7 @@ struct BoundFamily<'plan> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoutedInboundProposal {
     connector: ContractId,
-    proposal: InboundProposal,
+    proposal: IngressProposal,
 }
 
 /// Failure of one inbound Driver/VM boundary round.
@@ -276,7 +276,7 @@ impl RoutedInboundProposal {
 
     /// Retained proposal presented for atomic VM admission.
     #[must_use]
-    pub fn proposal(&self) -> &InboundProposal {
+    pub fn proposal(&self) -> &IngressProposal {
         &self.proposal
     }
 }
@@ -547,27 +547,27 @@ impl<'plan> RuntimeBindings<'plan> {
     pub fn decide_inbound(
         &mut self,
         routed: &RoutedInboundProposal,
-        decision: InboundDecision,
+        decision: IngressDecision,
     ) -> Result<(), DriverRouteError> {
         let Some(family) = self.families.get_mut(&routed.connector) else {
-            return Err(DriverRouteError::UnknownInboundProposal {
+            return Err(DriverRouteError::UnknownIngressProposal {
                 connector: routed.connector.clone(),
                 reference: routed.proposal.reference,
             });
         };
         let Some(pending) = &family.pending_inbound else {
-            return Err(DriverRouteError::UnknownInboundProposal {
+            return Err(DriverRouteError::UnknownIngressProposal {
                 connector: routed.connector.clone(),
                 reference: routed.proposal.reference,
             });
         };
         if pending != &routed.proposal {
-            return Err(DriverRouteError::UnknownInboundProposal {
+            return Err(DriverRouteError::UnknownIngressProposal {
                 connector: routed.connector.clone(),
                 reference: routed.proposal.reference,
             });
         }
-        if let InboundDecision::Accepted(accepted) = decision {
+        if let IngressDecision::Accepted(accepted) = decision {
             match accepted.exchange {
                 Some(InboundExchangeRef::Call(call_id)) => {
                     if let Some(expected) = self.inbound_calls.get(&call_id)
@@ -620,21 +620,21 @@ impl<'plan> RuntimeBindings<'plan> {
         &mut self,
         vm: &mut Vm<'plan>,
         journal: &mut dyn Journal,
-    ) -> Result<Option<InboundAdmission>, InboundPumpError> {
+    ) -> Result<Option<IngressAdmission>, InboundPumpError> {
         let Some(routed) = self.next_inbound().map_err(InboundPumpError::Driver)? else {
             return Ok(None);
         };
         let admission = vm
-            .admit_inbound(journal, routed.proposal())
+            .admit_ingress(journal, routed.proposal())
             .map_err(InboundPumpError::Machine)?;
         match admission {
-            InboundAdmission::Accepted(accepted) => self
-                .decide_inbound(&routed, InboundDecision::Accepted(accepted))
+            IngressAdmission::Accepted(accepted) => self
+                .decide_inbound(&routed, IngressDecision::Accepted(accepted))
                 .map_err(InboundPumpError::Driver)?,
-            InboundAdmission::Rejected(reason) => self
-                .decide_inbound(&routed, InboundDecision::Rejected(reason))
+            IngressAdmission::Rejected(reason) => self
+                .decide_inbound(&routed, IngressDecision::Rejected(reason))
                 .map_err(InboundPumpError::Driver)?,
-            InboundAdmission::Pending => {}
+            IngressAdmission::Pending => {}
         }
         Ok(Some(admission))
     }
@@ -1322,8 +1322,8 @@ mod tests {
     use crate::boundary::{
         CallConnectorDriver, CallStart, Completion, Draft, HttpServerExit,
         InboundCallConnectorDriver, InboundCallEvent, InboundCallResponse,
-        InboundCallResponseStart, InboundDecision, InboundEnvelopeProvenance, InboundExchangeRef,
-        InboundProposal, InboundProposalHandle, InboundSubmission, Intent,
+        InboundCallResponseStart, InboundExchangeRef, IngressDecision, IngressEnvelopeProvenance,
+        IngressProposal, IngressProposalHandle, IngressSubmission, Intent,
         OutboundConnectorBindings, OutboundConnectorDriver, ProcessExit, RequestPreparation,
         Response, SchedulerCompletion, SessionConnectorBindings, SessionConnectorDriver,
         SessionDriverEvent, SessionId, SessionOpenIntent, SessionWriteIntent, SubmissionSequence,
@@ -1414,11 +1414,11 @@ mod tests {
     struct EmptyInbound;
 
     impl crate::boundary::InboundConnectorDriver for EmptyInbound {
-        fn proposal(&mut self) -> Option<InboundProposal> {
+        fn proposal(&mut self) -> Option<IngressProposal> {
             None
         }
 
-        fn decide(&mut self, _: InboundProposalHandle, _: InboundDecision) {}
+        fn decide(&mut self, _: IngressProposalHandle, _: IngressDecision) {}
     }
 
     struct RoutingDriver {
@@ -1648,12 +1648,12 @@ graph inbound : App {
     }
 
     impl crate::boundary::InboundConnectorDriver for DuplexDriver {
-        fn proposal(&mut self) -> Option<InboundProposal> {
+        fn proposal(&mut self) -> Option<IngressProposal> {
             self.observations.lock().unwrap().push("inbound");
             None
         }
 
-        fn decide(&mut self, _: InboundProposalHandle, _: InboundDecision) {}
+        fn decide(&mut self, _: IngressProposalHandle, _: IngressDecision) {}
 
         fn call(&mut self) -> Option<&mut dyn InboundCallConnectorDriver> {
             Some(self)
@@ -1779,12 +1779,12 @@ graph inbound : App {
     }
 
     impl crate::boundary::InboundConnectorDriver for SessionDuplexDriver {
-        fn proposal(&mut self) -> Option<InboundProposal> {
+        fn proposal(&mut self) -> Option<IngressProposal> {
             self.observations.lock().unwrap().push("inbound");
             None
         }
 
-        fn decide(&mut self, _: InboundProposalHandle, _: InboundDecision) {
+        fn decide(&mut self, _: IngressProposalHandle, _: IngressDecision) {
             self.observations.lock().unwrap().push("decision");
         }
     }
@@ -1966,8 +1966,8 @@ graph inbound : App {
 
         let mut journal = MemJournal::new(GraphVersion(1));
         let request = journal
-            .append_inbound(InboundSubmission {
-                provenance: InboundEnvelopeProvenance::single(node::Path::new(["world"]).unwrap()),
+            .append_ingress(IngressSubmission {
+                provenance: IngressEnvelopeProvenance::single(node::Path::new(["world"]).unwrap()),
                 port: node::Port::new("in").unwrap(),
                 draft: Draft {
                     data: Data::materialized(Value::Text(String::from("hello"))),
@@ -2143,8 +2143,8 @@ graph inbound : App {
 
     #[derive(Default)]
     struct InboundQueueState {
-        proposals: VecDeque<InboundProposal>,
-        decisions: Vec<(InboundProposalHandle, InboundDecision)>,
+        proposals: VecDeque<IngressProposal>,
+        decisions: Vec<(IngressProposalHandle, IngressDecision)>,
     }
 
     struct RetainedInboundDriver {
@@ -2152,11 +2152,11 @@ graph inbound : App {
     }
 
     impl crate::boundary::InboundConnectorDriver for RetainedInboundDriver {
-        fn proposal(&mut self) -> Option<InboundProposal> {
+        fn proposal(&mut self) -> Option<IngressProposal> {
             self.state.lock().unwrap().proposals.front().cloned()
         }
 
-        fn decide(&mut self, reference: InboundProposalHandle, decision: InboundDecision) {
+        fn decide(&mut self, reference: IngressProposalHandle, decision: IngressDecision) {
             let mut state = self.state.lock().unwrap();
             let retained = state
                 .proposals
@@ -2184,8 +2184,8 @@ graph inbound : App {
 
     #[derive(Default)]
     struct RetainedCallState {
-        proposals: VecDeque<InboundProposal>,
-        decisions: Vec<(InboundProposalHandle, InboundDecision)>,
+        proposals: VecDeque<IngressProposal>,
+        decisions: Vec<(IngressProposalHandle, IngressDecision)>,
         events: Vec<InboundCallEvent>,
         responses: Vec<InboundCallResponse>,
         acknowledge_on_accept: bool,
@@ -2197,11 +2197,11 @@ graph inbound : App {
     }
 
     impl crate::boundary::InboundConnectorDriver for RetainedCallDriver {
-        fn proposal(&mut self) -> Option<InboundProposal> {
+        fn proposal(&mut self) -> Option<IngressProposal> {
             self.state.lock().unwrap().proposals.front().cloned()
         }
 
-        fn decide(&mut self, reference: InboundProposalHandle, decision: InboundDecision) {
+        fn decide(&mut self, reference: IngressProposalHandle, decision: IngressDecision) {
             let mut state = self.state.lock().unwrap();
             let retained = state
                 .proposals
@@ -2209,7 +2209,7 @@ graph inbound : App {
                 .expect("a decision follows a retained proposal");
             assert_eq!(retained.reference, reference);
             if state.acknowledge_on_accept
-                && let InboundDecision::Accepted(accepted) = decision
+                && let IngressDecision::Accepted(accepted) = decision
             {
                 let Some(InboundExchangeRef::Call(call_id)) = accepted.exchange else {
                     panic!("an inbound Call acceptance carries its Call ref")
@@ -2311,11 +2311,11 @@ graph inbound : App {
         }
     }
 
-    fn inbound_proposal(reference: u64, port: &str) -> InboundProposal {
-        InboundProposal {
-            reference: InboundProposalHandle::new(reference),
-            submission: InboundSubmission {
-                provenance: InboundEnvelopeProvenance::single(node::Path::new(["source"]).unwrap()),
+    fn inbound_proposal(reference: u64, port: &str) -> IngressProposal {
+        IngressProposal {
+            reference: IngressProposalHandle::new(reference),
+            submission: IngressSubmission {
+                provenance: IngressEnvelopeProvenance::single(node::Path::new(["source"]).unwrap()),
                 port: node::Port::new(port).unwrap(),
                 draft: Draft {
                     data: Data::materialized(Value::Text(format!("event-{reference}"))),
@@ -2422,10 +2422,10 @@ graph api : App {
             })
         ));
         let state = Arc::new(Mutex::new(RetainedCallState {
-            proposals: VecDeque::from([InboundProposal {
-                reference: InboundProposalHandle::new(1),
-                submission: InboundSubmission {
-                    provenance: InboundEnvelopeProvenance::single(
+            proposals: VecDeque::from([IngressProposal {
+                reference: IngressProposalHandle::new(1),
+                submission: IngressSubmission {
+                    provenance: IngressEnvelopeProvenance::single(
                         node::Path::new(["server"]).unwrap(),
                     ),
                     port: node::Port::conventional_out(),
@@ -2450,7 +2450,7 @@ graph api : App {
         let mut vm = Vm::boot(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
 
-        let Some(crate::boundary::InboundAdmission::Accepted(accepted)) = bindings
+        let Some(crate::boundary::IngressAdmission::Accepted(accepted)) = bindings
             .pump_inbound(&mut vm, &mut journal)
             .expect("the proposal reaches atomic admission")
         else {
@@ -2497,7 +2497,7 @@ graph api : App {
             .position(|record| {
                 matches!(
                     record,
-                    crate::journal::Record::Inbound(inbound)
+                    crate::journal::Record::Ingress(inbound)
                         if matches!(
                             inbound.exchange.as_deref(),
                             Some(crate::journal::InboundExchangeRecord::Call(call))
@@ -2505,7 +2505,7 @@ graph api : App {
                         )
                 )
             })
-            .expect("the opening INBOUND fact is present");
+            .expect("the opening INGRESS fact is present");
         let terminal_index = journal
             .records()
             .iter()
@@ -2557,10 +2557,10 @@ graph api : App {
     fn a_graph_response_closes_its_original_inbound_call_without_an_outbound_call() {
         let plan = inbound_call_response_plan();
         let state = Arc::new(Mutex::new(RetainedCallState {
-            proposals: VecDeque::from([InboundProposal {
-                reference: InboundProposalHandle::new(1),
-                submission: InboundSubmission {
-                    provenance: InboundEnvelopeProvenance::single(
+            proposals: VecDeque::from([IngressProposal {
+                reference: IngressProposalHandle::new(1),
+                submission: IngressSubmission {
+                    provenance: IngressEnvelopeProvenance::single(
                         node::Path::new(["server"]).unwrap(),
                     ),
                     port: node::Port::conventional_out(),
@@ -2585,7 +2585,7 @@ graph api : App {
         let mut vm = Vm::boot(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
 
-        let Some(crate::boundary::InboundAdmission::Accepted(accepted)) = bindings
+        let Some(crate::boundary::IngressAdmission::Accepted(accepted)) = bindings
             .pump_inbound(&mut vm, &mut journal)
             .expect("the request reaches atomic admission")
         else {
@@ -2594,12 +2594,12 @@ graph api : App {
         let Some(InboundExchangeRef::Call(call_id)) = accepted.exchange else {
             panic!("the accepted request opens one inbound Call")
         };
-        let opening_instance =
-            journal
-                .records()
-                .iter()
-                .find_map(|record| match record {
-                    crate::journal::Record::Inbound(inbound) => inbound
+        let opening_instance = journal
+            .records()
+            .iter()
+            .find_map(|record| match record {
+                crate::journal::Record::Ingress(inbound) => {
+                    inbound
                         .exchange
                         .as_deref()
                         .and_then(|exchange| match exchange {
@@ -2610,11 +2610,11 @@ graph api : App {
                             }
                             crate::journal::InboundExchangeRecord::Call(_)
                             | crate::journal::InboundExchangeRecord::Session(_) => None,
-                        }),
-                    crate::journal::Record::Transaction(_)
-                    | crate::journal::Record::Outbound(_) => None,
-                })
-                .expect("the accepted Call records its exact source instance");
+                        })
+                }
+                crate::journal::Record::Transaction(_) | crate::journal::Record::Egress(_) => None,
+            })
+            .expect("the accepted Call records its exact source instance");
         vm.drain_with_bindings(&mut journal, &mut bindings)
             .expect("the graph response reaches the retained connector cursor");
         let response_target = journal
@@ -2626,9 +2626,9 @@ graph api : App {
                 {
                     transaction.routes.first().map(|route| route.target.clone())
                 }
-                crate::journal::Record::Inbound(_)
+                crate::journal::Record::Ingress(_)
                 | crate::journal::Record::Transaction(_)
-                | crate::journal::Record::Outbound(_) => None,
+                | crate::journal::Record::Egress(_) => None,
             })
             .expect("the response-producing transaction seals its route");
         assert_eq!(response_target, opening_instance);
@@ -2685,7 +2685,7 @@ graph api : App {
             journal
                 .records()
                 .iter()
-                .all(|record| !matches!(record, crate::journal::Record::Outbound(_))),
+                .all(|record| !matches!(record, crate::journal::Record::Egress(_))),
             "respond is the return half of the inbound Call, never a new outbound Call"
         );
     }
@@ -2694,10 +2694,10 @@ graph api : App {
     fn a_response_after_the_inbound_call_closed_is_discarded_and_journaled() {
         let plan = inbound_call_response_plan();
         let state = Arc::new(Mutex::new(RetainedCallState {
-            proposals: VecDeque::from([InboundProposal {
-                reference: InboundProposalHandle::new(1),
-                submission: InboundSubmission {
-                    provenance: InboundEnvelopeProvenance::single(
+            proposals: VecDeque::from([IngressProposal {
+                reference: IngressProposalHandle::new(1),
+                submission: IngressSubmission {
+                    provenance: IngressEnvelopeProvenance::single(
                         node::Path::new(["server"]).unwrap(),
                     ),
                     port: node::Port::conventional_out(),
@@ -2722,7 +2722,7 @@ graph api : App {
         let mut vm = Vm::boot(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
 
-        let Some(crate::boundary::InboundAdmission::Accepted(accepted)) = bindings
+        let Some(crate::boundary::IngressAdmission::Accepted(accepted)) = bindings
             .pump_inbound(&mut vm, &mut journal)
             .expect("the request reaches atomic admission")
         else {
@@ -2791,7 +2791,7 @@ graph api : App {
         let mut journal = MemJournal::new(GraphVersion(1));
 
         for expected in 0..1024 {
-            let Some(crate::boundary::InboundAdmission::Accepted(accepted)) = bindings
+            let Some(crate::boundary::IngressAdmission::Accepted(accepted)) = bindings
                 .pump_inbound(&mut vm, &mut journal)
                 .expect("the bounded intake stays healthy")
             else {
@@ -2802,7 +2802,7 @@ graph api : App {
             assert_eq!(state.decisions.last().unwrap().0.get(), expected);
             assert!(matches!(
                 state.decisions.last().unwrap().1,
-                InboundDecision::Accepted(observed) if observed == accepted
+                IngressDecision::Accepted(observed) if observed == accepted
             ));
             assert!(journal.find_envelope(accepted.envelope).is_some());
         }
@@ -2810,7 +2810,7 @@ graph api : App {
             .records()
             .iter()
             .filter_map(|record| match record {
-                crate::journal::Record::Inbound(inbound) => inbound.connector_path.as_ref(),
+                crate::journal::Record::Ingress(inbound) => inbound.connector_path.as_ref(),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -2824,7 +2824,7 @@ graph api : App {
         let records_before = journal.records().len();
         assert_eq!(
             bindings.pump_inbound(&mut vm, &mut journal).unwrap(),
-            Some(crate::boundary::InboundAdmission::Pending)
+            Some(crate::boundary::IngressAdmission::Pending)
         );
         assert_eq!(journal.records().len(), records_before);
         assert_eq!(state.lock().unwrap().decisions.len(), 1024);
@@ -2832,7 +2832,7 @@ graph api : App {
         assert_eq!(retained.proposal().reference.get(), 1024);
         assert_eq!(
             bindings.pump_inbound(&mut vm, &mut journal).unwrap(),
-            Some(crate::boundary::InboundAdmission::Pending),
+            Some(crate::boundary::IngressAdmission::Pending),
             "re-polling cannot replace or acknowledge the retained proposal"
         );
         assert_eq!(journal.records().len(), records_before);
@@ -2857,16 +2857,16 @@ graph api : App {
         let mut journal = MemJournal::new(GraphVersion(1));
         assert_eq!(
             bindings.pump_inbound(&mut vm, &mut journal).unwrap(),
-            Some(crate::boundary::InboundAdmission::Rejected(
-                crate::boundary::InboundRejection::UnknownPort
+            Some(crate::boundary::IngressAdmission::Rejected(
+                crate::boundary::IngressRejection::UnknownPort
             ))
         );
         assert!(journal.records().is_empty());
         assert_eq!(
             state.lock().unwrap().decisions,
             [(
-                InboundProposalHandle::new(7),
-                InboundDecision::Rejected(crate::boundary::InboundRejection::UnknownPort)
+                IngressProposalHandle::new(7),
+                IngressDecision::Rejected(crate::boundary::IngressRejection::UnknownPort)
             )]
         );
     }
@@ -2902,7 +2902,7 @@ graph api : App {
         let plan = inbound_event_plan();
         let mut proposal = inbound_proposal(11, "out");
         proposal.submission.provenance =
-            InboundEnvelopeProvenance::single(node::Path::new(["other"]).unwrap());
+            IngressEnvelopeProvenance::single(node::Path::new(["other"]).unwrap());
         let state = Arc::new(Mutex::new(InboundQueueState {
             proposals: VecDeque::from([proposal]),
             decisions: Vec::new(),
@@ -2988,8 +2988,8 @@ graph api : App {
         let mut vm = Vm::boot(&plan, GraphVersion(1));
         vm.inject(
             &mut journal,
-            InboundSubmission {
-                provenance: InboundEnvelopeProvenance::single(node::Path::new(["test"]).unwrap()),
+            IngressSubmission {
+                provenance: IngressEnvelopeProvenance::single(node::Path::new(["test"]).unwrap()),
                 port: node::Port::new("in").unwrap(),
                 draft: Draft {
                     data: Data::materialized(Value::Text(String::from("request"))),

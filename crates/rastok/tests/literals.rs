@@ -10,7 +10,7 @@ use rastok::contract::ContractCatalog;
 
 fn emitted(body: &str) -> rastok::envelope::Data {
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
@@ -29,8 +29,8 @@ fn emitted(body: &str) -> rastok::envelope::Data {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
         &mut journal,
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 rastok::node::Path::new(["probe"]).unwrap(),
             ),
             port: rastok::node::Port::new("in").unwrap(),
@@ -109,7 +109,7 @@ fn base64_refusals_are_located() {
 #[test]
 fn base64_with_a_content_type_is_whole_payload() {
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};
     use rastok::journal::MemJournal;
@@ -131,8 +131,8 @@ fn base64_with_a_content_type_is_whole_payload() {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
         &mut journal,
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 rastok::node::Path::new(["probe"]).unwrap(),
             ),
             port: rastok::node::Port::new("in").unwrap(),
@@ -382,7 +382,7 @@ fn asset_refusals_are_named() {
 #[test]
 fn an_asset_emission_runs_and_carries_its_type() {
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::compiler::compile_with_assets;
     use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};
@@ -407,8 +407,8 @@ fn an_asset_emission_runs_and_carries_its_type() {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
         &mut journal,
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 rastok::node::Path::new(["probe"]).unwrap(),
             ),
             port: rastok::node::Port::new("in").unwrap(),
@@ -553,7 +553,7 @@ fn bare_forms_embed_in_records_and_typed_forms_refuse_there() {
 #[test]
 fn the_carry_survives_a_dead_earlier_write() {
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, Encoding, MetaValue, Namespace, Scalar};
     use rastok::journal::MemJournal;
@@ -578,8 +578,8 @@ fn the_carry_survives_a_dead_earlier_write() {
     );
     vm.inject(
         &mut journal,
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 rastok::node::Path::new(["probe"]).unwrap(),
             ),
             port: rastok::node::Port::new("in").unwrap(),
@@ -612,7 +612,7 @@ fn the_carry_survives_a_dead_earlier_write() {
 #[test]
 fn inject_holds_the_ext_zone_to_the_schema() {
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};
     use rastok::journal::MemJournal;
@@ -634,8 +634,8 @@ fn inject_holds_the_ext_zone_to_the_schema() {
     );
     let refused = vm.inject(
         &mut journal,
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 rastok::node::Path::new(["probe"]).unwrap(),
             ),
             port: rastok::node::Port::new("in").unwrap(),
@@ -719,7 +719,7 @@ fn the_meta_type_grid_is_closed_end_to_end() {
     }
     // And the ingress holds content_type to MEDIA_TYPE, name and type.
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};
     use rastok::journal::MemJournal;
@@ -740,8 +740,8 @@ fn the_meta_type_grid_is_closed_end_to_end() {
     );
     let refused = vm.inject(
         &mut journal,
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 rastok::node::Path::new(["probe"]).unwrap(),
             ),
             port: rastok::node::Port::new("in").unwrap(),
@@ -1238,7 +1238,7 @@ fn a_decimal_meta_value_round_trips_through_a_copy() {
     // Admitted under variant at the ingress, an exact decimal must
     // survive an explicit handler copy — one physical vocabulary.
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};
     use rastok::journal::MemJournal;
@@ -1255,8 +1255,8 @@ fn a_decimal_meta_value_round_trips_through_a_copy() {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
         &mut journal,
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 rastok::node::Path::new(["probe"]).unwrap(),
             ),
             port: rastok::node::Port::new("in").unwrap(),

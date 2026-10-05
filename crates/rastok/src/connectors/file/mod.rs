@@ -5,7 +5,7 @@
 //!
 //! Request preparation is pure: it validates the logical path and seals one
 //! complete operation descriptor. Only [`OutboundConnectorDriver::start`],
-//! called after the OUTBOUND open is journaled, hands that descriptor to a
+//! called after the EGRESS open is journaled, hands that descriptor to a
 //! worker that may observe or mutate the filesystem.
 
 use crate::boundary::{

@@ -82,16 +82,16 @@ production the world-half is *recorded* ; in simulation there is no world —
 
 | Fixture step | Plays | Journal record produced |
 |---|---|---|
-| `orders.out = { … }` | the world sends | **INBOUND** (fixture-owned `inbound_seq`) |
+| `orders.out = { … }` | the world sends | **INGRESS** (fixture-owned `inbound_seq`) |
 | `advance duration("30s")` | time passes | the dated decisions (the sweep, execution-model §8) |
-| `mock … { on in … }` | the mock Outbound Driver answers | the **OUTBOUND closures** |
+| `mock … { on in … }` | the mock Outbound Driver answers | the **EGRESS closures** |
 | `crash after <record>` / `restart` | the process dies | volatile truncation + recovery |
 | `expect …` | *(nothing — pure observation)* | *(none)* |
 
 **The same-shape contract** — what makes golden traces mean anything :
 
 > A simulated run produces a journal of the **same shape** as a production
-> run. A mocked call still writes its real OUTBOUND records (`open` with key
+> run. A mocked call still writes its real EGRESS records (`open` with key
 > and digest, `closed` with the mock's reply) ; the reply enters through the
 > Connector's normal response path (trigger `p:in`, parent = the request).
 > The mock replaces the Driver, **not the bookkeeping**.
@@ -119,7 +119,7 @@ does not prove a complete scripted protocol: outgoing Process, File and
 HttpClient Calls execute their mocks; `HttpServer` **ack** executes decoded
 source injections; source `respond` and Session scripting remain named gates.
 HttpClient's mock seals the resolved method, URL, lossless headers, body and
-idempotency material before the ordinary OUTBOUND open. HttpServer's Lab
+idempotency material before the ordinary EGRESS open. HttpServer's Lab
 proposes an inbound draft and returns a terminal only after committed acceptance.
 Neither needs the physical networking features.
 
@@ -177,13 +177,13 @@ successful fixed ACK, not a physical socket write. No `mock listener` is
 needed. The fixture may supply `meta.ext` explicitly; absent HTTP metadata is
 not invented. `meta.app` and `meta.sys` remain forbidden fixture writes.
 
-The source path and sequence enter the ordinary `InboundSubmission`.
+The source path and sequence enter the ordinary `IngressSubmission`.
 `RuntimeBindings` proves ownership; VM admission reserves every destination
-and commits INBOUND before the Lab receives the `InboundCallRef`. The Lab
+and commits INGRESS before the Lab receives the `InboundCallRef`. The Lab
 then reports `Completed { status: 202 }`; the core commits the ordinary
 correlated `l:reply` transaction and `exit`. `expect listener.out` reads the
-INBOUND root once, including when the explicit disposition is `nothing`.
-No OUTBOUND Call or extra root is manufactured for the acknowledgement.
+INGRESS root once, including when the explicit disposition is `nothing`.
+No EGRESS Call or extra root is manufactured for the acknowledgement.
 
 There is one retained world-side proposal and one terminal slot. Under
 pressure, neither changes identity nor acknowledges. If the current injection
@@ -546,10 +546,10 @@ incident is a **mechanical projection**, not inference :
 
 | Production journal slice | → | Scenario step |
 |---|---|---|
-| INBOUND records | → | injections (same envelopes, **same `inbound_seq`** — the injection's optional `seq` clause : `ping.out = { … } seq 105` ; hand-written scenarios omit it and use the fixture counter) |
+| INGRESS records | → | injections (same envelopes, **same `inbound_seq`** — the injection's optional `seq` clause : `ping.out = { … } seq 105` ; hand-written scenarios omit it and use the fixture counter) |
 | dated decisions (`l:*` transactions) | → | the `advance` script — **times rebased** (t₀ = first record, deltas preserved) ; the bridge sets the scenario's **`origin` = the slice's first civil instant**, so window/cron arithmetic is preserved (§5.3, execution-model §9.3) |
-| OUTBOUND `closed(response)` | → | generated mock branches: the external system's real replies, **guarded by the recorded request id** (`on in where meta.sys.id == 0x9f42… { out = … }`) — Lab Driver-script grammar, zero new application machinery |
-| OUTBOUND `closed(timeout)` | → | `{ out = nothing }` (the chrono re-does its work) |
+| EGRESS `closed(response)` | → | generated mock branches: the external system's real replies, **guarded by the recorded request id** (`on in where meta.sys.id == 0x9f42… { out = … }`) — Lab Driver-script grammar, zero new application machinery |
+| EGRESS `closed(timeout)` | → | `{ out = nothing }` (the chrono re-does its work) |
 | crash + recovery (visible in the journal) | → | `crash after <record>` / `restart` |
 
 The **slice** is well-defined : the transitive closure of a lineage through
@@ -707,8 +707,8 @@ the opaque block.
 
 - [execution-model.md](execution-model.md) — virtual time, the `advance`
   sweep, dated events, the node transaction.
-- [delivery-semantics.md](delivery-semantics.md) — the journal (INBOUND /
-  TRANSACTION / OUTBOUND), recovery, and boundary completion.
+- [delivery-semantics.md](delivery-semantics.md) — the journal (INGRESS /
+  TRANSACTION / EGRESS), recovery, and boundary completion.
 - [envelope.md](envelope.md) — the id recipe the traces fingerprint ;
   storage form (the trace serializes it).
 - [grammar.md](grammar.md) — the simulation grammar productions ;

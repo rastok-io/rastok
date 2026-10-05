@@ -1447,11 +1447,11 @@ function envelopePanel(snapshot) {
   panel.append(heading);
 
   if (selectedEnvelopeId && !delivery) {
-    const spine = (snapshot.history?.envelopes || []).find(envelope => envelope.envelope_id === selectedEnvelopeId);
+    const sysFields = (snapshot.history?.envelopes || []).find(envelope => envelope.envelope_id === selectedEnvelopeId);
     position.textContent = `Transition ${snapshot.timeline.boundary}`;
     title.textContent = 'Retained causal envelope';
     panel.append(identifier(selectedEnvelopeId, 'envelope'));
-    if (spine) panel.append(envelopeZones({ sys: { id: spine.envelope_id, origin_id: spine.origin_id, parent_id: spine.parent_id } }, { content: 'No DATA observation is retained for this envelope at this transition.' }));
+    if (sysFields) panel.append(envelopeZones({ sys: { id: sysFields.envelope_id, origin_id: sysFields.origin_id, parent_id: sysFields.parent_id } }, { content: 'No DATA observation is retained for this envelope at this transition.' }));
     else panel.append(document.createTextNode('This envelope is outside the selected journal prefix.'));
     return panel;
   }

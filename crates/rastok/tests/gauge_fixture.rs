@@ -7,7 +7,7 @@
 //! boundary input, typed operator ports, and a typed named output,
 //! with its Lab scenario. Pinned here: the exact semantic hash (the
 //! identity move of the port-table presence tag), the current v19 package
-//! bytes, and the full golden trace whose INBOUND record seals the
+//! bytes, and the full golden trace whose INGRESS record seals the
 //! ingress port as key 24.
 
 use rastok::compiler::compile;
@@ -74,7 +74,7 @@ fn the_lab_trace_matches_its_golden_and_seals_the_ingress() {
         "{:#?}",
         roundtrip.report.failures
     );
-    // The INBOUND record seals its named ingress as key 24.
+    // The INGRESS record seals its named ingress as key 24.
     let trace = rastok::golden::project(&roundtrip.records);
     let (tree, _) = rastok::canonical_cbor::decode(trace.record_bytes(0).expect("a record"))
         .expect("canonical bytes");

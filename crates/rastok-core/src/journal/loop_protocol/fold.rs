@@ -552,11 +552,18 @@ mod tests {
     use alloc::{boxed::Box, vec, vec::Vec};
 
     fn state(value: i64) -> Envelope {
-        let root = MetaSys::root(Id::derive(1, &[&2_i64.to_le_bytes()]), 1);
+        let root = MetaSys::root(
+            Id::derive(crate::envelope::IdKind::Root, &[&2_i64.to_le_bytes()]),
+            1,
+        );
         let sys = if value == 2 {
             root
         } else {
-            MetaSys::emission(Id::derive(1, &[&value.to_le_bytes()]), &root, 1)
+            MetaSys::emission(
+                Id::derive(crate::envelope::IdKind::Root, &[&value.to_le_bytes()]),
+                &root,
+                1,
+            )
         };
         Envelope::new(Meta::new(sys), Data::materialized(Value::Int(value)))
     }
@@ -617,14 +624,14 @@ mod tests {
             retry_record: None,
             loop_record: Some(Box::new(packet)),
             logical_time: None,
-            timer_schedule: None,
+            deadlines: None,
             instance_commands: None,
             consumed: vec![],
             join_inputs: vec![],
             state_delta: vec![],
             emissions: vec![],
             routes: vec![],
-            timers: vec![],
+            deadline_ids: vec![],
         }))
     }
 
@@ -929,7 +936,11 @@ mod tests {
         for packet in packets {
             fold.apply(&packet).unwrap();
         }
-        let command = CommandProduced::new(run, 0, CommandValue::Again(Id::derive(1, &[b"exit"])));
+        let command = CommandProduced::new(
+            run,
+            0,
+            CommandValue::Again(Id::derive(crate::envelope::IdKind::Root, &[b"exit"])),
+        );
         let production = Packet {
             context: vec![run],
             produced: vec![command.clone()],

@@ -35,7 +35,7 @@ fn instance(path: &str, tenant: &str, generation: u64) -> instance::Generation {
 fn transaction(instance: &instance::Generation, trigger: Trigger) -> TransactionRecord {
     TransactionRecord {
         instance_commands: None,
-        timer_schedule: None,
+        deadlines: None,
         owner_path: instance.address().owner().clone(),
         instance: instance.clone(),
         parent_instance: None,
@@ -51,7 +51,7 @@ fn transaction(instance: &instance::Generation, trigger: Trigger) -> Transaction
         state_delta: vec![],
         emissions: vec![],
         routes: vec![],
-        timers: vec![],
+        deadline_ids: vec![],
     }
 }
 
@@ -103,7 +103,7 @@ fn production(
     seed: u8,
 ) -> (Record, Command) {
     let port = Port::new("end").unwrap();
-    let cause = Id::derive(0xff, &[&[seed]]);
+    let cause = Id::derive(crate::envelope::IdKind::Root, &[&[seed]]);
     let command = Command::new(
         Endpoint {
             owner: EndpointOwner::Node(Path::new(source.address().owner().segments()).unwrap()),
@@ -318,7 +318,7 @@ fn command_identity_includes_cause_scope_target_and_generation() {
     let (_, original) = production(&decide, &alice, &worker, 1);
     let mut variants = Vec::new();
     let mut command = original.clone();
-    command.cause = Id::derive(0xff, &[b"other"]);
+    command.cause = Id::derive(crate::envelope::IdKind::Root, &[b"other"]);
     variants.push(command);
     let mut command = original.clone();
     command.target = instance("conversation.worker", "alice", 1);

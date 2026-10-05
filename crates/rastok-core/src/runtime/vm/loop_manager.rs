@@ -552,16 +552,16 @@ impl Vm<'_> {
                     });
                 }
                 if call_timeout.is_some() {
-                    record.timers.push((
-                        crate::journal::timer_kind::CALL_TIMEOUT,
+                    record.deadline_ids.push((
+                        crate::journal::DeadlineKind::CallTimeout,
                         ids::delivery_id(&edge, envelope.meta().sys().id()),
                     ));
                 }
                 if let Some(timeout) = call_timeout {
                     self.retain_timer_arms(
                         &mut record,
-                        vec![crate::journal::timing::TimerArm {
-                            kind: crate::journal::timer_kind::CALL_TIMEOUT,
+                        vec![crate::journal::timing::Deadline {
+                            kind: crate::journal::DeadlineKind::CallTimeout,
                             reference: ids::delivery_id(&edge, envelope.meta().sys().id()),
                             due_at: self.now.saturating_add(timeout),
                         }],
@@ -721,22 +721,20 @@ impl Vm<'_> {
         self.retain_graph_verdicts(&mut record)?;
         if let Some(due_at) = due {
             let timer = (
-                crate::journal::timer_kind::RECURRENCE_DELAY,
+                crate::journal::DeadlineKind::RecurrenceDelay,
                 protocol::admission_ref(run, current.iteration + 1, command.reference),
             );
-            record.timers.push(timer);
-            let schedule = crate::journal::timing::TimerSchedule::try_new(
+            record.deadline_ids.push(timer);
+            let schedule = crate::journal::timing::Deadlines::try_new(
                 self.now,
-                vec![crate::journal::timing::TimerArm {
+                vec![crate::journal::timing::Deadline {
                     kind: timer.0,
                     reference: timer.1,
                     due_at,
                 }],
             )
-            .map_err(|error| {
-                VmError::Journal(crate::journal::Error::InvalidTimerSchedule(error))
-            })?;
-            record.timer_schedule = Some(Box::new(schedule));
+            .map_err(|error| VmError::Journal(crate::journal::Error::InvalidDeadlines(error)))?;
+            record.deadlines = Some(Box::new(schedule));
         }
         let prepared = match slot {
             Some(slot) => {
@@ -857,7 +855,7 @@ pub(super) fn manager_record(
         retry_record: None,
         loop_record: Some(Box::new(packet)),
         logical_time: None,
-        timer_schedule: None,
+        deadlines: None,
         instance_commands: None,
         trigger: node::Trigger::Lifecycle(node::Lifecycle::Next),
         cause: Some(cause),
@@ -866,6 +864,6 @@ pub(super) fn manager_record(
         state_delta: vec![],
         emissions: vec![],
         routes: vec![],
-        timers: vec![],
+        deadline_ids: vec![],
     }
 }

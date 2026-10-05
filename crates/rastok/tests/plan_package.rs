@@ -233,7 +233,7 @@ fn v16_retains_one_operator_loop_without_a_graph_handler_or_command_port() {
     assert_eq!(declared, hash);
 
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, Namespace};
     use rastok::journal::MemJournal;
@@ -243,8 +243,8 @@ fn v16_retains_one_operator_loop_without_a_graph_handler_or_command_port() {
     let mut vm = Vm::boot(&decoded, GraphVersion(1));
     vm.inject(
         &mut journal,
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 rastok::node::Path::new(["probe"]).unwrap(),
             ),
             port: rastok::node::Port::new("in").unwrap(),
@@ -812,7 +812,7 @@ fn the_boundary_value_matrix_executes_identically_across_the_trip() {
 /// compares.
 fn run_boundary_probe(plan: &rastok::plan::ValidatedExecutionPlan) -> (Vec<String>, usize) {
     use rastok::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
@@ -820,8 +820,8 @@ fn run_boundary_probe(plan: &rastok::plan::ValidatedExecutionPlan) -> (Vec<Strin
     use rastok::runtime::vm::Vm;
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(plan, GraphVersion(1));
-    let submission = InboundSubmission {
-        provenance: InboundEnvelopeProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
+    let submission = IngressSubmission {
+        provenance: IngressEnvelopeProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
         port: rastok::node::Port::new("in").unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Text(String::from("go"))),

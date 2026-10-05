@@ -11,7 +11,7 @@
 //! the rustc shape through [`rastok::render`]. `--resolve-open-api` owns one
 //! deterministic generated source without rewriting authored project files.
 
-use rastok::boundary::{Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence};
+use rastok::boundary::{Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence};
 use rastok::compiler::Compilation;
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
@@ -727,9 +727,9 @@ fn boundary_fault(message: String) -> rastok::ui::FaultView {
     }
 }
 
-fn cli_submission(inbound_path: &node::Path, line: String) -> InboundSubmission {
-    InboundSubmission {
-        provenance: InboundEnvelopeProvenance::single(inbound_path.clone()),
+fn cli_submission(inbound_path: &node::Path, line: String) -> IngressSubmission {
+    IngressSubmission {
+        provenance: IngressEnvelopeProvenance::single(inbound_path.clone()),
         port: node::Port::new("in").unwrap_or_else(|_| unreachable!("`in` is a valid port")),
         draft: Draft {
             data: Data::materialized(Value::Text(line)),

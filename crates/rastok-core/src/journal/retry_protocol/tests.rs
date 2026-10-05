@@ -9,7 +9,7 @@ use crate::node;
 
 use crate::journal::{
     Emission, ids,
-    timing::{TimerArm, TimerSchedule},
+    timing::{Deadline, Deadlines},
 };
 use crate::node::Path;
 use crate::plan::PlanConstant;
@@ -202,10 +202,10 @@ impl Fixture {
             .then(|| self.policy.due_after(ordinal, at))
             .flatten()
             .map(|due| {
-                TimerSchedule::try_new(
+                Deadlines::try_new(
                     at,
-                    vec![TimerArm {
-                        kind: 5,
+                    vec![Deadline {
+                        kind: crate::journal::DeadlineKind::RecurrenceDelay,
                         reference: admission_ref(self.operation, ordinal + 1, intent.call_id),
                         due_at: due,
                     }],
@@ -247,7 +247,7 @@ impl Fixture {
             envelope: Envelope::new(
                 Meta::new(MetaSys::emission(
                     Id::derive(
-                        0xf0,
+                        crate::envelope::IdKind::Emission,
                         &[parent.id().as_bytes(), &(index as u32).to_le_bytes()],
                     ),
                     parent,
@@ -297,7 +297,7 @@ fn carrier(
         loop_record: None,
         instance_commands: None,
         retry_record: Some(Box::new(packet)),
-        timer_schedule: None,
+        deadlines: None,
         logical_time: None,
         consumed: if manager {
             vec![]
@@ -312,7 +312,7 @@ fn carrier(
         state_delta: vec![],
         emissions,
         routes: vec![],
-        timers: vec![],
+        deadline_ids: vec![],
     }
 }
 
@@ -376,8 +376,8 @@ fn retained_retry_carriers_cannot_hide_dispositions_or_application_work() {
     orphan.retry_record = None;
     assert_eq!(validate_transaction(&orphan), Err(Error::PacketShape));
     assert!(
-        crate::journal::retention::Reader::default()
-            .record(&crate::journal::retention::record(
+        crate::journal::codec::Decoder::default()
+            .decode(&crate::journal::codec::encode(
                 &crate::journal::Record::Transaction(Box::new(orphan))
             ))
             .is_err()
@@ -784,17 +784,17 @@ fn missing_renewed_foreign_and_final_timer_arms_refuse_atomically() {
     let intent = f.intent(&fold);
     fold.open_call(f.attempt(1), &intent).unwrap();
     let expected = admission_ref(f.operation, 2, intent.call_id);
-    let valid = TimerArm {
-        kind: 5,
+    let valid = Deadline {
+        kind: crate::journal::DeadlineKind::RecurrenceDelay,
         reference: expected,
         due_at: 110,
     };
     let candidates = [
         None,
         Some(
-            TimerSchedule::try_new(
+            Deadlines::try_new(
                 20,
-                vec![TimerArm {
+                vec![Deadline {
                     due_at: 120,
                     ..valid
                 }],
@@ -802,27 +802,36 @@ fn missing_renewed_foreign_and_final_timer_arms_refuse_atomically() {
             .unwrap(),
         ),
         Some(
-            TimerSchedule::try_new(
+            Deadlines::try_new(
                 10,
-                vec![TimerArm {
+                vec![Deadline {
                     due_at: 111,
                     ..valid
                 }],
             )
             .unwrap(),
         ),
-        Some(TimerSchedule::try_new(10, vec![TimerArm { kind: 1, ..valid }]).unwrap()),
         Some(
-            TimerSchedule::try_new(
+            Deadlines::try_new(
                 10,
-                vec![TimerArm {
+                vec![Deadline {
+                    kind: crate::journal::DeadlineKind::CallTimeout,
+                    ..valid
+                }],
+            )
+            .unwrap(),
+        ),
+        Some(
+            Deadlines::try_new(
+                10,
+                vec![Deadline {
                     reference: Id::from_bytes([0; 16]),
                     ..valid
                 }],
             )
             .unwrap(),
         ),
-        Some(TimerSchedule::try_new(10, vec![valid, valid]).unwrap()),
+        Some(Deadlines::try_new(10, vec![valid, valid]).unwrap()),
     ];
     for schedule in candidates {
         let before = fold.clone();
@@ -840,7 +849,7 @@ fn missing_renewed_foreign_and_final_timer_arms_refuse_atomically() {
         );
         assert_eq!(fold, before);
     }
-    let schedule = TimerSchedule::try_new(10, vec![valid]).unwrap();
+    let schedule = Deadlines::try_new(10, vec![valid]).unwrap();
     assert_eq!(
         fold.settle(
             f.attempt(1),
@@ -975,7 +984,7 @@ fn each_algebra_prefix_reconstructs_without_a_saved_manager_or_driver() {
     enum Retained {
         Packet(Packet, i64),
         Open(Intent, AttemptId),
-        Settle(Intent, AttemptId, String, i64, Option<TimerSchedule>),
+        Settle(Intent, AttemptId, String, i64, Option<Deadlines>),
     }
     fn apply(f: &Fixture, fold: &mut Fold, fact: &Retained) {
         match fact {
@@ -1005,10 +1014,10 @@ fn each_algebra_prefix_reconstructs_without_a_saved_manager_or_driver() {
         let intent = f.intent(&live);
         history.push(Retained::Open(intent.clone(), f.attempt(ordinal)));
         let schedule = (ordinal < 3).then(|| {
-            TimerSchedule::try_new(
+            Deadlines::try_new(
                 at,
-                vec![TimerArm {
-                    kind: 5,
+                vec![Deadline {
+                    kind: crate::journal::DeadlineKind::RecurrenceDelay,
                     reference: admission_ref(f.operation, ordinal + 1, intent.call_id),
                     due_at: at + 100,
                 }],

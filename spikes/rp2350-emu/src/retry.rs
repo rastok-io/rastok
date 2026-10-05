@@ -74,8 +74,8 @@ pub(super) fn run(plan: &ValidatedExecutionPlan, hash: SemanticHash) -> usize {
     for _ in 0..operations {
         vm.inject(
             &mut journal,
-            InboundSubmission {
-                provenance: InboundEnvelopeProvenance::single(Path::new(["spike"]).unwrap()),
+            IngressSubmission {
+                provenance: IngressEnvelopeProvenance::single(Path::new(["spike"]).unwrap()),
                 port: Port::new("in").unwrap(),
                 sequence: SubmissionSequence::Next,
                 draft: Draft {

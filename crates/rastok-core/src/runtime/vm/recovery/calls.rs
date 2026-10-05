@@ -2,7 +2,7 @@
 //! record never grants permission to start that old effect again.
 
 use super::*;
-use crate::journal::{CallRecord, Closure, ConsumedPosition, OutboundStatus};
+use crate::journal::{CallRecord, CallStatus, Closure, ConsumedPosition};
 
 impl Vm<'_> {
     pub(super) fn restore_call(
@@ -35,7 +35,7 @@ impl Vm<'_> {
                 "a retained Call contradicts its request identity",
             ));
         }
-        if record.status == OutboundStatus::Open {
+        if record.status == CallStatus::Open {
             if self.pending.contains_key(&intent.call_id) {
                 return Err(invalid(index, "a retained Call opens twice"));
             }
@@ -136,12 +136,12 @@ impl Vm<'_> {
             ));
         }
         let (completion, trigger) = match &record.status {
-            OutboundStatus::Closed(Closure::Response(completion)) => (
+            CallStatus::Closed(Closure::Response(completion)) => (
                 completion.clone(),
                 node::Trigger::Port(pending.delivery.port.clone()),
             ),
-            OutboundStatus::Closed(Closure::Timeout) | OutboundStatus::Abandoned => {
-                let terminal = if record.status == OutboundStatus::Abandoned {
+            CallStatus::Closed(Closure::Timeout) | CallStatus::Abandoned => {
+                let terminal = if record.status == CallStatus::Abandoned {
                     SchedulerCompletion::OutcomeUnknown
                 } else {
                     SchedulerCompletion::TimeoutExpired
@@ -152,14 +152,14 @@ impl Vm<'_> {
                     .map_err(VmError::Dispatch)?;
                 (
                     completion,
-                    node::Trigger::Lifecycle(if record.status == OutboundStatus::Abandoned {
+                    node::Trigger::Lifecycle(if record.status == CallStatus::Abandoned {
                         node::Lifecycle::Recover
                     } else {
                         node::Lifecycle::Timeout
                     }),
                 )
             }
-            OutboundStatus::Open => return Err(invalid(index, "duplicate Call opening")),
+            CallStatus::Open => return Err(invalid(index, "duplicate Call opening")),
         };
         PlanGate { plan: self.plan }
             .admit(&intent.connector_path, &completion)

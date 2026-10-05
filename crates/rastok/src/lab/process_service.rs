@@ -1,9 +1,9 @@
 //! Effectless resident child: the script replaces replies, not Session state.
 use super::*;
 use crate::boundary::{
-    InboundConnectorDriver, InboundDecision, InboundProposal, InboundProposalHandle,
-    InboundSession, SessionConnectorDriver, SessionDriverEvent, SessionId, SessionOpenIntent,
-    SessionStart, SessionWriteIntent,
+    InboundConnectorDriver, InboundSession, IngressDecision, IngressProposal,
+    IngressProposalHandle, SessionConnectorDriver, SessionDriverEvent, SessionId,
+    SessionOpenIntent, SessionStart, SessionWriteIntent,
 };
 use crate::connectors::ProcessRequestBindings;
 use std::collections::VecDeque;
@@ -61,7 +61,7 @@ struct World {
     resources: BTreeMap<SessionId, node::Path>,
     terminating: std::collections::BTreeSet<SessionId>,
     events: VecDeque<SessionDriverEvent>,
-    proposals: VecDeque<InboundProposal>,
+    proposals: VecDeque<IngressProposal>,
     next: u64,
 }
 impl World {
@@ -81,10 +81,10 @@ impl World {
                         return;
                     };
                     self.next = next;
-                    self.proposals.push_back(InboundProposal {
-                        reference: InboundProposalHandle::new(next),
-                        submission: InboundSubmission {
-                            provenance: InboundEnvelopeProvenance::single(path.clone()),
+                    self.proposals.push_back(IngressProposal {
+                        reference: IngressProposalHandle::new(next),
+                        submission: IngressSubmission {
+                            provenance: IngressEnvelopeProvenance::single(path.clone()),
                             port: output.port,
                             draft: Draft {
                                 data: output.data,
@@ -201,7 +201,7 @@ impl SessionConnectorDriver for World {
     }
 }
 impl InboundConnectorDriver for World {
-    fn proposal(&mut self) -> Option<InboundProposal> {
+    fn proposal(&mut self) -> Option<IngressProposal> {
         let proposal = self.proposals.front()?;
         // The script may answer during open_session. As with the physical
         // Driver, the opening must reach the core before its first frame.
@@ -214,14 +214,14 @@ impl InboundConnectorDriver for World {
         }
         Some(proposal.clone())
     }
-    fn decide(&mut self, reference: InboundProposalHandle, decision: InboundDecision) {
+    fn decide(&mut self, reference: IngressProposalHandle, decision: IngressDecision) {
         if self
             .proposals
             .front()
             .is_some_and(|p| p.reference == reference)
         {
             self.proposals.pop_front();
-            if let InboundDecision::Rejected(reason) = decision {
+            if let IngressDecision::Rejected(reason) = decision {
                 self.evaluator
                     .fault(format!("the service frame was refused: {reason:?}"));
             }

@@ -52,7 +52,19 @@ integration seam — request, external partner, late callback — be
 built, simulated, and shown end to end, before its real systems
 exist? Scope, order, and evidence:
 [`docs/architecture/m1-slice.md`](docs/architecture/m1-slice.md).
-Public opening is **15 October 2026**.
+Public opening is **5 November 2026**.
+
+### Human-review follow-up — 5 October
+
+The review's written valve has applied: **24 October** is the real freeze.
+The [consolidated human-review ledger](docs/architecture/human-review-m1.md)
+owns the three lots: vocabulary without changed bytes, structure without
+changed bytes, then the single v20 identity cutover. Vocabulary stops for
+Fable's review; the cutover needs Fable's review and Yoann's approval before
+blessing. Pre-public registries compact once; the public extend-only contract
+starts after that bless. Keep the chantier numbered v20 for now, and record
+the switch to public format 1 as a pre-publication TODO. The executable
+checkout remains v19 until the cutover; no publication is authorized here.
 
 ### Current close-out — 18 September
 
@@ -179,7 +191,7 @@ and GIF, debugger browser pass, CHANGELOG and release preparation block the
 opening. Independent HTTP/3-server ngtcp2, official Autobahn and marginal
 Connector implementation-cost measurements remain **open but non-blocking**;
 their absence stays visible in the release inventory and README. No public
-push, release tag or crate publication occurs before 15 October or without
+push, release tag or crate publication occurs before 5 November or without
 Yoann's instruction. Public documentation is authored here as plain Markdown
 in `docs/site/`; the separate site consumes it and the examples at one tag.
 

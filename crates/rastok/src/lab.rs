@@ -8,8 +8,8 @@
 //! test double.
 
 use crate::boundary::{
-    CallConnectorDriver, CallStart, Completion, Draft, InboundAdmission, InboundEnvelopeProvenance,
-    InboundSubmission, Intent, OutboundConnectorDriver, PortOutput, RequestPreparation, Response,
+    CallConnectorDriver, CallStart, Completion, Draft, IngressAdmission, IngressEnvelopeProvenance,
+    IngressSubmission, Intent, OutboundConnectorDriver, PortOutput, RequestPreparation, Response,
     SchedulerCompletion, SubmissionSequence,
 };
 use crate::compiler::hir::{
@@ -507,8 +507,8 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
                     .map_or_else(|| draft(value), Ok);
                 match candidate {
                     Ok(draft) => {
-                        let submission = InboundSubmission {
-                            provenance: InboundEnvelopeProvenance::single(
+                        let submission = IngressSubmission {
+                            provenance: IngressEnvelopeProvenance::single(
                                 target.connector().cloned().unwrap_or_else(|| {
                                     node::Path::new(["lab"])
                                         .unwrap_or_else(|_| unreachable!("`lab` is a valid path"))
@@ -886,13 +886,13 @@ fn pump_inbound_world<'plan>(
         .pump_inbound(vm, journal)
         .map_err(|error| error.to_string())?
     {
-        Some(InboundAdmission::Accepted(_)) => true,
-        Some(InboundAdmission::Rejected(reason)) => {
+        Some(IngressAdmission::Accepted(_)) => true,
+        Some(IngressAdmission::Rejected(reason)) => {
             return Err(format!(
                 "the source proposal was refused before admission: {reason:?}"
             ));
         }
-        Some(InboundAdmission::Pending) | None => false,
+        Some(IngressAdmission::Pending) | None => false,
     };
     let report = driver
         .pump_inbound_call_events(vm)
@@ -963,12 +963,12 @@ fn expectation_envelopes<'a>(
             .filter(|output| output.port == *port)
             .map(|output| &output.envelope)
             .collect(),
-        // An inbound source is an INBOUND fact, not a synthetic emission
+        // An inbound source is an INGRESS fact, not a synthetic emission
         // transaction. Read it directly, once, in this action's journal window.
         ExpectTarget::Node { path, port } => records
             .iter()
             .filter_map(|record| {
-                let Record::Inbound(root) = record else {
+                let Record::Ingress(root) = record else {
                     return None;
                 };
                 (root.connector_path.as_ref() == Some(path) && root.port == *port)
@@ -1553,7 +1553,10 @@ mod tests {
             pending: Vec::new(),
             faults: Rc::clone(&faults),
         };
-        let id = crate::envelope::Id::derive(0x01, &[b"request", &0u64.to_le_bytes()]);
+        let id = crate::envelope::Id::derive(
+            crate::envelope::IdKind::Root,
+            &[b"request", &0u64.to_le_bytes()],
+        );
         let request = Envelope::new(
             crate::envelope::Meta::new(crate::envelope::MetaSys::root(id, 1)),
             Data::encoded(crate::envelope::Encoding::Avro, *b"\x01\x02"),

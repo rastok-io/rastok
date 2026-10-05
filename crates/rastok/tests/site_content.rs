@@ -297,10 +297,7 @@ fn live_loop_diagnostics_do_not_reintroduce_retired_codes() {
 fn current_journal_tables_include_retry_retention_without_saga_key_rules() {
     let source = std::fs::read_to_string(root().join("docs/spec/identity.md")).unwrap();
     for (key, name) in [
-        (
-            rastok_core::journal::timing::TIMER_SCHEDULE_KEY,
-            "timer_schedule",
-        ),
+        (rastok_core::journal::timing::DEADLINES_KEY, "deadlines"),
         (
             rastok_core::journal::timing::CALL_CLOSED_AT_KEY,
             "closed_at",
@@ -308,12 +305,12 @@ fn current_journal_tables_include_retry_retention_without_saga_key_rules() {
     ] {
         assert!(
             source.contains(&format!("| {key} | {name} |")),
-            "identity.md omits the retained field {key}: {name}"
+            "identity.md omits the unsealed field {key}: {name}"
         );
     }
     let timers = source
         .lines()
-        .find(|line| line.starts_with("| 37 | timers |"))
+        .find(|line| line.starts_with("| 37 | deadline_ids |"))
         .unwrap();
     assert!(timers.contains("Loop") && timers.contains("Retry"));
     let key = source

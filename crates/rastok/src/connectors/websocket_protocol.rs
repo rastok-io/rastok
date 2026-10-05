@@ -5,7 +5,7 @@
 //! contract ids, shared both-role object and message framing stay put.
 
 use crate::boundary::{
-    InboundConnectorDriver, InboundDecision, InboundProposal, InboundProposalHandle,
+    InboundConnectorDriver, IngressDecision, IngressProposal, IngressProposalHandle,
     OutboundConnectorDriver, PreparedRequest, RequestPreparation, SessionConnectorDriver,
     SessionDriverEvent, SessionId, SessionOpenIntent, SessionStart, SessionWriteIntent,
 };
@@ -614,11 +614,11 @@ impl WebSocketLabDriver {
 }
 
 impl InboundConnectorDriver for WebSocketLabDriver {
-    fn proposal(&mut self) -> Option<InboundProposal> {
+    fn proposal(&mut self) -> Option<IngressProposal> {
         None
     }
 
-    fn decide(&mut self, _: InboundProposalHandle, _: InboundDecision) {}
+    fn decide(&mut self, _: IngressProposalHandle, _: IngressDecision) {}
 }
 
 impl OutboundConnectorDriver for WebSocketLabDriver {

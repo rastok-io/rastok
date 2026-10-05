@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use rastok::boundary::{Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence};
+use rastok::boundary::{Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence};
 use rastok::compiler;
 use rastok::connectors::{DriverRegistry, RuntimeBindings};
 use rastok::contract::ContractCatalog;
@@ -345,8 +345,8 @@ fn graph_manager_admissions_reserve_capacity_before_ingress_commits() {
     let error = vm
         .inject(
             &mut journal,
-            InboundSubmission {
-                provenance: InboundEnvelopeProvenance::single(
+            IngressSubmission {
+                provenance: IngressEnvelopeProvenance::single(
                     rastok::node::Path::new(["test"]).unwrap(),
                 ),
                 port: rastok::node::Port::new("in").unwrap(),
@@ -666,7 +666,10 @@ fn a_routed_loop_context_must_name_a_retained_delivery() {
     packet
         .routes
         .push(rastok::journal::loop_protocol::RoutedContext {
-            delivery: rastok::envelope::Id::derive(1, &[b"unretained-delivery"]),
+            delivery: rastok::envelope::Id::derive(
+                rastok::envelope::IdKind::Root,
+                &[b"unretained-delivery"],
+            ),
             runs: packet.context.clone(),
         });
     assert_loop_record_refused(
@@ -790,7 +793,7 @@ fn a_rejected_transaction_does_not_update_the_journal_loop_projection() {
         } = fact
         {
             *opening = rastok::journal::loop_protocol::OpeningAdmissionRef::Delivery(
-                rastok::envelope::Id::derive(1, &[b"another-opening"]),
+                rastok::envelope::Id::derive(rastok::envelope::IdKind::Root, &[b"another-opening"]),
             );
             *run = rastok::journal::loop_protocol::run_ref(instance, opening);
         }
@@ -836,8 +839,8 @@ fn delayed_runs_reserve_manager_capacity_before_the_next_ingress_commit() {
             .all(|mailbox| mailbox.deliveries.is_empty())
     );
     let before = journal.records().to_vec();
-    let incoming = || InboundSubmission {
-        provenance: InboundEnvelopeProvenance::single(rastok::node::Path::new(["test"]).unwrap()),
+    let incoming = || IngressSubmission {
+        provenance: IngressEnvelopeProvenance::single(rastok::node::Path::new(["test"]).unwrap()),
         port: rastok::node::Port::new("in").unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Int(1)),
@@ -945,8 +948,8 @@ lab app {{
                 .records
                 .iter()
                 .filter(|record| matches!(record,
-            Record::Outbound(rastok::journal::OutboundRecord::Call(call))
-                if call.status == rastok::journal::OutboundStatus::Open))
+            Record::Egress(rastok::journal::EgressRecord::Call(call))
+                if call.status == rastok::journal::CallStatus::Open))
                 .count(),
             1
         );
@@ -1071,7 +1074,7 @@ fn recovery_rearms_the_retained_deadline_not_a_fresh_delay() {
 
 #[test]
 fn retained_timer_bytes_are_required_for_delays_but_not_part_of_the_causal_seal() {
-    use rastok::journal::timing::TimerSchedule;
+    use rastok::journal::timing::Deadlines;
     let plan = compile(
         r#"
       Loop.fuel = 2
@@ -1086,15 +1089,12 @@ fn retained_timer_bytes_are_required_for_delays_but_not_part_of_the_causal_seal(
     let index = journal
         .records()
         .iter()
-        .position(|record| record.timer_schedule().is_some())
+        .position(|record| record.deadlines().is_some())
         .unwrap();
-    let schedule = journal.records()[index].timer_schedule().unwrap();
-    assert_eq!(schedule.armed_at(), 7_000_000_000);
-    assert_eq!(schedule.arms()[0].due_at, 8_000_000_000);
-    assert_eq!(
-        &TimerSchedule::decode(&schedule.encode()).unwrap(),
-        schedule
-    );
+    let schedule = journal.records()[index].deadlines().unwrap();
+    assert_eq!(schedule.created_at(), 7_000_000_000);
+    assert_eq!(schedule.items()[0].due_at, 8_000_000_000);
+    assert_eq!(&Deadlines::decode(&schedule.encode()).unwrap(), schedule);
 
     let before = journal.records().to_vec();
     let seal = rastok::golden::project(&before).seal();
@@ -1104,13 +1104,13 @@ fn retained_timer_bytes_are_required_for_delays_but_not_part_of_the_causal_seal(
             unreachable!()
         };
         match corrupt {
-            0 => transaction.timer_schedule = None,
+            0 => transaction.deadlines = None,
             1 => {
-                let schedule = transaction.timer_schedule.as_deref().unwrap();
-                let mut arms = schedule.arms().to_vec();
+                let schedule = transaction.deadlines.as_deref().unwrap();
+                let mut arms = schedule.items().to_vec();
                 arms[0].due_at += 1;
-                transaction.timer_schedule = Some(Box::new(
-                    TimerSchedule::try_new(schedule.armed_at(), arms).unwrap(),
+                transaction.deadlines = Some(Box::new(
+                    Deadlines::try_new(schedule.created_at(), arms).unwrap(),
                 ));
             }
             2 => {
@@ -1121,16 +1121,16 @@ fn retained_timer_bytes_are_required_for_delays_but_not_part_of_the_causal_seal(
                 *due_at = Some(8_000_000_001);
             }
             _ => {
-                let schedule = transaction.timer_schedule.as_deref().unwrap();
-                let arm = schedule.arms()[0];
-                transaction.timer_schedule = Some(Box::new(
-                    TimerSchedule::try_new(schedule.armed_at(), vec![arm, arm]).unwrap(),
+                let schedule = transaction.deadlines.as_deref().unwrap();
+                let arm = schedule.items()[0];
+                transaction.deadlines = Some(Box::new(
+                    Deadlines::try_new(schedule.created_at(), vec![arm, arm]).unwrap(),
                 ));
             }
         }
         assert!(matches!(
             journal.commit(transaction.as_ref().clone()),
-            Err(rastok::journal::Error::InvalidTimerSchedule(_))
+            Err(rastok::journal::Error::InvalidDeadlines(_))
         ));
         assert_eq!(
             rastok::golden::project(&records).seal(),
@@ -1302,8 +1302,8 @@ fn a_measure_refuses_an_unproved_fallback_or_an_unchanged_again() {
 fn inject(vm: &mut Vm<'_>, journal: &mut MemJournal, value: i64) {
     vm.inject(
         journal,
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 rastok::node::Path::new(["test"]).unwrap(),
             ),
             port: rastok::node::Port::new("in").unwrap(),

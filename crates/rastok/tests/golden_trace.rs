@@ -10,8 +10,8 @@
 //! moves these traces once more by sealing owner paths as segment arrays.
 
 use rastok::boundary::{
-    CallConnectorDriver, CallStart, Completion, Draft, InboundEnvelopeProvenance,
-    InboundSubmission, Intent, ProcessExit, RequestPreparation, Response, SchedulerCompletion,
+    CallConnectorDriver, CallStart, Completion, Draft, IngressEnvelopeProvenance,
+    IngressSubmission, Intent, ProcessExit, RequestPreparation, Response, SchedulerCompletion,
     SubmissionSequence,
 };
 use rastok::compiler::compile;
@@ -107,8 +107,8 @@ fn run(source: &str) -> Vec<Record> {
     let data = vec![(String::from("text"), Value::Text(String::from("salut")))];
     vm.inject(
         &mut journal,
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::materialized(Value::Struct(data)),
@@ -129,14 +129,19 @@ fn run(source: &str) -> Vec<Record> {
 fn retained_call_time_is_unsealed_but_retry_context_and_arm_identity_are_causal() {
     use rastok::canonical_cbor::{self, Value as Cbor};
     use rastok::journal::{
-        OutboundRecord, OutboundStatus, retry_protocol as retry, timer_kind,
-        timing::{TimerArm, TimerSchedule},
+        CallStatus, DeadlineKind, EgressRecord, retry_protocol as retry,
+        timing::{Deadline, Deadlines},
     };
     let original = run(M0_PROBE);
-    let index = original.iter().position(|record| matches!(record,
-        Record::Outbound(OutboundRecord::Call(call)) if matches!(call.status, OutboundStatus::Closed(_)))).unwrap();
+    let index = original
+        .iter()
+        .position(|record| {
+            matches!(record,
+        Record::Egress(EgressRecord::Call(call)) if matches!(call.status, CallStatus::Closed(_)))
+        })
+        .unwrap();
     let mut changed = original.clone();
-    let Record::Outbound(OutboundRecord::Call(call)) = &mut changed[index] else {
+    let Record::Egress(EgressRecord::Call(call)) = &mut changed[index] else {
         unreachable!()
     };
     call.closed_at = Some(99);
@@ -146,11 +151,11 @@ fn retained_call_time_is_unsealed_but_retry_context_and_arm_identity_are_causal(
         "wall-independent causal facts do not seal a closure instant"
     );
     assert_ne!(
-        rastok::journal::retention::record(&original[index]),
-        rastok::journal::retention::record(&changed[index])
+        rastok::journal::codec::encode(&original[index]),
+        rastok::journal::codec::encode(&changed[index])
     );
 
-    let Record::Outbound(OutboundRecord::Call(call)) = &mut changed[index] else {
+    let Record::Egress(EgressRecord::Call(call)) = &mut changed[index] else {
         unreachable!()
     };
     let operation = retry::OperationId::from_id(rastok::envelope::Id::from_bytes([7; 16]));
@@ -163,11 +168,11 @@ fn retained_call_time_is_unsealed_but_retry_context_and_arm_identity_are_causal(
         facts: vec![],
     }));
     let reference = retry::admission_ref(operation, 2, call.intent.call_id);
-    call.timer_schedule = Some(Box::new(
-        TimerSchedule::try_new(
+    call.deadlines = Some(Box::new(
+        Deadlines::try_new(
             99,
-            vec![TimerArm {
-                kind: timer_kind::RECURRENCE_DELAY,
+            vec![Deadline {
+                kind: DeadlineKind::RecurrenceDelay,
                 reference,
                 due_at: 199,
             }],
@@ -192,19 +197,19 @@ fn retained_call_time_is_unsealed_but_retry_context_and_arm_identity_are_causal(
     assert_eq!(
         keys.get(&37),
         Some(&Cbor::Array(vec![Cbor::Array(vec![
-            Cbor::Uint(u64::from(timer_kind::RECURRENCE_DELAY)),
+            Cbor::Uint(5),
             Cbor::Bytes(reference.as_bytes().to_vec())
         ])]))
     );
     assert!(!keys.contains_key(&56) && !keys.contains_key(&59));
-    let Record::Outbound(OutboundRecord::Call(call)) = &mut changed[index] else {
+    let Record::Egress(EgressRecord::Call(call)) = &mut changed[index] else {
         unreachable!()
     };
-    call.timer_schedule = Some(Box::new(
-        TimerSchedule::try_new(
+    call.deadlines = Some(Box::new(
+        Deadlines::try_new(
             99,
-            vec![TimerArm {
-                kind: timer_kind::RECURRENCE_DELAY,
+            vec![Deadline {
+                kind: DeadlineKind::RecurrenceDelay,
                 reference,
                 due_at: 299,
             }],
@@ -216,7 +221,7 @@ fn retained_call_time_is_unsealed_but_retry_context_and_arm_identity_are_causal(
         project(&changed),
         "retained due time is not a causal timestamp"
     );
-    let Record::Outbound(OutboundRecord::Call(call)) = &mut changed[index] else {
+    let Record::Egress(EgressRecord::Call(call)) = &mut changed[index] else {
         unreachable!()
     };
     call.retry_record
@@ -409,7 +414,7 @@ fn the_readable_diff_labels_expected_actual_and_the_causal_trigger() {
     assert!(
         missing.contains("record count")
             && missing.contains("got 0")
-            && missing.contains("cause: INBOUND"),
+            && missing.contains("cause: INGRESS"),
         "{missing}"
     );
 }

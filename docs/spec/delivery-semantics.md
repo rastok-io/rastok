@@ -48,7 +48,7 @@ Retry operation/attempt facts):
                    lifecycle cause      (when no consumed cursor names it)
    annotations   : committed_at (UTC in production, virtual in simulation —
                    the REGULATORY timestamp, commit-authoritative),
-                   … every clock-valued field (e.g. an OUTBOUND's arming t)
+                   … every clock-valued field (e.g. an EGRESS's arming t)
 
    ONE commit covers both. Before it : the transaction never happened.
                           After it  : it happened entirely.
@@ -70,7 +70,7 @@ worlds close cleanly :
   retry invisible.
 - **Crash after commit** → the emissions are durable facts ; delivery resumes
   from the journal. A keyed target resumes from the route bytes retained by
-  its producer (INBOUND key 25 / TRANSACTION key 38); recovery never
+  its producer (INGRESS key 25 / TRANSACTION key 38); recovery never
   re-evaluates `instance.key` against old traffic or substitutes a later
   generation.
 
@@ -136,7 +136,7 @@ Three accumulations, three answers — nothing can grow without limit :
    ```
    LWM = min( delivery cursors,
               every OPEN saga's floor          (the oldest record of its scope),
-              every open OUTBOUND's floor      (the §4.4 triage needs it),
+              every open EGRESS's floor        (the §4.4 triage needs it),
               every LIVE instance's state floor )
    ```
 
@@ -204,7 +204,7 @@ journal-before-effect. An authorized secret setting contributes its logical
 `SecretRef` to the prepared descriptor, while material is fixed by provider
 coordinate/version in the immutable run header and never becomes request
 bytes in the journal. The Driver may inspect that material during pure
-pre-open validation and may transport it only after the OUTBOUND open wins.
+pre-open validation and may transport it only after the EGRESS open wins.
 Recovery under another attestation refuses; rotation cannot silently change a
 replayed effect.
 
@@ -232,10 +232,10 @@ would be an ambiguous second external operation.
 
 One Call has exactly one closure. Recovery starts no existing open Call again
 (§4.4). Repetition under the approved Retry target is a distinct admitted
-attempt with a new CallRef; it does not give the old Call another closure.
+attempt with a new CallId; it does not give the old Call another closure.
 
 Bounded instance Closing uses the same close-once operation, not a parallel
-record state. At its settlement deadline an OUTBOUND still `open` becomes
+record state. At its settlement deadline an EGRESS still `open` becomes
 `abandoned`; the Connector emits its declared empty `OutcomeUnknown` case with
 trigger `l:recover`. A response that won first keeps its ordinary completion.
 One arriving later is a discarded observation.
@@ -328,7 +328,7 @@ The same empty case is the last resort of explicit bounded Closing when
 cancellation produced no confirmed terminal outcome before `settle_for`.
 Closing does not recall: it first cancels, allows the
 ordinary response race to settle, then abandons only what remains open. The
-OUTBOUND state and `l:recover` envelope are identical facts in both paths, so
+EGRESS state and `l:recover` envelope are identical facts in both paths, so
 replay and compensation need no second unknown-outcome protocol.
 
 **The general principle: recovery rebuilds the dated-events
@@ -350,11 +350,11 @@ record to test this table — the crash becomes an ordinary simulation case.
 
 ### 4.4.1 Inbound Calls — commit the root, then close it once
 
-An inbound Call is not an OUTBOUND call pointed backwards. The world retains
+An inbound Call is not an EGRESS call pointed backwards. The world retains
 one proposal while the runtime validates the source endpoint, selects the
 exact source instance and all downstream routes, and reserves bounded
-capacity. The accepting INBOUND record atomically commits the root, its
-`InboundCallRef` and source `InstanceRef`; only after that commit may the
+capacity. The accepting INGRESS record atomically commits the root, its
+`InboundCallId` and source `instance::Generation`; only after that commit may the
 Driver observe acceptance or send a fixed application acknowledgement.
 
 The root itself opens the obligation. A terminal Driver observation is judged
@@ -362,13 +362,13 @@ against the resolved Connector output table and becomes one ordinary
 Connector transaction:
 
 ```text
-INBOUND(root, call_ref, source_instance)        // opens after bounded admission
+INGRESS(root, call_ref, source_instance)        // opens after bounded admission
         ... graph work ...
 TRANSACTION(response producer, route=source)   // commits before response bytes
 TRANSACTION(l:reply, cause=root, call_ref)      // outputs*, exactly one exit last
 ```
 
-The terminal transaction creates no synthetic mailbox cursor and no OUTBOUND
+The terminal transaction creates no synthetic mailbox cursor and no EGRESS
 record. Fixed acknowledgement consumes zero cursors. A graph response consumes
 exactly the real delivery cursor already sealed by its producer, atomically
 with Call closure. Direct lineage (`response.origin_id == root.id`) selects
@@ -403,14 +403,14 @@ session     open session
 ```
 
 M1.6 adds `ConnectorExchange = Event | Call | Session`; it does not add
-a fourth causal record type. Session opening and inbound messages are INBOUND
+a fourth causal record type. Session opening and inbound messages are INGRESS
 facts when initiated by the world. A client opening and every graph-to-world
-message are OUTBOUND intents. Session terminal publication is an ordinary
+message are EGRESS intents. Session terminal publication is an ordinary
 Connector transaction folded against the same close-once authority. The exact
 v11 subforms and keys landed together at H1, so no intermediate package can claim
 session behavior without carrying the facts needed to replay it.
 
-Every session has one opaque journal-derived `SessionRef`. It correlates
+Every session has one opaque journal-derived `SessionId`. It correlates
 messages and the sole terminal exit while excluding sockets, addresses,
 negotiated HTTP version and placement. A direct response may use retained
 lineage. When lineage roots mix or a message is stored, an explicit contract
@@ -511,16 +511,21 @@ it would strand an already-admitted protocol obligation.
 
 ## 6. The journal — three record types (fills envelope.md §7)
 
+EGRESS records an effect initiated by the graph, not every message leaving
+it. The response to an inbound Call is the `exchange_exit` of a TRANSACTION,
+not a separate EGRESS record. Inbound/outbound still describe exchange
+direction; INGRESS/TRANSACTION/EGRESS name journal record kinds.
+
 The taxonomy collapses by construction : supervision decisions ARE
 transaction records (triggers `l:timeout`, `l:evict`, `l:stop`…) ; explicit
-timer firings ARE inbound records (`Timer` roots), while `now()` is an optional
+timer firings ARE ingress records (`Timer` roots), while `now()` is an optional
 field of the firing transaction itself. Exactly three **causal** types
 remain — plus one **derived** type, the SNAPSHOT (§3 : the folded state of
 an instance or an open saga ; no new facts, rebuildable, excluded from
 traces and replay — an index, not history) :
 
 ```
-   ① INBOUND record       the world enters
+   ① INGRESS record       the world enters
         { connector, inbound_seq, envelope, ingress_port, committed_at }
         ingress_port = the graph input entered (default `in`, omitted) ;
         inbound_seq committed ATOMICALLY with the accept ;
@@ -534,12 +539,12 @@ traces and replay — an index, not history) :
         inbound dedup is a per-protocol duty, declared in the Connector
         contract (stdlib.md, case 7). Stated, never glossed.
    ② TRANSACTION record   everything inside the graph          (§1)
-   ③ OUTBOUND record        the graph acts on the world          (§4.2)
+   ③ EGRESS record        the graph acts on the world          (§4.2)
         open { key, digest, t } → closed (response XOR timeout) | discarded
 ```
 
-World-originated Driver facts use INBOUND. A typed response correlated with an
-already-open outbound Call or Session write does not create another INBOUND
+World-originated Driver facts use INGRESS. A typed response correlated with an
+already-open outbound Call or Session write does not create another INGRESS
 root; it settles that existing obligation and supplies a Connector
 transaction. Loop `CommandProduced` and `CommandConsumed` are append-only
 fields/subforms of TRANSACTION records, not fourth and fifth record types.

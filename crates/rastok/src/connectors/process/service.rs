@@ -186,7 +186,7 @@ struct Service {
     resources: BTreeMap<SessionId, Resource>,
     retiring: Vec<std::thread::JoinHandle<()>>,
     events: Vec<SessionDriverEvent>,
-    proposal: Option<InboundProposal>,
+    proposal: Option<IngressProposal>,
     next_proposal: u64,
 }
 
@@ -394,7 +394,7 @@ impl Service {
     }
 }
 impl InboundConnectorDriver for Service {
-    fn proposal(&mut self) -> Option<InboundProposal> {
+    fn proposal(&mut self) -> Option<IngressProposal> {
         if self.proposal.is_some() {
             return self.proposal.clone();
         }
@@ -411,10 +411,10 @@ impl InboundConnectorDriver for Service {
             }
             if let Some(Event::Frame(port, data)) = resource.waiting.front() {
                 self.next_proposal = self.next_proposal.checked_add(1)?;
-                self.proposal = Some(InboundProposal {
-                    reference: InboundProposalHandle::new(self.next_proposal),
-                    submission: InboundSubmission {
-                        provenance: InboundEnvelopeProvenance::single(resource.connector.clone()),
+                self.proposal = Some(IngressProposal {
+                    reference: IngressProposalHandle::new(self.next_proposal),
+                    submission: IngressSubmission {
+                        provenance: IngressEnvelopeProvenance::single(resource.connector.clone()),
                         port: port.clone(),
                         draft: Draft {
                             data: data.clone(),
@@ -429,7 +429,7 @@ impl InboundConnectorDriver for Service {
         }
         self.proposal.clone()
     }
-    fn decide(&mut self, reference: InboundProposalHandle, decision: InboundDecision) {
+    fn decide(&mut self, reference: IngressProposalHandle, decision: IngressDecision) {
         if self
             .proposal
             .as_ref()
@@ -442,7 +442,7 @@ impl InboundConnectorDriver for Service {
             && let Some(resource) = self.resources.get_mut(&session)
         {
             resource.waiting.pop_front();
-            if matches!(decision, InboundDecision::Rejected(_)) {
+            if matches!(decision, IngressDecision::Rejected(_)) {
                 resource.control.fetch_max(FORCED, Ordering::Release);
             }
         }

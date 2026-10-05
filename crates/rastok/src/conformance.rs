@@ -21,7 +21,7 @@
 //! statically selected, and future plugin-hosted Drivers.
 
 use crate::boundary::{
-    Draft, InboundAdmission, InboundEnvelopeProvenance, InboundSubmission,
+    Draft, IngressAdmission, IngressEnvelopeProvenance, IngressSubmission,
     OutboundConnectorBindings, RequestPreparation, SessionConnectorBindings, SessionDriverEvent,
     SessionOpenIntent, SessionWriteIntent, SubmissionSequence,
 };
@@ -31,7 +31,7 @@ use crate::contract::{ConnectorContract, ContractCatalog};
 use crate::datatype::DataType;
 use crate::envelope::{Data, Namespace, Value};
 use crate::journal::{
-    self, CloseVerdict, Closure, Journal, MemJournal, OutboundRecord, OutboundStatus, Record,
+    self, CallStatus, CloseVerdict, Closure, EgressRecord, Journal, MemJournal, Record,
 };
 use crate::node;
 use crate::plan::{GraphVersion, ValidatedExecutionPlan};
@@ -340,7 +340,7 @@ pub fn verify_event(profile: &EventProfile<'_>, drivers: &DriverRegistry) -> Rep
             return report;
         }
     };
-    let InboundAdmission::Accepted(accepted) = admission else {
+    let IngressAdmission::Accepted(accepted) = admission else {
         report
             .violations
             .push(format!("the Event proposal did not commit: {admission:?}"));
@@ -375,7 +375,7 @@ pub fn verify_event(profile: &EventProfile<'_>, drivers: &DriverRegistry) -> Rep
     if journal
         .records()
         .iter()
-        .any(|record| matches!(record, Record::Outbound(_)))
+        .any(|record| matches!(record, Record::Egress(_)))
     {
         report
             .violations
@@ -456,7 +456,7 @@ pub fn verify_session(profile: &SessionProfile<'_>, drivers: &DriverRegistry) ->
         }
     };
     let mut journal = MemJournal::new(GraphVersion(1));
-    let seed = match journal.append_inbound(submission("session-conformance")) {
+    let seed = match journal.append_ingress(submission("session-conformance")) {
         Ok(committed) => committed.envelope,
         Err(error) => {
             report
@@ -901,9 +901,9 @@ fn bind<'plan>(
         .map_err(|error| format!("the conformance composition cannot bind: {error}"))
 }
 
-fn submission(text: &str) -> InboundSubmission {
-    InboundSubmission {
-        provenance: InboundEnvelopeProvenance::single(
+fn submission(text: &str) -> IngressSubmission {
+    IngressSubmission {
+        provenance: IngressEnvelopeProvenance::single(
             node::Path::new(["conformance"]).unwrap_or_else(|_| unreachable!("a valid path")),
         ),
         port: node::Port::new("in").unwrap_or_else(|_| unreachable!("a valid port")),
@@ -966,17 +966,17 @@ fn audit_journal(journal: &MemJournal, report: &mut Report) {
     let mut closed = BTreeSet::new();
     let mut any_closed = false;
     for record in journal.records() {
-        if let Record::Outbound(OutboundRecord::Call(outbound)) = record {
+        if let Record::Egress(EgressRecord::Call(outbound)) = record {
             let call = outbound.intent.call_id;
             match &outbound.status {
-                OutboundStatus::Open => {
+                CallStatus::Open => {
                     if !open.insert(call) {
                         report
                             .violations
                             .push(format!("call {call} has two open facts"));
                     }
                 }
-                OutboundStatus::Closed(_) => {
+                CallStatus::Closed(_) => {
                     any_closed = true;
                     if !open.contains(&call) {
                         report
@@ -987,7 +987,7 @@ fn audit_journal(journal: &MemJournal, report: &mut Report) {
                         report.violations.push(format!("call {call} closed twice"));
                     }
                 }
-                OutboundStatus::Abandoned => {}
+                CallStatus::Abandoned => {}
             }
         }
     }
@@ -1068,8 +1068,8 @@ fn mute_battery(
     let timed_out = journal.records().iter().any(|record| {
         matches!(
             record,
-            Record::Outbound(OutboundRecord::Call(outbound))
-                if matches!(outbound.status, OutboundStatus::Closed(Closure::Timeout))
+            Record::Egress(EgressRecord::Call(outbound))
+                if matches!(outbound.status, CallStatus::Closed(Closure::Timeout))
         )
     });
     if !timed_out {
@@ -1154,8 +1154,8 @@ fn interleave_battery(
         (String::from("a"), Value::Text(String::from(probe.a))),
         (String::from("b"), Value::Text(String::from(probe.b))),
     ];
-    let paired = InboundSubmission {
-        provenance: InboundEnvelopeProvenance::single(
+    let paired = IngressSubmission {
+        provenance: IngressEnvelopeProvenance::single(
             node::Path::new(["conformance"]).unwrap_or_else(|_| unreachable!("a valid path")),
         ),
         port: node::Port::new("in").unwrap_or_else(|_| unreachable!("a valid port")),
@@ -1194,17 +1194,17 @@ fn interleave_battery(
     let mut requests = BTreeSet::new();
     let mut answered = BTreeSet::new();
     for record in journal.records() {
-        let Record::Outbound(OutboundRecord::Call(outbound)) = record else {
+        let Record::Egress(EgressRecord::Call(outbound)) = record else {
             continue;
         };
-        if matches!(outbound.status, OutboundStatus::Open) {
+        if matches!(outbound.status, CallStatus::Open) {
             if !any_close_seen {
                 opens_before_first_close += 1;
             }
             requests.insert(outbound.intent.prepared.bytes().to_vec());
             continue;
         }
-        let OutboundStatus::Closed(Closure::Response(completion)) = &outbound.status else {
+        let CallStatus::Closed(Closure::Response(completion)) = &outbound.status else {
             continue;
         };
         any_close_seen = true;

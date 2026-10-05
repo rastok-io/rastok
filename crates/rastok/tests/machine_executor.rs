@@ -71,7 +71,10 @@ fn input(text: &str) -> envelope::Delivery {
         String::from("text"),
         envelope::Value::Text(String::from(text)),
     );
-    let id = envelope::Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]);
+    let id = envelope::Id::derive(
+        rastok::envelope::IdKind::Root,
+        &[b"inbound", &0u64.to_le_bytes()],
+    );
     envelope::Delivery {
         port: node::Port::new("in").unwrap(),
         edge: String::from(".in>shout.in"),
@@ -122,7 +125,10 @@ fn an_identity_emission_inherits_everything_but_its_sys_fields() {
         .unwrap();
     // An ancestry-rich input: app fields, ext fields, a
     // content-type hint on unchanged encoded data.
-    let id = envelope::Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]);
+    let id = envelope::Id::derive(
+        rastok::envelope::IdKind::Root,
+        &[b"inbound", &0u64.to_le_bytes()],
+    );
     let mut app = envelope::Namespace::new();
     app.insert(
         String::from("label"),
@@ -166,7 +172,10 @@ fn an_identity_emission_inherits_everything_but_its_sys_fields() {
 
 #[test]
 fn the_meta_projection_carries_all_sys_fields() {
-    let id = envelope::Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]);
+    let id = envelope::Id::derive(
+        rastok::envelope::IdKind::Root,
+        &[b"inbound", &0u64.to_le_bytes()],
+    );
     let mut ext = envelope::Namespace::new();
     ext.insert(
         String::from("tenant.org"),
@@ -243,7 +252,10 @@ fn the_projection_has_exactly_three_roots() {
     // No alias, no custom root (D-2026-08-10-1): the projection
     // exposes `sys`, `app`, and `ext` — nothing else, whatever the
     // zones contain.
-    let id = envelope::Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]);
+    let id = envelope::Id::derive(
+        rastok::envelope::IdKind::Root,
+        &[b"inbound", &0u64.to_le_bytes()],
+    );
     let mut app = envelope::Namespace::new();
     app.insert(
         String::from("audit.origin"),
@@ -288,7 +300,10 @@ fn metadata_writes_land_where_the_spec_says() {
     let state = State::new()
         .cell(&compilation.plan, slot, &singleton())
         .unwrap();
-    let id = envelope::Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]);
+    let id = envelope::Id::derive(
+        rastok::envelope::IdKind::Root,
+        &[b"inbound", &0u64.to_le_bytes()],
+    );
     let delivery = envelope::Delivery {
         port: node::Port::new("in").unwrap(),
         edge: String::from(".in>o.in"),

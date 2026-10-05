@@ -110,14 +110,6 @@ impl AdmissionPrefix {
 }
 
 impl InstanceAdmissions for AdmissionPrefix {
-    fn instance_commands(&self) -> Result<instance_stop::Fold, Error> {
-        self.instance_commands
-            .as_deref()
-            .cloned()
-            .ok_or(Error::InvalidRetainedRecord(
-                "instance command prefix was not enabled",
-            ))
-    }
     fn instance_generation_for_admission(
         &self,
         address: &instance::Identity,
@@ -131,5 +123,14 @@ impl InstanceAdmissions for AdmissionPrefix {
         } else {
             Ok(instance::Generation::new(address.clone(), state.starts))
         }
+    }
+
+    fn instance_commands(&self) -> Result<instance_stop::Fold, Error> {
+        self.instance_commands
+            .as_deref()
+            .cloned()
+            .ok_or(Error::InvalidRetainedRecord(
+                "instance command prefix was not enabled",
+            ))
     }
 }

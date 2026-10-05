@@ -65,7 +65,7 @@ impl TimeAdvance {
         loop {
             match &self.phase {
                 Phase::Ready => {
-                    // A recovered VM can already be at a retained deadline.
+                    // A recovered VM can already be at a unsealed deadline.
                     // Resolve that dated frontier before admitting ready
                     // recurrences, just as the uninterrupted sweep does.
                     // Lifecycle work queued by an expiry waits for the rest

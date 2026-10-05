@@ -1162,12 +1162,12 @@ impl CallConnectorDriver for Process<'_> {
 mod tests {
     use super::*;
     use crate::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use crate::compiler::compile;
     use crate::contract::ContractCatalog;
     use crate::envelope::Namespace;
-    use crate::journal::{MemJournal, OutboundStatus, Record};
+    use crate::journal::{CallStatus, MemJournal, Record};
     use crate::plan::GraphVersion;
     use crate::runtime::vm::{Observed, Vm};
 
@@ -1192,9 +1192,9 @@ graph real : App {
 }
 "#;
 
-    fn submission_data(data: Data) -> InboundSubmission {
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(crate::node::Path::new(["cli"]).unwrap()),
+    fn submission_data(data: Data) -> IngressSubmission {
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(crate::node::Path::new(["cli"]).unwrap()),
             port: crate::node::Port::new("in").unwrap(),
             draft: Draft {
                 data,
@@ -1204,7 +1204,7 @@ graph real : App {
         }
     }
 
-    fn submission(text: &str) -> InboundSubmission {
+    fn submission(text: &str) -> IngressSubmission {
         submission_data(Data::materialized(Value::Struct(vec![(
             String::from("text"),
             Value::Text(String::from(text)),
@@ -1217,7 +1217,7 @@ graph real : App {
     /// the Driver — mints the timeouts.
     fn run_submission(
         source: &str,
-        submission: InboundSubmission,
+        submission: IngressSubmission,
     ) -> (MemJournal, Vec<Envelope>, Vec<Envelope>, Vec<Observed>) {
         let compilation = compile(
             &[source],
@@ -1303,8 +1303,8 @@ graph real : App {
         let closed = journal.records().iter().any(|record| {
             matches!(
                 record,
-                Record::Outbound(crate::journal::OutboundRecord::Call(o))
-                    if matches!(o.status, OutboundStatus::Closed(_))
+                Record::Egress(crate::journal::EgressRecord::Call(o))
+                    if matches!(o.status, CallStatus::Closed(_))
             )
         });
         assert!(closed, "the call closed against a real child process");
@@ -1530,8 +1530,8 @@ graph mute : App {
         // never a driver-fabricated failure response.
         assert!(journal.records().iter().any(|record| matches!(
             record,
-            Record::Outbound(crate::journal::OutboundRecord::Call(o))
-                if matches!(o.status, OutboundStatus::Closed(crate::journal::Closure::Timeout))
+            Record::Egress(crate::journal::EgressRecord::Call(o))
+                if matches!(o.status, CallStatus::Closed(crate::journal::Closure::Timeout))
         )));
     }
 
@@ -1571,13 +1571,13 @@ graph closing : App {
         );
         assert!(journal.records().iter().any(|record| matches!(
             record,
-            Record::Outbound(crate::journal::OutboundRecord::Call(outbound))
-                if matches!(outbound.status, OutboundStatus::Closed(crate::journal::Closure::Response(_)))
+            Record::Egress(crate::journal::EgressRecord::Call(outbound))
+                if matches!(outbound.status, CallStatus::Closed(crate::journal::Closure::Response(_)))
         )));
         assert!(journal.records().iter().all(|record| !matches!(
             record,
-            Record::Outbound(crate::journal::OutboundRecord::Call(outbound))
-                if outbound.status == OutboundStatus::Abandoned
+            Record::Egress(crate::journal::EgressRecord::Call(outbound))
+                if outbound.status == CallStatus::Abandoned
         )));
     }
 

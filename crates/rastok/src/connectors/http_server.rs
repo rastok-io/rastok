@@ -12,7 +12,7 @@ use std::rc::Rc;
 use crate::boundary::{
     Completion, HttpServerExit, InboundCallConnectorDriver, InboundCallEvent, InboundCallResponse,
     InboundCallResponseStart, InboundCallTimeout, InboundCallTimeoutStart, InboundConnectorDriver,
-    InboundDecision, InboundExchangeRef, InboundProposal, InboundProposalHandle, InboundSubmission,
+    InboundExchangeRef, IngressDecision, IngressProposal, IngressProposalHandle, IngressSubmission,
 };
 use crate::connector::{ConnectorRoles, ContractId};
 use crate::plan::ValidatedExecutionPlan;
@@ -255,7 +255,7 @@ pub(crate) fn bind_routes(
 /// owns envelopes, sequence allocation or journal records.
 #[derive(Debug, Default)]
 pub(crate) struct HttpServerLabInput {
-    pending: Option<InboundProposal>,
+    pending: Option<IngressProposal>,
     terminal: Option<InboundCallEvent>,
     fault: Option<String>,
 }
@@ -263,7 +263,7 @@ pub(crate) struct HttpServerLabInput {
 impl HttpServerLabInput {
     pub(crate) fn offer(
         &mut self,
-        submission: InboundSubmission,
+        submission: IngressSubmission,
         action: u64,
     ) -> Result<(), String> {
         if self.pending.is_some() || self.terminal.is_some() {
@@ -271,8 +271,8 @@ impl HttpServerLabInput {
                 "the preceding HttpServer Lab request has not settled",
             ));
         }
-        self.pending = Some(InboundProposal {
-            reference: InboundProposalHandle::new(action),
+        self.pending = Some(IngressProposal {
+            reference: IngressProposalHandle::new(action),
             submission,
             session: None,
         });
@@ -293,11 +293,11 @@ struct HttpServerLabDriver {
 }
 
 impl InboundConnectorDriver for HttpServerLabDriver {
-    fn proposal(&mut self) -> Option<InboundProposal> {
+    fn proposal(&mut self) -> Option<IngressProposal> {
         self.input.borrow().pending.clone()
     }
 
-    fn decide(&mut self, reference: InboundProposalHandle, decision: InboundDecision) {
+    fn decide(&mut self, reference: IngressProposalHandle, decision: IngressDecision) {
         let mut input = self.input.borrow_mut();
         if input
             .pending
@@ -310,7 +310,7 @@ impl InboundConnectorDriver for HttpServerLabDriver {
             return;
         }
         input.pending = None;
-        if let InboundDecision::Accepted(accepted) = decision {
+        if let IngressDecision::Accepted(accepted) = decision {
             match accepted.exchange {
                 Some(InboundExchangeRef::Call(call_id)) if input.terminal.is_none() => {
                     // A fixture scripts a decoded request and successful fixed
@@ -419,7 +419,7 @@ pub(crate) fn lab_factory(
 mod lab_tests {
     use super::*;
     use crate::boundary::{
-        Draft, InboundAdmission, InboundEnvelopeProvenance, InboundRejection, SubmissionSequence,
+        Draft, IngressAdmission, IngressEnvelopeProvenance, IngressRejection, SubmissionSequence,
     };
     use crate::connectors::{DriverRegistry, RuntimeBindings};
     use crate::envelope::{Data, Value};
@@ -427,9 +427,9 @@ mod lab_tests {
     use crate::plan::GraphVersion;
     use crate::runtime::vm::Vm;
 
-    fn submission(value: Value) -> InboundSubmission {
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+    fn submission(value: Value) -> IngressSubmission {
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 crate::node::Path::new(["listener"]).unwrap(),
             ),
             port: crate::node::Port::new("out").unwrap(),
@@ -469,7 +469,7 @@ mod lab_tests {
         );
         assert_eq!(
             bindings.pump_inbound(&mut vm, &mut journal).unwrap(),
-            Some(InboundAdmission::Rejected(InboundRejection::InvalidPayload))
+            Some(IngressAdmission::Rejected(IngressRejection::InvalidPayload))
         );
         assert!(journal.records().is_empty());
         assert!(!input.borrow().is_pending());
@@ -492,13 +492,13 @@ mod lab_tests {
             bindings.pump_inbound_call_events(&mut vm).unwrap().queued,
             0
         );
-        let Some(InboundAdmission::Accepted(accepted)) =
+        let Some(IngressAdmission::Accepted(accepted)) =
             bindings.pump_inbound(&mut vm, &mut journal).unwrap()
         else {
             panic!("accepted source")
         };
         assert!(journal.find_envelope(accepted.envelope).is_some());
-        assert!(matches!(journal.records()[0], Record::Inbound(_)));
+        assert!(matches!(journal.records()[0], Record::Ingress(_)));
         assert!(
             input
                 .borrow_mut()
@@ -537,7 +537,7 @@ mod lab_tests {
                 .unwrap();
             assert!(matches!(
                 bindings.pump_inbound(&mut vm, &mut journal).unwrap(),
-                Some(InboundAdmission::Accepted(_))
+                Some(IngressAdmission::Accepted(_))
             ));
             assert_eq!(
                 bindings.pump_inbound_call_events(&mut vm).unwrap().queued,
@@ -553,7 +553,7 @@ mod lab_tests {
         for _ in 0..2 {
             assert_eq!(
                 bindings.pump_inbound(&mut vm, &mut journal).unwrap(),
-                Some(InboundAdmission::Pending)
+                Some(IngressAdmission::Pending)
             );
             assert_eq!(journal.records().len(), records_before);
             assert_eq!(
@@ -574,7 +574,7 @@ mod lab_tests {
         vm.drain_with_bindings(&mut journal, &mut bindings).unwrap();
         assert!(matches!(
             bindings.pump_inbound(&mut vm, &mut journal).unwrap(),
-            Some(InboundAdmission::Accepted(_))
+            Some(IngressAdmission::Accepted(_))
         ));
         assert_eq!(
             bindings.pump_inbound_call_events(&mut vm).unwrap().queued,

@@ -2,14 +2,14 @@
 
 use super::*;
 use crate::instance;
-use crate::journal::{InboundExchangeRecord, InboundRecord, SessionIngressRecord, timer_kind};
+use crate::journal::{DeadlineKind, InboundExchangeRecord, IngressRecord, SessionIngressRecord};
 
 impl Vm<'_> {
     pub(super) fn restore_ingress(
         &mut self,
         admissions: &dyn InstanceAdmissions,
         index: usize,
-        inbound: &InboundRecord,
+        inbound: &IngressRecord,
     ) -> Result<(), VmError> {
         if inbound.envelope.meta().sys().graph_version() != self.graph_version.0 {
             return Err(invalid(
@@ -94,11 +94,11 @@ impl Vm<'_> {
                 )?;
                 timeout = self.inbound_call_timeout(slot, &selected.reference, &candidates)?;
                 let expected_timers = timeout
-                    .map(|_| vec![(timer_kind::INBOUND_CALL_TIMEOUT, call.reference.id())])
+                    .map(|_| vec![(DeadlineKind::InboundCallTimeout, call.reference.id())])
                     .unwrap_or_default();
                 if call.reference != InboundCallId::from_root(inbound.envelope.meta().sys().id())
                     || call.instance != selected.reference
-                    || call.timers != expected_timers
+                    || call.deadline_ids != expected_timers
                     || self.inbound_calls.contains_key(&call.reference)
                     || self
                         .inbound_calls
@@ -252,8 +252,8 @@ impl Vm<'_> {
             );
         }
         if let Some(timeout) = timeout {
-            arms.push(crate::journal::timing::TimerArm {
-                kind: timer_kind::INBOUND_CALL_TIMEOUT,
+            arms.push(crate::journal::timing::Deadline {
+                kind: DeadlineKind::InboundCallTimeout,
                 reference: InboundCallId::from_root(inbound.envelope.meta().sys().id()).id(),
                 due_at: self.now.saturating_add(timeout),
             });
@@ -265,9 +265,9 @@ impl Vm<'_> {
             &mut activity,
         ));
         if inbound
-            .timer_schedule
+            .deadlines
             .as_deref()
-            .map_or(&[][..], |schedule| schedule.arms())
+            .map_or(&[][..], |schedule| schedule.items())
             != arms
         {
             return Err(invalid(

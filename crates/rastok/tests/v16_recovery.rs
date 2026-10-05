@@ -2,11 +2,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use rastok::boundary::{Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence};
+use rastok::boundary::{Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence};
 use rastok::compiler;
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
-use rastok::journal::{Journal, MemJournal, Record, ids, timer_kind};
+use rastok::journal::{DeadlineKind, Journal, MemJournal, Record, ids};
 use rastok::plan::{self, GraphVersion};
 use rastok::runtime::vm::Vm;
 
@@ -99,8 +99,8 @@ fn compile(source: &str) -> plan::ValidatedExecutionPlan {
 fn inject(vm: &mut Vm<'_>, journal: &mut MemJournal, port: &str, value: i64) {
     vm.inject(
         journal,
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 rastok::node::Path::new(["recovery-test"]).unwrap(),
             ),
             port: rastok::node::Port::new(port).unwrap(),
@@ -450,9 +450,16 @@ fn graph_call_deadlines_survive_recovery_without_extending_the_application() {
         assert_eq!(checked.inspection(), restored.inspection());
         assert_eq!(journal.records(), retained);
     }
-    assert_eq!(journal.records().iter().filter(|record| matches!(record,
-        Record::Outbound(rastok::journal::OutboundRecord::Call(call))
-        if call.status == rastok::journal::OutboundStatus::Closed(rastok::journal::Closure::Timeout))).count(), 2);
+    assert_eq!(
+        journal
+            .records()
+            .iter()
+            .filter(|record| matches!(record,
+        Record::Egress(rastok::journal::EgressRecord::Call(call))
+        if call.status == rastok::journal::CallStatus::Closed(rastok::journal::Closure::Timeout)))
+            .count(),
+        2
+    );
 }
 
 #[test]
@@ -641,11 +648,11 @@ fn delivery_deadlines_are_retained_at_both_ingress_and_producer_commits() {
             }
         }
         let (schedule, routes): (_, Vec<_>) = if direct {
-            let Record::Inbound(record) = &journal.records()[0] else {
+            let Record::Ingress(record) = &journal.records()[0] else {
                 panic!("ingress")
             };
             (
-                record.timer_schedule.as_deref(),
+                record.deadlines.as_deref(),
                 record
                     .routes
                     .iter()
@@ -657,7 +664,7 @@ fn delivery_deadlines_are_retained_at_both_ingress_and_producer_commits() {
                 panic!("producer")
             };
             (
-                record.timer_schedule.as_deref(),
+                record.deadlines.as_deref(),
                 record
                     .routes
                     .iter()
@@ -666,9 +673,9 @@ fn delivery_deadlines_are_retained_at_both_ingress_and_producer_commits() {
             )
         };
         let schedule = schedule.expect("every delivery timer has a retained due instant");
-        assert_eq!(schedule.armed_at(), 7_000_000_000);
-        assert_eq!(schedule.arms().len(), 2);
-        for arm in schedule.arms() {
+        assert_eq!(schedule.created_at(), 7_000_000_000);
+        assert_eq!(schedule.items().len(), 2);
+        for arm in schedule.items() {
             assert!(
                 routes
                     .iter()
@@ -677,8 +684,8 @@ fn delivery_deadlines_are_retained_at_both_ingress_and_producer_commits() {
             assert_eq!(
                 arm.due_at,
                 match arm.kind {
-                    timer_kind::JOIN_WITHIN => 9_000_000_000,
-                    timer_kind::CALL_TIMEOUT => 10_000_000_000,
+                    DeadlineKind::JoinWithin => 9_000_000_000,
+                    DeadlineKind::CallTimeout => 10_000_000_000,
                     _ => panic!("unexpected timer kind"),
                 }
             );
@@ -768,10 +775,10 @@ fn scheduler_closed_calls_recover_through_pure_contract_projection_only() {
         vm.drain_with_bindings(&mut journal, &mut world).unwrap();
         let call = journal.open_calls()[0].call_id;
         if abandoned {
-            journal.abandon_outbound(&call, 0).unwrap();
+            journal.abandon_egress(&call, 0).unwrap();
         } else {
             journal
-                .close_outbound(&call, rastok::journal::Closure::Timeout, 0, None)
+                .close_egress(&call, rastok::journal::Closure::Timeout, 0, None)
                 .unwrap();
         }
         let before = journal.records().to_vec();
@@ -991,15 +998,15 @@ graph app : App {{
         let mut world = World::default();
         inject(&mut vm, &mut journal, "in", 3);
         let schedule = journal.records()[0]
-            .timer_schedule()
+            .deadlines()
             .expect("lifetime is dated at admission");
         let first_due = if kind == "tumbling" {
             9_000_000_000
         } else {
             10_000_000_000
         };
-        assert_eq!(schedule.armed_at(), 7_000_000_000);
-        assert_eq!(schedule.arms()[0].due_at, first_due);
+        assert_eq!(schedule.created_at(), 7_000_000_000);
+        assert_eq!(schedule.items()[0].due_at, first_due);
         vm.advance(&mut journal, &mut world, 8_000_000_000).unwrap();
         inject(&mut vm, &mut journal, "in", 4);
         vm.drain(&mut journal).unwrap();

@@ -15,7 +15,7 @@ use crate::node;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecordObservationKind {
     /// One root envelope entered the graph.
-    InboundCommitted,
+    IngressCommitted,
     /// One atomic Node or Graph firing committed.
     TransactionCommitted,
     /// One outbound Call became open before external work.

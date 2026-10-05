@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use rastok::journal::{OutboundRecord, Record, SessionStatus};
+use rastok::journal::{EgressRecord, Record, SessionStatus};
 use rastok::{compiler, contract::ContractCatalog, plan::GraphVersion};
 
 const CHAT: &str = include_str!("../../../examples/agent-chat.rkg");
@@ -56,7 +56,7 @@ fn nicknames_own_distinct_reused_children_and_rejected_messages_open_none() {
             run.records
                 .iter()
                 .filter(|record| {
-                    matches!(record, Record::Outbound(OutboundRecord::Session(session))
+                    matches!(record, Record::Egress(EgressRecord::Session(session))
                         if session.connector_path.to_string() == "conversation.model"
                         && matches!(session.status, SessionStatus::Opening(_)))
                 })
@@ -66,7 +66,7 @@ fn nicknames_own_distinct_reused_children_and_rejected_messages_open_none() {
     assert_eq!(openings, [2, 1, 0]);
     let mut writes = BTreeMap::new();
     for record in &runs[0].records {
-        if let Record::Outbound(OutboundRecord::Session(session)) = record
+        if let Record::Egress(EgressRecord::Session(session)) = record
             && session.connector_path.to_string() == "conversation.model"
             && matches!(session.status, SessionStatus::WriteOpen(_))
         {

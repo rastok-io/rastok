@@ -63,7 +63,7 @@ the subject of this document.
 it (see §6 for the one apparent exception — emission constructors — and why it
 is not a write). It has two tiers.
 
-### 1.1 Tier 1 — the spine (always present)
+### 1.1 Tier 1 — the reserved `sys` fields (always present)
 
 Five fields, present on every envelope, owned by the spec's schema (so any
 Rastok tool of any version can read any envelope's header without knowing the
@@ -132,27 +132,42 @@ origin_id = the id of the lineage's inbound root
 **The `‖` framing — BLAKE3 is part of the contract:**
 
 ```
-input      = domain_tag ++ frame(field)*
+input      = id_kind_tag(kind) ++ frame(field)*
 frame(f)   = u32_le( len(f) ) ++ bytes(f)          // length-prefixed : INJECTIVE
-domain_tag = 0x01 (root, 2 fields)          |  0x02 (emission, 5 fields)
-             0x03 (root + boot-epoch, 3 fields : connector_path, inbound_seq,
-                   epoch u64 LE — the `durability = none` mode)
-             0x04 (root + replica — RESERVED byte ; multi-host semantics are deferred)
-             0x05 (Loop re-entry envelope, 3 fields : loop_run_ref,
-                   iteration u64 LE, selected_next_id)
-             0x10 (call, 2 fields : delivery_ref, request_digest)
-             0x13 (Loop run reference, 3 fields : canonical instance-address
-                   bytes, generation u64 LE, external_root_id)
-             0x20 (delivery reference, 2 fields : canonical_edge_text, envelope_id)
-             0x21 (instance lifetime, 2 fields : canonical instance-address bytes,
-                                                    generation u64 little-endian)
-             0x22 (instance Closing phase, 3 fields : canonical instance-address
-                                                    bytes, generation u64 LE,
-                                                    timer kind byte)
 id         = first 128 bits of blake3(input)
 encodings  : paths/triggers/ports = UTF-8 ; parent_id = its 16 raw bytes ;
              inbound_seq = u64 LE ; emission_index = u32 LE
 ```
+
+`envelope::IdKind` is the closed registry of the implemented recipes below.
+`id_kind_tag` projects explicitly; declaration order is never an encoding.
+All other bytes refuse as `UnknownIdKind`. The table describes the current
+internal layout; the approved pre-public compaction belongs to the single
+v20 cutover, not this byte-neutral vocabulary pass.
+
+| Kind | Byte | Length-prefixed fields, in order |
+|---|---|---|
+| `Root` | `0x01` | Connector path, ingress sequence |
+| `Emission` | `0x02` | Node/owner path, trigger, parent id, port, per-port emission index |
+| `LoopAdmission` | `0x06` | run id, iteration, consumed command id |
+| `RetryAdmission` | `0x07` | operation id, next attempt ordinal, previous winning Call id |
+| `Call` | `0x10` | delivery id, prepared-request digest |
+| `Session` | `0x11` | subtype; path segments; opening root id (inbound), or emitting id and request digest (outbound) |
+| `SessionWrite` | `0x12` | Session id, emitting id, message digest |
+| `LoopRun` | `0x14` | instance identity bytes, generation, opening-admission kind, exact opening id, entry port (empty for a delivery) |
+| `LoopCommand` | `0x15` | run id, iteration, command-kind/Done-provenance pair, cause id |
+| `RetryOperation` | `0x16` | instance identity bytes, generation, entry port, exact opening delivery id |
+| `Delivery` | `0x20` | canonical edge text, envelope id |
+| `InstanceLifetime` | `0x21` | instance identity bytes, generation |
+| `InstanceClosing` | `0x22` | instance identity bytes, generation, explicit deadline-kind byte |
+| `InstanceStop` | `0x23` | source owner kind, source port, source identity/generation, scope identity/generation, target identity/generation, cause id |
+
+Generation, sequence and iteration/attempt ordinals use u64 little-endian;
+emission indices use u32 little-endian. Tags/subtypes are bytes; ids are
+their 16 raw bytes. Session subtype 1 denotes inbound opening, 2 outbound.
+These are the existing recipes, with no new boot-epoch, replica or decoder
+recipe introduced by naming their domains. The Loop run recipe uses the
+exact opening admission, not only its business origin ([loop.md](loop.md)).
 
 Length-prefixing kills concatenation ambiguity (`"ab"‖"c"` ≠ `"a"‖"bc"`) ;
 the domain byte separates root from emission derivations (different
@@ -529,10 +544,10 @@ typed `content_type` leaf.
 D-2026-08-25-1 reserves `session_id: text?` as the M1.6 session-contract
 projection. A WebSocket Client/Server Driver writes the same value on every
 peer message and on the sole terminal session `exit`. It is derived from the
-journal's opaque logical `SessionRef`; it is never a file descriptor, socket
+journal's opaque logical `SessionId`; it is never a file descriptor, socket
 address, negotiated HTTP version, Host or Worker id.
 
-The field is in `meta.ext`, not the closed `meta.sys` spine, because it is
+The field is in `meta.ext`, not the closed `meta.sys` fields, because it is
 boundary-protocol context that a graph may deliberately preserve or replace
 when routing a stored/root-mixed response. Direct replies retain causal
 session routing independently of the writable projection. An explicit
@@ -600,16 +615,16 @@ that look like writes are not :
 
 ## 7. Provenance — three pieces
 
-The envelope carries the **minimal spine** ; the **journal** carries the full
+The envelope carries the **minimal system metadata** ; the **journal** carries the full
 graph of events. The journal itself is specified by
 [delivery-semantics.md](delivery-semantics.md) §6 — **three CAUSAL record
 types** (plus the derived, non-causal SNAPSHOT — rebuildable, excluded from
 traces and replay) :
-INBOUND (the world enters, `inbound_seq` committed atomically with the
+INGRESS (the world enters, `inbound_seq` committed atomically with the
 accept), TRANSACTION (the atomic unit : consumed positions, state delta,
-emissions, `committed_at`), OUTBOUND (the graph acts on the world : `open` →
+emissions, `committed_at`), EGRESS (the graph acts on the world : `open` →
 `closed` XOR timeout | `discarded`). Supervision decisions ARE transaction
-records (`l:*` triggers); declared `Timer` firings ARE inbound records, while
+records (`l:*` triggers); declared `Timer` firings ARE Ingress records, while
 an observed `now()` instant is key 54 of its firing transaction. Three pieces
 together reconstruct everything :
 

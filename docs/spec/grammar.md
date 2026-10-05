@@ -414,7 +414,7 @@ Braces and names carry ALL the semantics — indentation carries none.
   silent capture).
 - **Liveness.** A graph with **no inbound path** — no edge reaches it or
   its children from outside, and it contains no source Connector (a
-  Connector producing INBOUND records) — is **dead** : diagnostic
+  Connector producing INGRESS records) — is **dead** : diagnostic
   `W-DEAD-GRAPH` (warning, not an error — work-in-progress graphs are
   legitimate), and its boundary-port wiring obligations are suspended.
   Any partial wiring, or any source Connector inside, re-arms the normal
@@ -1325,7 +1325,7 @@ Required Rust extensions for the parser to land :
 | Extension | protocol attached to a Node, such as `App`, `Loop`, or future `Saga` |
 | Operator parameterization | Four orthogonal choices — Node-local `var`, optional `instance.key`, optional `lifetime`, and ordinary/join handler — covering the Reducer/Aggregator/Window/Joiner guide patterns. |
 | Dynamic patterns | Router = Dispatch with static outputs; Fanout = destination set or multi-emit; neither adds a Node category |
-| Instance | One logical execution context of a Node owner. Its address is the owner path plus the outer-to-inner stack of keyed instance frames. A singleton owner has no local key frame. See [instances.md](instances.md). |
+| Instance | One logical execution context of a Node owner. Its address is the owner path plus the outer-to-inner stack of keyed instance segments. A singleton owner has no local key segment. See [instances.md](instances.md). |
 | Lifetime | The policy that says when an instance closes. It is independent from key selection: keyed and singleton owners may both be persistent or finite-lived. |
 | State read-modify-write | **Imperative within a transaction.** `x` (bare in DSL, or `$x` inside `jq! { … }`) starts at the value the previous transaction committed (or the default); assignments mutate it in place, so later reads see the new value (RHS = Rastok expression; no `++`-style shortcuts). The transaction commits atomically at its end. The Lustre `pre` is *inter-transaction*, not intra. |
 | Value types | The data's type tree : `variant` (dynamic, JSON model), scalars (`text`/`media_type`/`bytes`/numeric + logical `date`/`timestamp`/`uuid`/`decimal`/`duration`), composites (`struct`/`map`/`array`), `enum` (closed symbols), `union` (sum type). `table` is the relational view of `array<struct>`, not a type. See [Data](#data--typed-values-and-literals). |

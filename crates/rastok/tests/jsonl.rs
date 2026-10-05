@@ -6,7 +6,7 @@
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use rastok::boundary::{Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence};
+use rastok::boundary::{Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence};
 use rastok::compiler::compile;
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
@@ -34,8 +34,8 @@ fn drive(
         rastok::connectors::Process::try_new(&compilation.plan).expect("the plan binds");
     vm.inject(
         &mut journal,
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 rastok::node::Path::new(["probe"]).unwrap(),
             ),
             port: rastok::node::Port::new("in").unwrap(),
@@ -479,8 +479,8 @@ fn an_out_of_domain_decimal_refuses_at_the_door() {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let refused = vm.inject(
         &mut journal,
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 rastok::node::Path::new(["probe"]).unwrap(),
             ),
             port: rastok::node::Port::new("in").unwrap(),

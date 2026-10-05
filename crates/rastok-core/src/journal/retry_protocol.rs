@@ -220,7 +220,7 @@ impl Fact {
     }
 }
 
-/// Sparse contribution; context alone correlates an OUTBOUND Call fact.
+/// Sparse contribution; context alone correlates an EGRESS Call fact.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Packet {
     /// Attempt of a Call or Connector completion, absent on manager records.
@@ -252,16 +252,11 @@ impl Packet {
     }
 }
 
-/// C1's 0x16 domain: instance address, generation, entry, exact opening delivery.
-const OPERATION_DOMAIN: u8 = 0x16;
-/// A Retry admission is distinct from an ordinary emission and a Loop admission.
-const ADMISSION_DOMAIN: u8 = 0x07;
-
 /// Derive an operation from its exact opening admission.
 #[must_use]
 pub fn operation_ref(instance: &instance::Generation, entry: &Port, opening: Id) -> OperationId {
     OperationId(Id::derive(
-        OPERATION_DOMAIN,
+        crate::envelope::IdKind::RetryOperation,
         &[
             instance.address().as_bytes(),
             &instance.generation().to_le_bytes(),
@@ -275,7 +270,7 @@ pub fn operation_ref(instance: &instance::Generation, entry: &Port, opening: Id)
 #[must_use]
 pub fn admission_ref(operation: OperationId, ordinal: u64, previous: CallId) -> Id {
     Id::derive(
-        ADMISSION_DOMAIN,
+        crate::envelope::IdKind::RetryAdmission,
         &[
             operation.id().as_bytes(),
             &ordinal.to_le_bytes(),

@@ -23,6 +23,98 @@ use core::fmt;
 
 pub use crate::value::Value;
 
+/// The closed domains of the journal's identity recipes (`envelope.md` §2).
+/// Encoding uses [`id_kind_tag`], never declaration order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum IdKind {
+    /// An envelope admitted from the world.
+    Root = 0x01,
+    /// An envelope emitted by a transaction.
+    Emission = 0x02,
+    /// A Loop application admitted again.
+    LoopAdmission = 0x06,
+    /// A Retry attempt admitted again.
+    RetryAdmission = 0x07,
+    /// An outgoing Call for one delivery and prepared request.
+    Call = 0x10,
+    /// One logical Session, independently of its physical connection.
+    Session = 0x11,
+    /// One write within a Session.
+    SessionWrite = 0x12,
+    /// A Loop run opened by an exact admission.
+    LoopRun = 0x14,
+    /// One command addressed to a Loop run.
+    LoopCommand = 0x15,
+    /// A Retry operation opened by an exact delivery.
+    RetryOperation = 0x16,
+    /// One envelope delivered along one edge.
+    Delivery = 0x20,
+    /// One instance generation's lifetime obligation.
+    InstanceLifetime = 0x21,
+    /// One bounded phase of an instance's Closing.
+    InstanceClosing = 0x22,
+    /// One explicit stop command for an exact generation.
+    InstanceStop = 0x23,
+}
+
+/// Projects an identity domain to its specified byte.
+#[must_use]
+pub const fn id_kind_tag(kind: IdKind) -> u8 {
+    match kind {
+        IdKind::Root => 0x01,
+        IdKind::Emission => 0x02,
+        IdKind::LoopAdmission => 0x06,
+        IdKind::RetryAdmission => 0x07,
+        IdKind::Call => 0x10,
+        IdKind::Session => 0x11,
+        IdKind::SessionWrite => 0x12,
+        IdKind::LoopRun => 0x14,
+        IdKind::LoopCommand => 0x15,
+        IdKind::RetryOperation => 0x16,
+        IdKind::Delivery => 0x20,
+        IdKind::InstanceLifetime => 0x21,
+        IdKind::InstanceClosing => 0x22,
+        IdKind::InstanceStop => 0x23,
+    }
+}
+
+/// A byte which does not name an allocated identity recipe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnknownIdKind(pub u8);
+
+impl fmt::Display for UnknownIdKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unknown identity kind byte {:#04x}", self.0)
+    }
+}
+
+impl core::error::Error for UnknownIdKind {}
+
+impl TryFrom<u8> for IdKind {
+    type Error = UnknownIdKind;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x01 => Ok(Self::Root),
+            0x02 => Ok(Self::Emission),
+            0x06 => Ok(Self::LoopAdmission),
+            0x07 => Ok(Self::RetryAdmission),
+            0x10 => Ok(Self::Call),
+            0x11 => Ok(Self::Session),
+            0x12 => Ok(Self::SessionWrite),
+            0x14 => Ok(Self::LoopRun),
+            0x15 => Ok(Self::LoopCommand),
+            0x16 => Ok(Self::RetryOperation),
+            0x20 => Ok(Self::Delivery),
+            0x21 => Ok(Self::InstanceLifetime),
+            0x22 => Ok(Self::InstanceClosing),
+            0x23 => Ok(Self::InstanceStop),
+            other => Err(UnknownIdKind(other)),
+        }
+    }
+}
+
 /// Deterministically derived 128-bit identity (`envelope.md` §2). The
 /// physical type is a fixed 128-bit value; no random bits ever enter an
 /// id.
@@ -43,9 +135,9 @@ impl Id {
     /// recipe vocabulary (which tag, which fields, their encodings) is
     /// owned by the journal's `ids` module.
     #[must_use]
-    pub fn derive(id_kind: u8, fields: &[&[u8]]) -> Self {
+    pub fn derive(id_kind: IdKind, fields: &[&[u8]]) -> Self {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(&[id_kind]);
+        hasher.update(&[id_kind_tag(id_kind)]);
         for field in fields {
             let len = u32::try_from(field.len())
                 .unwrap_or_else(|_| unreachable!("an identity frame never approaches 4 GiB"));
@@ -484,28 +576,75 @@ mod tests {
     use alloc::string::ToString;
 
     #[test]
+    fn identity_kinds_keep_their_explicit_bytes_and_refuse_every_other_byte() {
+        let registry = [
+            (0x01, IdKind::Root),
+            (0x02, IdKind::Emission),
+            (0x06, IdKind::LoopAdmission),
+            (0x07, IdKind::RetryAdmission),
+            (0x10, IdKind::Call),
+            (0x11, IdKind::Session),
+            (0x12, IdKind::SessionWrite),
+            (0x14, IdKind::LoopRun),
+            (0x15, IdKind::LoopCommand),
+            (0x16, IdKind::RetryOperation),
+            (0x20, IdKind::Delivery),
+            (0x21, IdKind::InstanceLifetime),
+            (0x22, IdKind::InstanceClosing),
+            (0x23, IdKind::InstanceStop),
+        ];
+        for byte in 0..=u8::MAX {
+            match registry.iter().find(|(tag, _)| *tag == byte) {
+                Some((_, kind)) => {
+                    assert_eq!(IdKind::try_from(byte), Ok(*kind));
+                    assert_eq!(id_kind_tag(*kind), byte);
+                    // Construct the framing independently of the enum projection.
+                    let expected = blake3::hash(&[byte, 1, 0, 0, 0, b'x']);
+                    assert_eq!(
+                        Id::derive(*kind, &[b"x"]).as_bytes(),
+                        &expected.as_bytes()[..16]
+                    );
+                }
+                None => assert_eq!(IdKind::try_from(byte), Err(UnknownIdKind(byte))),
+            }
+        }
+    }
+
+    #[test]
     fn id_framing_is_injective() {
-        let split_one = Id::derive(0x02, &[b"ab", b"c"]);
-        let split_two = Id::derive(0x02, &[b"a", b"bc"]);
+        let split_one = Id::derive(crate::envelope::IdKind::Emission, &[b"ab", b"c"]);
+        let split_two = Id::derive(crate::envelope::IdKind::Emission, &[b"a", b"bc"]);
         assert_ne!(split_one, split_two);
-        assert_eq!(split_one, Id::derive(0x02, &[b"ab", b"c"]));
+        assert_eq!(
+            split_one,
+            Id::derive(crate::envelope::IdKind::Emission, &[b"ab", b"c"])
+        );
     }
 
     #[test]
     fn id_domains_are_separated() {
-        assert_ne!(Id::derive(0x01, &[b"x"]), Id::derive(0x02, &[b"x"]));
+        assert_ne!(
+            Id::derive(crate::envelope::IdKind::Root, &[b"x"]),
+            Id::derive(crate::envelope::IdKind::Emission, &[b"x"])
+        );
     }
 
     #[test]
     fn id_derivation_is_pinned_byte_for_byte() {
-        let id = Id::derive(0x01, &[b"inbound", &7u64.to_le_bytes()]);
+        let id = Id::derive(
+            crate::envelope::IdKind::Root,
+            &[b"inbound", &7u64.to_le_bytes()],
+        );
         assert_eq!(id.to_string(), "78cf0ba5304d78c7857726f182eb0706");
         assert_eq!(Id::from_bytes(*id.as_bytes()), id);
     }
 
     #[test]
     fn a_root_is_its_own_origin() {
-        let id = Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]);
+        let id = Id::derive(
+            crate::envelope::IdKind::Root,
+            &[b"inbound", &0u64.to_le_bytes()],
+        );
         let root = MetaSys::root(id, 42);
         assert_eq!(root.origin_id(), root.id());
         assert_eq!(root.parent_id(), None);
@@ -516,9 +655,23 @@ mod tests {
 
     #[test]
     fn a_lineage_keeps_its_origin_constant() {
-        let root = MetaSys::root(Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]), 1);
-        let hop_one = MetaSys::emission(Id::derive(0x02, &[b"a"]), &root, 1);
-        let hop_two = MetaSys::emission(Id::derive(0x02, &[b"b"]), &hop_one, 1);
+        let root = MetaSys::root(
+            Id::derive(
+                crate::envelope::IdKind::Root,
+                &[b"inbound", &0u64.to_le_bytes()],
+            ),
+            1,
+        );
+        let hop_one = MetaSys::emission(
+            Id::derive(crate::envelope::IdKind::Emission, &[b"a"]),
+            &root,
+            1,
+        );
+        let hop_two = MetaSys::emission(
+            Id::derive(crate::envelope::IdKind::Emission, &[b"b"]),
+            &hop_one,
+            1,
+        );
         assert_eq!(hop_one.parent_id(), Some(root.id()));
         assert_eq!(hop_two.parent_id(), Some(hop_one.id()));
         assert_eq!(hop_one.origin_id(), root.id());
@@ -588,7 +741,13 @@ mod tests {
 
     #[test]
     fn an_envelope_exposes_meta_and_data_read_only() {
-        let sys = MetaSys::root(Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]), 1);
+        let sys = MetaSys::root(
+            Id::derive(
+                crate::envelope::IdKind::Root,
+                &[b"inbound", &0u64.to_le_bytes()],
+            ),
+            1,
+        );
         let mut app = Namespace::new();
         app.insert(
             String::from("session_key"),

@@ -1,6 +1,10 @@
 # Public-opening showcase — 10 September 2026 brief
 
-Opening: **15 October 2026**. This is the current M1 delivery checklist,
+Opening: **5 November 2026**, freeze **24 October**, per the 5 October
+[human-review amendment](human-review-m1.md). This is the current M1 delivery
+checklist. **Release TODO:** keep v20 as the chantier/target during the work,
+then number the first public format 1 before publication. No public operation
+is authorized by this update. The following qualification baseline was
 updated **18 September**. Approved amendments to the original v17 opening
 freeze now converge on **v19 / diagnostic recording v3**: exact-instance
 closure, resident Process, native Retry, flat annotation types and bounded
@@ -19,7 +23,7 @@ The [release inventory](release-qualification.md) distinguishes the blocking
 debugger browser pass from three **open, non-blocking** measurements: HTTP/3
 server ngtcp2, Autobahn, and marginal Connector implementation cost. This is a
 priority decision, not a passing qualification. Public push, tag and crate
-publication require Yoann's order on or after 15 October. M2 durability is not
+publication require Yoann's order on or after 5 November. M2 durability is not
 an M1 gate. The separate site consumes this repository's ordinary Markdown,
 examples, goldens and editor grammar at one tag; it does not author them here.
 
@@ -66,7 +70,7 @@ dead when no handler emits on that port.
 | Three flagship captures and 30-second GIF | Done locally — native Retry assets; publication review remains separate | `docs/site/assets/` records the current Retry graph at transitions 0/20/34, 1352×760, 120 frames / 30.000 s. The backoff view shows the real held attempt and due time, with no Loop dial. All three stills were visually inspected; a regression keeps page captions aligned with the capture manifest. No causal golden is changed |
 | Three release binaries | Partial | Both macOS targets rebuild with hosted-ui/hosted-websocket, without HTTP/3; starter and all three echo scenarios pass. Intel runs under Rosetta, not native hardware. Linux remains unbuilt here: no Linux target, container engine or cross-toolchain is installed; the prepared remote workflow is not invoked. |
 | CHANGELOG, crate metadata and release tag | Partial | `0.1.0-alpha` manifests, exact core dependency, license/readmes and CHANGELOG prepared. Both crate archives build outside the workspace using the packaged local core. Confirmed public URLs are now in local metadata/readmes; prior archives predate this URL-only update. Publication stays disabled; authorized tag/publication remain pending |
-| Public documentation destination | Partial — URL confirmed, availability unverified | `https://docs.rastok.com` must resolve before the authorized 15 October publication: minimal Starlight quickstart/gallery preferred, 301 to the actual `www.rastok.com` gallery as fallback. [Site handoff](../site/README.md#public-destination-handoff--18-september-2026); no deployment or DNS change performed |
+| Public documentation destination | Partial — URL confirmed, availability unverified | `https://docs.rastok.com` must resolve before the authorized 5 November publication: minimal Starlight quickstart/gallery preferred, 301 to the actual `www.rastok.com` gallery as fallback. [Site handoff](../site/README.md#public-destination-handoff--18-september-2026); no deployment or DNS change performed |
 | Contribution safeguards and private contact | Partial — files prepared, activation pending | Local DCO check and ten regressions, issue forms and PR template are present. Yoann selected strict DCO and rebase-only PR integration; hosted activation remains pending. `contact@rastok.com` is planned for Yoann, not yet activated or receipt-tested. Labels, main protection, private vulnerability reporting and one historical unsigned commit remain in the [owner checklist](github-opening-checklist.md). No GitHub, mailbox or DNS change performed |
 | Paid benchmark wave | Partial — dry harness requalified | All 20 references pass their referees; 4 runner tests and 3 canned attempts pass (17 deliberately unattempted). Prompt v4 uses executable idempotence/Retry, preserving frozen v1–v3. Exact three model IDs/adapters and spending authorization remain user choices; no paid run started. |
 | Optional concepts pages | Removed from this pass | No spare scope assumed; four short pages may follow the gallery |

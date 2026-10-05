@@ -3,9 +3,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::boundary::{
-    Completion, Draft, HttpServerExit, InboundAdmission, InboundCallEvent,
-    InboundEnvelopeProvenance, InboundExchangeRef, InboundProposal, InboundProposalHandle,
-    InboundSubmission, SubmissionSequence,
+    Completion, Draft, HttpServerExit, InboundCallEvent, InboundExchangeRef, IngressAdmission,
+    IngressEnvelopeProvenance, IngressProposal, IngressProposalHandle, IngressSubmission,
+    SubmissionSequence,
 };
 use rastok::compiler;
 use rastok::contract::ContractCatalog;
@@ -22,11 +22,11 @@ fn compile(source: &str) -> plan::ValidatedExecutionPlan {
         .0
 }
 
-fn proposal(reference: u64, text: &str) -> InboundProposal {
-    InboundProposal {
-        reference: InboundProposalHandle::new(reference),
-        submission: InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(node::Path::new(["server"]).unwrap()),
+fn proposal(reference: u64, text: &str) -> IngressProposal {
+    IngressProposal {
+        reference: IngressProposalHandle::new(reference),
+        submission: IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(node::Path::new(["server"]).unwrap()),
             port: node::Port::conventional_out(),
             draft: Draft {
                 data: Data::materialized(Value::Text(text.into())),
@@ -80,8 +80,8 @@ graph app : App {{
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut calls = Vec::new();
         for (reference, text) in [(1, "alice"), (2, "bob")] {
-            let InboundAdmission::Accepted(accepted) = vm
-                .admit_inbound(&mut journal, &proposal(reference, text))
+            let IngressAdmission::Accepted(accepted) = vm
+                .admit_ingress(&mut journal, &proposal(reference, text))
                 .unwrap()
             else {
                 panic!("uncongested ingress");

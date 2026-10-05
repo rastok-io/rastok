@@ -85,18 +85,18 @@ and D-2026-09-09-3 for the separation.
 
 `InboundConnectorDriver` retains and proposes one bounded external arrival at
 a time. This world-originated fact enters the Connector instance's ordinary
-mailbox only after INBOUND admission. The Driver does not mint root envelopes:
+mailbox only after INGRESS admission. The Driver does not mint root envelopes:
 sequencing, routing, admission, identity and journal commit remain runtime authorities. The runtime answers
 accepted only after commit, pending without a callback under pressure, or a
 portable rejection. A proposal also names the exact Connector Node that owns
-its source output through its single `InboundEnvelopeProvenance` authority.
+its source output through its single `IngressEnvelopeProvenance` authority.
 Registry binding proves that path belongs to the Contract; the VM proves the
 output row. An App-boundary injection remains a separate explicit API
 category, never a provenance-string heuristic.
 
 For a Call-shaped inbound contract, the same bound object also exposes
-`InboundCallConnectorDriver`. The accepting INBOUND fact returns an
-`InboundCallRef` only after it has committed the root and exact source
+`InboundCallConnectorDriver`. The accepting INGRESS fact returns an
+`InboundCallId` only after it has committed the root and exact source
 instance. For fixed acknowledgement, the terminal view later reports one
 correlated `Completion`; the VM validates it and commits one zero-cursor
 `l:reply` Connector transaction with exactly one final `exit`.
@@ -115,7 +115,7 @@ Driver never manufactures a mailbox delivery or writes a causal record.
 completions; `SessionConnectorDriver` prepares/starts an opening and its
 individual writes, then reports correlated open/write/terminal observations.
 A correlated result for an existing outbound exchange is not a second
-world-originated INBOUND root: it settles the already committed obligation and
+world-originated INGRESS root: it settles the already committed obligation and
 then enables the Connector's ordinary core-owned transition. Neither Driver
 writes records or manufactures scheduler outcomes such as timeouts.
 
@@ -241,7 +241,7 @@ handshakes, fragmentation, control frames and transport progress.
 H4.1 makes the header boundary contributor-facing and typed. A Contract sheet
 declares well-known request fields in the sparse `headers` struct and leaves
 extensions in `custom_headers: map<text,array<text>>`; the Contract binder must
-combine and validate them before OUTBOUND open. Exact peer response bytes stay
+combine and validate them before EGRESS open. Exact peer response bytes stay
 in `meta.ext.http_headers`, while valid standard observations such as
 `content_type: media_type` receive their typed projection. Shared modules are
 named after the responsibility they own (`websocket_protocol`, `network`), not

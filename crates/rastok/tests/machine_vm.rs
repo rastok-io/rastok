@@ -8,8 +8,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use rastok::boundary::{
-    CallConnectorDriver, CallStart, DriverRouteError, InboundAdmission, InboundExchangeRef,
-    InboundProposal, InboundProposalHandle, InboundSession, InboundSubmission, Intent,
+    CallConnectorDriver, CallStart, DriverRouteError, InboundExchangeRef, InboundSession,
+    IngressAdmission, IngressProposal, IngressProposalHandle, IngressSubmission, Intent,
     OutboundConnectorBindings, PreparedRequest, SessionDriverEvent, SessionId, SessionOpenIntent,
     SessionStart, SessionWriteId, SessionWriteIntent, WebSocketExit,
 };
@@ -22,14 +22,14 @@ use rastok::plan::{AttrSetting, EvaluationSite, GraphVersion, OwnerValue, Valida
 use rastok::runtime::vm::{Vm, VmError};
 
 use rastok::boundary::{
-    Completion, Draft, InboundEnvelopeProvenance, PortOutput, ProcessExit, RequestPreparation,
+    Completion, Draft, IngressEnvelopeProvenance, PortOutput, ProcessExit, RequestPreparation,
     Response, SchedulerCompletion, SubmissionSequence,
 };
 use rastok::compiler::compile;
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Encoding, Namespace, Value};
 use rastok::journal::loop_protocol::{Fact as LoopFact, Fold as LoopFold, Phase as LoopPhase};
-use rastok::journal::{CloseVerdict, MemJournal, OutboundRecord, OutboundStatus, Record};
+use rastok::journal::{CallStatus, CloseVerdict, EgressRecord, MemJournal, Record};
 
 fn loop_state(
     journal: &MemJournal,
@@ -325,10 +325,10 @@ impl CallConnectorDriver for FileSettingsWorld {
     }
 }
 
-fn submission(text: &str) -> InboundSubmission {
+fn submission(text: &str) -> IngressSubmission {
     let data = vec![(String::from("text"), Value::Text(String::from(text)))];
-    InboundSubmission {
-        provenance: InboundEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
+    IngressSubmission {
+        provenance: IngressEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
         port: rastok::node::Port::new("in").unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Struct(data)),
@@ -338,9 +338,9 @@ fn submission(text: &str) -> InboundSubmission {
     }
 }
 
-fn text_submission(text: &str) -> InboundSubmission {
-    InboundSubmission {
-        provenance: InboundEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
+fn text_submission(text: &str) -> IngressSubmission {
+    IngressSubmission {
+        provenance: IngressEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
         port: rastok::node::Port::new("in").unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Text(String::from(text))),
@@ -350,11 +350,11 @@ fn text_submission(text: &str) -> InboundSubmission {
     }
 }
 
-fn websocket_proposal(reference: u64, text: &str, session: InboundSession) -> InboundProposal {
-    InboundProposal {
-        reference: InboundProposalHandle::new(reference),
-        submission: InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+fn websocket_proposal(reference: u64, text: &str, session: InboundSession) -> IngressProposal {
+    IngressProposal {
+        reference: IngressProposalHandle::new(reference),
+        submission: IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 node::Path::new(["socket"]).expect("the fixture path is valid"),
             ),
             port: node::Port::conventional_out(),
@@ -368,9 +368,9 @@ fn websocket_proposal(reference: u64, text: &str, session: InboundSession) -> In
     }
 }
 
-fn int_submission(value: i64) -> InboundSubmission {
-    InboundSubmission {
-        provenance: InboundEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
+fn int_submission(value: i64) -> IngressSubmission {
+    IngressSubmission {
+        provenance: IngressEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
         port: rastok::node::Port::new("in").unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Int(value)),
@@ -380,9 +380,9 @@ fn int_submission(value: i64) -> InboundSubmission {
     }
 }
 
-fn port_int_submission(port: &str, value: i64) -> InboundSubmission {
-    InboundSubmission {
-        provenance: InboundEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
+fn port_int_submission(port: &str, value: i64) -> IngressSubmission {
+    IngressSubmission {
+        provenance: IngressEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
         port: rastok::node::Port::new(port).unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Int(value)),
@@ -397,7 +397,7 @@ fn encoded_submission(
     encoding: Encoding,
     bytes: &'static [u8],
     content_type: &str,
-) -> InboundSubmission {
+) -> IngressSubmission {
     let mut ext = Namespace::new();
     ext.insert(
         String::from("content_type"),
@@ -405,8 +405,8 @@ fn encoded_submission(
             content_type,
         ))),
     );
-    InboundSubmission {
-        provenance: InboundEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
+    IngressSubmission {
+        provenance: IngressEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
         port: rastok::node::Port::new(port).unwrap(),
         draft: Draft {
             data: Data::encoded(encoding, bytes),
@@ -416,9 +416,9 @@ fn encoded_submission(
     }
 }
 
-fn tenant_submission(tenant: &str, user: i64) -> InboundSubmission {
-    InboundSubmission {
-        provenance: InboundEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
+fn tenant_submission(tenant: &str, user: i64) -> IngressSubmission {
+    IngressSubmission {
+        provenance: IngressEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
         port: rastok::node::Port::new("in").unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Struct(vec![
@@ -515,7 +515,7 @@ fn the_m0_probe_runs_end_to_end() {
         .records()
         .iter()
         .map(|record| match record {
-            Record::Inbound(_) => String::from("inbound"),
+            Record::Ingress(_) => String::from("inbound"),
             Record::Transaction(t) => {
                 let owner = if t.owner_path.is_root() {
                     String::from("root")
@@ -528,12 +528,12 @@ fn the_m0_probe_runs_end_to_end() {
                     format!("tx:{owner}")
                 }
             }
-            Record::Outbound(OutboundRecord::Call(o)) => match o.status {
-                OutboundStatus::Open => String::from("outbound:open"),
-                OutboundStatus::Closed(_) => String::from("outbound:closed"),
-                OutboundStatus::Abandoned => String::from("outbound:abandoned"),
+            Record::Egress(EgressRecord::Call(o)) => match o.status {
+                CallStatus::Open => String::from("outbound:open"),
+                CallStatus::Closed(_) => String::from("outbound:closed"),
+                CallStatus::Abandoned => String::from("outbound:abandoned"),
             },
-            Record::Outbound(OutboundRecord::Session(_)) => String::from("session"),
+            Record::Egress(EgressRecord::Session(_)) => String::from("session"),
         })
         .collect();
     assert_eq!(
@@ -552,7 +552,7 @@ fn the_m0_probe_runs_end_to_end() {
     );
     // One envelope left the graph, with the root's origin.
     assert_eq!(outputs.len(), 1);
-    let Record::Inbound(root) = &journal.records()[0] else {
+    let Record::Ingress(root) = &journal.records()[0] else {
         panic!("expected the birth");
     };
     assert_eq!(
@@ -602,7 +602,7 @@ graph rooted : App {
     vm.inject(&mut journal, int_submission(7)).unwrap();
     vm.drain(&mut journal).unwrap();
 
-    let Record::Inbound(inbound) = &journal.records()[0] else {
+    let Record::Ingress(inbound) = &journal.records()[0] else {
         panic!("the first fact is ingress");
     };
     let root_id = inbound.envelope.meta().sys().id();
@@ -847,7 +847,7 @@ fn a_public_join_consumes_one_presence_set_in_declared_port_order() {
                 .records()
                 .iter()
                 .find_map(|record| match record {
-                    Record::Inbound(inbound) if inbound.port.name() == "left" => {
+                    Record::Ingress(inbound) if inbound.port.name() == "left" => {
                         Some(inbound.envelope.meta().sys().id())
                     }
                     _ => None,
@@ -857,7 +857,7 @@ fn a_public_join_consumes_one_presence_set_in_declared_port_order() {
                 .records()
                 .iter()
                 .find_map(|record| match record {
-                    Record::Inbound(inbound) if inbound.port.name() == "right" => {
+                    Record::Ingress(inbound) if inbound.port.name() == "right" => {
                         Some(inbound.envelope.meta().sys().id())
                     }
                     _ => None,
@@ -901,7 +901,7 @@ fn a_presence_join_uses_arrival_only_for_the_trigger_not_tuple_order() {
             .records()
             .iter()
             .find_map(|record| match record {
-                Record::Inbound(inbound) if inbound.port.name() == port => {
+                Record::Ingress(inbound) if inbound.port.name() == port => {
                     Some(inbound.envelope.meta().sys().id())
                 }
                 _ => None,
@@ -1595,7 +1595,7 @@ graph keyed : App {
         .records()
         .iter()
         .filter_map(|record| match record {
-            Record::Inbound(inbound) => Some(inbound.routes[0].target.address().clone()),
+            Record::Ingress(inbound) => Some(inbound.routes[0].target.address().clone()),
             _ => None,
         })
         .collect();
@@ -1822,7 +1822,7 @@ graph lifecycle : App {
     assert_eq!(restarted.instance.generation(), 1);
     assert_eq!(
         journal.records().iter().find_map(|record| match record {
-            Record::Inbound(inbound) if inbound.envelope.meta().sys().id() == next => {
+            Record::Ingress(inbound) if inbound.envelope.meta().sys().id() == next => {
                 Some(inbound.routes[0].target.generation())
             }
             _ => None,
@@ -2008,13 +2008,13 @@ fn a_confirmed_cancel_keeps_the_observed_exit_and_never_invents_unknown() {
     assert_eq!(source_exit_cases(&vm), ["Exited"]);
     assert!(journal.records().iter().any(|record| matches!(
         record,
-        Record::Outbound(OutboundRecord::Call(outbound))
-            if matches!(outbound.status, OutboundStatus::Closed(_))
+        Record::Egress(EgressRecord::Call(outbound))
+            if matches!(outbound.status, CallStatus::Closed(_))
     )));
     assert!(journal.records().iter().all(|record| !matches!(
         record,
-        Record::Outbound(OutboundRecord::Call(outbound))
-            if outbound.status == OutboundStatus::Abandoned
+        Record::Egress(EgressRecord::Call(outbound))
+            if outbound.status == CallStatus::Abandoned
     )));
 }
 
@@ -2048,8 +2048,8 @@ fn silent_cancel_becomes_one_unknown_only_after_settlement() {
             .iter()
             .filter(|record| matches!(
                 record,
-                Record::Outbound(OutboundRecord::Call(outbound))
-                    if outbound.status == OutboundStatus::Abandoned
+                Record::Egress(EgressRecord::Call(outbound))
+                    if outbound.status == CallStatus::Abandoned
             ))
             .count(),
         1,
@@ -2167,7 +2167,7 @@ fn bounded_closing_interleavings_are_model_checked() {
                 .iter()
                 .filter(|record| matches!(
                     record,
-                    Record::Outbound(OutboundRecord::Call(outbound))
+                    Record::Egress(EgressRecord::Call(outbound))
                         if outbound.intent.call_id == call
                 ))
                 .count(),
@@ -2464,7 +2464,10 @@ graph persistent : App {
                     node::Trigger::Lifecycle(node::Lifecycle::Start | node::Lifecycle::Stop)
                 ) =>
             {
-                Some((transaction.trigger.clone(), transaction.timers.clone()))
+                Some((
+                    transaction.trigger.clone(),
+                    transaction.deadline_ids.clone(),
+                ))
             }
             _ => None,
         })
@@ -3258,7 +3261,7 @@ fn a_new_input_reopens_only_its_ended_session_without_resending_old_writes() {
         assert_eq!(journal.open_session_writes().len(), 1);
         assert_eq!(journal.open_session_writes()[0].session_id, bob);
         assert!(journal.records().iter().any(|record| matches!(record,
-            Record::Outbound(OutboundRecord::Session(record))
+            Record::Egress(EgressRecord::Session(record))
                 if record.session_id == alice
                     && record.status == SessionStatus::WriteAbandoned(original_writes[0].1))));
         assert!(vm.inspection().instances.iter().any(|instance| {
@@ -3289,7 +3292,7 @@ fn a_new_input_reopens_only_its_ended_session_without_resending_old_writes() {
             session.reference == fresh_alice && session.instance == alice_instance
         }));
         assert!(journal.records().iter().any(|record| matches!(record,
-            Record::Outbound(OutboundRecord::Session(record))
+            Record::Egress(EgressRecord::Session(record))
                 if record.session_id == fresh_alice
                     && matches!(&record.status, SessionStatus::Opening(intent)
                         if intent.emitting_id == fresh_input))));
@@ -3553,7 +3556,7 @@ graph app : App {
                     .records()
                     .iter()
                     .filter(|record| matches!(record,
-                        Record::Outbound(OutboundRecord::Session(record))
+                        Record::Egress(EgressRecord::Session(record))
                             if record.status == SessionStatus::WriteSettled(quit_write)
                     ))
                     .count(),
@@ -3627,7 +3630,7 @@ fn session_release_waits_for_the_committed_terminal_even_after_a_storage_failure
             assert_eq!(
                 world.abort_requests,
                 if observed_exit { vec![] } else { vec![alice] },
-                "the retained deadline authorizes cleanup even if terminal storage fails"
+                "the unsealed deadline authorizes cleanup even if terminal storage fails"
             );
 
             journal.refuse_commits = false;
@@ -3853,13 +3856,13 @@ graph app : App {
         let mut records = retained.clone();
         match sabotage {
             0 => {
-                let Record::Inbound(record) = &mut records[0] else {
+                let Record::Ingress(record) = &mut records[0] else {
                     panic!("ingress");
                 };
-                record.timer_schedule = None;
+                record.deadlines = None;
             }
             1 => {
-                let Record::Outbound(rastok::journal::OutboundRecord::Session(record)) =
+                let Record::Egress(rastok::journal::EgressRecord::Session(record)) =
                     records.last_mut().unwrap()
                 else {
                     panic!("opening");
@@ -3934,7 +3937,7 @@ graph app : App {{
         let mut journal = MemJournal::new(GraphVersion(1));
         let before = vm.inspection();
         assert!(matches!(
-            vm.admit_inbound(
+            vm.admit_ingress(
                 &mut journal,
                 &websocket_proposal(1, "", InboundSession::Open),
             ),
@@ -3973,12 +3976,12 @@ graph app : App {
         for live_peers in [0, 1] {
             if live_peers == 1 {
                 assert!(matches!(
-                    vm.admit_inbound(
+                    vm.admit_ingress(
                         &mut journal,
                         &websocket_proposal(1, "", InboundSession::Open),
                     )
                     .unwrap(),
-                    InboundAdmission::Accepted(_)
+                    IngressAdmission::Accepted(_)
                 ));
             }
             vm.inject(&mut journal, text_submission("uncorrelated"))
@@ -4030,8 +4033,8 @@ graph app : App {
     let mut world = SessionWorld::default();
     let mut sessions = Vec::new();
     for sequence in [1, 2] {
-        let InboundAdmission::Accepted(accepted) = vm
-            .admit_inbound(
+        let IngressAdmission::Accepted(accepted) = vm
+            .admit_ingress(
                 &mut journal,
                 &websocket_proposal(sequence, "", InboundSession::Open),
             )
@@ -4047,7 +4050,7 @@ graph app : App {
     }
     vm.drain(&mut journal).unwrap();
     for (sequence, text, session) in [(3, "alice", sessions[0]), (4, "bob", sessions[1])] {
-        vm.admit_inbound(
+        vm.admit_ingress(
             &mut journal,
             &websocket_proposal(sequence, text, InboundSession::Message(session)),
         )
@@ -4246,8 +4249,8 @@ graph websocket : App {
     let mut world = SessionWorld::default();
 
     let open = |vm: &mut Vm<'_>, journal: &mut MemJournal, reference| {
-        let InboundAdmission::Accepted(accepted) = vm
-            .admit_inbound(
+        let IngressAdmission::Accepted(accepted) = vm
+            .admit_ingress(
                 journal,
                 &websocket_proposal(reference, "", InboundSession::Open),
             )
@@ -4269,12 +4272,12 @@ graph websocket : App {
 
     for (reference, text, session) in [(3, "alice", first), (4, "bob", second)] {
         assert!(matches!(
-            vm.admit_inbound(
+            vm.admit_ingress(
                 &mut journal,
                 &websocket_proposal(reference, text, InboundSession::Message(session)),
             )
             .expect("the message admission is healthy"),
-            InboundAdmission::Accepted(_)
+            IngressAdmission::Accepted(_)
         ));
     }
     assert_eq!(vm.outputs().len(), 2);
@@ -4412,32 +4415,32 @@ impl Journal for FlakyJournal {
         self.inner.retained_observations_from(start)
     }
 
-    fn prepare_inbound(
+    fn prepare_ingress(
         &self,
-        submission: InboundSubmission,
-    ) -> Result<rastok::journal::PreparedInbound, rastok::journal::Error> {
-        self.inner.prepare_inbound(submission)
+        submission: IngressSubmission,
+    ) -> Result<rastok::journal::PreparedIngress, rastok::journal::Error> {
+        self.inner.prepare_ingress(submission)
     }
-    fn prepare_connector_inbound(
+    fn prepare_connector_ingress(
         &self,
-        submission: InboundSubmission,
+        submission: IngressSubmission,
         session: Option<InboundSession>,
-    ) -> Result<rastok::journal::PreparedInbound, rastok::journal::Error> {
-        self.inner.prepare_connector_inbound(submission, session)
+    ) -> Result<rastok::journal::PreparedIngress, rastok::journal::Error> {
+        self.inner.prepare_connector_ingress(submission, session)
     }
-    fn prepare_session_inbound(
+    fn prepare_session_ingress(
         &self,
-        submission: InboundSubmission,
+        submission: IngressSubmission,
         session: InboundSession,
-    ) -> Result<rastok::journal::PreparedInbound, rastok::journal::Error> {
-        self.inner.prepare_session_inbound(submission, session)
+    ) -> Result<rastok::journal::PreparedIngress, rastok::journal::Error> {
+        self.inner.prepare_session_ingress(submission, session)
     }
-    fn commit_inbound(
+    fn commit_ingress(
         &mut self,
-        prepared: rastok::journal::PreparedInbound,
+        prepared: rastok::journal::PreparedIngress,
         routes: Vec<rastok::journal::RouteTarget>,
-    ) -> Result<rastok::journal::CommittedInbound, rastok::journal::Error> {
-        self.inner.commit_inbound(prepared, routes)
+    ) -> Result<rastok::journal::CommittedIngress, rastok::journal::Error> {
+        self.inner.commit_ingress(prepared, routes)
     }
     fn instance_generation_for_admission(
         &self,
@@ -4455,7 +4458,7 @@ impl Journal for FlakyJournal {
         }
         self.inner.commit(transaction)
     }
-    fn open_outbound(
+    fn open_egress(
         &mut self,
         intent: Intent,
         attempt: Option<rastok::journal::retry_protocol::AttemptId>,
@@ -4463,7 +4466,7 @@ impl Journal for FlakyJournal {
         if self.refuse_opens {
             return Err(rastok::journal::Error::Storage(String::from("scripted")));
         }
-        self.inner.open_outbound(intent, attempt)
+        self.inner.open_egress(intent, attempt)
     }
     fn open_outbound_session(
         &mut self,
@@ -4490,20 +4493,20 @@ impl Journal for FlakyJournal {
     ) -> Result<CloseVerdict, rastok::journal::Error> {
         self.inner.settle_session_write(write_ref, abandoned)
     }
-    fn close_outbound(
+    fn close_egress(
         &mut self,
         call_id: &rastok::boundary::CallId,
         closure: rastok::journal::Closure,
         closed_at: i64,
-        schedule: Option<Box<rastok::journal::timing::TimerSchedule>>,
+        schedule: Option<Box<rastok::journal::timing::Deadlines>>,
     ) -> Result<rastok::journal::CloseVerdict, rastok::journal::Error> {
         if self.refuse_closes || self.refuse_call.as_ref() == Some(call_id) {
             return Err(rastok::journal::Error::Storage(String::from("scripted")));
         }
         self.inner
-            .close_outbound(call_id, closure, closed_at, schedule)
+            .close_egress(call_id, closure, closed_at, schedule)
     }
-    fn abandon_outbound(
+    fn abandon_egress(
         &mut self,
         call_id: &rastok::boundary::CallId,
         closed_at: i64,
@@ -4511,7 +4514,7 @@ impl Journal for FlakyJournal {
         if self.refuse_closes {
             return Err(rastok::journal::Error::Storage(String::from("scripted")));
         }
-        self.inner.abandon_outbound(call_id, closed_at)
+        self.inner.abandon_egress(call_id, closed_at)
     }
     fn find_envelope(&self, id: rastok::envelope::Id) -> Option<Envelope> {
         self.inner.find_envelope(id)
@@ -4657,7 +4660,7 @@ graph app : App {
     let mut prefix: Vec<_> = original
         .iter()
         .filter(|record| match record {
-            Record::Inbound(_) => true,
+            Record::Ingress(_) => true,
             Record::Transaction(record) => {
                 record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Start)
                     || record.loop_protocol().is_some_and(|packet| {
@@ -4666,7 +4669,7 @@ graph app : App {
                         })
                     })
             }
-            Record::Outbound(_) => false,
+            Record::Egress(_) => false,
         })
         .cloned()
         .collect();
@@ -5411,7 +5414,7 @@ graph app : App {
     let call = journal.inner.open_calls()[0].call_id;
     journal
         .inner
-        .close_outbound(
+        .close_egress(
             &call,
             rastok::journal::Closure::Response(Completion::process(
                 vec![],
@@ -5430,24 +5433,23 @@ graph app : App {
         let mut records = original.clone();
         match sabotage {
             0 | 1 => {
-                let Record::Inbound(inbound) = &mut records[0] else {
+                let Record::Ingress(inbound) = &mut records[0] else {
                     panic!("ingress");
                 };
                 if sabotage == 0 {
-                    inbound.timer_schedule = None;
+                    inbound.deadlines = None;
                 } else {
-                    let schedule = inbound.timer_schedule.as_ref().unwrap();
-                    let mut arms = schedule.arms().to_vec();
+                    let schedule = inbound.deadlines.as_ref().unwrap();
+                    let mut arms = schedule.items().to_vec();
                     arms[0].due_at += 1;
-                    inbound.timer_schedule = Some(Box::new(
-                        rastok::journal::timing::TimerSchedule::try_new(schedule.armed_at(), arms)
+                    inbound.deadlines = Some(Box::new(
+                        rastok::journal::timing::Deadlines::try_new(schedule.created_at(), arms)
                             .unwrap(),
                     ));
                 }
             }
             2 => {
-                let Record::Outbound(OutboundRecord::Call(closed)) = records.last_mut().unwrap()
-                else {
+                let Record::Egress(EgressRecord::Call(closed)) = records.last_mut().unwrap() else {
                     panic!("closure");
                 };
                 closed.intent.logical_time += 1;
@@ -5455,14 +5457,14 @@ graph app : App {
             3 => {
                 let opening = records
                     .iter()
-                    .position(|record| matches!(record, Record::Outbound(_)))
+                    .position(|record| matches!(record, Record::Egress(_)))
                     .unwrap();
                 let opening = records.remove(opening);
                 records.insert(1, opening);
             }
             _ => {
                 records.pop();
-                let Record::Outbound(OutboundRecord::Call(opening)) = records.last_mut().unwrap()
+                let Record::Egress(EgressRecord::Call(opening)) = records.last_mut().unwrap()
                 else {
                     panic!("opening");
                 };
@@ -5559,7 +5561,7 @@ graph logical_time : App {
         .iter()
         .filter_map(|record| match record {
             Record::Transaction(transaction) => transaction.logical_time,
-            Record::Inbound(_) | Record::Outbound(_) => None,
+            Record::Ingress(_) | Record::Egress(_) => None,
         })
         .collect();
     assert_eq!(observed, [1_000, 2_000]);
@@ -5599,7 +5601,7 @@ graph logical_time_guard : App {
         .iter()
         .filter_map(|record| match record {
             Record::Transaction(transaction) => transaction.logical_time,
-            Record::Inbound(_) | Record::Outbound(_) => None,
+            Record::Ingress(_) | Record::Egress(_) => None,
         })
         .collect();
     assert_eq!(observed, [1_000]);
@@ -5747,18 +5749,18 @@ fn a_budget_runs_from_delivery_and_covers_queue_time() {
         ["TimeoutExpired", "TimeoutExpired"],
         "both requests expired exactly once"
     );
-    let statuses: Vec<&OutboundStatus> = journal
+    let statuses: Vec<&CallStatus> = journal
         .records()
         .iter()
         .filter_map(|record| match record {
-            Record::Outbound(OutboundRecord::Call(o)) => Some(&o.status),
+            Record::Egress(EgressRecord::Call(o)) => Some(&o.status),
             _ => None,
         })
         .collect();
     assert_eq!(
         statuses
             .iter()
-            .filter(|status| matches!(status, OutboundStatus::Open))
+            .filter(|status| matches!(status, CallStatus::Open))
             .count(),
         2,
         "both calls opened — the queued one at its expiry"
@@ -5768,7 +5770,7 @@ fn a_budget_runs_from_delivery_and_covers_queue_time() {
             .iter()
             .filter(|status| matches!(
                 status,
-                OutboundStatus::Closed(rastok::journal::Closure::Timeout)
+                CallStatus::Closed(rastok::journal::Closure::Timeout)
             ))
             .count(),
         2,
@@ -5794,7 +5796,7 @@ fn a_budget_runs_from_delivery_and_covers_queue_time() {
         .records()
         .iter()
         .filter_map(|record| match record {
-            Record::Transaction(t) => Some(t.timers.len()),
+            Record::Transaction(t) => Some(t.deadline_ids.len()),
             _ => None,
         })
         .sum();
@@ -5883,8 +5885,8 @@ fn an_answer_and_an_expiry_race_to_a_single_closure() {
         .filter(|record| {
             matches!(
                 record,
-                Record::Outbound(OutboundRecord::Call(o))
-                    if matches!(o.status, OutboundStatus::Closed(_))
+                Record::Egress(EgressRecord::Call(o))
+                    if matches!(o.status, CallStatus::Closed(_))
             )
         })
         .count();
@@ -6194,8 +6196,8 @@ graph countdown : App + Loop {
         .collect();
     assert_eq!(delayed_facts.len(), 2);
     assert!(delayed_facts.iter().all(|transaction| {
-        transaction.timers.len() == 1
-            && transaction.timers[0].0 == rastok::journal::timer_kind::RECURRENCE_DELAY
+        transaction.deadline_ids.len() == 1
+            && transaction.deadline_ids[0].0 == rastok::journal::DeadlineKind::RecurrenceDelay
     }));
 }
 
@@ -6446,10 +6448,10 @@ graph retry : App + Loop {
         .filter(|record| {
             matches!(
                 record,
-                Record::Outbound(OutboundRecord::Call(call))
+                Record::Egress(EgressRecord::Call(call))
                     if matches!(
                         call.status,
-                        OutboundStatus::Closed(rastok::journal::Closure::Timeout)
+                        CallStatus::Closed(rastok::journal::Closure::Timeout)
                     )
             )
         })

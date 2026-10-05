@@ -21,7 +21,7 @@ use embedded_alloc::LlffHeap as Heap;
 use panic_semihosting as _;
 
 use rastok_core::boundary::{
-    Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
 };
 use rastok_core::envelope::{Data, Id, Namespace, Value};
 use rastok_core::journal;
@@ -124,12 +124,12 @@ fn spin(n: u32) {
     }
 }
 
-fn submission(text: &str, marker: u8) -> InboundSubmission {
+fn submission(text: &str, marker: u8) -> IngressSubmission {
     let mut ext = Namespace::new();
     let _ = marker;
     let _ = &mut ext;
-    InboundSubmission {
-        provenance: InboundEnvelopeProvenance::single(Path::new(["pico"]).unwrap()),
+    IngressSubmission {
+        provenance: IngressEnvelopeProvenance::single(Path::new(["pico"]).unwrap()),
         port: rastok_core::node::Port::new("in").unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Text(String::from(text))),
@@ -166,9 +166,9 @@ fn main() -> ! {
     hprintln!(
         "record_layout: record {} / inbound {} / transaction {} / outbound {} bytes",
         core::mem::size_of::<Record>(),
-        core::mem::size_of::<journal::InboundRecord>(),
+        core::mem::size_of::<journal::IngressRecord>(),
         core::mem::size_of::<journal::TransactionRecord>(),
-        core::mem::size_of::<journal::OutboundRecord>()
+        core::mem::size_of::<journal::EgressRecord>()
     );
 
     #[cfg(feature = "retry-qualification")]
@@ -223,7 +223,7 @@ fn main() -> ! {
     let (id_ticks, last) = ticks.measure(|| {
         let mut last = Id::from_bytes([0; 16]);
         for _ in 0..1000 {
-            last = Id::derive(0x02, &[&frame]);
+            last = Id::derive(rastok_core::envelope::IdKind::Emission, &[&frame]);
         }
         last
     });

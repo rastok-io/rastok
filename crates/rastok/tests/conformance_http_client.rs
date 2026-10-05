@@ -328,8 +328,8 @@ lab authenticated {
     let mut vm = Vm::boot_with_deployment(&compilation.plan, version, &boot);
     vm.inject(
         &mut journal,
-        rastok::boundary::InboundSubmission {
-            provenance: rastok::boundary::InboundEnvelopeProvenance::single(
+        rastok::boundary::IngressSubmission {
+            provenance: rastok::boundary::IngressEnvelopeProvenance::single(
                 node::Path::new(["test"]).expect("valid provenance"),
             ),
             port: node::Port::new("in").expect("valid input port"),
@@ -507,8 +507,8 @@ graph app : App {{
     let mut vm = Vm::boot_program(&compilation.plan, compilation.hash, version, 0, None);
     vm.inject(
         &mut journal,
-        rastok::boundary::InboundSubmission {
-            provenance: rastok::boundary::InboundEnvelopeProvenance::single(
+        rastok::boundary::IngressSubmission {
+            provenance: rastok::boundary::IngressEnvelopeProvenance::single(
                 node::Path::new(["wire-test"]).expect("provenance"),
             ),
             port: node::Port::new("in").expect("port"),

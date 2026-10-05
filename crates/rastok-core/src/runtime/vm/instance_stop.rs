@@ -172,7 +172,7 @@ impl Vm<'_> {
                 let mut cause = None;
                 journal
                     .visit_records(&mut |record| match record {
-                        crate::journal::Record::Inbound(record)
+                        crate::journal::Record::Ingress(record)
                             if record.envelope.meta().sys().id() == command.cause =>
                         {
                             cause = Some(record.envelope.clone())

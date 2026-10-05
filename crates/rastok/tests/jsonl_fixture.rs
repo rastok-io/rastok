@@ -5,7 +5,7 @@
 //! The jsonl golden fixture (D-2026-08-11-1): one graph whose Lab
 //! run opens a REAL outbound call framed by the canonical writer.
 //! Pinned here: the exact semantic hash, the package bytes, and the
-//! full golden trace whose OUTBOUND record seals the jsonl
+//! full golden trace whose EGRESS record seals the jsonl
 //! `request_digest` (key 43) — the writer's bytes ARE identity, so
 //! a change to the canonical form must re-bless this file with its
 //! reason.
@@ -74,7 +74,7 @@ fn the_lab_trace_matches_its_golden_and_seals_the_request_digest() {
         "{:#?}",
         roundtrip.report.failures
     );
-    // The OUTBOUND record seals the canonical line's digest as
+    // The EGRESS record seals the canonical line's digest as
     // key 43 — the writer's bytes are boundary identity.
     let trace = rastok::golden::project(&roundtrip.records);
     let mut sealed_digest = None;
@@ -88,7 +88,7 @@ fn the_lab_trace_matches_its_golden_and_seals_the_request_digest() {
             sealed_digest = Some(digest.clone());
         }
     }
-    let sealed = sealed_digest.expect("an OUTBOUND record carries key 43");
+    let sealed = sealed_digest.expect("an EGRESS record carries key 43");
     // The digest is DERIVABLE: it is the canonical line's seal, so
     // the golden pins the writer's exact bytes end to end.
     let request = rastok::envelope::Data::materialized(rastok::envelope::Value::Struct(vec![

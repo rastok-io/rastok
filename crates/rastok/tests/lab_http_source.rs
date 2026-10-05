@@ -41,7 +41,7 @@ fn decoded_requests_use_the_source_contract_without_a_physical_driver_or_app_inp
         .records
         .iter()
         .filter_map(|record| match record {
-            Record::Inbound(record) => Some(record),
+            Record::Ingress(record) => Some(record),
             _ => None,
         })
         .collect();
@@ -243,7 +243,7 @@ lab nested {
     let compilation = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let run = lab::run(&compilation.plan, GraphVersion(1), &compilation.labs[0]).remove(0);
     assert!(run.report.passed(), "{:#?}", run.report);
-    let Record::Inbound(root) = &run.records[0] else {
+    let Record::Ingress(root) = &run.records[0] else {
         panic!("source root")
     };
     assert_eq!(
@@ -336,7 +336,7 @@ lab blocked {
     assert_eq!(
         run.records
             .iter()
-            .filter(|record| matches!(record, Record::Inbound(_)))
+            .filter(|record| matches!(record, Record::Ingress(_)))
             .count(),
         capacity
     );

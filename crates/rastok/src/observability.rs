@@ -201,7 +201,7 @@ impl JournalLogProjector {
 
 fn event_name(kind: RecordObservationKind) -> &'static str {
     match kind {
-        RecordObservationKind::InboundCommitted => "rastok.inbound.committed",
+        RecordObservationKind::IngressCommitted => "rastok.ingress.committed",
         RecordObservationKind::TransactionCommitted => "rastok.transaction.committed",
         RecordObservationKind::CallOpened => "rastok.call.opened",
         RecordObservationKind::CallClosed => "rastok.call.closed",
@@ -315,7 +315,7 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::boundary::{
-        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
     use crate::envelope::{Data, Namespace, Value};
     use crate::journal::MemJournal;
@@ -325,9 +325,9 @@ mod tests {
         AnnotationSet, DataAnnotation, SchemaPath, SchemaPathSegment, SensitivityLevel,
     };
 
-    fn submission(value: i64) -> InboundSubmission {
-        InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(
+    fn submission(value: i64) -> IngressSubmission {
+        IngressSubmission {
+            provenance: IngressEnvelopeProvenance::single(
                 node::Path::new(["cli"]).expect("valid path"),
             ),
             port: node::Port::new("in").expect("valid port"),
@@ -402,8 +402,8 @@ mod tests {
     #[test]
     fn saturation_and_exporter_loss_never_change_retained_observations() {
         let mut journal = MemJournal::new(GraphVersion(1));
-        journal.append_inbound(submission(1)).expect("first root");
-        journal.append_inbound(submission(2)).expect("second root");
+        journal.append_ingress(submission(1)).expect("first root");
+        journal.append_ingress(submission(2)).expect("second root");
         let retained = journal.retained_observations();
         let records = journal.records().to_vec();
 
@@ -422,7 +422,7 @@ mod tests {
         assert_eq!(journal.retained_observations(), retained);
 
         drop(receiver);
-        journal.append_inbound(submission(3)).expect("third root");
+        journal.append_ingress(submission(3)).expect("third root");
         assert_eq!(
             projector.project_journal(&journal),
             ProjectionBatch {
@@ -438,7 +438,7 @@ mod tests {
     #[test]
     fn payloads_are_omitted_by_default_and_redacted_before_json_formatting() {
         let mut journal = MemJournal::new(GraphVersion(1));
-        journal.append_inbound(submission(1)).expect("root commits");
+        journal.append_ingress(submission(1)).expect("root commits");
         let observations = journal.retained_observations();
         let observation = &observations[0];
         let annotations = AnnotationTable::new(vec![(
@@ -470,7 +470,7 @@ mod tests {
         assert!(without_payload.get("payload").is_none());
         assert_eq!(
             without_payload.get("event").and_then(JsonValue::as_str),
-            Some("rastok.inbound.committed")
+            Some("rastok.ingress.committed")
         );
         assert!(without_payload.get("origin_id").is_some());
 

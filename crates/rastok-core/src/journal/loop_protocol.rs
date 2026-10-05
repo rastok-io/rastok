@@ -14,7 +14,7 @@ pub use fold::{Error, Fold, Phase, RunState};
 /// Exact admission which opens a run, not its possibly shared business origin.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpeningAdmissionRef {
-    /// Public input admitted by one INBOUND fact.
+    /// Public input admitted by one INGRESS fact.
     Ingress {
         /// Retained root envelope.
         inbound: Id,
@@ -276,11 +276,6 @@ impl Packet {
     }
 }
 
-// All domains are disjoint from the published r1 recipes (0x13 and 0x05).
-const RUN_R2: u8 = 0x14;
-const COMMAND: u8 = 0x15;
-const ADMISSION: u8 = 0x06;
-
 /// `rastok.loop-run.r2`: instance plus the exact opening admission.
 #[must_use]
 pub fn run_ref(instance: &instance::Generation, opening: &OpeningAdmissionRef) -> LoopRunId {
@@ -289,7 +284,7 @@ pub fn run_ref(instance: &instance::Generation, opening: &OpeningAdmissionRef) -
         OpeningAdmissionRef::Delivery(delivery) => (2, *delivery, &[][..]),
     };
     LoopRunId::new(Id::derive(
-        RUN_R2,
+        crate::envelope::IdKind::LoopRun,
         &[
             instance.address().as_bytes(),
             &instance.generation().to_le_bytes(),
@@ -308,7 +303,7 @@ pub fn command_ref(run: LoopRunId, iteration: u64, value: &CommandValue) -> Comm
         _ => 0,
     };
     CommandId(Id::derive(
-        COMMAND,
+        crate::envelope::IdKind::LoopCommand,
         &[
             run.id().as_bytes(),
             &iteration.to_le_bytes(),
@@ -322,7 +317,7 @@ pub fn command_ref(run: LoopRunId, iteration: u64, value: &CommandValue) -> Comm
 #[must_use]
 pub fn admission_ref(run: LoopRunId, iteration: u64, command: CommandId) -> Id {
     Id::derive(
-        ADMISSION,
+        crate::envelope::IdKind::LoopAdmission,
         &[
             run.id().as_bytes(),
             &iteration.to_le_bytes(),
@@ -340,7 +335,7 @@ mod tests {
     fn sibling_deliveries_of_one_origin_open_distinct_runs() {
         let owner = node::OwnerPath::new(["loop"]).unwrap();
         let instance = instance::Generation::new(instance::Identity::singleton(&owner), 0);
-        let envelope = Id::derive(1, &[b"same-origin"]);
+        let envelope = Id::derive(crate::envelope::IdKind::Root, &[b"same-origin"]);
         let left =
             OpeningAdmissionRef::Delivery(super::super::ids::delivery_id("left>loop.in", envelope));
         let right = OpeningAdmissionRef::Delivery(super::super::ids::delivery_id(
@@ -363,17 +358,7 @@ mod tests {
         ];
         for (index, reference) in refs.iter().enumerate() {
             assert!(!refs[..index].contains(reference));
-            assert_ne!(
-                *reference,
-                LoopRunId::new(Id::derive(
-                    0x13,
-                    &[
-                        instance.address().as_bytes(),
-                        &instance.generation().to_le_bytes(),
-                        envelope.as_bytes(),
-                    ]
-                ))
-            );
+            assert_ne!(reference.id(), envelope);
         }
         let successor = instance::Generation::new(instance.address().clone(), 1);
         assert_ne!(run_ref(&instance, &left), run_ref(&successor, &left));
@@ -382,8 +367,8 @@ mod tests {
 
     #[test]
     fn command_and_admission_domains_distinguish_verdict_iteration_and_cause() {
-        let run = LoopRunId::new(Id::derive(1, &[b"run"]));
-        let cause = Id::derive(1, &[b"cause"]);
+        let run = LoopRunId::new(Id::derive(crate::envelope::IdKind::Root, &[b"run"]));
+        let cause = Id::derive(crate::envelope::IdKind::Root, &[b"cause"]);
         let again = command_ref(run, 0, &CommandValue::Again(cause));
         let done = command_ref(
             run,
@@ -409,17 +394,7 @@ mod tests {
         assert_ne!(again, command_ref(run, 0, &CommandValue::Again(run.id())));
         let admission = admission_ref(run, 1, again);
         assert_ne!(admission, again.id());
-        assert_ne!(
-            admission,
-            Id::derive(
-                0x05,
-                &[
-                    run.id().as_bytes(),
-                    &1_u64.to_le_bytes(),
-                    again.id().as_bytes()
-                ]
-            )
-        );
+        assert_ne!(admission, run.id());
         assert_ne!(admission, admission_ref(run, 2, again));
         assert_ne!(admission, admission_ref(run, 1, done));
     }

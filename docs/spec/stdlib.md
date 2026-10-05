@@ -17,7 +17,7 @@
 > `Process.exit: ProcessExit` and the total effective port table.
 > Companion to [execution-model.md](execution-model.md) (`timeout` /
 > `on_timeout`, the correlator duty), [delivery-semantics.md](delivery-semantics.md)
-> (INBOUND / OUTBOUND records) and [simulation-semantics.md](simulation-semantics.md)
+> (INGRESS / EGRESS records) and [simulation-semantics.md](simulation-semantics.md)
 > (mocks, the coverage checklist these contracts feed).
 >
 > Guest-language placement follows the Operator/Connector boundary: a pure
@@ -51,7 +51,7 @@ contract identity.
 | 7 | **Correlator** | what one invocation or session is in its protocol, and how messages/answers find it (execution-model §6.1: the Connector matches) |
 | 8 | **Outcome coverage** | the finite typed cases each output may emit and the completion rule the future `rastok simulate --coverage` enumerates |
 | 9 | **Instances** | singleton / `instance.key` (each resource run may have a `run_id`) / per-invocation or per-session; Node-instance closing policy and each exchange's terminal exit |
-| 10 | **Journal & sim** | which records it writes (INBOUND w/ `inbound_seq`; OUTBOUND open-closed); how it is mocked/injected |
+| 10 | **Journal & sim** | which records it writes (INGRESS w/ `inbound_seq`; EGRESS open-closed); how it is mocked/injected |
 
 Case 8 deserves the emphasis: coverage must enumerate the cases a
 Connector can emit, but they are described by the ordinary types of its
@@ -197,7 +197,7 @@ There is no parallel `mime_type` spelling.
 | Outcome cases | `Completed { status: int }`, `RequestExpired`, `Overloaded`, `PeerDisconnected`, `OutcomeUnknown` |
 | Application profile | inbound Call, therefore not a Loop host; each admitted request produces exactly one decoded `out`, accepts zero or one response `in` according to mode, and produces exactly one terminal `exit`; a pre-admission refusal produces none of these |
 | Instances | singleton |
-| Journal / sim | two-phase INBOUND proposal; commit precedes 202/response; Lab `listener.out = value` scripts a decoded request and successful fixed ACK, without a socket; source `respond` scripting remains deferred |
+| Journal / sim | two-phase INGRESS proposal; commit precedes 202/response; Lab `listener.out = value` scripts a decoded request and successful fixed ACK, without a socket; source `respond` scripting remains deferred |
 
 - **`ack`** (webhook): 202 immediately after the accepting commit —
   "received", not "processed";
@@ -256,7 +256,7 @@ request.
 | Outcome cases | `Completed { status: int }`, `ServerError { status: int }`, `DnsFailed`, `ConnectFailed`, `TlsFailed`, `ProtocolFailed`, `TimeoutExpired`, `BodyTooLarge { limit: uint }`, `DecodeFailed`, `OutcomeUnknown` |
 | Application profile | outbound finite Call and Loop-admissible; exactly one request `in`, exactly one `out` iff the exit is `Completed` or `ServerError`, then exactly one terminal `exit`; terminal visibility is the conservative [C1 table](../architecture/retry-c1-algebra.md) |
 | Instances | singleton by default; the common Node attribute `instance.key` may key the Connector |
-| Journal / sim | method, resolved URL, canonical ordinary headers, exact body, idempotency material and a logical bearer `SecretRef` seal before OUTBOUND open; physical bearer bytes are fixed by the run header and overlaid only in the real Driver; the contract-specific Lab twin scripts only the post-open outcome |
+| Journal / sim | method, resolved URL, canonical ordinary headers, exact body, idempotency material and a logical bearer `SecretRef` seal before EGRESS open; physical bearer bytes are fixed by the run header and overlaid only in the real Driver; the contract-specific Lab twin scripts only the post-open outcome |
 
 The hosted H4 Driver attempts declared versions in order, skipping backends
 not compiled into the runtime. It may fall back only before request bytes can
@@ -272,7 +272,7 @@ A4's boot references are exact roots, not general evaluator calls. A profile
 must supply the URL value and resolve the versioned bearer before Driver
 binding. The logical request seen by real and Lab Drivers contains the secret
 reference only. The real Driver may validate the bearer before opening an
-effect and may put it on the wire only after the OUTBOUND record; neither
+effect and may put it on the wire only after the EGRESS record; neither
 material nor its command-line spelling exists in graph or causal artifacts.
 
 For hosted clients, absent `tls_ca` selects Rastok's compiled exact Mozilla
@@ -297,7 +297,7 @@ weaken verification or reinterpret the plan bytes.
 | Outcome cases | `ProcessExit` below; exactly one terminal per job invocation or resident child incarnation, never per service message. stderr never carries lifecycle data. |
 | Application profile | `job`: one request, ordered frames, one atomic terminal completion; Loop-admissible under [R1](../architecture/rework-r1-host-contracts.md#71-contracts-for-loop-admissible-connectors). `service`: first input opens a child, subsequent inputs reuse it, inbound frames stream while it lives; not a Loop host. |
 | Instances | see modes below |
-| Journal / sim | OUTBOUND records per call (job: per run); spontaneous emissions = INBOUND roots; mocked in scenarios |
+| Journal / sim | EGRESS records per call (job: per run); spontaneous emissions = INGRESS roots; mocked in scenarios |
 
 **The attribute table (D-2026-08-12-1).** `mode` is the PROFILE
 selector; its omission selects `job` and the checker materializes
@@ -362,8 +362,8 @@ payload.
 
 `OutcomeUnknown` is empty and closed. It is emitted only by supervision when
 no terminal external outcome can be established: recovery triage of an open
-OUTBOUND, or expiry of an instance's explicit Closing settlement budget. In
-both cases the OUTBOUND closes `abandoned`, the envelope uses `l:recover`, and
+EGRESS record, or expiry of an instance's explicit Closing settlement budget. In
+both cases the EGRESS closes `abandoned`, the envelope uses `l:recover`, and
 causal provenance explains the reason instead of a racing string payload. A
 confirmed close-time kill remains the observed `Exited` result. A late Driver
 answer after abandonment is a discarded observation and cannot create a
@@ -423,7 +423,7 @@ default: zero hidden shared state.
 
 **The `jsonl` wire (D-2026-08-11-1).** One JSON value per `\n`-framed
 line, both directions, the JSON model exactly (`variant`).
-OUTBOUND, the request value serializes CANONICALLY — these bytes are
+Outbound, the request value serializes CANONICALLY — these bytes are
 `request_digest` material, so the writer is part of identity: object
 keys sorted by their UTF-8 bytes (structs and maps alike — the
 wire's own canonical order; the envelope seal orders map entries by
@@ -435,7 +435,7 @@ strings JSON-escaped, one trailing `\n`. Unserializable requests
 refuse as `DecodeFailed` before any open fact: `bytes` (no JSON
 form — `lines` or a future `bytes` codec carry those), a
 non-finite `double`, and any ENCODED payload (`jsonl` frames the
-JSON model, not opaque representations). INBOUND, each line decodes
+JSON model, not opaque representations). Inbound, each line decodes
 EAGERLY through the house JSON reader (D-2026-08-10-4/-7): exact
 numbers, duplicate keys refused; a line that does not parse — an
 interior empty line included — is `DecodeFailed` with the offending
@@ -520,7 +520,7 @@ and non-Unix physical supervision are not claimed.
 | Correlator | **none** (a pure source makes no calls) |
 | Outcome cases | none (a timer event has no runtime outcome worth another envelope) |
 | Instances | one source per declared Node instance; no implicit `system_clock` Node exists |
-| Journal / sim | firings = INBOUND records; in simulation, driven by `advance` |
+| Journal / sim | firings = INGRESS records; in simulation, driven by `advance` |
 
 `Timer` is not the VM's clock and is not required for `now()`, timeouts,
 lifetimes, join eviction or Loop delay. Those mechanisms consume the explicit
@@ -541,7 +541,7 @@ civil-time source is needed only to anchor `Calendar` semantics.
 | Correlator | **none** (a pure source makes no calls) |
 | Outcome cases | none (misconfiguration is compile-time: bad cron/tz = refusal) |
 | Instances | singleton per declaration |
-| Journal / sim | ticks = INBOUND records; a scenario using `Calendar` should declare its `origin` (simulation-semantics §5: virtual t=0 ≡ a civil instant; absent → epoch + **warning**) |
+| Journal / sim | ticks = INGRESS records; a scenario using `Calendar` should declare its `origin` (simulation-semantics §5: virtual t=0 ≡ a civil instant; absent → epoch + **warning**) |
 
 **DST policy, stated**: a nonexistent civil time (spring forward) is
 **skipped**; an ambiguous one (fall back) fires **once, first occurrence**.
@@ -591,7 +591,7 @@ run can inject selected values as new roots.
 | Outcome cases | `Completed`; `NotFound`; `NotAFile`; `PermissionDenied`; `InvalidPath`; `ReadLimitExceeded { limit: uint }`; `AtomicReplaceUnavailable`; `IoFailed`; scheduler `TimeoutExpired`; bounded-Closing `OutcomeUnknown` |
 | Application profile | outbound finite Call and Loop-admissible: both profiles consume exactly one `in` and produce exactly one terminal `exit`; `read` produces exactly one `out` iff Completed, while `replace` can never produce `out`; terminal visibility is the conservative `@2` table in [R1](../architecture/rework-r1-host-contracts.md#71-contracts-for-loop-admissible-connectors) |
 | Instances | ordinary Node instances; a dynamic `path` is evaluated for each invocation and is not instance addressing |
-| Journal / sim | request preparation and typed rejection occur before OUTBOUND open; C4's real Driver executes only the sealed operation after open; replay never recalls it without recovery triage; C5's mock factory reuses the same pure File request binding and only replaces the post-open effect |
+| Journal / sim | request preparation and typed rejection occur before EGRESS open; C4's real Driver executes only the sealed operation after open; replay never recalls it without recovery triage; C5's mock factory reuses the same pure File request binding and only replaces the post-open effect |
 
 `path` is a logical UTF-8 path relative to the physical root supplied to the
 bound Driver. The physical root is deployment data, not plan identity. `/` is
@@ -613,7 +613,7 @@ preservation of permissions, ownership, xattrs or timestamps. Existing
 directory segments are required, while the final target may be created.
 
 The sealed request descriptor carries mode, exact logical path, and the read
-bound or exact replacement bytes. It is prepared before OUTBOUND open and
+bound or exact replacement bytes. It is prepared before EGRESS open and
 executed without recomputation afterwards. Cancellation before the read or
 rename commit point is silent at the Driver; scheduler timeout and bounded
 Closing own the terminal fact. A completion that loses the close race is an
@@ -894,7 +894,7 @@ preserves the design inventory, including future Lab world actions.
 
 - [execution-model.md](execution-model.md) — `timeout`/`on_timeout`, the
   correlator duty, dated events, windows.
-- [delivery-semantics.md](delivery-semantics.md) — INBOUND/OUTBOUND records,
+- [delivery-semantics.md](delivery-semantics.md) — INGRESS/EGRESS records,
   the key-stability rule these contracts obey.
 - [simulation-semantics.md](simulation-semantics.md) — mocks, the coverage
   checklist fed by resolved port cases, `origin` for `Calendar` scenarios.

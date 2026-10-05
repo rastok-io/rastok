@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use rastok::boundary::{Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence};
+use rastok::boundary::{Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence};
 use rastok::compiler;
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
@@ -51,14 +51,14 @@ graph app : App {{
         let mut vm = Vm::boot(&plan, GraphVersion(1));
         vm.inject(
             &mut journal,
-            InboundSubmission {
+            IngressSubmission {
                 sequence: SubmissionSequence::Next,
                 port: rastok::node::Port::new("in").unwrap(),
                 draft: Draft {
                     data: Data::materialized(Value::Int(7)),
                     ext: Namespace::new(),
                 },
-                provenance: InboundEnvelopeProvenance::single(
+                provenance: IngressEnvelopeProvenance::single(
                     rastok::node::Path::new(["test"]).unwrap(),
                 ),
             },
@@ -136,14 +136,14 @@ graph app : App {
     for n in [1, 10] {
         vm.inject(
             &mut journal,
-            InboundSubmission {
+            IngressSubmission {
                 sequence: SubmissionSequence::Next,
                 port: rastok::node::Port::new("in").unwrap(),
                 draft: Draft {
                     data: Data::materialized(Value::Int(n)),
                     ext: Namespace::new(),
                 },
-                provenance: InboundEnvelopeProvenance::single(
+                provenance: IngressEnvelopeProvenance::single(
                     rastok::node::Path::new(["test"]).unwrap(),
                 ),
             },
@@ -238,14 +238,14 @@ graph app : App {{
             let mut vm = Vm::boot(&plan, GraphVersion(1));
             vm.inject(
                 &mut journal,
-                InboundSubmission {
+                IngressSubmission {
                     sequence: SubmissionSequence::Next,
                     port: rastok::node::Port::new("in").unwrap(),
                     draft: Draft {
                         data: Data::materialized(Value::Int(n)),
                         ext: Namespace::new(),
                     },
-                    provenance: InboundEnvelopeProvenance::single(
+                    provenance: IngressEnvelopeProvenance::single(
                         rastok::node::Path::new(["nested"]).unwrap(),
                     ),
                 },
@@ -314,14 +314,14 @@ graph app : App {{
     let mut vm = Vm::boot(&plan, GraphVersion(1));
     vm.inject(
         &mut journal,
-        InboundSubmission {
+        IngressSubmission {
             sequence: SubmissionSequence::Next,
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::materialized(Value::Int(5)),
                 ext: Namespace::new(),
             },
-            provenance: InboundEnvelopeProvenance::single(
+            provenance: IngressEnvelopeProvenance::single(
                 rastok::node::Path::new(["test"]).unwrap(),
             ),
         },
@@ -381,14 +381,14 @@ graph app : App {{
         let mut vm = Vm::boot(&plan, GraphVersion(1));
         vm.inject(
             &mut journal,
-            InboundSubmission {
+            IngressSubmission {
                 sequence: SubmissionSequence::Next,
                 port: rastok::node::Port::new("in").unwrap(),
                 draft: Draft {
                     data: Data::materialized(Value::Int(1)),
                     ext: Namespace::new(),
                 },
-                provenance: InboundEnvelopeProvenance::single(
+                provenance: IngressEnvelopeProvenance::single(
                     rastok::node::Path::new(["test"]).unwrap(),
                 ),
             },

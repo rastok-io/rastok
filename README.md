@@ -23,7 +23,7 @@ textual, typed, readable in code review, easy to version in Git, and
 constrained enough for an LLM to generate without hiding the result
 behind a visual low-code format.
 
-Public destinations for the planned **15 October 2026** opening:
+Public destinations for the planned **5 November 2026** opening:
 [website](https://www.rastok.com) ·
 [documentation](https://docs.rastok.com) ·
 [source](https://github.com/rastok-io/rastok) ·
@@ -137,7 +137,7 @@ Rastok is at an early experimental stage. Its specification and
 implementation architecture are under active review, and the runtime
 does not yet make a production-readiness claim.
 
-Opening is planned for **15 October 2026**, on explicit release instruction.
+Opening is planned for **5 November 2026**, on explicit release instruction.
 The independent HTTP/3 server test against ngtcp2, official Autobahn suite,
 and measurement of the work needed to add a Connector remain **open and
 non-blocking for that opening**. The debugger's final browser qualification
