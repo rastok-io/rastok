@@ -1,8 +1,9 @@
 # Human-review cutover — v20 identity inventory
 
 > Opened 2026-10-06, from qualified lot 2 at `3bdd807`, on `rework/v20`.
-> Candidate only: no witness has been blessed. Fable's review and Yoann's
-> explicit approval are required before replacing a committed witness.
+> Candidate measured, blessing authorized on 2026-10-07 after Fable's review.
+> The final pre-blessing measurements below include all three complements.
+> No stored witness is replaced before that inventory is committed.
 
 ## Invariant and scope
 
@@ -199,16 +200,17 @@ constants remain unchanged pending approval.
 | Witness | Stored | Candidate | Reason |
 |---|---|---|---|
 | Lowering semantic-hash pin | `3fe6e5319383eec3792f2981a40f9579fce96a4e1c3efe7b52b491dad932bc1a` | `6a49eb768c73af74cff64dc40bd08009e711fc1456c2b92e9e5f4f71e2508433` | Standard Contract namespace |
-| Echo recording digest | `eba461cb2011177539b0a0a864ee01064f39097cace16dd3268b5523ce9e2078` | `69d7131c777178e9b395dfc70f45205a83bbbc411e9fbb10c8561935fa465c76` | Recording 4, package 20, role removal, ccbor DATA and compact record/identity forms |
+| Echo recording digest | `eba461cb2011177539b0a0a864ee01064f39097cace16dd3268b5523ce9e2078` | `6130123972daf8e882d56c726361a0ca26a4b6ac320613e697848e6bca6abb4d` | Recording 4, package 20, role removal, ccbor DATA, compact record/identity forms and inline deadlines (final 7 October measurement) |
 | HttpClient defaults | `135282f162cbc350e091d230ff4d35077c920003a8f541c6173a47e671c1c661` | `97116fe8c6748306126066065a264bbf0f0e3e6cb38866ae0812069e198ebb5a` | Standard Contract namespace; explicit/implicit default equivalence still passes |
-| HttpClient representative program | `c071a2a881181c82d6fc52841d2f789a803c853da67dd6a3c9f9f39f87c51330` | `a1bf3c54b12e0bb08795d67b2849560fa1b529ec97f802484d7578ef77134f56` | Standard Contract namespace |
-| HttpServer representative program | `8be9c5c663158e632bb2f9de4dd20852c59580318ad3198dbac931f46ca18638` | `de5b489357e12e52bbd7b536e133d103dc6e7430734fa65e476dfee38e99fcdf` | Standard Contract namespace |
-| WebSocketClient representative program | `33fff893c4ea10aed45047f6b296022138c6ac3cc5528c908c06ee0c0f8b0aff` | `e5d8c57b20427655842aa608f078858c744ede0a9648f3a4b881bb3c4b612020` | Standard Contract namespace |
-| WebSocketServer representative program | `8e023ac5bed6d799511633ba858330494ae6d8e1f901de9c09be7dcd735ad6f8` | `37c7043e337fb958e7a743ddd1d9ad1693b1bf9d169297f2b882efbafe356667` | Standard Contract namespace |
+| HttpClient representative program | `a1bf3c54b12e0bb08795d67b2849560fa1b529ec97f802484d7578ef77134f56` | `c071a2a881181c82d6fc52841d2f789a803c853da67dd6a3c9f9f39f87c51330` | Standard Contract namespace |
+| HttpServer representative program | `de5b489357e12e52bbd7b536e133d103dc6e7430734fa65e476dfee38e99fcdf` | `8be9c5c663158e632bb2f9de4dd20852c59580318ad3198dbac931f46ca18638` | Standard Contract namespace |
+| WebSocketClient representative program | `e5d8c57b20427655842aa608f078858c744ede0a9648f3a4b881bb3c4b612020` | `33fff893c4ea10aed45047f6b296022138c6ac3cc5528c908c06ee0c0f8b0aff` | Standard Contract namespace |
+| WebSocketServer representative program | `37c7043e337fb958e7a743ddd1d9ad1693b1bf9d169297f2b882efbafe356667` | `8e023ac5bed6d799511633ba858330494ae6d8e1f901de9c09be7dcd735ad6f8` | Standard Contract namespace |
 | M0 probe, eight records | `7594ec29d0f7c306a830220d06521cdf9d3aab4fc60839e64a3ccbb246f56166` | `858c71fa25d2fb26be6c201ea91af3ec83a3cdd3a2b02db7cff9d2703e04956b` | Compact envelope/record/value registry and graph-born ccbor DATA |
 | Delivery identity | `301cd0af333f760b8f5dc13738b821ec` | `b26fc16a16876c6d531bfc0b5ee3442b` | Delivery domain 32 → 11 |
 | Instance lifetime identity | `d8977f984e5356cc4df3aca36c442642` | `77901038ea63d061071656d3c7637a9d` | Lifetime domain 33 → 12 |
-| Retry operation identity | `c2df2737937f43b8bda58a9d58f30f94` | `f09790a0bce6f64ec5ae4edacec19f2f` | Retry-operation domain 22 → 10 and compact typed instance value |
+| Retry operation identity | `d6c4216ebd85518c3497d7410c2707eb` | `f09790a0bce6f64ec5ae4edacec19f2f` | Retry-operation domain 22 → 10 and opening Delivery domain 32 → 11 |
+| Retry admission identity | `e9b37274b55fddbac02eee26f3fd4849` | `05cbdcc63115d77e8aeff05c0f1958dc` | Retry-admission domain 7 → 4 and the preceding operation identity |
 | Inbound Session identity | `45e41992da920539378d903e21f963a0` | `5ea1374ac75e3968f604f31cbe68e2ca` | Session domain 17 → 6 |
 | Outbound Session identity | `835d72e38dc56aaf373d9613449d7354` | `7ddc2c74566fc89f912afee39073d7be` | Session domain 17 → 6 |
 | Session-write identity | `19b7714f0076f09221da8c3d9a22f2f8` | `47998f535730ffa5def6866dec6795cd` | Session-write domain 18 → 7 and its parent Session identity |
@@ -218,7 +220,8 @@ the selected-text instance address changes its value tag 8 → 6 (its
 virtual-shard probe becomes 169 instead of 117); metadata map/array tags
 18/19 become 16/17; the union payload's struct tag 17 becomes 15; scalar
 tags follow the complete registry above; personal annotation `[5, 7]`
-becomes `[3, 7]`; the deadline encoding uses map key 41 instead of 56.
+becomes `[3, 7]`. The final deadline codec uses an inline optional array,
+not a byte string wrapping a single-field map.
 The public join/expiry Lab also independently pins the instance generation
 at transaction key 31: the candidate moves that field to key 18, without
 changing the expected keyed address or generation.
@@ -299,3 +302,69 @@ was changed.
 
 No bless, push, merge, tag, publication or external reviewer invocation has
 been performed.
+
+## Final pre-blessing inventory — 7 October
+
+Yoann approved the blessing after Fable's candidate review, subject to the
+three complements. These measurements precede every stored-witness change.
+
+- A-T2-6(4): deadline arrays now sit directly in each lossless record tuple;
+  `Deadlines::try_new` still enforces the same acceptance invariants. The
+  record codec is positional: registry key 41 is not an outer map in this
+  carrier. Call `closed_at` was already inline and does not move.
+- The 6 October intermediate echo recording digest was
+  `69d7131c777178e9b395dfc70f45205a83bbbc411e9fbb10c8561935fa465c76`.
+  Removing the nested deadline byte strings gives the final digest in the
+  table above. No causal seal changes from this complement. There is no
+  committed recording file to convert: the test rebuilds its records from
+  the echo Lab and pins their complete lossless encoding.
+- The confirmed publisher rule also renames `std/env@1`, `test.local/test@1`
+  and dotted privacy/pricing example references. These are deployment
+  attestations, not new graph facts. No package or gallery seal moves from
+  this complement; profile version syntax remains unchanged.
+- The explicit `repr(u8)` discriminants and `From`/`TryFrom` implementations
+  preserve every allocated byte. Tests cover all 256 inputs for each of the
+  15 identity, 8 deadline and 10 lifecycle kinds, including named refusals.
+
+The package ledger was rebuilt against the final source and re-ran echo,
+JSONL, gauge and all eight gallery programs. Every body size, semantic hash,
+checksum, trace count and seal agrees with the tables above; all 28 scenario
+assertions pass. The regenerated Retry spike package also keeps the measured
+candidate hash. Gauge remains the negative semantic-hash witness.
+
+**Inventory corrections found by re-measurement:** the four network-program
+rows had their stored/candidate columns reversed in the 6 October report;
+the rows above now agree with the actual assertions and computed values.
+The Retry operation row had compared a partially migrated independent
+recipe with the new identity, rather than the original pinned string.
+It now names the original pin and also inventories the subsequent admission
+assertion, which was hidden behind that first failing assertion. These are
+evidence corrections before blessing, not changes to execution semantics.
+
+Focused checks: seven deadline-codec tests pass; twelve envelope tests pass;
+the lifecycle exhaustive-byte test passes. Eleven recording tests pass,
+including full prefix reconstruction and rejection of nested deadline
+carriers; the remaining recording test fails only on its old digest shown
+above. The core run has 360 passing tests and the ten remaining inventoried
+pins; the Contract suite has 83 passing tests and its two inventoried hash
+pins. No expected functional result, refusal or timeout was weakened.
+
+The blessing will regenerate the three package witnesses, the embedded echo
+package, four root trace witnesses, 28 gallery traces (including `files.utf8`),
+the recording digest and the additional pins enumerated above. The CI echo
+hash follows the same echo row. The post-blessing complete gate is still
+required; these focused runs are not its substitute.
+
+Final embedded measurements after the three complements, before accepting
+their footprint (same regenerated packages, workloads and fixed gates):
+
+| Workload | Peak heap | `.text + .rodata` | Heap / code margin |
+|---|---:|---:|---:|
+| echo, 67 records | 112,656 B | 973,028 B | 18,416 / 75,548 B |
+| Retry with full recovery, 17 records | 130,560 B | 1,041,440 B | 512 / 7,136 B |
+
+Both report `SPIKE_OK`. Relative to qualified lot 2, code grows by 2,004 B
+and 2,428 B respectively; peak heap does not grow. Relative to the first v20
+candidate, code shrinks by 224 B and 264 B. Retry remains one operation,
+three Calls, sixteen four-byte frames per channel per attempt. The M2 entry
+constraint is unchanged: no core growth without reclaiming bytes first.

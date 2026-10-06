@@ -644,9 +644,7 @@ fn record_tree(record: &Record) -> Cbor {
                                     .iter()
                                     .map(|(kind, reference)| {
                                         Cbor::Array(vec![
-                                            Cbor::Uint(u64::from(
-                                                crate::journal::deadline_kind_tag(*kind),
-                                            )),
+                                            Cbor::Uint(u64::from(u8::from(*kind))),
                                             Cbor::Bytes(reference.as_bytes().to_vec()),
                                         ])
                                     })
@@ -803,7 +801,7 @@ fn record_tree(record: &Record) -> Cbor {
                             .into_iter()
                             .map(|(kind, reference)| {
                                 Cbor::Array(vec![
-                                    Cbor::Uint(u64::from(crate::journal::deadline_kind_tag(*kind))),
+                                    Cbor::Uint(u64::from(u8::from(*kind))),
                                     Cbor::Bytes(reference.as_bytes().to_vec()),
                                 ])
                             })
@@ -877,9 +875,7 @@ fn record_tree(record: &Record) -> Cbor {
                             .iter()
                             .map(|arm| {
                                 Cbor::Array(vec![
-                                    Cbor::Uint(u64::from(crate::journal::deadline_kind_tag(
-                                        arm.kind,
-                                    ))),
+                                    Cbor::Uint(u64::from(u8::from(arm.kind))),
                                     Cbor::Bytes(arm.reference.as_bytes().to_vec()),
                                 ])
                             })

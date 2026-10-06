@@ -24,6 +24,9 @@ use core::fmt;
 mod retry;
 pub use retry::retry_packet;
 
+#[cfg(test)]
+mod tests;
+
 /// Lossless carrier decoding failure, distinct from journal/plan acceptance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
@@ -31,8 +34,8 @@ pub enum Error {
     Invalid(&'static str),
     /// A typed canonical field cannot be decoded.
     Read(crate::canonical_cbor::DecodeError),
-    /// The decoded deadlines are malformed or violate their typed invariant.
-    Deadlines(journal::timing::DecodeError),
+    /// The decoded deadlines violate their typed invariant.
+    Deadlines(journal::timing::Error),
     /// A Call's unsealed timing contradicts its sealed facts.
     CallTiming(journal::timing::Error),
 }
@@ -226,12 +229,11 @@ fn envelope(value: &Envelope) -> Cbor {
     ])
 }
 fn deadline_ids(values: &[(journal::DeadlineKind, Id)]) -> Cbor {
-    list(values.iter().map(|(kind, reference)| {
-        list([
-            Cbor::Uint(u64::from(journal::deadline_kind_tag(*kind))),
-            id(*reference),
-        ])
-    }))
+    list(
+        values.iter().map(|(kind, reference)| {
+            list([Cbor::Uint(u64::from(u8::from(*kind))), id(*reference)])
+        }),
+    )
 }
 fn read_deadline_ids(value: &Cbor) -> Result<Vec<(journal::DeadlineKind, Id)>, Error> {
     items(value)?
@@ -250,11 +252,38 @@ fn read_deadline_ids(value: &Cbor) -> Result<Vec<(journal::DeadlineKind, Id)>, E
         .collect()
 }
 fn schedule(value: Option<&journal::timing::Deadlines>) -> Cbor {
-    optional(value, |value| Cbor::Bytes(value.encode()))
+    optional(value, |value| {
+        list([
+            integer(value.created_at()),
+            list(value.items().iter().map(|deadline| {
+                list([
+                    Cbor::Uint(u64::from(u8::from(deadline.kind))),
+                    id(deadline.reference),
+                    integer(deadline.due_at),
+                ])
+            })),
+        ])
+    })
 }
 fn read_schedule(value: &Cbor) -> Result<Option<Box<journal::timing::Deadlines>>, Error> {
     read_optional(value, |value| {
-        journal::timing::Deadlines::decode(bytes(value)?)
+        let [created_at, deadlines] = array(value)?;
+        let items = items(deadlines)?
+            .iter()
+            .map(|value| {
+                let [kind, reference, due_at] = array(value)?;
+                Ok(journal::timing::Deadline {
+                    kind: journal::DeadlineKind::try_from(
+                        u8::try_from(uint(kind)?)
+                            .map_err(|_| Error::Invalid("deadline kind exceeds u8"))?,
+                    )
+                    .map_err(|_| Error::Invalid("unknown deadline kind"))?,
+                    reference: read_id(reference)?,
+                    due_at: signed(due_at)?,
+                })
+            })
+            .collect::<Result<_, Error>>()?;
+        journal::timing::Deadlines::try_new(signed(created_at)?, items)
             .map(Box::new)
             .map_err(Error::Deadlines)
     })

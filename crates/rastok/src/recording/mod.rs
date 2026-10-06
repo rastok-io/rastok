@@ -81,12 +81,9 @@ impl From<crate::journal::codec::Error> for Error {
         match error {
             crate::journal::codec::Error::Invalid(reason) => Self::Invalid(reason),
             crate::journal::codec::Error::Read(error) => Self::Read(error),
-            crate::journal::codec::Error::Deadlines(crate::journal::timing::DecodeError::Read(
-                error,
-            )) => Self::Read(error),
-            crate::journal::codec::Error::Deadlines(
-                crate::journal::timing::DecodeError::Invalid(error),
-            ) => Self::Journal(crate::journal::Error::InvalidDeadlines(error)),
+            crate::journal::codec::Error::Deadlines(error) => {
+                Self::Journal(crate::journal::Error::InvalidDeadlines(error))
+            }
             crate::journal::codec::Error::CallTiming(error) => {
                 Self::Journal(crate::journal::Error::InvalidCallRetention(error))
             }

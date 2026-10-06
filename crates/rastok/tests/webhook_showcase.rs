@@ -33,7 +33,7 @@ fn boot(with_privacy: bool) -> BootBindings {
     let policy = |name| PolicyName::new(name).unwrap();
     let privacy = with_privacy.then(|| {
         PrivacyProfile::new(
-            PrivacyProfileName::new("privacy/showcase-webhook@1").unwrap(),
+            PrivacyProfileName::new("privacy.example/showcase-webhook@1").unwrap(),
             policy("showcase/fictional-webhook"),
             vec![policy("purpose/local-synthetic-demonstration")],
             vec![policy("basis/synthetic-fixture-not-production-authority")],
@@ -56,7 +56,7 @@ fn boot(with_privacy: bool) -> BootBindings {
                 reference.clone(),
                 SecretBinding::new(
                     reference,
-                    SecretProviderId::new("rastok/test@1").unwrap(),
+                    SecretProviderId::new("test.local/test@1").unwrap(),
                     "fixture-token",
                     SecretVersion::new("fixture-v1").unwrap(),
                 )

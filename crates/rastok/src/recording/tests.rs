@@ -261,15 +261,15 @@ fn repeated_envelope_ids_cannot_change_their_content() {
 fn journal_timing_failures_remain_typed_at_the_recording_boundary() {
     use crate::journal::{codec, timing};
     assert!(matches!(
-        super::Error::from(codec::Error::Deadlines(timing::DecodeError::Read(
+        super::Error::from(codec::Error::Read(
             crate::canonical_cbor::DecodeError::Malformed("deadline row"),
-        ))),
+        )),
         super::Error::Read(_),
     ));
     assert!(matches!(
-        super::Error::from(codec::Error::Deadlines(timing::DecodeError::Invalid(
+        super::Error::from(codec::Error::Deadlines(
             timing::Error::DeadlinePrecedesCreation,
-        ))),
+        )),
         super::Error::Journal(crate::journal::Error::InvalidDeadlines(
             timing::Error::DeadlinePrecedesCreation,
         )),
@@ -282,4 +282,45 @@ fn journal_timing_failures_remain_typed_at_the_recording_boundary() {
             timing::Error::MissingClosureInstant,
         )),
     ));
+}
+
+#[test]
+fn record_decoder_rejects_nested_deadlines_without_changing_causal_projection() {
+    let compilation = compile(include_str!("../../../../examples/echo.rkg"));
+    let mut inspected = 0;
+    for run in lab::run(&compilation.plan, GraphVersion(1), &compilation.labs[0]) {
+        let mut reader = codec::Decoder::default();
+        let mut restored = Vec::new();
+        for (position, record) in run.records.iter().enumerate() {
+            let tree = codec::encode(record);
+            restored.push(reader.decode(&tree).unwrap());
+            let field = match record {
+                Record::Ingress(value) if value.deadlines.is_some() => 9,
+                Record::Transaction(value) if value.deadlines.is_some() => 16,
+                Record::Egress(crate::journal::EgressRecord::Call(value))
+                    if value.deadlines.is_some() =>
+                {
+                    4
+                }
+                _ => continue,
+            };
+            let Cbor::Array(mut row) = tree else {
+                panic!("record tuple")
+            };
+            assert!(matches!(row[field], Cbor::Array(_)));
+            row[field] = Cbor::Bytes(canonical_cbor::encode(&row[field]));
+            let mut forged_reader = codec::Decoder::default();
+            for earlier in &run.records[..position] {
+                forged_reader.decode(&codec::encode(earlier)).unwrap();
+            }
+            assert!(forged_reader.decode(&Cbor::Array(row)).is_err());
+            inspected += 1;
+        }
+        assert_eq!(restored, run.records);
+        assert_eq!(golden::project(&restored), golden::project(&run.records));
+    }
+    assert!(
+        inspected > 0,
+        "the echo scenarios must exercise recorded deadlines"
+    );
 }

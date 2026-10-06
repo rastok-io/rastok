@@ -247,7 +247,7 @@ fn authenticated_boot(url: String) -> BootBindings {
     let reference = SecretName::new("providers/http/token").expect("logical secret reference");
     let binding = SecretBinding::new(
         reference.clone(),
-        SecretProviderId::new("rastok/test@1").expect("stable provider id"),
+        SecretProviderId::new("test.local/test@1").expect("stable provider id"),
         "HTTP_TEST_TOKEN",
         SecretVersion::new("v3").expect("stable secret version"),
     )

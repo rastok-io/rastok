@@ -708,9 +708,10 @@ fn handler_tree(handler: &Handler) -> Cbor {
             within_ns.map_or(Cbor::Null, canonical::signed),
             last.map_or(Cbor::Null, |count| Cbor::Uint(u64::from(count))),
         ]),
-        node::HandlerActivation::Lifecycle(lifecycle) => {
-            Cbor::Array(vec![Cbor::Uint(2), Cbor::Uint(lifecycle_tag(*lifecycle))])
-        }
+        node::HandlerActivation::Lifecycle(lifecycle) => Cbor::Array(vec![
+            Cbor::Uint(2),
+            Cbor::Uint(u64::from(u8::from(*lifecycle))),
+        ]),
     };
     let owner = Cbor::Array(vec![
         Cbor::Uint(1),
@@ -722,21 +723,6 @@ fn handler_tree(handler: &Handler) -> Cbor {
     }
     pairs.insert(4, fields::dispatch_tree(&handler.dispatch));
     Cbor::Map(pairs)
-}
-
-const fn lifecycle_tag(lifecycle: node::Lifecycle) -> u64 {
-    match lifecycle {
-        node::Lifecycle::Start => 1,
-        node::Lifecycle::Stop => 2,
-        node::Lifecycle::Next => 3,
-        node::Lifecycle::Timeout => 4,
-        node::Lifecycle::Evict => 5,
-        node::Lifecycle::Recover => 6,
-        node::Lifecycle::Closing => 7,
-        node::Lifecycle::Reply => 8,
-        node::Lifecycle::Exit => 9,
-        node::Lifecycle::Retry => 10,
-    }
 }
 
 fn step_tree(step: &DispatchStep) -> Cbor {
@@ -2200,21 +2186,12 @@ fn handler_from(tree: &Cbor) -> Result<Handler, DecodeError> {
         [Cbor::Uint(1), Cbor::Text(port)] => node::HandlerActivation::Port(
             node::Port::new(port.clone()).map_err(|_| err("activation port"))?,
         ),
-        [Cbor::Uint(2), Cbor::Uint(lifecycle)] => {
-            node::HandlerActivation::Lifecycle(match lifecycle {
-                1 => node::Lifecycle::Start,
-                2 => node::Lifecycle::Stop,
-                3 => node::Lifecycle::Next,
-                4 => node::Lifecycle::Timeout,
-                5 => node::Lifecycle::Evict,
-                6 => node::Lifecycle::Recover,
-                7 => node::Lifecycle::Closing,
-                8 => node::Lifecycle::Reply,
-                9 => node::Lifecycle::Exit,
-                10 => node::Lifecycle::Retry,
-                _ => return Err(err("activation lifecycle")),
-            })
-        }
+        [Cbor::Uint(2), Cbor::Uint(lifecycle)] => node::HandlerActivation::Lifecycle(
+            node::Lifecycle::try_from(
+                u8::try_from(*lifecycle).map_err(|_| err("activation lifecycle"))?,
+            )
+            .map_err(|_| err("activation lifecycle"))?,
+        ),
         [Cbor::Uint(3), ports, within, last] => node::HandlerActivation::Join {
             ports: array_of(ports, "join ports")?
                 .iter()

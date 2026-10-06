@@ -187,7 +187,7 @@ graph priced_call : App {
     .expect("the typed Connector probe compiles");
     let model = node::Path::new(["model"]).expect("canonical Connector path");
     let profile = CostProfile::new(
-        CostProfileName::new("pricing/model@2026-08-30").expect("stable profile ref"),
+        CostProfileName::new("pricing.example/model@2026-08-30").expect("stable profile ref"),
         vec![
             UnitPrice::new(
                 model.clone(),

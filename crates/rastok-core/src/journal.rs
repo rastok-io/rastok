@@ -150,7 +150,7 @@ pub mod ids {
             &[
                 instance.address().as_bytes(),
                 &instance.generation().to_le_bytes(),
-                &[super::deadline_kind_tag(phase)],
+                &[u8::from(phase)],
             ],
         )
     }
@@ -231,40 +231,31 @@ pub mod ids {
 }
 
 /// The closed kinds of dated obligations recorded in key 24.
-/// Their encoded numbers are defined by [`deadline_kind_tag`].
+/// Explicit discriminants define their wire bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum DeadlineKind {
     /// One delivered Connector call budget.
-    CallTimeout,
+    CallTimeout = 1,
     /// One join correlation bound.
-    JoinWithin,
+    JoinWithin = 2,
     /// One logical instance generation lifetime.
-    InstanceLifetime,
+    InstanceLifetime = 3,
     /// One Loop or Retry delayed re-entry wakeup, keyed by its admission id.
-    RecurrenceDelay,
+    RecurrenceDelay = 4,
     /// End of an instance's admitted-work drain interval.
-    InstanceDrain,
+    InstanceDrain = 5,
     /// End of an instance's cancellation settlement interval.
-    InstanceSettlement,
+    InstanceSettlement = 6,
     /// One admitted inbound Call response deadline.
-    InboundCallTimeout,
+    InboundCallTimeout = 7,
     /// One client Session opening-handshake deadline.
-    SessionHandshake,
+    SessionHandshake = 8,
 }
 
-/// Projects a deadline kind to its specified byte, independently of order.
-#[must_use]
-pub const fn deadline_kind_tag(kind: DeadlineKind) -> u8 {
-    match kind {
-        DeadlineKind::CallTimeout => 1,
-        DeadlineKind::JoinWithin => 2,
-        DeadlineKind::InstanceLifetime => 3,
-        DeadlineKind::RecurrenceDelay => 4,
-        DeadlineKind::InstanceDrain => 5,
-        DeadlineKind::InstanceSettlement => 6,
-        DeadlineKind::InboundCallTimeout => 7,
-        DeadlineKind::SessionHandshake => 8,
+impl From<DeadlineKind> for u8 {
+    fn from(kind: DeadlineKind) -> Self {
+        kind as u8
     }
 }
 

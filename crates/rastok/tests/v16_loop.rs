@@ -1094,7 +1094,13 @@ fn retained_timer_bytes_are_required_for_delays_but_not_part_of_the_causal_seal(
     let schedule = journal.records()[index].deadlines().unwrap();
     assert_eq!(schedule.created_at(), 7_000_000_000);
     assert_eq!(schedule.items()[0].due_at, 8_000_000_000);
-    assert_eq!(&Deadlines::decode(&schedule.encode()).unwrap(), schedule);
+    let mut decoder = rastok::journal::codec::Decoder::default();
+    for record in &journal.records()[..=index] {
+        let restored = decoder
+            .decode(&rastok::journal::codec::encode(record))
+            .unwrap();
+        assert_eq!(&restored, record);
+    }
 
     let before = journal.records().to_vec();
     let seal = rastok::golden::project(&before).seal();

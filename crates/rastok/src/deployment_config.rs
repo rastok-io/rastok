@@ -24,7 +24,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
 
-const ENV_SECRET_PROVIDER: &str = "rastok/env@1";
+const ENV_SECRET_PROVIDER: &str = "std/env@1";
 
 /// Reads, validates and atomically resolves one hosted deployment profile.
 ///
@@ -345,6 +345,7 @@ mod tests {
     impl SecretProvider for FixedProvider {
         fn resolve(&self, binding: &SecretBinding) -> Result<SecretMaterial, SecretProviderError> {
             assert_eq!(binding.provider_path(), "API_TOKEN");
+            assert_eq!(binding.provider().as_str(), "std/env@1");
             SecretMaterial::new(b"private".to_vec())
         }
     }
@@ -360,7 +361,7 @@ mod tests {
     "version":"release-7"
   }],
   "privacy": {
-    "reference":"privacy/support@1",
+    "reference":"privacy.example/support@1",
     "processing_activity":"ropa/support",
     "purposes":["purpose/support"],
     "legal_bases":["basis/contract"],
@@ -407,7 +408,7 @@ mod tests {
   "environment": [],
   "secrets": [],
   "cost_profile": {
-    "reference": "pricing/openai@2026-08-30",
+    "reference": "pricing.example/openai@2026-08-30",
     "prices": [{
       "connector": "agent.model",
       "provider": "openai",
@@ -429,7 +430,10 @@ mod tests {
             .cost_profile
             .as_ref()
             .expect("run header cost attestation");
-        assert_eq!(cost.reference().as_str(), "pricing/openai@2026-08-30");
+        assert_eq!(
+            cost.reference().as_str(),
+            "pricing.example/openai@2026-08-30"
+        );
         assert_eq!(attested.reference, *cost.reference());
         assert_eq!(attested.digest, *cost.digest());
         assert_eq!(cost.rules()[0].price_money().amount().unscaled(), 25);

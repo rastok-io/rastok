@@ -1033,7 +1033,7 @@ mod tests {
             })
             .collect();
         CostProfile::new(
-            CostProfileName::new("pricing/test@1")
+            CostProfileName::new("pricing.example/test@1")
                 .unwrap_or_else(|error| panic!("profile ref: {error}")),
             rules,
         )

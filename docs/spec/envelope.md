@@ -106,7 +106,7 @@ origin_id = the id of the lineage's inbound root
 **The `‖` framing — BLAKE3 is part of the contract:**
 
 ```
-input      = id_kind_tag(kind) ++ frame(field)*
+input      = u8::from(kind) ++ frame(field)*
 frame(f)   = u32_le( len(f) ) ++ bytes(f)          // length-prefixed : INJECTIVE
 id         = first 128 bits of blake3(input)
 encodings  : paths/triggers/ports = UTF-8 ; parent_id = its 16 raw bytes ;
@@ -114,8 +114,9 @@ encodings  : paths/triggers/ports = UTF-8 ; parent_id = its 16 raw bytes ;
 ```
 
 `envelope::IdKind` is the closed registry of the implemented recipes below.
-`id_kind_tag` projects explicitly; declaration order is never an encoding.
-All other bytes refuse as `UnknownIdKind`. This is the compact format-20
+Each `#[repr(u8)]` variant carries its explicit wire byte; `From<IdKind>`
+projects that discriminant, never declaration order. `TryFrom<u8>` refuses
+all other bytes as `UnknownIdKind`. This is the compact format-20
 registry. Decoder names are specified in §5.1; runtime attestation is deferred.
 
 | Kind | Byte | Length-prefixed fields, in order |

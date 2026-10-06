@@ -25,61 +25,45 @@ use core::fmt;
 pub use crate::value::Value;
 
 /// The closed domains of the journal's identity recipes (`envelope.md` §2).
-/// Encoding uses [`id_kind_tag`], never declaration order.
+/// Explicit discriminants are the wire bytes; declaration order has no meaning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum IdKind {
     /// An envelope admitted from the world.
-    Root,
+    Root = 0x01,
     /// An envelope emitted by a transaction.
-    Emission,
+    Emission = 0x02,
     /// A Loop application admitted again.
-    LoopAdmission,
+    LoopAdmission = 0x03,
     /// A Retry attempt admitted again.
-    RetryAdmission,
+    RetryAdmission = 0x04,
     /// An outgoing Call for one delivery and prepared request.
-    Call,
+    Call = 0x05,
     /// One logical Session, independently of its physical connection.
-    Session,
+    Session = 0x06,
     /// One write within a Session.
-    SessionWrite,
+    SessionWrite = 0x07,
     /// A Loop run opened by an exact admission.
-    LoopRun,
+    LoopRun = 0x08,
     /// One command addressed to a Loop run.
-    LoopCommand,
+    LoopCommand = 0x09,
     /// A Retry operation opened by an exact delivery.
-    RetryOperation,
+    RetryOperation = 0x0a,
     /// One envelope delivered along one edge.
-    Delivery,
+    Delivery = 0x0b,
     /// One instance generation's lifetime obligation.
-    InstanceLifetime,
+    InstanceLifetime = 0x0c,
     /// One bounded phase of an instance's Closing.
-    InstanceClosing,
+    InstanceClosing = 0x0d,
     /// One explicit stop command for an exact generation.
-    InstanceStop,
+    InstanceStop = 0x0e,
     /// The canonical name of an attested decoder (attestation is an M2 gate).
-    Decoder,
+    Decoder = 0x0f,
 }
 
-/// Projects an identity domain to its specified byte.
-#[must_use]
-pub const fn id_kind_tag(kind: IdKind) -> u8 {
-    match kind {
-        IdKind::Root => 0x01,
-        IdKind::Emission => 0x02,
-        IdKind::LoopAdmission => 0x03,
-        IdKind::RetryAdmission => 0x04,
-        IdKind::Call => 0x05,
-        IdKind::Session => 0x06,
-        IdKind::SessionWrite => 0x07,
-        IdKind::LoopRun => 0x08,
-        IdKind::LoopCommand => 0x09,
-        IdKind::RetryOperation => 0x0a,
-        IdKind::Delivery => 0x0b,
-        IdKind::InstanceLifetime => 0x0c,
-        IdKind::InstanceClosing => 0x0d,
-        IdKind::InstanceStop => 0x0e,
-        IdKind::Decoder => 0x0f,
+impl From<IdKind> for u8 {
+    fn from(kind: IdKind) -> Self {
+        kind as u8
     }
 }
 
@@ -142,7 +126,7 @@ impl Id {
     #[must_use]
     pub fn derive(id_kind: IdKind, fields: &[&[u8]]) -> Self {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(&[id_kind_tag(id_kind)]);
+        hasher.update(&[u8::from(id_kind)]);
         for field in fields {
             let len = u32::try_from(field.len())
                 .unwrap_or_else(|_| unreachable!("an identity frame never approaches 4 GiB"));
@@ -586,7 +570,7 @@ mod tests {
             match registry.iter().find(|(tag, _)| *tag == byte) {
                 Some((_, kind)) => {
                     assert_eq!(IdKind::try_from(byte), Ok(*kind));
-                    assert_eq!(id_kind_tag(*kind), byte);
+                    assert_eq!(u8::from(*kind), byte);
                     // Construct the framing independently of the enum projection.
                     let expected = blake3::hash(&[byte, 1, 0, 0, 0, b'x']);
                     assert_eq!(

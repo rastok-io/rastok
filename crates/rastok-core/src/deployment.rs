@@ -84,7 +84,7 @@ pub enum BootReference {
 pub struct SecretProviderId(String);
 
 impl SecretProviderId {
-    /// Builds a stable provider identity such as `rastok/env@1`.
+    /// Builds a stable provider identity such as `std/env@1`.
     ///
     /// # Errors
     ///
@@ -823,7 +823,7 @@ mod tests {
             .unwrap_or_else(|error| panic!("secret ref: {error}"));
         let binding = SecretBinding::new(
             reference.clone(),
-            SecretProviderId::new("rastok/test@1")
+            SecretProviderId::new("test.local/test@1")
                 .unwrap_or_else(|error| panic!("provider: {error}")),
             "OPENAI_API_KEY",
             SecretVersion::new("v7").unwrap_or_else(|error| panic!("version: {error}")),
@@ -854,7 +854,7 @@ mod tests {
     fn privacy_digest_is_canonical_and_regime_coverage_is_explicit() {
         let build = |purposes| {
             PrivacyProfile::new(
-                PrivacyProfileName::new("privacy/support@1")
+                PrivacyProfileName::new("privacy.example/support@1")
                     .unwrap_or_else(|error| panic!("profile ref: {error}")),
                 policy("ropa/support"),
                 purposes,
@@ -889,7 +889,7 @@ mod tests {
             external_disclosure: true,
         }));
         let disclosed = PrivacyProfile::new(
-            PrivacyProfileName::new("privacy/support-disclosed@1")
+            PrivacyProfileName::new("privacy.example/support-disclosed@1")
                 .unwrap_or_else(|error| panic!("profile ref: {error}")),
             policy("ropa/support"),
             vec![policy("purpose/support")],

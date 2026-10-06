@@ -361,7 +361,7 @@ controller-owned stable identifiers, not free-form legal prose):
     }
   ],
   "privacy": {
-    "reference": "privacy/support@1",
+    "reference": "privacy.example/support@1",
     "processing_activity": "ropa/support",
     "purposes": ["purpose/customer-support"],
     "legal_bases": ["basis/contract"],
@@ -372,7 +372,7 @@ controller-owned stable identifiers, not free-form legal prose):
     "retention": "run_scoped"
   },
   "cost_profile": {
-    "reference": "pricing/model-api@2026-08-30",
+    "reference": "pricing.example/model-api@2026-08-30",
     "prices": [
       {
         "connector": "model",

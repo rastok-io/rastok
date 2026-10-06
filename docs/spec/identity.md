@@ -74,9 +74,20 @@ Rules :
 A Connector's identity includes its exact `ContractId`, required roles,
 exchange shape, complete resolved port types and effective attributes.
 `behavior` and the boolean `idempotent` promise are independent.
-Standard identities use `std/`; a non-standard namespace contains at least
-one dot. Physical Drivers, their libraries and negotiated transport state do
-not salt the graph hash.
+Physical Drivers, their libraries and negotiated transport state do not salt
+the graph hash.
+
+**One publisher namespace rule.** Every qualified `namespace/name@version`
+identity minted by the standard library uses `std/`, including Contracts,
+decoders, protected annotation definitions and the environment secret provider
+`std/env@1`. Every other publisher uses a dotted namespace, including test
+fixtures (`test.local/test@1`) and deployment profiles
+(`privacy.example/support@1`, `pricing.example/model-api@2026-08-30`).
+The rule is independent of whether the reference enters a plan hash or only
+a run-header attestation. It governs the publisher, not the version syntax:
+Contracts and decoders require a canonical positive major, while profile
+versions remain their existing opaque immutable references. Logical secret
+paths, environment names and unqualified policy names are not publisher ids.
 
 The canonical HIR carries lexical Graph ownership, instance selection,
 lifetimes, bounded Closing and phased immutable expressions. A Graph is a

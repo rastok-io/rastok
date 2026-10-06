@@ -299,13 +299,7 @@ fn live_loop_diagnostics_do_not_reintroduce_retired_codes() {
 #[test]
 fn current_journal_tables_include_retry_retention_without_saga_key_rules() {
     let source = std::fs::read_to_string(root().join("docs/spec/identity.md")).unwrap();
-    for (key, name) in [
-        (rastok_core::journal::timing::DEADLINES_KEY, "deadlines"),
-        (
-            rastok_core::journal::timing::CALL_CLOSED_AT_KEY,
-            "closed_at",
-        ),
-    ] {
+    for (key, name) in [(41, "deadlines"), (44, "closed_at")] {
         assert!(
             source.contains(&format!("| {key} | {name} |")),
             "identity.md omits the unsealed field {key}: {name}"

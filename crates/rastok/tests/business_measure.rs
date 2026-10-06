@@ -308,7 +308,7 @@ lab app {
     let compiled = compile(&[source], &ContractCatalog::try_m0().expect("catalogue"))
         .expect("a declared exact quantity downstream of the generic Connector");
     let profile = CostProfile::new(
-        CostProfileName::new("pricing/produce@1").expect("profile identity"),
+        CostProfileName::new("pricing.example/produce@1").expect("profile identity"),
         vec![
             UnitPrice::new(
                 node::Path::new(["weighing"]).expect("Connector path"),

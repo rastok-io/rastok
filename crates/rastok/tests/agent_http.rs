@@ -38,7 +38,7 @@ fn boot() -> BootBindings {
                 reference.clone(),
                 SecretBinding::new(
                     reference,
-                    SecretProviderId::new("rastok/test@1").unwrap(),
+                    SecretProviderId::new("test.local/test@1").unwrap(),
                     "fixture-token",
                     SecretVersion::new("fixture-v1").unwrap(),
                 )

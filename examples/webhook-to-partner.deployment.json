@@ -10,7 +10,7 @@
     }
   ],
   "privacy": {
-    "reference": "privacy/showcase-webhook@1",
+    "reference": "privacy.example/showcase-webhook@1",
     "processing_activity": "showcase/fictional-webhook",
     "purposes": ["purpose/local-synthetic-demonstration"],
     "legal_bases": ["basis/synthetic-fixture-not-production-authority"],

@@ -370,30 +370,69 @@ impl fmt::Display for Behavior {
 ///
 /// [`envelope.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/envelope.md
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
 pub enum Lifecycle {
     /// Internal Retry manager fact; never an authored handler activation.
-    Retry,
+    Retry = 10,
     /// Instance start.
-    Start,
+    Start = 1,
     /// Instance stop.
-    Stop,
+    Stop = 2,
     /// Durable request that enters bounded Closing. This is an internal
     /// runtime trigger, never a source handler activation.
-    Closing,
+    Closing = 7,
     /// Terminal observation of an admitted inbound Call. This is an internal
     /// Connector transaction trigger, never a source handler activation.
-    Reply,
+    Reply = 8,
     /// Sole terminal observation of one Session. This is an internal
     /// Connector transaction trigger, never a source handler activation.
-    Exit,
+    Exit = 9,
     /// Loop continuation transaction.
-    Next,
+    Next = 3,
     /// Expired per-call timeout budget.
-    Timeout,
+    Timeout = 4,
     /// Instance-state eviction.
-    Evict,
+    Evict = 5,
     /// Post-crash recovery transaction.
-    Recover,
+    Recover = 6,
+}
+
+impl From<Lifecycle> for u8 {
+    fn from(kind: Lifecycle) -> Self {
+        kind as u8
+    }
+}
+
+/// A byte which does not name an allocated lifecycle transaction kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnknownLifecycle(pub u8);
+
+impl fmt::Display for UnknownLifecycle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unknown lifecycle kind byte {}", self.0)
+    }
+}
+
+impl core::error::Error for UnknownLifecycle {}
+
+impl TryFrom<u8> for Lifecycle {
+    type Error = UnknownLifecycle;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::Start),
+            2 => Ok(Self::Stop),
+            3 => Ok(Self::Next),
+            4 => Ok(Self::Timeout),
+            5 => Ok(Self::Evict),
+            6 => Ok(Self::Recover),
+            7 => Ok(Self::Closing),
+            8 => Ok(Self::Reply),
+            9 => Ok(Self::Exit),
+            10 => Ok(Self::Retry),
+            other => Err(UnknownLifecycle(other)),
+        }
+    }
 }
 
 impl fmt::Display for Lifecycle {
@@ -578,6 +617,32 @@ pub fn loop_call_exit_type(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn lifecycle_wire_bytes_are_explicit_and_unknown_bytes_refuse() {
+        use super::{Lifecycle, UnknownLifecycle};
+        let registry = [
+            (1, Lifecycle::Start),
+            (2, Lifecycle::Stop),
+            (3, Lifecycle::Next),
+            (4, Lifecycle::Timeout),
+            (5, Lifecycle::Evict),
+            (6, Lifecycle::Recover),
+            (7, Lifecycle::Closing),
+            (8, Lifecycle::Reply),
+            (9, Lifecycle::Exit),
+            (10, Lifecycle::Retry),
+        ];
+        for byte in 0..=u8::MAX {
+            match registry.iter().find(|(tag, _)| *tag == byte) {
+                Some((_, kind)) => {
+                    assert_eq!(u8::from(*kind), byte);
+                    assert_eq!(Lifecycle::try_from(byte), Ok(*kind));
+                }
+                None => assert_eq!(Lifecycle::try_from(byte), Err(UnknownLifecycle(byte))),
+            }
+        }
+    }
+
     use super::*;
     use alloc::string::ToString;
     use alloc::vec;

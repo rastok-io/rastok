@@ -2830,7 +2830,7 @@ graph app : App {
                 .unwrap_or_else(|error| panic!("policy ref: {error}"))
         };
         let privacy = crate::deployment::PrivacyProfile::new(
-            crate::deployment::PrivacyProfileName::new("privacy/support@1")
+            crate::deployment::PrivacyProfileName::new("privacy.example/support@1")
                 .expect("stable privacy profile"),
             policy("ropa/support"),
             vec![policy("purpose/support")],
@@ -2909,7 +2909,7 @@ graph app : App {
         assert!(missing_conditions_journal.records().is_empty());
 
         let regulated_privacy = crate::deployment::PrivacyProfile::new(
-            crate::deployment::PrivacyProfileName::new("privacy/regulated@1")
+            crate::deployment::PrivacyProfileName::new("privacy.example/regulated@1")
                 .expect("stable privacy profile"),
             policy("ropa/regulated"),
             vec![policy("purpose/regulated-support")],
@@ -2973,7 +2973,7 @@ graph app : App {
         ));
 
         let recipient_privacy = crate::deployment::PrivacyProfile::new(
-            crate::deployment::PrivacyProfileName::new("privacy/disclosure@1")
+            crate::deployment::PrivacyProfileName::new("privacy.example/disclosure@1")
                 .expect("stable privacy profile"),
             policy("ropa/disclosure"),
             vec![policy("purpose/model-service")],

@@ -805,6 +805,77 @@ Fable's review and Yoann's explicit approval must precede the single
 re-blessing. No push, merge, tag, publication or reviewer invocation has
 been performed.
 
+**A-T2-6 (4) — Deadlines travel inline in the record codec; `timing.rs` keeps
+only the types.** Found 2026-10-07 while re-reading `timing.rs` after the
+v20 candidate; a miss of the 2 October reading, which had kept "the type and
+its codec" together. Verified: `Deadlines::encode` / `decode` have exactly one
+production consumer, `codec.rs:252-260`, and that consumer nests them —
+record key 41 holds a CBOR byte string that itself contains the map
+`{ 41: [created_at, [[kind, id, due_at]…]] }`, the number written twice and
+a CBOR inside a CBOR, where every other field (emissions, routes, Loop and
+Retry packets) is an inline array. The nesting is the heritage of the former
+stand-alone retention field; it is also the only reason `timing::DecodeError`
+(`timing.rs:76-104`) exists, duplicating the `Read` / `Invalid` distinction
+that `codec::Error` already makes. Target: key 41 becomes the inline array
+`[created_at, [[kind, id, due_at]…]]` written and read by `journal::codec`,
+whose reader calls `Deadlines::try_new`; `codec::Error::Deadlines(timing::Error)`;
+`timing::DecodeError`, `DEADLINES_KEY` and `CALL_CLOSED_AT_KEY` leave
+`timing.rs`, which keeps `Deadline`, `Deadlines`, `try_new` and `Error`, with
+a header saying "dated obligations accepted with one record"; the recording
+bridge `recording/mod.rs:84-88` simplifies; the existing round-trip tests move
+to the codec. Moves recording bytes, never a causal seal, so it belongs in the
+v20 candidate before its single blessing. Owner: Astra.
+
+**Decision pending Yoann — namespace of the remaining `namespace/name@major`
+ids.** A-T1-9 landed for Contracts and decoders, but `SecretProviderId` still
+mints `rastok/env@1` (`deployment_config.rs:27`) and tests use `rastok/test@1`;
+cost and privacy profiles use `pricing/…` and `privacy/…`. Proposed rule, the
+consistency reading of A-T1-9: every id of this grammar minted by the standard
+library uses `std/` (`std/env@1`), every other publisher a dotted namespace,
+including test fixtures (`test.local/…`); `identity.md` states the rule once
+for the whole grammar. The alternative — the rule applies only to ids that
+enter the plan hash — must then be written explicitly. Last byte movement
+before extend-only, so it is settled in the v20 candidate.
+
+Yoann confirmed the general rule on 7 October: standard-library identities
+use `std/`; other qualified identities use dotted publisher namespaces,
+including fixtures and deployment profiles. Existing opaque profile-version
+syntax (including dates) is unchanged. The candidate follow-up implements
+`std/env@1`, `test.local/test@1` and dotted example profile publishers without
+aliases. This resolves the decision above; it does not admit a new profile or
+alter the graph's causal identity.
+
+**A-T2-5 residue — closed byte enums use the standard Rust idiom.** Decision
+(Yoann, 2026-10-07). Lot 2 (`4dee690`) removed the explicit discriminants and
+kept a separate `*_tag` projection function per enum, as the brief literally
+asked. The idiomatic form is the opposite: `#[repr(u8)]` with the wire value
+on each variant, `impl From<Kind> for u8` (`kind as u8`, defined and stable
+under `repr(u8)`) and `impl TryFrom<u8> for Kind` with an exhaustive `match`
+and a named refusal for every other byte; no `Unknown` variant, no derive
+crate for eight arms. Applies to the three registries — `IdKind`,
+`DeadlineKind`, `Lifecycle` — and retires `id_kind_tag`, `deadline_kind_tag`
+and `lifecycle_tag`. The number lives once, on the variant, where a reader
+looks for it. Mechanical; no byte moves. Owner: Astra, in the v20 candidate.
+
+### Candidate complements — 7 October
+
+The three additions above are implemented together before witness replacement.
+`timing.rs` owns only dated-obligation types and acceptance errors; the record
+codec writes the optional deadline array directly and calls `Deadlines::try_new`
+on reading. Its error carries `timing::Error`, without another decoding layer.
+**Contact correction:** the lossless record is a positional tuple, not a map
+whose outer key is 41. The removed byte string contained that redundant map;
+the tuple now contains the array itself. `closed_at` was already inline and
+does not change. Key 41 remains the field's name in the identity registry.
+
+The namespace decision applies to provider and profile references as well as
+Contracts; their existing reference/version syntax is not widened. All three
+byte enums have explicit discriminants, `From` and rejecting `TryFrom`, with
+every possible byte exercised. The helpers and the stand-alone timing codec
+are gone, without an old-spelling alias. Package/trace identity and the sole
+additional recording-byte movement are measured in the final section of the
+[v20 inventory](human-review-v20-identity.md) before blessing.
+
 ## Landed changes
 
 **`f72454a` — Rename identity, canonical-form and check vocabulary

@@ -54,6 +54,12 @@ Raw DATA is distinguished from a graph-born ccbor byte value; encoded and
 materialized ccbor are representation states of the same payload. Decimals
 and canonical NaNs round-trip exactly. The tuple has four system fields
 (id, parent, origin, graph version), app/ext metadata and DATA; no role.
+Deadlines are an inline optional tuple field:
+`[created_at, [[kind, id, due_at], ...]]`, with signed logical nanoseconds.
+There is no nested CBOR byte string or second map around that array. The
+reader calls `Deadlines::try_new`; malformed carriers and invalid dated
+obligations remain distinct errors. Winning Call `closed_at` is already an
+inline signed integer. Neither field contributes to the causal seal.
 
 ## Framing and refusal
 
