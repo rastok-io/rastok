@@ -4,6 +4,7 @@
 > Blessed and qualified on 2026-10-07 after Fable's review and Yoann's approval.
 > The final pre-blessing inventory, including all three complements, was
 > committed in `8bc54fd` before any stored witness was replaced.
+> The single witness blessing and its complete gate are committed in `18a0d44`.
 > The final qualification below supersedes the dated candidate gate results.
 
 ## Invariant and scope
@@ -373,7 +374,7 @@ constraint is unchanged: no core growth without reclaiming bytes first.
 ## Single blessing and qualification — 7 October
 
 The final inventory was committed as `8bc54fd` before any witness was
-replaced. The blessing then regenerated the three package witnesses,
+replaced. The blessing in `18a0d44` then regenerated the three package witnesses,
 embedded echo package, four root traces and 28 gallery traces from the
 current sources and scenarios. The new `files.utf8` witness observes three
 bytes for `é\n`; no earlier artefact was converted or retained as a second

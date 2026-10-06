@@ -892,7 +892,8 @@ additional recording-byte movement are measured in the final section of the
 
 The table below supersedes the scheduling and "still open" columns in the
 dated notes above. Implementation commits are listed independently of the
-single witness blessing; its complete qualification is recorded in the
+single witness blessing, **`18a0d44`**, following the committed final inventory
+and complements in **`8bc54fd`**. Its complete qualification is recorded in the
 [v20 identity inventory](human-review-v20-identity.md).
 The final ordinary workspace run passes 1,571 tests in 61 groups with no
 failures or ignored tests. Fmt, strict Clippy, rustdoc, the three `no_std`
@@ -901,7 +902,7 @@ targets and both fixed embedded workloads pass as well.
 | Action | Landed implementation | Named remainder |
 |---|---|---|
 | A-T1-1 | `28d9f0d`: immutable encoded payloads share `Arc<[u8]>`, with measured embedded bounds | `Arc<Value>` was considered, not promised; no further payload-sharing work is required by this action |
-| A-T1-1b | `2de737a`: materialize raw DATA by the reader type, including UTF-8 refusal and the three-byte `é\n` gallery regression | Its witness is part of the single v20 blessing |
+| A-T1-1b | `2de737a`: materialize raw DATA by the reader type, including UTF-8 refusal and the three-byte `é\n` gallery regression | Its witness is blessed in `18a0d44` |
 | A-T1-2 | `2de737a`: remove role from the envelope, canonical form and recording; compact the registry | No role slot or compatibility reader remains |
 | A-T1-4 | `8fa9331`, `2de737a`, `8bc54fd`: closed `IdKind`, compact explicit discriminants, standard Rust conversions and exhaustive byte refusals | Decoder attestation itself remains M2 under A-T1-7 |
 | A-T1-5 | `f72454a`, `eb3f396`, `8fa9331`: instance/canonical modules, dependency direction and all listed rename residues | No deferred instance-module move remains |
