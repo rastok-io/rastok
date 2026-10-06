@@ -671,8 +671,8 @@ The journal-focused suite passes 74 tests, including each typed refusal,
 and core all-target/all-feature Clippy passes. Whole-lot qualification
 and embedded size measurement follow after the remaining actions.
 
-**A-T1-10 — Enforce the rustdoc citation convention** (the commit introducing
-this paragraph). The self-contained `canonical` and `canonical_cbor`
+**A-T1-10 — Enforce the rustdoc citation convention**, landed in `0322df8`.
+The self-contained `canonical` and `canonical_cbor`
 headers already landed in `eb3f396`; they describe CBOR, the byte bijection,
 the handwritten codec and the separate tag registry, with short in-text
 citations and absolute reference links. No rewrite was needed.
@@ -680,6 +680,20 @@ CI now checks all tracked Rust files for relative Markdown links in rustdoc
 comments, without a new dependency. Four focused tests cover line and block
 docs, inline/reference/HTML links, absolute links and ordinary non-doc text.
 The check passes on 208 tracked Rust files.
+
+**A-T2-6(2) — Share the admission-generation fold** (the commit introducing
+this paragraph). `MemJournal` and `AdmissionPrefix` use the same lifecycle
+fold, including active close roots, parent-generation traversal and the
+current-versus-successor admission rule. Generation validation remains
+before the journal's other lifecycle checks; the index changes only after
+all rejection gates, with the committed record. This consolidates an
+existing index, not the deferred M2 general journal indexing.
+The new regression compares independently specified generations after
+each of thirteen records: parent/child starts, inner-first Closing,
+successor generations and an unaffected sibling. It also checks that a
+rejected parent stop changes neither the journal nor admission queries,
+then reconstructs every prefix and the complete live index.
+The journal-focused suite passes 75 tests; core strict Clippy passes.
 
 ## Landed changes
 
