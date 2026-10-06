@@ -96,7 +96,7 @@ pub mod ids {
     /// The id of an envelope emitted by a Graph owner rather than an
     /// executable Node. Existing Node recipes keep their exact bytes; this
     /// form only makes the already-specified root-relative owner path
-    /// available to aspect managers and Graph-owned handlers.
+    /// available to Extension managers; Graphs have no application handlers.
     #[must_use]
     pub fn graph_emission_id(
         owner: &node::OwnerPath,
@@ -119,7 +119,7 @@ pub mod ids {
 
     /// The delivery reference (envelope.md §2): one envelope delivered
     /// along one canonical edge is one delivery, and this is its
-    /// identity — what `deadline_ids` (identity.md §3 key 37) seals, what
+    /// identity — what `deadline_ids` (identity.md §3 key 24) seals, what
     /// the scheduler resolves, and what the call identity derives
     /// from. A fan-out of one envelope is one distinct reference per
     /// receiving edge, two ports of one connector included.
@@ -159,7 +159,7 @@ pub mod ids {
     /// one delivery carrying one prepared request — derived from the
     /// delivery reference and the digest of the exact prepared bytes,
     /// recomputable from any record that carries them (EGRESS keys
-    /// 40, 43, 47), never stored as a new causal field. The digest
+    /// 27, 30, 33), never stored as a new causal field. The digest
     /// says WHAT was sent; the reference says BY WHERE — routing
     /// never salts the digest.
     #[must_use]
@@ -230,7 +230,7 @@ pub mod ids {
     }
 }
 
-/// The closed kinds of dated obligations recorded in key 37.
+/// The closed kinds of dated obligations recorded in key 24.
 /// Their encoded numbers are defined by [`deadline_kind_tag`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
@@ -260,11 +260,11 @@ pub const fn deadline_kind_tag(kind: DeadlineKind) -> u8 {
         DeadlineKind::CallTimeout => 1,
         DeadlineKind::JoinWithin => 2,
         DeadlineKind::InstanceLifetime => 3,
-        DeadlineKind::RecurrenceDelay => 5,
-        DeadlineKind::InstanceDrain => 6,
-        DeadlineKind::InstanceSettlement => 7,
-        DeadlineKind::InboundCallTimeout => 8,
-        DeadlineKind::SessionHandshake => 9,
+        DeadlineKind::RecurrenceDelay => 4,
+        DeadlineKind::InstanceDrain => 5,
+        DeadlineKind::InstanceSettlement => 6,
+        DeadlineKind::InboundCallTimeout => 7,
+        DeadlineKind::SessionHandshake => 8,
     }
 }
 
@@ -288,11 +288,11 @@ impl TryFrom<u8> for DeadlineKind {
             1 => Ok(Self::CallTimeout),
             2 => Ok(Self::JoinWithin),
             3 => Ok(Self::InstanceLifetime),
-            5 => Ok(Self::RecurrenceDelay),
-            6 => Ok(Self::InstanceDrain),
-            7 => Ok(Self::InstanceSettlement),
-            8 => Ok(Self::InboundCallTimeout),
-            9 => Ok(Self::SessionHandshake),
+            4 => Ok(Self::RecurrenceDelay),
+            5 => Ok(Self::InstanceDrain),
+            6 => Ok(Self::InstanceSettlement),
+            7 => Ok(Self::InboundCallTimeout),
+            8 => Ok(Self::SessionHandshake),
             other => Err(UnknownDeadlineKind(other)),
         }
     }
@@ -564,9 +564,9 @@ pub(crate) fn observations_for_records_from(
 /// `(connector_path, replica, seq)`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IngressRecord {
-    /// Exact-instance commands retained atomically with this root (key 57).
+    /// Exact-instance commands retained atomically with this root (key 42).
     pub instance_commands: Option<Box<instance_stop::Packet>>,
-    /// Retained arm instants and deadlines (key 56), atomically accepted with
+    /// Retained arm instants and deadlines (key 41), atomically accepted with
     /// this ingress. Omitted when this record arms no unsealed schedule.
     pub deadlines: Option<Box<timing::Deadlines>>,
     /// Stable provenance of the external root stream.
@@ -699,11 +699,11 @@ impl fmt::Display for LoopRunId {
 /// given.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TransactionRecord {
-    /// Sparse pinned-operation facts/correlation (causal key 58).
+    /// Sparse pinned-operation facts/correlation (causal key 43).
     pub retry_record: Option<Box<retry_protocol::Packet>>,
-    /// Exact-instance command production or winning consumption (key 57).
+    /// Exact-instance command production or winning consumption (key 42).
     pub instance_commands: Option<Box<instance_stop::Packet>>,
-    /// Retained arm instants and deadlines (key 56), outside causal identity.
+    /// Retained arm instants and deadlines (key 41), outside causal identity.
     /// Absence is not evidence from which recovery may invent a deadline.
     pub deadlines: Option<Box<timing::Deadlines>>,
     /// The firing lifecycle/transaction owner. Ordinary Node transactions
@@ -756,7 +756,7 @@ pub struct TransactionRecord {
     /// the same port and edge.
     pub routes: Vec<RoutedDelivery>,
     /// The dated obligations this firing creates — `(DeadlineKind, id)`
-    /// per identity.md §3 key 37: kind 1 = call budget, ref = the
+    /// per identity.md §3 key 24: kind 1 = call budget, ref = the
     /// derived budget identity `budget_ref(edge, envelope_id)`
     /// (erratum E-2026-08-04-2). Sorted at commit; the due instant
     /// is never sealed.
@@ -797,11 +797,11 @@ pub enum EgressRecord {
 /// its closure — two records, never one rewritten.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CallRecord {
-    /// Attempt correlation (causal key 58), absent outside Retry.
+    /// Attempt correlation (causal key 43), absent outside Retry.
     pub retry_record: Option<Box<retry_protocol::Packet>>,
-    /// Winning logical closure instant (unsealed key 59); absent only on Open.
+    /// Winning logical closure instant (unsealed key 44); absent only on Open.
     pub closed_at: Option<i64>,
-    /// Original closure-based recurrence arm (unsealed 56, causal presence 37).
+    /// Original closure-based recurrence arm (unsealed 41, causal presence 24).
     pub deadlines: Option<Box<timing::Deadlines>>,
     /// The canonical call fields.
     pub intent: Intent,
@@ -876,7 +876,7 @@ pub enum CloseVerdict {
 pub struct CommittedIngress {
     /// The allocated or validated sequence.
     pub seq: u64,
-    /// The envelope born here — its five reserved `sys` fields minted by the runtime.
+    /// The envelope born here — its four `sys` fields minted by the runtime.
     pub envelope: Envelope,
     /// The committed record.
     pub record: IngressRecord,
@@ -2324,7 +2324,7 @@ impl Journal for MemJournal {
         attempt: Option<retry_protocol::AttemptId>,
     ) -> Result<(), Error> {
         // The autonomy check: the call identity must recompute from
-        // the fields this record seals (keys 40, 43, 47).
+        // the fields this record seals (keys 27, 30, 33).
         let derived = ids::call_id(
             ids::delivery_id(&intent.edge, intent.emitting_id),
             intent.request_digest(),
@@ -3610,8 +3610,8 @@ mod tests {
     #[test]
     fn the_delivery_ref_recipe_is_pinned_byte_for_byte() {
         // envelope.md §2: the delivery reference is
-        // derive(0x20, canonical_edge, envelope_id). Any drift here
-        // silently unseals every golden's key 37 and every call ref.
+        // derive(0x0b, canonical_edge, envelope_id). Any drift here
+        // silently unseals every golden's key 24 and every call ref.
         let delivery = Id::from_bytes([7; 16]);
         let reference = ids::delivery_id("shout.out>echo.in", delivery);
         assert_eq!(
@@ -4038,7 +4038,9 @@ mod tests {
                 crate::envelope::Scalar::Text(first_ref.to_string())
             ))
         );
-        assert_eq!(journal.live_sessions(), vec![first_ref, second_ref]);
+        let mut expected = vec![first_ref, second_ref];
+        expected.sort();
+        assert_eq!(journal.live_sessions(), expected);
 
         activate(&mut journal, instance("socket", 0));
         let mut terminal = lifecycle_transaction(instance("socket", 0), node::Lifecycle::Exit);

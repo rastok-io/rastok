@@ -151,7 +151,7 @@ impl Checker<'_, '_> {
         }
         match AnnotationApplication::new(
             AnnotationBinding::Measure,
-            "rastok/measure@3".into(),
+            "std/measure@3".into(),
             schema,
             Value::Struct(values),
         ) {

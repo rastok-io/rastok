@@ -234,6 +234,17 @@ impl Vm<'_> {
                 })?;
             let from = self.endpoint_ref(source)?;
             let to = self.endpoint_ref(&destination)?;
+            let data = DataSlot {
+                ty: match &destination.owner {
+                    EndpointOwner::Node(_) => self.plan.resolved_ports().endpoint_type(&to),
+                    EndpointOwner::Graph(_) => self
+                        .plan
+                        .graph_ports(target_owner)
+                        .and_then(|ports| ports.iter().find(|port| port.port == destination.port))
+                        .and_then(|port| port.ty.as_ref()),
+                },
+                ..DataSlot::new(envelope.data())
+            };
             let target = if to.node.is_some() || self.graph_entry(&destination).is_some() {
                 Some(self.prepare_owner_target(
                     journal,
@@ -241,6 +252,7 @@ impl Vm<'_> {
                     source_instance,
                     target_owner,
                     envelope,
+                    &data,
                     candidates,
                 )?)
             } else {
@@ -522,13 +534,27 @@ impl Vm<'_> {
 
     fn next_graph_admission(&self) -> Option<&Admission> {
         self.graph_loops.as_deref().and_then(|graph| {
+            let unopened = |admission: &Admission| {
+                self.loop_manager.as_deref().is_none_or(|fold| {
+                    fold.run(protocol::run_ref(&admission.instance, &admission.opening))
+                        .is_none()
+                })
+            };
             graph.admissions.values().find(|admission| {
                 self.instances
                     .get(&admission.instance)
                     .is_some_and(|instance| matches!(instance.phase, instance::Phase::Open))
-                    && self.loop_manager.as_deref().is_none_or(|fold| {
-                        fold.run(protocol::run_ref(&admission.instance, &admission.opening))
-                            .is_none()
+                    && unopened(admission)
+                    // Open in the input's FIFO order, even when several runs
+                    // are opened before their first admission. Derived ids
+                    // identify the runs; they cannot reorder this stream.
+                    && !graph.admissions.values().any(|earlier| {
+                        earlier.instance == admission.instance
+                            && earlier.delivery.edge == admission.delivery.edge
+                            && earlier.delivery.source_instance
+                                == admission.delivery.source_instance
+                            && earlier.delivery.seq < admission.delivery.seq
+                            && unopened(earlier)
                     })
             })
         })
@@ -1210,7 +1236,9 @@ impl Vm<'_> {
                 if matches!(fact, Fact::Expired { .. })
                     && !matches!(record.emissions.as_slice(), [emission]
                     if self.plan.owners[owner.index()].loop_spec().and_then(|spec| spec.expired.as_ref())
-                        .is_some_and(|target| target.port == emission.port))
+                        .is_some_and(|target| target.port == emission.port
+                            && emission.envelope.data().materialized_value()
+                                .is_some_and(|value| target.ty.accepts(value))))
                 {
                     return Err(invalid(
                         "Loop exhaustion changed its resolved host terminal",

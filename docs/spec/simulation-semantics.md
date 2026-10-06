@@ -3,9 +3,9 @@
 > **Status: Normative — under review.** The `lab` is the home of
 > simulations and experiments;
 > `theorem` is a reserved declaration (§10–§11).
-> Plan v16 removes the historical RootSink observation path: Lab observes
+> Lab observes
 > every emission once at its source, and `app.<port>` observes only an actual
-> App-boundary crossing. This is the executable projection retained by v17; discarded
+> App-boundary crossing; discarded
 > child emissions are not public App outputs.
 > Companion to [execution-model.md](execution-model.md) (virtual time —
 > `advance` is defined there, §8) and
@@ -133,7 +133,7 @@ Two-mode equivalence, stated journal-relative : *same world-half and logical
 timeline in → byte-identical **causal cores** out*
 (delivery-semantics §1 : a record = causal core + observation annotations ;
 `committed_at` is an annotation outside the comparison, while a handler's
-explicit `now()` observation is causal key 54). This makes the claim
+explicit `now()` observation is causal key 39). This makes the claim
 **checkable against production** : fingerprint a prod slice's causal cores and
 compare them to the bridge-generated scenario's.
 
@@ -285,7 +285,7 @@ is `.` (`out = .`).
   response with exactly one final `exit`. A resident Process Session may
   emit zero or more frames without ending the resource; an optional `exit`
   is unique and last. Exits from different arms are never added
-  together. This executable Lab syntax is not a v16 package feature: the Lab
+  together. This executable Lab syntax is not a package feature: the Lab
   never enters the production plan or its identity. Multi-emission and Loop
   manager commands in mocks remain named deferrals.
 - **An uncovered outbound call fails the scenario, loudly** — a call reaching a

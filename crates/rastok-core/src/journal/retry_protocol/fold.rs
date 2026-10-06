@@ -416,7 +416,6 @@ impl Fold {
                 if sys.id() != id
                     || sys.parent_id() != state.parent
                     || sys.origin_id() != initial.sys().origin_id()
-                    || sys.role() != initial.sys().role()
                     || sys.graph_version() != initial.sys().graph_version()
                     || !same_state(envelope, &state.original)
                     || *delivery

@@ -64,6 +64,10 @@ pub enum Fault {
     MissingHandler,
     /// The payload could not be materialized for the handler.
     Opaque(String),
+    /// A text reader encountered bytes which are not valid UTF-8.
+    InvalidUtf8(core::str::Utf8Error),
+    /// A ccbor payload is not a canonical logical value.
+    InvalidCanonicalData(crate::canonical_cbor::DecodeError),
     /// A caller-supplied slot the plan does not know. `Slot` is
     /// freely constructible; the validated plan proves only its OWN
     /// references, so the public doors verify and refuse — never
@@ -81,6 +85,8 @@ impl fmt::Display for Fault {
             Self::InvalidValue(error) => error.fmt(f),
             Self::MissingHandler => f.write_str("no handler for this trigger"),
             Self::Opaque(what) => write!(f, "the payload is opaque here: {what}"),
+            Self::InvalidUtf8(error) => write!(f, "text payload is not valid UTF-8: {error}"),
+            Self::InvalidCanonicalData(error) => error.fmt(f),
             Self::UnknownSlot(slot) => {
                 write!(f, "the plan has no node at slot {}", slot.index())
             }
@@ -734,7 +740,13 @@ impl<'plan> HandlerExecutor<'plan> {
             String::from("meta"),
             expr::EvalValue::from(meta_value(input.meta())),
         );
-        let payloads = PayloadSlots::new(&input, candidate.inputs);
+        let payloads = PayloadSlots::new(
+            &input,
+            candidate.inputs,
+            self.plan,
+            slot,
+            &node::Trigger::Port(candidate.trigger.port.clone()),
+        );
         let verdict = resolve_payload_with_slots(
             eval_with_slots(guard, &base, &payloads, &self.plan.assets)?,
             &payloads,
@@ -996,7 +1008,7 @@ impl<'plan> HandlerExecutor<'plan> {
         // an identity emission, or a short-circuited branch never
         // forces an opaque payload to decode (envelope.md §5:
         // opacity is a property, not an ambush).
-        let payloads = PayloadSlots::new(input, named_inputs);
+        let payloads = PayloadSlots::new(input, named_inputs, self.plan, slot, trigger);
         if let Some(guard) = &handler.guard {
             let verdict = resolve_payload_with_slots(
                 eval_with_slots(guard, &base(&scratch, &lets), &payloads, &self.plan.assets)?,
@@ -2017,6 +2029,7 @@ pub fn apply_struct_write(data: &mut envelope::Value, path: &[String], leaf: env
 #[derive(Debug)]
 pub struct DataSlot<'a> {
     data: &'a Data,
+    ty: Option<&'a DataType>,
     cache: core::cell::RefCell<Option<Value>>,
     fault: core::cell::RefCell<Option<Fault>>,
 }
@@ -2027,8 +2040,19 @@ impl<'a> DataSlot<'a> {
     pub fn new(data: &'a Data) -> Self {
         Self {
             data,
+            ty: None,
             cache: core::cell::RefCell::new(None),
             fault: core::cell::RefCell::new(None),
+        }
+    }
+
+    /// Selects the logical reading from the validated port type. Raw bytes
+    /// never borrow another reader's cached text interpretation.
+    #[must_use]
+    pub fn typed(data: &'a Data, ty: &'a DataType) -> Self {
+        Self {
+            ty: Some(ty),
+            ..Self::new(data)
         }
     }
 
@@ -2049,7 +2073,21 @@ impl<'a> DataSlot<'a> {
         if let Some(value) = self.cache.borrow().as_ref() {
             return Ok(value.clone());
         }
-        let value = data_value(self.data)?;
+        let value = match (self.data, self.ty) {
+            (
+                Data::Encoded {
+                    encoding: envelope::Encoding::Raw,
+                    bytes,
+                    ..
+                },
+                Some(DataType::Text),
+            ) => Value::Text(
+                core::str::from_utf8(bytes)
+                    .map_err(Fault::InvalidUtf8)?
+                    .into(),
+            ),
+            _ => data_value(self.data)?,
+        };
         *self.cache.borrow_mut() = Some(value.clone());
         Ok(value)
     }
@@ -2089,20 +2127,66 @@ struct PayloadSlots<'a> {
 }
 
 impl<'a> PayloadSlots<'a> {
-    fn new(input: &'a Envelope, named: &'a [envelope::Delivery]) -> Self {
+    fn new(
+        input: &'a Envelope,
+        named: &'a [envelope::Delivery],
+        plan: &'a ValidatedExecutionPlan,
+        slot: Slot,
+        trigger: &node::Trigger,
+    ) -> Self {
+        let payload = |data, port: &node::Port| {
+            plan.resolved_ports()
+                .node_port_type(slot, port)
+                .map_or_else(|| DataSlot::new(data), |ty| DataSlot::typed(data, ty))
+        };
         let mut sources = BTreeMap::new();
         for delivery in named {
+            let mut data = payload(delivery.envelope.data(), &delivery.port);
+            if delivery.port.name() == "@Loop.state" {
+                let mut ancestor = Some(plan.nodes[slot.index()].owner);
+                while let Some(owner_slot) = ancestor {
+                    let owner = &plan.owners[owner_slot.index()];
+                    if let Some(spec) = owner.loop_spec() {
+                        let ty = if owner_slot == plan.nodes[slot.index()].owner {
+                            plan.resolved_ports().node_port_type(slot, &spec.entry)
+                        } else {
+                            plan.graph_ports(owner_slot)
+                                .and_then(|ports| ports.iter().find(|port| port.port == spec.entry))
+                                .and_then(|port| port.ty.as_ref())
+                        };
+                        if let Some(ty) = ty {
+                            data = DataSlot::typed(delivery.envelope.data(), ty);
+                        }
+                        break;
+                    }
+                    ancestor = owner.parent;
+                }
+            }
             sources.insert(
                 delivery.port.name().to_string(),
                 PayloadSource {
-                    data: DataSlot::new(delivery.envelope.data()),
+                    data,
                     meta: Some(delivery.envelope.meta()),
                 },
             );
         }
         Self {
             input: PayloadSource {
-                data: DataSlot::new(input.data()),
+                data: match trigger {
+                    node::Trigger::Port(port) => payload(input.data(), port),
+                    node::Trigger::Lifecycle(_) => plan
+                        .resolved_ports()
+                        .node(slot)
+                        .and_then(|ports| {
+                            ports
+                                .iter()
+                                .find(|port| port.direction() == node::Direction::Input)
+                        })
+                        .map_or_else(
+                            || DataSlot::new(input.data()),
+                            |port| DataSlot::typed(input.data(), port.ty()),
+                        ),
+                },
                 meta: Some(input.meta()),
             },
             named: sources,
@@ -2389,10 +2473,24 @@ pub fn eval_lazy(
     result
 }
 
-/// The handler-facing materialized view of an envelope's data — the bridge a
-/// host layer (lab, Drivers, tooling) uses to read what a handler
-/// reads.
+/// Materializes without a reading port: raw stays bytes, ccbor is a typed
+/// logical value. A caller evaluating a port-bound expression uses
+/// [`DataSlot::typed`] so a text port selects strict UTF-8 explicitly.
 pub fn data_value(data: &Data) -> Result<Value, Fault> {
+    if let Data::Encoded {
+        encoding: envelope::Encoding::Raw,
+        bytes,
+        ..
+    } = data
+    {
+        // Raw's envelope-wide cache can keep its byte reading. A text
+        // reader has a separate typed slot and must not redefine that cache.
+        let value = data.materialize_with(decode_encoded)?;
+        return Ok(match value {
+            Value::Bytes(cached) if cached.as_slice() == bytes.as_ref() => value.clone(),
+            _ => Value::Bytes(bytes.to_vec()),
+        });
+    }
     // `Data::materialize_with` is the CACHE AUTHORITY: the decode
     // lands in the envelope's own cell, so an identity re-emission
     // ships the filled cell and the next node never decodes again —
@@ -2404,10 +2502,10 @@ pub fn data_value(data: &Data) -> Result<Value, Fault> {
 /// `Data::materialize_with` runs on first structural access.
 fn decode_encoded(encoding: envelope::Encoding, bytes: &[u8]) -> Result<envelope::Value, Fault> {
     match encoding {
-        envelope::Encoding::Raw => Ok(match core::str::from_utf8(bytes) {
-            Ok(text) => envelope::Value::Text(String::from(text)),
-            Err(_) => envelope::Value::Bytes(bytes.to_vec()),
-        }),
+        envelope::Encoding::Raw => Ok(envelope::Value::Bytes(bytes.to_vec())),
+        envelope::Encoding::Ccbor => {
+            crate::canonical::decode_data_value(bytes).map_err(Fault::InvalidCanonicalData)
+        }
         other => Err(Fault::Opaque(format!(
             "{other} decoding is not in this build"
         ))),
@@ -2416,7 +2514,7 @@ fn decode_encoded(encoding: envelope::Encoding, bytes: &[u8]) -> Result<envelope
 
 /// Builds the one join evaluation context. Writable metadata uses
 /// CommonOrAbsent across every contribution; the triggering envelope keeps
-/// the five reserved `sys` fields and payload solely as the causal base.
+/// the four `sys` fields and payload solely as the causal base.
 /// Each declared port also receives a complete named envelope binding.
 fn join_context(
     plan: &crate::plan::ExecutionPlan,
@@ -2497,14 +2595,14 @@ fn bind_loop_state(
 }
 
 /// The handler-facing logical view of an envelope's metadata: the full
-/// five reserved `meta.sys` fields and the two writable zones, flat dotted keys
+/// four `meta.sys` fields and the two writable zones, flat dotted keys
 /// nested for reading.
 pub fn meta_value(meta: &Meta) -> Value {
     let mut app = BTreeMap::new();
     for (field, value) in meta.app() {
         app.insert(field.clone(), from_meta_value(value));
     }
-    // The five reserved `sys` fields — a handler reading any `meta.sys`
+    // The four `sys` fields — a handler reading any `meta.sys`
     // field the spec names must find it, not a hole.
     let mut sys = BTreeMap::new();
     sys.insert(String::from("id"), Value::Text(meta.sys().id().to_string()));
@@ -2518,10 +2616,6 @@ pub fn meta_value(meta: &Meta) -> Value {
     sys.insert(
         String::from("origin_id"),
         Value::Text(meta.sys().origin_id().to_string()),
-    );
-    sys.insert(
-        String::from("role"),
-        Value::Text(meta.sys().role().to_string()),
     );
     sys.insert(
         String::from("graph_version"),

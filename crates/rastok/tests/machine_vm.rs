@@ -1323,9 +1323,9 @@ graph lazy_join : App {{
         &mut journal,
         encoded_submission(
             "left",
-            Encoding::Avro,
+            Encoding::ArrowIpc,
             b"left-opaque",
-            "application/avro-left",
+            "application/vnd.apache.arrow.stream-left",
         ),
     )
     .unwrap();
@@ -1334,9 +1334,9 @@ graph lazy_join : App {{
         &mut journal,
         encoded_submission(
             "right",
-            Encoding::Avro,
+            Encoding::ArrowIpc,
             b"right-opaque",
-            "application/avro-right",
+            "application/vnd.apache.arrow.stream-right",
         ),
     )
     .unwrap();
@@ -1345,13 +1345,15 @@ graph lazy_join : App {{
     let output = &vm.outputs()[0].envelope;
     assert!(matches!(
         output.data(),
-        Data::Encoded { encoding: Encoding::Avro, bytes, .. }
+        Data::Encoded { encoding: Encoding::ArrowIpc, bytes, .. }
             if bytes.as_ref() == b"left-opaque"
     ));
     assert_eq!(
         output.meta().ext().get("content_type"),
         Some(&rastok::envelope::MetaValue::Scalar(
-            rastok::envelope::Scalar::Text(String::from("application/avro-left"))
+            rastok::envelope::Scalar::Text(String::from(
+                "application/vnd.apache.arrow.stream-left"
+            ))
         )),
         "the selected payload, not the causal trigger, decides content_type"
     );
@@ -1361,7 +1363,12 @@ graph lazy_join : App {{
     let mut vm = Vm::boot(&inspected.plan, GraphVersion(1));
     vm.inject(
         &mut journal,
-        encoded_submission("right", Encoding::Avro, b"never-read", "application/avro"),
+        encoded_submission(
+            "right",
+            Encoding::ArrowIpc,
+            b"never-read",
+            "application/vnd.apache.arrow.stream",
+        ),
     )
     .unwrap();
     vm.drain(&mut journal).unwrap();
@@ -6348,6 +6355,16 @@ graph countdown : App + Loop {
         .collect();
     assert_eq!(runs.len(), 2);
     let before = journal.records().len();
+    assert_eq!(
+        loop_state(&journal, runs[0]).state.data(),
+        &Data::materialized(Value::Int(0)),
+        "the first input opened the first run"
+    );
+    assert_eq!(
+        loop_state(&journal, runs[1]).state.data(),
+        &Data::materialized(Value::Int(1)),
+        "the second input opened the second run"
+    );
     vm.advance(&mut journal, &mut EchoWorld::default(), 1_000_000_000)
         .unwrap();
     let transitions: Vec<_> = journal.records()[before..]
@@ -6359,13 +6376,27 @@ graph countdown : App + Loop {
         .flat_map(|packet| &packet.facts)
         .filter(|fact| matches!(fact, LoopFact::Advance { .. } | LoopFact::Close { .. }))
         .collect();
-    assert!(matches!(
-        transitions.as_slice(),
-        [
-            LoopFact::Close { run: first, .. },
-            LoopFact::Advance { run: second, .. }
-        ] if *first == runs[0] && *second == runs[1]
-    ));
+    assert!(
+        matches!(
+            transitions.as_slice(),
+            [
+                LoopFact::Close { run: first, .. },
+                LoopFact::Advance { run: second, .. }
+            ] if *first == runs[0] && *second == runs[1]
+        ),
+        "opened {runs:?}, transitions {transitions:?}"
+    );
+    for cut in before..=journal.records().len() {
+        let mut retained =
+            MemJournal::from_records(GraphVersion(1), None, &journal.records()[..cut]).unwrap();
+        let mut restored = Vm::boot_at(&compilation.plan, GraphVersion(1), vm.now());
+        restored.recover_from_journal(&retained).unwrap();
+        restored
+            .advance(&mut retained, &mut EchoWorld::default(), 1_000_000_000)
+            .unwrap();
+        assert_eq!(retained.records(), journal.records(), "recovery at {cut}");
+        assert_eq!(restored.outputs(), vm.outputs(), "recovery at {cut}");
+    }
 }
 
 #[test]

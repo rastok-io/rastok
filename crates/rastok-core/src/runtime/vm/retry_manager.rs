@@ -354,11 +354,11 @@ impl Vm<'_> {
         &self,
         journal: &dyn Journal,
     ) -> Result<Option<Id>, VmError> {
-        let (Some(loops), Some(retries)) =
-            (self.loop_manager.as_deref(), self.retry_manager.as_deref())
-        else {
+        let loops = self.loop_manager.as_deref();
+        let retries = self.retry_manager.as_deref();
+        if loops.is_none() && retries.is_none() {
             return Ok(None);
-        };
+        }
         let mut head = None;
         journal
             .visit_records(&mut |record| {
@@ -376,7 +376,7 @@ impl Vm<'_> {
                                     let LoopFact::Advance { run, .. } = fact else {
                                         return false;
                                     };
-                                    loops.run(*run).is_some_and(|state| {
+                                    loops.and_then(|fold| fold.run(*run)).is_some_and(|state| {
                                         state.phase == LoopPhase::AwaitingAdmission
                                             && state.admission == arm.reference
                                             && state.due_at == Some(arm.due_at)
@@ -390,7 +390,9 @@ impl Vm<'_> {
                             .retry_record
                             .as_deref()
                             .and_then(|packet| packet.context)
-                            .and_then(|attempt| retries.operation(attempt.operation))
+                            .and_then(|attempt| {
+                                retries.and_then(|fold| fold.operation(attempt.operation))
+                            })
                             .is_some_and(|state| {
                                 state.phase == Phase::AwaitingAdmission
                                     && state.call == Some(call.intent.call_id)
@@ -525,10 +527,11 @@ impl Vm<'_> {
                     .ok_or_else(|| error(protocol::Error::Transition))?,
             );
             let envelope = Envelope::new(
-                Meta::new(
-                    MetaSys::emission(id, parent.meta().sys(), self.graph_version.0)
-                        .with_role(state.original.meta().sys().role()),
-                )
+                Meta::new(MetaSys::emission(
+                    id,
+                    parent.meta().sys(),
+                    self.graph_version.0,
+                ))
                 .with_app(state.original.meta().app().clone())
                 .with_ext(state.original.meta().ext().clone()),
                 state.original.data().clone(),

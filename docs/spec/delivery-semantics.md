@@ -1,6 +1,6 @@
 # Delivery Semantics — the journal, the transaction, and the boundary
 
-> **Status (2026-09-21): normative, current v19.**
+> **Status (2026-10-06): normative target, categorical package v20.**
 > Companion to [envelope.md](envelope.md) (identity ; its §7 journal stub is
 > filled by §6 below) and [execution-model.md](execution-model.md)
 > (Executor/manager transactions, ordering, and the dated-events queue).
@@ -215,7 +215,7 @@ Only `Started` transfers ownership and enters the local exactly-once start
 fold. Consequently queue or byte pressure changes pacing but can never be
 reported as an external domain fact.
 
-For `rastok/file@1`, the post-open worker decodes and executes that descriptor
+For `std/file@3`, the post-open worker decodes and executes that descriptor
 itself; it never re-reads the plan settings. Cooperative cancellation before a
 complete read or atomic-rename commit emits nothing from the Driver, leaving
 the scheduler's won closure authoritative. A completion observed after another
@@ -223,7 +223,7 @@ closure won is handled by the same discarded-response rule as every outbound
 protocol. `Dispatcher::resume` starts no existing open call: filesystem recall
 is a future recovery-fold decision, not replay behavior.
 
-For `rastok/http-client@1`, the descriptor additionally seals method,
+For `std/http-client@3`, the descriptor additionally seals method,
 absolute URL, lossless ordered headers, exact codec body, authentication and
 idempotency material. The live Driver may try another declared HTTP version
 only while no request byte can have become visible. Once visibility is
@@ -253,7 +253,7 @@ preparing a different operation.
 
 ### 4.3 Retry with the byte-same key — and the key-stability rule
 
-> Native Retry is executable in v19 for finite outbound Calls. Under its
+> Native Retry is executable in format 20 for finite outbound Calls. Under its
 > [operation contract](../architecture/retry-c1-algebra.md), the prepared
 > operation, resolved settings and optional partner key are retained once;
 > invocation expressions are not re-evaluated between attempts. This does not
@@ -406,9 +406,9 @@ M1.6 adds `ConnectorExchange = Event | Call | Session`; it does not add
 a fourth causal record type. Session opening and inbound messages are INGRESS
 facts when initiated by the world. A client opening and every graph-to-world
 message are EGRESS intents. Session terminal publication is an ordinary
-Connector transaction folded against the same close-once authority. The exact
-v11 subforms and keys landed together at H1, so no intermediate package can claim
-session behavior without carrying the facts needed to replay it.
+Connector transaction folded against the same close-once authority. Session
+behavior requires the complete subforms specified in [identity.md](identity.md),
+including the facts needed to replay it.
 
 Every session has one opaque journal-derived `SessionId`. It correlates
 messages and the sole terminal exit while excluding sockets, addresses,
@@ -469,7 +469,7 @@ output case has at least one explicit disposition in the validated plan:
 - a temporal-manager command;
 - `nothing`.
 
-> **Executable v19 Retry disposition:**
+> **Retry disposition:**
 > [D-2026-09-14-4](decisions.md#pre-c1-review-amendments--14-september)
 > gives intermediate attempt envelopes an explicit retained disposition to
 > their Retry manager and a separate consumption fact. They are emitted and
@@ -570,9 +570,9 @@ fields/subforms of TRANSACTION records, not fourth and fifth record types.
 | `irreversible`/`compensable` connectors | ⚠️ compile warning : guarantees are process-lifetime | ✅ | ✅ |
 
 
-## 7. Saga boundary in v16
+## 7. Saga boundary
 
-Saga remains a named future Extension. V16 does not admit `: Saga`, does not
+Saga remains a named future Extension. M1 does not admit `: Saga`, does not
 define `Saga.timeout`, and has no `on compensate` trigger. In particular,
 this document must not manufacture an executable rollback fold while the
 command, acknowledgement, reverse order, terminal result, and recovery

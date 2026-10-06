@@ -386,8 +386,6 @@ pub enum Lifecycle {
     /// Sole terminal observation of one Session. This is an internal
     /// Connector transaction trigger, never a source handler activation.
     Exit,
-    /// Saga compensation transaction.
-    Compensate,
     /// Loop continuation transaction.
     Next,
     /// Expired per-call timeout budget.
@@ -407,7 +405,6 @@ impl fmt::Display for Lifecycle {
             Self::Closing => "closing",
             Self::Reply => "reply",
             Self::Exit => "exit",
-            Self::Compensate => "compensate",
             Self::Next => "next",
             Self::Timeout => "timeout",
             Self::Evict => "evict",

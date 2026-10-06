@@ -675,12 +675,35 @@ impl Vm<'_> {
                                 "the expiry command lost its causal envelope",
                             )
                         })?;
+                    let entry_type = match slot {
+                        Some(slot) => self
+                            .plan
+                            .resolved_ports()
+                            .node_port_type(slot, &current.entry),
+                        None if self.plan.owners[owner.index()].path.is_root() => self
+                            .plan
+                            .resolved_ports()
+                            .boundary()
+                            .iter()
+                            .find(|port| port.port() == &current.entry)
+                            .map(|port| port.ty()),
+                        None => self
+                            .plan
+                            .graph_ports(owner)
+                            .and_then(|ports| ports.iter().find(|port| port.port == current.entry))
+                            .and_then(|port| port.ty.as_ref()),
+                    }
+                    .ok_or_else(|| {
+                        loop_error(&current.instance, "the Loop entry lost its resolved type")
+                    })?;
                     let value = crate::value::Value::TaggedUnion(Box::new(
                         crate::value::TaggedUnionValue {
                             case: String::from("LoopExpired"),
                             payload: vec![(
                                 String::from("last_state"),
-                                crate::runtime::data_value(state.data()).map_err(VmError::Fault)?,
+                                DataSlot::typed(state.data(), entry_type)
+                                    .materialize()
+                                    .map_err(VmError::Fault)?,
                             )],
                         },
                     ));

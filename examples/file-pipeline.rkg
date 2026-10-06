@@ -70,6 +70,13 @@ lab file_pipeline {
       expect app.empty count == 1
       expect nothing write_file.in
     }
+    scenario utf8 "one UTF-8 line is three bytes, not two characters" {
+      mock read_file { on in { out = base64! { w6kK }; exit = Completed {} } }
+      app.in = "utf8.txt"
+      expect app.bytes_read count == 1 where data == 3
+      expect write_file.in count == 1 where size(data) == 3
+      expect nothing app.failed
+    }
     scenario directory "a directory is refused by name" {
       mock read_file { on in { exit = NotAFile {} } }
       app.in = "directory"

@@ -12,11 +12,11 @@ use alloc::vec::Vec;
 use core::fmt;
 
 /// Unsealed record key for the deadlines accepted with one commit.
-pub const DEADLINES_KEY: u64 = 56;
+pub const DEADLINES_KEY: u64 = 41;
 
 /// Every winning outbound Call closure retains its original logical instant.
 /// This field, like the due instant, is not part of the causal seal.
-pub const CALL_CLOSED_AT_KEY: u64 = 59;
+pub const CALL_CLOSED_AT_KEY: u64 = 44;
 
 /// A deadline violates an acceptance invariant, independently of its encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,7 +153,7 @@ impl Deadlines {
         &self.items
     }
 
-    /// Canonical unsealed field `{56: [created_at, [[kind, ref, due_at], ...]]}`.
+    /// Canonical unsealed field `{41: [created_at, [[kind, ref, due_at], ...]]}`.
     /// These bytes must be integrity-protected by storage, but must not be
     /// appended to the causal seal or mistaken for a complete journal backup.
     #[must_use]
@@ -195,11 +195,11 @@ impl Deadlines {
         };
         if fields.len() != 1 {
             return Err(
-                canonical_cbor::DecodeError::Malformed("deadlines require only key 56").into(),
+                canonical_cbor::DecodeError::Malformed("deadlines require only key 41").into(),
             );
         }
         let Some(Value::Array(schedule)) = fields.remove(&DEADLINES_KEY) else {
-            return Err(canonical_cbor::DecodeError::Malformed("missing deadlines key 56").into());
+            return Err(canonical_cbor::DecodeError::Malformed("missing deadlines key 41").into());
         };
         let [at, Value::Array(rows)] = schedule.as_slice() else {
             return Err(canonical_cbor::DecodeError::Malformed("deadlines have two fields").into());
@@ -245,11 +245,11 @@ mod tests {
             (1, DeadlineKind::CallTimeout),
             (2, DeadlineKind::JoinWithin),
             (3, DeadlineKind::InstanceLifetime),
-            (5, DeadlineKind::RecurrenceDelay),
-            (6, DeadlineKind::InstanceDrain),
-            (7, DeadlineKind::InstanceSettlement),
-            (8, DeadlineKind::InboundCallTimeout),
-            (9, DeadlineKind::SessionHandshake),
+            (4, DeadlineKind::RecurrenceDelay),
+            (5, DeadlineKind::InstanceDrain),
+            (6, DeadlineKind::InstanceSettlement),
+            (7, DeadlineKind::InboundCallTimeout),
+            (8, DeadlineKind::SessionHandshake),
         ];
         for byte in 0..=u8::MAX {
             let bytes = canonical_cbor::encode(&Value::Map(BTreeMap::from([(
@@ -307,11 +307,11 @@ mod tests {
 
     #[test]
     fn every_registered_deadline_keeps_its_due_time_and_creation_order() {
-        let mut items: Vec<_> = [9, 8, 7, 6, 5, 3, 2, 1]
+        let mut items: Vec<_> = [8, 7, 6, 5, 4, 3, 2, 1]
             .into_iter()
             .map(|kind| arm(kind, i64::MAX))
             .collect();
-        items.push(arm(9, i64::MAX)); // a later renewal is not sorted or deduplicated
+        items.push(arm(8, i64::MAX)); // a later renewal is not sorted or deduplicated
         let schedule = Deadlines::try_new(i64::MIN, items.clone()).unwrap();
         let restored = Deadlines::decode(&schedule.encode()).unwrap();
         assert_eq!(restored.created_at(), i64::MIN);
@@ -323,7 +323,7 @@ mod tests {
     #[test]
     fn no_empty_unknown_or_backdated_schedule_is_constructible() {
         assert_eq!(Deadlines::try_new(0, vec![]), Err(Error::EmptySchedule));
-        for kind in [0, 4, 10, u8::MAX] {
+        for kind in [0, 9, 10, u8::MAX] {
             assert_eq!(
                 DeadlineKind::try_from(kind),
                 Err(super::super::UnknownDeadlineKind(kind))
@@ -368,10 +368,10 @@ mod tests {
         trailing.push(0);
         assert!(Deadlines::decode(&trailing).is_err());
         let mut nonminimal = valid.clone();
-        nonminimal.splice(1..3, [0x19, 0, 56]);
+        nonminimal.splice(1..3, [0x19, 0, 41]);
         assert!(Deadlines::decode(&nonminimal).is_err());
         let mut wrong_key = valid;
-        wrong_key[2] = 55;
+        wrong_key[2] = 40;
         assert!(Deadlines::decode(&wrong_key).is_err());
         for row in [
             Value::Array(vec![

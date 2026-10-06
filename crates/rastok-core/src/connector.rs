@@ -16,24 +16,24 @@ pub use call::{
 };
 
 /// The standard Process contract's stable major-version identity.
-pub const PROCESS_CONNECTOR_ID: &str = "rastok/process@4";
+pub const PROCESS_CONNECTOR_ID: &str = "std/process@4";
 /// Resident stdio Session, distinct from the finite job Contract.
-pub const PROCESS_SERVICE_CONNECTOR_ID: &str = "rastok/process@5";
+pub const PROCESS_SERVICE_CONNECTOR_ID: &str = "std/process@5";
 
 /// The standard single-file contract's stable major-version identity.
-pub const FILE_CONNECTOR_ID: &str = "rastok/file@3";
+pub const FILE_CONNECTOR_ID: &str = "std/file@3";
 
 /// The standard outbound HTTP call contract's stable identity.
-pub const HTTP_CLIENT_CONNECTOR_ID: &str = "rastok/http-client@3";
+pub const HTTP_CLIENT_CONNECTOR_ID: &str = "std/http-client@3";
 
 /// The standard inbound HTTP request contract's stable identity.
-pub const HTTP_SERVER_CONNECTOR_ID: &str = "rastok/http-server@3";
+pub const HTTP_SERVER_CONNECTOR_ID: &str = "std/http-server@3";
 
 /// The standard outbound WebSocket session contract's stable identity.
-pub const WEBSOCKET_CLIENT_CONNECTOR_ID: &str = "rastok/websocket-client@3";
+pub const WEBSOCKET_CLIENT_CONNECTOR_ID: &str = "std/websocket-client@3";
 
 /// The standard accepted WebSocket session contract's stable identity.
-pub const WEBSOCKET_SERVER_CONNECTOR_ID: &str = "rastok/websocket-server@3";
+pub const WEBSOCKET_SERVER_CONNECTOR_ID: &str = "std/websocket-server@3";
 
 /// Portable upper bound of one declared byte budget: 4 GiB inclusive.
 pub const MAX_BYTE_SIZE: u64 = 4 * 1024 * 1024 * 1024;
@@ -63,7 +63,8 @@ pub fn byte_size(text: &str) -> Option<u64> {
 /// A validated, canonical Connector contract identity.
 ///
 /// The spelling is `<namespace>/<name>@<major>`.  The namespace is one or
-/// more dot-separated lowercase labels; the name is one lowercase label;
+/// more dot-separated lowercase labels, with at least one dot outside the
+/// standard-library namespace `std`; the name is one lowercase label;
 /// labels may contain ASCII digits and internal `-`; the positive major has
 /// no leading zero.  The constructor never normalizes aliases.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -89,7 +90,9 @@ impl ContractId {
         if name.contains('/') {
             return Err(ConnectorIdError::Shape);
         }
-        if namespace.is_empty() || namespace.split('.').any(|label| !canonical_label(label)) {
+        if (namespace != "std" && !namespace.contains('.'))
+            || namespace.split('.').any(|label| !canonical_label(label))
+        {
             return Err(ConnectorIdError::Namespace);
         }
         if !canonical_label(name) {
@@ -156,7 +159,7 @@ impl fmt::Display for ConnectorIdError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Shape => "expected exactly `<namespace>/<name>@<major>`",
-            Self::Namespace => "the namespace is not canonical lowercase dotted labels",
+            Self::Namespace => "expected `std` or canonical lowercase dotted namespace",
             Self::Name => "the name is not one canonical lowercase label",
             Self::Major => "the major is not a positive canonical u32 decimal",
         })
@@ -322,8 +325,8 @@ mod tests {
             (HTTP_CLIENT_CONNECTOR_ID, None),
             (HTTP_SERVER_CONNECTOR_ID, None),
             (FILE_CONNECTOR_ID, None),
-            ("rastok/websocket-server@99", None),
-            ("third-party/websocket-server@2", None),
+            ("std/websocket-server@99", None),
+            ("org.third-party/websocket-server@2", None),
         ] {
             let contract = ContractId::parse(id).unwrap();
             for roles in [
@@ -356,24 +359,26 @@ mod tests {
     #[test]
     fn connector_ids_accept_one_canonical_spelling_only() {
         for valid in [
-            "rastok/process@2",
+            "std/process@2",
             "org.example/http-client@12",
-            "a/x1@4294967295",
+            "org.a/x1@4294967295",
         ] {
             assert_eq!(ContractId::parse(valid).unwrap().as_str(), valid);
         }
         for (invalid, reason) in [
             ("Process", ConnectorIdError::Shape),
+            ("acme/process@1", ConnectorIdError::Namespace),
+            ("rastok/process@4", ConnectorIdError::Namespace),
             ("rastok/process", ConnectorIdError::Shape),
-            ("rastok/process@2@2", ConnectorIdError::Shape),
+            ("std/process@2@2", ConnectorIdError::Shape),
             ("rastok/more/process@1", ConnectorIdError::Shape),
             ("Rastok/process@1", ConnectorIdError::Namespace),
             ("rastok./process@1", ConnectorIdError::Namespace),
-            ("rastok/Process@1", ConnectorIdError::Name),
-            ("rastok/-process@1", ConnectorIdError::Name),
-            ("rastok/process@0", ConnectorIdError::Major),
-            ("rastok/process@01", ConnectorIdError::Major),
-            ("rastok/process@4294967296", ConnectorIdError::Major),
+            ("std/Process@1", ConnectorIdError::Name),
+            ("std/-process@1", ConnectorIdError::Name),
+            ("std/process@0", ConnectorIdError::Major),
+            ("std/process@01", ConnectorIdError::Major),
+            ("std/process@4294967296", ConnectorIdError::Major),
         ] {
             assert_eq!(ContractId::parse(invalid), Err(reason), "{invalid}");
         }

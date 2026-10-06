@@ -1808,7 +1808,7 @@ impl<'plan> Vm<'plan> {
                     &&*journal,
                     scope,
                     None,
-                    source,
+                    &from,
                     inbound.envelope(),
                     &mut candidates,
                 )?;
@@ -1868,7 +1868,7 @@ impl<'plan> Vm<'plan> {
                     &&*journal,
                     scope,
                     None,
-                    source,
+                    &from,
                     inbound.envelope(),
                     &mut candidates,
                 )?;
@@ -5017,7 +5017,7 @@ impl<'plan> Vm<'plan> {
             });
         }
 
-        let Some(call_id) = self.select_inbound_call_ref(spec, &delivery.envelope)? else {
+        let Some(call_id) = self.select_inbound_call_ref(slot, spec, &delivery.envelope)? else {
             return self.discard_inbound_call_response(journal, slot, instance, delivery);
         };
         let matches_open_call = self.inbound_calls.get(&call_id).is_some_and(|call| {
@@ -5748,7 +5748,10 @@ impl<'plan> Vm<'plan> {
                             journal,
                             edge.scope,
                             source_instance,
-                            target,
+                            edge.to.as_ref().ok_or_else(|| VmError::PlanInvariant {
+                                node: self.plan.nodes[target.index()].path.clone(),
+                                reason: "a node route has no destination port",
+                            })?,
                             envelope,
                             candidates,
                         )?
@@ -5787,7 +5790,7 @@ impl<'plan> Vm<'plan> {
             return Ok(None);
         }
 
-        let Some(call_id) = self.select_inbound_call_ref(spec, envelope)? else {
+        let Some(call_id) = self.select_inbound_call_ref(target, spec, envelope)? else {
             return Ok(None);
         };
         let Some(pending) = self.inbound_calls.get(&call_id) else {
@@ -5875,6 +5878,7 @@ impl<'plan> Vm<'plan> {
     /// reference carried by the application through a root-mixing path.
     fn select_inbound_call_ref(
         &self,
+        slot: Slot,
         spec: &crate::plan::ConnectorSpec,
         envelope: &Envelope,
     ) -> Result<Option<InboundCallId>, VmError> {
@@ -5899,7 +5903,15 @@ impl<'plan> Vm<'plan> {
             String::from("meta"),
             crate::expr::EvalValue::from(meta_value(envelope.meta())),
         );
-        let data = DataSlot::new(envelope.data());
+        let data = DataSlot {
+            ty: self.plan.resolved_ports().node(slot).and_then(|ports| {
+                ports
+                    .iter()
+                    .find(|port| port.direction() == node::Direction::Input)
+                    .map(|port| port.ty())
+            }),
+            ..DataSlot::new(envelope.data())
+        };
         let selected = resolve_payload(
             eval_lazy(expr, &bindings, &data, &self.plan.assets).map_err(VmError::Fault)?,
             &data,
@@ -5956,21 +5968,32 @@ impl<'plan> Vm<'plan> {
         journal: &dyn InstanceAdmissions,
         scope: node::OwnerSlot,
         source_instance: Option<&instance::Generation>,
-        target: Slot,
+        target: &EdgeEnd,
         envelope: &Envelope,
         candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
     ) -> Result<PreparedTarget, VmError> {
-        let target_owner = self.plan.nodes[target.index()].owner;
+        let slot = target.node.ok_or_else(|| VmError::PlanInvariant {
+            node: node::Path::new(["admission"])
+                .unwrap_or_else(|_| unreachable!("a literal path is valid")),
+            reason: "an Executor admission has no node",
+        })?;
+        let target_owner = self.plan.nodes[slot.index()].owner;
+        let data = DataSlot {
+            ty: self.plan.resolved_ports().endpoint_type(target),
+            ..DataSlot::new(envelope.data())
+        };
         self.prepare_owner_target(
             journal,
             scope,
             source_instance,
             target_owner,
             envelope,
+            &data,
             candidates,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn prepare_owner_target(
         &self,
         journal: &dyn InstanceAdmissions,
@@ -5978,6 +6001,7 @@ impl<'plan> Vm<'plan> {
         source_instance: Option<&instance::Generation>,
         target_owner: node::OwnerSlot,
         envelope: &Envelope,
+        data: &DataSlot<'_>,
         candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
     ) -> Result<PreparedTarget, VmError> {
         let refusal = |reason| match self.plan.owners[target_owner.index()].kind {
@@ -6012,6 +6036,7 @@ impl<'plan> Vm<'plan> {
                     parent,
                     source_instance,
                     envelope,
+                    data,
                     candidates,
                 )?;
                 admitted.push(reference.clone());
@@ -6088,6 +6113,7 @@ impl<'plan> Vm<'plan> {
             .then(|| reference.clone())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn candidate_owner(
         &self,
         journal: &dyn InstanceAdmissions,
@@ -6095,6 +6121,7 @@ impl<'plan> Vm<'plan> {
         parent: Option<&instance::Generation>,
         source: Option<&instance::Generation>,
         envelope: &Envelope,
+        data: &DataSlot<'_>,
         candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
     ) -> Result<instance::Generation, VmError> {
         let owner = self
@@ -6188,10 +6215,9 @@ impl<'plan> Vm<'plan> {
                     String::from("meta"),
                     crate::expr::EvalValue::from(meta_value(envelope.meta())),
                 );
-                let data = DataSlot::new(envelope.data());
                 let value = resolve_payload(
-                    eval_lazy(key, &bindings, &data, &self.plan.assets).map_err(VmError::Fault)?,
-                    &data,
+                    eval_lazy(key, &bindings, data, &self.plan.assets).map_err(VmError::Fault)?,
+                    data,
                 )
                 .map_err(VmError::Fault)?;
                 frames.push(instance::Segment::SelectedKey {
@@ -6283,12 +6309,12 @@ impl<'plan> Vm<'plan> {
             return Ok(candidate.reference.clone());
         }
         let mut values =
-            self.evaluate_owner_values(owner_slot, &inherited, selected_key.as_ref(), envelope)?;
+            self.evaluate_owner_values(owner_slot, &inherited, selected_key.as_ref(), data)?;
         if let Some(key) = &selected_key {
             values.insert(String::from("instance.key"), key.clone());
         }
         let settings =
-            self.evaluate_instance_settings(owner_slot, &values, selected_key.as_ref(), envelope)?;
+            self.evaluate_instance_settings(owner_slot, &values, selected_key.as_ref(), data)?;
         let candidate = InstanceCandidate {
             owner: owner_slot,
             reference: reference.clone(),
@@ -6308,7 +6334,7 @@ impl<'plan> Vm<'plan> {
         owner_slot: node::OwnerSlot,
         inherited: &BTreeMap<String, crate::value::Value>,
         selected_key: Option<&crate::value::Value>,
-        envelope: &Envelope,
+        data: &DataSlot<'_>,
     ) -> Result<BTreeMap<String, crate::value::Value>, VmError> {
         let owner = self
             .plan
@@ -6330,7 +6356,7 @@ impl<'plan> Vm<'plan> {
                 index,
                 inherited,
                 selected_key,
-                envelope,
+                data,
                 &local,
                 &mut resolved,
                 &mut visiting,
@@ -6355,7 +6381,7 @@ impl<'plan> Vm<'plan> {
         index: usize,
         inherited: &BTreeMap<String, crate::value::Value>,
         selected_key: Option<&crate::value::Value>,
-        envelope: &Envelope,
+        data: &DataSlot<'_>,
         local: &BTreeMap<&str, usize>,
         resolved: &mut [Option<crate::value::Value>],
         visiting: &mut [bool],
@@ -6389,7 +6415,7 @@ impl<'plan> Vm<'plan> {
                     *dependency,
                     inherited,
                     selected_key,
-                    envelope,
+                    data,
                     local,
                     resolved,
                     visiting,
@@ -6421,11 +6447,10 @@ impl<'plan> Vm<'plan> {
                         crate::expr::EvalValue::from(key.clone()),
                     );
                 }
-                let data = DataSlot::new(envelope.data());
                 resolve_payload(
-                    eval_lazy(&declared.expr, &bindings, &data, &self.plan.assets)
+                    eval_lazy(&declared.expr, &bindings, data, &self.plan.assets)
                         .map_err(VmError::Fault)?,
-                    &data,
+                    data,
                 )
                 .map_err(VmError::Fault)?
             }
@@ -6445,7 +6470,7 @@ impl<'plan> Vm<'plan> {
         owner_slot: node::OwnerSlot,
         values: &BTreeMap<String, crate::value::Value>,
         selected_key: Option<&crate::value::Value>,
-        envelope: &Envelope,
+        data: &DataSlot<'_>,
     ) -> Result<BTreeMap<String, crate::value::Value>, VmError> {
         let Some(owner) = self.plan.owner(owner_slot) else {
             return Err(VmError::PlanInvariant {
@@ -6467,12 +6492,7 @@ impl<'plan> Vm<'plan> {
                 crate::expr::EvalValue::from(key.clone()),
             );
         }
-        self.evaluate_connector_setting_expressions(
-            spec,
-            EvaluationSite::Instance,
-            &bindings,
-            envelope,
-        )
+        self.evaluate_connector_setting_expressions(spec, EvaluationSite::Instance, &bindings, data)
     }
 
     fn resolve_invocation_settings(
@@ -6514,11 +6534,27 @@ impl<'plan> Vm<'plan> {
             String::from("meta"),
             crate::expr::EvalValue::from(meta_value(envelope.meta())),
         );
+        let ty = self
+            .plan
+            .nodes
+            .iter()
+            .position(|entry| entry.path == *node)
+            .and_then(|index| self.plan.resolved_ports().node(Slot::new(index as u32)))
+            .and_then(|ports| {
+                ports
+                    .iter()
+                    .find(|port| port.direction() == node::Direction::Input)
+            })
+            .map(|port| port.ty());
+        let data = DataSlot {
+            ty,
+            ..DataSlot::new(envelope.data())
+        };
         settings.extend(self.evaluate_connector_setting_expressions(
             spec,
             EvaluationSite::Invocation,
             &bindings,
-            envelope,
+            &data,
         )?);
         Ok(settings)
     }
@@ -6528,9 +6564,8 @@ impl<'plan> Vm<'plan> {
         spec: &crate::plan::ConnectorSpec,
         target_site: EvaluationSite,
         bindings: &BTreeMap<String, crate::expr::EvalValue>,
-        envelope: &Envelope,
+        data: &DataSlot<'_>,
     ) -> Result<BTreeMap<String, crate::value::Value>, VmError> {
-        let data = DataSlot::new(envelope.data());
         let mut settings = BTreeMap::new();
         for (name, setting) in &spec.attributes {
             let AttrSetting::Expr { site, expr } = setting else {
@@ -6547,8 +6582,8 @@ impl<'plan> Vm<'plan> {
                 continue;
             }
             let value = resolve_payload(
-                eval_lazy(expr, bindings, &data, &self.plan.assets).map_err(VmError::Fault)?,
-                &data,
+                eval_lazy(expr, bindings, data, &self.plan.assets).map_err(VmError::Fault)?,
+                data,
             )
             .map_err(VmError::Fault)?;
             if let Err(violation) = expr.ty.check_value_type(name, &value) {

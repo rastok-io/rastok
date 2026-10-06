@@ -270,7 +270,7 @@ impl Vm<'_> {
                         let spec = self.plan.nodes[slot.index()].connector().ok_or_else(|| {
                             invalid(index, "an exchange terminal has no Contract")
                         })?;
-                        if self.select_inbound_call_ref(spec, &delivery.envelope)?
+                        if self.select_inbound_call_ref(slot, spec, &delivery.envelope)?
                             != Some(*reference)
                         {
                             return Err(invalid(
@@ -434,7 +434,8 @@ impl Vm<'_> {
             let Some(spec) = self.plan.nodes[slot.index()].connector() else {
                 continue;
             };
-            let Some(reference) = self.select_inbound_call_ref(spec, &delivery.envelope)? else {
+            let Some(reference) = self.select_inbound_call_ref(slot, spec, &delivery.envelope)?
+            else {
                 continue;
             };
             let Some(pending) = self.inbound_calls.get_mut(&reference).filter(|pending| {

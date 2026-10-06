@@ -391,7 +391,6 @@ impl Fold {
                                 && actual.sys().parent_id() == Some(cause)
                                 && actual.sys().origin_id() == retained.sys().origin_id()
                                 && actual.sys().graph_version() == retained.sys().graph_version()
-                                && actual.sys().role() == crate::envelope::Role::Default
                                 && actual.app() == retained.app()
                                 && actual.ext() == retained.ext()
                                 && envelope.data() == state.state.data()
@@ -519,7 +518,6 @@ fn expiry_matches(cause: Id, state: &Envelope, output: &Envelope) -> bool {
     if sys.parent_id() != Some(cause)
         || sys.origin_id() != state.meta().sys().origin_id()
         || sys.graph_version() != state.meta().sys().graph_version()
-        || sys.role() != crate::envelope::Role::Default
         || output.meta().app() != state.meta().app()
         || output.meta().ext() != state.meta().ext()
     {
@@ -533,11 +531,19 @@ fn expiry_matches(cause: Id, state: &Envelope, output: &Envelope) -> bool {
     let [(field, actual)] = value.payload.as_slice() else {
         return false;
     };
+    // The payload states which logical reading it carries. Check that reading
+    // against the original bytes; the plan-bound replay separately checks the
+    // host terminal's declared type. Raw UTF-8 is not implicitly text here.
+    let expected = match actual {
+        crate::value::Value::Text(_) => {
+            crate::runtime::DataSlot::typed(state.data(), &crate::datatype::DataType::Text)
+                .materialize()
+        }
+        _ => crate::runtime::data_value(state.data()),
+    };
     value.case == "LoopExpired"
         && field == "last_state"
-        && crate::runtime::data_value(state.data())
-            .as_ref()
-            .is_ok_and(|expected| expected == actual)
+        && expected.as_ref().is_ok_and(|expected| expected == actual)
 }
 
 #[cfg(test)]

@@ -1210,8 +1210,8 @@ pub fn prepare_lines(data: &envelope::Data) -> Result<PreparedRequest, String> {
     Ok(PreparedRequest::seal(bytes))
 }
 
-/// Outbound-call intent: the canonical fields (`identity.md` §3, keys 40–43
-/// and 47) are journaled open before the effect executes; resolved settings
+/// Outbound-call intent: the canonical fields (`identity.md` §3, keys 27–30
+/// and 33) are journaled open before the effect executes; resolved settings
 /// remain execution material whose call-varying semantics must already be
 /// covered by the prepared-request digest.
 #[derive(Debug, Clone, PartialEq)]
@@ -1220,14 +1220,14 @@ pub struct Intent {
     pub call_id: CallId,
     /// The envelope that opened the call — the cause.
     pub emitting_id: envelope::Id,
-    /// The canonical edge of the causing delivery (key 47): with the
+    /// The canonical edge of the causing delivery (key 33): with the
     /// emitting id it reconstructs the delivery reference and hence
     /// the call identity — the record stays autonomous.
     pub edge: String,
     /// The calling connector node.
     pub connector_path: node::Path,
     /// The prepared request — the sealed digest is canonical (key
-    /// 43); the bytes ride along for the driver and are never
+    /// 30); the bytes ride along for the driver and are never
     /// themselves record material.
     pub prepared: PreparedRequest,
     /// Optional partner business-operation key, stable across attempts.

@@ -3,9 +3,8 @@
 > **Status: normative and executable through M1.3 B9.** The
 > executable module is `expr` and consumes core `DataType`/`Value`. Its
 > `is`/`as`, closed-struct and tagged-constructor trees execute, are
-> type-checked, and travel in the v7 registry with their resolved targets.
-> Categorical package v17 retains the registry that v12 extended with the open
-> `media_type(text)` constructor. The
+> type-checked, and travel in the plan with their resolved targets, alongside
+> the open `media_type(text)` constructor. The
 > `IDENT!` frontend surface and full JSON-value reader described below are
 > executable. M1.7's temporal prerequisite adds the transaction-context
 > function `now()` without changing the expression transport. A `variant` must be
@@ -275,7 +274,7 @@ The implemented minimum is deliberately small and deterministic:
   inference is invented.
 
 Named aliases are expanded before entering the tree, so alias spelling is
-not identity. V7 serializes the resolved target and any explicit external
+not identity. The plan serializes the resolved target and any explicit external
 discriminator; it never serializes an alias name or a compiler inference
 variable.
 
@@ -285,7 +284,7 @@ they are ordinary `Expr::Struct`/`Expr::Tagged` tree nodes, so their fields use
 the same evaluator, constants and narrowing operations. Likewise, implicit
 construction into a structural union is stored as an explicit resolved
 `Expr::As`; the expression engine executes a decision already made by the
-checker. V7 gives these constructor nodes and `is`/`as` one canonical
+checker. The plan gives these constructor nodes and `is`/`as` one canonical
 representation.
 
 Member and index access on `variant` refuse at expression check. A positive

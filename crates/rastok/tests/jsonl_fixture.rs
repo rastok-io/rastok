@@ -6,7 +6,7 @@
 //! run opens a REAL outbound call framed by the canonical writer.
 //! Pinned here: the exact semantic hash, the package bytes, and the
 //! full golden trace whose EGRESS record seals the jsonl
-//! `request_digest` (key 43) — the writer's bytes ARE identity, so
+//! `request_digest` (key 30) — the writer's bytes ARE identity, so
 //! a change to the canonical form must re-bless this file with its
 //! reason.
 
@@ -27,8 +27,8 @@ fn compilation() -> rastok::compiler::Compilation {
     .expect("a valid unit")
 }
 
-// Process @4 and plan-owned idempotence move this witness in v19.
-// See docs/architecture/retry-c4-qualification.md; its causal trace is unchanged.
+// The stored semantic hash stays pinned pending approval of the namespace
+// movement enumerated in docs/architecture/human-review-v20-identity.md.
 const JSONL_HASH: &str = "3f1b40ec3457d1b371289d9cac615df0394ef1dffe8b52c7f36424961a0dd064";
 
 #[test]
@@ -75,7 +75,7 @@ fn the_lab_trace_matches_its_golden_and_seals_the_request_digest() {
         roundtrip.report.failures
     );
     // The EGRESS record seals the canonical line's digest as
-    // key 43 — the writer's bytes are boundary identity.
+    // key 30 — the writer's bytes are boundary identity.
     let trace = rastok::golden::project(&roundtrip.records);
     let mut sealed_digest = None;
     for index in 0..trace.len() {
@@ -84,11 +84,11 @@ fn the_lab_trace_matches_its_golden_and_seals_the_request_digest() {
         let rastok::canonical_cbor::Value::Map(pairs) = tree else {
             panic!("a record map");
         };
-        if let Some(rastok::canonical_cbor::Value::Bytes(digest)) = pairs.get(&43) {
+        if let Some(rastok::canonical_cbor::Value::Bytes(digest)) = pairs.get(&30) {
             sealed_digest = Some(digest.clone());
         }
     }
-    let sealed = sealed_digest.expect("an EGRESS record carries key 43");
+    let sealed = sealed_digest.expect("an EGRESS record carries key 30");
     // The digest is DERIVABLE: it is the canonical line's seal, so
     // the golden pins the writer's exact bytes end to end.
     let request = rastok::envelope::Data::materialized(rastok::envelope::Value::Struct(vec![

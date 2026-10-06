@@ -99,7 +99,7 @@ graph app : App {
     let (decoded, decoded_hash) = plan::decode(&package).unwrap();
     assert_eq!(decoded, validated);
     assert_eq!(decoded_hash, hash);
-    assert_eq!(plan::FORMAT_VERSION, 19);
+    assert_eq!(plan::FORMAT_VERSION, 20);
 }
 
 #[test]
@@ -436,7 +436,10 @@ graph app : App {
     let mut journal = MemJournal::new(plan::GraphVersion(1));
     vm.inject(
         &mut journal,
-        submission(Data::encoded(rastok::envelope::Encoding::Avro, b"opaque")),
+        submission(Data::encoded(
+            rastok::envelope::Encoding::ArrowIpc,
+            b"opaque",
+        )),
     )
     .unwrap();
     vm.drain(&mut journal).unwrap();

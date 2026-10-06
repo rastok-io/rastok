@@ -650,7 +650,14 @@ fn decision(
             ),
         ]);
     }
-    let data = DataSlot::new(input.data());
+    let input_type = match &tx.trigger {
+        Trigger::Port(port) => plan.resolved_ports().node_port_type(slot, port),
+        Trigger::Lifecycle(_) => None,
+    };
+    let data = input_type.map_or_else(
+        || DataSlot::new(input.data()),
+        |ty| DataSlot::typed(input.data(), ty),
+    );
     let scope = LazyBindings {
         base: &bindings,
         data: &data,

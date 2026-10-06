@@ -1,6 +1,6 @@
 # The Execution Model — mailboxes, ordering, time, and the two planes
 
-> **Status (2026-09-21): normative, current categorical package v19.** Graph scopes own
+> **Status (2026-10-06): normative target, categorical package v20.** Graph scopes own
 > lifecycle, not application transactions. Operators and Connectors share the
 > transactional execution mechanism; temporal managers own their protocol transactions.
 > [R9 qualification](../architecture/rework-r9-qualification.md) records the
@@ -343,7 +343,7 @@ Concretely, the supervision plane maintains **one queue of dated events**:
 | join eviction | a join's `within` / `last` (§7) | `JoinExpired` on the Operator's declared typed expiry output (conventionally `expired`) |
 | instance lifetime expiry | `lifetime = { … }` | the instance's `on stop` sequence (parent = **the envelope that armed the deadline** — last admission for `idle`, creator for `fixed`, creating admission for its tumbling box) |
 | Loop re-entry delay | `Loop.delay` ([loop.md](loop.md) §9) | manager consumes a durable Next/Again command, then exactly-once `l:next` re-admits on the remembered entry when due |
-| saga completion budget | future Saga decision | not executable in v16; no timeout or output contract is inferred |
+| saga completion budget | future Saga decision | not executable in M1; no timeout or output contract is inferred |
 
 In production the queue is advanced by the hosted time source; in simulation,
 by the fixture (§8). **The delivery contract — order, causality, identity — is
@@ -354,16 +354,16 @@ never re-runs a race.
 Arming/due instants and host commit time remain journal annotations and
 observability facts — **never** envelope fields. The narrow exception is an
 explicit `now()` observation: the transaction's fixed logical instant is
-sealed under canonical key 54 because it may change control flow. It remains
+sealed under canonical key 39 because it may change control flow. It remains
 absent from time-insensitive firings (the `created_at` lesson,
 envelope.md §8).
 
-D-2026-09-07-2 allocates retained key 56 for exact timer schedules alongside
+Unsealed key 41 retains for exact timer schedules alongside
 their accepting records, outside the causal projection. This retention is
 atomic and integrity-protected, not best-effort observability. Its ordered
 arms preserve the original due instants and tie order; a restart cannot turn
-a missing instant into `now + duration`. R4 wires Loop delay retention; the
-remaining temporal recovery profiles stay gated until R7 wires their arm facts.
+a missing instant into `now + duration`. Recovery restores supported Loop, Retry, Call, join and lifecycle obligations
+from the original retained instants.
 
 A resumed sweep preserves the unfinished dated frontier before executing
 lifecycle work queued by an expiry. Only an instance's own lifetime is fenced
@@ -406,7 +406,7 @@ codex.exit ────► typed outcome envelope TimeoutExpired
 
 *`l:timeout` is general for every currently admitted timeout budget: its
 parent is the exact envelope which armed that budget. Saga has no executable
-timeout contract in v16; its future decision must either reuse this rule or
+timeout contract in M1; its future decision must either reuse this rule or
 allocate a distinct fact explicitly.*
 
 No new handler form: the graph reacts by ordinary wiring and union
@@ -702,7 +702,7 @@ Selected lifecycle triggers owned by this execution slice belong to the `l:` reg
 | Loop re-admission | `l:next` | the consumed Next/Again manager command | the Loop owner |
 
 Manager-command production and consumption are separate append-only facts in
-the v16 Loop r2 fold. They do not invent a trigger or spatial port. All
+the Loop r2 fold. They do not invent a trigger or spatial port. All
 runtime facts follow owner attribution: supervision and managers never emit in
 an anonymous out-of-graph name.
 

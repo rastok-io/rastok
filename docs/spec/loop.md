@@ -1,6 +1,6 @@
 # Loop — finite temporal recursion
 
-> **Status (2026-09-21): normative, current categorical package v19.** Loop contributes
+> **Status (2026-10-06): normative target, categorical package v20.** Loop contributes
 > no port; exhaustion extends a resolved host terminal under D-2026-09-08-1.
 > [The v17 ledger](../architecture/loop-host-terminal-v17.md) records that host-terminal qualification.
 > Operator, outbound Call and Graph hosts execute and recover, including nested
@@ -10,7 +10,7 @@
 > records the host checkpoint; [R9](../architecture/rework-r9-qualification.md)
 > records the final migration and qualification.
 
-> **Current v19 amendment — D-2026-09-14-4:** Loop advances authored state;
+> **Loop/Retry distinction — D-2026-09-14-4:** Loop advances authored state;
 > Retry repeats one prepared Call under its own hard safety gate. Global
 > `effect` classification is removed. §§11–12 distinguish the advisory Loop
 > warning from Retry admission. See the [refactor contract](../architecture/retry-extension-refactor.md)
@@ -57,7 +57,7 @@ opening delivery -> host application -> exactly one verdict
 Eligibility is derived from the resolved application profile in the Connector's
 Contract, not a source-facing contract name.
 
-| Host | v17 |
+| Host | Admission |
 |---|---|
 | Operator | admitted |
 | Graph | admitted |
@@ -282,7 +282,8 @@ Loop.delay = {
 ```
 
 The delay begins when the manager consumes Next or Again after quiescence.
-It uses logical time and timer kind 5. Arithmetic saturates before overflow.
+It uses logical time and the recurrence deadline kind (byte 4). Arithmetic
+saturates before overflow.
 There is no jitter in the current subset.
 
 No destination capacity is held during the wait. At the due instant, Admit
@@ -375,8 +376,8 @@ Closing wins over recurrence:
 - descendants close inner-first.
 
 The r2 fold contains Open, CommandProduced, CommandConsumed, Next/Again, Admit,
-Close, and Expired evidence. Exact wire keys are allocated once in R4; no v15
-tag is reused.
+Close, and Expired evidence. The current wire keys are specified in
+[identity.md §3](identity.md#3-the-canonical-record-form).
 
 Spatial recovery reconstructs instance generations, state deltas, unconsumed
 deliveries and cursors, Calls, timers, runs, pending commands, and due
@@ -390,9 +391,8 @@ expiry envelope on the plan-resolved host terminal, with the emission id
 derived from that actual port. Packet algebra alone does not establish these links
 or prove run-scoped quiescence.
 
-The old `rastok.aspects.r1` and `rastok.loop.r1` domains remain historical
-and are not reinterpreted. V17 retains `rastok.loop.r2` and every r2 fact shape;
-only the ordinary expiry emission's destination changes.
+`rastok.loop.r2` identifies this protocol in the plan. Its ordinary expiry
+emission uses the resolved host terminal; Loop contributes no port.
 
 ## 14. Examples
 

@@ -11,15 +11,12 @@
 > structural-union and tagged-union targets is executable in memory. Tagged
 > constructors and contextual structural-union wrapping are checked,
 > executable and transported; `err` uses the same emission path as any port.
-> Current categorical plan-package v17 retains the parent-linked lexical
-> owner tree and instance-key/lifetime descriptors introduced in v9, the
-> type/value/expression registry and total effective port table, and the
-> M1.8 annotation side-tables without changing this logical algebra.
-> The unpublished named-partition v8
-> draft has no compatibility status. Standard-layer projection adapters implement the
+> The current plan package transports the parent-linked lexical owner tree,
+> instance-key/lifetime descriptors, type/value/expression registry, total
+> effective port table and annotation side-tables. Standard-layer projection adapters implement the
 > exact external profiles, including physical union-selector mappings and
 > path-specific loss refusals. Unchecked structural access through `variant`
-> is closed. V6 is categorically refused rather than migrated.
+> is closed. Unsupported package versions are refused, not migrated.
 
 Rastok owns the logical type system of envelope payloads. The expression
 language, Connectors, codecs, guest frontends, state and metadata consume
@@ -510,7 +507,7 @@ checked and reviewable.
 
 This schema adapter is distinct from:
 
-- a package-format reader (the current v19 rejects older `.rkp` versions rather than
+- a package-format reader (the current format 20 rejects other `.rkp` versions rather than
   translating application schemas);
 - an internal representation codec;
 - a journal-format decoder.
@@ -536,7 +533,7 @@ adds no recursive wrapper to this type tree. A struct containing an amount
 annotates its numerical field; there is no special Money-shaped target or
 new `DataType` family. The source form, path vocabulary, propagation rules,
 secret boundary and observation semantics are normative in
-[observability.md](observability.md). Categorical package v17 carries the
+[observability.md](observability.md). The plan package carries the
 sparse table beside every owning schema without allocating a `DataType` tag.
 Registry-free validation resolves each path against that adjacent type and
 independently derives effective resolved-port policy from raw declarations and

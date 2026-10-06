@@ -329,13 +329,13 @@ impl DataAnnotation {
 /// Canonical identity order of the closed annotation family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AnnotationKind {
-    /// `rastok/sensitive@1`.
+    /// `std/sensitive@1`.
     Sensitive,
-    /// `rastok/secret@1`.
+    /// `std/secret@1`.
     Secret,
     /// The protected numerical or monetary measure interpretation.
     Measure,
-    /// `rastok/personal@1`.
+    /// `std/personal@1`.
     ///
     /// Appended after the original A1 registry so existing annotation-set
     /// order and semantic identity remain unchanged.
@@ -675,7 +675,7 @@ pub(crate) mod tests {
         DataAnnotation::Declared(Box::new(
             AnnotationApplication::new(
                 AnnotationBinding::Measure,
-                "rastok/measure@3".into(),
+                "std/measure@3".into(),
                 ty,
                 Value::Struct(values),
             )

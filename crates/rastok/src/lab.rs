@@ -350,7 +350,7 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
             outputs,
             &self.journal.records()[self.record_window_start..],
         );
-        let failure = check_expectation(expectation, &envelopes);
+        let failure = check_expectation(self.plan, expectation, &envelopes);
         Some(ExpectationInspection {
             expectation,
             envelopes,
@@ -564,7 +564,7 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
                     &self.vm.outputs()[self.output_window_start..],
                     &self.journal.records()[self.record_window_start..],
                 );
-                if let Some(message) = check_expectation(expectation, &envelopes) {
+                if let Some(message) = check_expectation(self.plan, expectation, &envelopes) {
                     self.failures.push(message);
                 }
                 self.quiescent = true;
@@ -986,7 +986,27 @@ fn expectation_envelopes<'a>(
     }
 }
 
-fn check_expectation(expectation: &Expectation, deliveries: &[&Envelope]) -> Option<String> {
+fn check_expectation(
+    plan: &ValidatedExecutionPlan,
+    expectation: &Expectation,
+    deliveries: &[&Envelope],
+) -> Option<String> {
+    let ty = match &expectation.target {
+        ExpectTarget::Boundary(port) => plan
+            .resolved_ports()
+            .boundary()
+            .iter()
+            .find(|resolved| resolved.port() == port)
+            .map(|port| port.ty()),
+        ExpectTarget::Node { path, port } => plan
+            .nodes
+            .iter()
+            .position(|node| node.path == *path)
+            .and_then(|index| {
+                plan.resolved_ports()
+                    .node_port_type(crate::plan::Slot::new(index as u32), port)
+            }),
+    };
     let name = expectation
         .label
         .clone()
@@ -997,7 +1017,11 @@ fn check_expectation(expectation: &Expectation, deliveries: &[&Envelope]) -> Opt
             None => matches += 1,
             Some(tree) => {
                 let mut env = BTreeMap::new();
-                match runtime::data_value(observed.data()) {
+                let data = ty.map_or_else(
+                    || runtime::DataSlot::new(observed.data()),
+                    |ty| runtime::DataSlot::typed(observed.data(), ty),
+                );
+                match data.materialize() {
                     Ok(data) => {
                         env.insert(String::from("data"), expr::EvalValue::from(data));
                     }
@@ -1157,6 +1181,7 @@ impl ConnectorDriverFactory for MockConnectorFactory {
     ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
         let protocol = (self.bind_protocol)(plan, nodes, boot)?;
         Ok(Box::new(MockOutboundConnectorDriver {
+            plan,
             mocks: self.mocks.clone(),
             protocol,
             pending: Vec::new(),
@@ -1214,14 +1239,15 @@ fn share_mocks(mocks: BTreeMap<node::Path, Mock>) -> SharedMocks {
 /// match in text order — and reports every uncovered call loudly. Its protocol
 /// preparation is the same pure binding used by the real family Driver; only
 /// the external effect is replaced.
-struct MockOutboundConnectorDriver {
+struct MockOutboundConnectorDriver<'plan> {
+    plan: &'plan ValidatedExecutionPlan,
     mocks: SharedMocks,
     protocol: Box<dyn ScriptedConnectorProtocol>,
     pending: Vec<Response>,
     faults: MockFaults,
 }
 
-impl MockOutboundConnectorDriver {
+impl MockOutboundConnectorDriver<'_> {
     fn fault(&self, message: String) {
         self.faults.borrow_mut().push(message);
     }
@@ -1263,7 +1289,25 @@ impl MockOutboundConnectorDriver {
             String::from("meta"),
             expr::EvalValue::from(runtime::meta_value(request.meta())),
         );
-        let slot = runtime::DataSlot::new(request.data());
+        let ty = self
+            .plan
+            .nodes
+            .iter()
+            .position(|node| node.path == *connector)
+            .and_then(|index| {
+                self.plan
+                    .resolved_ports()
+                    .node(crate::plan::Slot::new(index as u32))
+            })
+            .and_then(|ports| {
+                ports
+                    .iter()
+                    .find(|port| port.direction() == node::Direction::Input)
+            });
+        let slot = ty.map_or_else(
+            || runtime::DataSlot::new(request.data()),
+            |port| runtime::DataSlot::typed(request.data(), port.ty()),
+        );
         for handler in &mock.handlers {
             // Mock declarations retain their first-matching-filter protocol.
             // Once a declaration wins, its Dispatch selects one whole reply.
@@ -1477,7 +1521,7 @@ impl MockOutboundConnectorDriver {
     }
 }
 
-impl CallConnectorDriver for MockOutboundConnectorDriver {
+impl CallConnectorDriver for MockOutboundConnectorDriver<'_> {
     fn prepare_request(
         &mut self,
         connector: &node::Path,
@@ -1510,7 +1554,7 @@ impl CallConnectorDriver for MockOutboundConnectorDriver {
     }
 }
 
-impl BoundConnectorDriver for MockOutboundConnectorDriver {
+impl BoundConnectorDriver for MockOutboundConnectorDriver<'_> {
     fn inbound(&mut self) -> Option<&mut dyn crate::boundary::InboundConnectorDriver> {
         None
     }
@@ -1545,6 +1589,7 @@ mod tests {
         let faults = Rc::new(RefCell::new(Vec::new()));
         let nodes = [path.clone()];
         let mut driver = MockOutboundConnectorDriver {
+            plan: &compilation.plan,
             mocks: share_mocks(mocks),
             protocol: Box::new(
                 ProcessRequestBindings::try_bind(&compilation.plan, &nodes)
@@ -1559,7 +1604,7 @@ mod tests {
         );
         let request = Envelope::new(
             crate::envelope::Meta::new(crate::envelope::MetaSys::root(id, 1)),
-            Data::encoded(crate::envelope::Encoding::Avro, *b"\x01\x02"),
+            Data::encoded(crate::envelope::Encoding::ArrowIpc, *b"\x01\x02"),
         );
         let prepared = crate::boundary::PreparedRequest::seal(vec![1]);
         let intent = crate::boundary::Intent {

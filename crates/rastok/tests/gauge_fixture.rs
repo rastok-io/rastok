@@ -6,9 +6,9 @@
 //! owe (D-2026-08-08-2/-3): one graph carrying a TYPED named
 //! boundary input, typed operator ports, and a typed named output,
 //! with its Lab scenario. Pinned here: the exact semantic hash (the
-//! identity move of the port-table presence tag), the current v19 package
+//! identity move of the port-table presence tag), the package
 //! bytes, and the full golden trace whose INGRESS record seals the
-//! ingress port as key 24.
+//! ingress port as key 12.
 
 use rastok::compiler::compile;
 use rastok::contract::ContractCatalog;
@@ -27,8 +27,8 @@ fn compilation() -> rastok::compiler::Compilation {
     .expect("a valid unit")
 }
 
-// Gauge witnesses semantic and causal neutrality. Only the container moves;
-// see docs/architecture/retry-c4-qualification.md for body/checksum evidence.
+// Gauge witnesses semantic-hash neutrality. The candidate's compact record
+// keys/value tags move its trace independently; the v20 inventory records why.
 const GAUGE_HASH: &str = "0d3ad43d9fb09c8626146342f6a50d1f4c387a8de52a47a3134a408cf74cb22e";
 
 #[test]
@@ -54,7 +54,7 @@ fn the_package_matches_its_golden() {
     }
     let golden = std::fs::read_to_string(&path)
         .expect("no package golden; run once with RASTOK_BLESS=1 to bless");
-    assert_eq!(golden.trim(), rendered, "the v19 typed package is pinned");
+    assert_eq!(golden.trim(), rendered, "the typed package is pinned");
 }
 
 #[test]
@@ -74,7 +74,7 @@ fn the_lab_trace_matches_its_golden_and_seals_the_ingress() {
         "{:#?}",
         roundtrip.report.failures
     );
-    // The INGRESS record seals its named ingress as key 24.
+    // The INGRESS record seals its named ingress as key 12.
     let trace = rastok::golden::project(&roundtrip.records);
     let (tree, _) = rastok::canonical_cbor::decode(trace.record_bytes(0).expect("a record"))
         .expect("canonical bytes");
@@ -82,7 +82,7 @@ fn the_lab_trace_matches_its_golden_and_seals_the_ingress() {
         panic!("a record map");
     };
     assert_eq!(
-        pairs.get(&24),
+        pairs.get(&12),
         Some(&rastok::canonical_cbor::Value::Text(String::from("feed"))),
         "the named ingress is a causal fact"
     );

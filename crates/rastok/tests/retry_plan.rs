@@ -1,5 +1,5 @@
-//! The v19 policy is independently verifiable even before the runtime manager
-//! is admitted. A forged guarantee is never supplied by an Intent.
+//! Retry policy is independently verifiable before execution. A forged
+//! guarantee is never supplied by an Intent.
 
 #![allow(clippy::unwrap_used)]
 
@@ -106,9 +106,9 @@ fn retry_roundtrips_without_any_command_port_or_expired_wrapper() {
     let bytes = plan::encode(&validated, &ordinary.hash);
     let (decoded, _) = plan::decode(&bytes).unwrap();
     assert_eq!(decoded, validated);
-    assert_eq!(plan::FORMAT_VERSION, 19);
-    // Source remains fail-closed while C3 is unfinished; raw valid transport
-    // must likewise refuse before a Driver can hear an effect.
+    assert_eq!(plan::FORMAT_VERSION, 20);
+    // This VM has no bound Call dispatcher: a valid policy cannot bypass
+    // the execution gate or reach an unbound Driver.
     let mut vm = rastok::runtime::vm::Vm::boot(&validated, plan::GraphVersion(1));
     let mut journal = rastok::journal::MemJournal::new(plan::GraphVersion(1));
     assert!(matches!(

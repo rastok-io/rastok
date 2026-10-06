@@ -36,7 +36,10 @@ impl Vm<'_> {
         let fact = &packet.facts[0];
         if matches!(fact, Fact::Expired { .. })
             && !matches!(record.emissions.as_slice(), [emission]
-            if spec.expired.as_ref().is_some_and(|target| target.port == emission.port))
+            if spec.expired.as_ref().is_some_and(|target|
+                target.port == emission.port
+                    && emission.envelope.data().materialized_value()
+                        .is_some_and(|value| target.ty.accepts(value))))
         {
             return Err(invalid(
                 index,

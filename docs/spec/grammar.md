@@ -1,14 +1,13 @@
 # Rastok DSL — Grammar notes
 
-> **Status (2026-09-18): normative v19 with the approved Retry and annotation amendments.**
+> **Status (2026-10-06): normative source model for format 20.**
 > The implemented subset and migration evidence are recorded in
 > [R9](../architecture/rework-r9-qualification.md). Unsupported forms refuse
-> by name at check. V16 preserves Node-owned `instance`, `lifetime`, `closing`,
-> nested Graph composition, and instance-local joins. It replaces the old
-> Kind/Type/Aspect model with Node/Graph/Executor/Connector/Extension, removes Graph
-> and Connector handlers, adds Operator Dispatch and case routing, makes
-> output dispositions explicit, and represents Loop recurrence as manager
-> commands rather than spatial ports. M1.8 security/privacy guarantees and
+> by name at check. The model includes Node-owned `instance`, `lifetime`, `closing`,
+> nested Graph composition and instance-local joins. Its categories are
+> Node/Graph/Executor/Connector/Extension. Only Operators have DSL handlers;
+> Dispatch and case routing require explicit output dispositions. Loop
+> recurrence uses manager commands rather than spatial ports. M1.8 security/privacy guarantees and
 > exact `env()`/`secret()` boot references are preserved; the generic measure
 > signature is now exactly `id` and `unit`.
 > The [Retry contract](../architecture/retry-extension-refactor.md) admits
@@ -154,8 +153,8 @@ The rules :
   `durability` and retention overrides — are its attributes
   and body. `app` is no longer a keyword; it survives as a **pre-bound
   identifier** aliasing the `: App` graph, so a declared App boundary port
-  remains addressable as `app.<port>`. Plan v16 removes every implicit root
-  sink: each productible output case has an explicit disposition, and
+  remains addressable as `app.<port>`. There is no implicit root sink:
+  each productible output case has an explicit disposition, and
   `app.<port>` observes only a real App-boundary crossing.
 - **Durability is lexical.** A stateful Node's effective value is its
   explicit `durability`, otherwise the closest enclosing Graph's explicit
@@ -175,7 +174,7 @@ The rules :
   **excluded** ([envelope.md §2](envelope.md)).
 - **Reuse note** : instantiating one graph *type* at several sites is
   deferred. If introduced, it can use
-  an explicit import/instantiation form decided with that feature; v16 does
+  an explicit import/instantiation form decided with that feature; the current model does
   not overload the Extension annotation with a Graph type.
   `compose` and `app` are
   reserved-but-not-used.
@@ -202,10 +201,10 @@ Node
   declare private `var` state.
 - A **Connector** is an Executor which owns one exact versioned **Contract**;
   its transition comes from that Contract and typed Driver events. It has no DSL handler
-  or author-declared `var` in v16.
+  or author-declared `var` in M1.
 - An **Extension** is attached to a Node and may contribute qualified
   attributes, bindings, admission constraints, manager commands, and ports.
-  `App`, `Loop`, and the deferred `Saga` are Extensions.
+  `App`, `Loop`, `Retry`, and the deferred `Saga` are Extensions.
 
 The declaration keyword fixes the structural form. A Connector annotation
 starts with one mandatory Contract name and may continue with Extensions. A Graph or
@@ -991,7 +990,6 @@ Inside `Jaq { program = jq! { ... } }`, the input visible to the program is the
       "id":            "9f2c…",
       "parent_id":     "3a17…",
       "origin_id":     "0b44…",
-      "role":          "default",
       "graph_version": 42
     },
     "app": { "user_id": "user@example.test" },
@@ -1001,9 +999,8 @@ Inside `Jaq { program = jq! { ... } }`, the input visible to the program is the
 }
 ```
 
-(The `meta.sys` Tier 1 is fixed in [envelope.md](envelope.md). Tier-2
-`saga_*` / `loop_*` appear only inside the corresponding Extension
-scope. All ids are blake3-derived 128-bit values.)
+(The four `meta.sys` fields are fixed in [envelope.md](envelope.md).
+Extension context lives in the journal. Ids are BLAKE3-derived 128-bit values.)
 
 | Field | Writable by jaq |
 |---|---|
@@ -1019,8 +1016,8 @@ form serves lossless protocol fields such as `http_headers`, while other
 nested composites belong in `data`. There is no bare
 form: `meta.customer_id` is invalid. Types unify across all writers of an
 `app` field; `ext` fields come from Connector contracts plus the standard
-`content_type`. `meta.sys` is the fixed five-field Tier 1 plus
-scope-conditional Extension fields; Connector outcome data lives on its
+`content_type`. `meta.sys` has four fixed identity fields; Extension context
+lives in the journal, and Connector outcome data lives on its
 ordinary typed output port, not in `meta.sys`. Absent-field semantics are
 checked by the Rastok expression grid: an undeclared leaf is a compile
 error, a required read after an ambiguous join merge must be resolved by
@@ -1193,11 +1190,11 @@ does not claim implementation or release status.
 | Aggregator pattern | Reducer with `instance.key` | executable without an annotation |
 | Window pattern | stateful owner with a finite `lifetime` | processing-time profiles executable; sliding/event-time deferred |
 | Joiner pattern | Operator with an `on (a, b)` join handler | executable without an annotation |
-| Router pattern | closed/open Dispatch emitting to declared output ports | v16; `: Router` refuses |
-| Fanout pattern | atomic multi-emit statement `(a, b, c) = x` | v16; no category |
-| Dispatch | recursive `Linear | ClosedMatch | OpenMatch` within one Operator transaction | v16 |
+| Router pattern | closed/open Dispatch emitting to declared output ports | executable; `: Router` refuses |
+| Fanout pattern | atomic multi-emit statement `(a, b, c) = x` | executable; no category |
+| Dispatch | recursive `Linear | ClosedMatch | OpenMatch` within one Operator transaction | executable |
 | `Saga` Extension | future compensation orchestration | direction only; fail closed |
-| `Loop` Extension | finite temporal recurrence over an admissible host | v16 in [loop.md](loop.md) |
+| `Loop` Extension | finite temporal recurrence over an admissible host | executable in [loop.md](loop.md) |
 | `-> nothing` | Discard sink (built-in) | not a node — `nothing` as an edge target ; non-blocking drain |
 | `RequestReply` | Correlated call pattern | design intent ; may lower to Connector + Operator composition |
 | `Metrics` | Sink Connector | future |
@@ -1535,7 +1532,7 @@ operator_body     ::= "{" ( port_decl | val_decl | var_decl
                           | handler_decl | attribute )* "}"
                                                                       // sub_block is DEAD (D-2026-08-12-1); parsed only to refuse
                                                                       //   with its migration hint
-connector_body    ::= "{" ( port_decl | val_decl | attribute )* "}"  // no DSL var or handler in v16
+connector_body    ::= "{" ( port_decl | val_decl | attribute )* "}"  // no DSL var or handler in M1
 // D-2026-09-16-1: a Connector port_decl only refines a Contract-admitted
 // output type; M1 implements HttpClient/json/out. It never adds a port.
 
@@ -1586,7 +1583,7 @@ dispatch          ::= linear_dispatch | closed_match | open_match
                     // At most 32 nested match decisions per path, including
                     // the match introduced by a single-port `where`.
                     // Source and checked HIR refuse E-DISPATCH-DEPTH before
-                    // recursive evaluation; v16 validates the bound again.
+                    // recursive evaluation; the plan validator re-derives the bound.
 linear_dispatch   ::= statement*
 closed_match      ::= "match" expr "{" closed_arm ( sep closed_arm )* "}"
 closed_arm        ::= case_set "=>" arm_dispatch

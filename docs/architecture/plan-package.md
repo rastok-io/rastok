@@ -1,220 +1,20 @@
 # The plan package — the transportable, verifiable ExecutionPlan
 
-> **Current executable format: categorical v19, recording v3.** The
-> [C1 inventory](retry-c1-identity.md), [final annotation inventory](annotation-types-m1.md#19-two-field-measure-migration-inventory--18-september-before-code)
-> and [common qualification ledger](retry-c4-qualification.md) own the single
-> cutover, fixture movements and checks. Earlier formats refuse by version;
-> no retired field or tag is reinterpreted. [R9](rework-r9-qualification.md),
-> [v17](loop-host-terminal-v17.md) and [v18](instance-stop-command.md) remain
-> dated migration evidence, not alternate readable package formats.
+> **Candidate package format 20, diagnostic recording 4.**
+> This is the only readable format. The [v20 identity inventory](human-review-v20-identity.md)
+> records the pre-public compaction and the witnesses awaiting review and blessing.
+> There is no compatibility reader or converter. Publication freezes this registry
+> as extend-only; changing the public version label remains a pre-publication task.
 
-> Format note — the bytes follow this document, never precede it.
-> Specified 2026-08-06 (M0.5 item 4), after the delivery-reference
-> work froze the vocabulary the plan carries; **revised to format v2
-> on 2026-08-07** after the adversarial review refuted v1 on three
-> counts (an ambiguous value tag, a checksum that did not cover the
-> declared identity, and a decoder that validated shape but not
-> structure — errata E-2026-08-07-1, decisions D-2026-08-07-2/-3);
-> **revised to format v3 on 2026-08-08** when the M1 multiport lift
-> widened `port_decl` with the optional pinned type
-> (D-2026-08-08-3) — a new format is a new version, so the typed
-> table did not ride under a v2 header; **revised to format v4 on
-> 2026-08-09** when the braced-form reform admitted the EMPTY struct
-> literal (tag 17) into expression constants (D-2026-08-09-2) — an
-> extension of the expressible values is a version bump, exactly as
-> this document's own rule demands.
-> The package is a TRANSPORT format: versioned and free to evolve by
-> version bump; none of v1, v2, or v3 was ever published and no
-> decoder reads them — each refuses by its number.
-> **Format v10 (D-2026-08-22-1, C1 identity checkpoint, landed
-> 2026-08-22)** retains the complete v9 owner/instance/type/value/expression
-> transport and makes Connector identity categorical. Each Connector spec
-> carries a validated `<namespace>/<name>@<major>` id and its required runtime
-> role set; source names such as `Process` no longer travel. Registry-free
-> validation checks canonical ids and the built-in Process id/role contract.
-> V9 is categorically refused rather than guessed or migrated.
->
-> **Format v9 (D-2026-08-18-1, R2 transport tranche, landed
-> 2026-08-21)** refuses the unreleased v8 named-partition draft and adds the
-> categorical lexical-owner table. The root App Graph, nested Graphs, and
-> executable Nodes retain parent-linked ownership; each Node points back to
-> its owner and each edge carries its lexical Graph scope. Owners transport
-> the exact `instance.key` tree and inferred type, independent lifetime, and
-> phased immutable values. Connector attributes may likewise transport a
-> checked boot/instance/invocation expression; a plan-shaping dynamic row
-> refuses without consulting the compiler ContractCatalog.
->
-> Owner and execution tables are deliberately distinct. A Graph owns lexical
-> context and lifecycle but is not an executable VM Node; an Operator or
-> Connector has one row in each domain. Validation proves the reciprocal
-> references and the parent tree before either table is observable. This
-> preserves runtime `Slot` stability while preventing DAG flattening from
-> erasing Graph ownership. V9 did not smuggle in the later journal move: R3
-> has since landed mandatory `(address, generation)` route/transaction
-> references as their own declared causal-trace change. That change touches
-> no package byte. The R2 tranche moved package containers and checksums while
-> unchanged source kept its semantic hash and causal trace; R3 moves the trace
-> while keeping both semantic hash and package fixed.
->
-> **M1.5 C3** is the first public source consumer of an invocation-phase
-> Connector row: `File.path`. The existing v10 `AttrSetting::Expr` form
-> carries its checked text tree and actual site; Registry-free validation
-> re-derives the site and contract ceiling. The evaluated path is call data,
-> not a package mutation, so C3 allocates no format tag and moves no existing
-> package or semantic identity.
->
-> **M1.6 H1 is categorical format v11, not an implicit v10 extension.**
-> D-2026-08-25-1 requires every Connector to carry its closed
-> `Event | Call | Session` exchange shape and placement-neutral session
-> references in causal records. The affected package/hash/trace sets were
-> enumerated before implementation. Format v10 is categorically refused; no
-> decoder guesses the missing exchange fact.
->
-> **M1.6 H2 uses v11 unchanged.** The four network sheets produce ordinary
-> Connector ids, roles, exchanges, effective attributes and resolved ports
-> through forms already categorical in v11. Standard HTTP/WebSocket
-> `meta.ext` leaves are implicit typed vocabulary rather than a serialized
-> schema claim. H2 therefore moves no existing package, semantic hash or
-> causal trace and adds no format tag.
->
-> **M1.6 H3 also uses v11 unchanged.** Its Cargo features, hosted pump,
-> HTTP/QUIC/TLS libraries and WebSocket message machine are physical Driver
-> assembly only. None enters a Connector row or package. H3 therefore moves no
-> package, semantic hash or causal trace; the landed H4-H6 Drivers consume the
-> already-typed H2 rows rather than adding backend facts.
->
-> **M1.6 H4 also uses v11 unchanged.** HttpClient's exact prepared bytes seal
-> through the existing Call digest; HTTP version, status and headers are
-> response-envelope observations, not plan fields. `CallStart::Pending` is
-> local pacing and adds no record. No package, semantic hash or existing trace
-> moves.
->
-> **M1.6 H4.1 is categorical format v12.** D-2026-08-26-3 adds the
-> canonical open `media_type` logical scalar and its expression constructor.
-> V11 cannot spell either fact and is refused rather than guessed. The
-> append-only allocations are type tag 18 and call id 6. `Value::Text` remains
-> the materialized carrier, so no journal value tag is added. Typed/custom
-> header attributes otherwise reuse the existing struct/map/array expression
-> and phased-setting rows.
->
-> **M1.6 H5–H7 retain v12 unchanged.** HttpServer's retained-Call response,
-> deadline and protocol observations use causal forms rather than plan fields;
-> H6 executes the Session lifecycle already made categorical at H1; H7's Cargo
-> capabilities and static Driver registry are physical assembly only. The H5
-> correction to `HttpServerExit` changes the resolved type and semantic/package
-> body of affected graphs without changing the format. H6/H7 move no existing
-> semantic hash, package or causal trace.
->
-> **M1.7 L2 is categorical format v13.** D-2026-08-28-2 adds the first
-> closed aspect transport, nested-Graph port rows, explicit Node-or-Graph
-> handler ownership and direct-child output activation. V12 cannot represent
-> those facts and is refused rather than guessed. Root Graph ports are not
-> mirrored: plan key 2 remains their sole authority, while owner key 6 is
-> populated only for nested Graphs. L2 writes no Loop journal fact; L3 adds a
-> derived control proof without changing the container. L4 executes the
-> immediate persistent root-Graph subset from new causal facts, and L5 uses
-> the already-transported delay policy with the shared dated queue and
-> ordinary instance lifetimes. Neither changes v13 package bytes; nested and
-> spatial-child Loop composition remains fail-closed.
->
-> **M1.7 L6 is categorical format v14.** D-2026-08-28-7 makes the
-> termination witness sum explicit: positive `fuel`, independently checked
-> proof, or both. The proof carries the checked measure, optional invariant
-> and a sorted decrement witness that Registry-free validation re-derives
-> from the ordinary handler table. V13 cannot distinguish absent fuel from a
-> proof-only Loop and is refused rather than guessed. The change moves every
-> package container and checksum, but neither the Loop journal fold nor an
-> existing causal trace.
->
-> **M1.7 L7 retains v14 unchanged.** Closing the public composition matrix
-> changes neither the transported Loop contract nor its checked proof. An
-> ordinary nested Graph is already flattened into the scoped edge and Node
-> tables; L7 merely lets the existing Registry-free control walk follow that
-> complete contained DAG. No package, semantic hash or causal trace moves.
->
-> **M1.8 A2 is categorical format v15.** D-2026-08-30-1 adds a sparse
-> canonical annotation table beside every schema owner that can carry data
-> policy: raw and resolved ports, nested-Graph ports, owner values, Node state
-> cells and handler-local typed bindings. The table uses structural paths and
-> a closed annotation registry; it does not allocate a `DataType` or value
-> tag. V14 cannot represent these facts and is categorically refused. Empty
-> tables are omitted, so an unannotated body and semantic hash remain
-> byte-identical; only the outer version and checksum move. Registry-free
-> validation re-derives every local claim. A3 now derives effective transform
-> policy independently and compares the transported resolved table exactly;
-> raw declarations remain unchanged. D-2026-08-30-2 appends `@personal` to
-> that registry without changing v15 or any previous spelling. The source
-> checker refuses every executable clear `@secret` site; decoded packages keep
-> the VM belt. `@personal` requires the exact attested A4 privacy boundary.
->
-> The lifetime rows are one closed transport and executable registry: v9
-> validation admits `persistent`, `idle`, `fixed`, `single_pass`, and
-> processing-time `tumbling` on Graph and Node owners. R5 adds the optional
-> exact bounded `closing` row and the `stop` step under the same categorical
-> v9; sliding/event-time remain named gates. R6 completes the already
-> categorical handler registry with join activation tag 3 and makes nested
-> Graph composition public. Existing packages do not move: the new activation
-> row occurs only in newly executable join programs, while nested Graph source
-> already maps to the owner/edge tables v9 was designed to carry.
-> R7 changes no package byte: it categorically rechecks that the unpublished
-> v8 body remains refused, removes the old partition spellings from executable
-> syntax, and proves that the physical virtual-shard-to-Worker lookup is absent
-> from the v9 body, semantic identity, journal, and replay input.
-> A decoded key type is re-derived and compared; unlike
-> compiler lowering, package validation never normalizes the claim.
->
-> Format v7 (D-2026-08-14-1, landed 2026-08-15) was the one categorical
-> M1.3 B8 publication: the complete canonical
-> `DataType` constructor registry, all materialized value tags allocated in
-> identity.md, the full expression alphabet (`struct`, tagged constructor,
-> `is`, `as`) and the total resolved-port table travel together. A decoder
-> rebuilds the effective table from raw constraints and compares it exactly
-> with the transported claim; no compiler ContractCatalog or unresolved inference
-> variable can enter execution. `Process.exit` therefore carries exact
-> `ProcessExit`, and `decimal()` is statically `number`; their former v6
-> representation bridges are gone. V6 joins the refused drafts and is never
-> migrated silently. Avro branch indexes, Arrow type codes and dense/sparse
-> layout remain adapter projection facts mapped explicitly to canonical union
-> discriminants, never logical type identity.
-> **B9 closure (2026-08-15):** no format change. Strict JSON Schema, Avro and
-> Arrow projection happens outside the package and produces only canonical
-> `DataType` plus adapter-owned physical selector mappings. The historical v6
-> type/expression subset predicates and format refusals are deleted; an
-> unbound `asset()` call has its own invariant error. External schemas cannot
-> smuggle an alternate type registry into v7 or the categorical M1.4 format.
-> **Historical private v6 B5 revision (2026-08-15):** v6 was never published, so
-> B5 replaces its current canonical body rather than allocating a transitory
-> v7 before the categorical type registry lands. Connector spec key 5
-> (`error_set`) is retired; complete resolved Connector port rows travel, and
-> each row's mode now includes its unwired policy. A previous v6 body is not
-> migrated: validation or canonical re-encoding refuses it. The semantic
-> moves and affected goldens are recorded under D-2026-08-14-1. B8 subsequently
-> replaced this body with the categorical v7 registry above.
-> **Historical private v6 B7 revision (2026-08-15):** Process framing produced unit
-> outputs (`lines -> text`, `jsonl -> variant`, `bytes -> bytes`), while
-> stderr follows the independently resolved `err_codec`. The in-memory
-> completion gate required exact `ProcessExit`; only the raw v6 plan row kept
-> `exit: variant` because the v6 type grammar could not transport tagged unions.
-> This is one named representation bridge, not the execution contract. The
-> plan remained structurally v6, but effective Process port meaning changed its
-> canonical body and semantic identity. B8 removed the bridge in the single v7
-> type/expression publication.
-> Format v5 (D-2026-08-10-9, landed 2026-08-10): the
-> three-zone metadata write targets, the travelling `app`/`ext`
-> schemas, the content-addressed asset table, expanded named types
-> (they never reach the format — expansion is the checker's), and
-> the revised numeric canonicalization (D-2026-08-10-7). v4 joined
-> the refused drafts. **v5 is FROZEN (second freeze, 2026-08-10)**: the first freeze
-> was lifted the same day to settle two review findings — the
-> implicit `content_type` (key 6 carries sheet fields only) and the
-> recursive value forms (maps compose through the MapLit expression;
-> a non-empty struct inside a map is INEXPRESSIBLE in v1 and defers
-> by name, so no new expression form was needed). Nothing was ever
-> published between the freezes. The proposed travelling `JoinMetaPlan` never
-> landed: R6 derives static metadata-presence facts from v9's canonical schema,
-> topology, activation, and explicit-write rows, avoiding a duplicate claim.
-> Identity stays where it always was — the semantic hash over the
-> canonical HIR; the package merely carries a plan and proves it intact.
+The package transports a validated plan, not compiler internals or Driver state.
+Owners retain the lexical Graph tree, instance policies and Extensions. Executable
+Node rows belong only to Operators and Connectors. The two tables are reciprocal;
+flattening a passive Graph never erases its ownership or lifecycle.
+
+Raw declarations and the independently resolved port table travel together.
+Validation re-derives types, annotations, routes, Dispatch, dispositions and
+Extension contracts without a hosted catalogue. Driver libraries and deployment
+secrets do not enter the package.
 
 ## Shape
 
@@ -238,7 +38,7 @@ module carries it.
 package := magic "RKPB"                      4 raw bytes, sniffable
            ("Rastok Plan Binary" — the pinned meaning of the magic)
         ┌ canonical CBOR map ─────────────────────────────────┐
-        │ 1 : format_version   uint      (18)                 │
+        │ 1 : format_version   uint      (20)                 │
         │ 2 : semantic_hash    bytes(32) (the plan's identity)│
         │ 3 : body             bytes     (embedded, see below)│
         │ 4 : checksum         bytes(32) (see recipe below)   │
@@ -251,8 +51,7 @@ checksum = blake3( "rastok.plan-package\0"   fixed domain string
 ```
 
 The checksum covers the **whole association** — a tampered declared
-hash or version refuses exactly like a tampered body (v1 covered the
-body alone; refuted by counter-example). Every covered field is
+hash or version refuses exactly like a tampered body. Every covered field is
 fixed-width or last, so fields cannot slide into one another. The
 vocabulary is exact: the producer **declares** the semantic identity
 (computed over the HIR, which the plan alone cannot reproduce); the
@@ -313,13 +112,13 @@ map keys, the one canonical NaN), and nesting beyond its documented
 budget (`canonical_cbor::MAX_NESTING`, 128) refuses as a typed
 error, never a stack overflow. The budget cuts both ways:
 `ValidatedExecutionPlan` refuses any plan whose body would nest
-beyond it (`NestingBudgetExceeded`, measured without recursion), and
+beyond it (`NestingExceeded`, measured without recursion), and
 the compiler surfaces that refusal as the user diagnostic
 `E-PLAN-DEPTH` — so what `encode` accepts, `decode` reads back, with
 no gap at the boundary.
 
-The package re-derives expression/Dispatch types, the exact six built-in
-Connector Contracts, port tables, routed narrowing, composition, productibility,
+The package re-derives expression/Dispatch types, the exact seven built-in
+Connector Contracts (including the two Process profiles), port tables, routed narrowing, composition, productibility,
 Extensions, Loop control/measure and Retry safety evidence without the hosted
 ContractCatalog. Unknown contracts or unsupported execution profiles refuse.
 Checksums do not substitute for these proofs. Refusals are typed and total;
@@ -335,20 +134,17 @@ effective claim. A3 follows the canonical operation graph and requires that
 claim to equal its independent derivation exactly. It never rewrites the raw
 row or recovers meaning from payload strings.
 
-## Body tables (format v19)
+## Body tables (format 20)
 
 The body is one canonical CBOR value encoding the `ExecutionPlan`.
 Compound values use fixed-shape arrays with a leading numeric
 discriminant; maps use fixed unsigned keys; absent optional = omitted
 key. `tagged_value` is the registry of
 [identity.md §3](../spec/identity.md) — the same sub-form the golden
-traces seal, shared code and shared bytes; since 2026-08-07 the Rastok
-`uint` domain has its own registry tag 23, and tag 3 is `long` only
-(E-2026-08-07-1 — v1 reused tag 3 for both, and a decode could turn
-an `int` into a `uint` while keeping the plan's hash). Since v4 an
-expression literal may carry the struct tag 17. V7 admits the complete
-materialized struct family; the surrounding resolved `DataType` supplies its
-closed field contract, and validation checks conformance before encoding.
+traces seal, shared code and shared bytes. Signed and unsigned integers have
+distinct tags, as do raw bytes and ccbor DATA. The surrounding resolved
+`DataType` supplies width, scale and closed field contracts; validation checks
+conformance before encoding.
 
 ```text
 plan       := {1: [node*], 2: [port_decl*], 3: [edge*], 4: [handler*],
@@ -391,9 +187,9 @@ owner_kind := [1]                                 — graph
               // Key 7 is a canonical Extension list; App occurs once on the
               // root Graph, Loop on an admissible owner, no implicit order.
 
-extension_spec := [2]                            — App
-                | [3, loop_spec]                — Loop r2; tag 1 retired
-                | [4, retry_spec]               — Retry r1
+extension_spec := [1]                            — App
+                | [2, loop_spec]                — Loop
+                | [3, retry_spec]               — Retry
 retry_spec  := {1: attempts (plan_constant), 2: [case (text)+],
                 3: delay?, 4: entry (text), 5: terminal (text)}
               // Positive total attempts; strictly sorted unique terminal cases;
@@ -438,7 +234,7 @@ lifetime   := [1]                                 — persistent
             | [5, nanoseconds (int)]              — tumbling(every), > 0
               // Persistent is explicit in the categorical plan even though
               // omitted and explicitly persistent source spellings share one
-              // HIR identity. R4 executes every row above.
+              // HIR identity. All rows above are executable.
 closing    := [drain_for_ns (int), settle_for_ns (int)]
               // Both durations are positive. Absence is not a hidden default;
               // validation requires the row on a finite owner whose subtree
@@ -454,15 +250,15 @@ owner_val  := {1: name (text), 2: evaluation_site, 3: tree,
               // Invocation refuses for owner vals; invocation-local vals
               // remain handler steps.
 spec       := {1: contract_id (text),
-               3: behavior (uint: 1 deterministic · 2 probabilistic),
-               4: [[name (text), attr]*], 6: connector_roles,
-               7: connector_exchange, 8: idempotent (plan_constant)?}
+               2: behavior (uint: 1 deterministic · 2 probabilistic),
+               3: [[name (text), attr]*], 4: connector_roles,
+               5: connector_exchange, 6: idempotent (plan_constant)?}
               // contract_id is canonical <namespace>/<name>@<major>
               // connector_roles := uint: 1 inbound · 2 outbound ·
               //                            3 inbound+outbound
               // connector_exchange := uint: 1 event · 2 call · 3 session
-              // key 2 (effect) and key 5 (error_set) are RETIRED, never reused.
-              // Key 8 is a boolean PlanConstant on admitted outbound Call
+              // std/ is the standard namespace; other namespaces contain a dot.
+              // Key 6 is a boolean PlanConstant on admitted outbound Call
               // profiles, absent on Sessions and inbound profiles. Its reduction
               // must equal the effective Contract attribute; never copied to Intent.
 attr       := [1, word (text)] | [2, tagged_value]
@@ -479,16 +275,16 @@ attr       := [1, word (text)] | [2, tagged_value]
 evaluation_site := uint: 1 plan · 2 boot · 3 instance · 4 invocation
 port_decl  := [name (text), mode, type?, annotation_table?]
 mode       := uint: 1 input · 2 output
-              // Old unwired-policy modes refuse; disposition is explicit routing.
+              // Every productive output has an explicit disposition.
               — the third element is the PINNED type (same encoding
               as var types), present exactly when the source
               annotates: an unannotated port keeps its two-element
               form in the BODY. The effective type is independently reconstructed below.
-              — since M1.3 B2, validation derives a separate total
+              — validation derives a separate total
               ResolvedPortTable (effective type + Declared/Inferred origin)
               from these rows, connector pins and graph constraints; an
               unresolved variable refuses and never becomes variant
-              — since B5, every Connector contract row is present and typed;
+              — every Connector contract row is present and typed;
               Operator/Graph rows may still be source constraints; their
               mandatory effective type is carried by resolved_ports
               — annotation tables are appended only when non-empty. If an inferred raw
@@ -517,14 +313,13 @@ path_segment := [1, field (text)]                — struct field
 annotation_set := [data_annotation+]
 data_annotation := [1, sensitivity]
                  | [2]
-                 // tags 3 (implicit measure) and 4 (cost) retired; named refusal
-                 | [5, personal_flags]
-                 | [6, annotation_binding, definition (text), argument_type, tagged_value]
-                   // candidate v19: definition and complete typed struct arguments
+                 | [3, personal_flags]
+                 | [4, annotation_binding, definition (text), argument_type, tagged_value]
+                   // definition and complete typed struct arguments
 annotation_binding := uint: 1 descriptive metadata; 2 numerical measure;
                       // unsupported tags/profiles refuse; binding 2 requires
-                      // rastok/measure@3, exactly { id: text, unit: text },
-                      // and complete typed constants; @2 is not reinterpreted.
+                      // std/measure@3, exactly { id: text, unit: text },
+                      // and complete typed constants.
 sensitivity := uint: 1 internal · 2 confidential · 3 restricted
 personal_flags := uint: bit 0 special-category · bit 1 criminal-offence
                          · bit 2 subject identifier; all other bits refuse
@@ -551,12 +346,12 @@ endpoint   := [node_slot (uint) | null, port (text)]
               // lexical Graph whose boundary owns the route.
 
 handler    := {1: handler_owner, 2: activation, 3: join_guard (tree)?, 4: dispatch}
-handler_owner := [1, node_slot]                   — Operator only; tag 2 retired
+handler_owner := [1, node_slot]                   — Operator only
 activation := [1, port (text)]
             | [2, lifecycle]
             | [3, [port (text)+], within_ns (signed) | null,
                   last (positive uint32) | null]
-              // Tag 4 retired. Join ports retain declared order, >=2 distinct.
+              // Join ports retain declared order, >=2 distinct.
               // Key 3 is an admission guard on a join only. A single-port
               // where is already OpenMatch, with a no-emission fallback.
 dispatch   := [1, [step*]]                         — Linear
@@ -565,10 +360,10 @@ dispatch   := [1, [step*]]                         — Linear
 case_set   := [case_name (text)+]                  — canonical, disjoint
               // Closed arms cover the source domain; open arms keep source
               // order. Decisions <=32 deep, combined CBOR depth <=128.
-lifecycle  := uint: 1 start · 2 stop · 3 compensate · 4 next ·
-                    5 timeout · 6 evict · 7 recover · 8 closing · 9 reply · 10 exit
-              // registry is closed and extend-only; M1.4 instance lifecycle
-              // activates start/stop. `reply` is an internal inbound-Call
+lifecycle  := uint: 1 start · 2 stop · 3 next · 4 timeout · 5 evict ·
+                    6 recover · 7 closing · 8 reply · 9 exit · 10 retry
+              // Only start/stop activate authored lifecycle handlers.
+              // `reply` is an internal inbound-Call
               // transaction and is never admitted as a source handler;
               // supervision rows remain internal; only start/stop are DSL handlers
 step       := [1, name (text), tree, annotation_table?] — let
@@ -585,9 +380,7 @@ emission   := [1] | [2, [write*]] | [3, [write*]] | [4, tree] | [5]
 write      := [target, tree]
 target     := [1, [seg (text)*]]                  — data path (empty = whole data)
             | [2, field (text)]                   — meta.app, FLAT dotted field (D-2026-08-10-1)
-            | [5, field (text)]                   — meta.ext, flat field
-                                                  // 3 (custom namespace) and 4 (mime) are RETIRED
-                                                  //   draft tags — extend-only, never reused
+            | [3, field (text)]                   — meta.ext, flat field
               data path · app field · ext field (D-2026-08-10-1)
 
 route_rule := [route_endpoint, selection]
@@ -605,7 +398,7 @@ command_kind := uint: 1 next · 2 again · 3 done
               // Tag 4 requires boundary_routes even for flat Graphs. Scope must
               // be the wiring Graph; target is itself or one direct child.
               // No instance, key or generation is encoded in the static plan:
-              // the producer seals the exact InstanceRef in causal key 57.
+              // the producer seals the exact instance::Generation in causal key 42.
 
 tree       := [type, expr]
 type       := 1                                   — null
@@ -675,32 +468,30 @@ branches, empty enums/tagged unions and the published member/node/nesting
 budgets. The package reader additionally enforces its byte and CBOR-depth
 budgets before constructing a type.
 
-`tagged_value` is exactly the extend-only registry in
-[`identity.md`](../spec/identity.md): the M1.4 format retains every v7 B1 family,
-including interval tag 24 and both union selectors under tag 21. A typed
+`tagged_value` is exactly the registry in
+[`identity.md`](../spec/identity.md), including interval tag 21 and both
+union selectors under tag 19. A typed
 decimal may carry its declared scale, including scale zero; the integer fold
 remains a document/constructor reader rule, not a schema-blind package rule.
-`media_type` deliberately reuses tagged-value text tag 8; its surrounding
+`media_type` deliberately reuses tagged-value text tag 6; its surrounding
 resolved type requires the canonical concrete spelling and prevents arbitrary
 text from entering the scalar.
 The surrounding `type` in the expression/state/schema context supplies width,
 precision, units, fixed sizes and timezone rather than duplicating those
 parameters in every materialized value.
 
-All discriminants and keys are extend-only: append, never renumber.
+From the public blessing onward, discriminants and keys are extend-only:
+append, never renumber.
 Anything a future plan carries that these tables cannot express is a
 format-version bump, not a creative reuse.
 
 ## Placement
 
-The codec lives in `rastok-core` — both directions. The brief placed
-the encoder std-side; implementing both halves beside the tables they
-share is simpler and loses nothing: the *callers* keep the intended
-layering (the compiler/CLI encodes, the embedded boot decodes), and
-LTO strips the unused half from a firmware. The generic canonical
-CBOR machinery moves from `golden` into the kernel for the same
-reason — one implementation of the byte discipline, used by the
-golden projection (std, evidence) and the package (core, transport).
+Both codec directions live in `rastok-core`, beside the tables they share.
+The compiler/CLI encodes; embedded boot decodes. LTO can remove the unused
+direction from firmware. `canonical_cbor` supplies the byte discipline and
+`canonical` the shared value registry, consumed by both the golden projection
+and the package codec.
 
 ## Verification contract
 

@@ -74,7 +74,7 @@ fn currency_units_have_no_special_annotation_authority() {
         let [DataAnnotation::Declared(application)] = set.annotations() else {
             panic!("one generic measurement: {set:?}");
         };
-        assert_eq!(application.definition(), "rastok/measure@3");
+        assert_eq!(application.definition(), "std/measure@3");
         assert_eq!(application.quantity_measure(), Some(("amount", unit)));
     }
 }
@@ -233,7 +233,7 @@ fn amount_targets_are_checked_independently_and_units_cannot_conflict() {
             AnnotationSet::new(vec![DataAnnotation::Declared(Box::new(
                 AnnotationApplication::new(
                     AnnotationBinding::Measure,
-                    "rastok/measure@3".into(),
+                    "std/measure@3".into(),
                     measure_argument_type().expect("standard signature"),
                     Value::Struct(vec![
                         ("id".into(), Value::Text("amount".into())),

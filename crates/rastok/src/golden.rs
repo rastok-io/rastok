@@ -229,6 +229,21 @@ fn explain(a: &Cbor, b: &Cbor, path: String) -> (String, String, String) {
             }
             (path, render(a), render(b))
         }
+        (Cbor::Array(left), Cbor::Array(right))
+            if path.ends_with("data(5)")
+                && matches!(left.as_slice(), [Cbor::Uint(2), Cbor::Bytes(_)])
+                && matches!(right.as_slice(), [Cbor::Uint(2), Cbor::Bytes(_)]) =>
+        {
+            if let ([_, Cbor::Bytes(left)], [_, Cbor::Bytes(right)]) =
+                (left.as_slice(), right.as_slice())
+                && canonical::decode_data_value(left).is_ok()
+                && canonical::decode_data_value(right).is_ok()
+                && let (Ok((left, _)), Ok((right, _))) = (decode(left), decode(right))
+            {
+                return explain(&left, &right, format!("{path}[1] (ccbor value)"));
+            }
+            (path, render(a), render(b))
+        }
         (Cbor::Array(left), Cbor::Array(right)) => {
             for (index, (item, other)) in left.iter().zip(right).enumerate() {
                 if item != other {
@@ -238,25 +253,6 @@ fn explain(a: &Cbor, b: &Cbor, path: String) -> (String, String, String) {
             if left.len() != right.len() {
                 let at = format!("{path}.len");
                 return (at, left.len().to_string(), right.len().to_string());
-            }
-            (path, render(a), render(b))
-        }
-        (Cbor::Bytes(left), Cbor::Bytes(right)) if path.ends_with("data(8)[1]") => {
-            // Golden DATA retains bytes, not the materialized/encoded distinction.
-            // Label this an interpretation of a recognized canonical value, never
-            // pretend that an arbitrary raw byte payload had a retained text type.
-            if let (Ok((left_tree, left_used)), Ok((right_tree, right_used))) =
-                (decode(left), decode(right))
-                && left_used == left.len()
-                && right_used == right.len()
-                && rastok_core::canonical::decode_value(&left_tree).is_ok()
-                && rastok_core::canonical::decode_value(&right_tree).is_ok()
-            {
-                return explain(
-                    &left_tree,
-                    &right_tree,
-                    format!("{path} (canonical tagged-value view)"),
-                );
             }
             (path, render(a), render(b))
         }
@@ -322,27 +318,27 @@ fn record_context(tree: &Cbor) -> String {
             .map(render)
             .unwrap_or_else(|| String::from("absent"))
     };
-    match fields.get(&10) {
+    match fields.get(&7) {
         Some(Cbor::Uint(1)) => format!(
             "INGRESS {} · port {} · sequence {}",
-            field(21),
+            field(9),
             fields
-                .get(&24)
+                .get(&12)
                 .map(render)
                 .unwrap_or_else(|| String::from("in")),
-            field(22),
+            field(10),
         ),
         Some(Cbor::Uint(2)) => format!(
             "TRANSACTION {} · trigger {} · cause_id {}",
-            field(30),
-            field(32),
-            field(39),
+            field(17),
+            field(19),
+            field(26),
         ),
         Some(Cbor::Uint(3)) => format!(
             "EGRESS {} · emitting_id {} · call_key {}",
-            field(41),
-            field(40),
-            field(42),
+            field(28),
+            field(27),
+            field(29),
         ),
         _ => String::from("unrecognized retained record"),
     }
@@ -381,49 +377,47 @@ fn key_name(key: u64) -> String {
         1 => "id",
         2 => "parent_id",
         3 => "origin_id",
-        4 => "role",
-        5 => "graph_version",
-        6 => "mime_type",
-        7 => "tier2",
-        8 => "data",
-        9 => "app_meta",
-        10 => "kind",
-        20 => "envelope",
-        21 => "connector_path",
-        22 => "inbound_seq",
-        23 => "replica",
-        24 => "ingress_port",
+        4 => "graph_version",
+        5 => "data",
+        6 => "app_meta",
+        7 => "kind",
+        8 => "envelope",
+        9 => "connector_path",
+        10 => "ingress_seq",
+        11 => "replica",
+        12 => "ingress_port",
+        13 => "routes",
+        14 => "session_ingress",
+        15 => "source_connector_path",
+        16 => "inbound_call",
+        17 => "owner_path",
+        18 => "instance_generation",
+        19 => "trigger",
+        20 => "consumed",
+        21 => "join_inputs",
+        22 => "state_delta",
+        23 => "emissions",
+        24 => "deadline_ids",
         25 => "routes",
-        26 => "session_ingress",
-        27 => "source_connector_path",
-        28 => "inbound_call",
-        30 => "node_path",
-        31 => "instance_ref",
-        32 => "trigger",
-        33 => "consumed",
-        34 => "join_inputs",
-        35 => "state_delta",
-        36 => "emissions",
-        37 => "timers",
-        38 => "routes",
-        39 => "cause_id",
-        40 => "emitting_id",
-        41 => "connector_path",
-        42 => "call_key",
-        43 => "request_digest",
-        44 => "status",
-        45 => "closure",
-        46 => "edge_cursor",
-        47 => "edge",
-        48 => "parent_instance_ref",
-        49 => "close_scope_ref",
-        50 => "session_exit_ref",
-        51 => "session_fact",
-        52 => "inbound_call_exit_ref",
-        53 => "loop_fact",
-        54 => "logical_time",
-        55 => "loop_protocol",
-        57 => "instance_commands",
+        26 => "cause_id",
+        27 => "emitting_id",
+        28 => "connector_path",
+        29 => "call_key",
+        30 => "request_digest",
+        31 => "status",
+        32 => "closure",
+        33 => "edge",
+        34 => "parent_generation",
+        35 => "close_scope",
+        36 => "session_exit",
+        37 => "session_fact",
+        38 => "inbound_call_exit",
+        39 => "logical_time",
+        40 => "loop_protocol",
+        41 => "deadlines",
+        42 => "instance_commands",
+        43 => "retry_protocol",
+        44 => "closed_at",
         _ => return format!("key {key}"),
     };
     format!("{name}({key})")
@@ -605,29 +599,28 @@ fn record_tree(record: &Record) -> Cbor {
     match record {
         Record::Ingress(inbound) => {
             let mut pairs = BTreeMap::from([
-                (10, Cbor::Uint(1)),
-                (20, canonical::envelope(&inbound.envelope)),
+                (7, Cbor::Uint(1)),
+                (8, canonical::envelope(&inbound.envelope)),
                 (
-                    21,
+                    9,
                     Cbor::Text(inbound.provenance.connector_path().to_string()),
                 ),
-                (22, Cbor::Uint(inbound.seq)),
-                (23, Cbor::Uint(inbound.provenance.replica())),
+                (10, Cbor::Uint(inbound.seq)),
+                (11, Cbor::Uint(inbound.provenance.replica())),
             ]);
             if let Some(packet) = inbound.instance_commands.as_deref() {
                 pairs.insert(crate::journal::instance_stop::CAUSAL_KEY, packet.tree());
             }
-            // Key 24: the source port — boundary input without key 27,
-            // Connector output with it. Conventional `in` remains omitted,
-            // so every existing boundary trace stays byte-identical.
+            // Key 12: the source port — boundary input without key 15,
+            // Connector output with it. Absence denotes conventional `in`.
             if inbound.port.name() != "in" {
-                pairs.insert(24, Cbor::Text(inbound.port.name().to_string()));
+                pairs.insert(12, Cbor::Text(inbound.port.name().to_string()));
             }
             if !inbound.routes.is_empty() {
                 let mut routes = inbound.routes.clone();
                 routes.sort();
                 pairs.insert(
-                    25,
+                    13,
                     Cbor::Array(
                         routes
                             .into_iter()
@@ -660,7 +653,7 @@ fn record_tree(record: &Record) -> Cbor {
                                     .collect(),
                             ));
                         }
-                        pairs.insert(28, Cbor::Array(fields));
+                        pairs.insert(16, Cbor::Array(fields));
                     }
                     crate::journal::InboundExchangeRecord::Session(session) => {
                         let (kind, reference) = match session {
@@ -668,7 +661,7 @@ fn record_tree(record: &Record) -> Cbor {
                             SessionIngressRecord::Message(reference) => (2, reference),
                         };
                         pairs.insert(
-                            26,
+                            14,
                             Cbor::Array(vec![
                                 Cbor::Uint(kind),
                                 Cbor::Bytes(reference.id().as_bytes().to_vec()),
@@ -679,7 +672,7 @@ fn record_tree(record: &Record) -> Cbor {
             }
             if let Some(connector) = &inbound.connector_path {
                 pairs.insert(
-                    27,
+                    15,
                     Cbor::Array(
                         connector
                             .segments()
@@ -694,29 +687,29 @@ fn record_tree(record: &Record) -> Cbor {
         }
         Record::Transaction(transaction) => {
             let mut pairs = BTreeMap::from([
-                (10, Cbor::Uint(2)),
-                (30, Cbor::Text(transaction.owner_path.to_string())),
-                (32, Cbor::Text(transaction.trigger.to_string())),
+                (7, Cbor::Uint(2)),
+                (17, Cbor::Text(transaction.owner_path.to_string())),
+                (19, Cbor::Text(transaction.trigger.to_string())),
             ]);
-            pairs.insert(31, transaction.instance.tree());
+            pairs.insert(18, transaction.instance.tree());
             if let Some(parent) = &transaction.parent_instance {
-                pairs.insert(48, parent.tree());
+                pairs.insert(34, parent.tree());
             }
             if let Some(scope) = &transaction.close_scope {
-                pairs.insert(49, scope.tree());
+                pairs.insert(35, scope.tree());
             }
             match transaction.exchange_exit.as_deref() {
                 Some(crate::journal::InboundExchangeExitRecord::Session(session)) => {
-                    pairs.insert(50, Cbor::Bytes(session.id().as_bytes().to_vec()));
+                    pairs.insert(36, Cbor::Bytes(session.id().as_bytes().to_vec()));
                 }
                 Some(crate::journal::InboundExchangeExitRecord::Call(call)) => {
-                    pairs.insert(52, Cbor::Bytes(call.id().as_bytes().to_vec()));
+                    pairs.insert(38, Cbor::Bytes(call.id().as_bytes().to_vec()));
                 }
                 None => {}
             }
             if let Some(logical_time) = transaction.logical_time {
                 pairs.insert(
-                    54,
+                    39,
                     if logical_time >= 0 {
                         Cbor::Uint(logical_time as u64)
                     } else {
@@ -725,22 +718,22 @@ fn record_tree(record: &Record) -> Cbor {
                 );
             }
             if let Some(packet) = transaction.loop_protocol() {
-                pairs.insert(55, loop_packet_tree(packet));
+                pairs.insert(40, loop_packet_tree(packet));
             }
             if let Some(packet) = transaction.instance_commands.as_deref() {
                 pairs.insert(crate::journal::instance_stop::CAUSAL_KEY, packet.tree());
             }
             if let Some(packet) = transaction.retry_record.as_deref() {
-                pairs.insert(58, packet.tree());
+                pairs.insert(43, packet.tree());
             }
             if let Some(cause) = transaction.cause {
-                pairs.insert(39, Cbor::Bytes(cause.as_bytes().to_vec()));
+                pairs.insert(26, Cbor::Bytes(cause.as_bytes().to_vec()));
             }
             let mut consumed: Vec<&crate::journal::ConsumedPosition> =
                 transaction.consumed.iter().collect();
             consumed.sort();
             pairs.insert(
-                33,
+                20,
                 Cbor::Array(
                     consumed
                         .iter()
@@ -756,7 +749,7 @@ fn record_tree(record: &Record) -> Cbor {
             );
             if !transaction.join_inputs.is_empty() {
                 pairs.insert(
-                    34,
+                    21,
                     Cbor::Array(
                         transaction
                             .join_inputs
@@ -770,7 +763,7 @@ fn record_tree(record: &Record) -> Cbor {
                 let mut delta: Vec<_> = transaction.state_delta.iter().collect();
                 delta.sort_by(|a, b| a.0.cmp(&b.0));
                 pairs.insert(
-                    35,
+                    22,
                     Cbor::Array(
                         delta
                             .iter()
@@ -785,7 +778,7 @@ fn record_tree(record: &Record) -> Cbor {
                 );
             }
             pairs.insert(
-                36,
+                23,
                 Cbor::Array(
                     transaction
                         .emissions
@@ -804,7 +797,7 @@ fn record_tree(record: &Record) -> Cbor {
                 let mut timers: Vec<_> = transaction.deadline_ids.iter().collect();
                 timers.sort();
                 pairs.insert(
-                    37,
+                    24,
                     Cbor::Array(
                         timers
                             .into_iter()
@@ -822,7 +815,7 @@ fn record_tree(record: &Record) -> Cbor {
                 let mut routes = transaction.routes.clone();
                 routes.sort();
                 pairs.insert(
-                    38,
+                    25,
                     Cbor::Array(
                         routes
                             .into_iter()
@@ -841,17 +834,17 @@ fn record_tree(record: &Record) -> Cbor {
         }
         Record::Egress(EgressRecord::Call(outbound)) => {
             let mut pairs = BTreeMap::from([
-                (10, Cbor::Uint(3)),
+                (7, Cbor::Uint(3)),
                 (
-                    40,
+                    27,
                     Cbor::Bytes(outbound.intent.emitting_id.as_bytes().to_vec()),
                 ),
-                (41, Cbor::Text(outbound.intent.connector_path.to_string())),
+                (28, Cbor::Text(outbound.intent.connector_path.to_string())),
             ]);
             if let Some(key) = &outbound.intent.idempotency_key {
-                pairs.insert(42, Cbor::Bytes(key.clone().into_bytes()));
+                pairs.insert(29, Cbor::Bytes(key.clone().into_bytes()));
             }
-            pairs.insert(43, Cbor::Bytes(outbound.intent.request_digest().to_vec()));
+            pairs.insert(30, Cbor::Bytes(outbound.intent.request_digest().to_vec()));
             let (status, closure) = match &outbound.status {
                 CallStatus::Open => (1, None),
                 CallStatus::Closed(Closure::Response(completion)) => (
@@ -862,22 +855,22 @@ fn record_tree(record: &Record) -> Cbor {
                     ])),
                 ),
                 CallStatus::Closed(Closure::Timeout) => (2, Some(Cbor::Array(vec![Cbor::Uint(2)]))),
-                CallStatus::Abandoned => (4, Some(Cbor::Array(Vec::new()))),
+                CallStatus::Abandoned => (3, Some(Cbor::Array(Vec::new()))),
             };
-            pairs.insert(44, Cbor::Uint(status));
+            pairs.insert(31, Cbor::Uint(status));
             if let Some(closure) = closure {
-                pairs.insert(45, closure);
+                pairs.insert(32, closure);
             }
-            // Key 47: the causing delivery's canonical edge — with
-            // key 40 the record reconstructs delivery_id and hence
+            // Key 33: the causing delivery's canonical edge — with
+            // key 27 the record reconstructs delivery_id and hence
             // call_id, autonomously (identity.md §3).
-            pairs.insert(47, Cbor::Text(outbound.intent.edge.clone()));
+            pairs.insert(33, Cbor::Text(outbound.intent.edge.clone()));
             if let Some(packet) = outbound.retry_record.as_deref() {
-                pairs.insert(58, packet.tree());
+                pairs.insert(43, packet.tree());
             }
             if let Some(schedule) = outbound.deadlines.as_deref() {
                 pairs.insert(
-                    37,
+                    24,
                     Cbor::Array(
                         schedule
                             .items()
@@ -931,7 +924,7 @@ fn record_tree(record: &Record) -> Cbor {
                     Cbor::Text(session.connector_path.to_string()),
                 ]),
             };
-            Cbor::Map(BTreeMap::from([(10, Cbor::Uint(3)), (51, fact)]))
+            Cbor::Map(BTreeMap::from([(7, Cbor::Uint(3)), (37, fact)]))
         }
     }
 }
@@ -1012,7 +1005,7 @@ mod tests {
             panic!("a transaction projects as a canonical map")
         };
         assert_eq!(
-            tree.get(&55),
+            tree.get(&40),
             Some(&Cbor::Map(BTreeMap::from([(
                 5,
                 Cbor::Array(vec![Cbor::Array(vec![
@@ -1031,10 +1024,10 @@ mod tests {
             )])))
         );
         assert!(
-            !tree.contains_key(&53),
-            "retired record keys are not reused"
+            tree.keys().all(|key| *key <= 44),
+            "only the compact active registry is emitted"
         );
-        assert!(!tree.contains_key(&54), "time-insensitive facts omit time");
+        assert!(!tree.contains_key(&39), "time-insensitive facts omit time");
 
         let Record::Transaction(mut timed) = record.clone() else {
             unreachable!("the fixture is a transaction")
@@ -1043,7 +1036,7 @@ mod tests {
         let Cbor::Map(timed_tree) = record_tree(&Record::Transaction(timed)) else {
             panic!("a transaction projects as a canonical map")
         };
-        assert_eq!(timed_tree.get(&54), Some(&Cbor::Negative(0)));
+        assert_eq!(timed_tree.get(&39), Some(&Cbor::Negative(0)));
 
         let Record::Transaction(mut admit) = record else {
             unreachable!("the fixture is a transaction")
@@ -1062,7 +1055,7 @@ mod tests {
             panic!("an admission projects as a canonical map")
         };
         assert_eq!(
-            admit_tree.get(&55),
+            admit_tree.get(&40),
             Some(&Cbor::Map(BTreeMap::from([(
                 5,
                 Cbor::Array(vec![Cbor::Array(vec![
@@ -1099,7 +1092,7 @@ mod tests {
             panic!("an inbound record projects as a canonical map")
         };
         assert_eq!(
-            tree.get(&27),
+            tree.get(&15),
             Some(&Cbor::Array(vec![
                 Cbor::Text(String::from("api")),
                 Cbor::Text(String::from("listener")),
@@ -1115,7 +1108,7 @@ mod tests {
     fn the_diff_names_a_zero_sign_divergence() {
         let record = |zero: f64| {
             encode(&Cbor::Map(BTreeMap::from([(
-                8,
+                5,
                 Cbor::Double(rastok_core::canonical_cbor::CanonicalDouble::new(zero)),
             )])))
         };
@@ -1123,7 +1116,7 @@ mod tests {
         let theirs = Trace::from_stored(&[record(0.0)]).expect("canonical bytes");
         let divergence = diff(&ours, &theirs).expect("the traces differ");
         assert_eq!(divergence.record, 0);
-        assert_eq!(divergence.path, "data(8)");
+        assert_eq!(divergence.path, "data(5)");
         assert_eq!(divergence.left, "-0");
         assert_eq!(divergence.right, "0");
     }

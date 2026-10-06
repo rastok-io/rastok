@@ -42,6 +42,7 @@ impl ConnectorDriverFactory for Factory {
         Ok(Box::new(World {
             bindings,
             evaluator: MockOutboundConnectorDriver {
+                plan,
                 mocks: Rc::clone(&self.mocks),
                 faults: Rc::clone(&self.faults),
                 protocol: Box::new(protocol),
@@ -55,16 +56,16 @@ impl ConnectorDriverFactory for Factory {
         }))
     }
 }
-struct World {
+struct World<'plan> {
     bindings: ProcessRequestBindings,
-    evaluator: MockOutboundConnectorDriver,
+    evaluator: MockOutboundConnectorDriver<'plan>,
     resources: BTreeMap<SessionId, node::Path>,
     terminating: std::collections::BTreeSet<SessionId>,
     events: VecDeque<SessionDriverEvent>,
     proposals: VecDeque<IngressProposal>,
     next: u64,
 }
-impl World {
+impl World<'_> {
     fn answer(&mut self, session: SessionId, path: &node::Path, message: &Envelope) {
         if let Some(outputs) = self.evaluator.answer_outputs(path, None, message) {
             for output in outputs {
@@ -99,7 +100,7 @@ impl World {
         }
     }
 }
-impl BoundConnectorDriver for World {
+impl BoundConnectorDriver for World<'_> {
     fn inbound(&mut self) -> Option<&mut dyn InboundConnectorDriver> {
         Some(self)
     }
@@ -107,7 +108,7 @@ impl BoundConnectorDriver for World {
         Some(self)
     }
 }
-impl OutboundConnectorDriver for World {
+impl OutboundConnectorDriver for World<'_> {
     fn call(&mut self) -> Option<&mut dyn CallConnectorDriver> {
         None
     }
@@ -115,7 +116,7 @@ impl OutboundConnectorDriver for World {
         Some(self)
     }
 }
-impl SessionConnectorDriver for World {
+impl SessionConnectorDriver for World<'_> {
     fn prepare_session_open(
         &mut self,
         path: &node::Path,
@@ -200,7 +201,7 @@ impl SessionConnectorDriver for World {
         });
     }
 }
-impl InboundConnectorDriver for World {
+impl InboundConnectorDriver for World<'_> {
     fn proposal(&mut self) -> Option<IngressProposal> {
         let proposal = self.proposals.front()?;
         // The script may answer during open_session. As with the physical

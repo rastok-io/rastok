@@ -6,7 +6,7 @@ use crate::journal::retry_protocol::{
 use crate::plan::SemanticHash;
 use alloc::collections::BTreeSet;
 
-/// Lossless key 58 payload. An empty packet must be omitted by its carrier.
+/// Lossless key 43 payload. An empty packet must be omitted by its carrier.
 #[must_use]
 pub fn retry_packet(packet: &Packet) -> Cbor {
     rp::encoding::packet_tree(packet, retained_pin, envelope)

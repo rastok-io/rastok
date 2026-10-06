@@ -4,10 +4,9 @@
 > projection profiles between external schemas and Rastok
 > [`DataType`](types.md). A Connector may implement a strict subset, but it may
 > not reinterpret or weaken a refusal. Library iteration order and physical
-> container layout never become type identity. The v7 registry transports
-> every resulting logical type and union discriminant; categorical package v17
-> retains that registry (v12 added the open `media_type` scalar) alongside v9's
-> instance ownership. B9
+> container layout never become type identity. The current plan package transports
+> every resulting logical type and union discriminant, including the open
+> `media_type` scalar, alongside instance ownership. B9
 > implements the adapters in `rastok::schema_projection` and pins their reverse
 > projections, physical union mappings and refusal corpus.
 
@@ -27,7 +26,7 @@ They normalize widths and representation parameters rather than copying the
 schema into each value: narrower floats promote exactly to binary64, fixed
 collections use their ordinary byte/array carrier, temporal counts normalize
 to the canonical units in [`types.md`](types.md), and non-text maps carry
-canonical typed keys. `DataType::violation` checks the omitted width, length,
+canonical typed keys. `DataType::check_value_type` checks the omitted width, length,
 unit, timezone and key constraints recursively. The B1 conformance matrix
 exercises representative JSON, Avro and Arrow values; parsing and reverse
 projection of the external schema documents themselves remain boundary work.
@@ -242,5 +241,5 @@ The executable corpus is `crates/rastok/tests/schema_projections.rs` plus the
 OpenAPI projection/resolver tests in `rastok::schema_projection::openapi` and
 `rastok::openapi`. It tests
 the public projection boundary, not private parser choreography; package/type
-round trips and runtime conformance remain independently pinned by the v7 and
+round trips and runtime conformance remain independently pinned by the type and
 multiport suites.

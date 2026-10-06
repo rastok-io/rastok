@@ -198,12 +198,11 @@ fn the_meta_projection_carries_all_sys_fields() {
         rastok::value::Value::Null,
         "a root has no parent"
     );
-    assert_eq!(
-        sys["role"],
-        rastok::value::Value::Text(String::from("default"))
-    );
+    assert_eq!(sys["origin_id"], rastok::value::Value::Text(id.to_string()));
+    assert_eq!(sys.len(), 4);
+    assert!(!sys.contains_key("role"));
     assert_eq!(sys["graph_version"], rastok::value::Value::Int(3));
-    // The five reserved `sys` fields carry no content type; the ext zone
+    // The four `sys` fields carry no content type; the ext zone
     // does — and its flat dotted keys NEST in the projection.
     assert!(!sys.contains_key("mime_type"));
     let rastok::value::Value::Map(ext) = &root["ext"] else {
@@ -430,7 +429,7 @@ fn a_faulted_transaction_changes_nothing() {
         source_instance: singleton(),
         envelope: Envelope::new(
             Meta::new(MetaSys::root(envelope::Id::from_bytes([1; 16]), 1)),
-            Data::encoded(Encoding::Avro, *b"opaque"),
+            Data::encoded(Encoding::ArrowIpc, *b"opaque"),
         ),
     };
     let fault = executor

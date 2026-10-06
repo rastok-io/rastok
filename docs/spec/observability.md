@@ -5,8 +5,8 @@
 > pricing or subset arithmetic ships in M1. §6–7 describe that reduced scope;
 > quantity ids have explicit units, not implicit registry meanings.
 
-> **Executable v19 — 18 September 2026.** M1.8's security, privacy,
-> propagation and late-bound secret guarantees remain in force. V19 adds [flat annotation types](annotations.md), typed response
+> **Format 20 target — 6 October 2026.** Security, privacy,
+> propagation and late-bound secret guarantees remain in force, alongside [flat annotation types](annotations.md), typed response
 > hydration and original signed measurements. Under D-2026-09-18-1 every
 > measure has exactly `id` and `unit`: money is a quantity with a currency
 > unit, not a second annotation profile. The [annotation inventory](../architecture/annotation-types-m1.md)
@@ -55,7 +55,7 @@ Structural branch indexes refer to the canonical branch order, never source
 order. A path must resolve in the adjacent type tree; dead or mistyped paths
 refuse after decode.
 
-Categorical v17 retains this sparse table locally beside every transported
+The plan carries this sparse table locally beside every transported
 schema that can own policy: raw and resolved port rows, nested-Graph ports,
 owner values, Node state cells and handler-local typed bindings. Empty tables
 are omitted. The decoder reconstructs the table from its structural wire form;
@@ -188,7 +188,7 @@ unit. The target must be an integer or exact decimal; signed field types
 retain negative corrections, and zero is an observation, not missing evidence.
 The unit is opaque text: no conversion is implicit.
 
-The protected `rastok/measure@3` binding carries the same ordinary flat
+The protected `std/measure@3` binding carries the same ordinary flat
 argument schema as other annotation definitions. Complete arguments, numeric
 targets, consistent units per id and interpretation authority are checked
 independently when opening a package. The schema has exactly two required
@@ -199,13 +199,10 @@ M1 derives no relationship or total from their names. Generic `subset_of`
 refuses by name. Runtime instruments and future exporter mappings are separate
 consumers; a field annotation neither produces an instrument nor adopts one.
 
-D-2026-09-16-3 and D-2026-09-16-7 supersede the closed M1.8 registry. Its
-compact annotation tag 3 is retired and refuses by name; it is never reused
-or reinterpreted. The [migration inventory](../architecture/annotation-types-m1.md#16-explicit-unit-migration-inventory--17-september-before-implementation)
-records that first migration. The subsequent
-[two-field inventory](../architecture/annotation-types-m1.md#19-two-field-measure-migration-inventory--18-september-before-code)
-retires compact cost tag 4 and changes the generic protected definition to
-`rastok/measure@3`. Security/privacy guarantees remain unchanged.
+The protected definition is `std/measure@3`, represented as a typed declared
+annotation (application tag 4, numerical binding 2). The format's active
+registry is [identity.md](identity.md); no parallel compact cost/measure tag
+or implicit standard quantity registry exists.
 
 ### 3.5 Amounts are ordinary quantities
 

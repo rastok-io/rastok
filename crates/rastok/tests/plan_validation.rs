@@ -1038,7 +1038,7 @@ fn a_dynamic_attribute_requires_a_registry_free_contract_authority() {
         plan::NodeExecution::Connector(spec) => spec,
         plan::NodeExecution::Operator => panic!("shell is a connector"),
     };
-    spec.contract = rastok::connector::ContractId::parse("test/custom@1").unwrap();
+    spec.contract = rastok::connector::ContractId::parse("org.rastok.test/custom@1").unwrap();
     spec.attributes = vec![(
         String::from("late"),
         plan::AttrSetting::Expr {
@@ -1989,15 +1989,15 @@ graph attributed : App {
 }
 
 #[test]
-fn a_future_lifecycle_handler_cannot_enter_v13_early() {
+fn an_internal_lifecycle_cannot_be_an_authored_handler() {
     let mut plan = raw_probe();
     plan.handlers[0].activation =
-        rastok::node::HandlerActivation::Lifecycle(rastok::node::Lifecycle::Compensate);
+        rastok::node::HandlerActivation::Lifecycle(rastok::node::Lifecycle::Reply);
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::UnsupportedLifecycleHandler {
             node: rastok::node::Path::new(["relay"]).unwrap(),
-            lifecycle: rastok::node::Lifecycle::Compensate,
+            lifecycle: rastok::node::Lifecycle::Reply,
         }
     );
 }

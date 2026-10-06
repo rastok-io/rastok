@@ -1,12 +1,14 @@
 # Rastok — White Paper
 
-> **Documentation follow-up (2026-09-21), package v19 / diagnostic recording v3.**
+> **Format-20 candidate (2026-10-06), diagnostic recording 4; blessing pending review.**
 > The Node/Executor/Extension model, host-terminal Loop, exact-instance closure,
 > native outbound Call Retry and typed measurement retention are executable.
-> The [common C4 qualification](docs/architecture/retry-c4-qualification.md)
-> records the single fixture blessing and local checks; external
+> The [C4 qualification](docs/architecture/retry-c4-qualification.md) records
+> the qualified native-Retry base, not this candidate. The current cutover's
+> measurements and pending blessing are in the
+> [identity inventory](docs/architecture/human-review-v20-identity.md); external
 > [opening gates](docs/architecture/opening-showcase.md) remain separate.
-> Process jobs use `rastok/process@4`; resident Sessions use `rastok/process@5`.
+> Process jobs use `std/process@4`; resident Sessions use `std/process@5`.
 > Earlier [R9](docs/architecture/rework-r9-qualification.md),
 > [host-terminal](docs/architecture/loop-host-terminal-v17.md) and
 > [exact-instance closure](docs/architecture/instance-stop-command.md) ledgers
@@ -611,7 +613,7 @@ single carried payload. The postal metaphor fits: `meta` is what's written
 *on* the envelope, `data` is what's *inside*.
 
 `meta` has exactly three zones. `meta.sys` holds the runtime's read-only reserved fields —
-identity, lineage, role; five fields, minted fresh at every hop.
+identity, lineage and graph version: four fields, reminted at each emission.
 `meta.app` is the application's writable zone — its fields inferred
 from the graph's own writes, with types unified across writers — and
 `meta.ext` is the external-boundary context, written by connectors
@@ -619,7 +621,7 @@ from the graph's own writes, with types unified across writers — and
 handlers. There is no bare form: `meta.x` resolves to nothing.
 `meta` leaves are typed scalars (or scalar arrays) — composites belong in
 `data`. The normative field list, read-only rules, id derivation, storage
-form and birth stamps live in
+form and Extension-context boundary live in
 [docs/spec/envelope.md](docs/spec/envelope.md).
 
 ```rastok
@@ -665,8 +667,9 @@ structural and tagged unions; an unsupported or ambiguous projection
 refuses instead of degrading to `bytes` or `variant`. It keeps logical
 type, internal representation, boundary codec and external content type
 distinct. Persisted and transported payload representations are bytes,
-but bytes are the logical type only for opaque binary data; an Avro or
-Arrow buffer may represent a logical struct, collection or union. Pure
+but bytes are the logical type only for opaque binary data. Graph-born values
+use ccbor; external raw bytes keep their reading port's bytes/text distinction.
+Arrow buffers may remain opaque; Avro is a schema/import-export projection. Pure
 routing therefore does not pay parse cost. The exact authority is
 [docs/spec/types.md](docs/spec/types.md), with host syntax in
 [docs/spec/grammar.md](docs/spec/grammar.md).
@@ -1401,7 +1404,7 @@ exactly what makes replay deterministic (envelope.md §2.0/§8). The
 Connector draws the boundary; the journal captures what crosses it.
 
 **The Contract is not the Driver.** Source names resolve through a compiler
-catalogue to a stable versioned contract id such as `rastok/process@4`. The
+catalogue to a stable versioned contract id such as `std/process@4`. The
 Contract declares inbound/outbound roles, typed ports, attributes and
 lifecycle rules. A physical Driver supplies real I/O; a Lab model supplies
 scripted arrivals and outcomes through the same pure protocol and admission
@@ -2715,12 +2718,13 @@ ledgers are evidence for Rastok; future design sections are not.
 
 ## 10. Status
 
-Rastok is experimental, not production-ready. The current package is **v19**;
-diagnostic recordings use v3 and the retained type/value registry is v7.
-Process job/service Contracts are `rastok/process@4` / `rastok/process@5`;
+Rastok is experimental, not production-ready. The current cutover candidate is
+**package 20 / diagnostic recording 4**, with one compact active registry.
+Process job/service Contracts are `std/process@4` / `std/process@5`;
 File and the four HTTP/WebSocket Contracts use `@3`. These version registers
-are independent. The [C4 ledger](docs/architecture/retry-c4-qualification.md)
-records the single blessing and the unchanged echo/JSONL/gauge causal witnesses.
+are independent. The [v20 inventory](docs/architecture/human-review-v20-identity.md)
+records the byte movements and pending pre-blessing review. No public release
+or compatibility reader is implied.
 
 | Executable today | Qualification / exact limit |
 |---|---|

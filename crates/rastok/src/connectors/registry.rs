@@ -1371,7 +1371,7 @@ mod tests {
 
     #[test]
     fn registration_is_exact_role_aware_and_never_first_wins() {
-        let id = ContractId::parse("test/duplex@1").unwrap();
+        let id = ContractId::parse("org.rastok.test/duplex@1").unwrap();
         let registry = DriverRegistry::default()
             .try_with(fake(id.as_str(), ConnectorRoles::Inbound))
             .unwrap();
@@ -1394,12 +1394,12 @@ mod tests {
         assert_eq!(
             registry
                 .require(
-                    &ContractId::parse("test/missing@1").unwrap(),
+                    &ContractId::parse("org.rastok.test/missing@1").unwrap(),
                     ConnectorRoles::Outbound,
                 )
                 .err(),
             Some(DriverBindingError::Missing {
-                id: ContractId::parse("test/missing@1").unwrap(),
+                id: ContractId::parse("org.rastok.test/missing@1").unwrap(),
             })
         );
         assert_eq!(
@@ -1571,8 +1571,8 @@ graph mixed : App {
                 continue;
             };
             spec.contract = ContractId::parse(match planned.path.to_string().as_str() {
-                "first" => "test/alpha@1",
-                "second" => "test/beta@1",
+                "first" => "org.rastok.test/alpha@1",
+                "second" => "org.rastok.test/beta@1",
                 other => panic!("unexpected probe node `{other}`"),
             })
             .unwrap();
@@ -1633,7 +1633,7 @@ graph inbound : App {
         let crate::plan::NodeExecution::Connector(spec) = &mut source.execution else {
             panic!("the source node is a connector")
         };
-        spec.contract = ContractId::parse("test/event-source@1").unwrap();
+        spec.contract = ContractId::parse("org.rastok.test/event-source@1").unwrap();
         spec.idempotent = None;
         spec.attributes.retain(|(name, _)| name != "idempotent");
         spec.roles = ConnectorRoles::Inbound;
@@ -1747,12 +1747,12 @@ graph inbound : App {
         let starts = Arc::new(Mutex::new(Vec::new()));
         let registry = DriverRegistry::default()
             .try_with(Box::new(DuplexFactory {
-                id: ContractId::parse("test/alpha@1").unwrap(),
+                id: ContractId::parse("org.rastok.test/alpha@1").unwrap(),
                 observations: Arc::clone(&observations),
             }))
             .unwrap()
             .try_with(routing_factory(
-                "test/beta@1",
+                "org.rastok.test/beta@1",
                 ConnectorRoles::Outbound,
                 Some(ConnectorRoles::Outbound),
                 &starts,
@@ -1950,12 +1950,12 @@ graph inbound : App {
         let starts = Arc::new(Mutex::new(Vec::new()));
         let registry = DriverRegistry::default()
             .try_with(Box::new(SessionDuplexFactory {
-                id: ContractId::parse("test/alpha@1").unwrap(),
+                id: ContractId::parse("org.rastok.test/alpha@1").unwrap(),
                 observations: Arc::clone(&observations),
             }))
             .unwrap()
             .try_with(routing_factory(
-                "test/beta@1",
+                "org.rastok.test/beta@1",
                 ConnectorRoles::Outbound,
                 Some(ConnectorRoles::Outbound),
                 &starts,
@@ -2087,19 +2087,19 @@ graph inbound : App {
         let starts = Arc::new(Mutex::new(Vec::new()));
         let registry = DriverRegistry::default()
             .try_with(Box::new(SessionDuplexFactory {
-                id: ContractId::parse("test/alpha@1").unwrap(),
+                id: ContractId::parse("org.rastok.test/alpha@1").unwrap(),
                 observations,
             }))
             .unwrap()
             .try_with(routing_factory(
-                "test/beta@1",
+                "org.rastok.test/beta@1",
                 ConnectorRoles::Outbound,
                 Some(ConnectorRoles::Outbound),
                 &starts,
             ))
             .unwrap();
         let contract = Box::leak(Box::new(crate::contract::ConnectorContract {
-            id: "test/alpha@1",
+            id: "org.rastok.test/alpha@1",
             name: "SessionProbe",
             roles: ConnectorRoles::InboundAndOutbound,
             exchange: ConnectorExchange::Session,
@@ -2367,7 +2367,7 @@ graph api : App {
         let crate::plan::NodeExecution::Connector(spec) = &mut server.execution else {
             panic!("the server node is a connector")
         };
-        spec.contract = ContractId::parse("test/inbound-call@1").unwrap();
+        spec.contract = ContractId::parse("org.rastok.test/inbound-call@1").unwrap();
 
         let response = raw
             .edges
@@ -2518,7 +2518,7 @@ graph api : App {
                 )
             })
             .expect("the terminal TRANSACTION fact is present");
-        for (index, key) in [(inbound_index, 28), (terminal_index, 52)] {
+        for (index, key) in [(inbound_index, 16), (terminal_index, 38)] {
             let bytes = trace
                 .record_bytes(index)
                 .expect("the canonical trace retains every causal record");
@@ -2577,7 +2577,7 @@ graph api : App {
         }));
         let registry = DriverRegistry::default()
             .try_with(Box::new(RetainedCallFactory {
-                id: ContractId::parse("test/inbound-call@1").unwrap(),
+                id: ContractId::parse("org.rastok.test/inbound-call@1").unwrap(),
                 state: Arc::clone(&state),
             }))
             .unwrap();
@@ -2714,7 +2714,7 @@ graph api : App {
         }));
         let registry = DriverRegistry::default()
             .try_with(Box::new(RetainedCallFactory {
-                id: ContractId::parse("test/inbound-call@1").unwrap(),
+                id: ContractId::parse("org.rastok.test/inbound-call@1").unwrap(),
                 state: Arc::clone(&state),
             }))
             .unwrap();
@@ -2782,7 +2782,7 @@ graph api : App {
         }));
         let registry = DriverRegistry::default()
             .try_with(Box::new(RetainedInboundFactory {
-                id: ContractId::parse("test/event-source@1").unwrap(),
+                id: ContractId::parse("org.rastok.test/event-source@1").unwrap(),
                 state: Arc::clone(&state),
             }))
             .unwrap();
@@ -2848,7 +2848,7 @@ graph api : App {
         }));
         let registry = DriverRegistry::default()
             .try_with(Box::new(RetainedInboundFactory {
-                id: ContractId::parse("test/event-source@1").unwrap(),
+                id: ContractId::parse("org.rastok.test/event-source@1").unwrap(),
                 state: Arc::clone(&state),
             }))
             .unwrap();
@@ -2882,7 +2882,7 @@ graph api : App {
         }));
         let registry = DriverRegistry::default()
             .try_with(Box::new(RetainedInboundFactory {
-                id: ContractId::parse("test/event-source@1").unwrap(),
+                id: ContractId::parse("org.rastok.test/event-source@1").unwrap(),
                 state,
             }))
             .unwrap();
@@ -2909,7 +2909,7 @@ graph api : App {
         }));
         let registry = DriverRegistry::default()
             .try_with(Box::new(RetainedInboundFactory {
-                id: ContractId::parse("test/event-source@1").unwrap(),
+                id: ContractId::parse("org.rastok.test/event-source@1").unwrap(),
                 state,
             }))
             .unwrap();
@@ -2933,7 +2933,7 @@ graph api : App {
         }));
         let registry = DriverRegistry::default()
             .try_with(Box::new(RetainedInboundFactory {
-                id: ContractId::parse("test/event-source@1").unwrap(),
+                id: ContractId::parse("org.rastok.test/event-source@1").unwrap(),
                 state,
             }))
             .unwrap();
@@ -2945,7 +2945,7 @@ graph api : App {
             .collect::<Vec<_>>()
             .into_boxed_slice();
         let contract = Box::leak(Box::new(crate::contract::ConnectorContract {
-            id: "test/event-source@1",
+            id: "org.rastok.test/event-source@1",
             name: "EventSource",
             roles: ConnectorRoles::Inbound,
             exchange: ConnectorExchange::Event,
@@ -2970,14 +2970,14 @@ graph api : App {
         let starts = Arc::new(Mutex::new(Vec::new()));
         let registry = DriverRegistry::default()
             .try_with(routing_factory(
-                "test/alpha@1",
+                "org.rastok.test/alpha@1",
                 ConnectorRoles::Outbound,
                 Some(ConnectorRoles::Outbound),
                 &starts,
             ))
             .unwrap()
             .try_with(routing_factory(
-                "test/beta@1",
+                "org.rastok.test/beta@1",
                 ConnectorRoles::Outbound,
                 Some(ConnectorRoles::Outbound),
                 &starts,
@@ -3008,13 +3008,13 @@ graph api : App {
         assert_eq!(
             *starts.lock().unwrap(),
             [
-                String::from("test/alpha@1:first"),
-                String::from("test/beta@1:second"),
+                String::from("org.rastok.test/alpha@1:first"),
+                String::from("org.rastok.test/beta@1:second"),
             ]
         );
         assert_eq!(
             vm.outputs()[0].envelope.data(),
-            &Data::materialized(Value::Text(String::from("test/beta@1")))
+            &Data::materialized(Value::Text(String::from("org.rastok.test/beta@1")))
         );
         assert!(
             bindings.calls.is_empty(),
@@ -3033,7 +3033,7 @@ graph api : App {
 
         let wrong = DriverRegistry::default()
             .try_with(routing_factory(
-                "test/alpha@1",
+                "org.rastok.test/alpha@1",
                 ConnectorRoles::Inbound,
                 Some(ConnectorRoles::Inbound),
                 &starts,
@@ -3046,14 +3046,14 @@ graph api : App {
 
         let extra = DriverRegistry::default()
             .try_with(routing_factory(
-                "test/alpha@1",
+                "org.rastok.test/alpha@1",
                 ConnectorRoles::Outbound,
                 Some(ConnectorRoles::InboundAndOutbound),
                 &starts,
             ))
             .unwrap()
             .try_with(routing_factory(
-                "test/beta@1",
+                "org.rastok.test/beta@1",
                 ConnectorRoles::Outbound,
                 Some(ConnectorRoles::Outbound),
                 &starts,

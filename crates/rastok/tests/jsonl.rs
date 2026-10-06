@@ -566,7 +566,8 @@ fn another_contracts_codec_vocabulary_is_untouched() {
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
         if let rastok::plan::NodeExecution::Connector(spec) = &mut node.execution {
-            spec.contract = rastok::connector::ContractId::parse("test/custom@1").unwrap();
+            spec.contract =
+                rastok::connector::ContractId::parse("org.rastok.test/custom@1").unwrap();
             spec.idempotent = None;
             spec.attributes.retain(|(name, _)| name != "idempotent");
             for (name, setting) in &mut spec.attributes {

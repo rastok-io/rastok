@@ -26,13 +26,13 @@ use crate::datatype::{
     IntegerType, IntegerWidth, IntervalUnit, MapType, StructType, TaggedCase, TaggedUnionType,
     TemporalType, TimeUnit, TimeZone, TypeField,
 };
-use crate::envelope::{Data, Encoding, Envelope, Role, Scalar};
+use crate::envelope::{Data, Encoding, Envelope, Scalar};
 use crate::value::Value;
 
 // CBOR item trees and logical values are distinct domains.
 use crate::canonical_cbor::{Value as Cbor, encode};
 
-/// The canonical envelope form, keys 1–9. Absent fields are omitted keys,
+/// The canonical envelope form, keys 1–6. Absent fields are omitted keys,
 /// never nulls.
 #[must_use]
 pub fn envelope(envelope: &Envelope) -> Cbor {
@@ -42,13 +42,8 @@ pub fn envelope(envelope: &Envelope) -> Cbor {
         pairs.insert(2, Cbor::Bytes(parent.as_bytes().to_vec()));
     }
     pairs.insert(3, Cbor::Bytes(sys.origin_id().as_bytes().to_vec()));
-    if sys.role() != Role::Default {
-        pairs.insert(4, Cbor::Text(sys.role().to_string()));
-    }
-    pairs.insert(5, Cbor::Uint(sys.graph_version()));
-    // Canonical form key 6 is RETIRED (extend-only): the content type moved
-    // to the ext zone, sealed in key 9 (D-2026-08-10-4).
-    pairs.insert(8, data(envelope.data()));
+    pairs.insert(4, Cbor::Uint(sys.graph_version()));
+    pairs.insert(5, data(envelope.data()));
     let mut app_meta = Vec::new();
     for (field, value) in envelope.meta().app() {
         app_meta.push((String::from("app"), field.clone(), value));
@@ -59,7 +54,7 @@ pub fn envelope(envelope: &Envelope) -> Cbor {
     if !app_meta.is_empty() {
         app_meta.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
         pairs.insert(
-            9,
+            6,
             Cbor::Array(
                 app_meta
                     .into_iter()
@@ -77,11 +72,10 @@ pub fn envelope(envelope: &Envelope) -> Cbor {
     Cbor::Map(pairs)
 }
 
-/// `data` (canonical form key 8): `[encoding_tag, bytes]`. Encoded payloads
-/// seal their original bytes, never re-encoded. A materialized value
-/// has no storage bytes, so its canonical bytes are its own
-/// `tagged_value` CBOR under `raw` — deterministic and injective,
-/// this build's materialization rule.
+/// `data` (canonical form key 5): `[encoding_tag, bytes]`. Encoded payloads
+/// seal their original bytes, never re-encoded. A graph-born value uses its
+/// canonical tagged-value bytes under `ccbor`, distinct from external `raw`
+/// bytes even when those bytes happen to encode the same tagged value.
 #[must_use]
 pub fn data(data: &Data) -> Cbor {
     match data {
@@ -90,13 +84,13 @@ pub fn data(data: &Data) -> Cbor {
         } => Cbor::Array(vec![
             Cbor::Uint(match encoding {
                 Encoding::Raw => 1,
-                Encoding::Avro => 2,
+                Encoding::Ccbor => 2,
                 Encoding::ArrowIpc => 3,
             }),
             Cbor::Bytes(bytes.to_vec()),
         ]),
         Data::Materialized(value) => Cbor::Array(vec![
-            Cbor::Uint(1),
+            Cbor::Uint(2),
             Cbor::Bytes(encode(&self::value(value))),
         ]),
     }
@@ -106,35 +100,35 @@ pub fn data(data: &Data) -> Cbor {
 /// the fixed registry.
 pub fn value(value: &Value) -> Cbor {
     match value {
-        Value::Null => Cbor::Array(vec![Cbor::Uint(9), Cbor::Null]),
+        Value::Null => Cbor::Array(vec![Cbor::Uint(7), Cbor::Null]),
         Value::Bool(v) => Cbor::Array(vec![Cbor::Uint(1), Cbor::Bool(*v)]),
         Value::Int(v) => int(*v),
-        Value::Uint(v) => Cbor::Array(vec![Cbor::Uint(23), Cbor::Uint(*v)]),
-        Value::Double(v) => Cbor::Array(vec![Cbor::Uint(5), Cbor::Double((*v).into())]),
-        Value::Text(v) => Cbor::Array(vec![Cbor::Uint(8), Cbor::Text(v.clone())]),
+        Value::Uint(v) => Cbor::Array(vec![Cbor::Uint(20), Cbor::Uint(*v)]),
+        Value::Double(v) => Cbor::Array(vec![Cbor::Uint(4), Cbor::Double((*v).into())]),
+        Value::Text(v) => Cbor::Array(vec![Cbor::Uint(6), Cbor::Text(v.clone())]),
         Value::Decimal { unscaled, scale } => decimal(*unscaled, *scale),
-        Value::Bytes(v) => Cbor::Array(vec![Cbor::Uint(7), Cbor::Bytes(v.clone())]),
-        Value::Duration(v) => Cbor::Array(vec![Cbor::Uint(16), signed(*v)]),
-        Value::Timestamp(v) => Cbor::Array(vec![Cbor::Uint(12), signed(*v)]),
-        Value::Date(v) => Cbor::Array(vec![Cbor::Uint(11), signed(*v)]),
-        Value::Time(v) => Cbor::Array(vec![Cbor::Uint(14), signed(*v)]),
-        Value::TimestampNtz(v) => Cbor::Array(vec![Cbor::Uint(13), signed(*v)]),
+        Value::Bytes(v) => Cbor::Array(vec![Cbor::Uint(5), Cbor::Bytes(v.clone())]),
+        Value::Duration(v) => Cbor::Array(vec![Cbor::Uint(14), signed(*v)]),
+        Value::Timestamp(v) => Cbor::Array(vec![Cbor::Uint(10), signed(*v)]),
+        Value::Date(v) => Cbor::Array(vec![Cbor::Uint(9), signed(*v)]),
+        Value::Time(v) => Cbor::Array(vec![Cbor::Uint(12), signed(*v)]),
+        Value::TimestampNtz(v) => Cbor::Array(vec![Cbor::Uint(11), signed(*v)]),
         Value::Interval {
             months,
             days,
             nanoseconds,
         } => Cbor::Array(vec![
-            Cbor::Uint(24),
+            Cbor::Uint(21),
             Cbor::Array(vec![signed(*months), signed(*days), signed(*nanoseconds)]),
         ]),
-        Value::Uuid(v) => Cbor::Array(vec![Cbor::Uint(15), Cbor::Bytes(v.to_vec())]),
+        Value::Uuid(v) => Cbor::Array(vec![Cbor::Uint(13), Cbor::Bytes(v.to_vec())]),
         Value::Struct(fields) => {
             // Canonical sorted pairs — construction order is not
             // identity material.
             let mut sorted: Vec<_> = fields.iter().collect();
             sorted.sort_by(|a, b| a.0.cmp(&b.0));
             Cbor::Array(vec![
-                Cbor::Uint(17),
+                Cbor::Uint(15),
                 Cbor::Array(
                     sorted
                         .into_iter()
@@ -152,7 +146,7 @@ pub fn value(value: &Value) -> Cbor {
             let mut pairs: Vec<(Vec<u8>, Cbor)> = entries
                 .iter()
                 .map(|(key, value)| {
-                    let tagged_key = Cbor::Array(vec![Cbor::Uint(8), Cbor::Text(key.clone())]);
+                    let tagged_key = Cbor::Array(vec![Cbor::Uint(6), Cbor::Text(key.clone())]);
                     (
                         encode(&tagged_key),
                         Cbor::Array(vec![tagged_key, self::value(value)]),
@@ -161,7 +155,7 @@ pub fn value(value: &Value) -> Cbor {
                 .collect();
             pairs.sort_by(|a, b| a.0.cmp(&b.0));
             Cbor::Array(vec![
-                Cbor::Uint(18),
+                Cbor::Uint(16),
                 Cbor::Array(pairs.into_iter().map(|(_, pair)| pair).collect()),
             ])
         }
@@ -178,21 +172,21 @@ pub fn value(value: &Value) -> Cbor {
                 .collect();
             pairs.sort_by(|a, b| a.0.cmp(&b.0));
             Cbor::Array(vec![
-                Cbor::Uint(18),
+                Cbor::Uint(16),
                 Cbor::Array(pairs.into_iter().map(|(_, pair)| pair).collect()),
             ])
         }
         Value::Array(items) => Cbor::Array(vec![
-            Cbor::Uint(19),
+            Cbor::Uint(17),
             Cbor::Array(items.iter().map(self::value).collect()),
         ]),
-        Value::Enum(symbol) => Cbor::Array(vec![Cbor::Uint(20), Cbor::Text(symbol.clone())]),
+        Value::Enum(symbol) => Cbor::Array(vec![Cbor::Uint(18), Cbor::Text(symbol.clone())]),
         Value::StructuralUnion { branch, value } => Cbor::Array(vec![
-            Cbor::Uint(21),
+            Cbor::Uint(19),
             Cbor::Array(vec![Cbor::Uint(u64::from(*branch)), self::value(value)]),
         ]),
         Value::TaggedUnion(tagged) => Cbor::Array(vec![
-            Cbor::Uint(21),
+            Cbor::Uint(19),
             Cbor::Array(vec![
                 Cbor::Text(tagged.case.clone()),
                 self::value(&Value::Struct(tagged.payload.clone())),
@@ -206,16 +200,16 @@ pub fn meta_value(value: &crate::envelope::MetaValue) -> Cbor {
     match value {
         crate::envelope::MetaValue::Scalar(scalar) => scalar_tagged(scalar),
         crate::envelope::MetaValue::Array(items) => Cbor::Array(vec![
-            Cbor::Uint(19),
+            Cbor::Uint(17),
             Cbor::Array(items.iter().map(scalar_tagged).collect()),
         ]),
         crate::envelope::MetaValue::Map(entries) => {
             let mut pairs: Vec<(Vec<u8>, Cbor)> = entries
                 .iter()
                 .map(|(key, values)| {
-                    let tagged_key = Cbor::Array(vec![Cbor::Uint(8), Cbor::Text(key.clone())]);
+                    let tagged_key = Cbor::Array(vec![Cbor::Uint(6), Cbor::Text(key.clone())]);
                     let tagged_values = Cbor::Array(vec![
-                        Cbor::Uint(19),
+                        Cbor::Uint(17),
                         Cbor::Array(values.iter().map(scalar_tagged).collect()),
                     ]);
                     (
@@ -226,11 +220,33 @@ pub fn meta_value(value: &crate::envelope::MetaValue) -> Cbor {
                 .collect();
             pairs.sort_by(|left, right| left.0.cmp(&right.0));
             Cbor::Array(vec![
-                Cbor::Uint(18),
+                Cbor::Uint(16),
                 Cbor::Array(pairs.into_iter().map(|(_, pair)| pair).collect()),
             ])
         }
     }
+}
+
+/// Decodes the complete ccbor DATA representation, not a prefix. The value
+/// algebra also has a canonical form (field order, integer width, decimals),
+/// which is stricter than merely accepting canonical CBOR items.
+///
+/// # Errors
+/// Invalid CBOR, inconsistent values, trailing bytes or a noncanonical value.
+pub fn decode_data_value(bytes: &[u8]) -> Result<Value, crate::canonical_cbor::DecodeError> {
+    use crate::canonical_cbor::{DecodeError, decode};
+    let (tree, used) = decode(bytes)?;
+    if used != bytes.len() {
+        return Err(DecodeError::Malformed("trailing ccbor DATA bytes"));
+    }
+    let decoded = decode_value(&tree)?;
+    decoded
+        .check_consistency()
+        .map_err(|_| DecodeError::Malformed("inconsistent ccbor value"))?;
+    if encode(&value(&decoded)) != bytes {
+        return Err(DecodeError::NonCanonical("ccbor value form"));
+    }
+    Ok(decoded)
 }
 
 /// Reads a `tagged_value` back into the core value domain — the inverse of
@@ -247,12 +263,12 @@ pub fn decode_value(tree: &Cbor) -> Result<Value, crate::canonical_cbor::DecodeE
             // honest width; the decoded value is one i64 either way.
             Ok(Value::Int(tagged_integer(value)?))
         }
-        [Cbor::Uint(5), Cbor::Double(v)] => Ok(Value::Double(v.value())),
-        [Cbor::Uint(7), Cbor::Bytes(v)] => Ok(Value::Bytes(v.clone())),
-        [Cbor::Uint(8), Cbor::Text(v)] => Ok(Value::Text(v.clone())),
-        [Cbor::Uint(9), Cbor::Null] => Ok(Value::Null),
-        [Cbor::Uint(23), Cbor::Uint(v)] => Ok(Value::Uint(*v)),
-        [Cbor::Uint(10), payload] => match tagged_array(payload, "decimal")? {
+        [Cbor::Uint(4), Cbor::Double(v)] => Ok(Value::Double(v.value())),
+        [Cbor::Uint(5), Cbor::Bytes(v)] => Ok(Value::Bytes(v.clone())),
+        [Cbor::Uint(6), Cbor::Text(v)] => Ok(Value::Text(v.clone())),
+        [Cbor::Uint(7), Cbor::Null] => Ok(Value::Null),
+        [Cbor::Uint(20), Cbor::Uint(v)] => Ok(Value::Uint(*v)),
+        [Cbor::Uint(8), payload] => match tagged_array(payload, "decimal")? {
             [Cbor::Bytes(unscaled), scale] => {
                 if unscaled.is_empty() || unscaled.len() > 16 {
                     return Err(value_decode_error("decimal coefficient"));
@@ -281,18 +297,18 @@ pub fn decode_value(tree: &Cbor) -> Result<Value, crate::canonical_cbor::DecodeE
             }
             _ => Err(value_decode_error("decimal")),
         },
-        [Cbor::Uint(12), value] => Ok(Value::Timestamp(tagged_integer(value)?)),
-        [Cbor::Uint(11), value] => Ok(Value::Date(tagged_integer(value)?)),
-        [Cbor::Uint(13), value] => Ok(Value::TimestampNtz(tagged_integer(value)?)),
-        [Cbor::Uint(14), value] => Ok(Value::Time(tagged_integer(value)?)),
-        [Cbor::Uint(15), Cbor::Bytes(value)] => Ok(Value::Uuid(
+        [Cbor::Uint(10), value] => Ok(Value::Timestamp(tagged_integer(value)?)),
+        [Cbor::Uint(9), value] => Ok(Value::Date(tagged_integer(value)?)),
+        [Cbor::Uint(11), value] => Ok(Value::TimestampNtz(tagged_integer(value)?)),
+        [Cbor::Uint(12), value] => Ok(Value::Time(tagged_integer(value)?)),
+        [Cbor::Uint(13), Cbor::Bytes(value)] => Ok(Value::Uuid(
             value
                 .as_slice()
                 .try_into()
                 .map_err(|_| value_decode_error("uuid length"))?,
         )),
-        [Cbor::Uint(16), value] => Ok(Value::Duration(tagged_integer(value)?)),
-        [Cbor::Uint(17), Cbor::Array(pairs)] => {
+        [Cbor::Uint(14), value] => Ok(Value::Duration(tagged_integer(value)?)),
+        [Cbor::Uint(15), Cbor::Array(pairs)] => {
             // The struct literal — bare text keys, declaration order AS
             // SEALED (sorted). Its surrounding DataType supplies the closed
             // field contract; validation checks conformance before encoding.
@@ -307,15 +323,15 @@ pub fn decode_value(tree: &Cbor) -> Result<Value, crate::canonical_cbor::DecodeE
             }
             Ok(Value::Struct(fields))
         }
-        [Cbor::Uint(18), Cbor::Array(pairs)] => map_from_canonical(pairs),
-        [Cbor::Uint(19), Cbor::Array(items)] => Ok(Value::Array(
+        [Cbor::Uint(16), Cbor::Array(pairs)] => map_from_canonical(pairs),
+        [Cbor::Uint(17), Cbor::Array(items)] => Ok(Value::Array(
             items
                 .iter()
                 .map(decode_value)
                 .collect::<Result<Vec<_>, _>>()?,
         )),
-        [Cbor::Uint(20), Cbor::Text(symbol)] => Ok(Value::Enum(symbol.clone())),
-        [Cbor::Uint(21), payload] => match tagged_array(payload, "union value")? {
+        [Cbor::Uint(18), Cbor::Text(symbol)] => Ok(Value::Enum(symbol.clone())),
+        [Cbor::Uint(19), payload] => match tagged_array(payload, "union value")? {
             [Cbor::Uint(branch), value] => Ok(Value::StructuralUnion {
                 branch: u16::try_from(*branch).map_err(|_| value_decode_error("union branch"))?,
                 value: alloc::boxed::Box::new(decode_value(value)?),
@@ -333,7 +349,7 @@ pub fn decode_value(tree: &Cbor) -> Result<Value, crate::canonical_cbor::DecodeE
             }
             _ => Err(value_decode_error("union value")),
         },
-        [Cbor::Uint(24), payload] => match tagged_array(payload, "interval")? {
+        [Cbor::Uint(21), payload] => match tagged_array(payload, "interval")? {
             [months, days, nanoseconds] => Ok(Value::Interval {
                 months: tagged_integer(months)?,
                 days: tagged_integer(days)?,
@@ -400,19 +416,19 @@ fn scalar_tagged(value: &Scalar) -> Cbor {
     match value {
         Scalar::Bool(v) => Cbor::Array(vec![Cbor::Uint(1), Cbor::Bool(*v)]),
         Scalar::Int(v) => int(*v),
-        Scalar::Double(v) => Cbor::Array(vec![Cbor::Uint(5), Cbor::Double((*v).into())]),
-        Scalar::Text(v) => Cbor::Array(vec![Cbor::Uint(8), Cbor::Text(v.clone())]),
+        Scalar::Double(v) => Cbor::Array(vec![Cbor::Uint(4), Cbor::Double((*v).into())]),
+        Scalar::Text(v) => Cbor::Array(vec![Cbor::Uint(6), Cbor::Text(v.clone())]),
         Scalar::Decimal { unscaled, scale } => decimal(*unscaled, *scale),
-        Scalar::Bytes(v) => Cbor::Array(vec![Cbor::Uint(7), Cbor::Bytes(v.clone())]),
+        Scalar::Bytes(v) => Cbor::Array(vec![Cbor::Uint(5), Cbor::Bytes(v.clone())]),
     }
 }
 
-/// `decimal` (tag 10): `[unscaled (minimal big-endian
+/// `decimal` (tag 8): `[unscaled (minimal big-endian
 /// two's-complement bytes), scale (int)]` — the registry's pinned
 /// layout, shared by typed and dynamic decimals (D-2026-08-10-7).
 pub fn decimal(unscaled: i128, scale: i32) -> Cbor {
     Cbor::Array(vec![
-        Cbor::Uint(10),
+        Cbor::Uint(8),
         Cbor::Array(vec![
             Cbor::Bytes(minimal_twos_complement(unscaled)),
             signed(i64::from(scale)),

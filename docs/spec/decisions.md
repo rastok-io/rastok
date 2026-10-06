@@ -5,6 +5,47 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-10-06-1 — Apply the consolidated pre-public format-20 cutover
+
+This records implementation of Yoann's approved brief and compaction addendum
+under D-2026-10-05-1; it does not reopen their design. Lot 2 was qualified
+and accepted before this candidate began on `rework/v20`, from `3bdd807`.
+The [identity inventory](../architecture/human-review-v20-identity.md) precedes
+blessing and names the old/new allocations and each affected witness.
+
+- `meta.sys` has exactly id, parent_id, origin_id and graph_version. Role and
+  speculative Extension birth-stamp slots do not travel or bind in the DSL.
+- Raw is external bytes. Reading ports select bytes versus strict UTF-8 text;
+  no byte sniffing changes a logical reading. Graph-born values use ccbor,
+  including graph-born bytes/text. Metadata uses ccbor too. Materialized and
+  encoded ccbor share their canonical DATA form; raw cannot impersonate it.
+  Avro remains an import/export schema projection, not an internal encoding.
+- Standard Contract and protected annotation identities use `std/`; other
+  Contract namespaces contain a dot. Exact admitted Contract versions remain
+  independently checked. There is no alias from a previous namespace.
+- Active value, record, identity, deadline, lifecycle, annotation and plan
+  registries compact once. No unpublished reserved/retired allocation is
+  maintained as a second interpretation. The active Loop/Retry fold meanings
+  do not change; their compact identity domain bytes do.
+- Package 20 and recording 4 read only their own formats. Regeneration, not
+  conversion, replaces old artifacts after review. The HIR hash is not salted
+  by the package version: connector-free gauge is the negative witness.
+- Decoder attestation is specified in envelope.md §5.1, with IdKind::Decoder
+  allocated. Implementing the registry, conformance attestation and
+  E-DECODER-UNAVAILABLE is M2; no runtime decoder plugin path is added here.
+
+This supersedes the affected representation/allocation clauses of
+D-2026-09-05-1, D-2026-09-08-1, D-2026-09-14-4 and D-2026-09-15-1/-2,
+not their Loop/Retry/Closing or exchange protocols. Original recovery
+deadlines and Call closure instants remain unsealed, mandatory evidence.
+The implementation is still an in-memory journal, not durable execution.
+
+**Pre-blessing stop:** no witness replacement, merge or publication until
+Fable's review and Yoann's approval. The public-format-1 renumbering TODO
+remains separate; work stays labelled 20. From the public blessing onward,
+the registry is extend-only. Dated architecture reports retain their original
+numbers as evidence, not as live specifications or alternate readers.
+
 ## D-2026-10-05-1 — Align the human-review vocabulary before one public cutover
 
 Yoann approves the consolidated T1 and T2-through-codec brief. The first lot

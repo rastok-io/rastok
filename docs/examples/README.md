@@ -1,9 +1,12 @@
 # Checked examples and historical sketches
 
-The checkout uses **v19 / diagnostic recording v3**. The native-Retry examples
-and their versioned goldens share the single inventoried blessing recorded in
-the [C4 qualification ledger](../architecture/retry-c4-qualification.md).
-Local qualification is complete; the external opening gates remain separate.
+The checkout uses the **format-20 / diagnostic-recording-4 candidate**.
+Its byte movements and qualification are tracked in the
+[human-review identity inventory](../architecture/human-review-v20-identity.md).
+Existing goldens have not yet been re-blessed: approval follows candidate
+review, not a failing comparison. The [C4 qualification ledger](../architecture/retry-c4-qualification.md)
+is dated evidence for the native-Retry base; it is not qualification of this
+new representation. External opening gates remain separate.
 Author against the live
 [grammar](../spec/grammar.md), [Contract sheets](../spec/stdlib.md) and
 [Loop specification](../spec/loop.md), not a frozen benchmark prompt or an old
@@ -40,7 +43,7 @@ corrected and regression-tested.
 | [webhook to partner](../../examples/webhook-to-partner.rkg) | HttpServer ACK, validation, deduplication, native HttpClient Retry, typed per-attempt charges and privacy/secret policy | 6 |
 | [WebSocket gateway](codex-websocket-gateway.rkg) | Session request/response boundary with a scripted Process job | 1 |
 | [expense approval](expense-approval.rkg) | Keyed two-input join, approval/rejection and timed expiry | 3 |
-| [File pipeline](../../examples/file-pipeline.rkg) | Bounded read, explicit empty/refusal paths, atomic replacement | 3 |
+| [File pipeline](../../examples/file-pipeline.rkg) | Bounded read, byte count including UTF-8, explicit empty/refusal paths, atomic replacement | 4 |
 | [sensor alarm](../../examples/sensor-alarm.rkg) | Per-sensor hysteresis, a missing heartbeat, a virtual day | 3 |
 | [resident dialogue](../../examples/agent-dialogue.rkg) | One JSONL Process per conversation, match mocks, exact child closure, fresh input after quit | 2 |
 | [resident agent gateway](../../examples/agent-gateway.rkg) | WebSocket → per-conversation Process, app-server JSON frames, exact child shutdown, independent sockets | 2 |

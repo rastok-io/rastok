@@ -57,7 +57,7 @@ simulated HTTP flow with typed validation, bounded retries and an audit profile.
 
 ![A retained webhook timeout, backoff and successful retry in the debugger](docs/site/assets/webhook-tour.gif)
 
-Native Retry, rendered from retained simulation transitions in package v19.
+Native Retry, rendered from recorded simulation transitions in the debugger.
 The [chapter](docs/site/gallery/04-webhook-to-partner.md)
 explains the inputs, retained transitions and visible limits.
 
@@ -83,7 +83,8 @@ bounded, statically checked policy; `Saga` remains a future Extension. A manager
 a Node nor an edge, so temporal recurrence never creates a spatial cycle.
 Loop contributes no port: exhaustion is a `LoopExpired` case on the host's
 resolved failure terminal (`err`, a custom terminal, or a Call's `exit`).
-The categorical v19 package carries recursive Dispatch, case routing,
+The format-20 candidate (blessing pending review in the
+[identity inventory](docs/architecture/human-review-v20-identity.md)) carries recursive Dispatch, case routing,
 ordered multi-emission and command-based Operator, Graph and outbound Call
 Loops. Independent core validation re-derives their contracts, routes and
 proofs. Recovery reconstructs retained deliveries, state, commands, exchanges
@@ -203,7 +204,7 @@ The frozen [R0 algebra](docs/architecture/rework-r0-algebra.md),
 links that design to the executable host and recovery tests.
 
 M1.8 closed on categorical package v15; its policy guarantees remain in the
-current v19 implementation. The source front end
+current implementation. The source front end
 recognizes `@sensitive`, `@secret`, `@personal` and `@measure`,
 resolves aliases into canonical schema paths and transports the sparse policy
 tables through checked HIR, package decode and Registry-free validation.
@@ -242,7 +243,7 @@ The optional OpenTelemetry transport is explicitly deferred until exact
 temporal observations exist; no exporter timestamp is presented as commit
 time.
 
-The current v19 implementation admits finite outbound Call `+ Retry`
+The current implementation admits finite outbound Call `+ Retry`
 through the public compiler, Lab, runner and diagnostic replay. It repeats the
 same prepared operation, retains each attempt and publishes only the final
 result. Instances distinguishes operations/attempts from Loop applications;

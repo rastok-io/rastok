@@ -238,74 +238,8 @@ pub(crate) fn bind_server_routes(
 }
 
 #[cfg(feature = "hosted-websocket")]
-fn decode_tagged(value: crate::canonical_cbor::Value) -> Option<Value> {
-    use crate::canonical_cbor::Value as Cbor;
-
-    let Cbor::Array(mut tagged) = value else {
-        return None;
-    };
-    if tagged.len() != 2 {
-        return None;
-    }
-    let payload = tagged.pop()?;
-    let Cbor::Uint(tag) = tagged.pop()? else {
-        return None;
-    };
-    match (tag, payload) {
-        (1, Cbor::Bool(value)) => Some(Value::Bool(value)),
-        (7, Cbor::Bytes(value)) => Some(Value::Bytes(value)),
-        (8, Cbor::Text(value)) => Some(Value::Text(value)),
-        (9, Cbor::Null) => Some(Value::Null),
-        (17, Cbor::Array(fields)) => fields
-            .into_iter()
-            .map(|field| {
-                let Cbor::Array(mut pair) = field else {
-                    return None;
-                };
-                if pair.len() != 2 {
-                    return None;
-                }
-                let value = decode_tagged(pair.pop()?)?;
-                let Cbor::Text(name) = pair.pop()? else {
-                    return None;
-                };
-                Some((name, value))
-            })
-            .collect::<Option<Vec<_>>>()
-            .map(Value::Struct),
-        (18, Cbor::Array(entries)) => entries
-            .into_iter()
-            .map(|entry| {
-                let Cbor::Array(mut pair) = entry else {
-                    return None;
-                };
-                if pair.len() != 2 {
-                    return None;
-                }
-                let value = decode_tagged(pair.pop()?)?;
-                let Value::Text(key) = decode_tagged(pair.pop()?)? else {
-                    return None;
-                };
-                Some((key, value))
-            })
-            .collect::<Option<BTreeMap<_, _>>>()
-            .map(Value::Map),
-        (19, Cbor::Array(items)) => items
-            .into_iter()
-            .map(decode_tagged)
-            .collect::<Option<Vec<_>>>()
-            .map(Value::Array),
-        (20, Cbor::Text(value)) => Some(Value::Enum(value)),
-        _ => None,
-    }
-}
-
-#[cfg(feature = "hosted-websocket")]
 fn prepared_value(prepared: &PreparedRequest) -> Option<Value> {
-    let (tree, used) = crate::canonical_cbor::decode(prepared.bytes()).ok()?;
-    (used == prepared.bytes().len())
-        .then(|| decode_tagged(tree))
-        .flatten()
+    crate::canonical::decode_data_value(prepared.bytes()).ok()
 }
 
 #[cfg(feature = "hosted-websocket")]

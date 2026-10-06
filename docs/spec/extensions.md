@@ -1,6 +1,6 @@
 # Node, Graph, Executor, Connector, and Extension
 
-> **Status (2026-09-18): normative categorical v19.** The underlying
+> **Status (2026-10-06): normative target for format 20.** The underlying
 > Graph/Executor model is retained from [R9](../architecture/rework-r9-qualification.md).
 > Loop's host-terminal amendment is D-2026-09-08-1; exact-instance closure
 > is D-2026-09-10-1. [D-2026-09-14-4](decisions.md#d-2026-09-14-4--separate-loop-retry-and-saga-over-one-recurrence-engine)
@@ -159,8 +159,7 @@ neither a data port nor a control port in the effective port table.
 D-2026-09-10-1 applies the same distinction to the common-lifecycle
 commands `instance.stop` and `child.instance.stop`. They belong to Node
 instances, require no new Extension, and invoke the existing lifecycle
-controller rather than a Loop manager. Introduced in package v18 and retained
-in v19, their scope is specified by
+controller rather than a Loop manager. Their scope is specified by
 [instances §7.3](instances.md#73-explicit-closure-commands).
 The Graph/Executor split and bare Operator `stop` are unchanged.
 
@@ -247,7 +246,7 @@ redefine an Extension contribution. The diagnostic names both contributors.
 
 ## 9. Transport and validation
 
-Plan v19 transports one closed `ExtensionSpec` list on every owner for which it
+Plan v20 transports one closed `ExtensionSpec` list on every owner for which it
 is non-empty. Registry-free validation re-derives:
 
 - structural owner compatibility;
@@ -268,15 +267,15 @@ independent plan validator rejects a Connector target and an out-of-bounds
 slot before a handler can execute. This does not remove controller-owned
 Graph lifecycle facts from the journal.
 
-The historical `AspectSpec` tag and `rastok.aspects.r1` domain are never
-reinterpreted. V15 and v16 refuse categorically by package version.
+The current Extension tags are App 1, Loop 2 and Retry 3. Unknown tags or
+unsupported package versions refuse, with no compatibility reader.
 
 ## 10. Migration
 
 The words `Aspect`, `NodeAspect`, `Carrier`, and an explicit Graph/Operator
 NodeType are removed from the live model. Source using old annotation forms
 gets a named migration diagnostic. Historic M1.7 decisions and reports remain
-accurate descriptions of v13–v15; D-2026-09-05-1 supersedes their live model.
+dated evidence; D-2026-09-05-1 supersedes their live model.
 
 Old `.`/`.foo` boundary wiring now refuses with `E-WIRING-MIGRATION` and the
 exact explicit-boundary replacement. R9 enabled this refusal after the source

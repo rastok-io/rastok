@@ -1,6 +1,6 @@
 # Standard library contracts
 
-> **Status (2026-09-18): normative, package v19.** Process job uses `@4`,
+> **Status (2026-10-06): normative target, package v20.** Process job uses `@4`,
 > Process service `@5`, and File/HTTP/WebSocket use `@3`. Their exact roles,
 > cardinality, terminal visibility and idempotence profiles are independently
 > checked. [C4 qualification](../architecture/retry-c4-qualification.md) records
@@ -9,12 +9,8 @@
 > WebSocketClient and WebSocketServer are live over HTTP/1.1 Upgrade and
 > HTTP/2–3 Extended CONNECT. M1.8 A4 adds versioned boot binding for
 > HttpClient URL and bearer settings without changing the contract id.
-> B5 removed the
-> former draft `error_set` and made the complete resolved port table the
-> executable contract. B7 removed the success/failure boundary seam:
-> completions now carry ordered ordinary outputs plus one final typed `exit`.
-> B8 removed the last raw-plan bridge: the categorical package retains v7's exact
-> `Process.exit: ProcessExit` and the total effective port table.
+> Completions carry ordered ordinary outputs and one final typed `exit`.
+> Exact resolved port tables are independently checked in the package.
 > Companion to [execution-model.md](execution-model.md) (`timeout` /
 > `on_timeout`, the correlator duty), [delivery-semantics.md](delivery-semantics.md)
 > (INGRESS / EGRESS records) and [simulation-semantics.md](simulation-semantics.md)
@@ -84,29 +80,22 @@ an `experiment` (simulation-semantics.md §10) checks empirically
 that a real Driver and its external system honor them. Neither layer replaces the
 other.
 
-### 1.1 V16 application profile
+### 1.1 Application profile
 
-The v16 rework added two mandatory kinds of evidence to executable Contracts:
+Executable Contracts carry two mandatory kinds of evidence:
 
 | Case | Required material |
 |---|---|
 | Application/cardinality | exchange profile, opening inputs, finite completion rule, per-port `Never | ZeroOrOne | ExactlyOne | ZeroOrMore | OneOrMore`, and one closed terminal fact where applicable |
 | Repeat visibility | every terminal case classified `before_effect | outcome_unknown | after_effect` |
 
-These facts are Registry-free validation material, productibility evidence,
-and Loop-host qualification. Removing `unwired` and adding them changed the
-six ids to `rastok/process@2`, `rastok/file@2`,
-`rastok/http-client@2`, `rastok/http-server@2`,
-`rastok/websocket-client@2`, and `rastok/websocket-server@2`. An `@1`
-package is never interpreted as `@2`.
-
-Those are historical ids, not the current sheets: v19 uses Process job/service
-`@4`/`@5` and File/network `@3`, as listed above. The
-[R1 tables](../architecture/rework-r1-host-contracts.md) retain the initial
-application evidence; the [Retry Contract tables](../architecture/retry-c1-algebra.md)
-amend terminal visibility and Call idempotence, including HttpClient
-`ServerError`. The [C4 ledger](../architecture/retry-c4-qualification.md)
-records their common qualification.
+These facts are Registry-free validation material, productibility evidence
+and Loop/Retry host qualification. The standard namespace is `std/`;
+external namespaces must contain a dot. Current ids are
+`std/process@4` (job), `std/process@5` (service), `std/file@3`,
+`std/http-client@3`, `std/http-server@3`, `std/websocket-client@3`
+and `std/websocket-server@3`. Only these exact Contracts execute in M1.
+Source names such as `Process` remain unchanged.
 
 ## 2. `behavior` — determinism, separate from idempotence
 
@@ -185,7 +174,7 @@ There is no parallel `mime_type` spelling.
 
 | Case | Contract |
 |---|---|
-| Stable identity | `rastok/http-server@3` (v19; earlier majors refuse) |
+| Stable identity | `std/http-server@3` (exact Contract) |
 | Role / Direction | HTTP endpoint; **inbound** Driver role |
 | Exchange | call — one admitted request, at most one protocol response, one typed request-lifecycle `exit` |
 | Ports | `out: T` decoded request; `in: T` graph response in `respond`; `exit: HttpServerExit`; no implicit `err` |
@@ -244,7 +233,7 @@ request.
 
 | Case | Contract |
 |---|---|
-| Stable identity | `rastok/http-client@3` (v19; earlier majors refuse) |
+| Stable identity | `std/http-client@3` (exact Contract) |
 | Role / Direction | HTTP calls; **outbound caller** |
 | Exchange | call — one request, response outputs, one typed call `exit` |
 | Ports | `in: T` request body, `out: T` every usable response body including non-2xx, `exit: HttpClientExit`; no implicit `err` |
@@ -288,7 +277,7 @@ weaken verification or reinterpret the plan bytes.
 
 | Case | Contract |
 |---|---|
-| Stable identity | `job`: `rastok/process@4`; `service`: `rastok/process@5`; both use package v19 |
+| Stable identity | `job`: `std/process@4`; `service`: `std/process@5`; both use package v20 |
 | Role / Direction | Job: outbound Call. Service: both roles, resident Session. Selecting a profile resolves its exact Contract before lowering. |
 | Ports | `in` → stdin; `out` ← decoded/framed stdout; `err` ← framed stderr data; `exit` ← `ProcessExit` |
 | idempotent / behavior | job: `idempotent: bool = false`; service has no idempotence attribute. `behavior` required for both profiles, plan-evaluated |
@@ -582,7 +571,7 @@ run can inject selected values as new roots.
 
 | Case | Contract |
 |---|---|
-| Stable identity | `rastok/file@3` (v19; earlier majors refuse) |
+| Stable identity | `std/file@3` (exact Contract) |
 | Role / Direction | outbound one-file operation; `mode = read \| replace` is required; `watch` is a known deferred spelling whose inbound role requires a later contract-version decision |
 | Ports | read: `in: variant`, one `out: bytes` on success, then `exit: FileExit`; replace: `in: bytes`, no success `out`, then `exit: FileExit` |
 | idempotent / behavior | `true` / `deterministic` (pre-declared by the File Contract) |
@@ -630,7 +619,7 @@ deletion, overflow, resynchronization and acknowledgement semantics.
 
 | Case | Contract |
 |---|---|
-| Stable identity | `rastok/websocket-server@3` (v19; earlier majors refuse) |
+| Stable identity | `std/websocket-server@3` (exact Contract) |
 | Role / Direction | both roles over one shared bound listener/session table; accepts remote sessions, receives messages and writes graph replies |
 | Exchange | session — many messages in either direction, exactly one terminal `WebSocketExit` per accepted session |
 | Ports | `out: T` receives complete peer messages; `in: T` sends complete messages; `exit: WebSocketExit` terminates a session; no implicit `err` |
@@ -670,7 +659,7 @@ orphan write, discarded-and-journaled without misrouting or a second exit.
 
 | Case | Contract |
 |---|---|
-| Stable identity | `rastok/websocket-client@3` (v19; earlier majors refuse) |
+| Stable identity | `std/websocket-client@3` (exact Contract) |
 | Role / Direction | both roles over one shared connection state; opens a remote session, writes graph messages and receives peer messages |
 | Exchange | session — many messages in either direction, exactly one terminal `WebSocketExit` per opened session |
 | Ports | `in: T`, `out: T`, `exit: WebSocketExit`; types follow the same required codec table as WebSocketServer; no implicit `err` |

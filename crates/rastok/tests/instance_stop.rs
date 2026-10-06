@@ -126,8 +126,8 @@ fn forged_packages_cannot_omit_the_lexical_scope_proof() {
     }
     assert_eq!(
         plan::FORMAT_VERSION,
-        19,
-        "Retry retains the existing exact-instance closure proof"
+        20,
+        "the current package requires the exact-instance closure proof"
     );
 }
 

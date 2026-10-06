@@ -107,7 +107,7 @@ impl AnnotationApplication {
                 }
             }
             AnnotationBinding::Measure => {
-                if self.definition != "rastok/measure@3"
+                if self.definition != "std/measure@3"
                     || !is_measure_argument_type(&self.argument_type)
                 {
                     return Err(self.invalid(

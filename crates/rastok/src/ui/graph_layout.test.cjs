@@ -132,7 +132,7 @@ test("Connector subtitles and Extension labels fit before any instance opens", (
         { name: "out", direction: "output" },
         { name: "exit", direction: "output" },
       ]),
-      kind: "connector", type: "rastok/http-client@3", extensions: ["Retry"],
+      kind: "connector", type: "std/http-client@3", extensions: ["Retry"],
     }],
     edges: [],
   };

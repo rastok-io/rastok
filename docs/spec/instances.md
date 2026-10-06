@@ -1,31 +1,13 @@
 # Instances, keys, lifetime, and placement
 
-> **Status (2026-09-07): normative, including the implemented v16 model adopted by
-> D-2026-09-05-1.** The compiler
-> accepts and checks the R1 `instance` / `lifetime` surface. Plan-package v18
-> retains v9's categorical parent-linked owner table, scoped routes,
-> independent instance policy, immutable owner expressions, and phased
-> Connector settings. R3 routes every owner through canonical hierarchical
-> instance references; those references index routes, transactions,
-> mailboxes, state, calls, timers, lifecycle, and cursors. R4 executes all five
-> closed lifetime profiles on Graph and Node owners, including global
-> temporal singletons. R5 executes bounded Closing, successor-generation
-> admission, cancellation, settlement, terminal `OutcomeUnknown`, inner-first
-> Graph closure, and bare `stop`. Source production of some dynamic
-> settings/values remains a named R1 gap. R6 makes nested Graphs and
-> instance-local joins public end to end, including Lab and package evidence;
-> M1.7's Graph-handler Loop implementation is historical. V16 removes Graph
-> handlers and application mailboxes while preserving Graph instance identity
-> and controller-owned lifecycle records; Loop work moves to an attached
-> manager and contained Executors. R7
-> closes the executable instance slice with negative-space and
-> placement-neutrality proofs; it adds no cluster runtime. This document is
-> the single authority for logical instance addressing, key selection,
-> Executor-owned semantic state, lifetime, and the semantic boundary with
-> future sharding.
+> **Status (2026-10-06): normative target, package 20.**
+> Parent-linked owners, scoped routes, instance identity/generation, lifetimes,
+> immutable expressions and phased Connector settings are validated together.
+> Graphs own scope and controller lifecycle, never application state or handlers.
+> All five lifetime profiles and bounded inner-first Closing execute in M1.
+> Placement remains physical; there is no cluster runtime.
 
-Rastok separates three concerns that the former `partition` declaration
-combined:
+Rastok separates three concerns:
 
 1. **addressing** — an optional key selects a logical Node instance;
 2. **time** — an optional lifetime determines when that instance closes;
@@ -573,7 +555,7 @@ carry the provenance.
 
 Loop commands and wakeups are generation-bound and die with their instance.
 Future Saga debt must be journal-bound rather than a second ledger, but no
-Saga execution contract is admitted in v16.
+Saga execution contract is admitted in M1.
 
 ### 7.2 Window work belongs to an Operator child
 
@@ -612,7 +594,7 @@ in D-2026-09-07-4.
 
 ### 7.3 Explicit closure commands
 
-D-2026-09-10-1 adds a v18 command destination for the common lifecycle.
+D-2026-09-10-1 defines an exact-instance command destination for the common lifecycle.
 In a Graph body:
 
 ```rastok
@@ -773,15 +755,8 @@ It preserves the useful invariants already proved by the P0–P3 draft:
 - generation-fenced dated events;
 - one synchronous Worker as a valid embedded/reference implementation.
 
-The plan/package and journal vocabulary has been rewritten from the draft
-`partition_key` / `target_partition` names to logical instance addresses and
-generation-bearing references without renumbering already reserved
-extend-only journal keys merely for spelling.
-Plan-package v18 retains v9's categorical owner/instance transport and
-refuses v16 and every older format, including the unpublished v8 draft, as
-input. The original v9
-package-only move left semantic hashes and causal traces unchanged at R2. R3
-made the instance reference
-mandatory in the causal journal core as its own declared trace move: existing
-trace goldens move, including singleton graphs, while semantic graph hashes
-and plan-package bodies remain unchanged.
+The current package transports the complete owner/instance model and refuses
+other format versions. Canonical generation-bearing references identify
+mailboxes, state, routes and lifecycle; the physical Worker assignment never
+enters their bytes. The [v20 inventory](../architecture/human-review-v20-identity.md)
+records the pre-public allocation change separately from these invariants.

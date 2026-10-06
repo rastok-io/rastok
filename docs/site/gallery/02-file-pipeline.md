@@ -5,7 +5,7 @@ teaches: File Contract, explicit deployment root, bounded read, atomic replaceme
 graph: examples/file-pipeline.rkg
 golden: crates/rastok/tests/golden/gallery/file-pipeline/files.copy.trace
 command: rastok simulate examples/file-pipeline.rkg --golden crates/rastok/tests/golden/gallery/file-pipeline
-expected: Three scenarios pass; eleven bytes reach the writer, while empty inputs and directory refusals never do.
+expected: Four scenarios pass; eleven ASCII bytes or three UTF-8 bytes reach the writer, while empty inputs and directory refusals never do.
 break_it: 'Change size(data) > 0 to size(data) > 20, then rerun the command without --bless.'
 limits:
   - This counts bytes and checks emptiness; it is not a CSV parser.
@@ -38,6 +38,8 @@ The Lab replaces both file operations, using the same resolved port types.
 The Lab supplies `alpha\nbeta\n`: eleven bytes. The Operator counts them and
 forwards a nonempty value to the replacement File Connector. Empty input does
 not overwrite the target. A directory produces `NotAFile`, routed to `failed`.
+The `utf8` scenario counts `é\n` as three bytes, not two characters: the
+reader's `bytes` port determines how the value is read.
 
 To exercise real disk I/O, use a new temporary directory:
 

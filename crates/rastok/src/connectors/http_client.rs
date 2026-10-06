@@ -347,73 +347,8 @@ impl HttpClientRequestBindings {
 }
 
 #[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
-fn decode_tagged(value: crate::canonical_cbor::Value) -> Option<Value> {
-    use crate::canonical_cbor::Value as Cbor;
-
-    let Cbor::Array(mut tagged) = value else {
-        return None;
-    };
-    if tagged.len() != 2 {
-        return None;
-    }
-    let payload = tagged.pop()?;
-    let Cbor::Uint(tag) = tagged.pop()? else {
-        return None;
-    };
-    match (tag, payload) {
-        (7, Cbor::Bytes(value)) => Some(Value::Bytes(value)),
-        (8, Cbor::Text(value)) => Some(Value::Text(value)),
-        (9, Cbor::Null) => Some(Value::Null),
-        (17, Cbor::Array(fields)) => fields
-            .into_iter()
-            .map(|field| {
-                let Cbor::Array(mut pair) = field else {
-                    return None;
-                };
-                if pair.len() != 2 {
-                    return None;
-                }
-                let value = decode_tagged(pair.pop()?)?;
-                let Cbor::Text(name) = pair.pop()? else {
-                    return None;
-                };
-                Some((name, value))
-            })
-            .collect::<Option<Vec<_>>>()
-            .map(Value::Struct),
-        (18, Cbor::Array(entries)) => entries
-            .into_iter()
-            .map(|entry| {
-                let Cbor::Array(mut pair) = entry else {
-                    return None;
-                };
-                if pair.len() != 2 {
-                    return None;
-                }
-                let value = decode_tagged(pair.pop()?)?;
-                let Value::Text(key) = decode_tagged(pair.pop()?)? else {
-                    return None;
-                };
-                Some((key, value))
-            })
-            .collect::<Option<BTreeMap<_, _>>>()
-            .map(Value::Map),
-        (19, Cbor::Array(items)) => items
-            .into_iter()
-            .map(decode_tagged)
-            .collect::<Option<Vec<_>>>()
-            .map(Value::Array),
-        _ => None,
-    }
-}
-
-#[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
 pub(crate) fn decode_request(prepared: &PreparedRequest) -> Option<HttpRequest> {
-    let (tree, used) = crate::canonical_cbor::decode(prepared.bytes()).ok()?;
-    if used != prepared.bytes().len() {
-        return None;
-    }
-    let Value::Struct(fields) = decode_tagged(tree)? else {
+    let Value::Struct(fields) = crate::canonical::decode_data_value(prepared.bytes()).ok()? else {
         return None;
     };
     let mut fields: BTreeMap<_, _> = fields.into_iter().collect();

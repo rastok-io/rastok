@@ -69,7 +69,7 @@ fn retry_never_trusts_unknown_or_noncanonical_case_sets() {
     // The new case belongs only to the new Contract, never an old-id alias.
     assert!(
         outbound_call_semantics(
-            &ContractId::parse("rastok/http-client@2").unwrap(),
+            &ContractId::parse("std/http-client@2").unwrap(),
             ConnectorRoles::Outbound,
             ConnectorExchange::Call,
             None
@@ -118,8 +118,8 @@ fn call_profiles_require_exact_identity_roles_exchange_and_mode() {
         (HTTP_SERVER_CONNECTOR_ID, None),
         (WEBSOCKET_CLIENT_CONNECTOR_ID, None),
         (WEBSOCKET_SERVER_CONNECTOR_ID, None),
-        ("third-party/process@1", Some("job")),
-        ("rastok/process@99", Some("job")),
+        ("org.third-party/process@1", Some("job")),
+        ("std/process@99", Some("job")),
     ] {
         assert!(
             outbound_call_semantics(

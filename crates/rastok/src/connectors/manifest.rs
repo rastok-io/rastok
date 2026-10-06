@@ -110,8 +110,8 @@ mod tests {
 
     #[test]
     fn a_manifest_describes_capabilities_without_loading_driver_code() {
-        let process = id("rastok/process@4");
-        let file = id("rastok/file@3");
+        let process = id("std/process@4");
+        let file = id("std/file@3");
         let manifest = DriverManifest::try_new([
             DriverManifestEntry::new(process.clone(), ConnectorRoles::Outbound),
             DriverManifestEntry::new(file.clone(), ConnectorRoles::Outbound),
@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn duplicate_manifest_claims_never_gain_an_ordering_policy() {
-        let process = id("rastok/process@4");
+        let process = id("std/process@4");
         assert_eq!(
             DriverManifest::try_new([
                 DriverManifestEntry::new(process.clone(), ConnectorRoles::Inbound),

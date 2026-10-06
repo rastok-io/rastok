@@ -61,6 +61,12 @@ fn describe(name: &str, side: &str, bytes: &[u8]) -> Result<Vec<u8>, String> {
 
 fn main() -> Result<(), String> {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "--gallery")
+    {
+        return gallery(manifest);
+    }
     let candidate_dir = std::env::args_os().nth(1);
     if let Some(directory) = &candidate_dir
         && !Path::new(directory).is_dir()
@@ -102,6 +108,80 @@ fn main() -> Result<(), String> {
         if let Some(directory) = &candidate_dir {
             std::fs::write(Path::new(directory).join(format!("{name}.rkp")), &candidate)
                 .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Compare existing evidence as generic CBOR, without a previous-format
+/// journal reader and without overwriting any witness.
+fn gallery(manifest: &Path) -> Result<(), String> {
+    let catalog = ContractCatalog::try_m0().map_err(|error| error.to_string())?;
+    for (name, directory) in [
+        ("echo", "echo"),
+        ("file-pipeline", "file-pipeline"),
+        ("keyed-retry", "two-tenants"),
+        ("webhook-to-partner", "webhook-to-partner"),
+        ("sensor-alarm", "sensor-alarm"),
+        ("agent-dialogue", "agent-gateway"),
+        ("agent-gateway", "agent-gateway"),
+        ("agent-http", "agent-http"),
+    ] {
+        let source = std::fs::read_to_string(manifest.join(format!("../../examples/{name}.rkg")))
+            .map_err(|error| error.to_string())?;
+        let compiled = compiler::compile(&[&source], &catalog)
+            .map_err(|error| format!("{name}: {error:?}"))?;
+        let package = plan::encode(&compiled.plan, &compiled.hash);
+        describe(name, "candidate", &package)?;
+        let deployment = manifest.join(format!("../../examples/{name}.deployment.json"));
+        let boot = deployment
+            .is_file()
+            .then(|| rastok::deployment_config::load(&deployment))
+            .transpose()
+            .map_err(|error| error.to_string())?;
+        for lab in &compiled.labs {
+            for run in rastok::lab::run_program(
+                &compiled.plan,
+                compiled.hash,
+                plan::GraphVersion(1),
+                lab,
+                boot.as_ref(),
+            ) {
+                if !run.report.passed() {
+                    return Err(format!("{name}: {:?}", run.report));
+                }
+                let trace = rastok::golden::project(&run.records);
+                let witness = format!(
+                    "gallery/{directory}/{}.{}.trace",
+                    run.report.simulation, run.report.scenario,
+                );
+                let path = manifest.join("tests/golden").join(&witness);
+                let (old_count, old_seal) = if path.is_file() {
+                    let stored =
+                        std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
+                    let records = stored
+                        .lines()
+                        .filter(|line| !line.starts_with("seal ") && !line.is_empty())
+                        .map(unhex)
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let old = rastok::golden::Trace::from_stored(&records)
+                        .ok_or_else(|| format!("{witness}: not canonical CBOR"))?;
+                    if !stored
+                        .lines()
+                        .any(|line| line == format!("seal {}", old.seal_hex()))
+                    {
+                        return Err(format!("{witness}: stored seal disagrees with its bytes"));
+                    }
+                    (old.len().to_string(), old.seal_hex())
+                } else {
+                    ("new".into(), "none".into())
+                };
+                println!(
+                    "| {witness} | {old_count} → {} | `{old_seal}` | `{}` |",
+                    trace.len(),
+                    trace.seal_hex()
+                );
+            }
         }
     }
     Ok(())

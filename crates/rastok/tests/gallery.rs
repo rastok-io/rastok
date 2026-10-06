@@ -13,7 +13,7 @@ fn opening_examples_match_versioned_scenario_goldens() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     for (graph, directory, count) in [
         ("echo", "echo", 3),
-        ("file-pipeline", "file-pipeline", 3),
+        ("file-pipeline", "file-pipeline", 4),
         ("keyed-retry", "two-tenants", 2),
         ("webhook-to-partner", "webhook-to-partner", 6),
         ("sensor-alarm", "sensor-alarm", 3),

@@ -70,8 +70,8 @@ fn incomplete_corrupt_and_wrong_version_files_refuse() {
     let Cbor::Array(fields) = &mut tree else {
         panic!("capture row");
     };
-    assert_eq!(fields[0], Cbor::Uint(3));
-    for version in [1, 2, 999] {
+    assert_eq!(fields[0], Cbor::Uint(4));
+    for version in [3, 5, u64::MAX] {
         let mut tree = tree.clone();
         let Cbor::Array(fields) = &mut tree else {
             panic!("capture row");

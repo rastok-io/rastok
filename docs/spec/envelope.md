@@ -5,9 +5,9 @@
 > of truth** for the envelope's structure, identity, `meta.sys` reserved
 > fields, the version stamp, and the storage / wire form. Other docs cite it
 > rather than restating the field list.
-> Plan v16 replaces Aspect vocabulary and Loop's root-derived run reference as
-> specified below; v15 packages retain their historical encoding and are never
-> reinterpreted.
+> Candidate format 20 has one current representation, without compatibility
+> readers. The [cutover inventory](../architecture/human-review-v20-identity.md)
+> records the pre-public change; blessing is a separate review gate.
 
 An **envelope** is the unit that flows along edges and through transactions. It is
 **immutable** : a transaction never mutates an envelope, it *emits* new ones (Mealy
@@ -61,20 +61,19 @@ the subject of this document.
 
 `meta.sys` is **fully read-only and runtime-owned**. The DSL never assigns to
 it (see §6 for the one apparent exception — emission constructors — and why it
-is not a write). It has two tiers.
+is not a write). Its complete surface is the four fields below.
 
-### 1.1 Tier 1 — the reserved `sys` fields (always present)
+### 1.1 The four runtime-owned fields
 
-Five fields, present on every envelope, owned by the spec's schema (so any
-Rastok tool of any version can read any envelope's header without knowing the
-emitting graph) :
+Four fields, owned by the format's schema. A reader of this format can
+read the header without knowing the emitting graph. The parent is absent
+at a root:
 
 | Field | Type | Meaning |
 |---|---|---|
 | `meta.sys.id` | `uuid128` | unique identity, **derived** (§2) — never random |
 | `meta.sys.parent_id` | `uuid128?` | the immediate ancestor envelope ; `null` at inbound. The chain of `parent_id` **is** the lineage (a linked list). |
-| `meta.sys.origin_id` | `uuid128` | the lineage root — the inbound ancestor's `id`. A root envelope is its own origin (`origin_id == id`). Exported as the OpenTelemetry trace id. Never `null`. |
-| `meta.sys.role` | `enum (extensible)` | the envelope's role : `default`, `compensate`, … Default value `default`. Omissible on the wire when `default`. |
+| `meta.sys.origin_id` | `uuid128` | the lineage root — the inbound ancestor's `id`. A root envelope is its own origin (`origin_id == id`). Available to a future telemetry projection as a trace correlation key. Never `null`. |
 | `meta.sys.graph_version` | `u64` | sequential build number of the emitting graph ; the **manifest** (§4) maps it to the content hash, dev semver, commit, and schemas. |
 
 The external content type is NOT a `sys` field: it is the standard
@@ -85,38 +84,13 @@ payload is a structured in-memory value.
 `uuid128` is a fixed 128-bit value. (The values are blake3-derived, not RFC
 UUIDs — see §2 — but the physical type is a 128-bit identifier.)
 
-### 1.2 Tier 2 — birth stamps (Extension scopes)
+### 1.2 Extension context is not envelope metadata
 
-Minted on envelopes **born** inside the corresponding Extension scope ; envelopes
-born outside carry nothing (zero overhead) :
-
-| Fields | Present when | Spec |
-|---|---|---|
-| `meta.sys.saga_*` (`saga_id`, `saga_stack`) | **birth stamps** : minted on envelopes *born* inside a `: Saga` scope | [effects-and-sagas.md](effects-and-sagas.md) |
-
-**The Tier-2 frame.** Tier-2 fields
-are **birth-context stamps**, immutable like everything else on the envelope :
-set at mint time when the emitting transaction runs inside the scope, absent
-on envelopes born outside, and they simply travel wherever the wires go
-(nothing strips them — nothing *can* : edges are wires, envelopes are
-immutable ; and it is honest provenance : that envelope *is* the scope's
-product). **In the language**, Saga context is *instance* context: inside its
-lexical scope, expressions expose `meta.sys.saga_id` / `saga_stack` resolved
-from the Extension owner instance (exactly like contextual `instance.key`). They are
-present even while processing the scope-creating envelope and absent from the
-type environment outside. Loop deliberately does not add birth stamps: its
-per-root reference and iteration ordinal are journal facts, while its sole
-expression binding is the immutable `Loop.state` entry envelope. Lifecycle
-facts are journal- and observability-side only — wall-clock never enters the
-data plane.
-
-Wire slots formerly allocated for the unpublished `loop_id`, `loop_stack` and
-`iter_count` draft remain reserved in [identity.md](identity.md); M1.7 emits
-none and source cannot read them.
-
-That is the **entire** `meta.sys` surface. Any other `meta.sys.*` field
-is outside the current contract — see §9.
-
+Loop run identity, application ordinals and Retry operation state belong to
+journal packets. `Loop.state` is a contextual binding, not a fifth `meta.sys`
+field. Saga remains a future Extension and has no allocated envelope field.
+There is no role, birth-stamp tier, loop counter or compatibility alias in
+`meta.sys`. An unknown field refuses at check.
 
 ## 2. Identity — derived, zero per-envelope randomness
 
@@ -141,32 +115,32 @@ encodings  : paths/triggers/ports = UTF-8 ; parent_id = its 16 raw bytes ;
 
 `envelope::IdKind` is the closed registry of the implemented recipes below.
 `id_kind_tag` projects explicitly; declaration order is never an encoding.
-All other bytes refuse as `UnknownIdKind`. The table describes the current
-internal layout; the approved pre-public compaction belongs to the single
-v20 cutover, not this byte-neutral vocabulary pass.
+All other bytes refuse as `UnknownIdKind`. This is the compact format-20
+registry. Decoder names are specified in §5.1; runtime attestation is deferred.
 
 | Kind | Byte | Length-prefixed fields, in order |
 |---|---|---|
 | `Root` | `0x01` | Connector path, ingress sequence |
 | `Emission` | `0x02` | Node/owner path, trigger, parent id, port, per-port emission index |
-| `LoopAdmission` | `0x06` | run id, iteration, consumed command id |
-| `RetryAdmission` | `0x07` | operation id, next attempt ordinal, previous winning Call id |
-| `Call` | `0x10` | delivery id, prepared-request digest |
-| `Session` | `0x11` | subtype; path segments; opening root id (inbound), or emitting id and request digest (outbound) |
-| `SessionWrite` | `0x12` | Session id, emitting id, message digest |
-| `LoopRun` | `0x14` | instance identity bytes, generation, opening-admission kind, exact opening id, entry port (empty for a delivery) |
-| `LoopCommand` | `0x15` | run id, iteration, command-kind/Done-provenance pair, cause id |
-| `RetryOperation` | `0x16` | instance identity bytes, generation, entry port, exact opening delivery id |
-| `Delivery` | `0x20` | canonical edge text, envelope id |
-| `InstanceLifetime` | `0x21` | instance identity bytes, generation |
-| `InstanceClosing` | `0x22` | instance identity bytes, generation, explicit deadline-kind byte |
-| `InstanceStop` | `0x23` | source owner kind, source port, source identity/generation, scope identity/generation, target identity/generation, cause id |
+| `LoopAdmission` | `0x03` | run id, iteration, consumed command id |
+| `RetryAdmission` | `0x04` | operation id, next attempt ordinal, previous winning Call id |
+| `Call` | `0x05` | delivery id, prepared-request digest |
+| `Session` | `0x06` | subtype; path segments; opening root id (inbound), or emitting id and request digest (outbound) |
+| `SessionWrite` | `0x07` | Session id, emitting id, message digest |
+| `LoopRun` | `0x08` | instance identity bytes, generation, opening-admission kind, exact opening id, entry port (empty for a delivery) |
+| `LoopCommand` | `0x09` | run id, iteration, command-kind/Done-provenance pair, cause id |
+| `RetryOperation` | `0x0a` | instance identity bytes, generation, entry port, exact opening delivery id |
+| `Delivery` | `0x0b` | canonical edge text, envelope id |
+| `InstanceLifetime` | `0x0c` | instance identity bytes, generation |
+| `InstanceClosing` | `0x0d` | instance identity bytes, generation, explicit deadline-kind byte |
+| `InstanceStop` | `0x0e` | source owner kind, source port, source identity/generation, scope identity/generation, target identity/generation, cause id |
+| `Decoder` | `0x0f` | canonical decoder name as UTF-8; attestation implementation deferred to M2 |
 
 Generation, sequence and iteration/attempt ordinals use u64 little-endian;
 emission indices use u32 little-endian. Tags/subtypes are bytes; ids are
 their 16 raw bytes. Session subtype 1 denotes inbound opening, 2 outbound.
-These are the existing recipes, with no new boot-epoch, replica or decoder
-recipe introduced by naming their domains. The Loop run recipe uses the
+A root's current single-process recipe does not include a boot epoch or
+replica. Cross-run/global uniqueness is not claimed. The Loop run recipe uses the
 exact opening admission, not only its business origin ([loop.md](loop.md)).
 
 Length-prefixing kills concatenation ambiguity (`"ab"‖"c"` ≠ `"a"‖"bc"`) ;
@@ -190,7 +164,7 @@ The five components :
     `on (a, b)`, the port of the **triggering** envelope (the one that
     completed presence under mailbox-FIFO order).
   - `l:<lifecycle>` — `l:start`, `l:closing`, `l:stop`, `l:reply`,
-    `l:exit`, `l:compensate`, `l:next`, `l:timeout`, `l:evict`, `l:recover` for transactions not triggered by a
+    `l:exit`, `l:next`, `l:retry`, `l:timeout`, `l:evict`, `l:recover` for transactions not triggered by a
     port arrival
     (§3.1 ; the last two are defined by
     [execution-model.md](execution-model.md) §6-§7).
@@ -210,12 +184,12 @@ one *delivery*, and its identity is the pair `(canonical edge text,
 envelope id)`, condensed as a derived id :
 
 ```
-delivery_ref = blake3-derive( 0x20, canonical_edge_text ‖ envelope_id )
+delivery_id = blake3-derive( 0x0b, canonical_edge_text ‖ envelope_id )
 ```
 
 The delivery reference — never the envelope id alone — is the
 identity of every per-delivery obligation : the call budget a
-delivery arms (identity.md §3, `timers`), the queue and pending
+delivery arms (identity.md §3, `deadline_ids`), the queue and pending
 lookups that resolve an expiry, and the derivation of the call
 identity below. A fan-out of one envelope to two edges is two
 deliveries, two references, two obligations — two ports of one
@@ -225,15 +199,15 @@ connector included.
 complete instance reference, not merely to its reusable logical address:
 
 ```
-instance_lifetime_ref = blake3-derive(
-  0x21,
+instance_lifetime_id = blake3-derive(
+  0x0c,
   canonical_instance_address_bytes ‖ u64_le(generation)
 )
 ```
 
 The full instance reference is also carried by the dated event. The derived
-reference is the stable timer identity sealed in transaction key 37; the due
-time remains replay-derived. Re-arming idle within one generation therefore
+reference is the stable timer identity sealed in transaction key 24; the original due
+instant is retained unsealed and restored exactly. Re-arming idle within one generation therefore
 keeps one logical obligation while its causal envelope changes, and an event
 from a closed generation cannot target its successor.
 
@@ -242,7 +216,7 @@ delivery carrying exactly one prepared request, and its internal
 identity derives from both :
 
 ```
-call_ref = blake3-derive( 0x10, delivery_ref ‖ request_digest )
+call_id = blake3-derive( 0x05, delivery_id ‖ request_digest )
 ```
 
 `request_digest` is the digest of the EXACT protocol bytes prepared
@@ -255,20 +229,12 @@ Wiring rule : the **same source port wired twice to the same input port is a
 compile error** (a duplicate edge is always a typo — and it would defeat the
 recipe).
 
-- **`inbound_seq`** : a monotone counter per inbound Connector instance. Its
-  source by mode :
-
-| Mode | `inbound_seq` source | Determinism |
-|---|---|---|
-| Simulation | the fixture (event N of the test set) | total — identical ids every run ⇒ byte-stable golden traces |
-| Prod, `durability ≥ local` | a **durable** counter, committed with the inbound accept | total — replay re-derives identical ids from the journal |
-| Prod, `durability = none` | RAM counter + boot epoch in the derivation | unique, but not stable across restarts — and that is fine : no journal, no replay |
-
-**Reserved multi-host property.** When inbound scales
-to replicas, each replica's identity joins the root derivation —
-`blake3( connector_path ‖ replica ‖ inbound_seq )` — so `(connector, replica,
-seq)` triples never collide. In single-process execution, `replica` is
-empty.
+- **`inbound_seq`** is committed with ingress, monotonically for a source
+  provenance. Simulation and single-process runs derive roots from the same
+  path/sequence recipe. Each fresh in-memory journal starts its own sequence;
+  a diagnostic recording supplies its original facts during replay.
+  Durable sequence allocation and multi-host replica-aware roots require the
+  M2/cluster contract. M1 adds no hidden clock or random boot salt.
 
 ### 2.0 The honest determinism contract — journal-relative
 
@@ -294,10 +260,9 @@ SIM     the fixture IS the journal ──► fully deterministic, byte-stable go
 So : **zero randomness in the ids ; all nondeterminism captured in the
 journal ; the run is a pure function of `(graph, journal)`.** Under
 `durability = none` the journal lives in memory or as a trace export:
-simulation replay works fully, but replaying a *production incident*
-requires a durable journal. Said plainly: in-memory durability gives
-deterministic simulation and in-process traces, not post-mortem
-production replay.
+a completed `run --record` can be restored by `replay` without touching the
+world. That diagnostic artifact is not a crash-safe WAL: a process failure
+can lose facts not exported. Durable execution remains M2.
 
 **Hash algorithm: BLAKE3, fixed by this contract.** Changing it would
 change every derived id and break replay. It was chosen for speed on small
@@ -311,12 +276,12 @@ compatibility contract.
 1. **Structural dedup.** A replayed transaction re-emits the *same* id from the same
    inputs ⇒ downstream Connectors deduplicate by id. This is the foundation of
    effectively-once delivery ([delivery-semantics.md](delivery-semantics.md)).
-2. **`meta.sys.id` is a natural idempotency key** for `irreversible`
-   Connectors — as an *integrity* handle. It is NOT the idempotency key :
+2. **`meta.sys.id` is an integrity handle**, not automatically the partner's
+   business idempotency key:
    the key names the **business operation** and stays **stable across
    retries** ([delivery-semantics.md §4.3](delivery-semantics.md) — a
    per-call-varying key is the double-pay trap ; the per-attempt form is
-   the documented escape, [loop.md](loop.md) §7.3).
+   a separate explicit program choice).
 3. **Byte-stable golden traces.** Two simulation runs produce *identical*
    envelopes ⇒ reference traces diff at the byte level. "Simulation = the spec"
    becomes literal.
@@ -369,7 +334,7 @@ Composed cases :
   one next-state envelope. The producer transaction retains a durable
   `CommandProduced` fact naming that exact cause. After a separate
   `CommandConsumed` fact and any logical delay, `l:next` re-admits the state at
-  the remembered entry. The v16 run reference derives from the exact opening
+  the remembered entry. The run identity derives from the exact opening
   admission reference, not merely `origin_id`; a last permitted Next instead
   parents `LoopExpired` on the resolved host terminal and creates no re-admission. Again retains
   `Loop.state` but uses its routed envelope as the command cause.
@@ -388,8 +353,7 @@ transactions that no port arrival triggers :
 | Inbound Call terminal | `l:reply` | the committed root request that opened the Call | the inbound Connector instance that admitted it |
 | Session terminal | `l:exit` | the envelope that opened the logical Session | the Connector instance that owns the Session |
 | Loop re-admission | `l:next` | the durable Next/Again command cause selected for this run and iteration | the Loop manager, recorded at its owner path and generation |
-| Saga compensation envelope | `l:compensate` | **the envelope explicitly routed to `Saga.rollback`** (or the saga's `SagaExpired` timeout event); for compensations 2..n: the previous compensation's ack (the chain IS the reverse rollback order) | **the `: Saga`-carrying node**, port `compensate` (reserved), index 0 |
-| Budget expiry (call `timeout`, `Saga.timeout`) | `l:timeout` | **the envelope that ARMED the budget** — the request (call) ; the instance-creating envelope (saga) | the Connector node / the `: Saga` node |
+| Call budget expiry | `l:timeout` | the request envelope that armed the budget | the Connector owner |
 | Join-buffer eviction | `l:evict` | the evicted envelope ([execution-model.md §7](execution-model.md)) | the Operator node |
 | Recovery resolution of an unknown outbound | `l:recover` | the request envelope whose outcome is unknown ([delivery-semantics.md §4.4](delivery-semantics.md)) | the Connector node |
 
@@ -399,26 +363,19 @@ the Extension owner's path and generation, with the manager command or
 lifecycle trigger as its cause. The recipe has no out-of-graph spatial
 emitter, but it does distinguish an Executor transaction from an Extension
 manager transaction.
-The saga row's scheme is fixed: compensations are
-**sequential transactions** of the `: Saga` node — port `compensate`
-(reserved), index 0, parent = the rollback's cause for the first, then the
-previous compensation's ack — the parent chain *is* the reverse rollback
-order, and the rollback is
-journal-driven by definition, so replay re-reads the same order and re-derives
-the same ids.
-
+Saga compensation identities are not allocated by this format.
 
 ## 4. The version stamp — one field, the manifest does the rest
 
 `meta.sys.graph_version` is a **`u64` sequential build/deploy number** per app.
-Everything else about versioning is derived through the **manifest**, an
-infrastructure artifact the runtime already needs (it holds the schemas
-required to decode the Avro zones — §5).
+In M1 it is fixed at 1 for a fresh in-memory run. The recording retains the
+validated plan and its semantic hash. A durable deployment **manifest** is
+an M2 design, not a file currently maintained by the runtime:
 
 ```
 manifest[graph_version] = {
   content_hash : blake3 of the canonical .rkg   // integrity — re-hashable, cannot lie
-  semver       : dev-declared `graph <name> : App { version = "1.4.0" }`   // the human version
+  semver       : deployment release label     // not an extra DSL attribute
   commit       : VCS ref, recorded by CI        // bridges hash ↔ source, VCS-agnostic
   schemas      : the data + per-namespace schemas of this build
 }
@@ -441,77 +398,69 @@ under the current `graph_version`, with ordinary parent lineage. Journal
 migration onto a different semantic hash remains deferred and refuses typed
 until that execution contract lands ([types.md §6](types.md)).
 
-In single-process mode the manifest is a local file with one deployer.
-Scaled multi-host allocation of the number requires a separate cluster
-contract and is deferred.
+A durable single-process manifest and multi-host allocation are both deferred.
+M1 does not claim that a deployment ledger has been persisted.
 
 
-## 5. Storage / wire form — "persisted form = transport form"
+## 5. Representation and codecs
 
-There is **one** representation : what travels the wire is exactly what is
-persisted to the journal, durable state, and audit. No second form, no
-coherence debt.
-
-```
-envelope (storage = wire) =
-  header      meta.sys              → Avro ; schema owned by the SPEC
-  zones       meta.app + meta.ext   → Avro ; app schema owned by the APP (graph_version manifest),
-                                      ext schema by the connector sheets + the standard fields
-  data        (encoding_tag, bytes) → ANY registered codec — lazy
+```text
+envelope record
+  meta.sys + meta.app + meta.ext  -> deterministic ccbor
+  data                           -> [encoding tag, original/current bytes]
+                                    raw | ccbor | arrow-ipc
 ```
 
-- The **header has a spec-owned schema** : any Rastok tool, any version, reads
-  any envelope's `meta.sys`. This is what makes cross-version audit and
-  debugging possible.
-- **`data` is tagged bytes.** The static type (what `data` *means* — `bytes`,
-  `struct`, `table<…>`) comes from the graph schema via `graph_version`. The
-  `encoding_tag` (how it is *represented now*) is dynamic, per-envelope, drawn
-  from the runtime's internal representations : `raw | avro | arrow-ipc`. `meta.ext.content_type` is never an internal decode tag: the core
-  decodes with `encoding_tag` ALONE. The v1 regime (D-2026-08-10-4):
-  a structured external body (HTTP JSON) is decoded EAGERLY at the
-  frontier by the connector — `Materialized(variant)` — while `raw`
-  carries opaque bytes whose only structural readings are UTF-8 text
-  or the bytes themselves; a possible future `Encoding::Json` would
-  make JSON lazy WITHOUT consulting Meta. A JSON body is never
-  parked under `raw` where a structural access would materialize it
-  as raw text.
+Metadata uses the same canonical value registry as the plan and causal
+projection. Avro is an import/export schema projection; it is not an internal
+envelope or journal encoding. M1's journal remains in memory; the recording
+codec writes complete records without claiming durable execution.
 
 ### 5.0 Four planes, never confused
 
 | Plane | Answers | Carried by |
 |---|---|---|
-| Logical type | what do ports and Rastok expressions see? | the graph schema (`text`, `Invoice`, `variant`, …; [types.md](types.md)) |
-| Internal encoding | how are the bytes represented NOW? | `Data::Encoded.encoding` (`raw \| avro \| arrow-ipc`) |
-| Connector codec | how does a boundary serialize/deserialize? | the connector's `codec` attribute |
-| External content type | what does the outside world call this exchange? | `meta.ext.content_type` (§5.2) |
+| Logical type | what do ports and expressions see? | resolved graph schema |
+| Internal encoding | how is this DATA represented? | Raw, Ccbor or ArrowIpc |
+| Connector codec | how does a boundary decode/encode the outside? | Contract and codec attributes |
+| External content type | what does the outside call these bytes? | `meta.ext.content_type` |
 
-The content type is neither a logical type nor an internal decode
-tag: a `json! { … }` literal is a materialized `variant` VALUE and
-carries no content type — only a boundary that serializes it mints
-bytes and a matching `content_type`.
+The media type never selects a core decoder. A `json! { … }` literal is a
+logical value, not raw JSON text. A structured HTTP response is decoded and
+checked at the boundary; it is not parked under raw with guessed access.
 
-### 5.1 Lazy rules (Memory-Representation Polymorphism)
+### 5.1 Lazy reading and decoder identity
 
-1. **No structural access → no transcode, ever.** An opaque `bytes` payload
-   routed on `meta` alone is never parsed nor re-encoded — the bytes traverse
-   untouched; an OGG payload stays OGG forever. (The pass-through ideal for
-   structured bodies awaits a lazy `Encoding::Json`; in the v1 regime a JSON
-   body is decoded eagerly at the frontier — D-2026-08-10-4 — because parking
-   it under `raw` would make a structural access materialize raw text.)
-2. **Access → transcode once** to the guest-native form (`jq!` on a document →
-   parse ; `sql! {}` on a table → Arrow, once).
-3. **A value built by the graph** (output of a `jq!`, a join) is born in memory
-   with no original bytes ; on persistence it takes its guest-native form :
-   `avro` for documents, `arrow-ipc` for tables, raw bytes for `bytes`/`text`.
-4. **Persistence stores the current form** — never a forced transcode at write.
-   The journal is therefore a self-describing mix (some json, some arrow, some
-   opaque), each entry tagged. Replay re-delivers identical bytes.
+1. An identity pass-through or a route using only metadata does not force
+   payload decoding. Encoded bytes are shared immutably.
+2. **Raw means external bytes.** A `bytes` reading port always sees
+   `Value::Bytes`; a `text` port sees `Value::Text` and rejects malformed
+   UTF-8 with a typed fault. No content sniffing selects between them.
+   For `é\n`, `size` is three on bytes and two on text.
+   One reader's cached interpretation cannot alter another port's reading.
+3. **Graph-born logical values use ccbor**, including text and bytes.
+   Materialized and encoded ccbor states have the same canonical DATA form.
+   The decoder checks consistency, exact consumption and canonical
+   re-encoding. Raw bytes that happen to encode a ccbor value remain raw:
+   their DATA discriminator is different.
+4. An opaque Arrow IPC value stays opaque unless an admitted reader supports
+   it. No fallback decoder fabricates a value. Boundary wire codecs such as
+   JSON do not allocate competing internal DATA tags.
 
-There is no single "canonical encoding" for `data` — an OGG stream has no Avro
-form to promote to ; the bytes *are* the value. The canonical thing is the
-**framing** (the three zones + the per-envelope `encoding_tag`), not a forced
-codec for `data`.
+**Attested decoder registry — M2 design, not implemented in M1.**
+A decoder has a canonical textual name, such as `std/ccbor@1` or
+`std/raw@1`. The standard namespace belongs to the stdlib; an external
+namespace has at least one dot. Its binary id is
+`Id::derive(IdKind::Decoder, [canonical_name_utf8])`.
+A run's immutable attestation binds that name/id to a conformance fingerprint,
+covering the agreed vectors and decoding contract. A missing or mismatched
+decoder refuses with `E-DECODER-UNAVAILABLE`; it never guesses an alternative
+or consults Content-Type. Different implementations claiming the same name
+must pass that same conformance contract.
 
+M1 allocates the Decoder identity kind and specifies this seam only. It has
+no dynamic decoder registration, plugin loader, attestation lookup or new
+decoder execution path. The active raw/ccbor handling above is built into core.
 
 ### 5.2 `meta.ext.content_type` — the payload-coupling invariant
 
@@ -554,9 +503,9 @@ session routing independently of the writable projection. An explicit
 `correlate = meta.ext.session_id` asks the Connector to verify and use that
 logical token; it never authorizes a physical address lookup from graph data.
 The projection is the lowercase 32-hex-character spelling of the reference's
-16 bytes. H1 makes this executable in categorical package v12. The journal
-derives inbound and outbound openings under identity domain `0x11`, and each
-graph-to-world message write under `0x12`; the exact framed recipes and causal
+16 bytes. The journal
+derives inbound and outbound openings under identity domain `0x06`, and each
+graph-to-world message write under `0x07`; the exact framed recipes and causal
 record forms are fixed in [identity.md §3](identity.md).
 
 ### 5.4 Standard HTTP and WebSocket projections
@@ -623,9 +572,9 @@ traces and replay) :
 INGRESS (the world enters, `inbound_seq` committed atomically with the
 accept), TRANSACTION (the atomic unit : consumed positions, state delta,
 emissions, `committed_at`), EGRESS (the graph acts on the world : `open` →
-`closed` XOR timeout | `discarded`). Supervision decisions ARE transaction
+`closed(response | timeout)` or `abandoned`). Supervision decisions ARE transaction
 records (`l:*` triggers); declared `Timer` firings ARE Ingress records, while
-an observed `now()` instant is key 54 of its firing transaction. Three pieces
+an observed `now()` instant is key 39 of its firing transaction. Three pieces
 together reconstruct everything :
 
 | Piece | Where | Gives |
@@ -655,7 +604,7 @@ Three principles drove every inclusion and every removal :
    that is a *fact of a transaction* (when it committed, in what arrival position, at
    what logical instance reference, who else fed the join) is per-hop and lives in the
    journal — not on the envelope. Anything that is the envelope's own *identity*
-   (its derived id, its lineage pointers, its role, its content type, its build
+   (its derived id, its lineage pointers, its content type, its build
    stamp) is on the envelope.
 2. **No hidden clock in the envelope or evaluator.** A readable `created_at`
    on every envelope was a per-message ambient clock leak, so it was removed
@@ -675,30 +624,11 @@ Three principles drove every inclusion and every removal :
    beside it.
 
 
-## 9. Fields removed or renamed (migration from older docs)
+## 9. Related docs
 
-Older docs and examples reference `meta.sys` fields that no longer exist. The
-canonical mapping :
-
-| Old field | Status | Where the concern went |
-|---|---|---|
-| `envelope_id` | renamed | → `id` (now derived, §2) |
-| `seq` | removed from envelope | → per-hop journal ; ordering = mailbox FIFO per instance reference (§7, and execution model #2) |
-| `created_at` | **removed** | per-envelope ambient clock leak (§8) ; regulatory timestamp → journal `committed_at`, expression observation → transaction-fixed `now()` |
-| `correlation_id` | removed | → Connector-internal protocol ids + logical instance address + a `meta.app` echo-token (re-addable later, additive) |
-| `trace_id` | merged | → `origin_id` *is* the OTel trace id (§1.1). There is **no** `meta.sys.trace_*` field, now or planned. |
-| `direction` | removed | no use case (the stream-protocol "direction" of a *Connector* is a different thing and stays) |
-| `action` (`forward`/`compensate`) | renamed | → `role` (extensible enum, §1.1) |
-| `type` / `encoding` | removed as flat fields | typing is per-zone (data, meta.app, meta.ext), defined by the graph schema via `graph_version` ; the logical/physical split survives as a *schema* concept, not envelope fields |
-| `kind` | renamed | → `role` |
-| `mime` | renamed, relocated | → `meta.ext.content_type` (full Content-Type, parameters included — D-2026-08-10-4 ; the earlier `meta.sys.mime_type` and its NiFi-lineage name die) |
-
-
-## 10. Related docs
-
-- [effects-and-sagas.md](effects-and-sagas.md) — Tier-2 `saga_*` ; `role = compensate`.
-- [loop.md](loop.md) — Tier-2 `loop_*` ; `id` as a per-call idempotency key.
-- [execution-model.md](execution-model.md) — the mailbox/ordering contract,
-  `emission_index`, the dated-events queue, `l:timeout` / `l:evict`.
-- [delivery-semantics.md](delivery-semantics.md) — the journal, `committed_at`, dedup by `id`, effectively-once.
-- [grammar.md](grammar.md) — the envelope constructor grammar.
+- [identity.md](identity.md) — canonical registries and causal/unsealed distinction.
+- [loop.md](loop.md) — temporal state recursion and journal-owned run context.
+- [extensions.md](extensions.md) — Retry and retained attempts.
+- [execution-model.md](execution-model.md) — mailbox ordering and dated obligations.
+- [delivery-semantics.md](delivery-semantics.md) — journal acceptance and exchanges.
+- [grammar.md](grammar.md) — envelope constructors.

@@ -574,7 +574,9 @@ fn the_carry_survives_a_dead_earlier_write() {
     let mut ext = Namespace::new();
     ext.insert(
         String::from("content_type"),
-        MetaValue::Scalar(Scalar::Text(String::from("application/avro"))),
+        MetaValue::Scalar(Scalar::Text(String::from(
+            "application/vnd.apache.arrow.stream",
+        ))),
     );
     vm.inject(
         &mut journal,
@@ -584,7 +586,7 @@ fn the_carry_survives_a_dead_earlier_write() {
             ),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
-                data: Data::encoded(Encoding::Avro, *b"\x01\x02"),
+                data: Data::encoded(Encoding::ArrowIpc, *b"\x01\x02"),
                 ext,
             },
             sequence: SubmissionSequence::Next,
@@ -596,7 +598,7 @@ fn the_carry_survives_a_dead_earlier_write() {
     assert!(
         matches!(
             output.envelope.data(),
-            Data::Encoded { encoding: Encoding::Avro, bytes, .. } if bytes.as_ref() == b"\x01\x02"
+            Data::Encoded { encoding: Encoding::ArrowIpc, bytes, .. } if bytes.as_ref() == b"\x01\x02"
         ),
         "the final write wins and carries: {:?}",
         output.envelope.data()
@@ -604,7 +606,7 @@ fn the_carry_survives_a_dead_earlier_write() {
     assert_eq!(
         output.envelope.meta().ext().get("content_type"),
         Some(&MetaValue::Scalar(Scalar::Text(String::from(
-            "application/avro"
+            "application/vnd.apache.arrow.stream"
         )))),
     );
 }

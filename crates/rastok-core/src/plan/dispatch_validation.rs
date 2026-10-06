@@ -93,7 +93,7 @@ impl core::error::Error for DispatchValidationError {}
 /// The caller must independently establish the environment, resolve any
 /// temporary `variant` inference bindings, and validate activation, output and
 /// state targets, metadata writes, assets, annotations propagation and Loop
-/// control/effects. A v15 plan cannot transport this recursive algebra yet.
+/// control/effects.
 ///
 /// Predicates preserve the existing expression contract: bool or a temporary
 /// `variant` which the surrounding port-resolution pass must constrain. The

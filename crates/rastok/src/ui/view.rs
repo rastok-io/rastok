@@ -1054,9 +1054,6 @@ fn history_record_description(record: &Record) -> (&'static str, Option<String>,
                 crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Timeout) => "timeout",
                 crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Evict) => "eviction",
                 crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Recover) => "recovery",
-                crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Compensate) => {
-                    "compensation"
-                }
             };
             (
                 kind,
@@ -1131,7 +1128,6 @@ fn transaction_summary(transaction: &crate::journal::TransactionRecord) -> Strin
                 crate::node::Lifecycle::Timeout => "Timeout",
                 crate::node::Lifecycle::Evict => "State evicted",
                 crate::node::Lifecycle::Recover => "Recovery",
-                crate::node::Lifecycle::Compensate => "Compensation",
             };
             format!("{verb} · {owner} · gen {generation}")
         }
@@ -1316,7 +1312,6 @@ fn meta_json(meta: &crate::envelope::Meta) -> JsonValue {
             "id": meta.sys().id().to_string(),
             "parent_id": meta.sys().parent_id().map(|id| id.to_string()),
             "origin_id": meta.sys().origin_id().to_string(),
-            "role": meta.sys().role().to_string(),
             "graph_version": meta.sys().graph_version(),
         },
         "app": namespace_json(meta.app()),

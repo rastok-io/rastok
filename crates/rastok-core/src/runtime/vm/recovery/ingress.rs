@@ -89,6 +89,7 @@ impl Vm<'_> {
                     admissions,
                     index,
                     slot,
+                    &inbound.port,
                     &inbound.envelope,
                     &mut candidates,
                 )?;
@@ -140,6 +141,7 @@ impl Vm<'_> {
                     admissions,
                     index,
                     slot,
+                    &inbound.port,
                     &inbound.envelope,
                     &mut candidates,
                 )?;
@@ -332,11 +334,13 @@ impl Vm<'_> {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn restore_source_target(
         &self,
         admissions: &dyn InstanceAdmissions,
         index: usize,
         slot: Slot,
+        port: &node::Port,
         envelope: &Envelope,
         candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
     ) -> Result<PreparedTarget, VmError> {
@@ -345,6 +349,16 @@ impl Vm<'_> {
             .first()
             .copied()
             .ok_or_else(|| invalid(index, "an inbound source has no owner chain"))?;
-        self.prepare_target(admissions, scope, None, slot, envelope, candidates)
+        self.prepare_target(
+            admissions,
+            scope,
+            None,
+            &EdgeEnd {
+                node: Some(slot),
+                port: port.clone(),
+            },
+            envelope,
+            candidates,
+        )
     }
 }

@@ -73,12 +73,21 @@ impl Vm<'_> {
                 .ok_or_else(|| self.command_error(&owner, Error::Source))?;
             // This is a pure selection. The bundle is not installed: a target
             // absent from the retained lifecycle prefix still refuses below.
+            let data = DataSlot {
+                ty: self
+                    .plan
+                    .graph_ports(slot)
+                    .and_then(|ports| ports.iter().find(|port| port.port == source.port))
+                    .and_then(|port| port.ty.as_ref()),
+                ..DataSlot::new(envelope.data())
+            };
             self.prepare_owner_target(
                 journal,
                 node::OwnerSlot::new(0),
                 None,
                 slot,
                 envelope,
+                &data,
                 &mut BTreeMap::new(),
             )?
             .reference

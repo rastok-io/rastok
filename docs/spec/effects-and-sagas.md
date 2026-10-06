@@ -1,6 +1,6 @@
 # Effects and the Saga boundary
 
-> **Current v19 model — D-2026-09-14-4 and D-2026-09-15-1.** Ordinary
+> **Format 20 target — D-2026-09-14-4 and D-2026-09-15-1.** Ordinary
 > Connectors have no global `effect` classification. Retry uses a plan-owned
 > idempotence guarantee; compensation and irreversibility belong to the future
 > Saga step contract. `Intent.effect` is removed, with no duplicate

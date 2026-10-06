@@ -1426,7 +1426,7 @@ fn simulate_blesses_then_verifies_a_golden_directory() {
     assert!(stdout.contains("cause: INGRESS"), "{stdout}");
     assert!(stdout.contains("sequence 0"), "{stdout}");
     assert!(
-        stdout.contains("data(8)"),
+        stdout.contains("data(5)"),
         "the diff names the key: {stdout}"
     );
     for malformed in ["a\n", "€1\n", "zz\n"] {

@@ -761,6 +761,50 @@ run by Astra. No lot-3 cutover, v20 format change, push, tag or publication
 has begun. `Arc<Value>` remains an unimplemented option, not an unfinished
 promise of this encoded-byte change.
 
+## Implementation follow-up — 2026-10-06, lot 3 candidate
+
+Yoann qualified lot 2 and opened lot 3 from `3bdd807`. The candidate is
+isolated on `rework/v20`. It implements the consolidated cutover, not a
+second vocabulary pass. The no-legacy amendment compacts the active
+registries before their first public blessing; it introduces no reader,
+converter or alias for an earlier package or recording.
+
+| Action | Candidate implementation | Review / release boundary |
+|---|---|---|
+| A-T1-2 | Four `meta.sys` identity fields; no envelope role, role write/read, or role in the lossless tuple | Changed canonical envelope/record bytes require the single bless |
+| A-T1-1b | Raw payload materialization follows the reading port: bytes stay bytes; text requires valid UTF-8, including keys, invocation expressions and Lab observations | Focused non-ASCII and shared-payload regressions; the Loop expiry path is qualified too |
+| A-T1-6 | Graph-born DATA is ccbor; external raw bytes cannot impersonate a canonical logical value; metadata is canonical CBOR | Plan/journal readers reject noncanonical logical values; Avro remains a schema import/export projection |
+| A-T1-9 | Standard Contract and protected annotation identities use `std/`; other Contract namespaces require a dot | No alias from the former namespace; seven Contract pins change |
+| A-T1-7 | Decoder name, derived id, attestation/fingerprint and unavailable-build refusal specified; `IdKind::Decoder` allocated | Decoder attestation/availability implementation remains M2 |
+| Pre-public compaction | Envelope/record keys, identity domains, deadlines, Extensions, annotations, lifecycle and value tags have a compact active registry | Package 20 and recording 4 only; format-1 public label remains a pre-publication TODO |
+
+The exact old/new allocations, witness hashes, body sizes, checksums,
+causal seals and embedded measurements are recorded in
+[the v20 identity inventory](human-review-v20-identity.md). The gauge's
+semantic hash stays fixed; its compact package and causal representation
+are measured separately rather than described as byte-neutral.
+
+The complete candidate suite has run: **1,543 passed, 25 failed, 0 ignored**
+(61 groups). The 25 observed failures are unchanged byte/identity pins,
+enumerated by target in the inventory; this is deliberately not a green
+release gate before the approved blessing. All 28 gallery scenarios pass
+in a separate read-only run. Fmt, strict Clippy, rustdoc, the three `no_std`
+targets and both Cortex-M33 workloads pass. The final Retry spike keeps
+512 B of heap margin and 6,872 B of code margin. JavaScript projection,
+SVG layout and CI helpers pass (32, 16 and 14 tests respectively).
+The optional Playwright suite was not run: its local dependency is absent.
+
+No moved witness is accepted merely because it is produced by the new code,
+no functional assertion is weakened, and no test timeout is relaxed. The
+full gate must be rerun after blessing, including assertions beyond the
+currently failing pins. The inventory distinguishes the initial macOS
+process-startup failures from the final passing chat/gateway integration run.
+
+**Review stop:** this is not a blessed format or a release qualification.
+Fable's review and Yoann's explicit approval must precede the single
+re-blessing. No push, merge, tag, publication or reviewer invocation has
+been performed.
+
 ## Landed changes
 
 **`f72454a` — Rename identity, canonical-form and check vocabulary

@@ -615,10 +615,9 @@ impl core::fmt::Display for PlanValidationError {
             Self::InvalidDispatch { handler, reason } => {
                 write!(f, "invalid plan: handler {handler} {reason}")
             }
-            Self::UnsupportedStatement { handler, statement } => write!(
-                f,
-                "invalid plan: handler {handler} uses {statement}, which requires the categorical v16 plan"
-            ),
+            Self::UnsupportedStatement { handler, statement } => {
+                write!(f, "invalid plan: handler {handler} uses {statement}")
+            }
             Self::NonOperatorHandler { node } => write!(
                 f,
                 "invalid plan: Connector `{node}` cannot own DSL handlers; its Contract defines its transitions"
@@ -1343,7 +1342,6 @@ fn instance_key_signature(
         .with("meta.sys.id", DataType::Text)
         .with("meta.sys.parent_id", DataType::Variant)
         .with("meta.sys.origin_id", DataType::Text)
-        .with("meta.sys.role", DataType::Text)
         .with("meta.sys.graph_version", DataType::INT);
     for field in crate::plan::STANDARD_EXT_FIELDS {
         if let Some(ty) = crate::plan::standard_ext_field_type(field) {
@@ -3952,7 +3950,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             validate_network_connector(node, spec, plan.owners[node.owner.index()].loop_spec())?;
             // Built-in sheets above retain their more specific missing-row
             // diagnostics. Foreign families still cannot bypass the generic
-            // exchange lifecycle retained by v15.
+            // exchange lifecycle.
             let exits = node
                 .ports
                 .iter()

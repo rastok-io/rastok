@@ -79,12 +79,12 @@ lab merge {
 
 /// The world's half of an Avro ingress: the transport's content
 /// type rides `meta.ext` (D-2026-08-10-4).
-fn avro_ext() -> rastok::envelope::Namespace {
+fn opaque_ext() -> rastok::envelope::Namespace {
     let mut ext = rastok::envelope::Namespace::new();
     ext.insert(
         String::from("content_type"),
         rastok::envelope::MetaValue::Scalar(rastok::envelope::Scalar::Text(String::from(
-            "application/avro",
+            "application/vnd.apache.arrow.stream",
         ))),
     );
     ext
@@ -245,23 +245,19 @@ fn the_inbound_record_carries_its_port_and_omits_the_default() {
     journal.append_ingress(submission("in")).unwrap();
     journal.append_ingress(submission("alpha")).unwrap();
     let trace = rastok::golden::project(journal.records());
-    let key_24 = |index: usize| {
+    let input_port = |index: usize| {
         let bytes = trace.record_bytes(index).expect("a projected record");
         let (tree, _) = decode(bytes).expect("canonical bytes");
         let Cbor::Map(pairs) = tree else {
             panic!("a record map");
         };
-        pairs.get(&24).cloned()
+        pairs.get(&12).cloned()
     };
+    assert_eq!(input_port(0), None, "the default `in` is omitted");
     assert_eq!(
-        key_24(0),
-        None,
-        "the default `in` is omitted — pre-multiport traces hold"
-    );
-    assert_eq!(
-        key_24(1),
+        input_port(1),
         Some(Cbor::Text(String::from("alpha"))),
-        "a named ingress is sealed as key 24"
+        "a named ingress is sealed as key 12"
     );
 }
 
@@ -587,7 +583,7 @@ fn a_resolved_contract_port_table_enters_the_validated_plan_complete() {
     // effective type; no named port becomes an implicit variant. Extra inputs
     // can travel unused; every producible output below is disposed explicitly.
     const PROBE_SHEET: ConnectorContract = ConnectorContract {
-        id: "test/probe@1",
+        id: "org.rastok.test/probe@1",
         name: "Probe",
         roles: rastok::connector::ConnectorRoles::Outbound,
         exchange: rastok::connector::ConnectorExchange::Call,
@@ -661,7 +657,7 @@ fn a_named_connector_edge_defers_by_name() {
     };
     use rastok::node::Direction;
     const PROBE_SHEET: ConnectorContract = ConnectorContract {
-        id: "test/probe@1",
+        id: "org.rastok.test/probe@1",
         name: "Probe",
         roles: rastok::connector::ConnectorRoles::Outbound,
         exchange: rastok::connector::ConnectorExchange::Call,
@@ -814,8 +810,8 @@ fn the_braced_record_is_physically_a_struct() {
     assert_eq!(fields.len(), 1);
     assert_eq!(fields[0].0, "v");
     assert_eq!(fields[0].1, Value::Int(7));
-    // And the canonical seal carries tag 17 (struct), not 18 (map):
-    // find the emission record and walk envelope(20).data(8).
+    // And the canonical seal carries tag 15 (struct), not 16 (map):
+    // find the emission record and walk emissions(23).envelope.data(5).
     let trace = rastok::golden::project(journal.records());
     let mut sealed_struct = false;
     for index in 0..trace.len() {
@@ -824,7 +820,7 @@ fn the_braced_record_is_physically_a_struct() {
         let rastok::canonical_cbor::Value::Map(pairs) = tree else {
             continue;
         };
-        let Some(rastok::canonical_cbor::Value::Array(emissions)) = pairs.get(&36) else {
+        let Some(rastok::canonical_cbor::Value::Array(emissions)) = pairs.get(&23) else {
             continue;
         };
         for emission in emissions {
@@ -834,19 +830,19 @@ fn the_braced_record_is_physically_a_struct() {
             let Some(rastok::canonical_cbor::Value::Map(form)) = parts.last() else {
                 continue;
             };
-            // Materialized data seals as [1, bytes(tagged_value)] —
+            // Materialized data seals as [2, bytes(tagged_value)] —
             // the tag lives inside the embedded bytes.
-            if let Some(rastok::canonical_cbor::Value::Array(form)) = form.get(&8)
+            if let Some(rastok::canonical_cbor::Value::Array(form)) = form.get(&5)
                 && let Some(rastok::canonical_cbor::Value::Bytes(inner)) = form.get(1)
                 && let Ok((rastok::canonical_cbor::Value::Array(tagged), _)) =
                     rastok::canonical_cbor::decode(inner)
-                && tagged.first() == Some(&rastok::canonical_cbor::Value::Uint(17))
+                && tagged.first() == Some(&rastok::canonical_cbor::Value::Uint(15))
             {
                 sealed_struct = true;
             }
         }
     }
-    assert!(sealed_struct, "the emission seals its data as tag 17");
+    assert!(sealed_struct, "the emission seals its data as tag 15");
 }
 
 #[test]
@@ -1276,7 +1272,7 @@ fn a_defective_sheet_is_held_at_the_door() {
     };
     use rastok::node::Direction;
     const MISDIRECTED: ConnectorContract = ConnectorContract {
-        id: "test/bad@1",
+        id: "org.rastok.test/bad@1",
         name: "Bad",
         roles: rastok::connector::ConnectorRoles::Outbound,
         exchange: rastok::connector::ConnectorExchange::Call,
@@ -1290,7 +1286,7 @@ fn a_defective_sheet_is_held_at_the_door() {
         selector: None,
     };
     const CONFLICTING: ConnectorContract = ConnectorContract {
-        id: "test/bad@1",
+        id: "org.rastok.test/bad@1",
         name: "Bad",
         roles: rastok::connector::ConnectorRoles::Outbound,
         exchange: rastok::connector::ConnectorExchange::Call,
@@ -1865,7 +1861,7 @@ fn the_bare_data_relay_preserves_the_logical_type() {
         vm.drain(&mut journal).expect("the drain completes");
         vm.outputs()[0].envelope.data().clone()
     };
-    // Struct in, Struct out — tag 17 stays tag 17.
+    // Struct in, Struct out — tag 15 stays tag 15.
     let sent = Value::Struct(vec![(String::from("field"), Value::Int(7))]);
     assert!(
         matches!(relay(sent), Data::Materialized(Value::Struct(_))),
@@ -1932,7 +1928,7 @@ fn an_ingress_pin_violation_is_a_named_error() {
 
 #[test]
 fn the_lab_builder_seals_structs_before_a_typed_mock_reply() {
-    // The Lab draft is held to tag 17. The lines mock answers with
+    // The Lab draft is held to tag 15. The lines mock answers with
     // text because its reply must conform to Process.out.
     let source = r#"
 graph g : App {
@@ -1987,7 +1983,7 @@ lab g {
         else {
             return false;
         };
-        tagged.first() == Some(&rastok::canonical_cbor::Value::Uint(17))
+        tagged.first() == Some(&rastok::canonical_cbor::Value::Uint(15))
     };
     let mut inbound_struct = false;
     for index in 0..trace.len() {
@@ -1997,15 +1993,15 @@ lab g {
             continue;
         };
         // The INGRESS record: the Lab draft's data seals as a struct.
-        if let Some(rastok::canonical_cbor::Value::Map(form)) = pairs.get(&20)
-            && let Some(rastok::canonical_cbor::Value::Array(form)) = form.get(&8)
+        if let Some(rastok::canonical_cbor::Value::Map(form)) = pairs.get(&8)
+            && let Some(rastok::canonical_cbor::Value::Array(form)) = form.get(&5)
             && let Some(rastok::canonical_cbor::Value::Bytes(inner)) = form.get(1)
             && tagged_struct(inner)
         {
             inbound_struct = true;
         }
     }
-    assert!(inbound_struct, "the Lab draft seals tag 17");
+    assert!(inbound_struct, "the Lab draft seals tag 15");
 }
 
 #[test]
@@ -2235,8 +2231,8 @@ fn an_encoded_bare_relay_passes_the_representation_through() {
             ),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
-                data: Data::encoded(Encoding::Avro, *b"\x01\x02"),
-                ext: avro_ext(),
+                data: Data::encoded(Encoding::ArrowIpc, *b"\x01\x02"),
+                ext: opaque_ext(),
             },
             sequence: SubmissionSequence::Next,
         },
@@ -2247,7 +2243,7 @@ fn an_encoded_bare_relay_passes_the_representation_through() {
     assert!(
         matches!(
             output.envelope.data(),
-            Data::Encoded { encoding: Encoding::Avro, bytes, .. } if bytes.as_ref() == b"\x01\x02"
+            Data::Encoded { encoding: Encoding::ArrowIpc, bytes, .. } if bytes.as_ref() == b"\x01\x02"
         ),
         "the representation passes through: {:?}",
         output.envelope.data()
@@ -2255,7 +2251,7 @@ fn an_encoded_bare_relay_passes_the_representation_through() {
     assert_eq!(
         output.envelope.meta().ext().get("content_type"),
         Some(&rastok::envelope::MetaValue::Scalar(
-            rastok::envelope::Scalar::Text(String::from("application/avro"))
+            rastok::envelope::Scalar::Text(String::from("application/vnd.apache.arrow.stream"))
         )),
         "the content type rides the ext zone"
     );
@@ -2388,8 +2384,8 @@ fn data_materializes_only_on_demand() {
                 ),
                 port: rastok::node::Port::new("in").unwrap(),
                 draft: Draft {
-                    data: Data::encoded(Encoding::Avro, *b"\x01\x02"),
-                    ext: avro_ext(),
+                    data: Data::encoded(Encoding::ArrowIpc, *b"\x01\x02"),
+                    ext: opaque_ext(),
                 },
                 sequence: SubmissionSequence::Next,
             },
@@ -2415,14 +2411,14 @@ fn data_materializes_only_on_demand() {
     assert!(matches!(
         outputs[0].envelope.data(),
         Data::Encoded {
-            encoding: Encoding::Avro,
+            encoding: Encoding::ArrowIpc,
             ..
         }
     ));
     assert_eq!(
         outputs[0].envelope.meta().ext().get("content_type"),
         Some(&rastok::envelope::MetaValue::Scalar(
-            rastok::envelope::Scalar::Text(String::from("application/avro"))
+            rastok::envelope::Scalar::Text(String::from("application/vnd.apache.arrow.stream"))
         ))
     );
     // A false guard consumes without decoding and without error.
@@ -2476,8 +2472,8 @@ fn short_circuits_never_demand_the_data() {
                 ),
                 port: rastok::node::Port::new("in").unwrap(),
                 draft: Draft {
-                    data: Data::encoded(Encoding::Avro, *b"\x01\x02"),
-                    ext: avro_ext(),
+                    data: Data::encoded(Encoding::ArrowIpc, *b"\x01\x02"),
+                    ext: opaque_ext(),
                 },
                 sequence: SubmissionSequence::Next,
             },
@@ -2508,7 +2504,7 @@ fn short_circuits_never_demand_the_data() {
     assert_eq!(errors, 0, "the right side never ran");
     assert!(matches!(
         outputs[0].envelope.data(),
-        Data::Encoded { encoding: Encoding::Avro, bytes, .. } if bytes.as_ref() == b"\x01\x02"
+        Data::Encoded { encoding: Encoding::ArrowIpc, bytes, .. } if bytes.as_ref() == b"\x01\x02"
     ));
     // `false ? size(data) : 1`: the untaken arm never demands.
     let (result, outputs, errors) = run(
@@ -2597,11 +2593,11 @@ fn the_carry_is_as_lazy_as_the_name() {
         vm.outputs()[0].envelope.clone()
     };
     let holds = |body: &str| {
-        let output = run(body, Encoding::Avro, b"\x01\x02");
+        let output = run(body, Encoding::ArrowIpc, b"\x01\x02");
         assert!(
             matches!(
                 output.data(),
-                Data::Encoded { encoding: Encoding::Avro, bytes, .. } if bytes.as_ref() == b"\x01\x02"
+                Data::Encoded { encoding: Encoding::ArrowIpc, bytes, .. } if bytes.as_ref() == b"\x01\x02"
             ),
             "`{body}` must ship the representation: {:?}",
             output.data()

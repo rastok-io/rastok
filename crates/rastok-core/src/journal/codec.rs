@@ -6,9 +6,7 @@
 use crate::boundary::*;
 use crate::canonical;
 use crate::canonical_cbor::Value as Cbor;
-use crate::envelope::{
-    Data, Encoding, Envelope, Id, Meta, MetaSys, MetaValue, Namespace, Role, Scalar,
-};
+use crate::envelope::{Data, Encoding, Envelope, Id, Meta, MetaSys, MetaValue, Namespace, Scalar};
 use crate::instance;
 
 use crate::journal::loop_protocol as lp;
@@ -151,34 +149,17 @@ fn instance(value: &Cbor) -> Result<instance::Generation, Error> {
     ))
 }
 fn data(value: &Data) -> Cbor {
-    match value {
-        Data::Materialized(value) => list([Cbor::Uint(0), canonical::value(value)]),
-        Data::Encoded {
-            encoding, bytes, ..
-        } => list([
-            Cbor::Uint(match encoding {
-                Encoding::Raw => 1,
-                Encoding::Avro => 2,
-                Encoding::ArrowIpc => 3,
-            }),
-            Cbor::Bytes(bytes.to_vec()),
-        ]),
-    }
+    canonical::data(value)
 }
 fn read_data(value: &Cbor) -> Result<Data, Error> {
     let [tag, payload] = array(value)?;
     match uint(tag)? {
-        0 => {
-            let value = canonical::decode_value(payload).map_err(Error::Read)?;
-            value
-                .check_consistency()
-                .map_err(|_| Error::Invalid("logical value"))?;
-            Ok(Data::Materialized(value))
-        }
-        tag @ 1..=3 => Ok(Data::encoded(
+        2 => Ok(Data::materialized(canonical::decode_data_value(bytes(
+            payload,
+        )?)?)),
+        tag @ (1 | 3) => Ok(Data::encoded(
             match tag {
                 1 => Encoding::Raw,
-                2 => Encoding::Avro,
                 _ => Encoding::ArrowIpc,
             },
             bytes(payload)?.to_vec(),
@@ -238,7 +219,6 @@ fn envelope(value: &Envelope) -> Cbor {
         id(sys.id()),
         optional(sys.parent_id().as_ref(), |value| id(*value)),
         id(sys.origin_id()),
-        word(sys.role()),
         Cbor::Uint(sys.graph_version()),
         namespace(value.meta().app()),
         namespace(value.meta().ext()),
@@ -604,7 +584,7 @@ pub struct Decoder {
 }
 impl Decoder {
     fn envelope(&mut self, value: &Cbor) -> Result<Envelope, Error> {
-        let [identity, parent, origin, role, version, app, ext, data] = array(value)?;
+        let [identity, parent, origin, version, app, ext, data] = array(value)?;
         let identity = read_id(identity)?;
         let origin = read_id(origin)?;
         let version = uint(version)?;
@@ -619,12 +599,7 @@ impl Decoder {
                 version,
             ),
             None => MetaSys::root(identity, version),
-        }
-        .with_role(match text(role)? {
-            "default" => Role::Default,
-            "compensate" => Role::Compensate,
-            _ => return Err(Error::Invalid("envelope role")),
-        });
+        };
         if sys.origin_id() != origin {
             return Err(Error::Invalid("envelope origin"));
         }
@@ -776,7 +751,6 @@ impl Decoder {
                 "l:closing" => Lifecycle::Closing,
                 "l:reply" => Lifecycle::Reply,
                 "l:exit" => Lifecycle::Exit,
-                "l:compensate" => Lifecycle::Compensate,
                 "l:next" => Lifecycle::Next,
                 "l:timeout" => Lifecycle::Timeout,
                 "l:evict" => Lifecycle::Evict,

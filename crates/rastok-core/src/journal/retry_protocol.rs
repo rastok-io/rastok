@@ -238,7 +238,7 @@ impl Packet {
         })
     }
 
-    /// Canonical causal key 58 payload. Request bytes and original logical time
+    /// Canonical causal key 43 payload. Request bytes and original logical time
     /// belong to retention; the seal commits to the prepared digest instead.
     #[must_use]
     pub fn tree(&self) -> crate::canonical_cbor::Value {
@@ -266,7 +266,7 @@ pub fn operation_ref(instance: &instance::Generation, entry: &Port, opening: Id)
     ))
 }
 
-/// C1's 0x07 domain: operation, following ordinal, previous winning Call.
+/// RetryAdmission's 0x04 domain: operation, following ordinal, previous winning Call.
 #[must_use]
 pub fn admission_ref(operation: OperationId, ordinal: u64, previous: CallId) -> Id {
     Id::derive(

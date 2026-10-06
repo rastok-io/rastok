@@ -117,7 +117,7 @@ impl fmt::Display for WebSocketConfigError {
 
 impl std::error::Error for WebSocketConfigError {}
 
-/// Statically linked hosted implementation of `rastok/websocket-client@3`.
+/// Statically linked hosted implementation of `std/websocket-client@3`.
 #[derive(Debug)]
 pub struct WebSocketClientFactory {
     id: crate::connector::ContractId,
@@ -136,7 +136,7 @@ impl WebSocketClientFactory {
     }
 }
 
-/// Statically linked hosted implementation of `rastok/websocket-server@3`.
+/// Statically linked hosted implementation of `std/websocket-server@3`.
 #[derive(Debug)]
 pub struct WebSocketServerFactory {
     id: crate::connector::ContractId,

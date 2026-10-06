@@ -185,7 +185,7 @@ fn retained_call_time_is_unsealed_but_retry_context_and_arm_identity_are_causal(
         unreachable!()
     };
     assert_eq!(
-        keys.get(&58),
+        keys.get(&43),
         Some(
             &retry::Packet {
                 context: Some(context),
@@ -195,13 +195,13 @@ fn retained_call_time_is_unsealed_but_retry_context_and_arm_identity_are_causal(
         )
     );
     assert_eq!(
-        keys.get(&37),
+        keys.get(&24),
         Some(&Cbor::Array(vec![Cbor::Array(vec![
-            Cbor::Uint(5),
+            Cbor::Uint(4),
             Cbor::Bytes(reference.as_bytes().to_vec())
         ])]))
     );
-    assert!(!keys.contains_key(&56) && !keys.contains_key(&59));
+    assert!(!keys.contains_key(&41) && !keys.contains_key(&44));
     let Record::Egress(EgressRecord::Call(call)) = &mut changed[index] else {
         unreachable!()
     };
@@ -290,11 +290,18 @@ fn the_m0_probe_trace_matches_its_golden() {
         // Explain before failing: the first semantic divergence
         // against the STORED golden, by record and key path — never
         // a wall of hex.
-        let divergence = diff(&project(&records), &stored_trace(&golden));
+        let proposed = project(&records);
+        let stored = stored_trace(&golden);
+        let divergence = diff(&proposed, &stored);
         panic!(
             "the trace diverged from its golden.\n\
              {divergence:?}\n\
-             if the change is intentional, bless: RASTOK_BLESS=1 cargo test"
+             records {} -> {}; seal {} -> {}\n\
+             if the change is intentional, bless: RASTOK_BLESS=1 cargo test",
+            stored.len(),
+            proposed.len(),
+            stored.seal_hex(),
+            proposed.seal_hex()
         );
     }
 }
@@ -355,7 +362,7 @@ fn a_stale_stored_golden_is_named_by_the_diff() {
     let divergence = diff(&project(&records), &stored_trace(&stale)).expect("the traces differ");
     assert_eq!(divergence.record, 0, "the inbound record");
     assert!(
-        divergence.path.contains("data(8)"),
+        divergence.path.contains("data(5)"),
         "the diff names the payload key: {divergence}"
     );
 }

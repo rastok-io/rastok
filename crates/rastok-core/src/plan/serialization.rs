@@ -1,7 +1,7 @@
 //! The plan package — the transportable, verifiable serialization
 //! of an [`ExecutionPlan`], per `docs/architecture/plan-package.md`.
 //!
-//! Format v17: the 4-byte magic `RKPB`, then one canonical CBOR map —
+//! Format v20: the 4-byte magic `RKPB`, then one canonical CBOR map —
 //! format version, the plan's semantic hash, the body as an embedded
 //! byte string, and a blake3 checksum over the domain-framed
 //! association `domain ‖ version ‖ semantic_hash ‖ body`, so a
@@ -49,11 +49,11 @@ pub(super) fn route_order_key(route: &super::RouteRule) -> Vec<u8> {
 /// The package's leading magic.
 pub const MAGIC: [u8; 4] = *b"RKPB";
 
-/// The categorical package format: recursive Dispatch, independent route
-/// selections, explicit Extensions and dispositions, and Connector Contracts
-/// `@2`, with Loop exhaustion resolved onto a host terminal. Earlier packages
-/// refuse; their fields are never silently reinterpreted.
-pub const FORMAT_VERSION: u32 = 19;
+/// The categorical package format: recursive Dispatch, independent routes,
+/// explicit Extensions and dispositions, and exact `std/` Contracts. The
+/// compact registry and ccbor values have one reading; every other package
+/// version refuses before its body can be interpreted.
+pub const FORMAT_VERSION: u32 = 20;
 
 /// The checksum domain — fixed-width framing, so the covered fields
 /// cannot slide into one another.
@@ -264,8 +264,8 @@ fn plan_tree_with_resolved(
     if !plan.boundary_routes.is_empty() {
         pairs.insert(11, fields::routing_tree(&plan.boundary_routes));
     }
-    // The travelling zone schemas (v5, D-2026-08-10-1): the
-    // validator answers without a Registry. Absent = omitted key.
+    // Zone schemas travel with the plan so validation needs no Registry.
+    // An absent schema is an omitted key.
     if !plan.app_schema.is_empty() {
         pairs.insert(5, schema_tree(&plan.app_schema));
     }
@@ -450,9 +450,9 @@ fn owner_tree(owner: &Owner) -> Cbor {
 
 fn extension_spec_tree(extension: &ExtensionSpec) -> Cbor {
     match extension {
-        ExtensionSpec::App => Cbor::Array(vec![Cbor::Uint(2)]),
-        ExtensionSpec::Loop(spec) => Cbor::Array(vec![Cbor::Uint(3), loop_spec_tree(spec)]),
-        ExtensionSpec::Retry(spec) => Cbor::Array(vec![Cbor::Uint(4), retry_spec_tree(spec)]),
+        ExtensionSpec::App => Cbor::Array(vec![Cbor::Uint(1)]),
+        ExtensionSpec::Loop(spec) => Cbor::Array(vec![Cbor::Uint(2), loop_spec_tree(spec)]),
+        ExtensionSpec::Retry(spec) => Cbor::Array(vec![Cbor::Uint(3), retry_spec_tree(spec)]),
     }
 }
 
@@ -602,9 +602,9 @@ fn spec_tree(spec: &ConnectorSpec) -> Cbor {
     });
     let mut fields = BTreeMap::from([
         (1, Cbor::Text(spec.contract.as_str().into())),
-        (3, behavior),
+        (2, behavior),
         (
-            4,
+            3,
             Cbor::Array(
                 spec.attributes
                     .iter()
@@ -614,11 +614,11 @@ fn spec_tree(spec: &ConnectorSpec) -> Cbor {
                     .collect(),
             ),
         ),
-        (6, Cbor::Uint(u64::from(spec.roles.tag()))),
-        (7, Cbor::Uint(u64::from(spec.exchange.tag()))),
+        (4, Cbor::Uint(u64::from(spec.roles.tag()))),
+        (5, Cbor::Uint(u64::from(spec.exchange.tag()))),
     ]);
     if let Some(guarantee) = &spec.idempotent {
-        fields.insert(8, plan_constant_tree(guarantee));
+        fields.insert(6, plan_constant_tree(guarantee));
     }
     Cbor::Map(fields)
 }
@@ -641,9 +641,8 @@ fn port_decl_tree(decl: &PortDecl) -> Cbor {
             node::Direction::Output => 2,
         }),
     ];
-    // The optional third element is the pinned type — ABSENT when
-    // unannotated, so every pre-typed-ports package is byte-identical
-    // and canonical form stays one form per table.
+    // An absent type denotes inference; the optional annotation table uses
+    // an explicit null in that position so the array has only one reading.
     if let Some(ty) = &decl.ty {
         parts.push(type_tree(ty));
     } else if !decl.annotations.is_empty() {
@@ -729,15 +728,14 @@ const fn lifecycle_tag(lifecycle: node::Lifecycle) -> u64 {
     match lifecycle {
         node::Lifecycle::Start => 1,
         node::Lifecycle::Stop => 2,
-        node::Lifecycle::Compensate => 3,
-        node::Lifecycle::Next => 4,
-        node::Lifecycle::Timeout => 5,
-        node::Lifecycle::Evict => 6,
-        node::Lifecycle::Recover => 7,
-        node::Lifecycle::Closing => 8,
-        node::Lifecycle::Reply => 9,
-        node::Lifecycle::Exit => 10,
-        node::Lifecycle::Retry => 11,
+        node::Lifecycle::Next => 3,
+        node::Lifecycle::Timeout => 4,
+        node::Lifecycle::Evict => 5,
+        node::Lifecycle::Recover => 6,
+        node::Lifecycle::Closing => 7,
+        node::Lifecycle::Reply => 8,
+        node::Lifecycle::Exit => 9,
+        node::Lifecycle::Retry => 10,
     }
 }
 
@@ -818,10 +816,8 @@ fn target_tree(target: &WriteTarget) -> Cbor {
             Cbor::Uint(1),
             Cbor::Array(path.iter().map(|seg| Cbor::Text(seg.clone())).collect()),
         ]),
-        // Tags 3 (custom-namespace) and 4 (mime) are RETIRED with
-        // D-2026-08-10-1/-4 — extend-only: never reused.
         WriteTarget::App(field) => Cbor::Array(vec![Cbor::Uint(2), Cbor::Text(field.clone())]),
-        WriteTarget::Ext(field) => Cbor::Array(vec![Cbor::Uint(5), Cbor::Text(field.clone())]),
+        WriteTarget::Ext(field) => Cbor::Array(vec![Cbor::Uint(3), Cbor::Text(field.clone())]),
     }
 }
 
@@ -863,7 +859,7 @@ fn annotation_set_tree(set: &AnnotationSet) -> Cbor {
             .iter()
             .map(|annotation| match annotation {
                 DataAnnotation::Declared(application) => Cbor::Array(vec![
-                    Cbor::Uint(6),
+                    Cbor::Uint(4),
                     Cbor::Uint(match application.binding() {
                         AnnotationBinding::Metadata => 1,
                         AnnotationBinding::Measure => 2,
@@ -882,7 +878,7 @@ fn annotation_set_tree(set: &AnnotationSet) -> Cbor {
                 ]),
                 DataAnnotation::Secret => Cbor::Array(vec![Cbor::Uint(2)]),
                 DataAnnotation::Personal(class) => Cbor::Array(vec![
-                    Cbor::Uint(5),
+                    Cbor::Uint(3),
                     Cbor::Uint(
                         u64::from(class.is_special_category())
                             | (u64::from(class.is_criminal_offence()) << 1)
@@ -945,8 +941,6 @@ fn expr_tree(expr: &expr::Expr) -> Cbor {
                 expr::Function::Duration => 1,
                 expr::Function::Timestamp => 2,
                 expr::Function::Size => 3,
-                // D-2026-08-13-1 allocated call id 4 to the exact-number
-                // constructor; v7 preserves that append-only spelling.
                 expr::Function::Decimal => 4,
                 expr::Function::MediaType => 6,
                 expr::Function::Has => 7,
@@ -1808,9 +1802,9 @@ fn owner_from(tree: &Cbor) -> Result<Owner, DecodeError> {
 
 fn extension_spec_from(tree: &Cbor) -> Result<ExtensionSpec, DecodeError> {
     match array_of(tree, "Extension specification")? {
-        [Cbor::Uint(2)] => Ok(ExtensionSpec::App),
-        [Cbor::Uint(3), spec] => Ok(ExtensionSpec::Loop(Box::new(loop_spec_from(spec)?))),
-        [Cbor::Uint(4), spec] => Ok(ExtensionSpec::Retry(Box::new(retry_spec_from(spec)?))),
+        [Cbor::Uint(1)] => Ok(ExtensionSpec::App),
+        [Cbor::Uint(2), spec] => Ok(ExtensionSpec::Loop(Box::new(loop_spec_from(spec)?))),
+        [Cbor::Uint(3), spec] => Ok(ExtensionSpec::Retry(Box::new(retry_spec_from(spec)?))),
         _ => Err(err("Extension specification")),
     }
 }
@@ -1992,7 +1986,7 @@ fn annotation_set_from(tree: &Cbor) -> Result<AnnotationSet, DecodeError> {
 fn annotation_from(tree: &Cbor) -> Result<DataAnnotation, DecodeError> {
     match array_of(tree, "annotation")? {
         [
-            Cbor::Uint(6),
+            Cbor::Uint(4),
             Cbor::Uint(binding),
             Cbor::Text(definition),
             argument_type,
@@ -2021,13 +2015,7 @@ fn annotation_from(tree: &Cbor) -> Result<DataAnnotation, DecodeError> {
             _ => return Err(err("sensitivity level")),
         })),
         [Cbor::Uint(2)] => Ok(DataAnnotation::Secret),
-        [Cbor::Uint(3), ..] => Err(err(
-            "retired implicit measure annotation; use an explicit-unit measure binding",
-        )),
-        [Cbor::Uint(4), ..] => Err(err(
-            "retired cost annotation; use a numerical measure with id and unit",
-        )),
-        [Cbor::Uint(5), Cbor::Uint(flags)] if *flags <= 0b111 => Ok(DataAnnotation::Personal(
+        [Cbor::Uint(3), Cbor::Uint(flags)] if *flags <= 0b111 => Ok(DataAnnotation::Personal(
             PersonalDataClass::new(flags & 0b001 != 0, flags & 0b010 != 0, flags & 0b100 != 0),
         )),
         _ => Err(err("annotation")),
@@ -2050,19 +2038,19 @@ fn owner_value_from(tree: &Cbor) -> Result<OwnerValue, DecodeError> {
 
 fn spec_from(tree: &Cbor) -> Result<ConnectorSpec, DecodeError> {
     let pairs = map_of(tree, "connector spec")?;
-    if find(pairs, 2).is_some() {
-        return Err(err("retired Connector effect field"));
+    if pairs.keys().any(|key| !matches!(key, 1..=6)) {
+        return Err(err("unknown Connector field"));
     }
     let contract =
         crate::connector::ContractId::parse(text_of(get(pairs, 1, "contract")?, "contract")?)
             .map_err(|reason| DecodeError::Malformed(format!("invalid connector id: {reason}")))?;
-    let behavior = match get(pairs, 3, "behavior")? {
+    let behavior = match get(pairs, 2, "behavior")? {
         Cbor::Uint(1) => node::Behavior::Deterministic,
         Cbor::Uint(2) => node::Behavior::Probabilistic,
         _ => return Err(err("behavior")),
     };
     let mut attributes = Vec::new();
-    for entry in array_of(get(pairs, 4, "attributes")?, "attributes")? {
+    for entry in array_of(get(pairs, 3, "attributes")?, "attributes")? {
         let parts = array_of(entry, "attribute")?;
         match parts {
             [name, setting] => {
@@ -2074,13 +2062,13 @@ fn spec_from(tree: &Cbor) -> Result<ConnectorSpec, DecodeError> {
             _ => return Err(err("attribute")),
         }
     }
-    let Cbor::Uint(role_tag) = get(pairs, 6, "connector roles")? else {
+    let Cbor::Uint(role_tag) = get(pairs, 4, "connector roles")? else {
         return Err(err("connector roles"));
     };
     let role_tag = u8::try_from(*role_tag).map_err(|_| err("connector roles"))?;
     let roles = crate::connector::ConnectorRoles::from_tag(role_tag)
         .ok_or_else(|| err("connector roles"))?;
-    let Cbor::Uint(exchange_tag) = get(pairs, 7, "connector exchange")? else {
+    let Cbor::Uint(exchange_tag) = get(pairs, 5, "connector exchange")? else {
         return Err(err("connector exchange"));
     };
     let exchange_tag = u8::try_from(*exchange_tag).map_err(|_| err("connector exchange"))?;
@@ -2090,7 +2078,7 @@ fn spec_from(tree: &Cbor) -> Result<ConnectorSpec, DecodeError> {
         contract,
         roles,
         exchange,
-        idempotent: find(pairs, 8).map(plan_constant_from).transpose()?,
+        idempotent: find(pairs, 6).map(plan_constant_from).transpose()?,
         behavior,
         attributes,
     })
@@ -2206,7 +2194,6 @@ fn handler_from(tree: &Cbor) -> Result<Handler, DecodeError> {
     let pairs = map_of(tree, "handler")?;
     let owner = match array_of(get(pairs, 1, "handler owner")?, "handler owner")? {
         [Cbor::Uint(1), index] => Slot::new(u32_from(index, "handler node")?),
-        [Cbor::Uint(2), ..] => return Err(err("retired Graph handler owner")),
         _ => return Err(err("handler owner")),
     };
     let activation = match array_of(get(pairs, 2, "activation")?, "activation")? {
@@ -2217,15 +2204,14 @@ fn handler_from(tree: &Cbor) -> Result<Handler, DecodeError> {
             node::HandlerActivation::Lifecycle(match lifecycle {
                 1 => node::Lifecycle::Start,
                 2 => node::Lifecycle::Stop,
-                3 => node::Lifecycle::Compensate,
-                4 => node::Lifecycle::Next,
-                5 => node::Lifecycle::Timeout,
-                6 => node::Lifecycle::Evict,
-                7 => node::Lifecycle::Recover,
-                8 => node::Lifecycle::Closing,
-                9 => node::Lifecycle::Reply,
-                10 => node::Lifecycle::Exit,
-                11 => node::Lifecycle::Retry,
+                3 => node::Lifecycle::Next,
+                4 => node::Lifecycle::Timeout,
+                5 => node::Lifecycle::Evict,
+                6 => node::Lifecycle::Recover,
+                7 => node::Lifecycle::Closing,
+                8 => node::Lifecycle::Reply,
+                9 => node::Lifecycle::Exit,
+                10 => node::Lifecycle::Retry,
                 _ => return Err(err("activation lifecycle")),
             })
         }
@@ -2247,7 +2233,6 @@ fn handler_from(tree: &Cbor) -> Result<Handler, DecodeError> {
                 _ => return Err(err("join last")),
             },
         },
-        [Cbor::Uint(4), ..] => return Err(err("retired child-output activation")),
         _ => return Err(err("activation")),
     };
     let guard = match find(pairs, 3) {
@@ -2321,9 +2306,7 @@ fn target_from(tree: &Cbor) -> Result<WriteTarget, DecodeError> {
                 .collect::<Result<Vec<_>, DecodeError>>()?,
         )),
         [Cbor::Uint(2), Cbor::Text(field)] => Ok(WriteTarget::App(field.clone())),
-        [Cbor::Uint(5), Cbor::Text(field)] => Ok(WriteTarget::Ext(field.clone())),
-        // 3 (custom) and 4 (mime) are retired draft tags — refused
-        // like any unknown discriminant.
+        [Cbor::Uint(3), Cbor::Text(field)] => Ok(WriteTarget::Ext(field.clone())),
         _ => Err(err("write target")),
     }
 }
@@ -2580,7 +2563,7 @@ mod tests {
     }
 
     #[test]
-    fn handler_owner_bytes_stay_fixed_and_retired_tags_stay_unreadable() {
+    fn handler_owners_admit_only_executor_slots() {
         let handler = Handler {
             owner: Slot::new(0),
             activation: node::HandlerActivation::Port(node::Port::new("in").unwrap()),
@@ -2599,7 +2582,7 @@ mod tests {
             (
                 1,
                 Cbor::Array(vec![Cbor::Uint(2), Cbor::Uint(0)]),
-                "retired Graph handler owner",
+                "handler owner",
             ),
             (
                 2,
@@ -2608,7 +2591,7 @@ mod tests {
                     Cbor::Text(text("child")),
                     Cbor::Text(text("out")),
                 ]),
-                "retired child-output activation",
+                "activation",
             ),
         ] {
             let Cbor::Map(mut fields) = tree.clone() else {
@@ -2762,7 +2745,7 @@ mod tests {
         );
         let value = Value::Struct(vec![(text("text"), Value::Text(text("description")))]);
         let wire = Cbor::Array(vec![
-            Cbor::Uint(6),
+            Cbor::Uint(4),
             Cbor::Uint(1),
             Cbor::Text(text("note")),
             type_tree(&ty),
@@ -2783,7 +2766,7 @@ mod tests {
             (1, Cbor::Uint(255)),
             (2, Cbor::Text(text("secret"))),
             (2, Cbor::Text(text("custom.personal"))),
-            (2, Cbor::Text(text("rastok/measure@2"))),
+            (2, Cbor::Text(text("std/measure@2"))),
             (3, type_tree(&DataType::Variant)),
             (
                 3,
@@ -2871,29 +2854,23 @@ mod tests {
     }
 
     #[test]
-    fn the_retired_implicit_measure_tag_refuses_by_name() {
-        for id in ["gen_ai.usage.input_tokens", "tokens"] {
-            let error = annotation_from(&Cbor::Array(vec![Cbor::Uint(3), Cbor::Text(text(id))]))
-                .expect_err("no registry-backed annotation survives in v19");
-            assert!(
-                error.to_string().contains("retired implicit measure"),
-                "{error}"
-            );
+    fn annotation_tags_outside_the_closed_registry_are_rejected() {
+        for tag in [0, 5, 6, u64::MAX] {
+            let error = annotation_from(&Cbor::Array(vec![Cbor::Uint(tag)]))
+                .expect_err("only the four declared annotation forms are executable");
+            assert!(error.to_string().contains("annotation"), "{error}");
         }
     }
 
     #[test]
-    fn the_retired_cost_tag_refuses_instead_of_acquiring_generic_measure_meaning() {
+    fn declared_annotations_require_the_complete_typed_application() {
         for fields in [
             vec![Cbor::Uint(4), Cbor::Uint(1)],
             vec![Cbor::Uint(4), Cbor::Uint(2), Cbor::Text(text("USD"))],
         ] {
             let error = annotation_from(&Cbor::Array(fields))
-                .expect_err("a retired annotation tag cannot select a new interpretation");
-            assert!(
-                error.to_string().contains("retired cost annotation"),
-                "{error}"
-            );
+                .expect_err("a tag and a binding alone do not define an annotation");
+            assert!(error.to_string().contains("annotation"), "{error}");
         }
     }
 
@@ -2929,9 +2906,9 @@ mod tests {
             (text("unit"), Value::Text(text("item"))),
         ]);
         let wire = vec![
-            Cbor::Uint(6),
+            Cbor::Uint(4),
             Cbor::Uint(2),
-            Cbor::Text(text("rastok/measure@3")),
+            Cbor::Text(text("std/measure@3")),
             type_tree(&ty),
             canonical::value(&arguments),
         ];
@@ -2949,7 +2926,7 @@ mod tests {
             (1, Cbor::Uint(3)),
             (2, Cbor::Text(text("measure"))),
             (2, Cbor::Text(text("custom_measure"))),
-            (2, Cbor::Text(text("rastok/measure@2"))),
+            (2, Cbor::Text(text("std/measure@2"))),
             (3, type_tree(&DataType::Variant)),
             (4, canonical::value(&Value::Struct(vec![]))),
         ] {
@@ -3120,7 +3097,7 @@ mod tests {
             annotation_set_from(&wire).unwrap_or_else(|error| panic!("personal wire: {error}")),
             set
         );
-        assert!(annotation_from(&Cbor::Array(vec![Cbor::Uint(5), Cbor::Uint(8)])).is_err());
+        assert!(annotation_from(&Cbor::Array(vec![Cbor::Uint(3), Cbor::Uint(8)])).is_err());
     }
 
     #[test]
@@ -3137,7 +3114,7 @@ mod tests {
     }
 
     #[test]
-    fn v15_sabotage_cannot_erase_or_forge_resolved_annotations() {
+    fn package_sabotage_cannot_erase_or_forge_resolved_annotations() {
         let plan =
             annotated_boundary_plan(DataAnnotation::Sensitive(SensitivityLevel::Confidential));
         let package = encode(&plan, &SemanticHash::from_bytes([0; 32]));
@@ -3237,7 +3214,7 @@ mod tests {
     }
 
     #[test]
-    fn v15_sabotage_cannot_detach_graph_policy_from_its_type() {
+    fn package_sabotage_cannot_detach_graph_policy_from_its_type() {
         let mut nested = root_owner();
         nested.extensions.clear();
         nested.path = node::OwnerPath::new(["nested"])
@@ -3296,7 +3273,7 @@ mod tests {
     }
 
     #[test]
-    fn v15_sabotage_cannot_reorder_annotation_paths_or_kinds() {
+    fn package_sabotage_cannot_reorder_annotation_paths_or_kinds() {
         let ty = DataType::Struct(
             StructType::new(vec![
                 TypeField::new("a", DataType::Text),
@@ -3386,7 +3363,7 @@ mod tests {
     }
 
     #[test]
-    fn current_format_categorically_refuses_v15_and_v16_envelopes() {
+    fn current_format_refuses_every_other_package_version() {
         let package = encode(
             &annotated_boundary_plan(DataAnnotation::Sensitive(SensitivityLevel::Internal)),
             &SemanticHash::from_bytes([0; 32]),
@@ -3396,7 +3373,7 @@ mod tests {
         else {
             panic!("map envelope");
         };
-        for version in [15, 16] {
+        for version in [19, 21, u64::MAX] {
             envelope.insert(1, Cbor::Uint(version));
             let mut previous = MAGIC.to_vec();
             previous.extend_from_slice(&canonical_cbor::encode(&Cbor::Map(envelope.clone())));
@@ -3408,18 +3385,18 @@ mod tests {
     }
 
     #[test]
-    fn both_removed_sink_direction_tags_are_unreadable() {
-        for retired in [3, 4] {
-            let declaration = Cbor::Array(vec![Cbor::Text(text("out")), Cbor::Uint(retired)]);
+    fn port_directions_refuse_unknown_tags() {
+        for unknown_tag in [3, 4] {
+            let declaration = Cbor::Array(vec![Cbor::Text(text("out")), Cbor::Uint(unknown_tag)]);
             assert!(
                 port_decl_from(&declaration).is_err(),
-                "a retired sink policy cannot become a direction"
+                "an unknown tag cannot become a port direction"
             );
         }
     }
 
     #[test]
-    fn v16_routes_are_mandatory_and_unknown_body_fields_are_not_ignored() {
+    fn routes_are_mandatory_and_unknown_body_fields_are_not_ignored() {
         let package = instance_package();
         let absent = mutate_package_body(&package, |body| {
             body.remove(&10);
@@ -3443,7 +3420,7 @@ mod tests {
             (
                 Cbor::Array(vec![Cbor::Uint(2), Cbor::Uint(0)]),
                 Cbor::Array(vec![Cbor::Uint(1), Cbor::Text(text("in"))]),
-                "retired Graph handler owner",
+                "handler owner",
             ),
             (
                 Cbor::Array(vec![Cbor::Uint(1), Cbor::Uint(0)]),
@@ -3452,7 +3429,7 @@ mod tests {
                     Cbor::Text(text("child")),
                     Cbor::Text(text("out")),
                 ]),
-                "retired child-output activation",
+                "activation",
             ),
         ] {
             let forged = mutate_package_body(&package, |body| {
@@ -3493,7 +3470,7 @@ mod tests {
     }
 
     #[test]
-    fn v15_retains_one_spelling_for_owner_lifetimes_sites_and_dynamic_attributes() {
+    fn owner_lifetimes_sites_and_dynamic_attributes_have_one_spelling() {
         let lifetimes = [
             instance::Lifetime::Persistent,
             instance::Lifetime::Idle(1),
@@ -3564,7 +3541,7 @@ mod tests {
     }
 
     #[test]
-    fn v15_package_sabotage_cannot_change_an_instance_key_or_lifetime() {
+    fn package_sabotage_cannot_change_an_instance_key_or_lifetime() {
         let package = instance_package();
 
         let lying_key_type = mutate_package_body(&package, |body| {

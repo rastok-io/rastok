@@ -1,15 +1,14 @@
 # Flat annotation types and validated metadata
 
-> **Executable v19 — 18 September 2026.** The standard
+> **Format 20 target — 6 October 2026.** The standard
 > `measure` definition is exactly `id: text` and `unit: text`, under
 > [D-2026-09-18-1](decisions.md#d-2026-09-18-1--separate-generic-measurements-otlp-export-and-budget-authority).
 > A currency such as `"USD"` is an ordinary unit. Original signed quantities,
 > including those in held Retry attempts, remain journaled with their causal
 > provenance. M1 implements no report, valuation, aggregation or subset policy.
-> The [migration inventory](../architecture/annotation-types-m1.md#19-two-field-measure-migration-inventory--18-september-before-code)
-> declares the affected annotation identities within the common v19/v3 cutover.
-> The [qualification ledger](../architecture/retry-c4-qualification.md) records
-> the single blessing and verification; security/privacy meanings are unchanged.
+> The [v20 inventory](../architecture/human-review-v20-identity.md) tracks
+> the namespace/tag compaction before blessing. Security/privacy meanings
+> and the two-field signature are unchanged.
 
 This document owns annotation declarations and their interpretation boundary.
 [Types](types.md) owns logical values; [observability](observability.md) owns
@@ -124,12 +123,12 @@ Descriptive metadata has an explicit metadata-only classification, is typed
 and retained for its tools, and grants no execution behavior. A required
 semantic interpretation must be supported by the target image or refuse by
 name before effects. An undeclared annotation is not metadata-only by default.
-The descriptive binding is explicit tag 1 inside a tag-6 application:
+The descriptive binding is explicit tag 1 inside a tag-4 application:
 declaring identity, ordinary argument type and ordinary constant value. Its
 name is a canonical dotted identifier of at most 255 bytes, not a protected
 stdlib name. Unknown interpretation tags refuse, including not-yet-supported
 semantic consumers. Binding 2 now admits the numerical quantity interpretation of
-`rastok/measure@3`, with the exact protected flat schema and complete ordinary
+`std/measure@3`, with the exact protected flat schema and complete ordinary
 typed constants. Merely changing the binding on a descriptive application
 cannot grant measurement authority.
 
@@ -193,8 +192,8 @@ A unit neither claims that an amount was billed nor identifies a pricing
 source. Valuation and future budgets must define their own authority.
 
 `@cost` and the former `currency`, `basis`, `aggregation` and `subset_of`
-arguments refuse with a migration explanation. Compact cost tag 4 is retired,
-not reused. Every numerical measure uses the same protected generic binding.
+arguments refuse with a migration explanation. Every numerical measure uses
+the same protected generic binding; there is no separate compact cost tag.
 
 ### 5.1 Standard signatures and normalization
 
@@ -214,9 +213,9 @@ Unknown and duplicate arguments refuse. Arguments are plan constants.
 The checker resolves the declared argument type; core independently verifies
 the complete ordinary type/value and protected definition identity.
 Sensitive, secret and personal applications lower to their existing compact
-policy encodings. Numerical measures use tag 6, binding 2,
-`rastok/measure@3`, and the exact two-field schema. The previous `@2`
-definition is rejected; its schema is not reinterpreted.
+policy encodings. Numerical measures use tag 4, binding 2,
+`std/measure@3`, and the exact two-field schema. A different definition or
+schema cannot claim that interpretation.
 
 ## 6. Business quantities, not a model-provider type system
 
@@ -252,12 +251,9 @@ A JSON member's name alone grants no measurement behavior. A consumer must
 not silently merge input, output and inclusive totals or count copies of a
 value at multiple flow points as new consumption.
 
-The compact registry tag 3 and cost tag 4 are retired. An old `gen_ai.*`
-id has the same authority as any other id and still needs an explicit unit.
-D-2026-09-18-1 removes monetary and aggregation arguments from the shared
-schema. The [inventory](../architecture/annotation-types-m1.md#19-two-field-measure-migration-inventory--18-september-before-code)
-records this identity movement before the common candidate blessing.
-No report or subset relationship is implemented in M1.
+Any `gen_ai.*` id has the same authority as any other id and still needs an
+explicit unit. Monetary and aggregation arguments are not fields of the
+shared schema. No report or subset relationship is implemented in M1.
 
 ### 6.1 Hydration supplies the values
 
@@ -369,7 +365,7 @@ follow the shared signature in §5.
 The executable security/privacy interpretations remain authoritative. The initial
 flat-data slice changed no plan format, Contract or recording. Typed HTTP
 hydration is part of `http-client@3`, using existing plan and annotation tables;
-its inventory precedes the common v19 blessing. Source, hostile-package,
+its namespace movement is enumerated in the v20 inventory. Source, hostile-package,
 original-attempt and UI evidence is recorded in the
 [qualification ledger](../architecture/retry-c4-qualification.md). Remaining
 [opening gates](../architecture/opening-showcase.md) are separate from semantic

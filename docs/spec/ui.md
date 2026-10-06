@@ -1,6 +1,6 @@
 # Visual simulation debugger
 
-> **Status (2026-09-10): v18 projection under D-2026-09-07-8, D-2026-09-08-1 and D-2026-09-10-1.**
+> **Status (2026-10-06): format-20 projection under D-2026-09-07-8, D-2026-09-08-1 and D-2026-09-10-1.**
 > [R9 qualification](../architecture/rework-r9-qualification.md) records code
 > and protocol evidence. Real-browser/keyboard qualification is tracked in
 > [release qualification](../architecture/release-qualification.md).
@@ -158,7 +158,7 @@ boundary ports come from the plan. The UI never infers execution from geometry.
 - Loop runs appear in Instances: exact run, owner, application, remaining fuel,
   phase, pending command, due instant and current state-envelope reference.
   That reference is a dependency, not a second unclassified DATA projection.
-- Retry operations appear separately in Instances in the v19 candidate: exact
+- Retry operations appear separately in Instances : exact
   operation and instance, admitted attempt/bound, phase, original due time,
   and one row per admitted attempt. Call, admission, closure, production and
   consumption links point to their original records. Held results are labelled

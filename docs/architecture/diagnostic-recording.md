@@ -1,9 +1,10 @@
 # Diagnostic recording and read-only replay
 
-Status: 10 September 2026, M1 showcase, diagnostic format **2**, embedding
-plan package **v18**. Version 2 retains exact-instance closure packets on
-INBOUND and TRANSACTION rows; version 1 refuses explicitly. Unused packets
-remain absent from the causal seal; Connector Contracts do not change.
+Status: 6 October 2026, candidate diagnostic format **4**, embedding
+plan package **20**. The [v20 inventory](human-review-v20-identity.md) records
+the byte changes before blessing. There is no reader or converter for another
+recording format. Exact-instance closure packets travel on INGRESS and
+TRANSACTION; unused packets are absent from the causal seal.
 The durable deployment Journal remains M2 work.
 
 ## Commands and observable result
@@ -40,7 +41,7 @@ The production-to-Lab extraction in simulation-semantics §9 remains deferred.
 - Source definitions and arm positions for inspection; presentation data,
   never code executed by the reader.
 - Deployment graph version and whether an empty deployment header existed.
-- Complete INBOUND, TRANSACTION and OUTBOUND records, including typed DATA,
+- Complete INGRESS, TRANSACTION and EGRESS records, including typed DATA,
   META, prepared request bytes, completion extension metadata, manager
   commands, Loop states and exact retained timer schedules.
 - Checkpoint prefix lengths and explicit logical observation instants.
@@ -48,9 +49,11 @@ The production-to-Lab extraction in simulation-semantics §9 remains deferred.
 
 The golden projection is deliberately insufficient as the storage codec: it
 omits non-causal retained fields needed for faithful recovery. The diagnostic
-codec therefore preserves those fields without adding journal facts or
-changing the existing golden bytes. Encoded DATA is distinguished from a
-materialized byte value; decimals and canonical NaNs round-trip exactly.
+codec therefore preserves those fields without fabricating journal facts.
+Raw DATA is distinguished from a graph-born ccbor byte value; encoded and
+materialized ccbor are representation states of the same payload. Decimals
+and canonical NaNs round-trip exactly. The tuple has four system fields
+(id, parent, origin, graph version), app/ext metadata and DATA; no role.
 
 ## Framing and refusal
 

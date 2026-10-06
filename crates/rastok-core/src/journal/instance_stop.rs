@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 /// Extend-only field in the canonical causal projection.
-pub const CAUSAL_KEY: u64 = 57;
+pub const CAUSAL_KEY: u64 = 42;
 
 /// Authority fixed by the producer, never resolved again by the consumer.
 #[derive(Debug, Clone, PartialEq, Eq)]

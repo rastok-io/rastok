@@ -217,11 +217,12 @@ fn readme_quickstart_is_a_verbatim_copy_of_the_site_source() {
 }
 
 #[test]
-fn current_public_status_matches_the_qualified_package_and_contracts() {
+fn current_public_status_matches_the_package_and_contracts() {
     let paper = std::fs::read_to_string(root().join("WHITEPAPER.md")).unwrap();
     let version = rastok_core::plan::FORMAT_VERSION;
-    assert!(paper.contains(&format!("package v{version} / diagnostic recording v3")));
-    assert!(paper.contains(&format!("current package is **v{version}**")));
+    assert!(paper.contains(&format!("Format-{version} candidate")));
+    assert!(paper.contains(&format!("**package {version} / diagnostic recording 4**")));
+    assert!(paper.contains("blessing pending review"));
     for contract in [
         rastok_core::connector::PROCESS_CONNECTOR_ID,
         rastok_core::connector::PROCESS_SERVICE_CONNECTOR_ID,
@@ -239,8 +240,10 @@ fn current_public_status_matches_the_qualified_package_and_contracts() {
     }
 
     let catalogue = std::fs::read_to_string(root().join("docs/examples/README.md")).unwrap();
-    assert!(catalogue.contains(&format!("**v{version} / diagnostic recording v3**")));
-    assert!(catalogue.contains("retry-c4-qualification.md"));
+    assert!(catalogue.contains(&format!(
+        "**format-{version} / diagnostic-recording-4 candidate**"
+    )));
+    assert!(catalogue.contains("human-review-v20-identity.md"));
     assert!(!catalogue.contains("unblessed v19 candidate"));
     assert!(!catalogue.contains("v18 is the last qualified"));
 
@@ -310,12 +313,12 @@ fn current_journal_tables_include_retry_retention_without_saga_key_rules() {
     }
     let timers = source
         .lines()
-        .find(|line| line.starts_with("| 37 | deadline_ids |"))
+        .find(|line| line.starts_with("| 24 | deadline_ids |"))
         .unwrap();
     assert!(timers.contains("Loop") && timers.contains("Retry"));
     let key = source
         .lines()
-        .find(|line| line.starts_with("| 42 | call_key |"))
+        .find(|line| line.starts_with("| 29 | call_key |"))
         .unwrap();
     assert!(
         !key.contains("E-COMPENSATE-KEY") && !key.contains("compensable"),

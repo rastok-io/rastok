@@ -1,5 +1,5 @@
 //! Public M1.4 instance scenarios. These proofs enter through source, the
-//! checker, v15 lowering, and the Lab; no test reaches into VM state cells.
+//! checker, lowering, and the Lab; no test reaches into VM state cells.
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 #![allow(clippy::expect_used, clippy::panic)]
 
@@ -301,7 +301,7 @@ fn the_public_lab_observes_join_correlation_and_expiry() {
         panic!("a transaction projects as one map")
     };
     assert_eq!(
-        fields.get(&34),
+        fields.get(&21),
         Some(&Cbor::Array(
             transaction
                 .join_inputs
@@ -309,7 +309,7 @@ fn the_public_lab_observes_join_correlation_and_expiry() {
                 .map(|id| Cbor::Bytes(id.as_bytes().to_vec()))
                 .collect()
         )),
-        "trace key 34 preserves declared join-port order"
+        "trace key 21 preserves declared join-port order"
     );
     let expected_address = encode(&Cbor::Array(vec![
         Cbor::Array(vec![Cbor::Text(String::from("pair"))]),

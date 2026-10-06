@@ -2378,7 +2378,6 @@ impl Checker<'_, '_> {
                     .with("meta.sys.id", DataType::Text)
                     .with("meta.sys.parent_id", DataType::Variant)
                     .with("meta.sys.origin_id", DataType::Text)
-                    .with("meta.sys.role", DataType::Text)
                     .with("meta.sys.graph_version", DataType::INT);
                 for field in crate::plan::STANDARD_EXT_FIELDS {
                     if let Some(ty) = crate::plan::standard_ext_field_type(field) {
@@ -2521,7 +2520,6 @@ impl Checker<'_, '_> {
                 .with("meta.sys.id", DataType::Text)
                 .with("meta.sys.parent_id", DataType::Variant)
                 .with("meta.sys.origin_id", DataType::Text)
-                .with("meta.sys.role", DataType::Text)
                 .with("meta.sys.graph_version", DataType::INT);
             for field in crate::plan::STANDARD_EXT_FIELDS {
                 if let Some(ty) = crate::plan::standard_ext_field_type(field) {
@@ -6703,20 +6701,7 @@ impl Checker<'_, '_> {
     /// vocabulary — the Rastok expression grid, statically: three zones only, and
     /// a name written nowhere refuses.
     fn verify_meta_reads(&mut self) {
-        const SYS_FIELDS: &[&str] = &[
-            "id",
-            "parent_id",
-            "origin_id",
-            "role",
-            "graph_version",
-            // Tier-2 birth stamps — spec'd fields, absent outside
-            // their Extension scope (envelope.md §1.2).
-            "saga_id",
-            "saga_stack",
-            "loop_id",
-            "loop_stack",
-            "iter_count",
-        ];
+        const SYS_FIELDS: &[&str] = &["id", "parent_id", "origin_id", "graph_version"];
         let reads = core::mem::take(&mut self.meta_reads);
         for (segments, span) in reads {
             let parts: Vec<&str> = segments.iter().map(String::as_str).collect();
@@ -6737,7 +6722,7 @@ impl Checker<'_, '_> {
                         self.meta_zone_refusal(
                             span,
                             &format!("meta.sys.{field}"),
-                            "sys has five reserved fields plus the Extension birth stamps — nothing else",
+                            "sys has four fields: id, parent_id, origin_id and graph_version",
                         );
                     }
                 }

@@ -57,6 +57,8 @@ pub enum IdKind {
     InstanceClosing,
     /// One explicit stop command for an exact generation.
     InstanceStop,
+    /// The canonical name of an attested decoder (attestation is an M2 gate).
+    Decoder,
 }
 
 /// Projects an identity domain to its specified byte.
@@ -65,18 +67,19 @@ pub const fn id_kind_tag(kind: IdKind) -> u8 {
     match kind {
         IdKind::Root => 0x01,
         IdKind::Emission => 0x02,
-        IdKind::LoopAdmission => 0x06,
-        IdKind::RetryAdmission => 0x07,
-        IdKind::Call => 0x10,
-        IdKind::Session => 0x11,
-        IdKind::SessionWrite => 0x12,
-        IdKind::LoopRun => 0x14,
-        IdKind::LoopCommand => 0x15,
-        IdKind::RetryOperation => 0x16,
-        IdKind::Delivery => 0x20,
-        IdKind::InstanceLifetime => 0x21,
-        IdKind::InstanceClosing => 0x22,
-        IdKind::InstanceStop => 0x23,
+        IdKind::LoopAdmission => 0x03,
+        IdKind::RetryAdmission => 0x04,
+        IdKind::Call => 0x05,
+        IdKind::Session => 0x06,
+        IdKind::SessionWrite => 0x07,
+        IdKind::LoopRun => 0x08,
+        IdKind::LoopCommand => 0x09,
+        IdKind::RetryOperation => 0x0a,
+        IdKind::Delivery => 0x0b,
+        IdKind::InstanceLifetime => 0x0c,
+        IdKind::InstanceClosing => 0x0d,
+        IdKind::InstanceStop => 0x0e,
+        IdKind::Decoder => 0x0f,
     }
 }
 
@@ -99,18 +102,19 @@ impl TryFrom<u8> for IdKind {
         match value {
             0x01 => Ok(Self::Root),
             0x02 => Ok(Self::Emission),
-            0x06 => Ok(Self::LoopAdmission),
-            0x07 => Ok(Self::RetryAdmission),
-            0x10 => Ok(Self::Call),
-            0x11 => Ok(Self::Session),
-            0x12 => Ok(Self::SessionWrite),
-            0x14 => Ok(Self::LoopRun),
-            0x15 => Ok(Self::LoopCommand),
-            0x16 => Ok(Self::RetryOperation),
-            0x20 => Ok(Self::Delivery),
-            0x21 => Ok(Self::InstanceLifetime),
-            0x22 => Ok(Self::InstanceClosing),
-            0x23 => Ok(Self::InstanceStop),
+            0x03 => Ok(Self::LoopAdmission),
+            0x04 => Ok(Self::RetryAdmission),
+            0x05 => Ok(Self::Call),
+            0x06 => Ok(Self::Session),
+            0x07 => Ok(Self::SessionWrite),
+            0x08 => Ok(Self::LoopRun),
+            0x09 => Ok(Self::LoopCommand),
+            0x0a => Ok(Self::RetryOperation),
+            0x0b => Ok(Self::Delivery),
+            0x0c => Ok(Self::InstanceLifetime),
+            0x0d => Ok(Self::InstanceClosing),
+            0x0e => Ok(Self::InstanceStop),
+            0x0f => Ok(Self::Decoder),
             other => Err(UnknownIdKind(other)),
         }
     }
@@ -208,8 +212,8 @@ pub enum Scalar {
 pub enum Encoding {
     /// Opaque bytes; `meta.ext.content_type` names them externally.
     Raw,
-    /// Avro-encoded document.
-    Avro,
+    /// A logical value in the canonical CBOR profile.
+    Ccbor,
     /// Arrow IPC-encoded table.
     ArrowIpc,
 }
@@ -218,7 +222,7 @@ impl fmt::Display for Encoding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Raw => "raw",
-            Self::Avro => "avro",
+            Self::Ccbor => "ccbor",
             Self::ArrowIpc => "arrow-ipc",
         })
     }
@@ -302,8 +306,9 @@ impl Data {
 }
 
 impl PartialEq for Data {
-    /// Equality is causal: encoded data compares by encoding and bytes,
-    /// never by the cache.
+    /// Equality is causal: raw bytes never become a logical value by guessing
+    /// their content. A canonical value's encoded and materialized states are
+    /// two views of the same DATA; the cache contributes nothing.
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (
@@ -317,34 +322,32 @@ impl PartialEq for Data {
                 },
             ) => encoding == other_encoding && bytes == other_bytes,
             (Self::Materialized(value), Self::Materialized(other_value)) => value == other_value,
+            (
+                Self::Materialized(value),
+                Self::Encoded {
+                    encoding: Encoding::Ccbor,
+                    bytes,
+                    ..
+                },
+            )
+            | (
+                Self::Encoded {
+                    encoding: Encoding::Ccbor,
+                    bytes,
+                    ..
+                },
+                Self::Materialized(value),
+            ) => {
+                crate::canonical_cbor::encode(&crate::canonical::value(value)).as_slice()
+                    == bytes.as_ref()
+            }
             _ => false,
         }
     }
 }
 
-/// The envelope's role (`envelope.md` §1.1) — an extensible vocabulary.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub enum Role {
-    /// Ordinary forward flow.
-    #[default]
-    Default,
-    /// Saga compensation flow.
-    Compensate,
-}
-
-impl fmt::Display for Role {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Default => "default",
-            Self::Compensate => "compensate",
-        })
-    }
-}
-
-/// Runtime-owned identity and lineage metadata — exactly the five reserved
-/// `sys` fields of `envelope.md` §1.1. Tier-2 birth stamps join with
-/// the aspect work; envelopes born outside an aspect scope carry
-/// nothing.
+/// Runtime-owned identity and lineage metadata — the four `sys` fields
+/// of `envelope.md` §1.1.
 ///
 /// Read-only by construction: built through [`MetaSys::root`] or
 /// [`MetaSys::emission`], which encode the lineage invariants — a root
@@ -354,12 +357,11 @@ pub struct MetaSys {
     id: Id,
     parent_id: Option<Id>,
     origin_id: Id,
-    role: Role,
     graph_version: u64,
 }
 
 impl MetaSys {
-    /// Mints the five reserved `sys` fields of a root envelope: no parent,
+    /// Mints the four `sys` fields of a root envelope: no parent,
     /// and the envelope is its own origin (`origin_id == id`).
     #[must_use]
     pub fn root(id: Id, graph_version: u64) -> Self {
@@ -367,12 +369,11 @@ impl MetaSys {
             id,
             parent_id: None,
             origin_id: id,
-            role: Role::Default,
             graph_version,
         }
     }
 
-    /// Mints the five reserved `sys` fields of an emitted envelope: the parent
+    /// Mints the four `sys` fields of an emitted envelope: the parent
     /// is the cause, and the origin is inherited from it unchanged.
     #[must_use]
     pub fn emission(id: Id, parent: &MetaSys, graph_version: u64) -> Self {
@@ -380,16 +381,8 @@ impl MetaSys {
             id,
             parent_id: Some(parent.id),
             origin_id: parent.origin_id,
-            role: Role::Default,
             graph_version,
         }
-    }
-
-    /// Sets the role at mint time.
-    #[must_use]
-    pub fn with_role(mut self, role: Role) -> Self {
-        self.role = role;
-        self
     }
 
     /// Unique derived identity.
@@ -409,12 +402,6 @@ impl MetaSys {
     #[must_use]
     pub fn origin_id(&self) -> Id {
         self.origin_id
-    }
-
-    /// The envelope's role.
-    #[must_use]
-    pub fn role(&self) -> Role {
-        self.role
     }
 
     /// Sequential build number of the emitting graph; the manifest maps
@@ -469,7 +456,7 @@ pub enum WriteTarget {
     Ext(String),
 }
 
-/// Runtime and application metadata: the five reserved `sys` fields and
+/// Runtime and application metadata: the four reserved `sys` fields and
 /// the two writable zones — `app` (application-owned) and `ext`
 /// (external-boundary context). Exactly three zones, no other root
 /// (D-2026-08-10-1).
@@ -481,7 +468,7 @@ pub struct Meta {
 }
 
 impl Meta {
-    /// Starts metadata around the five minted `sys` fields, with empty writable
+    /// Starts metadata around the four minted `sys` fields, with empty writable
     /// namespaces.
     #[must_use]
     pub fn new(sys: MetaSys) -> Self {
@@ -506,7 +493,7 @@ impl Meta {
         self
     }
 
-    /// The five reserved, runtime-owned `sys` fields.
+    /// The four reserved, runtime-owned `sys` fields.
     #[must_use]
     pub fn sys(&self) -> &MetaSys {
         &self.sys
@@ -581,18 +568,19 @@ mod tests {
         let registry = [
             (0x01, IdKind::Root),
             (0x02, IdKind::Emission),
-            (0x06, IdKind::LoopAdmission),
-            (0x07, IdKind::RetryAdmission),
-            (0x10, IdKind::Call),
-            (0x11, IdKind::Session),
-            (0x12, IdKind::SessionWrite),
-            (0x14, IdKind::LoopRun),
-            (0x15, IdKind::LoopCommand),
-            (0x16, IdKind::RetryOperation),
-            (0x20, IdKind::Delivery),
-            (0x21, IdKind::InstanceLifetime),
-            (0x22, IdKind::InstanceClosing),
-            (0x23, IdKind::InstanceStop),
+            (0x03, IdKind::LoopAdmission),
+            (0x04, IdKind::RetryAdmission),
+            (0x05, IdKind::Call),
+            (0x06, IdKind::Session),
+            (0x07, IdKind::SessionWrite),
+            (0x08, IdKind::LoopRun),
+            (0x09, IdKind::LoopCommand),
+            (0x0a, IdKind::RetryOperation),
+            (0x0b, IdKind::Delivery),
+            (0x0c, IdKind::InstanceLifetime),
+            (0x0d, IdKind::InstanceClosing),
+            (0x0e, IdKind::InstanceStop),
+            (0x0f, IdKind::Decoder),
         ];
         for byte in 0..=u8::MAX {
             match registry.iter().find(|(tag, _)| *tag == byte) {
@@ -650,7 +638,6 @@ mod tests {
         assert_eq!(root.origin_id(), root.id());
         assert_eq!(root.parent_id(), None);
         assert!(root.is_root());
-        assert_eq!(root.role(), Role::Default);
         assert_eq!(root.graph_version(), 42);
     }
 
@@ -714,7 +701,7 @@ mod tests {
             .materialize_with(|_, _| Ok::<_, DecodeFault>(Value::Int(1)))
             .unwrap();
         assert_eq!(plain, cached);
-        assert_ne!(plain, Data::encoded(Encoding::Avro, *b"{\"n\":1}"));
+        assert_ne!(plain, Data::encoded(Encoding::ArrowIpc, *b"{\"n\":1}"));
     }
 
     #[test]

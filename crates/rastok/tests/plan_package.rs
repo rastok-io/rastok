@@ -648,7 +648,7 @@ fn connector_identity_roles_and_exchange_are_categorical_plan_facts() {
         let Cbor::Map(spec) = connector_spec_mut(body) else {
             panic!("the connector spec is a map");
         };
-        spec.insert(6, Cbor::Uint(1));
+        spec.insert(4, Cbor::Uint(1));
     });
     assert_eq!(
         plan::decode(&forged_role).unwrap_err(),
@@ -661,7 +661,7 @@ fn connector_identity_roles_and_exchange_are_categorical_plan_facts() {
         let Cbor::Map(spec) = connector_spec_mut(body) else {
             panic!("the connector spec is a map");
         };
-        spec.insert(7, Cbor::Uint(3));
+        spec.insert(5, Cbor::Uint(3));
     });
     assert_eq!(
         plan::decode(&forged_exchange).unwrap_err(),
@@ -692,19 +692,13 @@ fn every_refusal_is_typed() {
         DecodeError::UnsupportedVersion(future)
     );
 
-    // Every earlier categorical body is refused by number, never migrated
-    // silently. In particular, v8 was the unreleased named-partition draft;
-    // v9 replaced it rather than assigning two meanings to one version; v10
-    // then replaced source Connector names with stable ids, v11 adds the
-    // mandatory exchange lifecycle, v12 adds the media-type registry, and
-    // v13 adds categorical Graph-aspect transport, v14 adds checked Loop
-    // proof transport, and v15 adds schema-policy side-tables.
-    for draft in [2u64, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] {
-        let retired = reframe(&bytes, |pairs| {
+    // A different version is refused, never interpreted under this registry.
+    for draft in 0..u64::from(plan::FORMAT_VERSION) {
+        let unsupported = reframe(&bytes, |pairs| {
             pairs.insert(1, Cbor::Uint(draft));
         });
         assert_eq!(
-            plan::decode(&retired).unwrap_err(),
+            plan::decode(&unsupported).unwrap_err(),
             DecodeError::UnsupportedVersion(draft)
         );
     }
@@ -872,11 +866,11 @@ fn a_non_canonical_envelope_refuses() {
     // Reordered header keys: same fields, same checksum coverage,
     // different bytes — not the canonical encoding. Raw splice,
     // because the canonical encoder itself refuses to write an
-    // unsorted map: entry (1, uint 19) is bytes 5..7, entry
+    // unsorted map: entry (1, uint 20) is bytes 5..7, entry
     // (2, bytes32) is the 35 bytes after it; swap them.
     assert_eq!(
         &bytes[4..7],
-        &[0xa4, 0x01, 0x13],
+        &[0xa4, 0x01, 0x14],
         "the envelope head is stable"
     );
     assert_eq!(&bytes[7..10], &[0x02, 0x58, 0x20], "the hash entry follows");
@@ -891,16 +885,16 @@ fn a_non_canonical_envelope_refuses() {
         DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))
     ));
 
-    // A non-minimal integer in the header: uint 19 written on two
-    // bytes (0x18 0x13) instead of one. The checksum still holds —
+    // A non-minimal integer in the header: uint 20 written on two
+    // bytes (0x18 0x14) instead of one. The checksum still holds —
     // the VALUE is unchanged — so only the canonicity check refuses.
     assert_eq!(
         &bytes[4..7],
-        &[0xa4, 0x01, 0x13],
+        &[0xa4, 0x01, 0x14],
         "the envelope head is stable"
     );
     let mut widened = bytes.clone();
-    widened.splice(6..7, [0x18, 0x13]);
+    widened.splice(6..7, [0x18, 0x14]);
     assert!(matches!(
         plan::decode(&widened).unwrap_err(),
         DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))

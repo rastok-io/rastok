@@ -1,6 +1,6 @@
 # Diagnostics catalog
 
-> **Status (2026-09-21):** normative v19 registry, with reserved and retired names explicitly marked.
+> **Status (2026-10-06):** current diagnostics; deferred tool surfaces are labelled explicitly.
 > This file is the single registry of tool-output diagnostic codes.
 
 **Scope.** This catalog norms diagnostics emitted by *tools* (compiler,
@@ -10,19 +10,12 @@ Runtime outcome cases (`JoinExpired`, `LoopExpired`,
 ordinary typed port payloads, hashed through their resolved types and
 compared in the causal core. They live in their home specs, not here.
 
-The current `E-EXPR` and `IDENT!` rows describe the expression registry first
-published in v7; categorical package v19 retains it (v12 added
-`media_type(text)` and v18 added `has(object.member)`). New or
-renamed checks are registered only when their focused negative tests
-land, never pre-allocated by a planning pass.
-`E-EXPR` supersedes the unreleased `E-CEL-EXPR` spelling as part of B3;
-no public diagnostic contract ever carried the old code.
+The expression registry includes `media_type(text)` and
+`has(object.member)`. New or renamed executable diagnostics enter this
+catalog only with focused tests. A deferred design name is not a claim that
+the CLI currently emits it; the current core may refuse through an existing
+typed capability gate.
 
-The v16 opening decision deliberately reserved some names ahead of their
-implementation. Most now have executable checks; entries marked **reserved**
-still describe a required rule or future tool surface, not a diagnostic the
-current CLI emits. Core validation may reject the same construct through a
-typed error or an existing capability gate without publishing that tool code.
 `W-DEAD-GRAPH` currently covers nested Graph admission, not unused top-level
 Graph definitions. The bounded-join expiry productibility defect found in the
 [9 September audit](../architecture/documentation-audit-2026-09-09.md) is fixed:
@@ -44,20 +37,19 @@ cover the refusal, nested boundaries and actual expiry observations.
 4. **Lazy assignment** : many specification rules still describe
    errors and warnings without a named code. Each receives its code
    **when its check is implemented**, in the same change as its negative
-   test. Until then, the prose rule remains normative. The explicitly reserved
-   names below are reserved by the opening decision and cannot be repurposed.
+   test. Until then, the prose rule remains normative. The deferred names below describe design intent, not allocated package tags.
 
 ## Registry
 
 | Code | Severity | Phase | Home spec | Meaning (informative) |
 |---|---|---|---|---|
-| E-LAB-DUP | error | resolve | [grammar.md](grammar.md) | **reserved:** more than one logical lab for the same App |
+| E-LAB-DUP | error | resolve | [grammar.md](grammar.md) | **deferred:** more than one logical lab for the same App |
 | E-LAB-NO-APP | error | resolve | [grammar.md](grammar.md) | a lab whose name binds to no `: App` graph in the unit |
 | E-SIM-TARGET | error | resolve | [simulation-semantics.md](simulation-semantics.md) | `simulation … on <graph>` targeting a non-App graph (deferred capability) |
-| E-EXPERIMENT-PROFILE | error | resolve | [grammar.md](grammar.md) | **reserved:** experiment without exactly one constant `profile` |
-| E-SAGA-DURABILITY | error | plan | [effects-and-sagas.md](effects-and-sagas.md) | **reserved:** a Saga whose effective durability resolves to `none` |
-| E-COMPENSATE-KEY | error | plan | [effects-and-sagas.md](effects-and-sagas.md) | **reserved:** compensation without a stable business key |
-| E-REPLAY-VERSION-MISMATCH | error | replay | [identity.md](identity.md) | **reserved:** journal segment hash ≠ loaded graph hash ; replay refused |
+| E-EXPERIMENT-PROFILE | error | resolve | [grammar.md](grammar.md) | **deferred:** experiment without exactly one constant `profile` |
+| E-SAGA-DURABILITY | error | plan | [effects-and-sagas.md](effects-and-sagas.md) | **deferred:** a Saga whose effective durability resolves to `none` |
+| E-COMPENSATE-KEY | error | plan | [effects-and-sagas.md](effects-and-sagas.md) | **deferred:** compensation without a stable business key |
+| E-REPLAY-VERSION-MISMATCH | error | replay | [identity.md](identity.md) | **deferred:** journal segment hash ≠ loaded graph hash ; replay refused |
 | E-DUP-KEY | error | check | [identity.md](identity.md) | a STATIC map/struct literal with two keys that canonicalize equal; a runtime collision is instead a typed language error, not a tool diagnostic; field `detail` |
 | E-UNION-OVERLAP | error | check | [identity.md](identity.md) | a structural union (`A \| B`) with overlapping or identical branches (`int \| int`, `int \| long`, `number \| long`) — no unique branch; a tagged union may deliberately distinguish equal-shaped cases by name; field `detail` |
 | E-LEX-CHAR | error | parse | [grammar.md](grammar.md) | a character outside the lexical grammar; field `character` |
@@ -75,7 +67,7 @@ cover the refusal, nested boundaries and actual expiry observations.
 | E-EXPR | error | check | [grammar.md](grammar.md) | a Rastok expression fault, adapted from the isolated expression compiler; field `detail` |
 | E-CHECK-DEFERRED | error | check | [grammar.md](grammar.md) | grammar admitted but outside the executable subset of this build; field `construct` |
 | E-DATA-ANNOTATION | error | check | [observability.md](observability.md) | a data annotation is unknown, duplicated, malformed, dynamically parameterized, missing its explicit measurement id/unit, uses retired cost arguments, or is illegal at its resolved canonical target; fields `annotation`, `path`, `detail` |
-| E-NODE-ANNOTATION | error | check | [extensions.md](extensions.md) | historical stable code for an unknown, duplicated, or incompatible Node annotation; v16 interprets a Connector annotation as one exact Contract plus a canonical Extension list; fields `name`, `detail` |
+| E-NODE-ANNOTATION | error | check | [extensions.md](extensions.md) | stable code for an unknown, duplicated, or incompatible Node annotation; a Connector annotation names one exact Contract plus a canonical Extension list; fields `name`, `detail` |
 | E-EXTENSION-CONFLICT | error | check, plan | [extensions.md](extensions.md) | two Extensions have incompatible same-owner contributions; C2 checks the unadmitted Loop + Retry combination before transport; fields `owner`, `left`, `right`, `detail` |
 | E-RETRY-HOST | error | check | [Retry contract](../architecture/retry-extension-refactor.md#2-retry-source-and-admission) | Retry or plan-owned Call idempotence on a non-Call/unknown Contract or inadmissible owner/profile; field `detail` |
 | E-RETRY-ATTRIBUTE | error | check | [Retry contract](../architecture/retry-extension-refactor.md#2-retry-source-and-admission) | absent, duplicate, misplaced or unknown policy attribute, invalid positive bound/delay, non-boolean guarantee or contradictory File guarantee; field `detail`; expression/constant faults retain `E-EXPR` |
@@ -88,9 +80,8 @@ cover the refusal, nested boundaries and actual expiry observations.
 | E-LOOP-HOST | error | check, plan | [loop.md](loop.md) | Loop is attached to a profile that is not a finite Operator, Graph, or outbound Call application; fields `owner`, `profile`, `detail` |
 | E-LOOP-ENTRY | error | check, plan | [loop.md](loop.md) | no unique recurrent input can be derived or the authored `Loop.entry` is not that input; fields `owner`, `entry`, `detail` |
 | E-LOOP-TERMINAL | error | check, plan | [loop.md](loop.md) | the natural terminal set is ambiguous, contradictory or ill-typed, or is authored for a Connector Call; fields `owner`, `port`, `detail` |
-| E-LOOP-CONTEXT | error | check, plan | [loop.md](loop.md) | **reserved as a tool code:** a route, join or activation can mix Loop runs or let uncorrelated work vote in a run; the current VM uses this name in its runtime join-context refusal, not a structured compiler diagnostic; planned fields `owner`, `path`, `detail` |
+| E-LOOP-CONTEXT | error | check, plan | [loop.md](loop.md) | **deferred as a tool code:** a route, join or activation can mix Loop runs or let uncorrelated work vote in a run; the current VM uses this name in its runtime join-context refusal, not a structured compiler diagnostic; planned fields `owner`, `path`, `detail` |
 | E-LOOP-CARDINALITY | error | check, plan | [loop.md](loop.md) | a possibly repeated frame can select more than one manager command for one application; fields `owner`, `port`, `detail` |
-| E-LOOP-EFFECT | retired | — | [Retry contract](../architecture/retry-extension-refactor.md) | removed in v19: authored Loop repetition is advisory; Retry has the separate hard refusal `E-RETRY-EFFECT` |
 | W-LOOP-REPEAT | warning | check | [C1 algebra](../architecture/retry-c1-algebra.md#41-required-c2-loop-warning) | authored `Loop.again` may repeat a visible Call without an original-plan idempotence guarantee, including successful sibling Calls; not emitted for `Loop.next` or a wholly BeforeEffect path; no identity contribution |
 | E-CONNECTOR-UNAVAILABLE | error | check | [stdlib.md](stdlib.md) | a Connector Contract is unknown, only declared without an executable sheet, absent from the compiler catalogue, or has an invalid semantic id; field `type`. Physical Driver availability is checked separately at deployment; Lab simulation does not require one |
 | E-CONTRACT-ATTR | error | check | [stdlib.md](stdlib.md) | an attribute violating its connector contract sheet; fields `attribute`, `detail` |
@@ -136,7 +127,6 @@ cover the refusal, nested boundaries and actual expiry observations.
 | E-INTERNAL-PLAN | error | plan | [plan-package.md](../architecture/plan-package.md) | the lowering emitted a plan its own validator refuses — a compiler defect surfaced as a diagnostic, never a panic; field `detail` |
 | E-PLAN-DEPTH | error | check, plan | [plan-package.md](../architecture/plan-package.md) | a program nesting deeper than the format reader's budget (`MAX_NESTING`) — gated at check on the parsed expression (the parser also bounds its production recursion at the same budget, one unit per syntactic level), and again at plan on the exact serialized depth; field `depth` in both phases |
 | W-DEAD-GRAPH | warning | check | [grammar.md](grammar.md) | a nested Graph has no external admission and its output obligations are suspended; field `owner`; unused top-level graph analysis remains deferred |
-| W-UNWIRED-OUTPUT | warning | check | [delivery-semantics.md](delivery-semantics.md) | historical v15 warning for an unconnected `RequireWire` output; retired by v16's `E-UNWIRED-OUTPUT`, never reused; fields `node`, `port` |
 | W-DEAD-OUTPUT | warning | check | [delivery-semantics.md](delivery-semantics.md) | an author-declared output is proven impossible under the closed source/Contract analysis and therefore needs no destination; field `source`; implicit contributions proven impossible produce no warning |
-| W-DEAD-INPUT | warning | check | [delivery-semantics.md](delivery-semantics.md) | **reserved:** a required input is never fed; a required respond-return half is an error instead; fields `node`, `port` |
-| W-DURABILITY-WEAKENED | warning | plan | [delivery-semantics.md](delivery-semantics.md) | **reserved:** a Node or nested Graph explicitly selects a weaker scope than its closest inherited value |
+| W-DEAD-INPUT | warning | check | [delivery-semantics.md](delivery-semantics.md) | **deferred:** a required input is never fed; a required respond-return half is an error instead; fields `node`, `port` |
+| W-DURABILITY-WEAKENED | warning | plan | [delivery-semantics.md](delivery-semantics.md) | **deferred:** a Node or nested Graph explicitly selects a weaker scope than its closest inherited value |

@@ -110,7 +110,7 @@ impl fmt::Display for HttpServerConfigError {
 
 impl std::error::Error for HttpServerConfigError {}
 
-/// Statically linked hosted implementation of `rastok/http-server@3`.
+/// Statically linked hosted implementation of `std/http-server@3`.
 #[derive(Debug)]
 pub struct HttpServerFactory {
     id: crate::connector::ContractId,
