@@ -33,6 +33,10 @@ pub enum Error {
     Invalid(&'static str),
     /// A typed canonical field cannot be decoded.
     Read(crate::canonical_cbor::DecodeError),
+    /// The decoded deadlines are malformed or violate their typed invariant.
+    Deadlines(journal::timing::DecodeError),
+    /// A Call's unsealed timing contradicts its sealed facts.
+    CallTiming(journal::timing::Error),
 }
 
 impl fmt::Display for Error {
@@ -40,11 +44,19 @@ impl fmt::Display for Error {
         match self {
             Self::Invalid(reason) => write!(f, "invalid retained record: {reason}"),
             Self::Read(error) => error.fmt(f),
+            Self::Deadlines(error) => error.fmt(f),
+            Self::CallTiming(error) => error.fmt(f),
         }
     }
 }
 
 impl core::error::Error for Error {}
+
+impl From<crate::canonical_cbor::DecodeError> for Error {
+    fn from(error: crate::canonical_cbor::DecodeError) -> Self {
+        Self::Read(error)
+    }
+}
 
 fn list(items: impl IntoIterator<Item = Cbor>) -> Cbor {
     Cbor::Array(items.into_iter().collect())
@@ -52,7 +64,7 @@ fn list(items: impl IntoIterator<Item = Cbor>) -> Cbor {
 fn word(value: impl ToString) -> Cbor {
     Cbor::Text(value.to_string())
 }
-fn integer(value: i64) -> Cbor {
+pub(super) fn integer(value: i64) -> Cbor {
     if value >= 0 {
         Cbor::Uint(value as u64)
     } else {
@@ -94,14 +106,14 @@ fn uint(value: &Cbor) -> Result<u64, Error> {
         _ => Err(Error::Invalid("unsigned integer")),
     }
 }
-fn signed(value: &Cbor) -> Result<i64, Error> {
+pub(super) fn signed(value: &Cbor) -> Result<i64, crate::canonical_cbor::DecodeError> {
+    use crate::canonical_cbor::DecodeError;
     match value {
-        Cbor::Uint(value) => i64::try_from(*value).map_err(|_| Error::Invalid("integer range")),
-        Cbor::Negative(value) => i64::try_from(*value)
-            .map(|value| -1 - value)
-            .map_err(|_| Error::Invalid("integer range")),
-        _ => Err(Error::Invalid("integer")),
+        Cbor::Uint(value) => i64::try_from(*value),
+        Cbor::Negative(value) => i64::try_from(*value).map(|value| -1 - value),
+        _ => return Err(DecodeError::Malformed("expected a signed integer")),
     }
+    .map_err(|_| DecodeError::Malformed("signed integer exceeds i64"))
 }
 fn read_id(value: &Cbor) -> Result<Id, Error> {
     Ok(Id::from_bytes(
@@ -264,7 +276,7 @@ fn read_schedule(value: &Cbor) -> Result<Option<Box<journal::timing::Deadlines>>
     read_optional(value, |value| {
         journal::timing::Deadlines::decode(bytes(value)?)
             .map(Box::new)
-            .map_err(Error::Read)
+            .map_err(Error::Deadlines)
     })
 }
 fn completion(value: &Completion) -> Cbor {
@@ -794,7 +806,7 @@ impl Decoder {
                 }))
             })?,
             loop_record: read_optional(packet, |value| self.loop_packet(value).map(Box::new))?,
-            logical_time: read_optional(at, signed)?,
+            logical_time: read_optional(at, |value| signed(value).map_err(Error::Read))?,
             consumed: items(consumed)?
                 .iter()
                 .map(|value| {
@@ -855,11 +867,11 @@ impl Decoder {
         let record = journal::CallRecord {
             intent: read_intent(intent)?,
             status,
-            closed_at: read_optional(closed_at, signed)?,
+            closed_at: read_optional(closed_at, |value| signed(value).map_err(Error::Read))?,
             deadlines: read_schedule(schedule)?,
             retry_record: read_optional(retry, |value| self.retry_packet(value).map(Box::new))?,
         };
-        journal::timing::validate_call(&record).map_err(Error::Read)?;
+        journal::acceptance::validate_call(&record).map_err(Error::CallTiming)?;
         Ok(Record::Egress(journal::EgressRecord::Call(Box::new(
             record,
         ))))
@@ -1003,7 +1015,7 @@ impl Decoder {
                 remaining: uint(remaining)?,
                 command: self.command(command)?,
                 state: self.envelope(state)?,
-                due_at: read_optional(due, signed)?,
+                due_at: read_optional(due, |value| signed(value).map_err(Error::Read))?,
             },
             [Cbor::Uint(3), reference, iteration, admission, envelope] => Fact::Admit {
                 run: run(reference)?,

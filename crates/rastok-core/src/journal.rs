@@ -38,6 +38,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
 
+pub(crate) mod acceptance;
 pub(crate) mod admission;
 pub mod codec;
 pub mod instance_stop;
@@ -1037,9 +1038,9 @@ pub enum Error {
     /// An exact-instance command contradicts its source, target or close fact.
     InvalidInstanceCommand(instance_stop::Error),
     /// Retained scheduler evidence contradicts the accepted obligations.
-    InvalidDeadlines(crate::canonical_cbor::DecodeError),
+    InvalidDeadlines(timing::Error),
     /// A Call carrier contradicts its closure time or Retry correlation.
-    InvalidCallRetention(crate::canonical_cbor::DecodeError),
+    InvalidCallRetention(timing::Error),
     /// A call ref matching no journaled call.
     UnknownCall,
     /// An inbound Call marker contradicts its root or source instance.
@@ -1145,7 +1146,7 @@ impl fmt::Display for Error {
             Self::InvalidLoopProtocol(error) => error.fmt(f),
             Self::InvalidRetryProtocol(error) => error.fmt(f),
             Self::InvalidInstanceCommand(error) => error.fmt(f),
-            Self::InvalidDeadlines(error) => write!(f, "invalid timer schedule: {error}"),
+            Self::InvalidDeadlines(error) => write!(f, "invalid deadlines: {error}"),
             Self::InvalidCallRetention(error) => write!(f, "invalid Call retention: {error}"),
             Self::UnknownCall => f.write_str("no outbound record for this call"),
             Self::CorruptInboundCall => {
@@ -1626,7 +1627,7 @@ impl MemJournal {
                 }
                 Record::Transaction(transaction) => journal.commit(*transaction.clone())?,
                 Record::Egress(EgressRecord::Call(call)) => {
-                    timing::validate_call(call).map_err(Error::InvalidCallRetention)?;
+                    acceptance::validate_call(call).map_err(Error::InvalidCallRetention)?;
                     if call.status != CallStatus::Open {
                         let Some(original) =
                             journal.records.iter().find_map(|record| match record {
@@ -1657,11 +1658,7 @@ impl MemJournal {
                         )?,
                         CallStatus::Closed(closure) => {
                             let at = call.closed_at.ok_or({
-                                Error::InvalidCallRetention(
-                                    crate::canonical_cbor::DecodeError::Malformed(
-                                        "missing Call closure instant",
-                                    ),
-                                )
+                                Error::InvalidCallRetention(timing::Error::MissingClosureInstant)
                             })?;
                             journal.close_egress(
                                 &call.intent.call_id,
@@ -1672,11 +1669,7 @@ impl MemJournal {
                         }
                         CallStatus::Abandoned => {
                             let at = call.closed_at.ok_or({
-                                Error::InvalidCallRetention(
-                                    crate::canonical_cbor::DecodeError::Malformed(
-                                        "missing Call closure instant",
-                                    ),
-                                )
+                                Error::InvalidCallRetention(timing::Error::MissingClosureInstant)
                             })?;
                             journal.abandon_egress(&call.intent.call_id, at)?;
                         }
@@ -2017,7 +2010,7 @@ impl Journal for MemJournal {
         if let (Some(schedule), Some(InboundExchangeRecord::Call(call))) =
             (prepared.deadlines.as_deref(), prepared.exchange.as_ref())
         {
-            timing::require_deadline_instants(schedule, &call.deadline_ids)
+            acceptance::require_deadline_instants(schedule, &call.deadline_ids)
                 .map_err(Error::InvalidDeadlines)?;
         }
         let expected = self
@@ -2142,7 +2135,7 @@ impl Journal for MemJournal {
 
     fn commit(&mut self, mut transaction: TransactionRecord) -> Result<(), Error> {
         retry_protocol::validate_transaction(&transaction).map_err(Error::InvalidRetryProtocol)?;
-        timing::validate_transaction(&transaction).map_err(Error::InvalidDeadlines)?;
+        acceptance::validate_transaction(&transaction).map_err(Error::InvalidDeadlines)?;
         if transaction.instance_commands.is_some() {
             self.instance_commands()?
                 .apply(&Record::Transaction(Box::new(transaction.clone())))
@@ -2473,7 +2466,7 @@ impl Journal for MemJournal {
                 })
             }),
         };
-        timing::validate_call(&record).map_err(Error::InvalidCallRetention)?;
+        acceptance::validate_call(&record).map_err(Error::InvalidCallRetention)?;
         self.records
             .push(Record::Egress(EgressRecord::Call(Box::new(record))));
         Ok(())
@@ -2634,7 +2627,7 @@ impl Journal for MemJournal {
             deadlines: schedule,
             retry_record,
         };
-        timing::validate_call(&record).map_err(Error::InvalidCallRetention)?;
+        acceptance::validate_call(&record).map_err(Error::InvalidCallRetention)?;
         self.records
             .push(Record::Egress(EgressRecord::Call(Box::new(record))));
         Ok(CloseVerdict::Won)
@@ -2668,7 +2661,7 @@ impl Journal for MemJournal {
             deadlines: None,
             retry_record,
         };
-        timing::validate_call(&record).map_err(Error::InvalidCallRetention)?;
+        acceptance::validate_call(&record).map_err(Error::InvalidCallRetention)?;
         self.records
             .push(Record::Egress(EgressRecord::Call(Box::new(record))));
         Ok(CloseVerdict::Won)
@@ -2818,6 +2811,155 @@ mod tests {
             resolved_settings: BTreeMap::new(),
             logical_time: 0,
         }
+    }
+
+    #[test]
+    fn call_timing_refusals_keep_their_typed_cause() {
+        use timing::{Deadline, Deadlines, Error as TimingError};
+        let mut call = CallRecord {
+            intent: intent("clocked", 6),
+            status: CallStatus::Open,
+            closed_at: Some(0),
+            deadlines: None,
+            retry_record: None,
+        };
+        assert_eq!(
+            acceptance::validate_call(&call),
+            Err(TimingError::UnexpectedClosureInstant)
+        );
+        call.status = CallStatus::Closed(Closure::Timeout);
+        call.closed_at = None;
+        assert_eq!(
+            acceptance::validate_call(&call),
+            Err(TimingError::MissingClosureInstant)
+        );
+        call.closed_at = Some(-1);
+        assert_eq!(
+            acceptance::validate_call(&call),
+            Err(TimingError::ClosurePrecedesOpening)
+        );
+        call.closed_at = Some(0);
+        let attempt = retry_protocol::AttemptId {
+            operation: retry_protocol::OperationId::from_id(Id::from_bytes([8; 16])),
+            ordinal: 1,
+        };
+        call.retry_record = Some(Box::new(retry_protocol::Packet {
+            context: None,
+            facts: vec![],
+        }));
+        assert_eq!(
+            acceptance::validate_call(&call),
+            Err(TimingError::MissingRetryContext)
+        );
+        call.retry_record.as_deref_mut().unwrap().context = Some(retry_protocol::AttemptId {
+            ordinal: 0,
+            ..attempt
+        });
+        assert_eq!(
+            acceptance::validate_call(&call),
+            Err(TimingError::InvalidRetryContext)
+        );
+        call.retry_record = None;
+        let deadline = Deadline {
+            kind: DeadlineKind::RecurrenceDelay,
+            reference: retry_protocol::admission_ref(attempt.operation, 2, call.intent.call_id),
+            due_at: 10,
+        };
+        call.deadlines = Some(Box::new(Deadlines::try_new(0, vec![deadline]).unwrap()));
+        assert_eq!(
+            acceptance::validate_call(&call),
+            Err(TimingError::ArmWithoutRetryContext)
+        );
+        call.retry_record = Some(Box::new(retry_protocol::Packet {
+            context: Some(retry_protocol::AttemptId {
+                ordinal: u64::MAX,
+                ..attempt
+            }),
+            facts: vec![],
+        }));
+        assert_eq!(
+            acceptance::validate_call(&call),
+            Err(TimingError::RetryOrdinalOverflow)
+        );
+        call.retry_record.as_deref_mut().unwrap().context = Some(attempt);
+        call.closed_at = Some(1);
+        assert_eq!(
+            acceptance::validate_call(&call),
+            Err(TimingError::ArmMismatch)
+        );
+        call.closed_at = Some(0);
+        assert_eq!(acceptance::validate_call(&call), Ok(()));
+    }
+
+    #[test]
+    fn transaction_deadlines_must_match_sealed_ids_time_and_loop_advances() {
+        use timing::{Deadline, Deadlines, Error as TimingError};
+        let mut record = lifecycle_transaction(instance("clocked", 0), node::Lifecycle::Next);
+        let mut deadline = Deadline {
+            kind: DeadlineKind::CallTimeout,
+            reference: Id::from_bytes([7; 16]),
+            due_at: 10,
+        };
+        record.deadlines = Some(Box::new(Deadlines::try_new(0, vec![deadline]).unwrap()));
+        record.logical_time = Some(1);
+        assert_eq!(
+            acceptance::validate_transaction(&record),
+            Err(TimingError::FiringTimeDisagrees)
+        );
+        record.logical_time = Some(0);
+        record.deadline_ids = vec![(DeadlineKind::CallTimeout, Id::from_bytes([6; 16]))];
+        assert_eq!(
+            acceptance::validate_transaction(&record),
+            Err(TimingError::SealedDeadlineWithoutInstant)
+        );
+        record.deadline_ids = vec![(deadline.kind, deadline.reference)];
+        assert_eq!(acceptance::validate_transaction(&record), Ok(()));
+
+        let run = LoopRunId::new(Id::from_bytes([9; 16]));
+        let command = loop_protocol::CommandProduced::new(
+            run,
+            0,
+            loop_protocol::CommandValue::Again(Id::from_bytes([3; 16])),
+        );
+        let state = MemJournal::new(GraphVersion(1))
+            .prepare_connector_ingress(submission("clocked", SubmissionSequence::Next), None)
+            .unwrap()
+            .envelope()
+            .clone();
+        record.loop_record = Some(Box::new(loop_protocol::Packet {
+            facts: vec![loop_protocol::Fact::Advance {
+                run,
+                from_iteration: 0,
+                to_iteration: 1,
+                remaining: 1,
+                command: command.reference,
+                state,
+                due_at: Some(10),
+            }],
+            ..Default::default()
+        }));
+        assert_eq!(
+            acceptance::validate_transaction(&record),
+            Err(TimingError::LoopDeadlineMismatch)
+        );
+        deadline.kind = DeadlineKind::RecurrenceDelay;
+        deadline.reference = loop_protocol::admission_ref(run, 1, command.reference);
+        record.deadline_ids = vec![(deadline.kind, deadline.reference)];
+        record.deadlines = Some(Box::new(Deadlines::try_new(0, vec![deadline]).unwrap()));
+        assert_eq!(acceptance::validate_transaction(&record), Ok(()));
+        record.deadlines = Some(Box::new(
+            Deadlines::try_new(0, vec![deadline, deadline]).unwrap(),
+        ));
+        assert_eq!(
+            acceptance::validate_transaction(&record),
+            Err(TimingError::LoopDeadlineMismatch)
+        );
+        record.deadlines = Some(Box::new(Deadlines::try_new(0, vec![deadline]).unwrap()));
+        record.loop_record = None;
+        assert_eq!(
+            acceptance::validate_transaction(&record),
+            Err(TimingError::LoopDeadlineMismatch)
+        );
     }
 
     #[test]

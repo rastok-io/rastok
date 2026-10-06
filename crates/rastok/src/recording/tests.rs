@@ -256,3 +256,30 @@ fn repeated_envelope_ids_cannot_change_their_content() {
         Err(Error::Invalid("inconsistent repeated envelope"))
     ));
 }
+
+#[test]
+fn journal_timing_failures_remain_typed_at_the_recording_boundary() {
+    use crate::journal::{codec, timing};
+    assert!(matches!(
+        super::Error::from(codec::Error::Deadlines(timing::DecodeError::Read(
+            crate::canonical_cbor::DecodeError::Malformed("deadline row"),
+        ))),
+        super::Error::Read(_),
+    ));
+    assert!(matches!(
+        super::Error::from(codec::Error::Deadlines(timing::DecodeError::Invalid(
+            timing::Error::DeadlinePrecedesCreation,
+        ))),
+        super::Error::Journal(crate::journal::Error::InvalidDeadlines(
+            timing::Error::DeadlinePrecedesCreation,
+        )),
+    ));
+    assert!(matches!(
+        super::Error::from(codec::Error::CallTiming(
+            timing::Error::MissingClosureInstant
+        )),
+        super::Error::Journal(crate::journal::Error::InvalidCallRetention(
+            timing::Error::MissingClosureInstant,
+        )),
+    ));
+}

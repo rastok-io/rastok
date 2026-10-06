@@ -632,7 +632,7 @@ Fable accepted lot 1 at `8fa9331`: 1,554 passing tests and no remaining
 arbitration. Lot 2 is structural only: package v19, recording v3 and all
 witness bytes stay unchanged. The v20 cutover has not started.
 
-**A-T1-1 — Share encoded envelope bytes** (the commit introducing this entry).
+**A-T1-1 — Share encoded envelope bytes**, landed in `28d9f0d`.
 `Data::Encoded` now owns an `Arc<[u8]>`; cloning a journal payload,
 delivery or recurrent admission shares those immutable original bytes.
 Equality and canonical encoding remain content-based. The pointer-sharing
@@ -658,6 +658,18 @@ expected. The encoded-byte regression proves sharing, not a measured gain on
 these workloads. Format check, strict workspace Clippy, rustdoc and
 `thumbv7m-none-eabi` pass for this action. The full workspace suite is still
 running; final lot qualification will be recorded after all actions.
+
+**A-T2-6(1) — Separate typed deadline validation from decoding** (the commit
+introducing this paragraph). `timing::Error` names the acceptance failures;
+only `timing::DecodeError` additionally wraps a canonical-byte error.
+The cross-record checks now live in `journal::acceptance`, called by the
+live journal, codec and recovery at their existing validation points.
+Signed integer encoding/reading is shared with `journal::codec`.
+No condition was widened or narrowed and the unsealed field bytes stay fixed.
+The obsolete “timer schedule” diagnostic wording is gone from this path.
+The journal-focused suite passes 74 tests, including each typed refusal,
+and core all-target/all-feature Clippy passes. Whole-lot qualification
+and embedded size measurement follow after the remaining actions.
 
 ## Landed changes
 

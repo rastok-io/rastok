@@ -2,12 +2,14 @@
 //! Arm order belongs to recovery: sorting equal-due arms by reference would
 //! silently change which timeout wins after a restart.
 
+use super::codec::{integer, signed};
 use super::{DeadlineKind, deadline_kind_tag};
-use crate::canonical_cbor::{self, DecodeError, Value};
+use crate::canonical_cbor::{self, Value};
 use crate::envelope::Id;
 use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::fmt;
 
 /// Unsealed record key for the deadlines accepted with one commit.
 pub const DEADLINES_KEY: u64 = 56;
@@ -16,54 +18,90 @@ pub const DEADLINES_KEY: u64 = 56;
 /// This field, like the due instant, is not part of the causal seal.
 pub const CALL_CLOSED_AT_KEY: u64 = 59;
 
-pub(crate) fn validate_call(record: &super::CallRecord) -> Result<(), DecodeError> {
-    let context = if let Some(packet) = record.retry_record.as_deref() {
-        let Some(context) = packet.context else {
-            return Err(DecodeError::Malformed(
-                "a Retry Call requires an attempt context",
-            ));
-        };
-        if context.ordinal == 0 || !packet.facts.is_empty() {
-            return Err(DecodeError::Malformed(
-                "a Call carries only a positive Retry context",
-            ));
-        }
-        Some(context)
-    } else {
-        None
-    };
-    match (&record.status, record.closed_at) {
-        (super::CallStatus::Open, None) => {}
-        (super::CallStatus::Closed(_) | super::CallStatus::Abandoned, Some(at))
-            if at >= record.intent.logical_time => {}
-        _ => {
-            return Err(DecodeError::Malformed(
-                "a winning Call closure requires its original instant, no earlier than its opening",
-            ));
-        }
-    }
-    if let Some(schedule) = record.deadlines.as_deref() {
-        let Some(context) = context else {
-            return Err(DecodeError::Malformed(
-                "only a Retry closure can arm a recurrence",
-            ));
-        };
-        let Some(next) = context.ordinal.checked_add(1) else {
-            return Err(DecodeError::Malformed("Retry admission ordinal overflows"));
-        };
-        let reference =
-            super::retry_protocol::admission_ref(context.operation, next, record.intent.call_id);
-        if !matches!(record.status, super::CallStatus::Closed(_))
-            || record.closed_at != Some(schedule.created_at())
-            || !matches!(schedule.items(), [arm] if arm.kind == super::DeadlineKind::RecurrenceDelay && arm.reference == reference)
-        {
-            return Err(DecodeError::Malformed(
-                "the Retry arm must belong to this winning closure and next admission",
-            ));
-        }
-    }
-    Ok(())
+/// A deadline violates an acceptance invariant, independently of its encoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Error {
+    /// No obligations were supplied; the optional field must instead be absent.
+    EmptySchedule,
+    /// An obligation is already due before its recorded creation.
+    DeadlinePrecedesCreation,
+    /// A winning Call closure has no logical instant.
+    MissingClosureInstant,
+    /// An open Call incorrectly carries a closure instant.
+    UnexpectedClosureInstant,
+    /// A Call closes earlier than its original opening.
+    ClosurePrecedesOpening,
+    /// A Retry Call packet is missing its attempt context.
+    MissingRetryContext,
+    /// A Call carries facts or a nonpositive attempt ordinal.
+    InvalidRetryContext,
+    /// The next attempt ordinal cannot be represented.
+    RetryOrdinalOverflow,
+    /// A recurrence deadline is attached to a Call without Retry.
+    ArmWithoutRetryContext,
+    /// A Retry deadline does not identify this closure's next admission.
+    ArmMismatch,
+    /// A sealed obligation has no corresponding unsealed deadline.
+    SealedDeadlineWithoutInstant,
+    /// The observable transaction time disagrees with deadline creation.
+    FiringTimeDisagrees,
+    /// Loop Advance facts and recurrence deadlines do not agree exactly.
+    LoopDeadlineMismatch,
 }
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::EmptySchedule => "empty deadlines must be omitted",
+            Self::DeadlinePrecedesCreation => "a deadline precedes its creation",
+            Self::MissingClosureInstant => "a winning Call closure requires its logical instant",
+            Self::UnexpectedClosureInstant => "an open Call cannot carry a closure instant",
+            Self::ClosurePrecedesOpening => "a Call closure precedes its opening",
+            Self::MissingRetryContext => "a Retry Call requires an attempt context",
+            Self::InvalidRetryContext => "a Call carries only a positive Retry context",
+            Self::RetryOrdinalOverflow => "Retry admission ordinal overflows",
+            Self::ArmWithoutRetryContext => "only a Retry closure can create a recurrence deadline",
+            Self::ArmMismatch => "the Retry deadline must identify this closure's next admission",
+            Self::SealedDeadlineWithoutInstant => "a sealed deadline id has no unsealed deadline",
+            Self::FiringTimeDisagrees => "observable firing time disagrees with deadline creation",
+            Self::LoopDeadlineMismatch => "Loop Advance and its exact recurrence deadline disagree",
+        })
+    }
+}
+
+impl core::error::Error for Error {}
+
+/// Reading deadlines can fail at the byte boundary or at their typed invariant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DecodeError {
+    /// The canonical carrier is malformed.
+    Read(canonical_cbor::DecodeError),
+    /// The decoded instants violate an acceptance invariant.
+    Invalid(Error),
+}
+
+impl From<canonical_cbor::DecodeError> for DecodeError {
+    fn from(error: canonical_cbor::DecodeError) -> Self {
+        Self::Read(error)
+    }
+}
+
+impl From<Error> for DecodeError {
+    fn from(error: Error) -> Self {
+        Self::Invalid(error)
+    }
+}
+
+impl fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Read(error) => error.fmt(f),
+            Self::Invalid(error) => error.fmt(f),
+        }
+    }
+}
+
+impl core::error::Error for DecodeError {}
 
 /// One dated obligation, identified by its kind and exact subject id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,17 +129,13 @@ impl Deadlines {
     ///
     /// # Errors
     /// Empty schedules or deadlines preceding their creation instant.
-    pub fn try_new(created_at: i64, items: Vec<Deadline>) -> Result<Self, DecodeError> {
+    pub fn try_new(created_at: i64, items: Vec<Deadline>) -> Result<Self, Error> {
         if items.is_empty() {
-            return Err(DecodeError::Malformed(
-                "an empty timer schedule must be omitted",
-            ));
+            return Err(Error::EmptySchedule);
         }
         for arm in &items {
             if arm.due_at < created_at {
-                return Err(DecodeError::Malformed(
-                    "an unsealed deadline precedes its creation",
-                ));
+                return Err(Error::DeadlinePrecedesCreation);
             }
         }
         Ok(Self { created_at, items })
@@ -152,155 +186,53 @@ impl Deadlines {
     pub fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
         let (value, consumed) = canonical_cbor::decode(bytes)?;
         if consumed != bytes.len() {
-            return Err(DecodeError::Malformed(
-                "trailing bytes after timer retention",
-            ));
+            return Err(
+                canonical_cbor::DecodeError::Malformed("trailing bytes after deadlines").into(),
+            );
         }
         let Value::Map(mut fields) = value else {
-            return Err(DecodeError::Malformed("timer retention must be a map"));
+            return Err(canonical_cbor::DecodeError::Malformed("deadlines must be a map").into());
         };
         if fields.len() != 1 {
-            return Err(DecodeError::Malformed(
-                "timer retention requires only key 56",
-            ));
+            return Err(
+                canonical_cbor::DecodeError::Malformed("deadlines require only key 56").into(),
+            );
         }
         let Some(Value::Array(schedule)) = fields.remove(&DEADLINES_KEY) else {
-            return Err(DecodeError::Malformed("missing timer schedule key 56"));
+            return Err(canonical_cbor::DecodeError::Malformed("missing deadlines key 56").into());
         };
         let [at, Value::Array(rows)] = schedule.as_slice() else {
-            return Err(DecodeError::Malformed("a timer schedule has two fields"));
+            return Err(canonical_cbor::DecodeError::Malformed("deadlines have two fields").into());
         };
         let created_at = signed(at)?;
         let mut items = Vec::with_capacity(rows.len());
         for row in rows {
             let Value::Array(row) = row else {
-                return Err(DecodeError::Malformed("a timer arm must be an array"));
+                return Err(
+                    canonical_cbor::DecodeError::Malformed("a deadline must be an array").into(),
+                );
             };
             let [Value::Uint(kind), Value::Bytes(reference), due] = row.as_slice() else {
-                return Err(DecodeError::Malformed(
-                    "a timer arm has kind, reference and due instant",
-                ));
+                return Err(canonical_cbor::DecodeError::Malformed(
+                    "a deadline has kind, reference and due instant",
+                )
+                .into());
             };
             items.push(Deadline {
-                kind: DeadlineKind::try_from(
-                    u8::try_from(*kind)
-                        .map_err(|_| DecodeError::Malformed("deadline kind exceeds u8"))?,
-                )
-                .map_err(|_| DecodeError::Malformed("unknown deadline kind"))?,
+                kind: DeadlineKind::try_from(u8::try_from(*kind).map_err(|_| {
+                    canonical_cbor::DecodeError::Malformed("deadline kind exceeds u8")
+                })?)
+                .map_err(|_| canonical_cbor::DecodeError::Malformed("unknown deadline kind"))?,
                 reference: Id::from_bytes(reference.as_slice().try_into().map_err(|_| {
-                    DecodeError::Malformed("timer reference must have sixteen bytes")
+                    canonical_cbor::DecodeError::Malformed(
+                        "deadline reference must have sixteen bytes",
+                    )
                 })?),
                 due_at: signed(due)?,
             });
         }
-        Self::try_new(created_at, items)
+        Self::try_new(created_at, items).map_err(DecodeError::Invalid)
     }
-}
-
-pub(crate) fn require_deadline_instants(
-    schedule: &Deadlines,
-    timers: &[(DeadlineKind, Id)],
-) -> Result<(), DecodeError> {
-    for (kind, reference) in timers {
-        if !schedule
-            .items
-            .iter()
-            .any(|arm| arm.kind == *kind && arm.reference == *reference)
-        {
-            return Err(DecodeError::Malformed(
-                "a sealed deadline id has no unsealed deadline",
-            ));
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn validate_transaction(record: &super::TransactionRecord) -> Result<(), DecodeError> {
-    if let Some(schedule) = record.deadlines.as_deref() {
-        if record
-            .logical_time
-            .is_some_and(|at| at != schedule.created_at())
-        {
-            return Err(DecodeError::Malformed(
-                "observable firing time disagrees with its unsealed schedule",
-            ));
-        }
-        require_deadline_instants(schedule, &record.deadline_ids)?;
-    }
-    let facts = record
-        .loop_protocol()
-        .map_or(&[][..], |packet| packet.facts.as_slice());
-    let delayed = facts.iter().filter_map(|fact| match fact {
-        super::loop_protocol::Fact::Advance {
-            run,
-            to_iteration,
-            command,
-            due_at: Some(due_at),
-            ..
-        } => Some((
-            super::loop_protocol::admission_ref(*run, *to_iteration, *command),
-            *due_at,
-        )),
-        _ => None,
-    });
-    for (reference, due_at) in delayed {
-        if !record
-            .deadline_ids
-            .contains(&(super::DeadlineKind::RecurrenceDelay, reference))
-            || !record.deadlines.as_deref().is_some_and(|schedule| {
-                // A Loop admission reference already fixes the run and
-                // iteration: unlike an idle lifetime, it cannot be renewed.
-                schedule
-                    .items
-                    .iter()
-                    .filter(|arm| {
-                        arm.kind == super::DeadlineKind::RecurrenceDelay
-                            && arm.reference == reference
-                            && arm.due_at == due_at
-                    })
-                    .count()
-                    == 1
-            })
-        {
-            return Err(DecodeError::Malformed(
-                "a delayed Loop must retain its exact accepted deadline",
-            ));
-        }
-    }
-    if let Some(schedule) = record.deadlines.as_deref() {
-        for arm in &schedule.items {
-            if arm.kind == super::DeadlineKind::RecurrenceDelay && !facts.iter().any(|fact| {
-                matches!(fact, super::loop_protocol::Fact::Advance {
-                    run, to_iteration, command, due_at: Some(due_at), ..
-                } if super::loop_protocol::admission_ref(*run, *to_iteration, *command) == arm.reference
-                    && *due_at == arm.due_at)
-            }) {
-                return Err(DecodeError::Malformed("an unsealed Loop deadline has no matching Advance"));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn integer(value: i64) -> Value {
-    if value < 0 {
-        Value::Negative(value.unsigned_abs() - 1)
-    } else {
-        Value::Uint(value as u64)
-    }
-}
-
-fn signed(value: &Value) -> Result<i64, DecodeError> {
-    match value {
-        Value::Uint(value) => i64::try_from(*value),
-        Value::Negative(value) => i64::try_from(*value).map(|value| -1 - value),
-        _ => {
-            return Err(DecodeError::Malformed(
-                "timer instants must be signed integers",
-            ));
-        }
-    }
-    .map_err(|_| DecodeError::Malformed("timer instant exceeds signed nanoseconds"))
 }
 
 #[cfg(test)]
@@ -346,7 +278,9 @@ mod tests {
                     );
                     assert!(matches!(
                         Deadlines::decode(&bytes),
-                        Err(DecodeError::Malformed("unknown deadline kind"))
+                        Err(DecodeError::Read(canonical_cbor::DecodeError::Malformed(
+                            "unknown deadline kind"
+                        )))
                     ));
                 }
             }
@@ -388,15 +322,43 @@ mod tests {
 
     #[test]
     fn no_empty_unknown_or_backdated_schedule_is_constructible() {
-        assert!(Deadlines::try_new(0, vec![]).is_err());
+        assert_eq!(Deadlines::try_new(0, vec![]), Err(Error::EmptySchedule));
         for kind in [0, 4, 10, u8::MAX] {
             assert_eq!(
                 DeadlineKind::try_from(kind),
                 Err(super::super::UnknownDeadlineKind(kind))
             );
         }
-        assert!(Deadlines::try_new(0, vec![arm(1, -1)]).is_err());
+        assert_eq!(
+            Deadlines::try_new(0, vec![arm(1, -1)]),
+            Err(Error::DeadlinePrecedesCreation)
+        );
         assert!(Deadlines::try_new(i64::MAX, vec![arm(1, i64::MAX)]).is_ok());
+    }
+
+    #[test]
+    fn decoding_distinguishes_carrier_errors_from_deadline_invariants() {
+        for (rows, expected) in [
+            (vec![], Error::EmptySchedule),
+            (
+                vec![Value::Array(vec![
+                    Value::Uint(1),
+                    Value::Bytes(vec![0; 16]),
+                    Value::Negative(0),
+                ])],
+                Error::DeadlinePrecedesCreation,
+            ),
+        ] {
+            let bytes = canonical_cbor::encode(&Value::Map(BTreeMap::from([(
+                DEADLINES_KEY,
+                Value::Array(vec![Value::Uint(0), Value::Array(rows)]),
+            )])));
+            assert_eq!(
+                Deadlines::decode(&bytes),
+                Err(DecodeError::Invalid(expected))
+            );
+        }
+        assert!(matches!(Deadlines::decode(&[]), Err(DecodeError::Read(_))));
     }
 
     #[test]

@@ -192,7 +192,7 @@ impl Vm<'_> {
         if record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Retry) {
             return self.restore_retry_manager(index, record);
         }
-        crate::journal::timing::validate_transaction(record)
+        crate::journal::acceptance::validate_transaction(record)
             .map_err(|_| invalid(index, "unsealed deadlines contradict the accepting record"))?;
         if record
             .deadlines
