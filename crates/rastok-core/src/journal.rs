@@ -236,21 +236,21 @@ pub mod ids {
 #[repr(u8)]
 pub enum DeadlineKind {
     /// One delivered Connector call budget.
-    CallTimeout = 1,
+    CallTimeout,
     /// One join correlation bound.
-    JoinWithin = 2,
+    JoinWithin,
     /// One logical instance generation lifetime.
-    InstanceLifetime = 3,
+    InstanceLifetime,
     /// One Loop or Retry delayed re-entry wakeup, keyed by its admission id.
-    RecurrenceDelay = 5,
+    RecurrenceDelay,
     /// End of an instance's admitted-work drain interval.
-    InstanceDrain = 6,
+    InstanceDrain,
     /// End of an instance's cancellation settlement interval.
-    InstanceSettlement = 7,
+    InstanceSettlement,
     /// One admitted inbound Call response deadline.
-    InboundCallTimeout = 8,
+    InboundCallTimeout,
     /// One client Session opening-handshake deadline.
-    SessionHandshake = 9,
+    SessionHandshake,
 }
 
 /// Projects a deadline kind to its specified byte, independently of order.

@@ -30,33 +30,33 @@ pub use crate::value::Value;
 #[repr(u8)]
 pub enum IdKind {
     /// An envelope admitted from the world.
-    Root = 0x01,
+    Root,
     /// An envelope emitted by a transaction.
-    Emission = 0x02,
+    Emission,
     /// A Loop application admitted again.
-    LoopAdmission = 0x06,
+    LoopAdmission,
     /// A Retry attempt admitted again.
-    RetryAdmission = 0x07,
+    RetryAdmission,
     /// An outgoing Call for one delivery and prepared request.
-    Call = 0x10,
+    Call,
     /// One logical Session, independently of its physical connection.
-    Session = 0x11,
+    Session,
     /// One write within a Session.
-    SessionWrite = 0x12,
+    SessionWrite,
     /// A Loop run opened by an exact admission.
-    LoopRun = 0x14,
+    LoopRun,
     /// One command addressed to a Loop run.
-    LoopCommand = 0x15,
+    LoopCommand,
     /// A Retry operation opened by an exact delivery.
-    RetryOperation = 0x16,
+    RetryOperation,
     /// One envelope delivered along one edge.
-    Delivery = 0x20,
+    Delivery,
     /// One instance generation's lifetime obligation.
-    InstanceLifetime = 0x21,
+    InstanceLifetime,
     /// One bounded phase of an instance's Closing.
-    InstanceClosing = 0x22,
+    InstanceClosing,
     /// One explicit stop command for an exact generation.
-    InstanceStop = 0x23,
+    InstanceStop,
 }
 
 /// Projects an identity domain to its specified byte.

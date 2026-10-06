@@ -681,8 +681,8 @@ comments, without a new dependency. Four focused tests cover line and block
 docs, inline/reference/HTML links, absolute links and ordinary non-doc text.
 The check passes on 208 tracked Rust files.
 
-**A-T2-6(2) — Share the admission-generation fold** (the commit introducing
-this paragraph). `MemJournal` and `AdmissionPrefix` use the same lifecycle
+**A-T2-6(2) — Share the admission-generation fold**, landed in `00e1e77`.
+`MemJournal` and `AdmissionPrefix` use the same lifecycle
 fold, including active close roots, parent-generation traversal and the
 current-versus-successor admission rule. Generation validation remains
 before the journal's other lifecycle checks; the index changes only after
@@ -694,6 +694,13 @@ successor generations and an unaffected sibling. It also checks that a
 rejected parent stop changes neither the journal nor admission queries,
 then reconstructs every prefix and the complete live index.
 The journal-focused suite passes 75 tests; core strict Clippy passes.
+
+**Lot-1 residue — Keep wire tags separate from enum representation** (the
+commit introducing this paragraph). `IdKind` and `DeadlineKind` no longer
+repeat wire numbers as Rust discriminants. Their explicit tag projections
+and strict readers are unchanged, as is declaration/sort order. No call
+site casts either enum to a wire byte. The existing tests pin all allocated
+bytes and reject every other byte; whole-lot qualification reruns them.
 
 ## Landed changes
 
