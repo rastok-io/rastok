@@ -220,9 +220,9 @@ fn readme_quickstart_is_a_verbatim_copy_of_the_site_source() {
 fn current_public_status_matches_the_package_and_contracts() {
     let paper = std::fs::read_to_string(root().join("WHITEPAPER.md")).unwrap();
     let version = rastok_core::plan::FORMAT_VERSION;
-    assert!(paper.contains(&format!("Format-{version} candidate")));
+    assert!(paper.contains(&format!("Format-{version} (2026-10-07)")));
     assert!(paper.contains(&format!("**package {version} / diagnostic recording 4**")));
-    assert!(paper.contains("blessing pending review"));
+    assert!(!paper.contains("blessing pending review"));
     for contract in [
         rastok_core::connector::PROCESS_CONNECTOR_ID,
         rastok_core::connector::PROCESS_SERVICE_CONNECTOR_ID,
@@ -240,9 +240,7 @@ fn current_public_status_matches_the_package_and_contracts() {
     }
 
     let catalogue = std::fs::read_to_string(root().join("docs/examples/README.md")).unwrap();
-    assert!(catalogue.contains(&format!(
-        "**format-{version} / diagnostic-recording-4 candidate**"
-    )));
+    assert!(catalogue.contains(&format!("**format-{version} / diagnostic-recording-4**")));
     assert!(catalogue.contains("human-review-v20-identity.md"));
     assert!(!catalogue.contains("unblessed v19 candidate"));
     assert!(!catalogue.contains("v18 is the last qualified"));

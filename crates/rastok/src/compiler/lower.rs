@@ -3215,7 +3215,7 @@ graph m0_probe : App {
         .hash;
         assert_eq!(
             hash.to_string(),
-            "3fe6e5319383eec3792f2981a40f9579fce96a4e1c3efe7b52b491dad932bc1a"
+            "6a49eb768c73af74cff64dc40bd08009e711fc1456c2b92e9e5f4f71e2508433"
         );
     }
 

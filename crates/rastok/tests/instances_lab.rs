@@ -323,12 +323,12 @@ fn the_public_lab_observes_join_correlation_and_expiry() {
         ])]),
     ]));
     assert_eq!(
-        fields.get(&31),
+        fields.get(&18),
         Some(&Cbor::Array(vec![
             Cbor::Bytes(expected_address),
             Cbor::Uint(0),
         ])),
-        "trace key 31 independently pins owner/key frame order and generation"
+        "trace key 18 independently pins scope/key segment order and generation"
     );
 }
 

@@ -889,7 +889,7 @@ mod tests {
         let Cbor::Array(tagged) = meta_value(&headers) else {
             panic!("metadata map has one tagged form");
         };
-        assert_eq!(tagged[0], Cbor::Uint(18));
+        assert_eq!(tagged[0], Cbor::Uint(16));
         let Cbor::Array(entries) = &tagged[1] else {
             panic!("metadata map contains canonical pairs");
         };
@@ -898,10 +898,10 @@ mod tests {
         };
         assert_eq!(
             first[0],
-            Cbor::Array(alloc::vec![Cbor::Uint(8), Cbor::Text(String::from("b"))]),
+            Cbor::Array(alloc::vec![Cbor::Uint(6), Cbor::Text(String::from("b"))]),
             "canonical bytes, rather than Rust string order, own map ordering",
         );
-        assert!(matches!(first[1], Cbor::Array(ref value) if value[0] == Cbor::Uint(19)));
+        assert!(matches!(first[1], Cbor::Array(ref value) if value[0] == Cbor::Uint(17)));
     }
 
     #[test]
@@ -934,24 +934,24 @@ mod tests {
         assert_eq!(tagged_body[0], Cbor::Text(String::from("Exited")));
         assert!(matches!(
             tagged_body[1],
-            Cbor::Array(ref payload) if payload.first() == Some(&Cbor::Uint(17))
+            Cbor::Array(ref payload) if payload.first() == Some(&Cbor::Uint(15))
         ));
     }
 
     #[test]
     fn every_completed_scalar_family_has_one_canonical_value_tag() {
         let values = [
-            (crate::value::Value::Date(0), 11),
-            (crate::value::Value::TimestampNtz(0), 13),
-            (crate::value::Value::Time(0), 14),
-            (crate::value::Value::Uuid([0; 16]), 15),
+            (crate::value::Value::Date(0), 9),
+            (crate::value::Value::TimestampNtz(0), 11),
+            (crate::value::Value::Time(0), 12),
+            (crate::value::Value::Uuid([0; 16]), 13),
             (
                 crate::value::Value::Interval {
                     months: 1,
                     days: 2,
                     nanoseconds: 3,
                 },
-                24,
+                21,
             ),
         ];
         for (value, expected_tag) in values {

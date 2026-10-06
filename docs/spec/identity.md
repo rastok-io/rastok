@@ -1,9 +1,9 @@
 # Identity and canonical form
 
-> **Candidate format 20, diagnostic recording 4.** Normative target of the
-> approved human-review cutover. The [identity inventory](../architecture/human-review-v20-identity.md)
-> records every pre-public allocation change and the unblessed witnesses.
-> Only this format is readable. Its public blessing starts the extend-only rule.
+> **Format 20, diagnostic recording 4.** The [identity inventory](../architecture/human-review-v20-identity.md)
+> records the reviewed allocation changes and the single witness blessing.
+> Only this format is readable. The registry is now extend-only: no
+> renumbering or reuse of an allocated key, tag or domain.
 > Changing the public version label to 1 remains a pre-publication TODO.
 
 ## 1. The semantic hash

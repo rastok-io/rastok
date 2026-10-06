@@ -453,7 +453,7 @@ fn exact_delivery_and_generation_separate_operations_with_identical_requests() {
         operation_ref(&f.instance, &Port::new("request").unwrap(), f.opening)
     );
     let mut hasher = blake3::Hasher::new();
-    hasher.update(&[0x16]);
+    hasher.update(&[0x0a]);
     for bytes in [
         f.instance.address().as_bytes(),
         &0_u64.to_le_bytes(),
@@ -467,7 +467,7 @@ fn exact_delivery_and_generation_separate_operations_with_identical_requests() {
     assert_eq!(f.operation.id(), expected);
     let call = CallId::new(Id::from_bytes([3; 16]));
     let mut hasher = blake3::Hasher::new();
-    hasher.update(&[0x07]);
+    hasher.update(&[0x04]);
     for bytes in [
         expected.as_bytes().as_slice(),
         &2_u64.to_le_bytes(),
@@ -481,8 +481,8 @@ fn exact_delivery_and_generation_separate_operations_with_identical_requests() {
     assert_eq!(
         (expected.to_string(), expected_admission.to_string()),
         (
-            String::from("d6c4216ebd85518c3497d7410c2707eb"),
-            String::from("e9b37274b55fddbac02eee26f3fd4849")
+            String::from("f09790a0bce6f64ec5ae4edacec19f2f"),
+            String::from("05cbdcc63115d77e8aeff05c0f1958dc")
         )
     );
     assert_ne!(

@@ -83,7 +83,7 @@ bounded, statically checked policy; `Saga` remains a future Extension. A manager
 a Node nor an edge, so temporal recurrence never creates a spatial cycle.
 Loop contributes no port: exhaustion is a `LoopExpired` case on the host's
 resolved failure terminal (`err`, a custom terminal, or a Call's `exit`).
-The format-20 candidate (blessing pending review in the
+Format 20 (the reviewed, single blessing is recorded in the
 [identity inventory](docs/architecture/human-review-v20-identity.md)) carries recursive Dispatch, case routing,
 ordered multi-emission and command-based Operator, Graph and outbound Call
 Loops. Independent core validation re-derives their contracts, routes and

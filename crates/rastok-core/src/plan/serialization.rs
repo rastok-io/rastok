@@ -3068,7 +3068,7 @@ mod tests {
         let wire = annotation_set_tree(&set);
         assert_eq!(
             wire,
-            Cbor::Array(vec![Cbor::Array(vec![Cbor::Uint(5), Cbor::Uint(0b111)])])
+            Cbor::Array(vec![Cbor::Array(vec![Cbor::Uint(3), Cbor::Uint(0b111)])])
         );
         assert_eq!(
             annotation_set_from(&wire).unwrap_or_else(|error| panic!("personal wire: {error}")),

@@ -19,6 +19,16 @@ Lot 1 stops for Fable's review; the cutover stops for Fable and Yoann before
 any witness blessing. The older dated paragraphs remain review evidence.
 The release-number TODO is recorded with the no-legacy decision below.
 
+**Current implementation — 7 October.** The consolidated T1/T2 cutover is
+qualified as package 20 / recording 4: **1,571 tests pass, zero fail or are
+ignored**, with the complete gate in the [identity inventory](human-review-v20-identity.md).
+The [consolidated action disposition](#consolidated-action-disposition--7-october)
+below names landed commits and the M2-only remainders. Current paths are
+`instance.rs`, `canonical.rs` and `journal/codec.rs`; the dated reading map
+below preserves the paths present when that reading was planned. T2 resumes
+at `journal/loop_protocol.rs`. This closes the approved implementation brief,
+not M1, the rest of the human review or the external opening gates.
+
 Rastok promises that the same validated plan and the same journaled inputs
 produce the same execution, identities and trace. The review reads what
 carries that promise first (identity, journal, validated plan, VM), then what
@@ -877,6 +887,51 @@ additional recording-byte movement are measured in the final section of the
 [v20 inventory](human-review-v20-identity.md) before blessing.
 
 ## Landed changes
+
+### Consolidated action disposition — 7 October
+
+The table below supersedes the scheduling and "still open" columns in the
+dated notes above. Implementation commits are listed independently of the
+single witness blessing; its complete qualification is recorded in the
+[v20 identity inventory](human-review-v20-identity.md).
+The final ordinary workspace run passes 1,571 tests in 61 groups with no
+failures or ignored tests. Fmt, strict Clippy, rustdoc, the three `no_std`
+targets and both fixed embedded workloads pass as well.
+
+| Action | Landed implementation | Named remainder |
+|---|---|---|
+| A-T1-1 | `28d9f0d`: immutable encoded payloads share `Arc<[u8]>`, with measured embedded bounds | `Arc<Value>` was considered, not promised; no further payload-sharing work is required by this action |
+| A-T1-1b | `2de737a`: materialize raw DATA by the reader type, including UTF-8 refusal and the three-byte `é\n` gallery regression | Its witness is part of the single v20 blessing |
+| A-T1-2 | `2de737a`: remove role from the envelope, canonical form and recording; compact the registry | No role slot or compatibility reader remains |
+| A-T1-4 | `8fa9331`, `2de737a`, `8bc54fd`: closed `IdKind`, compact explicit discriminants, standard Rust conversions and exhaustive byte refusals | Decoder attestation itself remains M2 under A-T1-7 |
+| A-T1-5 | `f72454a`, `eb3f396`, `8fa9331`: instance/canonical modules, dependency direction and all listed rename residues | No deferred instance-module move remains |
+| A-T1-6 | `2de737a`: graph-born ccbor, raw/ccbor distinction and canonical metadata | Avro remains an export/schema projection, not another identity encoding |
+| A-T1-7 | `2de737a`: decoder identity and conformance/availability specification; `IdKind::Decoder` allocated | Attested decoder registry and build-availability implementation remain M2, explicitly outside this brief |
+| A-T1-8 | `f72454a`, `eb3f396`, `8fa9331`: canonical-form and sys-field vocabulary in code and live prose | Dated review evidence keeps the words it reviewed |
+| A-T1-9 | `2de737a`, `8bc54fd`: standard `std/` identities, dotted publishers, provider/profile examples and no aliases | Existing opaque profile-version syntax is unchanged |
+| A-T1-10 | `eb3f396`, `9ef4865`: self-contained CBOR headers, absolute reference links and CI lint | None |
+| A-T1-11 | `f72454a`, `eb3f396`: consistency/type/bounds checks, `Result` and named exceeded bounds | Published diagnostic codes remain unchanged |
+| A-T2-1 | `f72454a`, `eb3f396`: Id/Name/Handle vocabulary and `EdgeEnd` | None |
+| A-T2-2(a) | `f72454a`, `8fa9331`, `2de737a`: recurrence deadline vocabulary and compact active allocation | A-T2-2(b), Extension-neutral journal facts, remains M2 design; it is not claimed landed |
+| A-T2-3 | `f72454a`: explicit linear-M1 journal lookup/scan limits and atomic-index direction | General journal indexes remain M2; this cutover does not implement them |
+| A-T2-4 | `8fa9331`: Ingress/Transaction/Egress records and admission pipeline, directional adjectives preserved | None |
+| A-T2-5 | `8fa9331`, `2de737a`, `8bc54fd`: typed deadlines, compact bytes and idiomatic rejecting enum conversions | None |
+| A-T2-6(1) | `387f39c`: typed timing errors and journal-owned acceptance checks | The final codec separation is A-T2-6(4) |
+| A-T2-6(2) | `cdc4350`: one generation-admission fold for live and prefix replay | None |
+| A-T2-6(3) | `8fa9331`: admission implementation follows trait order | None |
+| A-T2-6(4) | `8bc54fd`: inline deadline arrays in the record codec; timing owns types and acceptance errors only | `closed_at` was already inline; no causal-seal movement from this complement |
+| A-T2-7 | `8fa9331`: `journal::codec` and sealed/unsealed terminology | Ordinary retained evidence remains "retained" as a verb, not a second field category |
+
+**M2 entry constraint.** The final Retry/recovery workload uses 130,560 B of
+the 128 KiB heap gate and 1,041,440 B of the 1 MiB code gate: **512 B heap and
+7,136 B code remain**. No core growth is accepted without reclaiming bytes
+first. The workload, thresholds and functional assertions were not reduced.
+
+The human review itself is not closed by these changes. T2 resumes at
+`loop_protocol.rs`, then its fold, Retry and explicit instance closing; T4
+remains a separate reading. No external reviewer was invoked. The
+**public-format-1 TODO**, 24 October freeze and 5 November opening remain;
+no push, tag or publication is authorized by this disposition.
 
 **`f72454a` — Rename identity, canonical-form and check vocabulary
 (2026-09-28, Astra with the RustRover rename refactoring, signed by Yoann).**

@@ -1,12 +1,12 @@
 # Checked examples and historical sketches
 
-The checkout uses the **format-20 / diagnostic-recording-4 candidate**.
+The checkout uses **format-20 / diagnostic-recording-4**.
 Its byte movements and qualification are tracked in the
 [human-review identity inventory](../architecture/human-review-v20-identity.md).
-Existing goldens have not yet been re-blessed: approval follows candidate
-review, not a failing comparison. The [C4 qualification ledger](../architecture/retry-c4-qualification.md)
-is dated evidence for the native-Retry base; it is not qualification of this
-new representation. External opening gates remain separate.
+Goldens are regenerated together after review and explicit approval, with
+their representation changes enumerated before replacement. The
+[C4 qualification ledger](../architecture/retry-c4-qualification.md) is dated
+evidence for the native-Retry base. External opening gates remain separate.
 Author against the live
 [grammar](../spec/grammar.md), [Contract sheets](../spec/stdlib.md) and
 [Loop specification](../spec/loop.md), not a frozen benchmark prompt or an old

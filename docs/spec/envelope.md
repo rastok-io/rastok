@@ -5,9 +5,9 @@
 > of truth** for the envelope's structure, identity, `meta.sys` reserved
 > fields, the version stamp, and the storage / wire form. Other docs cite it
 > rather than restating the field list.
-> Candidate format 20 has one current representation, without compatibility
+> Format 20 has one current representation, without compatibility
 > readers. The [cutover inventory](../architecture/human-review-v20-identity.md)
-> records the pre-public change; blessing is a separate review gate.
+> records the reviewed pre-public change and its single blessing.
 
 An **envelope** is the unit that flows along edges and through transactions. It is
 **immutable** : a transaction never mutates an envelope, it *emits* new ones (Mealy

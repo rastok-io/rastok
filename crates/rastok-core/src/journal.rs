@@ -3587,8 +3587,8 @@ mod tests {
 
     #[test]
     fn an_outbound_record_reconstructs_its_call_ref_autonomously() {
-        // The autonomy rule of identity.md §3: keys 40 (emitting),
-        // 43 (digest), and 47 (edge) suffice — no other record, no
+        // The autonomy rule of identity.md §3: keys 27 (emitting),
+        // 30 (digest), and 33 (edge) suffice — no other record, no
         // out-of-band state.
         let sealed = intent("echo", 7);
         let reconstructed = ids::call_id(
@@ -3602,12 +3602,12 @@ mod tests {
     fn the_delivery_ref_recipe_is_pinned_byte_for_byte() {
         // envelope.md §2: the delivery reference is
         // derive(0x0b, canonical_edge, envelope_id). Any drift here
-        // silently unseals every golden's key 24 and every call ref.
+        // silently changes every consumed delivery and derived Call id.
         let delivery = Id::from_bytes([7; 16]);
         let reference = ids::delivery_id("shout.out>echo.in", delivery);
         assert_eq!(
             reference.to_string(),
-            "301cd0af333f760b8f5dc13738b821ec",
+            "b26fc16a16876c6d531bfc0b5ee3442b",
             "the pinned obligation identity"
         );
     }
@@ -3619,7 +3619,7 @@ mod tests {
         );
         let first = ids::instance_lifetime_id(&instance::Generation::new(address.clone(), 0));
         let second = ids::instance_lifetime_id(&instance::Generation::new(address, 1));
-        assert_eq!(first.to_string(), "d8977f984e5356cc4df3aca36c442642");
+        assert_eq!(first.to_string(), "77901038ea63d061071656d3c7637a9d");
         assert_ne!(
             first, second,
             "a stale generation has another obligation id"
@@ -3651,8 +3651,8 @@ mod tests {
         let write = ids::session_write_id(outbound, Id::from_bytes([6; 16]), &[7; 32]);
         assert_eq!(
             format!("{inbound}|{outbound}|{write}"),
-            "45e41992da920539378d903e21f963a0|835d72e38dc56aaf373d9613449d7354|\
-             19b7714f0076f09221da8c3d9a22f2f8"
+            "5ea1374ac75e3968f604f31cbe68e2ca|7ddc2c74566fc89f912afee39073d7be|\
+             47998f535730ffa5def6866dec6795cd"
         );
     }
 

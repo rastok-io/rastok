@@ -1,9 +1,10 @@
 # Human-review cutover — v20 identity inventory
 
 > Opened 2026-10-06, from qualified lot 2 at `3bdd807`, on `rework/v20`.
-> Candidate measured, blessing authorized on 2026-10-07 after Fable's review.
-> The final pre-blessing measurements below include all three complements.
-> No stored witness is replaced before that inventory is committed.
+> Blessed and qualified on 2026-10-07 after Fable's review and Yoann's approval.
+> The final pre-blessing inventory, including all three complements, was
+> committed in `8bc54fd` before any stored witness was replaced.
+> The final qualification below supersedes the dated candidate gate results.
 
 ## Invariant and scope
 
@@ -368,3 +369,61 @@ and 2,428 B respectively; peak heap does not grow. Relative to the first v20
 candidate, code shrinks by 224 B and 264 B. Retry remains one operation,
 three Calls, sixteen four-byte frames per channel per attempt. The M2 entry
 constraint is unchanged: no core growth without reclaiming bytes first.
+
+## Single blessing and qualification — 7 October
+
+The final inventory was committed as `8bc54fd` before any witness was
+replaced. The blessing then regenerated the three package witnesses,
+embedded echo package, four root traces and 28 gallery traces from the
+current sources and scenarios. The new `files.utf8` witness observes three
+bytes for `é\n`; no earlier artefact was converted or retained as a second
+accepted representation. All additional assertion pins follow their rows
+above. No functional assertion or test timeout changed, and no test was
+disabled or ignored.
+
+Independent comparisons after regeneration confirm every package body,
+checksum and gallery seal against the pre-blessing inventory. Gauge's
+semantic hash is still `0d3ad43d…`; its package and trace move only for the
+separately inventoried representation changes. The echo recording digest is
+`6130123972daf8e882d56c726361a0ca26a4b6ac320613e697848e6bca6abb4d`.
+
+Completed checks after the final implementation and inventoried pin update:
+
+| Check | Observed result |
+|---|---|
+| `cargo fmt --all -- --check` | Pass |
+| `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` | Pass |
+| `cargo doc --locked --workspace --no-deps` | Pass |
+| `cargo test --locked --workspace --all-features --no-fail-fast` | Pass: 1,571 tests, zero failures/ignored, 61 result groups; exit 0 |
+| Core, no default features | Pass on `thumbv7m-none-eabi`, `thumbv8m.main-none-eabihf`, `riscv32imac-unknown-none-elf` |
+| Cortex-M33 echo and Retry/recovery | Both `SPIKE_OK`; final heap/code figures are in the preceding table |
+| SVG layout, editor grammar and readable chat-page JavaScript | 32 tests pass |
+| DCO and rustdoc-link CI helpers | 14 tests pass; citation lint checks 210 tracked Rust files |
+| Gallery assertions | 28 scenarios pass; their regenerated seals match the inventory |
+| Real echo recording and replay | Eight records, output `hello`, same seal `80f1263274f3b1b7480fdb13c007459e18e1e4cf10cc9bf08b5d12b63a4b7e0e`; replay performs no Driver I/O |
+
+The first ordinary Cargo invocation completed with **1,570 passed, one
+failed, zero ignored**, across 61 groups. It encountered the same native
+macOS startup delay as the candidate: the chat
+child produced no output before the unchanged 30-second listener deadline.
+Sampling a delayed test executable found it at `_dyld_start`, before Rust
+entry. With the identical built binaries and no configuration change, the
+isolated chat regression subsequently passed in 1.30 seconds; all three
+gateway tests, including real local WebSockets and resident children, also
+passed. The **complete ordinary Cargo command then passed**, not just the
+failed target: 1,571 passed, zero failures/ignored, 61 groups, exit 0. No
+build ran concurrently with either network-test campaign. The initial
+failure remains evidence and is not counted as a passing run.
+
+The three tests added to the 1,568-test candidate are the exact inline
+deadline form, rejection of nested deadlines through the recording decoder,
+and exhaustive lifecycle-byte conversion. The complete run also covers
+hostile package-20 and recording-4 inputs: unknown tags/versions, forged
+types/commands, noncanonical DATA, malformed tuples, signed-instant bounds
+and invalid deadline relationships refuse rather than being repaired.
+
+No host security setting was changed. No release archive was rebuilt, no
+independent browser review was performed, and no paid provider was called.
+Decoder attestation/availability, general journal indexes and
+Extension-neutral journal facts remain M2. Public-format-1 numbering stays
+a separate pre-publication TODO; no push, tag or publication is authorized.

@@ -1,11 +1,11 @@
 # Rastok — White Paper
 
-> **Format-20 candidate (2026-10-06), diagnostic recording 4; blessing pending review.**
+> **Format-20 (2026-10-07), diagnostic recording 4.**
 > The Node/Executor/Extension model, host-terminal Loop, exact-instance closure,
 > native outbound Call Retry and typed measurement retention are executable.
 > The [C4 qualification](docs/architecture/retry-c4-qualification.md) records
-> the qualified native-Retry base, not this candidate. The current cutover's
-> measurements and pending blessing are in the
+> the qualified native-Retry base. The current cutover's measurements,
+> single reviewed blessing and verification results are in the
 > [identity inventory](docs/architecture/human-review-v20-identity.md); external
 > [opening gates](docs/architecture/opening-showcase.md) remain separate.
 > Process jobs use `std/process@4`; resident Sessions use `std/process@5`.
@@ -2718,12 +2718,12 @@ ledgers are evidence for Rastok; future design sections are not.
 
 ## 10. Status
 
-Rastok is experimental, not production-ready. The current cutover candidate is
+Rastok is experimental, not production-ready. The current format is
 **package 20 / diagnostic recording 4**, with one compact active registry.
 Process job/service Contracts are `std/process@4` / `std/process@5`;
 File and the four HTTP/WebSocket Contracts use `@3`. These version registers
 are independent. The [v20 inventory](docs/architecture/human-review-v20-identity.md)
-records the byte movements and pending pre-blessing review. No public release
+records the reviewed byte movements and their qualification. No public release
 or compatibility reader is implied.
 
 | Executable today | Qualification / exact limit |
@@ -2743,7 +2743,7 @@ or compatibility reader is implied.
 The [example catalogue](docs/examples/README.md) distinguishes passing programs,
 isolated illustrative fragments and historical future-surface sketches.
 The [9 September documentation audit](docs/architecture/documentation-audit-2026-09-09.md)
-is historical evidence. The [current C4 ledger](docs/architecture/retry-c4-qualification.md)
+is historical evidence. The [current identity ledger](docs/architecture/human-review-v20-identity.md)
 and [opening checklist](docs/architecture/opening-showcase.md) distinguish local
 qualification from remaining external evidence.
 

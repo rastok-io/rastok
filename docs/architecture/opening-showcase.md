@@ -4,13 +4,14 @@ Opening: **5 November 2026**, freeze **24 October**, per the 5 October
 [human-review amendment](human-review-m1.md). This is the current M1 delivery
 checklist. **Release TODO:** keep v20 as the chantier/target during the work,
 then number the first public format 1 before publication. No public operation
-is authorized by this update. The following qualification baseline was
-updated **18 September**. Approved amendments to the original v17 opening
-freeze now converge on **v19 / diagnostic recording v3**: exact-instance
+is authorized by this update. The current representation is **v20 /
+diagnostic recording v4**, reviewed and inventoried in the
+[human-review identity ledger](human-review-v20-identity.md). Exact-instance
 closure, resident Process, native Retry, flat annotation types and bounded
-typed HTTP hydration. The [common C4 ledger](retry-c4-qualification.md) records
-the single fixture blessing and current verification; older candidate counts
-below are dated evidence, not outstanding failures.
+typed HTTP hydration keep their execution semantics. The
+[C4 ledger](retry-c4-qualification.md) records the preceding native-Retry
+qualification; its 18 September counts and unchanged-witness claims below
+are dated evidence, not the status of the subsequent compact representation.
 
 The standard measurement is exactly `@measure(id, unit)`. Signed original
 integer/decimal samples remain in the journal, including Retry-held attempts.
@@ -53,11 +54,11 @@ dead when no handler emits on that port.
 | Optional JSON member presence | Done | Approved `has(object.member)`, core evaluator, independent package validation, constant folding, classification and pinned CEL differential tests; absence is distinct from null and observed zero; no witness re-blessing |
 | Loop / Retry / Saga separation | Done for the admitted M1 profile | Finite outbound Call Retry retains the prepared operation, all original attempts and exact closure-based deadlines; final-only publication and exact-prefix recovery are qualified. Loop progresses state, Retry repeats an operation; same-owner composition and unsupported hosts refuse. Saga remains deferred. [C4](retry-c4-qualification.md) records the common blessing and the unchanged embedded limits. |
 | `docs/site/README.md` schema | Done | Plain Markdown/YAML, exact requested fields; Rust validation rejects missing/unknown/duplicate fields and checks artifact references; no extra field introduced |
-| Editor grammar | Done for executable v19 syntax | Data-only package, four lexical and three real TextMate/Oniguruma tests; all shipped examples, `@struct`, custom annotations, Retry, idempotence, JSON quoting and instance commands. No new dependency or claim of interactive historical-VS-Code certification. |
+| Editor grammar | Done for the executable syntax, unchanged by format 20 | Data-only package, four lexical and three real TextMate/Oniguruma tests; all shipped examples, `@struct`, custom annotations, Retry, idempotence, JSON quoting and instance commands. No new dependency or claim of interactive historical-VS-Code certification. |
 | echo page and comparison | Done | Three scenarios and gallery goldens; reproducible run/replay; `cli` versus `lab` provenance prevents a false claim of raw run/simulate seal equality |
-| file-pipeline | Done | New File graph, three scenarios/goldens and page; CLI regression checks actual replacement, changes both files, and proves replay leaves them untouched |
+| file-pipeline | Done | File graph with four scenarios/goldens, including `files.utf8`: three bytes, not two characters. CLI regression checks actual replacement, changes both files, and proves replay leaves them untouched |
 | asymmetric two-tenants | Done | Bob once, Alice timeout/backoff/retry of identical prepared bytes; idle lifetime retains generations 0 and 1. No artificial attempt field. Both migrated goldens and batch/step equivalence pass; the genuine Loop UI fixture remains a separate regression. |
-| HttpServer ack source simulation | Done — qualification below | Decoded requests use the ordinary inbound binding and correlated ACK without a physical Driver or artificial App input; source observations come from INBOUND |
+| HttpServer ack source simulation | Done — qualification below | Decoded requests use the ordinary inbound binding and correlated ACK without a physical Driver or artificial App input; source observations come from INGRESS |
 | webhook-to-partner | Done locally; independent visual gate remains separate | Six native Retry scenarios and their versioned goldens pass; invalid-business-payload trace stays unchanged. Typed Receipt retains charges on original Held and Published emissions, without an extractor or report. ACK, deduplication, personal-data admission and redaction remain qualified. Fresh captures/GIF and break-it golden checks are delivered. |
 | sensor-alarm | Done | New graph/page, three scenarios/goldens: per-sensor hysteresis, missing heartbeat, virtual day; warm CLI measurement published with its limits |
 | agent-gateway | Done for resident and limited HTTP examples; no live HTTP-provider certification | `examples/agent-http.rkg` targets Responses with explicit projected JSON. Six first-time goldens, local physical HTTP and LIVE/HISTORY/REPLAY tests qualify original samples, missing versus zero, schema refusal, job/session META and secret-free retention. Inference is not declared idempotent. The resident bridge keeps its existing real-Process evidence; no paid provider call or report is claimed. |
@@ -78,9 +79,24 @@ State vocabulary: Done = fait; Partial = partiel (including an explicitly
 unstarted or externally blocked item); Removed = retiré from this pass, not
 silently claimed complete. Six chapters are published in the checkout; the
 remaining independent visual, distribution and opening work stays explicit above.
-Every result section below is dated; the live table and the C4 ledger take precedence.
+Every result section below is dated; the live table and the human-review
+identity ledger take precedence for the current format.
 
-## Current local qualification — 18 September
+## Current representation qualification — 7 October
+
+Package 20 and recording 4 are blessed once against the committed inventory.
+The final ordinary workspace run passes **1,571 tests, zero failures/ignored,
+61 groups**. Fmt, strict Clippy, rustdoc, three `no_std` targets and both fixed
+Cortex-M33 workloads pass. The 28 gallery scenarios match their regenerated
+goldens, including `files.utf8`; the three package witnesses match their
+inventoried bytes. The [identity ledger](human-review-v20-identity.md) records
+the initial native-startup failure and complete passing rerun separately.
+
+No release archives or captures were regenerated, and no independent browser
+review was performed in this format pass. The external opening rows remain
+open; this qualification is not an authorization to publish.
+
+## Dated local qualification — 18 September
 
 **1,545 Rust tests pass, zero failures/ignored, 60 result groups** in the final
 ordinary all-feature Cargo run. A separate six-worker campaign runs all 58

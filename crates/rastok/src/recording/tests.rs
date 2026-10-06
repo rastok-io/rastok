@@ -14,12 +14,12 @@ fn echo_retention_bytes_are_pinned_independently_of_the_codec_location() {
             .into_iter()
             .map(|run| codec::list(run.records.iter().map(codec::encode)))
     })));
-    // Recording v3 removes Intent.effect and retains the winning closure time.
-    // The tuple moves separately from the unchanged causal-seal witnesses;
-    // see docs/architecture/retry-c4-qualification.md.
+    // The recording-4 tuple includes inline unsealed deadlines. Its digest
+    // moves independently of causal seals; the single blessing is inventoried
+    // in docs/architecture/human-review-v20-identity.md.
     assert_eq!(
         blake3::hash(&bytes).to_hex().as_str(),
-        "eba461cb2011177539b0a0a864ee01064f39097cace16dd3268b5523ce9e2078"
+        "6130123972daf8e882d56c726361a0ca26a4b6ac320613e697848e6bca6abb4d"
     );
 }
 

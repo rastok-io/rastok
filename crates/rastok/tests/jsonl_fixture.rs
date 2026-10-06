@@ -27,9 +27,9 @@ fn compilation() -> rastok::compiler::Compilation {
     .expect("a valid unit")
 }
 
-// The stored semantic hash stays pinned pending approval of the namespace
-// movement enumerated in docs/architecture/human-review-v20-identity.md.
-const JSONL_HASH: &str = "3f1b40ec3457d1b371289d9cac615df0394ef1dffe8b52c7f36424961a0dd064";
+// The standard Contract namespace movement is approved and inventoried in
+// docs/architecture/human-review-v20-identity.md.
+const JSONL_HASH: &str = "0aeff047b9efde5c6dc4efd6f411c5541a786fb24f816108e110eb29d00e026f";
 
 #[test]
 fn the_semantic_hash_is_pinned() {

@@ -625,7 +625,7 @@ mod tests {
                 .expect("same address")
                 .as_bytes()
         );
-        assert_eq!(address.virtual_shard(NonZeroU32::new(257).unwrap()), 117);
+        assert_eq!(address.virtual_shard(NonZeroU32::new(257).unwrap()), 169);
         assert_eq!(Generation::new(address, 7).generation(), 7);
     }
 
@@ -646,7 +646,7 @@ mod tests {
             address.as_bytes(),
             &[
                 0x82, 0x81, 0x64, b'n', b'o', b'd', b'e', 0x81, 0x83, 0x81, 0x64, b'n', b'o', b'd',
-                b'e', 0x01, 0x82, 0x07, 0x82, 0x08, 0x65, b'a', b'l', b'i', b'c', b'e',
+                b'e', 0x01, 0x82, 0x07, 0x82, 0x06, 0x65, b'a', b'l', b'i', b'c', b'e',
             ]
         );
     }

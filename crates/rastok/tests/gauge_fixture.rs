@@ -27,7 +27,7 @@ fn compilation() -> rastok::compiler::Compilation {
     .expect("a valid unit")
 }
 
-// Gauge witnesses semantic-hash neutrality. The candidate's compact record
+// Gauge witnesses semantic-hash neutrality. The compact format-20 record
 // keys/value tags move its trace independently; the v20 inventory records why.
 const GAUGE_HASH: &str = "0d3ad43d9fb09c8626146342f6a50d1f4c387a8de52a47a3134a408cf74cb22e";
 

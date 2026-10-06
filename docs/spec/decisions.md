@@ -5,6 +5,51 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-10-07-1 — Bless the reviewed format-20 representation once
+
+Yoann approves the single blessing after Fable's review of `2de737a`, with
+the three complements recorded in `8bc54fd`. The final
+[identity inventory](../architecture/human-review-v20-identity.md) was
+committed before replacing any witness and gives the old/new identities,
+body sizes, checksums, causal seals and lossless recording digest.
+
+- Dated obligations are inline record fields, not embedded CBOR documents.
+  `timing.rs` owns the types and acceptance errors; `journal::codec` owns
+  their encoding. `closed_at` stays inline. Both remain unsealed facts,
+  required for exact recovery rather than re-armed at restart time.
+- The publisher namespace rule is general: standard-library qualified ids
+  use `std/`, including `std/env@1`; other publishers are dotted, including
+  fixtures and privacy/pricing references. Existing opaque profile-version
+  syntax is unchanged. No alias preserves a previous spelling.
+- `IdKind`, `DeadlineKind` and `Lifecycle` have explicit `repr(u8)`
+  discriminants, `From<Kind> for u8` and rejecting `TryFrom<u8>` with named
+  errors. This idiom changes no allocated byte and adds no derive dependency.
+- The three package witnesses, embedded echo package, four root traces,
+  28 gallery traces and inventoried assertion pins regenerate from source
+  and original scenarios. Recording 4's pin regenerates from the echo Lab.
+  No converter, older reader, disabled test or weaker functional assertion
+  participates. Gauge's semantic hash stays fixed; its compact representation
+  and checksum move as separately inventoried.
+
+This closes the representation/allocation amendments of D-2026-10-05-1 and
+D-2026-10-06-1 and their targeted supersession of D-2026-09-05-1,
+D-2026-09-08-1, D-2026-09-14-4 and D-2026-09-15-1/-2. Loop, Retry, Closing,
+exchange and deterministic ordering rules do not change. The complete
+qualification results belong to the inventory, not an inferred passing gate.
+
+The compact registry is now **extend-only**: no key, tag or identity-domain
+renumbering or reuse after this blessing. Work stays numbered **20**, recording
+**4**. The approved **public-format-1 TODO** remains for the pre-publication
+step; it is not executed here. The fixed Retry/recovery workload leaves
+512 B below 128 KiB heap and 7,136 B below 1 MiB code: M2 must reclaim bytes
+before increasing the core footprint. General journal indexing, decoder
+attestation and Extension-neutral journal facts remain named M2 work.
+
+Only local DCO-signed commits and a fast-forward into `rework/retry` are
+authorized. No push, tag, publication or new external review is performed.
+Human T2 reading resumes at `loop_protocol.rs`; the 24 October freeze and
+5 November opening remain the agreed dates, not an authorization to publish.
+
 ## D-2026-10-06-1 — Apply the consolidated pre-public format-20 cutover
 
 This records implementation of Yoann's approved brief and compaction addendum

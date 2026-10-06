@@ -1,8 +1,8 @@
 # Diagnostic recording and read-only replay
 
-Status: 6 October 2026, candidate diagnostic format **4**, embedding
+Status: 7 October 2026, diagnostic format **4**, embedding
 plan package **20**. The [v20 inventory](human-review-v20-identity.md) records
-the byte changes before blessing. There is no reader or converter for another
+the byte changes inventoried before the single blessing. There is no reader or converter for another
 recording format. Exact-instance closure packets travel on INGRESS and
 TRANSACTION; unused packets are absent from the causal seal.
 The durable deployment Journal remains M2 work.

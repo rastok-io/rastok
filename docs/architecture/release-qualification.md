@@ -60,7 +60,20 @@ rewriting. These gates must close before public participation opens.
 
 ## Open qualification inventory
 
-**18 September current qualification:** native Retry, two-field measurements
+**Current representation — 7 October:** package 20 and diagnostic recording 4
+have one reviewed blessing in the [human-review identity inventory](human-review-v20-identity.md).
+That ledger owns the current workspace and three-target `no_std` evidence.
+The final all-feature workspace run passes **1,571 tests, zero failures or
+ignored tests, 61 groups**; fmt, strict Clippy and rustdoc pass as well.
+Both fixed Cortex-M33 workloads pass: echo uses 112,656 B peak heap and
+973,028 B code; Retry with full recovery uses 130,560 B and 1,041,440 B.
+Retry's margins remain only 512 B heap and 7,136 B code. M2 must reclaim
+bytes before growing the core; neither threshold has been relaxed.
+This cutover does not rebuild release archives or perform a new independent
+browser review. The dated artifact/browser evidence and open rows below must
+not be presented as qualification of freshly published binaries.
+
+**18 September dated qualification:** native Retry, two-field measurements
 and the Responses adapter share one v19/v3 blessing, documented in the
 [C4 ledger](retry-c4-qualification.md). The final ordinary workspace run has
 1,545 passing tests, zero failures/ignored; earlier listener-start failures

@@ -63,14 +63,16 @@ changed bytes, then the single v20 identity cutover. Vocabulary stops for
 Fable's review; the cutover needs Fable's review and Yoann's approval before
 blessing. Pre-public registries compact once; the public extend-only contract
 starts after that bless. Keep the chantier numbered v20 for now, and record
-the switch to public format 1 as a pre-publication TODO. The executable
-checkout remains v19 until the cutover; no publication is authorized here.
+the switch to public format 1 as a pre-publication TODO. The approved cutover
+now uses package 20 and recording 4; no publication is authorized here.
 
-### Current close-out — 18 September
+### Current close-out — 7 October
 
-The checkout uses **v19 / diagnostic recording v3**. The common
-[C4 ledger](docs/architecture/retry-c4-qualification.md) owns the single
-identity/trace blessing and current qualification, including native Retry,
+The checkout uses **v20 / diagnostic recording v4**. The
+[human-review identity inventory](docs/architecture/human-review-v20-identity.md)
+owns the reviewed single blessing and current qualification. The
+[C4 ledger](docs/architecture/retry-c4-qualification.md) is dated evidence
+for the preceding native-Retry base. The executable scope includes native Retry,
 typed Responses hydration and generic `@measure(id, unit)` samples retained
 on original attempts. The six-chapter gallery, editor grammar and publication
 assets are migrated. OTLP export and the Budget Extension remain outside M1;
@@ -84,7 +86,8 @@ publication are not inferred from local tests. The confirmed URLs and site
 handoff are recorded in the [release inventory](docs/architecture/release-qualification.md#public-destinations-and-opening-gate).
 No public push, tag, registry publication or paid model call is
 made by this pass. The embedded Retry workload leaves only **512 B of heap**
-and **6,852 B of code** margin; the unchanged limits remain gates.
+and **7,136 B of code** margin; the unchanged limits remain gates. M2 must
+reclaim bytes before growing the core on this workload.
 
 ### Dated implementation checkpoints — superseded by the current ledger
 
