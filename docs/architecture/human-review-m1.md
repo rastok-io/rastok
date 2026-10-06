@@ -640,9 +640,10 @@ regression failed before the change and also checks materialization and
 survival after the original envelope data is dropped.
 
 `Arc<Value>` was considered but not introduced: materialized trees and the
-lazy cache keep their existing ownership. Neither embedded qualification
-workload demonstrates a heap saving from that additional change. No saving
-for that unimplemented variant is claimed.
+lazy cache keep their existing ownership. Only the encoded-byte change was
+implemented and measured; no `Arc<Value>` prototype or benchmark was run.
+The unchanged peak heap below is not evidence about what that additional
+change might save.
 
 Cortex-M33 QEMU measurements, release builds from the same tree before and
 after this action, using the same three-attempt Retry package:
@@ -656,22 +657,25 @@ Both runs report `SPIKE_OK`; the 128 KiB heap and 1 MiB code gates hold.
 These workloads use materialized values, so their unchanged peak heap is
 expected. The encoded-byte regression proves sharing, not a measured gain on
 these workloads. Format check, strict workspace Clippy, rustdoc and
-`thumbv7m-none-eabi` pass for this action. The full workspace suite is still
-running; final lot qualification will be recorded after all actions.
+`thumbv7m-none-eabi` passed for this action. At that checkpoint the full
+workspace suite was still running; final lot qualification is recorded below.
 
 **A-T2-6(1) — Separate typed deadline validation from decoding**, landed in
-`a07c061`. `timing::Error` names the acceptance failures;
+`387f39c`. `timing::Error` names the acceptance failures;
 only `timing::DecodeError` additionally wraps a canonical-byte error.
 The cross-record checks now live in `journal::acceptance`, called by the
 live journal, codec and recovery at their existing validation points.
 Signed integer encoding/reading is shared with `journal::codec`.
 No condition was widened or narrowed and the unsealed field bytes stay fixed.
 The obsolete “timer schedule” diagnostic wording is gone from this path.
-The journal-focused suite passes 74 tests, including each typed refusal,
-and core all-target/all-feature Clippy passes. Whole-lot qualification
-and embedded size measurement follow after the remaining actions.
+The journal-focused suite passed 74 tests, including each typed refusal,
+and core all-target/all-feature Clippy passed. The hosted recording reader
+preserves these typed failures too; its focused regression distinguishes
+malformed bytes from deadline and Call acceptance failures. That bridge was
+folded into this same action commit after workspace Clippy exposed the
+missing exhaustive match, without moving the recording tuple.
 
-**A-T1-10 — Enforce the rustdoc citation convention**, landed in `0322df8`.
+**A-T1-10 — Enforce the rustdoc citation convention**, landed in `9ef4865`.
 The self-contained `canonical` and `canonical_cbor`
 headers already landed in `eb3f396`; they describe CBOR, the byte bijection,
 the handwritten codec and the separate tag registry, with short in-text
@@ -681,7 +685,7 @@ comments, without a new dependency. Four focused tests cover line and block
 docs, inline/reference/HTML links, absolute links and ordinary non-doc text.
 The check passes on 208 tracked Rust files.
 
-**A-T2-6(2) — Share the admission-generation fold**, landed in `00e1e77`.
+**A-T2-6(2) — Share the admission-generation fold**, landed in `cdc4350`.
 `MemJournal` and `AdmissionPrefix` use the same lifecycle
 fold, including active close roots, parent-generation traversal and the
 current-versus-successor admission rule. Generation validation remains
@@ -695,12 +699,67 @@ rejected parent stop changes neither the journal nor admission queries,
 then reconstructs every prefix and the complete live index.
 The journal-focused suite passes 75 tests; core strict Clippy passes.
 
-**Lot-1 residue — Keep wire tags separate from enum representation** (the
-commit introducing this paragraph). `IdKind` and `DeadlineKind` no longer
+**Lot-1 residue — Keep wire tags separate from enum representation**, landed
+in `4dee690`. `IdKind` and `DeadlineKind` no longer
 repeat wire numbers as Rust discriminants. Their explicit tag projections
 and strict readers are unchanged, as is declaration/sort order. No call
 site casts either enum to a wire byte. The existing tests pin all allocated
 bytes and reject every other byte; whole-lot qualification reruns them.
+
+### Final lot-2 qualification
+
+Qualified on 2026-10-06, against the lot-1 base `8fa9331`, after the five
+scoped commits above. The final standard workspace run, not an aggregate of
+partial runs, passes **1,560 tests, zero failed, zero ignored**, in 60 result
+groups including the two empty rustdoc groups.
+
+| Check actually executed | Result |
+|---|---|
+| `cargo fmt --all -- --check` | Passed |
+| `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` | Passed |
+| `cargo test --locked --workspace --all-features` | Passed: 1,560 tests |
+| `cargo doc --locked --workspace --no-deps` | Passed |
+| `cargo check --locked -p rastok-core --no-default-features --target thumbv7m-none-eabi` | Passed |
+| Same core check, `thumbv8m.main-none-eabihf` | Passed |
+| Same core check, `riscv32imac-unknown-none-elf` | Passed |
+| `node --test tools/ci/check-dco.test.mjs tools/ci/check-rustdoc-links.test.mjs` | Passed: 14 tests |
+| Rustdoc-link lint | Passed: 208 tracked Rust files, no relative Markdown link |
+| `git diff --check` | Passed |
+
+An auxiliary run of the test executables in four parallel workers hit the
+30-second listener-start deadline in
+`agent_chat::http_remains_available_while_two_children_talk_and_one_quits`
+(`Connection refused`, no application output). Its cause was not established.
+The subsequent standard full Cargo run above passed that unchanged test;
+no timeout was relaxed and no failure was ignored.
+
+Final Cortex-M33 measurements, with the same workloads and packages as the
+baseline, after all lot-2 changes:
+
+| Workload | Peak heap, baseline / final | `.text + .rodata`, baseline / final | Code delta |
+|---|---:|---:|---:|
+| echo | 112,656 / 112,656 B | 971,468 / 971,024 B | -444 B |
+| Retry, including full recovery | 130,560 / 130,560 B | 1,039,572 / 1,039,012 B | -560 B |
+
+Both final runs report `SPIKE_OK`. The Retry workload leaves **512 B**
+under the 128 KiB peak-heap gate and **9,564 B** under the 1 MiB code gate.
+There is no claimed heap saving or throughput improvement. Echo keeps
+67 records and semantic hash
+`878a34b77a7ac6500b6452b903f633ba39848c47ed0ac387ce1597f78a785699`;
+the Retry package keeps hash
+`62d07d3b8e10ea45daf1260d9c3b993fb5046b22edfbb78e66ddaf34e1dce132`
+and produces 17 records for one operation, three Calls, sixteen four-byte
+frames per channel per attempt.
+
+No golden, fixture, example, `.rkp` or `.trace` changed relative to `8fa9331`;
+there was no re-blessing. Package v19 and recording v3 remain unchanged.
+The Loop and Retry protocol files being read by the human reviewer, their
+Loop fold, and `instance_stop.rs` are untouched by this lot.
+
+**Review stop:** lot 2 is ready for Fable's review; that review has not been
+run by Astra. No lot-3 cutover, v20 format change, push, tag or publication
+has begun. `Arc<Value>` remains an unimplemented option, not an unfinished
+promise of this encoded-byte change.
 
 ## Landed changes
 
