@@ -659,8 +659,8 @@ these workloads. Format check, strict workspace Clippy, rustdoc and
 `thumbv7m-none-eabi` pass for this action. The full workspace suite is still
 running; final lot qualification will be recorded after all actions.
 
-**A-T2-6(1) — Separate typed deadline validation from decoding** (the commit
-introducing this paragraph). `timing::Error` names the acceptance failures;
+**A-T2-6(1) — Separate typed deadline validation from decoding**, landed in
+`a07c061`. `timing::Error` names the acceptance failures;
 only `timing::DecodeError` additionally wraps a canonical-byte error.
 The cross-record checks now live in `journal::acceptance`, called by the
 live journal, codec and recovery at their existing validation points.
@@ -670,6 +670,16 @@ The obsolete “timer schedule” diagnostic wording is gone from this path.
 The journal-focused suite passes 74 tests, including each typed refusal,
 and core all-target/all-feature Clippy passes. Whole-lot qualification
 and embedded size measurement follow after the remaining actions.
+
+**A-T1-10 — Enforce the rustdoc citation convention** (the commit introducing
+this paragraph). The self-contained `canonical` and `canonical_cbor`
+headers already landed in `eb3f396`; they describe CBOR, the byte bijection,
+the handwritten codec and the separate tag registry, with short in-text
+citations and absolute reference links. No rewrite was needed.
+CI now checks all tracked Rust files for relative Markdown links in rustdoc
+comments, without a new dependency. Four focused tests cover line and block
+docs, inline/reference/HTML links, absolute links and ordinary non-doc text.
+The check passes on 208 tracked Rust files.
 
 ## Landed changes
 

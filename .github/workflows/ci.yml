@@ -23,6 +23,10 @@ jobs:
           node-version: '22'
       - name: test the sign-off checker
         run: node --test tools/ci/check-dco.test.mjs
+      - name: check rustdoc citation links
+        run: |
+          node --test tools/ci/check-rustdoc-links.test.mjs
+          node tools/ci/check-rustdoc-links.mjs
       - name: check every contribution commit
         env:
           DCO_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
