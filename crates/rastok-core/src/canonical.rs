@@ -93,7 +93,7 @@ pub fn data(data: &Data) -> Cbor {
                 Encoding::Avro => 2,
                 Encoding::ArrowIpc => 3,
             }),
-            Cbor::Bytes(bytes.clone()),
+            Cbor::Bytes(bytes.to_vec()),
         ]),
         Data::Materialized(value) => Cbor::Array(vec![
             Cbor::Uint(1),

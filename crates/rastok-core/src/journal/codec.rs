@@ -149,7 +149,7 @@ fn data(value: &Data) -> Cbor {
                 Encoding::Avro => 2,
                 Encoding::ArrowIpc => 3,
             }),
-            Cbor::Bytes(bytes.clone()),
+            Cbor::Bytes(bytes.to_vec()),
         ]),
     }
 }

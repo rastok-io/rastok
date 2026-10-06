@@ -626,6 +626,39 @@ or numerical renumbering is part of this lot. The package remains v19 and
 recording v3. The **public-format-1 TODO** is retained above, not implemented
 early. Nothing is pushed and no external reviewer is invoked.
 
+## Implementation follow-up — 2026-10-06, lot 2
+
+Fable accepted lot 1 at `8fa9331`: 1,554 passing tests and no remaining
+arbitration. Lot 2 is structural only: package v19, recording v3 and all
+witness bytes stay unchanged. The v20 cutover has not started.
+
+**A-T1-1 — Share encoded envelope bytes** (the commit introducing this entry).
+`Data::Encoded` now owns an `Arc<[u8]>`; cloning a journal payload,
+delivery or recurrent admission shares those immutable original bytes.
+Equality and canonical encoding remain content-based. The pointer-sharing
+regression failed before the change and also checks materialization and
+survival after the original envelope data is dropped.
+
+`Arc<Value>` was considered but not introduced: materialized trees and the
+lazy cache keep their existing ownership. Neither embedded qualification
+workload demonstrates a heap saving from that additional change. No saving
+for that unimplemented variant is claimed.
+
+Cortex-M33 QEMU measurements, release builds from the same tree before and
+after this action, using the same three-attempt Retry package:
+
+| Workload | Peak heap, before / after | Code + read-only data, before / after |
+|---|---:|---:|
+| echo | 112,656 / 112,656 B | 971,468 / 971,132 B |
+| Retry, including full recovery | 130,560 / 130,560 B | 1,039,572 / 1,039,380 B |
+
+Both runs report `SPIKE_OK`; the 128 KiB heap and 1 MiB code gates hold.
+These workloads use materialized values, so their unchanged peak heap is
+expected. The encoded-byte regression proves sharing, not a measured gain on
+these workloads. Format check, strict workspace Clippy, rustdoc and
+`thumbv7m-none-eabi` pass for this action. The full workspace suite is still
+running; final lot qualification will be recorded after all actions.
+
 ## Landed changes
 
 **`f72454a` — Rename identity, canonical-form and check vocabulary

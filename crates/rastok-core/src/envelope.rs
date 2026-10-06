@@ -17,6 +17,7 @@ use crate::instance;
 use crate::node;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cell::OnceCell;
 use core::fmt;
@@ -232,8 +233,8 @@ pub enum Data {
     Encoded {
         /// How the bytes are represented now.
         encoding: Encoding,
-        /// The original bytes, preserved untouched.
-        bytes: Vec<u8>,
+        /// The original bytes, shared unchanged across journal and deliveries.
+        bytes: Arc<[u8]>,
         /// Lazy materialization, filled at most once on first
         /// structural access.
         value_cache: OnceCell<Value>,
@@ -248,7 +249,7 @@ impl Data {
     pub fn encoded(encoding: Encoding, bytes: impl Into<Vec<u8>>) -> Self {
         Self::Encoded {
             encoding,
-            bytes: bytes.into(),
+            bytes: Arc::from(bytes.into()),
             value_cache: OnceCell::new(),
         }
     }
@@ -682,6 +683,28 @@ mod tests {
     /// The test decoders' error type; any typed error travels intact.
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct DecodeFault(&'static str);
+
+    #[test]
+    fn cloned_payloads_share_original_bytes_without_changing_the_canonical_form() {
+        let source = Data::encoded(Encoding::Raw, alloc::vec![0xa5; 4096]);
+        let form = crate::canonical::data(&source);
+        let copy = source.clone();
+        let Data::Encoded { bytes, .. } = &source else {
+            unreachable!()
+        };
+        let Data::Encoded { bytes: copied, .. } = &copy else {
+            unreachable!()
+        };
+        assert_eq!(bytes.as_ptr(), copied.as_ptr());
+        assert_eq!(source, copy);
+        assert_eq!(crate::canonical::data(&copy), form);
+        copy.materialize_with(|_, bytes| Ok::<_, DecodeFault>(Value::Bytes(bytes.to_vec())))
+            .unwrap();
+        assert_eq!(source, copy);
+        assert_eq!(crate::canonical::data(&copy), form);
+        drop(source);
+        assert_eq!(crate::canonical::data(&copy), form);
+    }
 
     #[test]
     fn data_equality_is_causal_and_ignores_the_cache() {

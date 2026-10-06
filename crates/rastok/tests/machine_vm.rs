@@ -1346,7 +1346,7 @@ graph lazy_join : App {{
     assert!(matches!(
         output.data(),
         Data::Encoded { encoding: Encoding::Avro, bytes, .. }
-            if bytes.as_slice() == b"left-opaque"
+            if bytes.as_ref() == b"left-opaque"
     ));
     assert_eq!(
         output.meta().ext().get("content_type"),
@@ -3083,7 +3083,7 @@ impl OutboundConnectorBindings for SessionWorld {
     ) -> Result<RequestPreparation, DriverRouteError> {
         let bytes = match data {
             Data::Materialized(Value::Text(value)) => value.as_bytes().to_vec(),
-            Data::Encoded { bytes, .. } => bytes.clone(),
+            Data::Encoded { bytes, .. } => bytes.to_vec(),
             Data::Materialized(_) => Vec::new(),
         };
         Ok(RequestPreparation::Prepared(PreparedRequest::seal(bytes)))

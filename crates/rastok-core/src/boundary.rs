@@ -1143,8 +1143,8 @@ pub fn bytes_payload(data: &envelope::Data) -> Result<&[u8], String> {
             encoding: Encoding::Raw,
             bytes,
             ..
-        }
-        | Data::Materialized(Value::Bytes(bytes)) => Ok(bytes),
+        } => Ok(bytes),
+        Data::Materialized(Value::Bytes(bytes)) => Ok(bytes),
         Data::Encoded { encoding, .. } => Err(alloc::format!(
             "the bytes codec requires raw bytes; the request is {encoding:?}-encoded"
         )),
@@ -1187,7 +1187,7 @@ pub fn prepare_lines(data: &envelope::Data) -> Result<PreparedRequest, String> {
             encoding: Encoding::Raw,
             bytes,
             ..
-        } => bytes.clone(),
+        } => bytes.to_vec(),
         Data::Materialized(Value::Text(text)) => {
             let mut bytes = text.clone().into_bytes();
             if bytes.last() != Some(&b'\n') {

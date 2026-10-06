@@ -1621,7 +1621,7 @@ mod tests {
             assert!(
                 outcome.is_some_and(|completion| matches!(
                     &completion.outputs()[0].data,
-                    Data::Encoded { bytes, .. } if bytes.as_slice() == b"\x01\x02"
+                    Data::Encoded { bytes, .. } if bytes.as_ref() == b"\x01\x02"
                 )),
                 "`{body}` must relay the representation"
             );
@@ -1659,7 +1659,7 @@ mod tests {
         let completion = outcome.expect("the selected nested arm answered");
         assert_eq!(completion.outputs().len(), 2);
         assert!(matches!(&completion.outputs()[0].data,
-            Data::Encoded { bytes, .. } if bytes.as_slice() == b"\x01\x02"));
+            Data::Encoded { bytes, .. } if bytes.as_ref() == b"\x01\x02"));
     }
 
     #[test]

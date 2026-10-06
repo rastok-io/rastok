@@ -596,7 +596,7 @@ fn the_carry_survives_a_dead_earlier_write() {
     assert!(
         matches!(
             output.envelope.data(),
-            Data::Encoded { encoding: Encoding::Avro, bytes, .. } if bytes.as_slice() == b"\x01\x02"
+            Data::Encoded { encoding: Encoding::Avro, bytes, .. } if bytes.as_ref() == b"\x01\x02"
         ),
         "the final write wins and carries: {:?}",
         output.envelope.data()

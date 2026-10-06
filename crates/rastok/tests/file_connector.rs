@@ -141,9 +141,8 @@ fn source_bytes(vm: &Vm<'_>) -> Vec<Vec<u8>> {
                 return None;
             }
             match observed.envelope.data() {
-                Data::Encoded { bytes, .. } | Data::Materialized(Value::Bytes(bytes)) => {
-                    Some(bytes.clone())
-                }
+                Data::Encoded { bytes, .. } => Some(bytes.to_vec()),
+                Data::Materialized(Value::Bytes(bytes)) => Some(bytes.clone()),
                 _ => None,
             }
         })

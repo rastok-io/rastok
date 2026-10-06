@@ -2247,7 +2247,7 @@ fn an_encoded_bare_relay_passes_the_representation_through() {
     assert!(
         matches!(
             output.envelope.data(),
-            Data::Encoded { encoding: Encoding::Avro, bytes, .. } if bytes.as_slice() == b"\x01\x02"
+            Data::Encoded { encoding: Encoding::Avro, bytes, .. } if bytes.as_ref() == b"\x01\x02"
         ),
         "the representation passes through: {:?}",
         output.envelope.data()
@@ -2508,7 +2508,7 @@ fn short_circuits_never_demand_the_data() {
     assert_eq!(errors, 0, "the right side never ran");
     assert!(matches!(
         outputs[0].envelope.data(),
-        Data::Encoded { encoding: Encoding::Avro, bytes, .. } if bytes.as_slice() == b"\x01\x02"
+        Data::Encoded { encoding: Encoding::Avro, bytes, .. } if bytes.as_ref() == b"\x01\x02"
     ));
     // `false ? size(data) : 1`: the untaken arm never demands.
     let (result, outputs, errors) = run(
@@ -2601,7 +2601,7 @@ fn the_carry_is_as_lazy_as_the_name() {
         assert!(
             matches!(
                 output.data(),
-                Data::Encoded { encoding: Encoding::Avro, bytes, .. } if bytes.as_slice() == b"\x01\x02"
+                Data::Encoded { encoding: Encoding::Avro, bytes, .. } if bytes.as_ref() == b"\x01\x02"
             ),
             "`{body}` must ship the representation: {:?}",
             output.data()
@@ -2681,7 +2681,7 @@ fn an_inspection_then_identity_ships_the_filled_cell() {
     let output = &vm.outputs()[0];
     match output.envelope.data() {
         Data::Encoded { bytes, .. } => {
-            assert_eq!(bytes.as_slice(), b"ok", "the bytes ship untouched");
+            assert_eq!(bytes.as_ref(), b"ok", "the bytes ship untouched");
         }
         other => panic!("the representation must survive: {other:?}"),
     }
