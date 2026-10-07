@@ -3,16 +3,17 @@
 ## Unreleased — preparation for v0.1.0-alpha
 
 This is not a released tag. Public release and crate publication await
-15 October 2026 and Yoann's explicit instruction.
+5 November 2026 and Yoann's explicit instruction.
 
-The current checkout uses **v19 / recording v3**. The common
-[qualification ledger](docs/architecture/retry-c4-qualification.md) records the
-single fixture blessing, preserved causal witnesses and verification.
+The current checkout uses **format 20 / diagnostic recording 4**, to be
+labelled public format 1 at publication. The
+[identity inventory](docs/architecture/human-review-v20-identity.md) records the
+single witness blessing, preserved causal witnesses and verification.
 External opening gates remain open; these capabilities are not a release claim.
 
 - Typed Graph scopes, Operator/Connector execution, explicit destinations,
   case routing and atomic multi-emission; exact-instance closure commands
-  introduced in v18 are retained by v19.
+  introduced in v18 are kept.
 - Finite temporal Loop managers with exact causal run contexts and retained
   commands; exhaustion extends the host's failure terminal, never adds a port.
 - Native outgoing-Call Retry, separate from Loop: the same prepared request,

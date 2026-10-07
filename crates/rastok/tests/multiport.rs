@@ -1867,7 +1867,7 @@ fn the_bare_data_relay_preserves_the_logical_type() {
         matches!(relay(sent), Data::Materialized(Value::Struct(_))),
         "a bare relay must not retype a struct"
     );
-    // Map in, Map out — tag 18 stays tag 18.
+    // Map in, Map out — tag 16 stays tag 16.
     let mut entries = BTreeMap::new();
     entries.insert(String::from("k"), Value::Int(1));
     assert!(

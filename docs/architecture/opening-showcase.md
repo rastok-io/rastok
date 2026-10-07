@@ -619,7 +619,7 @@ result, an induced failure, explained golden difference and visible limits.
 
 The dated checkpoint above is not the current delivery ledger. The table at
 the top owns the status of each opening item; unfinished rows are not waived
-by test counts. The public-opening date remains 15 October 2026.
+by test counts. The public-opening date remains 5 November 2026.
 
 ## 10 September — learning path and Process contract review
 

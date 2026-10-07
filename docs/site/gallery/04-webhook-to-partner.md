@@ -119,7 +119,7 @@ debugger views of a simulation, not live HTTP requests or an edited branch.
 Three stills make the checkpoints easier to inspect:
 
 - [Before admission, transition 0](../assets/webhook-before.png).
-- [Armed Retry backoff, transition 20](../assets/webhook-backoff.png).
+- [Retry backoff scheduled, transition 20](../assets/webhook-backoff.png).
 - [Success after two attempts, transition 34](../assets/webhook-completed.png).
 
 ## Carry forward

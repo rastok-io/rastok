@@ -161,7 +161,7 @@ fn base64_with_a_content_type_is_whole_payload() {
 fn maps_are_colon_punctuated_and_run() {
     use rastok::envelope::{Data, Value};
     use std::collections::BTreeMap;
-    // `{ "k": v }` is an executable emission: a MAP, tag 18 — never
+    // `{ "k": v }` is an executable emission: a MAP, tag 16 — never
     // silently a struct.
     let Data::Materialized(Value::Map(map)) = emitted("{ \"a\": 1, \"b\": 2 }") else {
         panic!("a map value");

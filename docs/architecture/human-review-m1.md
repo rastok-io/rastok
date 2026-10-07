@@ -1022,6 +1022,26 @@ The CLI still reports echo `562396de…`, JSONL `0aeff047…` and gauge `0d3ad43
 No `no_std` target or embedded workload was rerun in this documentation pass;
 their qualification remains the separately dated cutover evidence.
 
+**Verified by Fable — 7 October, on `7947b53`.** The gate was rerun in
+session: fmt, strict Clippy, rustdoc with `-D warnings` and the full workspace
+suite — **1,572 tests in 61 groups, zero failed or ignored**. The sweep above
+was replayed on the live surfaces, every live key/kind/domain numeral was
+checked against `identity.md` §3 and the byte enums, and the 154 tracked
+Markdown files were link-checked. Five zero-byte residues escaped the lot and
+are corrected by the commit carrying this paragraph: value tags still numbered
+17/18 for struct/map in `expr.rs:84`, `tests/literals.rs:164` and
+`tests/multiport.rs:1870` (registry: 15/16); the `02` container view title and
+SVG ("package v19"); two dated links in `retry-c1-algebra.md` and
+`retry-c1-identity.md` retargeted from the removed `journal/timing.rs` to
+`journal/deadline.rs`, their reviewed words kept; the webhook gallery caption
+("Armed Retry backoff"); and `parallelism-notes.md:172` (the journal seals
+deadlines, not timers). The same commit corrects four stale current-state
+facts outside the sweep's surfaces: `CHANGELOG.md` still said "v19 /
+recording v3" and 15 October, and `crates/rastok-core/README.md`,
+`opening-showcase.md` and `opening-tooling.md` still dated the opening
+15 October (5 November since the 5 October amendment). The lot is accepted;
+T2 reading resumes at `loop_protocol.rs`.
+
 ### Consolidated action disposition — 7 October
 
 The table below supersedes the scheduling and "still open" columns in the

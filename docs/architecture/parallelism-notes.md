@@ -169,7 +169,7 @@ Rastok selected key          ~= stream key / locality domain
 Rastok logical Node instance ~= keyed task or virtual actor
 Rastok virtual shard         ~= physical assignment unit
 Rastok journal               >  a state changelog: it also seals effects,
-                                 timers, call exits, and lifecycle
+                                 deadlines, call exits, and lifecycle
 ```
 
 A join correlates within the owning Operator instance. If two streams need a

@@ -39,5 +39,5 @@ Linux x86-64 with `hosted-ui,hosted-websocket` on Rust 1.97.1. It neither includ
 `hosted-http3` nor creates a tag, GitHub release or registry publication.
 An uploaded CI artifact is qualification evidence, not an announced release.
 Cross-host builds and installation are unqualified until that workflow runs
-and the actual outputs are checked. Public publication waits for 15 October
+and the actual outputs are checked. Public publication waits for 5 November
 and Yoann's explicit order.

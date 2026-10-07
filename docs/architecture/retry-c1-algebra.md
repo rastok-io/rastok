@@ -414,7 +414,7 @@ symbols are the durable references:
 | [`loop_protocol::Fact`](../../crates/rastok-core/src/journal/loop_protocol.rs) | Advance requires a CommandRef and state; share the recurrence kernel without fabricating either for Retry |
 | [`restore_call`](../../crates/rastok-core/src/runtime/vm/recovery/calls.rs) | compares effect and re-evaluates settings; replace those checks with original plan and pinned-operation authority for attempts |
 | [`CallRecord`](../../crates/rastok-core/src/journal.rs) | only Intent/status today; no closure time; Record::timer_schedule excludes OUTBOUND |
-| [`TimerSchedule`](../../crates/rastok-core/src/journal/timing.rs) | due must not precede the original arm; arm at closure, never at a later consumer |
+| [`TimerSchedule`](../../crates/rastok-core/src/journal/deadline.rs) | due must not precede the original arm; arm at closure, never at a later consumer |
 | [`CallSemantics`](../../crates/rastok-core/src/connector/call.rs) | visibility table exists; one-case frame cardinality must cover both HTTP terminal response cases |
 | [`stdlib`](../../crates/rastok/src/stdlib.rs) | effect present on all six sheets, Process service inherits the common sheet; File guarantee is already fixed |
 | [`accounting_observations`](../../crates/rastok-core/src/accounting.rs) | observes emission schemas, not raw OUTBOUND drafts or withheld downstream decoder results |

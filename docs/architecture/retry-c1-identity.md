@@ -30,7 +30,7 @@ before blessing; it is not permission for an undocumented format movement.
 | [`connector.rs`](../../crates/rastok-core/src/connector.rs) | process@2 job, process@3 service; File and four network Contracts @2 |
 | [`journal.rs`](../../crates/rastok-core/src/journal.rs) | three record species; OUTBOUND Call causal fields do not include Intent.effect |
 | [`loop_protocol.rs`](../../crates/rastok-core/src/journal/loop_protocol.rs) | sparse key 55, r2 facts and derivation domains 0x14 / 0x15 / 0x06 |
-| [`timing.rs`](../../crates/rastok-core/src/journal/timing.rs) | retained key 56, armed_at and ordered due arms; not part of the causal seal |
+| [`timing.rs`](../../crates/rastok-core/src/journal/deadline.rs) | retained key 56, armed_at and ordered due arms; not part of the causal seal |
 | [`instance_stop.rs`](../../crates/rastok-core/src/journal/instance_stop.rs) | causal key 57 and command domain 0x23 |
 | [`recording/codec.rs`](../../crates/rastok/src/recording/codec.rs) | Intent tuple includes an effect word; Call tuple has only Intent and status |
 

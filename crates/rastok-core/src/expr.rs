@@ -81,8 +81,8 @@ pub enum EvalValue {
     /// Map whose canonical key type is not text.
     KeyedMap(Vec<(EvalValue, EvalValue)>),
     /// Named fields in declaration order — the LOGICAL twin of
-    /// [`Value::Struct`] (canonical tag 17, where a map is
-    /// 18): the witness that lets a struct cross the expression evaluator —
+    /// [`Value::Struct`] (canonical tag 15, where a map is
+    /// 16): the witness that lets a struct cross the expression evaluator —
     /// bindings, locals, ternaries — without silently becoming a
     /// map. The expression surface cannot construct one; it can only carry, access,
     /// and re-emit what the envelope domain handed it.

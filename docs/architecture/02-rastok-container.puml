@@ -3,7 +3,7 @@ skinparam backgroundColor white
 !include <C4/C4_Container>
 
 LAYOUT_LEFT_RIGHT()
-title Rastok — current container view (package v19)
+title Rastok — current container view (registry: identity.md)
 
 Person(author, "Graph author", "Checks and exercises an integration graph.")
 Person(operator, "Application operator", "Runs the App path and inspects evidence.")
