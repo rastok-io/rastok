@@ -28,10 +28,17 @@ jobs:
           node --test tools/ci/check-rustdoc-links.test.mjs
           node tools/ci/check-rustdoc-links.mjs
       - name: check every contribution commit
+        # The first push of a branch has no "before" commit. Its history is
+        # checked from the one documented exception, exclusive: bb1b1edb3606
+        # (6 August 2026) lacks its sign-off and is kept unrewritten; every
+        # later commit is signed (CONTRIBUTING.md, github-opening-checklist.md).
         env:
           DCO_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           DCO_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-        run: node tools/ci/check-dco.mjs "$DCO_BASE" "$DCO_HEAD"
+          DCO_EXCEPTION: bb1b1edb360690e4c90fe963e4d933f9ddf0e881
+        run: |
+          if [ "$DCO_BASE" = "0000000000000000000000000000000000000000" ]; then DCO_BASE="$DCO_EXCEPTION"; fi
+          node tools/ci/check-dco.mjs "$DCO_BASE" "$DCO_HEAD"
 
   debugger:
     runs-on: ubuntu-latest

@@ -163,7 +163,10 @@ The approved opening policy is **rebase-only PR integration**: preserve each
 reviewed commit and its author-matching sign-off and assistance credits. Merge
 commits are not exempt from DCO. GitHub's merge-commit and squash buttons are
 to be disabled before opening; those hosted settings have not been activated
-by this local policy change. Existing history is not rewritten by this rule.
+by this local policy change. Existing history is not rewritten by this rule:
+one commit of 6 August 2026, `bb1b1edb3606`, lacks its sign-off and stays as
+it is, a documented exception rather than a rewrite; the hosted first-push
+check starts after it, and every other commit in the history is signed.
 
 The same check runs locally without network access, using full commit SHAs:
 
