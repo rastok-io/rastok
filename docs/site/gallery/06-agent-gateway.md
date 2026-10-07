@@ -118,7 +118,7 @@ The page selects the app-server read-only sandbox and no-approval policy;
 this is a trusted local example, not a security boundary. Do not expose the
 listeners publicly or send credentials through the chat. Editing the HTML
 changes its embedded asset: restart `run` to load the new file. The browser
-does not edit the graph, the Lab or retained data.
+does not edit the graph, the Lab or recorded data.
 
 ## Inspect a typed model response
 
@@ -134,7 +134,7 @@ RASTOK_SHOWCASE_MODEL_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_MODEL_TOKE
 
 Read `ModelResponse`, then `model`: `output out: ModelResponse` and
 `json_profile = projected` hydrate the declared fields before an emission is
-retained. Additional JSON members are omitted; absent nullable fields become
+recorded. Additional JSON members are omitted; absent nullable fields become
 null; a wrong type still gives `DecodeFailed`. This is an explicit selected
 view of Responses, not a new rule that makes every struct open.
 
@@ -163,12 +163,12 @@ names the changed record. Restore the reply afterward; do not use `--bless`.
 Change only `Hello from the simulated agent.` to `A different answer.` in
 the mock. Leave the golden unchanged and run the comparison command again.
 The graph still compiles, and the shape/count assertions still pass. The
-changed answer nevertheless differs in the retained evidence.
+changed answer nevertheless differs in the recorded evidence.
 
 ## Read the golden difference
 
 The diff names the first changed record, expected and actual data, and the
-retained cause. Here the changed evidence is an inbound service frame, not
+recorded cause. Here the changed evidence is an inbound service frame, not
 an invented per-turn Call completion. Do not use `--bless` to hide the change.
 Restore the answer before continuing.
 
@@ -203,7 +203,7 @@ model API. Its [projected profile](../../architecture/openai-responses-hydration
 is qualified locally, including original samples from a held Retry attempt
 on an inert test endpoint. This does not authorize retrying model inference.
 `secret()` is bound only at the HttpClient Driver boundary; its bearer is not
-retained or displayed. That boot-dependent profile still refuses diagnostic
+recorded or displayed. That boot-dependent profile still refuses diagnostic
 recording, rather than persisting deployment secrets or inventing replay inputs.
 
 Disconnecting a socket is not the same as cancelling an agent turn. The idle

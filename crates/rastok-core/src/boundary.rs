@@ -1520,7 +1520,7 @@ pub struct Response {
     pub completion: Completion,
 }
 
-/// Result of framing one invocation before its outbound record opens.
+/// Result of framing one invocation before its EGRESS record opens.
 ///
 /// A rejection is an ordinary, contract-typed completion. It commits through
 /// the same connector transaction as any other completion, but no external
@@ -1824,12 +1824,12 @@ pub struct IngressAcceptance {
     pub envelope: envelope::Id,
     /// Exchange-specific reference created by the accepting fact. Event
     /// ingress has none; Call and Session are mutually exclusive.
-    pub exchange: Option<InboundExchangeRef>,
+    pub exchange: Option<InboundExchangeId>,
 }
 
 /// Exchange-specific identity returned by a committed inbound admission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InboundExchangeRef {
+pub enum InboundExchangeId {
     /// The root opened one bounded Call obligation.
     Call(InboundCallId),
     /// The root opened or addressed one logical Session.
@@ -1934,7 +1934,7 @@ pub enum DatedPayload {
     /// journal fold remains authoritative for the state, ordinal and fuel;
     /// these fields only identify the exact obligation to re-check.
     LoopDelay {
-        /// Graph owner carrying the Loop aspect.
+        /// Owner carrying the Loop Extension.
         owner: node::OwnerSlot,
         /// Exact generation in which the continuation was selected.
         instance: instance::Generation,
@@ -1942,16 +1942,16 @@ pub enum DatedPayload {
         run: crate::journal::LoopRunId,
         /// Ordinal of the manager-produced state awaiting admission.
         iteration: u64,
-        /// Re-entry envelope id, also used as timer kind 5's stable ref.
+        /// Re-entry envelope id, also used as deadline kind 4's stable id (RecurrenceDelay).
         state: envelope::Id,
     },
     /// Original closure-based eligibility, on the same dated scheduler as Loop.
     RetryDelay {
         /// Exact generation retaining the operation.
         instance: instance::Generation,
-        /// Predecessor whose winning closure armed this deadline.
+        /// Predecessor whose winning closure created this deadline.
         attempt: crate::journal::retry_protocol::AttemptId,
-        /// Following admission reference (timer kind 5).
+        /// Following admission reference (deadline kind 4, RecurrenceDelay).
         admission: envelope::Id,
     },
     /// One owner lifetime reached a scheduler-owned deadline. The complete
@@ -1959,11 +1959,11 @@ pub enum DatedPayload {
     /// the causal admission id, while fixed and tumbling never move after
     /// `l:start`.
     InstanceLifetime {
-        /// Plan owner whose policy armed the event.
+        /// Plan owner whose policy scheduled the event.
         owner: node::OwnerSlot,
         /// Exact generation whose deadline is being observed.
         instance: instance::Generation,
-        /// Envelope whose arrival armed this deadline and causes `l:stop`.
+        /// Envelope whose arrival created this deadline and causes `l:stop`.
         cause: envelope::Id,
         /// Which profile determines the stale-event rule.
         deadline: InstanceDeadline,
@@ -1985,7 +1985,7 @@ pub enum ClosingDeadline {
     /// Stop executing admitted ordinary work and request cancellation.
     Drain,
     /// Stop waiting for cancellation observations; unresolved calls become
-    /// `OutcomeUnknown` and their outbound records become `abandoned`.
+    /// `OutcomeUnknown` and their EGRESS records become `abandoned`.
     Settlement,
 }
 
@@ -2151,7 +2151,7 @@ pub enum SessionStart {
 /// fold. Correlation uses the connector's own protocol.
 pub trait CallConnectorDriver {
     /// Frames one invocation under this bound contract before the machine
-    /// opens its outbound record. The Driver chooses no defaults: binding has
+    /// opens its EGRESS record. The Driver chooses no defaults: binding has
     /// already resolved every effective non-plan setting for `connector`.
     fn prepare_request(
         &mut self,
@@ -2677,7 +2677,7 @@ impl Dispatcher {
             &Intent,
             &Completion,
         ) -> Result<
-            Option<alloc::boxed::Box<crate::journal::timing::Deadlines>>,
+            Option<alloc::boxed::Box<crate::journal::deadline::Deadlines>>,
             DispatchError,
         >,
     ) -> Result<PumpBatch, DispatchError> {

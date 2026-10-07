@@ -275,7 +275,7 @@ requests. The journal records its answers and each original annotated usage or
 monetary value, including those from a held Retry attempt. M1 supplies this
 evidence, not a cost report or automatic price calculation. Universal commit
 timestamps and per-call latency are not
-yet retained, so OTLP spans remain deferred. If refund
+yet recorded, so OTLP spans remain deferred. If refund
 requests become a stable rule, move that case into a typed Operator with
 statically declared outputs and keep the LLM only as a fallback for ambiguous
 requests. Replay the Lab
@@ -517,7 +517,7 @@ rebuilding sight of it — distributed tracing and OpenTelemetry are the
 graph, reconstructed after the fact, at runtime, from fragments.
 
 Rastok's choice is **text as the authored source, a graph as its projection**.
-The visual debugger makes retained messages, instances and causal decisions
+The visual debugger makes recorded messages, instances and causal decisions
 inspectable without turning the canvas into an editor. Compile-time contracts
 and deterministic Lab scenarios are part of the same workflow.
 
@@ -1375,7 +1375,7 @@ retried without the guarantee; OutcomeUnknown and AfterEffect terminals require
 it, otherwise `E-RETRY-EFFECT`. The request, resolved settings and idempotency
 material are retained, not recomputed. Each attempt is journaled, but only the
 final batch is delivered to the graph; the last failure remains its original
-typed case, with no `RetryExpired` wrapper. Retry's delay starts at the retained
+typed case, with no `RetryExpired` wrapper. Retry's delay starts at the recorded
 logical Call closure. A Loop may contain a Retry Connector; same-owner
 `Loop + Retry` remains refused. See [Extensions](docs/spec/extensions.md).
 
@@ -1512,7 +1512,7 @@ physical placement. A Process job or database operation is a call; a
 WebSocket connection and the resident Process service profile are sessions.
 Neither automatically invents a Node-instance key.
 
-For WebSocket, one server Driver owns many logical SessionRefs and one client
+For WebSocket, one server Driver owns many logical SessionIds and one client
 Node instance owns at most one live Session. Each complete inbound message is
 a bounded two-phase proposal; each graph-to-peer message is a durable write
 before bytes. Fragmentation and control frames remain physical protocol state.
@@ -1667,7 +1667,7 @@ static Node path
 
 Frames are ordered outermost to innermost. Every owner instance has derived
 immutable bindings and lifecycle at that address. An Executor instance adds a
-bounded mailbox, semantic state, open exchanges, armed events and cursors; a
+bounded mailbox, semantic state, open exchanges, scheduled events and cursors; a
 Graph instance adds containment but no application mailbox or transaction. A
 temporal Extension manager adds run-scoped durable commands without becoming a
 Node. After closure, a later delivery may create a clean instance at the
@@ -1704,7 +1704,7 @@ lifetime = { kind = single_pass }
 lifetime = { kind = tumbling   ; every = duration("5m") }
 ```
 
-- **persistent** arms no deadline;
+- **persistent** creates no deadline;
 - **idle** closes after mailbox-admission silence;
 - **fixed** closes at a fixed age from the creating admission;
 - **single_pass** admits one root and closes after its bounded work settles;
@@ -1773,7 +1773,7 @@ this same contract, not a different language model.
 ## 4. Distribution Model
 
 **Future deployment design.** Only the single-process, one-worker, in-memory
-engine is shipped. Spatial recovery from retained records is implemented, but
+engine is shipped. Spatial recovery from journal records is implemented, but
 no durable storage backend, multi-Worker scheduler or clustered runtime is
 claimed by this section. The durability syntax below remains deferred.
 
@@ -2122,7 +2122,7 @@ under controlled inputs and replays deterministically.
 debugger execute today. `experiment`, `challenge`, `prove`, coverage generation,
 authored crash/restart actions and automatic incident-to-fixture extraction do
 not. Their descriptions below are design directions, not available CLI verbs.
-The core recovery tests exercise retained journals independently of Lab syntax.
+The core recovery tests exercise recorded journals independently of Lab syntax.
 
 Every App may declare its twin: the **lab** — at
 most one *logical* lab per App, possibly split across same-name
@@ -2732,12 +2732,12 @@ or compatibility reader is implied.
 | Operator, Graph and outbound Call Loop; exact run context, fuel, delay and integer measure | [Loop contract](docs/spec/loop.md); guarded/timed joins, lifecycle-dependent bodies and broader proof fragments refuse by name |
 | Loop exhaustion on an existing host terminal, no contributed port | [v17 amendment](docs/architecture/loop-host-terminal-v17.md); non-Loop identity witnesses unchanged |
 | Native Retry of a finite outbound Call, prepared request retained, final-only publication | [Operation contract](docs/architecture/retry-c1-algebra.md); statically checked terminal cases and plan-owned idempotence, closure-based backoff, no Retry port/command or new error case |
-| Keyed instances, all five lifetimes, bounded Closing, joins and recovery from retained records | One synchronous Worker; recovery is not a durable storage backend or distributed runtime |
+| Keyed instances, all five lifetimes, bounded Closing, joins and recovery from recorded records | One synchronous Worker; recovery is not a durable storage backend or distributed runtime |
 | Explicit Graph or direct-child closure, idempotent per exact instance generation | [Closure ledger](docs/architecture/instance-stop-command.md); no global key lookup, implicit creation or repeated cancellation |
 | Process job/service, File read/replace, HttpClient/HttpServer, WebSocketClient/WebSocketServer | Exact Contracts; HTTP/1.1–3 and complete-message Sessions; resident Process [qualification](docs/architecture/process-service.md), not a model-specific protocol or token-streaming SSE |
 | Strict logical types and JSON Schema / Avro / Arrow / OpenAPI projections | Unsupported/lossy cases refuse by path; guest-language execution remains deferred |
 | Data annotations, exact HttpClient boot references, privacy attestations, redaction, structured logs and individual typed measurement retention | [Observability contract](docs/spec/observability.md); no measurement report, automatic pricing, subset arithmetic, raw-secret payload, legal-compliance certificate, budget enforcement, FX, FOCUS/OpenCost or OTLP exporter |
-| `simulate --ui`: retained transitions, source, mailboxes, instances, Loop dials, Retry attempts, decisions, causal links, assertion evidence and comparisons | [UI contract](docs/spec/ui.md); read-only source-authored scenarios, no `run --ui`, editing or branches; intermediate VM transitions within an authored `advance` are individually inspectable |
+| `simulate --ui`: recorded transitions, source, mailboxes, instances, Loop dials, Retry attempts, decisions, causal links, assertion evidence and comparisons | [UI contract](docs/spec/ui.md); read-only source-authored scenarios, no `run --ui`, editing or branches; intermediate VM transitions within an authored `advance` are individually inspectable |
 | `new`, readable golden divergence, `run --record` and `replay [--ui]` | [Diagnostic recording](docs/architecture/diagnostic-recording.md); immutable restitution without a Driver, not durable recovery; classified/boot-dependent recording limits remain explicit |
 
 The [example catalogue](docs/examples/README.md) distinguishes passing programs,

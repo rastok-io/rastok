@@ -3,7 +3,7 @@
 //
 // One accepted socket is one logical Session. Each complete JSON message runs
 // one bounded `codex exec --json -` job; the reply retains the socket's
-// SessionRef through causal lineage. A later Process(service) profile can keep
+// SessionId through causal lineage. A later Process(service) profile can keep
 // one app-server child alive per keyed Graph instance without changing this
 // WebSocket boundary.
 // =============================================================================

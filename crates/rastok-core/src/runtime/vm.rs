@@ -765,13 +765,12 @@ pub struct BoundaryOutput {
 }
 
 /// One observed delivery — the debugger-shaped observation surface:
-/// every envelope reaching a node port, the boundary, or the root
-/// error sink is logged here in arrival order. Expectations read
+/// every envelope reaching a node port or the App boundary is logged
+/// here in arrival order. Expectations read
 /// windows of this log; nothing consumes it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Observed {
-    /// The receiving node, or `None` at the App boundary (the root
-    /// error sink logs as the boundary `err`).
+    /// The receiving node, or `None` at the App boundary.
     pub node: Option<node::Path>,
     /// The receiving port.
     pub port: node::Port,
@@ -850,7 +849,7 @@ pub struct CallInspection {
     /// Exact logical instance generation.
     pub instance: instance::Generation,
     /// Whether the terminal observation is retained but not yet consumed.
-    pub completion_retained: bool,
+    pub completion_recorded: bool,
 }
 
 /// Direction in which one Session was opened.
@@ -878,7 +877,7 @@ pub struct SessionInspection {
     /// Journaled writes not yet locally settled.
     pub pending_writes: usize,
     /// Whether a terminal observation is retained but not yet consumed.
-    pub completion_retained: bool,
+    pub completion_recorded: bool,
 }
 
 /// Disposable read model over VM-owned mutable state.
@@ -917,11 +916,11 @@ const WORKER_MAILBOX_CAPACITY: usize = 1024;
 pub struct Scheduler {
     mailboxes: Mailboxes,
     /// The machine's one dated-event queue, ordered by due date; the
-    /// arm sequence breaks ties deterministically. Typed on the
+    /// creation sequence breaks ties deterministically. Typed on the
     /// boundary vocabulary so every future obligation (join windows,
     /// lifetimes) crosses the same frontier as call budgets.
     dated: BTreeMap<(i64, u64), DatedPayload>,
-    arm_seq: u64,
+    creation_seq: u64,
 }
 
 impl Scheduler {
@@ -929,18 +928,18 @@ impl Scheduler {
         Self {
             mailboxes: Mailboxes::new(capacity),
             dated: BTreeMap::new(),
-            arm_seq: 0,
+            creation_seq: 0,
         }
     }
 
-    fn arm(&mut self, at: i64, payload: DatedPayload) {
-        self.dated.insert((at, self.arm_seq), payload);
-        self.arm_seq = self.arm_seq.wrapping_add(1);
+    fn schedule(&mut self, at: i64, payload: DatedPayload) {
+        self.dated.insert((at, self.creation_seq), payload);
+        self.creation_seq = self.creation_seq.wrapping_add(1);
     }
 
     /// The next dated event due at or before `target`, WITHOUT
     /// removing it — the reservation: an expiry that fails to commit
-    /// stays armed and replays.
+    /// stays scheduled and replays.
     fn peek_due(
         &self,
         target: i64,
@@ -1447,7 +1446,7 @@ impl<'plan> Vm<'plan> {
     }
 
     /// Attempts one retained Driver proposal against bounded admission.
-    /// `Accepted` is returned only after the inbound record and every route
+    /// `Accepted` is returned only after the INGRESS record and every route
     /// committed. `Pending` and `Rejected` leave the journal untouched.
     ///
     /// # Errors
@@ -1826,7 +1825,7 @@ impl<'plan> Vm<'plan> {
                 }
                 let timeout = self.inbound_call_timeout(source, &target.reference, &candidates)?;
                 let call_id = InboundCallId::from_root(inbound.envelope().meta().sys().id());
-                let timers = timeout
+                let deadline_ids = timeout
                     .map(|_| {
                         vec![(
                             crate::journal::DeadlineKind::InboundCallTimeout,
@@ -1835,7 +1834,7 @@ impl<'plan> Vm<'plan> {
                     })
                     .unwrap_or_default();
                 inbound = inbound
-                    .into_call(target.reference.clone(), timers)
+                    .into_call(target.reference.clone(), deadline_ids)
                     .map_err(VmError::Journal)?;
                 Some((source, target, timeout))
             }
@@ -1985,7 +1984,7 @@ impl<'plan> Vm<'plan> {
         }
         let recorded_routes = self.inbound_route_targets(&prepared);
         let mut activity = BTreeMap::new();
-        let mut arms = Vec::new();
+        let mut deadlines = Vec::new();
         for target in source_target
             .as_ref()
             .map(|(_, target, _)| target)
@@ -1997,27 +1996,27 @@ impl<'plan> Vm<'plan> {
                     .map(|(_, target, _)| target),
             )
         {
-            arms.extend(
+            deadlines.extend(
                 self.admission_deadlines(target, &candidates, inbound.envelope(), &mut activity)
                     .into_iter()
-                    .map(|(arm, _)| arm),
+                    .map(|(deadline, _)| deadline),
             );
         }
         if let Some((_, _, Some(timeout))) = &source_target {
-            arms.push(crate::journal::timing::Deadline {
+            deadlines.push(crate::journal::deadline::Deadline {
                 kind: crate::journal::DeadlineKind::InboundCallTimeout,
                 reference: InboundCallId::from_root(inbound.envelope().meta().sys().id()).id(),
                 due_at: self.now.saturating_add(*timeout),
             });
         }
-        arms.extend(self.route_timer_arms_with_activity(
+        deadlines.extend(self.route_deadlines_with_activity(
             &prepared,
             &candidates,
             inbound.envelope(),
             &mut activity,
         ));
-        if !arms.is_empty() {
-            inbound = inbound.with_deadlines(Self::create_deadlines(self.now, arms)?);
+        if !deadlines.is_empty() {
+            inbound = inbound.with_deadlines(Self::create_deadlines(self.now, deadlines)?);
         }
         let committed = journal
             .commit_ingress(inbound, recorded_routes)
@@ -2030,21 +2029,21 @@ impl<'plan> Vm<'plan> {
             .as_deref()
             .map(|exchange| match exchange {
                 crate::journal::InboundExchangeRecord::Call(call) => {
-                    crate::boundary::InboundExchangeRef::Call(call.reference)
+                    crate::boundary::InboundExchangeId::Call(call.reference)
                 }
                 crate::journal::InboundExchangeRecord::Session(session) => {
                     let reference = match session {
                         crate::journal::SessionIngressRecord::Open(reference)
                         | crate::journal::SessionIngressRecord::Message(reference) => *reference,
                     };
-                    crate::boundary::InboundExchangeRef::Session(reference)
+                    crate::boundary::InboundExchangeId::Session(reference)
                 }
             });
         if let Some((source, target, timeout)) = &source_target {
             self.install_target(target, &candidates, &committed.envelope);
             let call_id = InboundCallId::from_root(id);
             if let Some(timeout) = timeout {
-                self.scheduler.arm(
+                self.scheduler.schedule(
                     self.now.saturating_add(*timeout),
                     DatedPayload::InboundCallBudget {
                         call_id,
@@ -2070,7 +2069,7 @@ impl<'plan> Vm<'plan> {
             && *opening
         {
             self.install_target(target, &candidates, &committed.envelope);
-            let Some(crate::boundary::InboundExchangeRef::Session(session_id)) = exchange else {
+            let Some(crate::boundary::InboundExchangeId::Session(session_id)) = exchange else {
                 return Err(VmError::PlanInvariant {
                     node: self.plan.nodes[source.index()].path.clone(),
                     reason: "a committed Session opening lost its logical reference",
@@ -2701,7 +2700,7 @@ impl<'plan> Vm<'plan> {
         Ok(())
     }
 
-    /// Advances the virtual date to `target`, firing each armed
+    /// Advances the virtual date to `target`, firing each scheduled
     /// budget in expiry order — the discrete advance: time moves in
     /// jumps, and the machine drains between them. Only the machine
     /// mints a timeout — a driver answers or stays silent, never
@@ -2822,7 +2821,7 @@ impl<'plan> Vm<'plan> {
                 .expire_session_handshake(journal, bindings, slot, instance, &edge, delivery);
         }
         // An open call for THIS obligation — the delivered edge and
-        // envelope both: a fan-out of one envelope arms one budget
+        // envelope both: a fan-out of one envelope creates one budget
         // per receiving edge, and each expires its own call.
         if let Some(call_id) = self
             .pending
@@ -2922,7 +2921,7 @@ impl<'plan> Vm<'plan> {
             };
             let planned = &self.plan.nodes[slot.index()];
             let NodeExecution::Connector(spec) = &planned.execution else {
-                unreachable!("budgets arm connectors only")
+                unreachable!("budgets apply to connectors only")
             };
             if !spec.roles.has_outbound() || spec.exchange != ConnectorExchange::Call {
                 return Err(VmError::PlanInvariant {
@@ -3174,8 +3173,8 @@ impl<'plan> Vm<'plan> {
             .any(|session| session.slot == slot && session.instance == instance)
         {
             // Every routed client delivery carries the statically derivable
-            // handshake timer. Once this instance owns an opening, later
-            // message timers are intentionally stale rather than a second
+            // handshake deadline. Once this instance owns an opening, later
+            // message deadlines are intentionally stale rather than a second
             // opening authority.
             return Ok(());
         }
@@ -3388,7 +3387,7 @@ impl<'plan> Vm<'plan> {
                 direction: CallDirectionInspection::Outbound,
                 connector: self.plan.nodes[pending.slot.index()].path.clone(),
                 instance: pending.instance.clone(),
-                completion_retained: self
+                completion_recorded: self
                     .settled
                     .iter()
                     .any(|entry| entry.event.call_id == *reference),
@@ -3400,7 +3399,7 @@ impl<'plan> Vm<'plan> {
                 direction: CallDirectionInspection::Inbound,
                 connector: self.plan.nodes[pending.slot.index()].path.clone(),
                 instance: pending.instance.clone(),
-                completion_retained: self
+                completion_recorded: self
                     .settled_inbound_calls
                     .iter()
                     .any(|event| event.call_id == *reference),
@@ -3425,7 +3424,7 @@ impl<'plan> Vm<'plan> {
                     .values()
                     .filter(|write| write.intent.session_id == *reference)
                     .count(),
-                completion_retained: self
+                completion_recorded: self
                     .settled_sessions
                     .iter()
                     .any(|settled| settled.session == *reference),
@@ -3730,7 +3729,7 @@ impl<'plan> Vm<'plan> {
         })
     }
 
-    fn closing_timers(
+    fn closing_deadline_ids(
         &self,
         reference: &instance::Generation,
     ) -> Vec<(crate::journal::DeadlineKind, Id)> {
@@ -3755,7 +3754,7 @@ impl<'plan> Vm<'plan> {
         ]
     }
 
-    fn arm_closing_deadlines(&mut self, reference: &instance::Generation, cause: Id) {
+    fn schedule_closing_deadlines(&mut self, reference: &instance::Generation, cause: Id) {
         let Some(instance) = self.instances.get(reference) else {
             return;
         };
@@ -3763,7 +3762,7 @@ impl<'plan> Vm<'plan> {
             return;
         };
         let drain_at = self.now.saturating_add(policy.drain_for);
-        self.scheduler.arm(
+        self.scheduler.schedule(
             drain_at,
             DatedPayload::InstanceClosing {
                 instance: reference.clone(),
@@ -3771,7 +3770,7 @@ impl<'plan> Vm<'plan> {
                 deadline: ClosingDeadline::Drain,
             },
         );
-        self.scheduler.arm(
+        self.scheduler.schedule(
             drain_at.saturating_add(policy.settle_for),
             DatedPayload::InstanceClosing {
                 instance: reference.clone(),
@@ -3822,12 +3821,12 @@ impl<'plan> Vm<'plan> {
             state_delta: vec![],
             emissions: vec![],
             routes: vec![],
-            deadline_ids: self.closing_timers(reference),
+            deadline_ids: self.closing_deadline_ids(reference),
         };
-        self.retain_timer_arms(&mut record, self.closing_timer_arms(reference))?;
+        self.retain_deadlines(&mut record, self.closing_deadlines(reference))?;
         journal.commit(record).map_err(VmError::Journal)?;
         self.activate_close(reference, cause.clone());
-        self.arm_closing_deadlines(reference, cause.meta().sys().id());
+        self.schedule_closing_deadlines(reference, cause.meta().sys().id());
         Ok(())
     }
 
@@ -4458,7 +4457,7 @@ impl<'plan> Vm<'plan> {
     /// Commits one retained inbound-Call terminal observation. Fixed
     /// acknowledgements consume no mailbox cursor; a graph-driven response
     /// atomically consumes its real response delivery. Neither form creates
-    /// an outbound record.
+    /// an EGRESS record.
     fn settle_inbound_call_next(
         &mut self,
         journal: &mut dyn Journal,
@@ -4789,7 +4788,7 @@ impl<'plan> Vm<'plan> {
             outcome
                 .record
                 .deadline_ids
-                .extend(self.closing_timers(scope));
+                .extend(self.closing_deadline_ids(scope));
         }
         let prepared =
             self.validate_and_prepare_emissions(&&*journal, slot, instance, &outcome.record)?;
@@ -4807,7 +4806,7 @@ impl<'plan> Vm<'plan> {
             .apply_unchecked(self.plan.plan(), slot, instance, &state_delta);
         if let Some(scope) = close_request {
             self.activate_close(&scope, delivery.envelope.clone());
-            self.arm_closing_deadlines(&scope, delivery.envelope.meta().sys().id());
+            self.schedule_closing_deadlines(&scope, delivery.envelope.meta().sys().id());
         }
         self.route_emissions(slot, instance, prepared);
         self.progress_closures();
@@ -4906,7 +4905,7 @@ impl<'plan> Vm<'plan> {
             outcome
                 .record
                 .deadline_ids
-                .extend(self.closing_timers(scope));
+                .extend(self.closing_deadline_ids(scope));
         }
         let prepared =
             self.validate_and_prepare_emissions(&&*journal, slot, instance, &outcome.record)?;
@@ -4943,7 +4942,7 @@ impl<'plan> Vm<'plan> {
         );
         if let Some(scope) = close_request {
             self.activate_close(&scope, trigger.envelope.clone());
-            self.arm_closing_deadlines(&scope, trigger.envelope.meta().sys().id());
+            self.schedule_closing_deadlines(&scope, trigger.envelope.meta().sys().id());
         }
         self.route_emissions(slot, instance, prepared);
         self.progress_closures();
@@ -5931,8 +5930,8 @@ impl<'plan> Vm<'plan> {
             .find(|reference| reference.to_string() == selected))
     }
 
-    /// Every route decision sealed by an inbound record. The envelope id is
-    /// implicit because an inbound record carries exactly one envelope.
+    /// Every route decision sealed by an INGRESS record. The envelope id is
+    /// implicit because an INGRESS record carries exactly one envelope.
     fn inbound_route_targets(&self, prepared: &[PreparedEdge]) -> Vec<RouteTarget> {
         prepared
             .iter()
@@ -6753,10 +6752,10 @@ impl<'plan> Vm<'plan> {
                             .unwrap_or_else(|_| {
                                 unreachable!("capacity was reserved before the commit")
                             });
-                        for (arm, payload) in
+                        for (deadline, payload) in
                             self.delivery_deadlines(&route, prepared, candidates, envelope)
                         {
-                            self.scheduler.arm(arm.due_at, payload);
+                            self.scheduler.schedule(deadline.due_at, payload);
                         }
                         self.observed.push(Observed {
                             node: Some(self.plan.nodes[target.index()].path.clone()),
@@ -6872,8 +6871,8 @@ impl<'plan> Vm<'plan> {
                 }
             };
         }
-        for (arm, payload) in deadlines {
-            self.scheduler.arm(arm.due_at, payload);
+        for (deadline, payload) in deadlines {
+            self.scheduler.schedule(deadline.due_at, payload);
         }
     }
 

@@ -176,7 +176,7 @@ impl core::error::Error for ConnectorIdError {}
 /// session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ConnectorExchange {
-    /// One spontaneous inbound fact with no per-event terminal obligation.
+    /// One spontaneous INGRESS fact with no per-event terminal obligation.
     Event,
     /// One admitted operation with zero or more outputs and exactly one exit.
     Call,

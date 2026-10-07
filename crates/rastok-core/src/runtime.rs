@@ -1262,7 +1262,7 @@ impl<'plan> HandlerExecutor<'plan> {
             .map(|(name, value)| (name.clone(), value.clone()))
             .collect();
         let emissions = buffer.into_emissions();
-        let timers = self.armed_budgets(slot, &emissions)?;
+        let deadline_ids = self.created_deadline_ids(slot, &emissions)?;
         Ok(TransactionOutcome {
             record: TransactionRecord {
                 owner_path: crate::node::OwnerPath::from(&node.path),
@@ -1288,22 +1288,22 @@ impl<'plan> HandlerExecutor<'plan> {
                 state_delta,
                 emissions,
                 routes: vec![],
-                deadline_ids: timers,
+                deadline_ids,
             },
         })
     }
 
-    /// The dated obligations this record's emissions arm: a delivery
+    /// The dated obligations this record's emissions create: a delivery
     /// reaching a connector with a declared `timeout` starts its
     /// budget AT DELIVERY — queue time counts (execution-model §8).
     /// Statically derivable from the plan, so the record can seal
-    /// what the machine then arms, identically.
-    fn armed_budgets(
+    /// what the machine then creates, identically.
+    fn created_deadline_ids(
         &self,
         slot: Slot,
         emissions: &[Emission],
     ) -> Result<Vec<(crate::journal::DeadlineKind, envelope::Id)>, Fault> {
-        let mut timers = Vec::new();
+        let mut deadline_ids = Vec::new();
         for emission in emissions {
             let source = crate::plan::EdgeEnd {
                 node: Some(slot),
@@ -1339,7 +1339,7 @@ impl<'plan> HandlerExecutor<'plan> {
                         }
                     });
                 if let Some(kind) = budget_kind {
-                    timers.push((
+                    deadline_ids.push((
                         kind,
                         ids::delivery_id(
                             &self.plan.edge_text(edge),
@@ -1358,7 +1358,7 @@ impl<'plan> HandlerExecutor<'plan> {
                         })
                 });
                 if join_within.is_some() {
-                    timers.push((
+                    deadline_ids.push((
                         crate::journal::DeadlineKind::JoinWithin,
                         ids::delivery_id(
                             &self.plan.edge_text(edge),
@@ -1368,8 +1368,8 @@ impl<'plan> HandlerExecutor<'plan> {
                 }
             }
         }
-        timers.sort();
-        Ok(timers)
+        deadline_ids.sort();
+        Ok(deadline_ids)
     }
 
     /// The connector's completion transaction for a settled call: every
@@ -1737,7 +1737,7 @@ fn emitted_content(
             ext,
         }
     };
-    let carried = |reference: &expr::PayloadRef| -> Result<Built, Fault> {
+    let carried = |reference: &expr::PayloadSource| -> Result<Built, Fault> {
         let source = slots.source(reference).ok_or_else(|| {
             Fault::Eval(expr::Error {
                 kind: expr::ErrorKind::Evaluation,
@@ -1748,8 +1748,8 @@ fn emitted_content(
             // The ordinary single-input path already has exactly the source
             // metadata. Preserve it without a remove/reinsert cycle on every
             // identity relay.
-            expr::PayloadRef::Input => input.meta().ext().clone(),
-            expr::PayloadRef::Named(_) => {
+            expr::PayloadSource::Input => input.meta().ext().clone(),
+            expr::PayloadSource::Named(_) => {
                 let mut ext = input.meta().ext().clone();
                 ext.remove("content_type");
                 if let Some(content_type) =
@@ -1768,13 +1768,13 @@ fn emitted_content(
     };
     match emission {
         PlanEmission::Nothing => Ok(None),
-        PlanEmission::Identity => Ok(Some(carried(&expr::PayloadRef::Input)?)),
+        PlanEmission::Identity => Ok(Some(carried(&expr::PayloadSource::Input)?)),
         PlanEmission::Data(expr) => {
             // No spelling-dependent special case, in EITHER
             // direction: the evaluator preserves the struct and
             // laziness witnesses. A whole payload
             // arriving uninspected — `out = data`, `out = copy`, the
-            // taken arm of a ternary — ships the REPRESENTATION,
+            // taken branch of a ternary — ships the REPRESENTATION,
             // content type included; anything else is FRESH data and
             // strikes it (D-2026-08-10-4).
             // `data` is the dominant relay form. Its canonical tree already
@@ -1789,7 +1789,7 @@ fn emitted_content(
                     if path.len() == 1 && path[0] == "data" && !base.contains_key("data")
             );
             let value = if direct_input {
-                expr::EvalValue::Payload(expr::PayloadRef::Input)
+                expr::EvalValue::Payload(expr::PayloadSource::Input)
             } else {
                 eval_with_slots(expr, base, slots, assets)?
             };
@@ -1835,7 +1835,7 @@ fn emitted_content(
             } else if replace || !data_writes.is_empty() {
                 fresh(envelope::Value::Struct(Vec::new()))
             } else {
-                carried(&expr::PayloadRef::Input)?
+                carried(&expr::PayloadSource::Input)?
             };
             let mut data: Option<envelope::Value> = if replace && carry.is_none() {
                 // A fresh STRUCT — the physical form of a braced
@@ -1863,7 +1863,7 @@ fn emitted_content(
                             Some(current) => current,
                             None => data.insert(match input.data() {
                                 Data::Materialized(value) => value.clone(),
-                                _ => slots.materialize(&expr::PayloadRef::Input)?,
+                                _ => slots.materialize(&expr::PayloadSource::Input)?,
                             }),
                         };
                         apply_struct_write(current, path, value);
@@ -2021,7 +2021,7 @@ pub fn apply_struct_write(data: &mut envelope::Value, path: &[String], leaf: env
 /// The `data` binding, materialized on the EVALUATOR'S first demand
 /// and cached for the rest of the transaction. The demand is the
 /// evaluation itself — a short-circuited branch (`false && data.x`,
-/// the untaken arm of a ternary, a statement never reached) never
+/// the untaken branch of a ternary, a statement never reached) never
 /// asks, so an opaque payload survives every path that does not
 /// structurally read it (envelope.md §5.1: no structural access, no
 /// transcode — ever). A static pre-scan of the tree cannot express
@@ -2117,7 +2117,7 @@ struct PayloadSource<'a> {
 }
 
 /// All lazy payloads visible during one transaction. An ordinary handler has
-/// only [`expr::PayloadRef::Input`]; a join adds one independently cached slot
+/// only [`expr::PayloadSource::Input`]; a join adds one independently cached slot
 /// per declared input port. This is the runtime half of the rule that reading
 /// one join leg must not decode every other leg.
 #[derive(Debug)]
@@ -2193,14 +2193,14 @@ impl<'a> PayloadSlots<'a> {
         }
     }
 
-    fn source(&self, reference: &expr::PayloadRef) -> Option<&PayloadSource<'a>> {
+    fn source(&self, reference: &expr::PayloadSource) -> Option<&PayloadSource<'a>> {
         match reference {
-            expr::PayloadRef::Input => Some(&self.input),
-            expr::PayloadRef::Named(name) => self.named.get(name),
+            expr::PayloadSource::Input => Some(&self.input),
+            expr::PayloadSource::Named(name) => self.named.get(name),
         }
     }
 
-    fn materialize(&self, reference: &expr::PayloadRef) -> Result<Value, Fault> {
+    fn materialize(&self, reference: &expr::PayloadSource) -> Result<Value, Fault> {
         self.source(reference)
             .ok_or_else(|| {
                 Fault::Eval(expr::Error {
@@ -2212,7 +2212,7 @@ impl<'a> PayloadSlots<'a> {
             .materialize()
     }
 
-    fn demand(&self, reference: &expr::PayloadRef) -> Option<expr::EvalValue> {
+    fn demand(&self, reference: &expr::PayloadSource) -> Option<expr::EvalValue> {
         self.source(reference)?.data.demand()
     }
 
@@ -2245,11 +2245,11 @@ impl expr::Bindings for LazyBindings<'_> {
         }
         // Resolving the NAME is not yet inspecting the structure:
         // the witness carries; `Bindings::payload` materializes.
-        (name == "data").then_some(expr::EvalValue::Payload(expr::PayloadRef::Input))
+        (name == "data").then_some(expr::EvalValue::Payload(expr::PayloadSource::Input))
     }
 
-    fn payload(&self, reference: &expr::PayloadRef) -> Result<expr::EvalValue, expr::Error> {
-        if !matches!(reference, expr::PayloadRef::Input) {
+    fn payload(&self, reference: &expr::PayloadSource) -> Result<expr::EvalValue, expr::Error> {
+        if !matches!(reference, expr::PayloadSource::Input) {
             return Err(expr::Error {
                 kind: expr::ErrorKind::Evaluation,
                 message: format!("payload {reference:?} is not bound"),
@@ -2282,11 +2282,11 @@ struct MultiLazyBindings<'a> {
 impl expr::Bindings for MultiLazyBindings<'_> {
     fn get(&self, name: &str) -> Option<expr::EvalValue> {
         self.base.get(name).cloned().or_else(|| {
-            (name == "data").then_some(expr::EvalValue::Payload(expr::PayloadRef::Input))
+            (name == "data").then_some(expr::EvalValue::Payload(expr::PayloadSource::Input))
         })
     }
 
-    fn payload(&self, reference: &expr::PayloadRef) -> Result<expr::EvalValue, expr::Error> {
+    fn payload(&self, reference: &expr::PayloadSource) -> Result<expr::EvalValue, expr::Error> {
         self.payloads.demand(reference).ok_or_else(|| expr::Error {
             kind: expr::ErrorKind::Evaluation,
             message: format!("payload {reference:?} could not materialize"),
@@ -2400,7 +2400,7 @@ fn eval_with_slots(
 /// The materialization fault, if the payload cannot decode.
 pub fn resolve_payload(value: expr::EvalValue, slot: &DataSlot<'_>) -> Result<Value, Fault> {
     Ok(match value {
-        expr::EvalValue::Payload(expr::PayloadRef::Input) => slot.materialize()?,
+        expr::EvalValue::Payload(expr::PayloadSource::Input) => slot.materialize()?,
         expr::EvalValue::Payload(reference) => {
             return Err(Fault::Eval(expr::Error {
                 kind: expr::ErrorKind::Evaluation,
@@ -2546,7 +2546,7 @@ fn join_context(
     for delivery in inputs {
         let name = delivery.port.name();
         let meta = meta_value(delivery.envelope.meta());
-        let payload = expr::EvalValue::Payload(expr::PayloadRef::Named(name.to_string()));
+        let payload = expr::EvalValue::Payload(expr::PayloadSource::Named(name.to_string()));
         bindings.insert(format!("{name}.data"), payload.clone());
         bindings.insert(format!("{name}.meta"), expr::EvalValue::from(meta.clone()));
         bindings.insert(
@@ -2576,7 +2576,7 @@ fn bind_loop_state(
         source_instance: instance.clone(),
         envelope: application.state.clone(),
     });
-    let data = expr::EvalValue::Payload(expr::PayloadRef::Named(binding));
+    let data = expr::EvalValue::Payload(expr::PayloadSource::Named(binding));
     let meta = expr::EvalValue::from(meta_value(application.state.meta()));
     let state = expr::EvalValue::Struct(vec![
         (String::from("data"), data.clone()),
@@ -2932,7 +2932,7 @@ mod payload_resolution_tests {
             case: String::from("Done"),
             payload: vec![(
                 String::from("value"),
-                expr::EvalValue::Payload(expr::PayloadRef::Input),
+                expr::EvalValue::Payload(expr::PayloadSource::Input),
             )],
         };
 

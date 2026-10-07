@@ -190,7 +190,7 @@ delivery_id = blake3-derive( 0x0b, canonical_edge_text ‖ envelope_id )
 
 The delivery reference — never the envelope id alone — is the
 identity of every per-delivery obligation : the call budget a
-delivery arms (identity.md §3, `deadline_ids`), the queue and pending
+delivery creates (identity.md §3, `deadline_ids`), the queue and pending
 lookups that resolve an expiry, and the derivation of the call
 identity below. A fan-out of one envelope to two edges is two
 deliveries, two references, two obligations — two ports of one
@@ -207,8 +207,8 @@ instance_lifetime_id = blake3-derive(
 ```
 
 The full instance reference is also carried by the dated event. The derived
-reference is the stable timer identity sealed in transaction key 24; the original due
-instant is retained unsealed and restored exactly. Re-arming idle within one generation therefore
+reference is the stable deadline identity sealed in transaction key 24; the original due
+instant is retained unsealed and restored exactly. Renewing idle deadlines within one generation therefore
 keeps one logical obligation while its causal envelope changes, and an event
 from a closed generation cannot target its successor.
 
@@ -348,13 +348,13 @@ transactions that no port arrival triggers :
 | Transaction | `trigger` | `parent_id` (the cause) | Emitter (`owner_path` in the record) |
 |---|---|---|---|
 | `on start` | `l:start` | the envelope whose admission created the Node instance | the node itself |
-| Instance close request | `l:closing` | the envelope whose handler requested `stop`, or the envelope that armed the winning lifetime deadline | the closing owner itself |
+| Instance close request | `l:closing` | the envelope whose handler requested `stop`, or the envelope that created the winning lifetime deadline | the closing owner itself |
 | `on stop` via the `stop` action | `l:stop` | the envelope being processed when `stop` ran | the node itself |
-| `on stop` via lifetime expiry | `l:stop` | **the envelope that armed the deadline** — the last admitted envelope (`idle`), creator (`fixed`), or creating admission of the processing-time box (`tumbling`). Always exists; there is no phantom tick | the node itself |
+| `on stop` via lifetime expiry | `l:stop` | **the envelope that created the deadline** — the last admitted envelope (`idle`), creator (`fixed`), or creating admission of the processing-time box (`tumbling`). Always exists; there is no phantom tick | the node itself |
 | Inbound Call terminal | `l:reply` | the committed root request that opened the Call | the inbound Connector instance that admitted it |
 | Session terminal | `l:exit` | the envelope that opened the logical Session | the Connector instance that owns the Session |
 | Loop re-admission | `l:next` | the durable Next/Again command cause selected for this run and iteration | the Loop manager, recorded at its owner path and generation |
-| Call budget expiry | `l:timeout` | the request envelope that armed the budget | the Connector owner |
+| Call budget expiry | `l:timeout` | the request envelope that created the budget | the Connector owner |
 | Join-buffer eviction | `l:evict` | the evicted envelope ([execution-model.md §7](execution-model.md)) | the Operator node |
 | Recovery resolution of an unknown outbound | `l:recover` | the request envelope whose outcome is unknown ([delivery-semantics.md §4.4](delivery-semantics.md)) | the Connector node |
 
@@ -475,7 +475,7 @@ decides the payload, then derives it — a kept witness `Payload(x)`
 takes input x's value; FRESH data leaves it ABSENT; an explicit
 write in the same emission wins. The decision follows the VALUE
 (the keyed witness), never the spelling: `out = .`, `out = data`,
-`out = a.data`, a local carrying the witness, a ternary's taken arm
+`out = a.data`, a local carrying the witness, a ternary's taken branch
 all preserve representation and content type together. Outbound, a
 serializing codec dictates and writes the produced value; a byte
 pass-through uses the current value if compatible, else the

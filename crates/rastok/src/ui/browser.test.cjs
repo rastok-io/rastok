@@ -198,7 +198,7 @@ test('Retry keeps held attempts inspectable without drawing Loop state or downst
   assert.match(await page.locator('#future-items').innerText(), /Retry attempt.*due 0.1 s/s);
 });
 
-test('injection history names the retained routing key, not a guessed tenant field', { timeout: 60000 }, async t => {
+test('injection history names the recorded routing key, not a guessed tenant field', { timeout: 60000 }, async t => {
   const page = await openTour(t, undefined, 'crates/rastok/tests/fixtures/ui-instance-keys.rkg');
   await finish(page);
   await page.locator('#tab-instances').click();
@@ -352,7 +352,7 @@ test('a real recording is navigable without any execution command or Driver', { 
   run.stderr.on('data', chunk => { stderr += chunk; });
   run.stdout.resume();
   const ended = new Promise((resolve, reject) => { run.on('error', reject); run.on('exit', resolve); });
-  run.stdin.end('retained hello\n');
+  run.stdin.end('recorded hello\n');
   assert.equal(await ended, 0, stderr);
   const page = await openTour(t, undefined, undefined, ['replay', recording, '--ui']);
   const commands = [];
@@ -384,7 +384,7 @@ test('a real recording is navigable without any execution command or Driver', { 
   await page.locator('#tab-history').click();
   await page.locator('#history summary').filter({ hasText: /Observed envelopes/ }).click();
   await page.locator('.delivery-history-table tbody tr').first().locator('td:last-child > details > summary').click();
-  assert.match(await page.locator('#history').innerText(), /retained hello/);
+  assert.match(await page.locator('#history').innerText(), /recorded hello/);
   assert.deepEqual(commands, [], 'navigation must not ask the server to execute');
 });
 
@@ -410,7 +410,7 @@ async function bothRunsWaiting(page) {
     }
     return result;
   });
-  assert.ok(transitions.length > 0, 'both first applications have retained delayed recurrences');
+  assert.ok(transitions.length > 0, 'both first applications have recorded delayed recurrences');
   return transitions;
 }
 
@@ -430,15 +430,17 @@ async function presentResponse(page, release) {
 test("transitions have explicit transport names, a first-contact hint and an honest delayed dial", { timeout: 60000 }, async t => {
   const page = await openTour(t);
   for (const [command, label, hint] of [
-    ["step", "Next transition", "advance one retained transition"],
+    ["step", "Next transition", "advance one recorded transition"],
     ["next-scenario-action", "Next action", "run one authored action to its effect"],
     ["run-to-completion", "Finish", "run to completion"],
-    ["resume", "Replay", "replay retained transitions at the selected speed"],
+    ["resume", "Replay", "replay recorded transitions at the selected speed"],
   ]) {
     const button = page.locator(`[data-command="${command}"]`);
     assert.equal(await button.innerText(), label);
     assert.ok((await button.getAttribute("title")).includes(hint));
   }
+  assert.equal(await page.locator('.timeline-bar').getAttribute('aria-label'), 'Recorded execution timeline');
+  assert.equal(await page.locator('#timeline').getAttribute('aria-label'), 'Recorded transition');
   assert.match(await page.locator('#command-status').innerText(), /Paused before admission/);
   assert.match(await page.locator('#timeline-position').innerText(), /^LIVE · Main · transition 0$/);
   await page.locator('[data-command="next-scenario-action"]').click();
@@ -460,7 +462,7 @@ test("transitions have explicit transport names, a first-contact hint and an hon
   }
 });
 
-test('explanatory hovers expose types, capacity, command disposition, queued data and retained timers', { timeout: 60000 }, async t => {
+test('explanatory hovers expose types, capacity, command disposition, queued data and recorded deadlines', { timeout: 60000 }, async t => {
   const page = await openTour(t);
   await finish(page);
   await seek(page, 8);
@@ -485,7 +487,7 @@ test('explanatory hovers expose types, capacity, command disposition, queued dat
   await page.locator('.graph-scope-type[aria-label*="Loop"]').first().focus();
   assert.match(await page.locator('#graph-tooltip').innerText(), /Commands:.*Loop.next.*Fuel: 2/s);
   await page.locator('.graph-node-name').filter({ hasText: /^model$/ }).focus();
-  assert.match(await page.locator('#graph-tooltip').innerText(), /connector.*rastok\/process@4.*open instances/);
+  assert.match(await page.locator('#graph-tooltip').innerText(), /connector.*std\/process@4.*open instances/);
   await seek(page, (await bothRunsWaiting(page))[0]);
   await page.locator('.graph-loop-dial').focus();
   assert.match(await page.locator('#graph-tooltip').innerText(), /applications remaining.*waiting until.*exhaustion: failed/s);
@@ -539,7 +541,7 @@ test('causal selection links opening admission, manager command and readmission 
   assert.doesNotMatch(await page.locator('.causal-command').filter({ hasText: 'Done command' }).innerText(), /Admit/);
 });
 
-test('scenario actions select their retained transition and all navigation is keyboard reachable', { timeout: 60000 }, async t => {
+test('scenario actions select their recorded transition and all navigation is keyboard reachable', { timeout: 60000 }, async t => {
   const page = await openTour(t);
   assert.match(await page.locator('#timeline-position').innerText(), /^LIVE · Main · transition 0$/);
   assert.match(await page.locator('#command-status').innerText(), /Paused before admission/);
@@ -626,7 +628,7 @@ test('the explanatory path is reachable with Tab and keyboard alone', { timeout:
     [page.locator('.graph-edge-path[aria-label*="capacity"]'), /capacity 1024/],
     [page.locator('.edge-counter').filter({ hasText: /≡ 1/ }), /messages waiting/],
     [page.locator('.graph-scope-type[aria-label*="Loop"]'), /Commands:.*Loop.next/s],
-    [page.locator('.graph-node-name').filter({ hasText: /^model$/ }), /rastok\/process@4/],
+    [page.locator('.graph-node-name').filter({ hasText: /^model$/ }), /std\/process@4/],
   ]) {
     await tabTo(target);
     assert.match(await page.locator('#graph-tooltip').innerText(), explanation);
@@ -744,7 +746,7 @@ test("Loop dials follow historical admissions and instance selection without syn
     if (value.includes("⏱")) {
       const waitingRuns = await page.evaluate(() => currentSnapshot.loop_runs.filter(run => run.active && run.waiting));
       assert.ok(waitingRuns.length > 0);
-      assert.ok(waitingRuns.every(run => Number(run.application) === 1), "an armed run has not admitted its second application; another run may have");
+      assert.ok(waitingRuns.every(run => Number(run.application) === 1), "a waiting run has not admitted its second application; another run may have");
       waiting = boundary;
     }
     assert.equal(await page.locator('[data-port="Loop.expired"]').count(), 0);
@@ -758,7 +760,7 @@ test("Loop dials follow historical admissions and instance selection without syn
   await page.locator("#playback-speed").selectOption("1");
   await page.locator('[data-command="resume"]').click();
   await page.locator("#timeline-position").filter({ hasText: new RegExp(`^REPLAY.*transition ${waiting}$`) }).waitFor();
-  assert.equal(await dialText(), historicalDials.get(waiting), "replay projects the same retained fold as history");
+  assert.equal(await dialText(), historicalDials.get(waiting), "replay projects the same recorded fold as history");
   await page.locator('[data-command="pause"]').click();
   await page.locator("#timeline").fill(String(multiple));
   await page.locator("#timeline").dispatchEvent("change");
@@ -949,7 +951,7 @@ test("the complete tour stays inspectable by mouse and keyboard", { timeout: 600
     if (await page.locator("#execution-state").innerText() === "completed") break;
   }
   assert.equal(await page.locator("#execution-state").innerText(), "completed");
-  assert.deepEqual(boundaries, boundaries.map((_, index) => index), "Step never skips a retained boundary");
+  assert.deepEqual(boundaries, boundaries.map((_, index) => index), "Step never skips a recorded boundary");
   await capture(`transition ${boundaries.at(-1)}`);
   assert.match(await page.locator("#scenario-status").innerText(), /0 failures/);
   const readSnapshot = async () => (await page.request.get(new URL("/api/snapshot", page.url()).href)).json();

@@ -160,7 +160,7 @@ impl Bindings for LocalBindings<'_> {
             .or_else(|| self.bindings.get(name))
     }
 
-    fn payload(&self, reference: &expr::PayloadRef) -> Result<EvalValue, expr::Error> {
+    fn payload(&self, reference: &expr::PayloadSource) -> Result<EvalValue, expr::Error> {
         self.bindings.payload(reference)
     }
 

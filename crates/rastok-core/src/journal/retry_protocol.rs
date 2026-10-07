@@ -191,7 +191,7 @@ pub enum Fact {
         from: AttemptId,
         /// Following one-based ordinal.
         to: u64,
-        /// Winning Call, also the original timer's causal authority.
+        /// Winning Call, also the original deadline's causal authority.
         call: CallId,
     },
     /// Final batch uses ordinary authored routes, without reminting envelopes.

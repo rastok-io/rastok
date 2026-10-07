@@ -1,7 +1,7 @@
 use crate::boundary::{
     Draft, HttpServerExit, InboundCallConnectorDriver, InboundCallEvent, InboundCallResponse,
     InboundCallResponseStart, InboundCallTimeout, InboundCallTimeoutStart, InboundConnectorDriver,
-    InboundExchangeRef, IngressAcceptance, IngressDecision, IngressEnvelopeProvenance,
+    InboundExchangeId, IngressAcceptance, IngressDecision, IngressEnvelopeProvenance,
     IngressProposal, IngressProposalHandle, IngressRejection, IngressSubmission,
     SubmissionSequence,
 };
@@ -607,7 +607,7 @@ impl InboundConnectorDriver for HttpServer<'_> {
         };
         let decision = match decision {
             IngressDecision::Accepted(IngressAcceptance {
-                exchange: Some(InboundExchangeRef::Call(call_id)),
+                exchange: Some(InboundExchangeId::Call(call_id)),
                 ..
             }) => ServerDecision::Accepted(call_id),
             IngressDecision::Accepted(_) => ServerDecision::Rejected(IngressRejection::UnknownPort),
@@ -1741,7 +1741,7 @@ fn response_with_headers(status: StatusCode, headers: &http::HeaderMap) -> Respo
 )]
 mod tests {
     use super::*;
-    use crate::boundary::{InboundExchangeRef, IngressAdmission};
+    use crate::boundary::{InboundExchangeId, IngressAdmission};
     use crate::compiler::compile;
     use crate::contract::ContractCatalog;
     use crate::journal::{Journal, MemJournal};
@@ -1960,7 +1960,7 @@ graph api : App {
         else {
             panic!("the valid request must be accepted")
         };
-        let Some(InboundExchangeRef::Call(call_id)) = accepted.exchange else {
+        let Some(InboundExchangeId::Call(call_id)) = accepted.exchange else {
             panic!("an accepted server request opens one Call")
         };
         server.decide(proposal.reference, IngressDecision::Accepted(accepted));
@@ -2189,7 +2189,7 @@ graph api : App {
         else {
             panic!("the request must be admitted")
         };
-        let Some(InboundExchangeRef::Call(call_id)) = accepted.exchange else {
+        let Some(InboundExchangeId::Call(call_id)) = accepted.exchange else {
             panic!("the admitted request opens one Call")
         };
         server.decide(proposal.reference, IngressDecision::Accepted(accepted));
@@ -2245,7 +2245,7 @@ graph api : App {
         else {
             panic!("the request must be admitted")
         };
-        let Some(InboundExchangeRef::Call(call_id)) = accepted.exchange else {
+        let Some(InboundExchangeId::Call(call_id)) = accepted.exchange else {
             panic!("the admitted request opens one Call")
         };
         server.decide(proposal.reference, IngressDecision::Accepted(accepted));

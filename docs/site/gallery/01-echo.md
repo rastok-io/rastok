@@ -9,7 +9,7 @@ expected: Three scenarios pass, including a filtered empty line and a timed-out 
 break_it: 'Change the mock line out = . to out = "changed", then rerun the command without --bless.'
 limits:
   - Equal causal facts require equal inputs, responses and observable logical time.
-  - Diagnostic replay reconstructs retained facts; it does not execute a Lab scenario.
+  - Diagnostic replay reconstructs recorded facts; it does not execute a Lab scenario.
   - Recordings are sensitive local files, not a durable deployment journal or share-safe exports.
 replaces: 'NiFi: an input FlowFile, ExecuteStreamCommand and an output relationship; MuleSoft: a flow with an external-process boundary.'
 order: 1
@@ -67,7 +67,7 @@ command **without** `--bless`. The output assertion and golden should fail.
 ## Read the golden difference
 
 The diagnostic names the first differing record and field, labels the expected
-and actual values, and reports the retained input/transaction/Call context.
+and actual values, and reports the recorded input/transaction/Call context.
 Later differences are consequences, not a guessed source-code cause.
 Restore the line and rerun; do not bless merely to make a failure disappear.
 

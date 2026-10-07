@@ -6,7 +6,7 @@ use crate::boundary::Intent;
 use crate::canonical;
 use crate::instance;
 
-use crate::journal::{DeadlineKind, Emission, ids, timing::Deadlines};
+use crate::journal::{DeadlineKind, Emission, deadline::Deadlines, ids};
 use alloc::collections::BTreeSet;
 use core::fmt;
 
@@ -91,7 +91,7 @@ pub struct Settlement<'a> {
     pub case: &'a str,
     /// Explicit VM logical instant accepted with this winning closure.
     pub closed_at: i64,
-    /// Exact original retained arm, or absence for a final/non-delayed attempt.
+    /// Exact original unsealed deadline, or absence for a final/non-delayed attempt.
     pub schedule: Option<&'a Deadlines>,
 }
 
@@ -483,7 +483,7 @@ impl Fold {
     /// committed disposition into a graph publication.
     ///
     /// # Errors
-    /// Nonwinning/mismatched Call, unknown terminal, or inconsistent time/arm.
+    /// Nonwinning/mismatched Call, unknown terminal, or inconsistent time/deadline.
     pub fn settle(&mut self, attempt: AttemptId, settlement: &Settlement<'_>) -> Result<(), Error> {
         let mut next = self.clone();
         let state = next
@@ -525,12 +525,12 @@ impl Fold {
         match (due, settlement.schedule) {
             (None, None) => {}
             (Some(due), Some(schedule)) if schedule.created_at() == settlement.closed_at => {
-                let [arm] = schedule.items() else {
+                let [deadline] = schedule.items() else {
                     return Err(Error::Timing);
                 };
-                if arm.kind != DeadlineKind::RecurrenceDelay
-                    || arm.due_at != due
-                    || arm.reference
+                if deadline.kind != DeadlineKind::RecurrenceDelay
+                    || deadline.due_at != due
+                    || deadline.reference
                         != admission_ref(
                             attempt.operation,
                             attempt.ordinal + 1,

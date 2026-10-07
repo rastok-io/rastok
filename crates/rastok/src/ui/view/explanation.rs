@@ -14,11 +14,11 @@ use crate::plan::{
 use crate::runtime::{DataSlot, LazyBindings, State};
 
 pub(super) fn future(inspection: &VmInspection, records: &[Record]) -> JsonValue {
-    let arms: BTreeMap<_, _> = records
+    let deadlines: BTreeMap<_, _> = records
         .iter()
         .filter_map(Record::deadlines)
         .flat_map(|schedule| schedule.items())
-        .map(|arm| ((arm.kind, arm.reference), arm.due_at))
+        .map(|deadline| ((deadline.kind, deadline.reference), deadline.due_at))
         .collect();
     let mut result = Vec::new();
     for mailbox in &inspection.mailboxes {
@@ -43,7 +43,7 @@ pub(super) fn future(inspection: &VmInspection, records: &[Record]) -> JsonValue
                     && inspection.sessions.iter().any(|session| {
                         session.connector == mailbox.node && session.instance == mailbox.instance
                     });
-                if let Some(due) = arms.get(&(kind, reference))
+                if let Some(due) = deadlines.get(&(kind, reference))
                     && !(kind == DeadlineKind::CallTimeout && settled)
                     && !stale_handshake
                 {
@@ -88,7 +88,7 @@ pub(super) fn future(inspection: &VmInspection, records: &[Record]) -> JsonValue
             InstancePhaseInspection::Stopping => Vec::new(),
         };
         for (kind, reference, label) in scheduled {
-            if let Some(due) = arms.get(&(kind, reference)) {
+            if let Some(due) = deadlines.get(&(kind, reference)) {
                 result.push(json!({"kind": label, "owner": instance.owner.to_string(), "due_at_ns": due.to_string(), "instance": instance_ref_json(&instance.reference)}));
             }
         }
@@ -545,7 +545,7 @@ fn decision(
         return json!({"unavailable": "No exact consumed envelope is available for this transaction."});
     };
     if input.data().materialized_value().is_none() {
-        return json!({"unavailable": "The retained input is opaque; inspection does not decode DATA."});
+        return json!({"unavailable": "The recorded input is opaque; inspection does not decode DATA."});
     }
     let Ok(prestate) = state.cell(plan, slot, &tx.instance) else {
         return JsonValue::Null;
@@ -566,7 +566,7 @@ fn decision(
                 .collect::<Vec<_>>()
                 != tx.join_inputs
         {
-            return json!({"unavailable": "The complete named-input environment is not retained."});
+            return json!({"unavailable": "The complete named-input environment is not recorded."});
         }
         for (port, input) in ports.iter().zip(inputs) {
             let Some(value) = input.data().materialized_value() else {

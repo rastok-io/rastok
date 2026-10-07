@@ -416,7 +416,7 @@ Braces and names carry ALL the semantics — indentation carries none.
   Connector producing INGRESS records) — is **dead** : diagnostic
   `W-DEAD-GRAPH` (warning, not an error — work-in-progress graphs are
   legitimate), and its boundary-port wiring obligations are suspended.
-  Any partial wiring, or any source Connector inside, re-arms the normal
+  Any partial wiring, or any source Connector inside, reinstates the normal
   explicit-destination obligation of every productible output. A deliberate
   discard is written `-> nothing`.
 
@@ -820,7 +820,7 @@ parse -> {
   metrics
 }
 
-# one envelope, three DeliveryRef values; target order is non-semantic
+# one envelope, three delivery ids; target order is non-semantic
 ```
 
 ```

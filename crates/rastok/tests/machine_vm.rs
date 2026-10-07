@@ -8,7 +8,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use rastok::boundary::{
-    CallConnectorDriver, CallStart, DriverRouteError, InboundExchangeRef, InboundSession,
+    CallConnectorDriver, CallStart, DriverRouteError, InboundExchangeId, InboundSession,
     IngressAdmission, IngressProposal, IngressProposalHandle, IngressSubmission, Intent,
     OutboundConnectorBindings, PreparedRequest, SessionDriverEvent, SessionId, SessionOpenIntent,
     SessionStart, SessionWriteId, SessionWriteIntent, WebSocketExit,
@@ -1102,7 +1102,7 @@ fn within_evicts_only_a_still_buffered_candidate() {
             .outputs()
             .iter()
             .all(|output| output.port.name() != "expired"),
-        "the stale timer cannot evict a contribution already committed"
+        "the stale deadline cannot evict a contribution already committed"
     );
 }
 
@@ -1737,7 +1737,7 @@ graph lifecycle : App {
             })
             .collect::<Vec<_>>(),
         [102, 101],
-        "same-time expiries retain arm order after stale generations disappear"
+        "same-time expiries retain deadline order after stale generations disappear"
     );
 
     let lifecycle: Vec<_> = journal
@@ -2440,7 +2440,7 @@ graph finite : App {{
 }
 
 #[test]
-fn persistent_owners_start_once_and_arm_no_lifetime_deadline() {
+fn persistent_owners_start_once_and_create_no_lifetime_deadline() {
     let source = r#"
 graph persistent : App {
   input in: int
@@ -2480,8 +2480,8 @@ graph persistent : App {
         })
         .collect();
     assert_eq!(lifecycle.len(), 2, "root and relay start lazily once");
-    assert!(lifecycle.iter().all(|(trigger, timers)| {
-        *trigger == node::Trigger::Lifecycle(node::Lifecycle::Start) && timers.is_empty()
+    assert!(lifecycle.iter().all(|(trigger, deadline_ids)| {
+        *trigger == node::Trigger::Lifecycle(node::Lifecycle::Start) && deadline_ids.is_empty()
     }));
 }
 
@@ -4049,7 +4049,7 @@ graph app : App {
         else {
             panic!("opening admitted");
         };
-        let Some(InboundExchangeRef::Session(session)) = accepted.exchange else {
+        let Some(InboundExchangeId::Session(session)) = accepted.exchange else {
             panic!("Session reference");
         };
         sessions.push(session);
@@ -4265,7 +4265,7 @@ graph websocket : App {
         else {
             panic!("the uncongested opening must commit")
         };
-        let Some(InboundExchangeRef::Session(session)) = accepted.exchange else {
+        let Some(InboundExchangeId::Session(session)) = accepted.exchange else {
             panic!("an opening must mint a SessionId")
         };
         session
@@ -4505,7 +4505,7 @@ impl Journal for FlakyJournal {
         call_id: &rastok::boundary::CallId,
         closure: rastok::journal::Closure,
         closed_at: i64,
-        schedule: Option<Box<rastok::journal::timing::Deadlines>>,
+        schedule: Option<Box<rastok::journal::deadline::Deadlines>>,
     ) -> Result<rastok::journal::CloseVerdict, rastok::journal::Error> {
         if self.refuse_closes || self.refuse_call.as_ref() == Some(call_id) {
             return Err(rastok::journal::Error::Storage(String::from("scripted")));
@@ -5447,11 +5447,14 @@ graph app : App {
                     inbound.deadlines = None;
                 } else {
                     let schedule = inbound.deadlines.as_ref().unwrap();
-                    let mut arms = schedule.items().to_vec();
-                    arms[0].due_at += 1;
+                    let mut deadlines = schedule.items().to_vec();
+                    deadlines[0].due_at += 1;
                     inbound.deadlines = Some(Box::new(
-                        rastok::journal::timing::Deadlines::try_new(schedule.created_at(), arms)
-                            .unwrap(),
+                        rastok::journal::deadline::Deadlines::try_new(
+                            schedule.created_at(),
+                            deadlines,
+                        )
+                        .unwrap(),
                     ));
                 }
             }
@@ -5797,8 +5800,8 @@ fn a_budget_runs_from_delivery_and_covers_queue_time() {
         })
         .count();
     assert_eq!(timeout_transactions, 2);
-    // The sealed timers name the obligations the transactions
-    // armed — one per budgeted delivery.
+    // The sealed deadline_ids name the obligations the transactions
+    // created — one per budgeted delivery.
     let sealed: usize = journal
         .records()
         .iter()
@@ -5943,7 +5946,7 @@ fn a_late_answer_is_a_reported_observation_not_a_silence() {
 }
 
 #[test]
-fn a_refused_expiry_stays_armed_and_replays() {
+fn a_refused_expiry_stays_scheduled_and_replays() {
     // The eighth review's invariant: after any refusal, the
     // obligation and its delivery are either fully resolved or
     // replayable — never half-consumed, never duplicated.
@@ -5965,7 +5968,7 @@ fn a_refused_expiry_stays_armed_and_replays() {
         vm.advance(&mut journal, &mut world, 5_000_000_000).is_err(),
         "the refused closure surfaces"
     );
-    // Heal and replay: the timer was never acked.
+    // Heal and replay: the deadline was never acknowledged.
     journal.refuse_closes = false;
     vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
     assert!(vm.is_stable());
@@ -6034,7 +6037,7 @@ fn a_refused_commit_on_a_queued_expiry_loses_nothing() {
             .all(|record| !matches!(record, Record::Transaction(_))),
         "the open and closure facts may commit, but the refused transaction may not"
     );
-    // Heal and replay: the delivery was never removed, the timer
+    // Heal and replay: the delivery was never removed, the deadline
     // never acked — exactly one typed terminal fact results.
     journal.refuse_commits = false;
     vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
@@ -6149,7 +6152,7 @@ graph countdown : App + Loop {
         .expect("the root is admitted");
     before_restart
         .drain(&mut journal)
-        .expect("the first traversal arms, rather than runs, its successor");
+        .expect("the first traversal schedules, rather than runs, its successor");
     let run = first_loop(&journal);
     let first = loop_state(&journal, run);
     assert_eq!(first.iteration, 1);
@@ -6160,10 +6163,10 @@ graph countdown : App + Loop {
     let mut recovered = Vm::boot_at(&compilation.plan, GraphVersion(1), 1_000_000_000);
     recovered
         .recover_from_journal(&journal)
-        .expect("the persisted due-date annotation re-arms the same wakeup");
+        .expect("the persisted due-date annotation reschedules the same wakeup");
     recovered
         .recover_from_journal(&journal)
-        .expect("a duplicate recovery observation may re-arm but cannot re-enter twice");
+        .expect("a duplicate recovery observation may reschedule but cannot re-enter twice");
     let mut world = EchoWorld::default();
     recovered
         .advance(&mut journal, &mut world, 1_999_999_999)
@@ -6308,7 +6311,7 @@ graph countdown : App + Loop {
 }
 
 #[test]
-fn equal_date_loop_wakeups_keep_their_causal_arm_order() {
+fn equal_date_loop_wakeups_keep_their_deadline_creation_order() {
     let compilation = compile(
         &[r#"
 graph countdown : App + Loop {

@@ -426,7 +426,7 @@ fn key_name(key: u64) -> String {
 // ----- projection: the per-species tables -----
 
 fn loop_packet_tree(packet: &crate::journal::loop_protocol::Packet) -> Cbor {
-    use crate::journal::loop_protocol::{CloseReason, CommandValue, Fact, OpeningAdmissionRef};
+    use crate::journal::loop_protocol::{CloseReason, CommandValue, Fact, OpeningAdmissionId};
     let id = |id: crate::envelope::Id| Cbor::Bytes(id.as_bytes().to_vec());
     let mut fields = BTreeMap::new();
     if !packet.context.is_empty() {
@@ -508,14 +508,14 @@ fn loop_packet_tree(packet: &crate::journal::loop_protocol::Packet) -> Cbor {
                                 state,
                             } => {
                                 let opening = match opening {
-                                    OpeningAdmissionRef::Ingress { inbound, port } => {
+                                    OpeningAdmissionId::Ingress { inbound, port } => {
                                         Cbor::Array(vec![
                                             Cbor::Uint(1),
                                             id(*inbound),
                                             Cbor::Text(port.name().into()),
                                         ])
                                     }
-                                    OpeningAdmissionRef::Delivery(delivery) => {
+                                    OpeningAdmissionId::Delivery(delivery) => {
                                         Cbor::Array(vec![Cbor::Uint(2), id(*delivery)])
                                     }
                                 };
@@ -792,12 +792,12 @@ fn record_tree(record: &Record) -> Cbor {
                 ),
             );
             if !transaction.deadline_ids.is_empty() {
-                let mut timers: Vec<_> = transaction.deadline_ids.iter().collect();
-                timers.sort();
+                let mut deadline_ids: Vec<_> = transaction.deadline_ids.iter().collect();
+                deadline_ids.sort();
                 pairs.insert(
                     24,
                     Cbor::Array(
-                        timers
+                        deadline_ids
                             .into_iter()
                             .map(|(kind, reference)| {
                                 Cbor::Array(vec![
@@ -873,10 +873,10 @@ fn record_tree(record: &Record) -> Cbor {
                         schedule
                             .items()
                             .iter()
-                            .map(|arm| {
+                            .map(|deadline| {
                                 Cbor::Array(vec![
-                                    Cbor::Uint(u64::from(u8::from(arm.kind))),
-                                    Cbor::Bytes(arm.reference.as_bytes().to_vec()),
+                                    Cbor::Uint(u64::from(u8::from(deadline.kind))),
+                                    Cbor::Bytes(deadline.reference.as_bytes().to_vec()),
                                 ])
                             })
                             .collect(),
@@ -951,7 +951,7 @@ mod tests {
 
     #[test]
     fn the_loop_protocol_registry_pins_open_admit_and_observed_time() {
-        use crate::journal::loop_protocol::{Fact, OpeningAdmissionRef, Packet, run_ref};
+        use crate::journal::loop_protocol::{Fact, OpeningAdmissionId, Packet, run_ref};
         let owner = crate::node::OwnerPath::root();
         let instance =
             crate::instance::Generation::new(crate::instance::Identity::singleton(&owner), 0);
@@ -961,7 +961,7 @@ mod tests {
             Data::materialized(crate::value::Value::Int(7)),
         );
         let entry = crate::node::Port::new("in").unwrap();
-        let opening = OpeningAdmissionRef::Ingress {
+        let opening = OpeningAdmissionId::Ingress {
             inbound: root,
             port: entry.clone(),
         };
@@ -1085,7 +1085,7 @@ mod tests {
         }));
 
         let Cbor::Map(tree) = record_tree(&record) else {
-            panic!("an inbound record projects as a canonical map")
+            panic!("an INGRESS record projects as a canonical map")
         };
         assert_eq!(
             tree.get(&15),

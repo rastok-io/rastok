@@ -111,7 +111,7 @@ impl TryFrom<u8> for IdKind {
 pub struct Id([u8; 16]);
 
 impl Id {
-    /// Derives an id from a domain tag and length-prefixed frames — the
+    /// Derives an id from an [`IdKind`] and length-prefixed frames — the
     /// injective framing of `envelope.md` §2:
     ///
     /// ```text

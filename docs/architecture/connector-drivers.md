@@ -1,12 +1,13 @@
 # Contributing a Connector Driver
 
-> Current implementation, audited 2026-09-09: categorical package v17.
+> Current implementation, updated 2026-10-07; version authority:
+> [format registry](../spec/identity.md).
 > D-2026-09-05-1 established the model implemented by R3–R9: Connector is
 > one of the two Executor forms, its semantic transition comes from a
 > versioned Contract, all productible outcomes have explicit
-> dispositions. The original six Contracts retain `@2`; resident Process
-> selects `process@3` inside the unchanged package.
-> The v17 Loop amendment extends a Call's existing terminal type; it creates
+> dispositions. Process job/service use `std/process@4` / `@5`; File and
+> network Contracts use `std/…@3`.
+> Loop extends a Call's existing terminal type; it creates
 > neither a new Contract id nor a contributed port.
 > The normative contract lives in
 > [`../spec/stdlib.md`](../spec/stdlib.md) and
@@ -31,7 +32,7 @@ remains pending under the Driver's ordinary finite capacities.
 
 No Rust crate name, Cargo feature, library path, Host, Worker or concrete
 Driver version enters the semantic plan. The meeting key is the canonical
-Contract id, for example `rastok/file@2`.
+Contract id, for example `std/file@3`.
 
 ```text
                          compile time
@@ -49,7 +50,7 @@ Contract id, for example `rastok/file@2`.
        │                          │                                │
        └─ DriverManifest           │                      ┌─────────┴─────────┐
           (data only)              │                      │                   │
-                                                   inbound facts       committed outbound intents
+                                                   INGRESS facts       committed outbound intents
                                                            │                   │
                                                            └──── VM + journal ┘
 
@@ -124,7 +125,7 @@ cooperative protocol closure during bounded Closing; `abort_session` requests
 forced local cleanup at its retained settlement deadline; `release_session`
 notifies the Driver after the sole terminal transaction has committed. The
 last two must not wait for peer cooperation, allocate an unbounded cleanup
-queue or start another grace period. They are fenced by the exact `SessionRef`
+queue or start another grace period. They are fenced by the exact `SessionId`
 and cannot affect its successor. Aborting does not fabricate a normal exit or
 forget correlation early. Resource-free Lab Drivers may use the no-op defaults;
 physical shutdown needs separate qualification. In particular, these common
@@ -232,7 +233,7 @@ bounded close-once rules.
 H6 is the live Session consumer. WebSocketClient and WebSocketServer use the
 same `SessionConnectorDriver` fold over H1 Upgrade, RFC 8441 and RFC 9220.
 Opening, each write and terminal publication are separately correlated by
-journal-derived `SessionRef`/`SessionWriteRef`; pending work stays within the
+journal-derived `SessionId`/`SessionWriteId`; pending work stays within the
 ordinary mailbox bound. A server object owns a multi-session table, while a
 client Node instance owns at most one active connection. The contract-specific modules
 own settings and portable outcomes; private `network::websocket` owns sockets,
@@ -305,7 +306,7 @@ sealed request or a typed pre-open rejection.
 Keep that protocol callable by both the real Driver and the Lab mock. For a
 call it prepares one request and projects one completion. For a session
 it prepares open/write facts, correlates inbound messages to one logical
-`SessionRef`, and projects one terminal exit. Only the operation after the
+`SessionId`, and projects one terminal exit. Only the operation after the
 journal boundary — filesystem access, process spawn, socket open/write —
 differs between those worlds.
 
@@ -321,7 +322,7 @@ socket handles, Hyper/quiche/Tungstenite values and TLS contexts remain below
 that module. The Driver-facing side is synchronous and exchanges owned Rastok
 facts because queued or asynchronous boundaries must own their data.
 
-The Driver answers an outbound Call, proposes an inbound fact, reports an
+The Driver answers an outbound Call, proposes an INGRESS fact, reports an
 inbound Call terminal or Session observation, or stays silent. The runtime
 owns envelope birth, backpressure, journal ordering, timeout, close-once,
 bounded Closing and typed port validation. An HTTP response, successful

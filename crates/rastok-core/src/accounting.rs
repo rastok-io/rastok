@@ -152,7 +152,7 @@ impl CostProfileName {
     pub fn new(reference: impl Into<String>) -> Result<Self, AccountingError> {
         let reference = reference.into();
         if !stable_text(&reference, 512, false) {
-            return Err(AccountingError::InvalidProfileRef(reference));
+            return Err(AccountingError::InvalidProfileName(reference));
         }
         Ok(Self(reference))
     }
@@ -909,7 +909,7 @@ fn unit_price_tree(rule: &UnitPrice) -> Cbor {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountingError {
     /// Invalid stable profile reference.
-    InvalidProfileRef(String),
+    InvalidProfileName(String),
     /// Provider/model deployment dimension is empty or malformed.
     InvalidDimension(&'static str),
     /// Duplicate Connector/measure rule.
@@ -945,7 +945,7 @@ pub enum AccountingError {
 impl fmt::Display for AccountingError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidProfileRef(reference) => {
+            Self::InvalidProfileName(reference) => {
                 write!(formatter, "invalid cost-profile reference `{reference}`")
             }
             Self::InvalidDimension(name) => write!(formatter, "invalid cost-profile {name}"),

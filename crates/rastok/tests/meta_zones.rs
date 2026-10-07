@@ -351,7 +351,7 @@ fn content_type_follows_the_payload_not_the_merge() {
     assert_eq!(
         run("      out = true ? data : \"other\""),
         csv,
-        "the taken ternary arm keeps"
+        "the taken ternary branch keeps"
     );
     assert_eq!(
         run("      out = { data = data, meta.app.tag = \"x\" }"),

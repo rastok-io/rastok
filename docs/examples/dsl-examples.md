@@ -1,8 +1,8 @@
 # Rastok DSL — current fixtures and historical design sketches
 
-## Current v17 entry points
+## Current entry points
 
-Use [grammar.md](../spec/grammar.md) and the
+Use the [format registry](../spec/identity.md), [grammar.md](../spec/grammar.md) and the
 [checked example catalogue](README.md) for authoring. Benchmark language cards
 are frozen experimental inputs, not the current specification. The current
 ontology is Node / Graph / Executor / Connector / Extension: Graphs own no
@@ -16,8 +16,8 @@ The checked examples are:
   Process Calls with explicit output dispositions and deterministic Lab traces;
 - [gauge](../../examples/gauge.rkg): typed data and unchanged semantic identity;
 - [countdown](../../examples/countdown.rkg): an Operator Loop with a verified measure;
-- [keyed retry](../../examples/keyed-retry.rkg): a Graph Loop, two isolated
-  conversations and explicitly routed Call outcomes;
+- [keyed retry](../../examples/keyed-retry.rkg): two isolated tenants, an
+  outbound Call with native Retry and explicitly routed final outcomes;
 - [WebSocket gateway](codex-websocket-gateway.rkg): the checked session boundary.
 
 R9's historical v16 qualification is followed by the
@@ -56,7 +56,7 @@ graph hello_echo {
   }
 
   connector log : File {
-    // Prospective append/log profile. The executable rastok/file@1 surface is
+    // Prospective append/log profile. The executable std/file@3 surface is
     // one explicit read or atomic replace per invocation.
     path = "/var/log/rastok/echo.ndjson"
     codec = ndjson

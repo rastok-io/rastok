@@ -92,5 +92,5 @@ Editor syntax is `editors/vscode/rastok-dsl/syntaxes/rkg.tmLanguage.json`.
 The gallery uses ordinary relative Markdown image links for these assets;
 no new front-matter field is needed. `assets/webhook-capture.json` is capture
 provenance, not a documentation page: the site must treat `assets/` as files,
-not front-matter-bearing content. The replay GIF maps every frame to a retained
+not front-matter-bearing content. The replay GIF maps every frame to a recorded
 transition and contains no generated scene or external credential.

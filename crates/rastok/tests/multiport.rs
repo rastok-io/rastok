@@ -3,7 +3,7 @@
 //! named boundary outputs, end to end in the Lab. The refusals stay
 //! typed: a wrong-direction injection, an unknown input, a source-
 //! connector injection (still deferred), and the machine's own
-//! verified ingress. The inbound record carries its port as key 24,
+//! verified ingress. The INGRESS record carries its port as key 12,
 //! omitted for the default `in` (identity.md §3, D-2026-08-08-2).
 
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
@@ -2506,12 +2506,12 @@ fn short_circuits_never_demand_the_data() {
         outputs[0].envelope.data(),
         Data::Encoded { encoding: Encoding::ArrowIpc, bytes, .. } if bytes.as_ref() == b"\x01\x02"
     ));
-    // `false ? size(data) : 1`: the untaken arm never demands.
+    // `false ? size(data) : 1`: the untaken branch never demands.
     let (result, outputs, errors) = run(
         "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = false ? size(data) : 1 }\n  }\n  in -> o -> out\n}\n",
     );
-    result.expect("the untaken ternary arm performs no read");
-    assert_eq!(errors, 0, "the untaken arm never ran");
+    result.expect("the untaken ternary branch performs no read");
+    assert_eq!(errors, 0, "the untaken branch never ran");
     assert_eq!(
         outputs[0].envelope.data(),
         &Data::materialized(Value::Int(1))
@@ -2535,7 +2535,7 @@ fn short_circuits_never_demand_the_data() {
 #[test]
 fn the_carry_is_as_lazy_as_the_name() {
     // Semantics, not spelling: `val copy = data; out = copy` and a
-    // taken ternary arm behave exactly like `out = data` — the whole
+    // taken ternary branch behave exactly like `out = data` — the whole
     // payload ships its REPRESENTATION (bytes, encoding, MIME),
     // opaque or not, however the carry is written.
     use rastok::boundary::{

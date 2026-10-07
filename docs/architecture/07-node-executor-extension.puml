@@ -1,6 +1,6 @@
 @startuml 07-node-executor-extension
 skinparam backgroundColor white
-title Rastok — semantic ownership (v19; not a Rust API inventory)
+title Rastok — semantic ownership (not a Rust API inventory)
 skinparam shadowing false
 skinparam classAttributeIconSize 0
 hide empty methods
@@ -73,7 +73,7 @@ Manager ..> Node : owner address / generation
 note left of Node
 instance.stop closes the current generation.
 child.instance.stop targets a direct child.
-Retained commands, never spatial ports.
+Recorded commands, never spatial ports.
 end note
 note bottom of Graph
 Generic lifecycle records may name a Graph.
@@ -86,13 +86,13 @@ custom terminal, or the Call's extended exit.
 Commands are not ports or spatial edges.
 end note
 note bottom of Retry
-All attempts retained; only the final one delivered.
-Backoff starts at the retained Call closure time.
+All attempts recorded; only the final one delivered.
+Backoff starts at the unsealed Call closure instant.
 Idempotence is a plan guarantee, not an Intent field.
 end note
 note bottom of Driver
 Process job: finite Call.
 Process service: resident Session per instance.
-Session frames are fresh admitted INBOUND facts.
+Session frames are fresh admitted INGRESS facts.
 end note
 @enduml

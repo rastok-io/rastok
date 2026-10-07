@@ -259,7 +259,7 @@ fn repeated_envelope_ids_cannot_change_their_content() {
 
 #[test]
 fn journal_timing_failures_remain_typed_at_the_recording_boundary() {
-    use crate::journal::{codec, timing};
+    use crate::journal::{codec, deadline};
     assert!(matches!(
         super::Error::from(codec::Error::Read(
             crate::canonical_cbor::DecodeError::Malformed("deadline row"),
@@ -268,18 +268,18 @@ fn journal_timing_failures_remain_typed_at_the_recording_boundary() {
     ));
     assert!(matches!(
         super::Error::from(codec::Error::Deadlines(
-            timing::Error::DeadlinePrecedesCreation,
+            deadline::Error::DeadlinePrecedesCreation,
         )),
         super::Error::Journal(crate::journal::Error::InvalidDeadlines(
-            timing::Error::DeadlinePrecedesCreation,
+            deadline::Error::DeadlinePrecedesCreation,
         )),
     ));
     assert!(matches!(
         super::Error::from(codec::Error::CallTiming(
-            timing::Error::MissingClosureInstant
+            deadline::Error::MissingClosureInstant
         )),
         super::Error::Journal(crate::journal::Error::InvalidCallRetention(
-            timing::Error::MissingClosureInstant,
+            deadline::Error::MissingClosureInstant,
         )),
     ));
 }

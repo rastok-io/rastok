@@ -28,7 +28,7 @@ use crate::compiler::hir::{
 use crate::compiler::syntax::{
     Attribute as SynAttribute, BaseType, ConnectorDecl, Dispatch as SynDispatch, EdgeCaseSet,
     EdgeDecl, EdgeDestination as SynEdgeDestination, EdgeEndpoint, EdgeMatch, ExprSource,
-    GraphDecl, GraphItem, MatchSelector, Name, OperatorDecl, OperatorItem, PortRef, ScalarType,
+    GraphDecl, GraphItem, MatchSelector, Name, OperatorDecl, OperatorItem, PortPath, ScalarType,
     SchemaAnnotation as SynSchemaAnnotation, SchemaAnnotationConstant, Statement as SynStatement,
     StructBody, StructEntry, SyntaxTree, TopDecl, Trigger as SynTrigger, TypeRef, ValDecl,
     Value as SynValue, VarDecl,

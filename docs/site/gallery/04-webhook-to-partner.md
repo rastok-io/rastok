@@ -102,19 +102,19 @@ above, without `--bless`, then restore the source.
 Add
 `--golden crates/rastok/tests/golden/gallery/webhook-to-partner`.
 The CLI names the first differing record and field, expected versus actual,
-and retained causal context. This classified graph deliberately redacts
+and recorded causal context. This classified graph deliberately redacts
 values in divergence messages; it does not expose an email to explain a
-failure. Retained operation facts can differ before the final answer does.
+failure. Recorded operation facts can differ before the final answer does.
 The versioned goldens contain **only the synthetic fixture data**; they are
 not sanitised exports suitable for real personal data.
 
-The following 30-second sequence visits retained states of
+The following 30-second sequence visits recorded states of
 `webhook.timeout_then_success`: admission, timeout, backoff and successful
 second attempt. During the backoff, Retry retains the failed batch without
 delivering it to `decide`; only the final result is published. These are real
 debugger views of a simulation, not live HTTP requests or an edited branch.
 
-![Thirty seconds through the retained timeout and retry transitions](../assets/webhook-tour.gif)
+![Thirty seconds through the recorded timeout and retry transitions](../assets/webhook-tour.gif)
 
 Three stills make the checkpoints easier to inspect:
 
@@ -125,7 +125,7 @@ Three stills make the checkpoints easier to inspect:
 ## Carry forward
 
 This is the central exercise: one integration, several possible worlds, and
-a retained explanation when a revision changes behavior. Keep the timeout,
+a recorded explanation when a revision changes behavior. Keep the timeout,
 duplicate and 500 scenarios alongside the nominal one. Each describes a case
 the next change must still handle; passing them is evidence under their stated
 world assumptions, not proof that every real partner will behave that way.

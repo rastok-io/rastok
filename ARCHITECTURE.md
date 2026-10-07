@@ -2,7 +2,7 @@
 
 > Implementation blueprint — non-normative and under review.
 
-> **Current implementation (package v19).** The Node/Graph/Executor/Connector/Extension
+> **Current implementation** ([format registry](docs/spec/identity.md)). The Node/Graph/Executor/Connector/Extension
 > model, explicit dispositions, recursive Dispatch and Loop manager recovery
 > are executable. [R9](docs/architecture/rework-r9-qualification.md) records
 > the v16 qualification and remaining named limits; the
@@ -73,7 +73,7 @@ boundaries:
                          ┌──────────────────────────────┐
 event + state + plan ──▶ │ deterministic semantic step │
                          └──────────────┬───────────────┘
-                                        │ commit OUTBOUND open, then effect intent
+                                        │ commit EGRESS open, then effect intent
                             ┌───────────┴───────────┐
                             │                       │
                  real Driver event      scripted Lab event
@@ -241,9 +241,9 @@ debugging remains a separate gate; `run --ui` refuses before effects.
   logical responsibilities inside the executable.
 - [App/Lab effect cycle](docs/architecture/04-app-lab-effect-cycle.svg)
   — commit-before-effect with real or scripted Drivers.
-- [Archived pre-build module and type blueprint](docs/architecture/05-rastok-packages.svg)
-  — the M0 design artifact, retaining superseded names as history rather than
-  current API.
+- [Core data forms: envelopes, instances and journal records](docs/architecture/05-rastok-packages.svg)
+  — selected implemented types and their ownership relationships, aligned
+  with the current format registry.
 - [Module overview](docs/architecture/06-rastok-modules-overview.svg)
   — current Rust modules, their load-bearing types and the one-way crate
   dependency. View 03 shows the execution relationships.

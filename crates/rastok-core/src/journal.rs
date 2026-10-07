@@ -41,13 +41,13 @@ use core::fmt;
 pub(crate) mod acceptance;
 pub(crate) mod admission;
 pub mod codec;
+pub mod deadline;
 pub mod instance_stop;
 pub mod loop_protocol;
 pub mod retry_protocol;
-pub mod timing;
 
 /// Deterministic identity recipes — the injective blake3 framing of
-/// `envelope.md` §2, with its domain tags.
+/// `envelope.md` §2, with its IdKind registry.
 pub mod ids {
     use super::{CallId, Id, IdKind, IngressEnvelopeProvenance, SessionId, SessionWriteId, node};
     use crate::instance;
@@ -128,7 +128,7 @@ pub mod ids {
         Id::derive(IdKind::Delivery, &[edge.as_bytes(), delivery.as_bytes()])
     }
 
-    /// The stable 16-byte timer reference for one instance generation.
+    /// The stable 16-byte deadline reference for one instance generation.
     #[must_use]
     pub fn instance_lifetime_id(instance: &instance::Generation) -> Id {
         Id::derive(
@@ -141,7 +141,7 @@ pub mod ids {
     }
 
     /// Stable reference of one bounded Closing phase. `phase` is the
-    /// extend-only timer-kind number (drain or settlement), so the two
+    /// extend-only deadline-kind number (drain or settlement), so the two
     /// obligations of one generation cannot collide.
     #[must_use]
     pub fn instance_closing_id(instance: &instance::Generation, phase: super::DeadlineKind) -> Id {
@@ -304,11 +304,11 @@ pub enum Record {
 }
 
 impl Record {
-    /// Required scheduler retention when present. This is not a lossy
+    /// Required unsealed deadline evidence when present. This is not a lossy
     /// observation and never enters the causal seal. Outbound effects inherit
-    /// budgets armed by their accepting delivery, not their Driver start.
+    /// budgets created by their accepting delivery, not their Driver start.
     #[must_use]
-    pub fn deadlines(&self) -> Option<&timing::Deadlines> {
+    pub fn deadlines(&self) -> Option<&deadline::Deadlines> {
         match self {
             Self::Ingress(record) => record.deadlines.as_deref(),
             Self::Transaction(record) => record.deadlines.as_deref(),
@@ -551,20 +551,20 @@ pub(crate) fn observations_for_records_from(
 }
 
 /// An accepted inbound envelope and its record (`identity.md` §3,
-/// keys 20–28). The record autonomously reconstructs its root id from
+/// keys 8–16). The record autonomously reconstructs its root id from
 /// `(connector_path, replica, seq)`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IngressRecord {
     /// Exact-instance commands retained atomically with this root (key 42).
     pub instance_commands: Option<Box<instance_stop::Packet>>,
-    /// Retained arm instants and deadlines (key 41), atomically accepted with
-    /// this ingress. Omitted when this record arms no unsealed schedule.
-    pub deadlines: Option<Box<timing::Deadlines>>,
+    /// Unsealed creation and due instants (key 41), atomically accepted with
+    /// this ingress. Omitted when this record creates no deadline.
+    pub deadlines: Option<Box<deadline::Deadlines>>,
     /// Stable provenance of the external root stream.
     pub provenance: IngressEnvelopeProvenance,
     /// Source port of the root: an App input when [`Self::connector_path`] is
     /// absent, otherwise that Connector's output. Replay re-routes from this
-    /// causal fact. Projects as key 24, omitted for conventional `in`.
+    /// causal fact. Projects as key 12, omitted for conventional `in`.
     pub port: node::Port,
     /// Connector output which introduced this root. `None` is an explicit
     /// App-boundary injection. Replay therefore never guesses the source
@@ -574,7 +574,7 @@ pub struct IngressRecord {
     pub seq: u64,
     /// The envelope born here.
     pub envelope: Envelope,
-    /// Every target instance selected before this inbound fact committed.
+    /// Every target instance selected before this INGRESS fact committed.
     /// Singleton owners are explicit because generation is never derivable
     /// from a route's static endpoint alone.
     pub routes: Vec<RouteTarget>,
@@ -599,8 +599,8 @@ pub struct InboundCallIngressRecord {
     pub reference: InboundCallId,
     /// Exact Connector generation that owns the request and its terminal exit.
     pub instance: instance::Generation,
-    /// Dated obligations armed by this Call-opening fact. The tuple registry
-    /// is shared with transaction timers; ack-mode Calls carry none.
+    /// Dated obligations created by this Call-opening fact. The tuple registry
+    /// is shared with transaction deadlines; ack-mode Calls carry none.
     pub deadline_ids: Vec<(DeadlineKind, Id)>,
 }
 
@@ -617,7 +617,7 @@ pub enum InboundExchangeExitRecord {
     Session(SessionId),
 }
 
-/// Resolved session meaning of one committed inbound fact.
+/// Resolved session meaning of one committed INGRESS fact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionIngressRecord {
     /// This record opened the named session.
@@ -684,7 +684,7 @@ impl fmt::Display for LoopRunId {
 }
 
 /// The atomic commit packet of one node firing (`identity.md` §3,
-/// keys 30–39 and 48–55): consumed input, state delta, and emissions commit
+/// keys 17–26, 34–36, 38–40 and 42–43): consumed input, state delta, and emissions commit
 /// together or not at all. [`Journal::commit`] canonicalizes the
 /// sorted collections; emission order is text order and stays as
 /// given.
@@ -694,9 +694,9 @@ pub struct TransactionRecord {
     pub retry_record: Option<Box<retry_protocol::Packet>>,
     /// Exact-instance command production or winning consumption (key 42).
     pub instance_commands: Option<Box<instance_stop::Packet>>,
-    /// Retained arm instants and deadlines (key 41), outside causal identity.
+    /// Unsealed creation and due instants (key 41), outside causal identity.
     /// Absence is not evidence from which recovery may invent a deadline.
-    pub deadlines: Option<Box<timing::Deadlines>>,
+    pub deadlines: Option<Box<deadline::Deadlines>>,
     /// The firing lifecycle/transaction owner. Ordinary Node transactions
     /// carry the same segments as their node path; Graph lifecycle records
     /// use the preserved lexical Graph owner, including the empty root path.
@@ -792,8 +792,8 @@ pub struct CallRecord {
     pub retry_record: Option<Box<retry_protocol::Packet>>,
     /// Winning logical closure instant (unsealed key 44); absent only on Open.
     pub closed_at: Option<i64>,
-    /// Original closure-based recurrence arm (unsealed 41, causal presence 24).
-    pub deadlines: Option<Box<timing::Deadlines>>,
+    /// Original closure-based recurrence deadline (unsealed 41, causal presence 24).
+    pub deadlines: Option<Box<deadline::Deadlines>>,
     /// The canonical call fields.
     pub intent: Intent,
     /// Which fact this record states.
@@ -887,7 +887,7 @@ pub struct PreparedIngress {
     seq: u64,
     envelope: Envelope,
     exchange: Option<InboundExchangeRecord>,
-    deadlines: Option<Box<timing::Deadlines>>,
+    deadlines: Option<Box<deadline::Deadlines>>,
 }
 
 impl PreparedIngress {
@@ -900,7 +900,7 @@ impl PreparedIngress {
     /// Attach validated timing evidence before committing the accepting fact.
     /// A durable Journal stores it atomically with the root and its routes.
     #[must_use]
-    pub fn with_deadlines(mut self, schedule: timing::Deadlines) -> Self {
+    pub fn with_deadlines(mut self, schedule: deadline::Deadlines) -> Self {
         self.deadlines = Some(Box::new(schedule));
         self
     }
@@ -1028,10 +1028,10 @@ pub enum Error {
     InvalidRetryProtocol(retry_protocol::Error),
     /// An exact-instance command contradicts its source, target or close fact.
     InvalidInstanceCommand(instance_stop::Error),
-    /// Retained scheduler evidence contradicts the accepted obligations.
-    InvalidDeadlines(timing::Error),
+    /// Unsealed deadline evidence contradicts the accepted obligations.
+    InvalidDeadlines(deadline::Error),
     /// A Call carrier contradicts its closure time or Retry correlation.
-    InvalidCallRetention(timing::Error),
+    InvalidCallRetention(deadline::Error),
     /// A call ref matching no journaled call.
     UnknownCall,
     /// An inbound Call marker contradicts its root or source instance.
@@ -1078,7 +1078,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidRetainedRecord(reason) => write!(f, "invalid retained record: {reason}"),
+            Self::InvalidRetainedRecord(reason) => write!(f, "invalid journal record: {reason}"),
             Self::SequenceMismatch { expected, got } => {
                 write!(f, "expected inbound seq {expected}, got {got}")
             }
@@ -1139,7 +1139,7 @@ impl fmt::Display for Error {
             Self::InvalidInstanceCommand(error) => error.fmt(f),
             Self::InvalidDeadlines(error) => write!(f, "invalid deadlines: {error}"),
             Self::InvalidCallRetention(error) => write!(f, "invalid Call retention: {error}"),
-            Self::UnknownCall => f.write_str("no outbound record for this call"),
+            Self::UnknownCall => f.write_str("no EGRESS record for this call"),
             Self::CorruptInboundCall => {
                 f.write_str("the inbound Call marker contradicts its committed root or source")
             }
@@ -1404,7 +1404,7 @@ pub trait Journal {
         call_id: &CallId,
         closure: Closure,
         closed_at: i64,
-        schedule: Option<Box<timing::Deadlines>>,
+        schedule: Option<Box<deadline::Deadlines>>,
     ) -> Result<CloseVerdict, Error>;
 
     /// Declares that bounded Closing could not establish an observed
@@ -1637,7 +1637,7 @@ impl MemJournal {
                         )?,
                         CallStatus::Closed(closure) => {
                             let at = call.closed_at.ok_or({
-                                Error::InvalidCallRetention(timing::Error::MissingClosureInstant)
+                                Error::InvalidCallRetention(deadline::Error::MissingClosureInstant)
                             })?;
                             journal.close_egress(
                                 &call.intent.call_id,
@@ -1648,7 +1648,7 @@ impl MemJournal {
                         }
                         CallStatus::Abandoned => {
                             let at = call.closed_at.ok_or({
-                                Error::InvalidCallRetention(timing::Error::MissingClosureInstant)
+                                Error::InvalidCallRetention(deadline::Error::MissingClosureInstant)
                             })?;
                             journal.abandon_egress(&call.intent.call_id, at)?;
                         }
@@ -2468,7 +2468,7 @@ impl Journal for MemJournal {
         call_id: &CallId,
         closure: Closure,
         closed_at: i64,
-        schedule: Option<Box<timing::Deadlines>>,
+        schedule: Option<Box<deadline::Deadlines>>,
     ) -> Result<CloseVerdict, Error> {
         let mut intent = None;
         for record in &self.records {
@@ -2687,7 +2687,7 @@ mod tests {
 
     #[test]
     fn call_timing_refusals_keep_their_typed_cause() {
-        use timing::{Deadline, Deadlines, Error as TimingError};
+        use deadline::{Deadline, Deadlines, Error as DeadlineError};
         let mut call = CallRecord {
             intent: intent("clocked", 6),
             status: CallStatus::Open,
@@ -2697,18 +2697,18 @@ mod tests {
         };
         assert_eq!(
             acceptance::validate_call(&call),
-            Err(TimingError::UnexpectedClosureInstant)
+            Err(DeadlineError::UnexpectedClosureInstant)
         );
         call.status = CallStatus::Closed(Closure::Timeout);
         call.closed_at = None;
         assert_eq!(
             acceptance::validate_call(&call),
-            Err(TimingError::MissingClosureInstant)
+            Err(DeadlineError::MissingClosureInstant)
         );
         call.closed_at = Some(-1);
         assert_eq!(
             acceptance::validate_call(&call),
-            Err(TimingError::ClosurePrecedesOpening)
+            Err(DeadlineError::ClosurePrecedesOpening)
         );
         call.closed_at = Some(0);
         let attempt = retry_protocol::AttemptId {
@@ -2721,7 +2721,7 @@ mod tests {
         }));
         assert_eq!(
             acceptance::validate_call(&call),
-            Err(TimingError::MissingRetryContext)
+            Err(DeadlineError::MissingRetryContext)
         );
         call.retry_record.as_deref_mut().unwrap().context = Some(retry_protocol::AttemptId {
             ordinal: 0,
@@ -2729,7 +2729,7 @@ mod tests {
         });
         assert_eq!(
             acceptance::validate_call(&call),
-            Err(TimingError::InvalidRetryContext)
+            Err(DeadlineError::InvalidRetryContext)
         );
         call.retry_record = None;
         let deadline = Deadline {
@@ -2740,7 +2740,7 @@ mod tests {
         call.deadlines = Some(Box::new(Deadlines::try_new(0, vec![deadline]).unwrap()));
         assert_eq!(
             acceptance::validate_call(&call),
-            Err(TimingError::ArmWithoutRetryContext)
+            Err(DeadlineError::DeadlineWithoutRetryContext)
         );
         call.retry_record = Some(Box::new(retry_protocol::Packet {
             context: Some(retry_protocol::AttemptId {
@@ -2751,13 +2751,13 @@ mod tests {
         }));
         assert_eq!(
             acceptance::validate_call(&call),
-            Err(TimingError::RetryOrdinalOverflow)
+            Err(DeadlineError::RetryOrdinalOverflow)
         );
         call.retry_record.as_deref_mut().unwrap().context = Some(attempt);
         call.closed_at = Some(1);
         assert_eq!(
             acceptance::validate_call(&call),
-            Err(TimingError::ArmMismatch)
+            Err(DeadlineError::DeadlineMismatch)
         );
         call.closed_at = Some(0);
         assert_eq!(acceptance::validate_call(&call), Ok(()));
@@ -2765,7 +2765,7 @@ mod tests {
 
     #[test]
     fn transaction_deadlines_must_match_sealed_ids_time_and_loop_advances() {
-        use timing::{Deadline, Deadlines, Error as TimingError};
+        use deadline::{Deadline, Deadlines, Error as DeadlineError};
         let mut record = lifecycle_transaction(instance("clocked", 0), node::Lifecycle::Next);
         let mut deadline = Deadline {
             kind: DeadlineKind::CallTimeout,
@@ -2776,13 +2776,13 @@ mod tests {
         record.logical_time = Some(1);
         assert_eq!(
             acceptance::validate_transaction(&record),
-            Err(TimingError::FiringTimeDisagrees)
+            Err(DeadlineError::FiringTimeDisagrees)
         );
         record.logical_time = Some(0);
         record.deadline_ids = vec![(DeadlineKind::CallTimeout, Id::from_bytes([6; 16]))];
         assert_eq!(
             acceptance::validate_transaction(&record),
-            Err(TimingError::SealedDeadlineWithoutInstant)
+            Err(DeadlineError::SealedDeadlineWithoutInstant)
         );
         record.deadline_ids = vec![(deadline.kind, deadline.reference)];
         assert_eq!(acceptance::validate_transaction(&record), Ok(()));
@@ -2812,7 +2812,7 @@ mod tests {
         }));
         assert_eq!(
             acceptance::validate_transaction(&record),
-            Err(TimingError::LoopDeadlineMismatch)
+            Err(DeadlineError::LoopDeadlineMismatch)
         );
         deadline.kind = DeadlineKind::RecurrenceDelay;
         deadline.reference = loop_protocol::admission_ref(run, 1, command.reference);
@@ -2824,13 +2824,13 @@ mod tests {
         ));
         assert_eq!(
             acceptance::validate_transaction(&record),
-            Err(TimingError::LoopDeadlineMismatch)
+            Err(DeadlineError::LoopDeadlineMismatch)
         );
         record.deadlines = Some(Box::new(Deadlines::try_new(0, vec![deadline]).unwrap()));
         record.loop_record = None;
         assert_eq!(
             acceptance::validate_transaction(&record),
-            Err(TimingError::LoopDeadlineMismatch)
+            Err(DeadlineError::LoopDeadlineMismatch)
         );
     }
 
@@ -2918,7 +2918,7 @@ mod tests {
     }
 
     #[test]
-    fn retry_call_carriers_retain_only_their_own_next_admission_timer() {
+    fn retry_call_carriers_retain_only_their_own_next_admission_deadline() {
         let original = intent("retrying", 5);
         let call = original.call_id;
         let operation = retry_protocol::OperationId::from_id(Id::from_bytes([7; 16]));
@@ -2926,12 +2926,12 @@ mod tests {
             operation,
             ordinal: 1,
         };
-        let arm = timing::Deadline {
+        let deadline = deadline::Deadline {
             kind: DeadlineKind::RecurrenceDelay,
             reference: retry_protocol::admission_ref(operation, 2, call),
             due_at: 110,
         };
-        let schedule = timing::Deadlines::try_new(10, vec![arm]).unwrap();
+        let schedule = deadline::Deadlines::try_new(10, vec![deadline]).unwrap();
         let mut journal = MemJournal::new(GraphVersion(1));
         journal.open_egress(original.clone(), None).unwrap();
         assert!(matches!(
@@ -2946,13 +2946,13 @@ mod tests {
         let mut journal = MemJournal::new(GraphVersion(1));
         journal.open_egress(original, Some(attempt)).unwrap();
         for mutation in 0..2 {
-            let mut wrong = arm;
+            let mut wrong = deadline;
             if mutation == 0 {
                 wrong.reference = Id::from_bytes([9; 16]);
             } else {
                 wrong.kind = DeadlineKind::CallTimeout;
             }
-            let wrong = timing::Deadlines::try_new(10, vec![wrong]).unwrap();
+            let wrong = deadline::Deadlines::try_new(10, vec![wrong]).unwrap();
             assert!(
                 journal
                     .close_egress(&call, Closure::Timeout, 10, Some(Box::new(wrong)))
@@ -3155,9 +3155,9 @@ mod tests {
         let mut record = lifecycle_transaction(reference, node::Lifecycle::Start);
         record.logical_time = Some(7);
         record.deadlines = Some(Box::new(
-            timing::Deadlines::try_new(
+            deadline::Deadlines::try_new(
                 8,
-                vec![timing::Deadline {
+                vec![deadline::Deadline {
                     kind: DeadlineKind::JoinWithin,
                     reference: Id::from_bytes([1; 16]),
                     due_at: 10,
@@ -4055,26 +4055,26 @@ mod tests {
 
     #[test]
     fn an_ingress_schedule_commits_atomically_with_its_exact_obligations() {
-        use timing::{Deadline, Deadlines};
+        use deadline::{Deadline, Deadlines};
         let mut journal = MemJournal::new(GraphVersion(1));
         let prepared = journal
             .prepare_connector_ingress(submission("server", SubmissionSequence::Next), None)
             .unwrap();
         let root = prepared.envelope().meta().sys().id();
-        let timer = (DeadlineKind::InboundCallTimeout, root);
+        let deadline_id = (DeadlineKind::InboundCallTimeout, root);
         let prepared = prepared
-            .into_call(instance("server", 0), vec![timer])
+            .into_call(instance("server", 0), vec![deadline_id])
             .unwrap();
-        let mut arm = Deadline {
-            kind: timer.0,
+        let mut deadline = Deadline {
+            kind: deadline_id.0,
             reference: root,
             due_at: 12,
         };
-        let schedule = Deadlines::try_new(7, vec![arm]).unwrap();
-        arm.reference = Id::from_bytes([255; 16]);
+        let schedule = Deadlines::try_new(7, vec![deadline]).unwrap();
+        deadline.reference = Id::from_bytes([255; 16]);
         let forged = prepared
             .clone()
-            .with_deadlines(Deadlines::try_new(7, vec![arm]).unwrap());
+            .with_deadlines(Deadlines::try_new(7, vec![deadline]).unwrap());
         assert!(matches!(
             journal.commit_ingress(forged, vec![]),
             Err(Error::InvalidDeadlines(_))

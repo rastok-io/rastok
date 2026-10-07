@@ -6,7 +6,7 @@
 
 use crate::boundary::{
     CallConnectorDriver, CallId, CallStart, Completion, DriverRouteError, InboundCallResponseStart,
-    InboundCallTimeoutStart, InboundConnectorDriver, InboundExchangeRef, IngressDecision,
+    InboundCallTimeoutStart, InboundConnectorDriver, InboundExchangeId, IngressDecision,
     IngressProposal, Intent, OutboundConnectorBindings, OutboundConnectorDriver,
     RequestPreparation, Response, SchedulerCompletion, SessionConnectorBindings,
     SessionConnectorDriver, SessionDriverEvent, SessionId, SessionOpenIntent, SessionWriteIntent,
@@ -569,7 +569,7 @@ impl<'plan> RuntimeBindings<'plan> {
         }
         if let IngressDecision::Accepted(accepted) = decision {
             match accepted.exchange {
-                Some(InboundExchangeRef::Call(call_id)) => {
+                Some(InboundExchangeId::Call(call_id)) => {
                     if let Some(expected) = self.inbound_calls.get(&call_id)
                         && expected != &routed.connector
                     {
@@ -581,7 +581,7 @@ impl<'plan> RuntimeBindings<'plan> {
                     }
                     self.inbound_calls.insert(call_id, routed.connector.clone());
                 }
-                Some(InboundExchangeRef::Session(session)) => {
+                Some(InboundExchangeId::Session(session)) => {
                     if let Some(expected) = self.sessions.get(&session)
                         && expected != &routed.connector
                     {
@@ -1322,7 +1322,7 @@ mod tests {
     use crate::boundary::{
         CallConnectorDriver, CallStart, Completion, Draft, HttpServerExit,
         InboundCallConnectorDriver, InboundCallEvent, InboundCallResponse,
-        InboundCallResponseStart, InboundExchangeRef, IngressDecision, IngressEnvelopeProvenance,
+        InboundCallResponseStart, InboundExchangeId, IngressDecision, IngressEnvelopeProvenance,
         IngressProposal, IngressProposalHandle, IngressSubmission, Intent,
         OutboundConnectorBindings, OutboundConnectorDriver, ProcessExit, RequestPreparation,
         Response, SchedulerCompletion, SessionConnectorBindings, SessionConnectorDriver,
@@ -2211,7 +2211,7 @@ graph inbound : App {
             if state.acknowledge_on_accept
                 && let IngressDecision::Accepted(accepted) = decision
             {
-                let Some(InboundExchangeRef::Call(call_id)) = accepted.exchange else {
+                let Some(InboundExchangeId::Call(call_id)) = accepted.exchange else {
                     panic!("an inbound Call acceptance carries its Call ref")
                 };
                 state.events.push(InboundCallEvent {
@@ -2456,7 +2456,7 @@ graph api : App {
         else {
             panic!("the request must be accepted")
         };
-        let Some(InboundExchangeRef::Call(call_id)) = accepted.exchange else {
+        let Some(InboundExchangeId::Call(call_id)) = accepted.exchange else {
             panic!("the accepting fact opens a Call")
         };
         assert_eq!(journal.open_inbound_calls()[0].reference, call_id);
@@ -2591,7 +2591,7 @@ graph api : App {
         else {
             panic!("the request must be accepted")
         };
-        let Some(InboundExchangeRef::Call(call_id)) = accepted.exchange else {
+        let Some(InboundExchangeId::Call(call_id)) = accepted.exchange else {
             panic!("the accepted request opens one inbound Call")
         };
         let opening_instance = journal
@@ -2728,7 +2728,7 @@ graph api : App {
         else {
             panic!("the request must be accepted")
         };
-        let Some(InboundExchangeRef::Call(call_id)) = accepted.exchange else {
+        let Some(InboundExchangeId::Call(call_id)) = accepted.exchange else {
             panic!("the accepted request opens one inbound Call")
         };
         assert_eq!(

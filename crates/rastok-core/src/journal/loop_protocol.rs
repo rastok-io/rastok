@@ -13,7 +13,7 @@ pub use fold::{Error, Fold, Phase, RunState};
 
 /// Exact admission which opens a run, not its possibly shared business origin.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OpeningAdmissionRef {
+pub enum OpeningAdmissionId {
     /// Public input admitted by one INGRESS fact.
     Ingress {
         /// Retained root envelope.
@@ -142,7 +142,7 @@ pub enum Fact {
         /// Exact owner generation.
         instance: instance::Generation,
         /// The admission disambiguating sibling deliveries of one origin.
-        opening: OpeningAdmissionRef,
+        opening: OpeningAdmissionId,
         /// The host input to which every recurrence returns.
         entry: Port,
         /// Positive total application budget, including the first.
@@ -278,10 +278,10 @@ impl Packet {
 
 /// `rastok.loop-run.r2`: instance plus the exact opening admission.
 #[must_use]
-pub fn run_ref(instance: &instance::Generation, opening: &OpeningAdmissionRef) -> LoopRunId {
+pub fn run_ref(instance: &instance::Generation, opening: &OpeningAdmissionId) -> LoopRunId {
     let (tag, reference, port) = match opening {
-        OpeningAdmissionRef::Ingress { inbound, port } => (1, *inbound, port.name().as_bytes()),
-        OpeningAdmissionRef::Delivery(delivery) => (2, *delivery, &[][..]),
+        OpeningAdmissionId::Ingress { inbound, port } => (1, *inbound, port.name().as_bytes()),
+        OpeningAdmissionId::Delivery(delivery) => (2, *delivery, &[][..]),
     };
     LoopRunId::new(Id::derive(
         crate::envelope::IdKind::LoopRun,
@@ -337,16 +337,14 @@ mod tests {
         let instance = instance::Generation::new(instance::Identity::singleton(&owner), 0);
         let envelope = Id::derive(crate::envelope::IdKind::Root, &[b"same-origin"]);
         let left =
-            OpeningAdmissionRef::Delivery(super::super::ids::delivery_id("left>loop.in", envelope));
-        let right = OpeningAdmissionRef::Delivery(super::super::ids::delivery_id(
-            "right>loop.in",
-            envelope,
-        ));
-        let root = OpeningAdmissionRef::Ingress {
+            OpeningAdmissionId::Delivery(super::super::ids::delivery_id("left>loop.in", envelope));
+        let right =
+            OpeningAdmissionId::Delivery(super::super::ids::delivery_id("right>loop.in", envelope));
+        let root = OpeningAdmissionId::Ingress {
             inbound: envelope,
             port: Port::new("in").unwrap(),
         };
-        let other_port = OpeningAdmissionRef::Ingress {
+        let other_port = OpeningAdmissionId::Ingress {
             inbound: envelope,
             port: Port::new("request").unwrap(),
         };

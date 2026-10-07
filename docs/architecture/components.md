@@ -1,10 +1,10 @@
 # Component blueprint
 
-> Current implementation blueprint — non-normative, audited 2026-09-09.
-> Package **v17** retains the v7 type/value registry and six Connector
-> Contracts at **@2**. [R9](rework-r9-qualification.md) records the v16 rework;
-> the [v17 amendment](loop-host-terminal-v17.md) removes Loop's contributed
-> expiry port. Earlier milestone names below identify when a responsibility
+> Current implementation blueprint — non-normative, updated 2026-10-07.
+> The [format registry](../spec/identity.md) is the authority for current
+> package and record shapes. Process job/service use `std/process@4` / `@5`;
+> File and network Contracts use `std/…@3`. Loop extends an existing terminal;
+> Retry repeats a pinned Call without adding a port. Earlier milestone names below identify when a responsibility
 > landed; they are not current package versions or pending-work claims.
 > Current limits are in [Loop](../spec/loop.md#16-deferred-by-name),
 > [observability](../spec/observability.md) and [release qualification](release-qualification.md).
@@ -17,8 +17,7 @@ current build implements. It adds no language or runtime semantics;
 on any conflict,
 [`docs/spec/`](../spec/README.md) wins. The
 [C4 component view](03-rastok-components.svg) remains the coarse visual.
-The [pre-build module sketch](05-rastok-packages.svg) is archived for
-design history; its names are not a current API inventory. The maintained
+The [core data view](05-rastok-packages.svg) shows current owned types. The maintained
 [module overview](06-rastok-modules-overview.svg) tracks the load-bearing
 modules and public types of the current build.
 
@@ -74,7 +73,7 @@ canonical record projection ─▶ golden compare
 | `boundary::Completion` | `connectors` or the Lab's mock Driver | `runtime` (as an input event) | returns ordered ordinary port drafts plus one final typed `exit`, correlated by the internal `CallId` — never by the business key; a Driver only answers and never decides a timeout or mints journal records |
 | `journal::Record` | **runtime mechanics only** | recovery, `golden::Trace` | Drivers and mocks supply events, never records; causal core and observation annotations kept separable ([identity.md §3](../spec/identity.md)) |
 | `observation::RecordObservation` | semantic journal query | deterministic reports and disposable hosted projections | typed correlation is derived only from causal history, retained outside its seal, and never consulted by execution or replay ([observability.md §6–7](../spec/observability.md)) |
-| `accounting::AccountingObservation` | read-only journal/schema inspection | individual measurement inspection | original exact samples, basis, currency and causal provenance; no grouping, pricing or subset arithmetic in M1 ([observability.md §7.1](../spec/observability.md)) |
+| `accounting::AccountingObservation` | read-only journal/schema inspection | individual measurement inspection | original exact samples, annotation id/unit and causal provenance; no grouping, pricing or subset arithmetic in M1 ([observability.md §7.1](../spec/observability.md)) |
 | `diagnostics::Diagnostic` | every phase | entry points | stable code, spans, structured fields; accumulated values — never prints, never panics |
 | golden projection | `golden::Trace` (project, seal, diff) | evidence compare | deterministic bytes: same scope, same bytes ([simulation-semantics.md §6](../spec/simulation-semantics.md)) |
 
@@ -84,17 +83,17 @@ canonical record projection ─▶ golden compare
 crates/rastok-core/src/       # the kernel — #![no_std] + alloc (split at M0.5)
 ├── datatype.rs, value.rs       # logical types, values, validation/conformance
 ├── schema_annotation.rs, data_policy.rs, accounting.rs
-│                              # sparse policy, derivation, exact reports
+│                              # sparse policy, derivation, individual measurements
 ├── node.rs, envelope.rs, expr.rs, plan.rs
 ├── canonical_cbor.rs         # one bounded canonical byte discipline
-├── identity.rs               # canonical instance address/reference
-│   └── identity/encoding.rs  # tagged-value identity registry
+├── canonical.rs              # canonical envelope/type/value registry
+├── instance.rs               # identity, generation, policy and live lifecycle
 ├── json.rs, trivia.rs        # shared exact JSON and lexical-comment facts
 ├── deployment.rs             # typed boot/secret/privacy/price inputs, no environment reads
 ├── journal.rs, observation.rs # causal records plus retained typed correlation
 ├── boundary.rs               # host vocabulary, request framing, five traits
 ├── plan/                     # Dispatch, routing, composition, policy, validation, serialization
-└── runtime/                  # HandlerExecutor, VM, Loop manager, Closing and spatial recovery
+└── runtime/                  # HandlerExecutor, VM, Loop/Retry managers, Closing and recovery
 
 crates/rastok/src/            # the std layer — re-exports the kernel
 ├── diagnostics.rs    # Diagnostic, Code, Severity, Phase, Span, Bag
@@ -177,9 +176,9 @@ data out, the governing spec, and current status.
 | **Lexer + parser** | one forward byte cursor and token lookahead in `Lexer`; complete host lexemes; byte-adjacent `IDENT!` frontend selection; specialized expression/JSON/verbatim/guest regions; spans and structural recovery | source bytes + frontend Registry → syntax tree + diagnostics | [grammar.md](../spec/grammar.md); D-2026-08-13-1; D-2026-08-14-1 | M1.3 B4 |
 | **Unit assembly** | the deployed unit: multi-file resolution, lab-fragment merge, exactly-one-App, wiring by name, no shadowing | syntax trees → one resolved `Unit` | [grammar.md](../spec/grammar.md) scope rules; [simulation-semantics.md §2](../spec/simulation-semantics.md) | M0 (single unit) |
 | **Desugarer** | the finite sugar table — afterwards there is one way to say each thing | resolved unit → core-form graph | [grammar.md](../spec/grammar.md) | M0 |
-| **Type checker** | Node/Graph/Executor/Connector/Extension, one Dispatch per trigger, typed routes, explicit productibility/dispositions, instances, joins, policy and three qualified Loop hosts with a resolved host exhaustion terminal | source → checked `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [types.md](../spec/types.md); [observability.md](../spec/observability.md); [instances.md](../spec/instances.md); [expressions.md](../spec/expressions.md); [extensions.md](../spec/extensions.md); [loop.md](../spec/loop.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | R3–R9 and v17 executable |
+| **Type checker** | Node/Graph/Executor/Connector/Extension, one Dispatch per trigger, typed routes, explicit productibility/dispositions, instances, joins, policy and three qualified Loop hosts with a resolved host exhaustion terminal | source → checked `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [types.md](../spec/types.md); [observability.md](../spec/observability.md); [instances.md](../spec/instances.md); [expressions.md](../spec/expressions.md); [extensions.md](../spec/extensions.md); [loop.md](../spec/loop.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | executable; qualified by the current identity inventory |
 | **Canonicalizer** | the canonical byte form of the resolved HIR; the semantic hash | `Hir` → canonical bytes + `plan::SemanticHash` | [identity.md §1](../spec/identity.md) | M0, extended in M1 |
-| **Lowering + plan gate** | owner/address tables, Operator Dispatch, Contract-defined Connector transitions, RouteRule/PhysicalEdge separation, ExtensionSpec, manager commands and sparse policy; Graphs carry no application handlers | `Hir` → `plan::ValidatedExecutionPlan` | [identity.md](../spec/identity.md); [observability.md](../spec/observability.md); [instances.md](../spec/instances.md); [execution-model.md](../spec/execution-model.md); [extensions.md](../spec/extensions.md); [plan-package.md](plan-package.md) | categorical v17 executable; hostile validation in core |
+| **Lowering + plan gate** | owner/address tables, Operator Dispatch, Contract-defined Connector transitions, RouteRule/PhysicalEdge separation, ExtensionSpec, manager commands and sparse policy; Graphs carry no application handlers | `Hir` → `plan::ValidatedExecutionPlan` | [identity.md](../spec/identity.md); [observability.md](../spec/observability.md); [instances.md](../spec/instances.md); [execution-model.md](../spec/execution-model.md); [extensions.md](../spec/extensions.md); [plan-package.md](plan-package.md) | categorical plan executable; hostile validation in core |
 | **Tagged frontends** | registered name, framing and reader policy; built-in JSON/text/base64 decoding; deferred guest/data compiler identity; the host never tokenizes an owned body | `IDENT!` region → typed value, named deferral, or future compiled guest program | [expressions.md](../spec/expressions.md); [stdlib.md §5](../spec/stdlib.md) | B4 framing/readers; guest execution guarded |
 
 The facade returns `Result<Compilation, diagnostics::Bag>` with
@@ -194,18 +193,16 @@ semantics are an algebraic type:
 hir::NodeSemantics = Operator
                    | Connector { contract: ContractId, roles, exchange, attributes }
 
-Effect   = None | Class(EffectClass)   — `none` is an explicit declared
-                                         value, never an absent field;
-                                         the three effect *classes* stay three
+Contract roles and exchange profile select admission and dispatch.
+Idempotence is a separate validated guarantee used by Retry.
 ```
 
 Graphs have their own checked scope tree, not an Executor variant. Parsed
 `GraphItem`s may still carry invalid forms for named diagnostics; checking and
 independent package validation enforce legal attributes, required Connector
 settings and the absence of Graph/Connector application code. The syntax tree
-is not a proof of those invariants. `Effect::None` represents the catalogue's
-pure-source contracts without turning
-`none` into a fourth effect class. HttpServer executes; Timer and Calendar
+is not a proof of those invariants. Connector roles, not an effect class,
+distinguish inbound sources from outbound callers. HttpServer executes; Timer and Calendar
 remain declared-only and reject before HIR construction
 ([effects-and-sagas.md §2.1–2.2](../spec/effects-and-sagas.md),
 [stdlib.md §2](../spec/stdlib.md), [loop.md](../spec/loop.md)). The checker reads Connector
@@ -233,7 +230,7 @@ Two compiler rules with consequences elsewhere:
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`expr`** | the expression compiler/evaluator over core `DataType` and `Value`; its evaluator-only carrier may additionally hold the lazy payload witness | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → evaluation result; (`Tree`, boot constants) → core value | [expressions.md](../spec/expressions.md); [execution-model.md §5](../spec/execution-model.md) (no ambient time) | M1.3 B3 core + v7 registry; v12 added `media_type(text)`, retained by v17 |
+| **`expr`** | the expression compiler/evaluator over core `DataType` and `Value`; its evaluator-only carrier may additionally hold the lazy payload witness | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → evaluation result; (`Tree`, boot constants) → core value | [expressions.md](../spec/expressions.md); [execution-model.md §5](../spec/execution-model.md) (no ambient time) | core type/value authority; `media_type(text)` is executable |
 
 `expr` never sees an envelope, Node, or placement boundary, and owns its own
 `expr::Diagnostic` (the compiler adapts it into `diagnostics::Diagnostic`).
@@ -265,7 +262,7 @@ resolved constructor/narrowing forms their canonical package ids.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`plan::ValidatedExecutionPlan`** | private v17 plan with total ports, owners, recursive Dispatch, route selection, Contract profiles, Extensions, Loop proof/host terminals and sparse policy tables | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [types.md](../spec/types.md); [observability.md](../spec/observability.md); [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [extensions.md](../spec/extensions.md); [plan-package.md](plan-package.md) | v17 executable; removed versions/tags refuse without reinterpretation |
+| **`plan::ValidatedExecutionPlan`** | private validated plan with total ports, owners, recursive Dispatch, route selection, Contract profiles, Extensions, Loop proof/host terminals and sparse policy tables | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [types.md](../spec/types.md); [observability.md](../spec/observability.md); [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [extensions.md](../spec/extensions.md); [plan-package.md](plan-package.md) | current format executable; unknown versions/tags refuse |
 | **`plan::Manifest`** | the append-only ledger `SemanticHash → GraphVersions` — plural: a rollback allocates a **new** version for the same hash; a version is never renumbered, never reused | allocated at boot | [identity.md §2](../spec/identity.md) | M0 (minimal) |
 
 `ExecutionPlan` remains the whitepaper's domain term and the private data
@@ -308,7 +305,7 @@ the same VM surface; authored Lab crash/restart actions remain deferred.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **Scheduler** | run-to-completion firing; the single dated-event queue — the **call budgets, armed at DELIVERY** so queue time counts, referenced by `(edge, envelope id)`, resolved reserve→resolve→ack so a refused expiry replays (a timeout is the scheduler's dated event, never a Driver answer); virtual-time `advance`; drain-to-stable | plan + ordered events → transaction firings | [execution-model.md §1, §5–6, §8](../spec/execution-model.md) | M0 (single worker) |
+| **Scheduler** | run-to-completion firing; the single dated-event queue — the **call budgets, created at DELIVERY** so queue time counts, referenced by `(edge, envelope id)`, resolved reserve→resolve→ack so a refused expiry replays (a timeout is the scheduler's dated event, never a Driver answer); virtual-time `advance`; drain-to-stable | plan + ordered events → transaction firings | [execution-model.md §1, §5–6, §8](../spec/execution-model.md) | M0 (single worker) |
 | **Mailboxes** | per-instance-reference FIFO order, arrival-order capture (the race outcome is journaled), bounded capacity | envelopes → ordered delivery within one address generation | [execution-model.md §2–3](../spec/execution-model.md) | M0 base; M1.4 R3 hierarchical rebase landed |
 | **HandlerExecutor** | the atomic node transaction: consumed input, state delta, emissions, and records commit together; scratch isolation while a handler runs | firing → transaction commit + emissions | [execution-model.md §1](../spec/execution-model.md) | M0 |
 | **EmissionBuffer** | per-port emission identity in text order (`emission_index`) | handler body → ordered emissions | [execution-model.md §4](../spec/execution-model.md) | M0 |
@@ -386,7 +383,7 @@ Ownership rules that the types must make unrepresentable:
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`golden::Trace`** | the canonical causal projection and blake3 seal, encoded/decoded through shared canonical CBOR; timer identities are causal, the separately retained deadline schedule is not part of this projection | records → deterministic bytes; stored golden → structural re-read | [identity.md §3](../spec/identity.md); [simulation-semantics.md §6](../spec/simulation-semantics.md) | M0.5, extended causal registry |
+| **`golden::Trace`** | the canonical causal projection and blake3 seal, encoded/decoded through shared canonical CBOR; deadline identities are causal, the separately unsealed deadlines is not part of this projection | records → deterministic bytes; stored golden → structural re-read | [identity.md §3](../spec/identity.md); [simulation-semantics.md §6](../spec/simulation-semantics.md) | M0.5, extended causal registry |
 | **`golden::Divergence`** | the first meaningful difference, by record index and NAMED key path — a broken seal explains itself, never a hex dump | two traces → divergence or none | — | M0 |
 
 The module owns both directions of the **trace projection** and uses the
@@ -429,11 +426,11 @@ whatever its execution format.
 | **`connectors::DriverRegistry`** | exact `ContractId` → implementation factory mapping and role-availability checks; duplicate ids refuse | [decisions.md D-2026-08-22-1](../spec/decisions.md) | M1.5 C1 |
 | **`connectors::DriverManifest`** | data-only, canonically ordered stable id/role claims readable before implementation code loads; no factory, artifact locator, ABI or trust policy | [decisions.md D-2026-08-22-1](../spec/decisions.md); [connector-drivers.md](connector-drivers.md) | M1.5 C6 |
 | **`connectors::RuntimeBindings`** | the pre-VM association of every runnable inbound and callable outbound Connector with one bound Driver object; exact role-view proof; Node-path and Call routing without concrete contract matching | [decisions.md D-2026-08-22-1](../spec/decisions.md) | M1.5 C2 |
-| **`connectors::ProcessFactory` / `Process`** | the explicit `rastok/process@2` factory and real job-mode Outbound Driver: pre-binds every effective setting before the VM/journal exists, spawns asynchronously, captures under one aggregate budget, and supports `lines` / `jsonl` / `bytes` | [stdlib.md §3.3](../spec/stdlib.md) | M1.2 behavior; contract-specific module C0; registry binding C2 |
-| **`connectors::ProcessServiceFactory`** | `rastok/process@3`, one resident Session per exact instance; framed streaming, bounded writes, Unix supervision, no application RPC | [stdlib.md §3.3](../spec/stdlib.md) | [Resident qualification](process-service.md); pure Lab substitution and no package move |
-| **`stdlib::FILE` contract** | compiler sheet and Registry-free core mirror for `rastok/file@2`: `read`/`replace`, exact pins and `FileExit`, invocation-bound path, read budget | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 | M1.5 C3 |
+| **`connectors::ProcessFactory` / `Process`** | the explicit `std/process@4` factory and real job-mode Outbound Driver: pre-binds every effective setting before the VM/journal exists, spawns asynchronously, captures under one aggregate budget, and supports `lines` / `jsonl` / `bytes` | [stdlib.md §3.3](../spec/stdlib.md) | M1.2 behavior; contract-specific module C0; registry binding C2 |
+| **`connectors::ProcessServiceFactory`** | `std/process@5`, one resident Session per exact instance; framed streaming, bounded writes, Unix supervision, no application RPC | [stdlib.md §3.3](../spec/stdlib.md) | [Resident qualification](process-service.md); pure Lab substitution and no package move |
+| **`stdlib::FILE` contract** | compiler sheet and Registry-free core mirror for `std/file@3`: `read`/`replace`, exact pins and `FileExit`, invocation-bound path, read budget | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 | M1.5 C3 |
 | **`connectors::FileFactory` / `File`** | explicit physical-root binding and real one-file Outbound Driver: seals mode/path/budget-or-payload before open; performs complete bounded reads or native atomic replace after open; cooperates with generic cancel/close-once/replay rules | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 C4 checkpoint | M1.5 C4 |
-| **Network contract sheets** | exact `rastok/http-client@2`, `http-server@2`, `websocket-client@2`, and `websocket-server@2` roles/exchanges, codec-selected ports, phased settings, lossless HTTP metadata and portable terminal unions; the Registry-free mirror refuses forged rows without consulting the compiler catalogue | [stdlib.md §3.1–3.2, §3.8–3.9](../spec/stdlib.md); D-2026-08-25-2 | M1.6 H2 |
+| **Network contract sheets** | exact `std/http-client@3`, `std/http-server@3`, `std/websocket-client@3`, and `std/websocket-server@3` roles/exchanges, codec-selected ports, phased settings, lossless HTTP metadata and portable terminal unions; the Registry-free mirror refuses forged rows without consulting the compiler catalogue | [stdlib.md §3.1–3.2, §3.8–3.9](../spec/stdlib.md); D-2026-08-25-2 | M1.6 H2 |
 | **flat HTTP/WebSocket Connector modules** | `http_client`, `http_server`, `websocket_client` and `websocket_server` own contract-specific binding; `websocket_protocol` alone owns shared message framing. Every Contract resolves complete settings before external work and exposes only generic Call/Session views to the registry. | [M1.6 backlog](m1.6-http-websocket-backlog.md) | M1.6 H2–H7 complete |
 | **private `connectors::network` seam** | feature-selected bounded synchronous/async pump; Hyper/Rustls H1-H2, quiche/BoringSSL H3, shared trust bytes and bounded Tungstenite message machine; all runtime/library types stop below the Driver boundary | [connector-drivers.md](connector-drivers.md); D-2026-08-26-1; [M1.6 exit](m1.6-exit-report.md) | M1.6 H3 engine through H6 live client/server/Session execution |
 | **`connectors::http_client` / hosted HttpClient** | exact pre-open HTTP request descriptor; typed standard/custom request headers; bounded `CallStart` admission; H1 origin-form, pooled H2 and verified quiche H3; visibility-safe fallback; codec/body/header gates; lossless and typed response metadata plus portable exits | [stdlib.md §3.2](../spec/stdlib.md); D-2026-08-26-2/-3 | M1.6 H4/H4.1 |
@@ -463,8 +460,8 @@ second parser and no second engine.
 
 | Component | Owns | Spec | Status |
 |---|---|---|---|
-| **`node`** | shared path, port, effect, Connector `behavior`, trigger and closed `Extension` vocabulary; Executor is a semantic category, not a public trait | [grammar.md](../spec/grammar.md); [extensions.md](../spec/extensions.md); [effects-and-sagas.md](../spec/effects-and-sagas.md); [stdlib.md §2](../spec/stdlib.md); [envelope.md §3](../spec/envelope.md) | R3 vocabulary executable |
-| **`envelope`** | `Envelope { meta, data }` with the five reserved Tier-1 sys fields, optional Extension birth-context fields, and encoded/materialized data; Loop context and manager commands remain journal facts rather than new envelope fields | [envelope.md](../spec/envelope.md) | M0 core retained; Loop r2 causal context at R7 |
+| **`node`** | shared path, port, Connector `behavior`, trigger and closed `Extension` vocabulary; Executor is a semantic category, not a public trait | [grammar.md](../spec/grammar.md); [extensions.md](../spec/extensions.md); [effects-and-sagas.md](../spec/effects-and-sagas.md); [stdlib.md §2](../spec/stdlib.md); [envelope.md §3](../spec/envelope.md) | Current shared vocabulary |
+| **`envelope`** | `Envelope { meta, data }` with four `meta.sys` fields (`id`, `parent_id`, `origin_id`, `graph_version`), typed `app`/`ext` metadata, and encoded/materialized DATA; Loop context and manager commands remain journal facts rather than new envelope fields | [envelope.md](../spec/envelope.md) | Current envelope, without `role` |
 | **`diagnostics`** | stable codes, severity, the registry's **phase vocabulary** (`parse`, `resolve`, `check`, `plan`, `run`, `replay`, `sim`), multi-span, structured fields; a check ships with its code, its negative test, and its registry row in the same change | [diagnostics.md](../spec/diagnostics.md) | M0 |
 | **`main`** | the `check` / `run` / `simulate` verbs, wiring (Drivers, dispatcher, stdlib contracts), rendering; owns nothing semantic | — | M0 |
 
@@ -616,9 +613,9 @@ The R3–R9 rework and v17 amendment add the current load-bearing components:
 - `runtime::HandlerExecutor` with one selected Dispatch leaf and ordered multi-emission;
 - `journal::loop_protocol` plus `runtime/vm/loop_manager`: distinct command
   production/consumption, exact admission identity, quiescence, fuel and delay;
-- `runtime/vm/recovery`: spatial/exchange/timer/Loop reconstruction from a prefix;
+- `runtime/vm/recovery`: spatial/exchange/deadline/Loop/Retry reconstruction from a prefix;
 - `LoopSpec::expired`: a resolved existing terminal and extended type, never a
   contributed port or a VM comparison of the spelling `err`;
-- hosted `ui`: simulation-only retained transitions, source/decision/causal
+- hosted `ui`: recorded simulation transitions, source/decision/causal
   explanations and policy-aware DATA inspection. It never derives execution authority
   from an exported observation or invents a spatial manager edge.

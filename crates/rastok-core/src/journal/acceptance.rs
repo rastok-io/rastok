@@ -1,9 +1,9 @@
 //! Cross-record deadline acceptance, shared by the live journal and recovery.
-//! The timing codec checks the carrier; this layer relates its unsealed
-//! instants to the sealed Call, transaction and recurrence facts.
+//! The record codec and deadline constructor check shape and individual dates;
+//! this layer relates unsealed instants to sealed Call, transaction and recurrence facts.
 
 use super::DeadlineKind;
-use super::timing::{Deadlines, Error};
+use super::deadline::{Deadlines, Error};
 use crate::envelope::Id;
 
 pub(crate) fn validate_call(record: &super::CallRecord) -> Result<(), Error> {
@@ -28,7 +28,7 @@ pub(crate) fn validate_call(record: &super::CallRecord) -> Result<(), Error> {
     }
     if let Some(schedule) = record.deadlines.as_deref() {
         let Some(context) = context else {
-            return Err(Error::ArmWithoutRetryContext);
+            return Err(Error::DeadlineWithoutRetryContext);
         };
         let Some(next) = context.ordinal.checked_add(1) else {
             return Err(Error::RetryOrdinalOverflow);
@@ -37,9 +37,9 @@ pub(crate) fn validate_call(record: &super::CallRecord) -> Result<(), Error> {
             super::retry_protocol::admission_ref(context.operation, next, record.intent.call_id);
         if !matches!(record.status, super::CallStatus::Closed(_))
             || record.closed_at != Some(schedule.created_at())
-            || !matches!(schedule.items(), [arm] if arm.kind == super::DeadlineKind::RecurrenceDelay && arm.reference == reference)
+            || !matches!(schedule.items(), [deadline] if deadline.kind == super::DeadlineKind::RecurrenceDelay && deadline.reference == reference)
         {
-            return Err(Error::ArmMismatch);
+            return Err(Error::DeadlineMismatch);
         }
     }
     Ok(())
@@ -47,13 +47,13 @@ pub(crate) fn validate_call(record: &super::CallRecord) -> Result<(), Error> {
 
 pub(crate) fn require_deadline_instants(
     schedule: &Deadlines,
-    timers: &[(DeadlineKind, Id)],
+    deadline_ids: &[(DeadlineKind, Id)],
 ) -> Result<(), Error> {
-    for (kind, reference) in timers {
+    for (kind, reference) in deadline_ids {
         if !schedule
             .items()
             .iter()
-            .any(|arm| arm.kind == *kind && arm.reference == *reference)
+            .any(|deadline| deadline.kind == *kind && deadline.reference == *reference)
         {
             return Err(Error::SealedDeadlineWithoutInstant);
         }
@@ -97,10 +97,10 @@ pub(crate) fn validate_transaction(record: &super::TransactionRecord) -> Result<
                 schedule
                     .items()
                     .iter()
-                    .filter(|arm| {
-                        arm.kind == super::DeadlineKind::RecurrenceDelay
-                            && arm.reference == reference
-                            && arm.due_at == due_at
+                    .filter(|deadline| {
+                        deadline.kind == super::DeadlineKind::RecurrenceDelay
+                            && deadline.reference == reference
+                            && deadline.due_at == due_at
                     })
                     .count()
                     == 1
@@ -110,12 +110,12 @@ pub(crate) fn validate_transaction(record: &super::TransactionRecord) -> Result<
         }
     }
     if let Some(schedule) = record.deadlines.as_deref() {
-        for arm in schedule.items() {
-            if arm.kind == super::DeadlineKind::RecurrenceDelay && !facts.iter().any(|fact| {
+        for deadline in schedule.items() {
+            if deadline.kind == super::DeadlineKind::RecurrenceDelay && !facts.iter().any(|fact| {
                 matches!(fact, super::loop_protocol::Fact::Advance {
                     run, to_iteration, command, due_at: Some(due_at), ..
-                } if super::loop_protocol::admission_ref(*run, *to_iteration, *command) == arm.reference
-                    && *due_at == arm.due_at)
+                } if super::loop_protocol::admission_ref(*run, *to_iteration, *command) == deadline.reference
+                    && *due_at == deadline.due_at)
             }) {
                 return Err(Error::LoopDeadlineMismatch);
             }

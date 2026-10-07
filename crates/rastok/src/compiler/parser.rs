@@ -19,7 +19,7 @@ use crate::compiler::syntax::{
     EdgeDestination, EdgeEndpoint, EdgeMatch, EdgeMatchArm, ErrorNode, ExpectStep, ExprSource,
     ExtensionEvent, FieldDecl, FrontendPayload, FrontendValue, GraphDecl, GraphItem, Guard,
     HandlerDecl, IntLit, LValue, LabDecl, MatchArm, MatchSelector, MockDecl, Name, OperatorDecl,
-    OperatorItem, PortDecl, PortDirection, PortRef, RemovedLifetimeValue, RemovedPartitionDecl,
+    OperatorItem, PortDecl, PortDirection, PortPath, RemovedLifetimeValue, RemovedPartitionDecl,
     RemovedPartitionField, RemovedPerClause, RemovedWindowMode, ScalarType, ScenarioDecl,
     ScenarioItem, SchemaAnnotation, SchemaAnnotationArgument, SchemaAnnotationConstant,
     SimulationDecl, Statement, StructBody, StructEntry, SubBlock, SyntaxTree, TaggedCaseDecl,
@@ -982,7 +982,7 @@ impl<'src> Parser<'src, '_> {
             }
             TokenKind::Arrow | TokenKind::BiArrow => {
                 let span = target.span;
-                let first = EdgeEndpoint::Ref(PortRef {
+                let first = EdgeEndpoint::Ref(PortPath {
                     boundary: false,
                     segments: target.segments,
                     span,
@@ -1068,7 +1068,7 @@ impl<'src> Parser<'src, '_> {
             }
             TokenKind::Ident => {
                 let path = self.lvalue()?;
-                Some(EdgeEndpoint::Ref(PortRef {
+                Some(EdgeEndpoint::Ref(PortPath {
                     boundary: false,
                     segments: path.segments,
                     span: path.span,
@@ -1142,7 +1142,7 @@ impl<'src> Parser<'src, '_> {
             }
             TokenKind::Ident => {
                 let path = self.lvalue()?;
-                Some(EdgeEndpoint::Ref(PortRef {
+                Some(EdgeEndpoint::Ref(PortPath {
                     boundary: false,
                     segments: path.segments,
                     span: path.span,
@@ -1156,7 +1156,7 @@ impl<'src> Parser<'src, '_> {
     }
 
     /// `.` or `.foo` — the current graph's boundary.
-    fn boundary_ref(&mut self) -> PortRef {
+    fn boundary_ref(&mut self) -> PortPath {
         let dot = self.bump();
         let start = dot.span.range().start;
         // A boundary name belongs to its dot only on the same line:
@@ -1173,7 +1173,7 @@ impl<'src> Parser<'src, '_> {
         } else {
             vec![]
         };
-        PortRef {
+        PortPath {
             boundary: true,
             segments,
             span: self.span_from(start),
@@ -1182,7 +1182,7 @@ impl<'src> Parser<'src, '_> {
 
     /// `{ a ; b }` in source position — an unordered set of independent
     /// producers.
-    fn source_set(&mut self) -> Option<Vec<PortRef>> {
+    fn source_set(&mut self) -> Option<Vec<PortPath>> {
         self.expect(TokenKind::LBrace, "`{`")?;
         let mut refs = Vec::new();
         loop {
@@ -1194,7 +1194,7 @@ impl<'src> Parser<'src, '_> {
                 TokenKind::Dot => refs.push(self.boundary_ref()),
                 _ => {
                     let path = self.lvalue()?;
-                    refs.push(PortRef {
+                    refs.push(PortPath {
                         boundary: false,
                         segments: path.segments,
                         span: path.span,
@@ -1225,7 +1225,7 @@ impl<'src> Parser<'src, '_> {
                 }
                 TokenKind::Ident => {
                     let path = self.lvalue()?;
-                    destinations.push(EdgeDestination::Ref(PortRef {
+                    destinations.push(EdgeDestination::Ref(PortPath {
                         boundary: false,
                         segments: path.segments,
                         span: path.span,

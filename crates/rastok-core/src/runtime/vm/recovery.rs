@@ -198,9 +198,9 @@ impl Vm<'_> {
             .deadlines
             .iter()
             .flat_map(|schedule| schedule.items())
-            .any(|arm| {
+            .any(|deadline| {
                 !matches!(
-                    arm.kind,
+                    deadline.kind,
                     crate::journal::DeadlineKind::CallTimeout
                         | crate::journal::DeadlineKind::SessionHandshake
                         | crate::journal::DeadlineKind::JoinWithin
@@ -209,7 +209,7 @@ impl Vm<'_> {
                         | crate::journal::DeadlineKind::InstanceDrain
                         | crate::journal::DeadlineKind::InstanceSettlement
                 ) || (matches!(
-                    arm.kind,
+                    deadline.kind,
                     crate::journal::DeadlineKind::InstanceDrain
                         | crate::journal::DeadlineKind::InstanceSettlement
                 ) && record.close_scope.is_none())
@@ -217,7 +217,7 @@ impl Vm<'_> {
         {
             return Err(invalid(
                 index,
-                "a retained timer has no admitted transaction obligation",
+                "a retained deadline has no admitted transaction obligation",
             ));
         }
         if record.deadline_ids.iter().any(|(kind, _)| {
@@ -320,7 +320,7 @@ impl Vm<'_> {
                         "a passive Graph lifecycle carries executable work",
                     ));
                 }
-                self.check_recovered_delivery_timers(index, record.deadlines.as_deref(), &[])?;
+                self.check_recovered_delivery_deadlines(index, record.deadlines.as_deref(), &[])?;
                 self.restore_instance_closure(journal, index, record, None)?;
                 if record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Stop) {
                     self.discard_graph_admissions(&record.instance);
@@ -439,7 +439,7 @@ impl Vm<'_> {
             ));
         }
         let mut expected_contexts = prepared.contexts.clone();
-        let mut expected_arms = self.emission_timer_arms(&prepared);
+        let mut expected_deadlines = self.emission_deadlines(&prepared);
         let mut expected = self.routed_deliveries(&prepared);
         let mut recurrence = None;
         if let Some(packet) = record.loop_protocol() {
@@ -484,7 +484,7 @@ impl Vm<'_> {
                             .connector()
                             .and_then(|spec| spec.attribute("timeout"))
                     {
-                        expected_arms.push(crate::journal::timing::Deadline {
+                        expected_deadlines.push(crate::journal::deadline::Deadline {
                             kind: crate::journal::DeadlineKind::CallTimeout,
                             reference: ids::delivery_id(
                                 &super::loop_manager::manager_edge(*run, &state.entry),
@@ -514,7 +514,11 @@ impl Vm<'_> {
                 "the retained deliveries differ from the selected routes",
             ));
         }
-        self.check_recovered_delivery_timers(index, record.deadlines.as_deref(), &expected_arms)?;
+        self.check_recovered_delivery_deadlines(
+            index,
+            record.deadlines.as_deref(),
+            &expected_deadlines,
+        )?;
         self.state.apply_unchecked(
             self.plan.plan(),
             slot,
@@ -533,7 +537,7 @@ impl Vm<'_> {
                     ..
                 } = fact
                 {
-                    self.scheduler.arm(
+                    self.scheduler.schedule(
                         *due_at,
                         DatedPayload::LoopDelay {
                             owner,
@@ -547,12 +551,12 @@ impl Vm<'_> {
             }
         }
         if let Some((port, edge, envelope)) = recurrence {
-            let timer = expected_arms
+            let deadline = expected_deadlines
                 .last()
-                .filter(|arm| arm.kind == crate::journal::DeadlineKind::CallTimeout);
-            if let Some(timer) = timer {
-                self.scheduler.arm(
-                    timer.due_at,
+                .filter(|deadline| deadline.kind == crate::journal::DeadlineKind::CallTimeout);
+            if let Some(deadline) = deadline {
+                self.scheduler.schedule(
+                    deadline.due_at,
                     DatedPayload::DeliveryBudget {
                         connector: self.plan.nodes[slot.index()].path.clone(),
                         edge: edge.clone(),
@@ -759,14 +763,14 @@ impl Vm<'_> {
             .map_err(VmError::Journal)?;
         let cause = cause
             .ok_or_else(|| invalid(index, "a close request has no earlier causal envelope"))?;
-        let expected = self.closing_timer_arms(scope);
+        let expected = self.closing_deadlines(scope);
         let retained: Vec<_> = record
             .deadlines
             .iter()
             .flat_map(|schedule| schedule.items())
-            .filter(|arm| {
+            .filter(|deadline| {
                 matches!(
-                    arm.kind,
+                    deadline.kind,
                     crate::journal::DeadlineKind::InstanceDrain
                         | crate::journal::DeadlineKind::InstanceSettlement
                 )
@@ -780,22 +784,22 @@ impl Vm<'_> {
             ));
         }
         self.activate_close(scope, cause.clone());
-        self.arm_closing_deadlines(scope, cause.meta().sys().id());
+        self.schedule_closing_deadlines(scope, cause.meta().sys().id());
         Ok(())
     }
 
-    pub(super) fn check_recovered_delivery_timers(
+    pub(super) fn check_recovered_delivery_deadlines(
         &self,
         index: usize,
-        schedule: Option<&crate::journal::timing::Deadlines>,
-        expected: &[crate::journal::timing::Deadline],
+        schedule: Option<&crate::journal::deadline::Deadlines>,
+        expected: &[crate::journal::deadline::Deadline],
     ) -> Result<(), VmError> {
         let retained: Vec<_> = schedule
             .into_iter()
             .flat_map(|schedule| schedule.items())
-            .filter(|arm| {
+            .filter(|deadline| {
                 matches!(
-                    arm.kind,
+                    deadline.kind,
                     crate::journal::DeadlineKind::CallTimeout
                         | crate::journal::DeadlineKind::JoinWithin
                         | crate::journal::DeadlineKind::SessionHandshake

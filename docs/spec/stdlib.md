@@ -203,7 +203,7 @@ There is no parallel `mime_type` spelling.
   executes the same bounded protocol over HTTP/3 and executes `respond`: the
   producing transaction seals the exact opening instance, Driver saturation
   leaves the real response pending without bytes, and `l:reply` consumes its
-  cursor. Timer kind 8 makes the positive request deadline part of the
+  cursor. Deadline kind 7 (`InboundCallTimeout`) makes the positive request deadline part of the
   accepting fact; response and 504 race through one terminal protocol action.
 
 Malformed framing, failed bearer authentication and body refusal can occur
@@ -245,7 +245,7 @@ request.
 | Outcome cases | `Completed { status: int }`, `ServerError { status: int }`, `DnsFailed`, `ConnectFailed`, `TlsFailed`, `ProtocolFailed`, `TimeoutExpired`, `BodyTooLarge { limit: uint }`, `DecodeFailed`, `OutcomeUnknown` |
 | Application profile | outbound finite Call and Loop-admissible; exactly one request `in`, exactly one `out` iff the exit is `Completed` or `ServerError`, then exactly one terminal `exit`; terminal visibility is the conservative [C1 table](../architecture/retry-c1-algebra.md) |
 | Instances | singleton by default; the common Node attribute `instance.key` may key the Connector |
-| Journal / sim | method, resolved URL, canonical ordinary headers, exact body, idempotency material and a logical bearer `SecretRef` seal before EGRESS open; physical bearer bytes are fixed by the run header and overlaid only in the real Driver; the contract-specific Lab twin scripts only the post-open outcome |
+| Journal / sim | method, resolved URL, canonical ordinary headers, exact body, idempotency material and a logical bearer `SecretName` seal before EGRESS open; physical bearer bytes are fixed by the run header and overlaid only in the real Driver; the contract-specific Lab twin scripts only the post-open outcome |
 
 The hosted H4 Driver attempts declared versions in order, skipping backends
 not compiled into the runtime. It may fall back only before request bytes can
@@ -282,7 +282,7 @@ weaken verification or reinterpret the plan bytes.
 | Ports | `in` → stdin; `out` ← decoded/framed stdout; `err` ← framed stderr data; `exit` ← `ProcessExit` |
 | idempotent / behavior | job: `idempotent: bool = false`; service has no idempotence attribute. `behavior` required for both profiles, plan-evaluated |
 | Attributes | the normative table below (D-2026-08-12-1, amended by D-2026-08-14-1) — every attribute is `name = value`, presence and defaults are the CONTRACT's, and the checker injects every omitted default into the effective HIR |
-| Correlation | Job: the Call itself. Service: the exact Node instance selects its resource Session; application request/reply correlation belongs to Operators. An upstream socket's SessionRef cannot select a child process. |
+| Correlation | Job: the Call itself. Service: the exact Node instance selects its resource Session; application request/reply correlation belongs to Operators. An upstream socket's SessionId cannot select a child process. |
 | Outcome cases | `ProcessExit` below; exactly one terminal per job invocation or resident child incarnation, never per service message. stderr never carries lifecycle data. |
 | Application profile | `job`: one request, ordered frames, one atomic terminal completion; Loop-admissible under [R1](../architecture/rework-r1-host-contracts.md#71-contracts-for-loop-admissible-connectors). `service`: first input opens a child, subsequent inputs reuse it, inbound frames stream while it lives; not a Loop host. |
 | Instances | see modes below |
@@ -455,12 +455,12 @@ live child. Several turns share one resource. stdout/stderr frames and the
 single resource `ProcessExit` carry its Session context. Local write settlement
 does not complete a turn, and `exit` ends the child resource, not one request.
 There is no fake Call or Process job per line, nor a WebSocket-specific runtime
-path. A websocket SessionRef is not the resident child's SessionRef.
+path. A websocket SessionId is not the resident child's SessionId.
 
 D-2026-09-10-3 fixes fresh opening after child death: retain the resource's
 typed `exit`, do not respawn automatically, and leave the Node instance alive
 unless its own lifecycle closes it. A new eligible input can open a fresh
-child in that still-open instance, with a new `SessionRef` and no change to
+child in that still-open instance, with a new `SessionId` and no change to
 the instance generation. Earlier writes are never replayed or retargeted;
 the child's private memory is not restored. Closing or stopped generations
 cannot be revived by this rule. Any successor follows ordinary Node-instance
@@ -630,7 +630,7 @@ deletion, overflow, resynchronization and acknowledgement semantics.
 | Correlator | direct descendants reply by session lineage; root-mixing, stored or spontaneous paths use explicit `correlate`, normally `meta.ext.session_id` |
 | Outcome cases | `WebSocketExit`: `Closed { code: int, reason: text }`, `DnsFailed`, `ConnectFailed`, `TlsFailed`, `HandshakeRejected { status: int }`, `ProtocolFailed`, `TransportLost`, `TimeoutExpired`, `MessageTooLarge { limit: uint }`, `DecodeFailed`, `OutcomeUnknown` |
 | Application profile | accepted Session, therefore not a Loop host; zero or more ordered peer `out` messages, zero or more graph-to-peer `in` writes, then exactly one terminal `exit`; a pre-admission refusal creates no Session or exit |
-| Instances | one listener per Node instance may own many sessions; each session has one placement-neutral logical `SessionRef` |
+| Instances | one listener per Node instance may own many sessions; each session has one placement-neutral logical `SessionId` |
 | Journal / sim | session open commits before upgrade success; each message remains bounded/pending until runtime acceptance; graph writes are sealed before bytes; Lab scripts the same open/messages/exit protocol |
 
 An HTTP/1.1 Upgrade, HTTP/2 Extended CONNECT and HTTP/3 Extended CONNECT are
@@ -645,7 +645,7 @@ all three handshakes feed the same generic Session fold, but no shared codec
 test is counted as transport evidence.
 
 For an established session, `meta.ext.session_id` is the textual projection
-of the journal-derived logical `SessionRef`, not a socket descriptor, address,
+of the journal-derived logical `SessionId`, not a socket descriptor, address,
 Worker id or library handle. A pre-open failure has no invented session id: no
 Session existed. The field allows a graph to key a child scope or explicitly
 correlate a response without exposing physical placement. It is

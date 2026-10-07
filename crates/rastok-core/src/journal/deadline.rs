@@ -1,5 +1,5 @@
-//! Dated obligations accepted with one record, outside the causal projection.
-//! Arm order belongs to recovery: sorting equal-due arms by reference would
+//! Dated obligations created and accepted with one record, outside the causal projection.
+//! Creation order belongs to recovery: sorting equal-due deadlines by reference would
 //! silently change which timeout wins after a restart.
 
 use super::DeadlineKind;
@@ -27,9 +27,9 @@ pub enum Error {
     /// The next attempt ordinal cannot be represented.
     RetryOrdinalOverflow,
     /// A recurrence deadline is attached to a Call without Retry.
-    ArmWithoutRetryContext,
+    DeadlineWithoutRetryContext,
     /// A Retry deadline does not identify this closure's next admission.
-    ArmMismatch,
+    DeadlineMismatch,
     /// A sealed obligation has no corresponding unsealed deadline.
     SealedDeadlineWithoutInstant,
     /// The observable transaction time disagrees with deadline creation.
@@ -49,8 +49,12 @@ impl fmt::Display for Error {
             Self::MissingRetryContext => "a Retry Call requires an attempt context",
             Self::InvalidRetryContext => "a Call carries only a positive Retry context",
             Self::RetryOrdinalOverflow => "Retry admission ordinal overflows",
-            Self::ArmWithoutRetryContext => "only a Retry closure can create a recurrence deadline",
-            Self::ArmMismatch => "the Retry deadline must identify this closure's next admission",
+            Self::DeadlineWithoutRetryContext => {
+                "only a Retry closure can create a recurrence deadline"
+            }
+            Self::DeadlineMismatch => {
+                "the Retry deadline must identify this closure's next admission"
+            }
             Self::SealedDeadlineWithoutInstant => "a sealed deadline id has no unsealed deadline",
             Self::FiringTimeDisagrees => "observable firing time disagrees with deadline creation",
             Self::LoopDeadlineMismatch => "Loop Advance and its exact recurrence deadline disagree",
@@ -90,8 +94,8 @@ impl Deadlines {
         if items.is_empty() {
             return Err(Error::EmptySchedule);
         }
-        for arm in &items {
-            if arm.due_at < created_at {
+        for deadline in &items {
+            if deadline.due_at < created_at {
                 return Err(Error::DeadlinePrecedesCreation);
             }
         }
@@ -104,7 +108,7 @@ impl Deadlines {
         self.created_at
     }
 
-    /// Actual arm order. Together with record order it breaks equal-date ties.
+    /// Creation order. Together with record order it breaks equal-date ties.
     #[must_use]
     pub fn items(&self) -> &[Deadline] {
         &self.items

@@ -94,12 +94,12 @@ impl Vm<'_> {
                     &mut candidates,
                 )?;
                 timeout = self.inbound_call_timeout(slot, &selected.reference, &candidates)?;
-                let expected_timers = timeout
+                let expected_deadline_ids = timeout
                     .map(|_| vec![(DeadlineKind::InboundCallTimeout, call.reference.id())])
                     .unwrap_or_default();
                 if call.reference != InboundCallId::from_root(inbound.envelope.meta().sys().id())
                     || call.instance != selected.reference
-                    || call.deadline_ids != expected_timers
+                    || call.deadline_ids != expected_deadline_ids
                     || self.inbound_calls.contains_key(&call.reference)
                     || self
                         .inbound_calls
@@ -242,25 +242,25 @@ impl Vm<'_> {
                 "inbound instance commands contradict the exact accepting prefix",
             ));
         }
-        let mut arms = Vec::new();
+        let mut deadlines = Vec::new();
         let mut activity = BTreeMap::new();
         if let Some((_, target)) = &target
             && !target.chain.is_empty()
         {
-            arms.extend(
+            deadlines.extend(
                 self.admission_deadlines(target, &candidates, &inbound.envelope, &mut activity)
                     .into_iter()
-                    .map(|(arm, _)| arm),
+                    .map(|(deadline, _)| deadline),
             );
         }
         if let Some(timeout) = timeout {
-            arms.push(crate::journal::timing::Deadline {
+            deadlines.push(crate::journal::deadline::Deadline {
                 kind: DeadlineKind::InboundCallTimeout,
                 reference: InboundCallId::from_root(inbound.envelope.meta().sys().id()).id(),
                 due_at: self.now.saturating_add(timeout),
             });
         }
-        arms.extend(self.route_timer_arms_with_activity(
+        deadlines.extend(self.route_deadlines_with_activity(
             &routes,
             &candidates,
             &inbound.envelope,
@@ -270,7 +270,7 @@ impl Vm<'_> {
             .deadlines
             .as_deref()
             .map_or(&[][..], |schedule| schedule.items())
-            != arms
+            != deadlines
         {
             return Err(invalid(
                 index,
@@ -284,7 +284,7 @@ impl Vm<'_> {
             match exchange {
                 Some(InboundExchangeRecord::Call(call)) => {
                     if let Some(timeout) = timeout {
-                        self.scheduler.arm(
+                        self.scheduler.schedule(
                             self.now.saturating_add(timeout),
                             DatedPayload::InboundCallBudget {
                                 call_id: call.reference,

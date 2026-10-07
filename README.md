@@ -55,11 +55,11 @@ the [opening gallery](docs/site/index.md), starting with
 [webhook to partner](docs/site/gallery/04-webhook-to-partner.md) for a
 simulated HTTP flow with typed validation, bounded retries and an audit profile.
 
-![A retained webhook timeout, backoff and successful retry in the debugger](docs/site/assets/webhook-tour.gif)
+![A recorded webhook timeout, backoff and successful retry in the debugger](docs/site/assets/webhook-tour.gif)
 
 Native Retry, rendered from recorded simulation transitions in the debugger.
 The [chapter](docs/site/gallery/04-webhook-to-partner.md)
-explains the inputs, retained transitions and visible limits.
+explains the inputs, recorded transitions and visible limits.
 
 ## Model
 
@@ -87,8 +87,8 @@ Format 20 (the reviewed, single blessing is recorded in the
 [identity inventory](docs/architecture/human-review-v20-identity.md)) carries recursive Dispatch, case routing,
 ordered multi-emission and command-based Operator, Graph and outbound Call
 Loops. Independent core validation re-derives their contracts, routes and
-proofs. Recovery reconstructs retained deliveries, state, commands, exchanges
-and original timer deadlines without re-executing producers or repeating I/O.
+proofs. Recovery reconstructs recorded deliveries, state, commands, exchanges
+and original deadlines without re-executing producers or repeating I/O.
 Nested runs, same-context joins, annotations and entry-preserving measures
 are qualified within the [named Loop proof subset](docs/spec/loop.md#16-deferred-by-name).
 The [R9 qualification ledger](docs/architecture/rework-r9-qualification.md)
@@ -156,7 +156,7 @@ Rastok DSL source
   -> state-machine execution in a native in-memory VM
   -> mixed real Process and File boundaries selected through one Driver registry
   -> journaled, auditable multi-Contract Lab scenarios with useful golden diffs
-  -> optional paused simulation debugger with retained-transition inspection
+  -> optional paused simulation debugger with recorded-transition inspection
 ```
 
 Connector contracts have stable semantic ids and inbound/outbound roles.
@@ -225,11 +225,11 @@ remain fail-closed. The annotation migration does not change unannotated semanti
 original causal DATA. The separate Retry/Contract cutover and its exact
 witness movements are inventoried in the
 [C4 qualification ledger](docs/architecture/retry-c4-qualification.md). Every causal record
-also yields a typed retained observation with exact flow/instance/Call/Session
+also yields a typed recorded observation with exact flow/instance/Call/Session
 correlation. `rastok run --json-logs` projects that stream through a bounded
 never-block queue; payloads are omitted by default and classified values are
 redacted before JSON formatting. Export loss changes neither execution nor
-the retained facts. Measurements stay in their original typed envelopes;
+the recorded facts. Measurements stay in their original typed envelopes;
 the associated validated plan retains their annotations. Signed quantities
 and reported amounts remain exact, with their units and original causal
 provenance; a currency code is simply a unit. Under D-2026-09-16-7, M1 implements no report, automatic
@@ -263,7 +263,7 @@ use simple ids and explicit units, for example
 retain individual positive, zero and negative samples; decimal quantities are not implicitly
 money. Amounts use that same two-field schema, for example
 `decimal(18,6) @measure(id = refund, unit = "EUR")`; their ids remain distinct
-in the retained metadata. Generic subsets, reports, pricing and the future
+in the recorded metadata. Generic subsets, reports, pricing and the future
 Budget Extension are outside M1. The implicit-unit registry is retired: even a
 dotted id needs an explicit unit. Standard definitions and aliases use the
 ordinary type system. The [common qualification](docs/architecture/retry-c4-qualification.md)
@@ -276,17 +276,17 @@ Reset starts a fresh session and preserves the old history. The embedded page
 shows real compound topology, current mailbox FIFOs (`≡ n`), instances
 (`⧉ n`), source definitions, Loop-run state dependencies, redacted `META`/
 `DATA`. Manager commands are described as commands,
-never invented ports or spatial edges. Replay presents retained transitions at
+never invented ports or spatial edges. Replay presents recorded transitions at
 one or four events per second. Decisions, causal links, pending obligations
 and assertion evidence explain the selected journal prefix. The canvas
 pans/zooms and the inspector resizes. An authored `advance` exposes its
-intermediate retained VM states. Transitions and journal records remain
+intermediate recorded VM states. Transitions and journal records remain
 distinct: an authored action can also reach an effect without a new record.
 
 `run --ui` and `check --ui` refuse before effects. Editing, simulation
 branches and real-I/O experiment debugging remain separate future work.
 
-Record a real run, then inspect its retained facts without repeating effects:
+Record a real run, then inspect its recorded facts without repeating effects:
 
 ```sh
 printf 'hello\n' | rastok run examples/echo.rkg --record echo.rkrec

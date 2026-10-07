@@ -120,7 +120,7 @@ graph agent_chat : App {
       output out: variant
       var socket: text = ""
       on remember { socket = data }
-      // Process frames carry their own SessionRef, not the browser's.
+      // Process frames carry their own SessionId, not the browser's.
       on in { out = { data = { "kind": "rpc", "rpc": data }; meta.ext.session_id = socket } }
     }
     in -> admit

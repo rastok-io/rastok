@@ -122,12 +122,12 @@ pub enum EvalValue {
     /// inputs distinct: demanding `left.data` must never decode `right.data`,
     /// and carrying either witness preserves that exact envelope's physical
     /// representation.
-    Payload(PayloadRef),
+    Payload(PayloadSource),
 }
 
-/// Evaluation-local identity of a lazy payload source.
+/// Evaluation-local selector of a lazy payload source, not a journal identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum PayloadRef {
+pub enum PayloadSource {
     /// The ordinary single-input `data` binding (or a join's causal base).
     Input,
     /// A join input selected by its declared port name.
@@ -698,7 +698,7 @@ pub trait Bindings {
     ///
     /// # Errors
     /// When this environment carries no payload.
-    fn payload(&self, reference: &PayloadRef) -> Result<EvalValue, Error> {
+    fn payload(&self, reference: &PayloadSource) -> Result<EvalValue, Error> {
         Err(fault(format!(
             "payload {reference:?} is not available in this environment"
         )))
@@ -3351,8 +3351,8 @@ mod tests {
 
     #[test]
     fn map_materialization_never_returns_a_partial_value_with_unresolved_payloads() {
-        let first = EvalValue::Payload(PayloadRef::Named(String::from("first")));
-        let later = EvalValue::Payload(PayloadRef::Named(String::from("later")));
+        let first = EvalValue::Payload(PayloadSource::Named(String::from("first")));
+        let later = EvalValue::Payload(PayloadSource::Named(String::from("later")));
         let entries = BTreeMap::from([
             (String::from("z"), later),
             (String::from("a"), EvalValue::List(vec![first.clone()])),
@@ -3366,7 +3366,7 @@ mod tests {
 
     #[test]
     fn a_payload_witness_never_becomes_a_materialized_value() {
-        let nested = EvalValue::List(alloc::vec![EvalValue::Payload(PayloadRef::Input)]);
+        let nested = EvalValue::List(alloc::vec![EvalValue::Payload(PayloadSource::Input)]);
         assert!(
             nested.into_value().is_err(),
             "evaluator state must not enter plans, envelopes, or journals"
@@ -3419,7 +3419,7 @@ mod tests {
     fn keyed_map_equality_stays_total_before_payload_resolution() {
         let unresolved = EvalValue::KeyedMap(alloc::vec![
             (
-                EvalValue::Payload(PayloadRef::Input),
+                EvalValue::Payload(PayloadSource::Input),
                 EvalValue::Text(String::from("payload")),
             ),
             (EvalValue::Int(1), EvalValue::Text(String::from("one"))),
@@ -3427,7 +3427,7 @@ mod tests {
         let reordered = EvalValue::KeyedMap(alloc::vec![
             (EvalValue::Int(1), EvalValue::Text(String::from("one"))),
             (
-                EvalValue::Payload(PayloadRef::Input),
+                EvalValue::Payload(PayloadSource::Input),
                 EvalValue::Text(String::from("payload")),
             ),
         ]);

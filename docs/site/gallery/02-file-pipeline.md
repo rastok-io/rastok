@@ -52,7 +52,7 @@ printf 'changed after recording\n' > "$demo_root/input.txt"
 rastok replay "$demo_root/copy.rkrec"
 ```
 
-Replay prints the same retained output and seal without reading or replacing
+Replay prints the same recorded output and seal without reading or replacing
 either file. It does not restore the disk to its earlier contents. Use
 `replay "$demo_root/copy.rkrec" --ui` to inspect the recorded history.
 

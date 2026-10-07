@@ -12,7 +12,7 @@ use std::rc::Rc;
 use crate::boundary::{
     Completion, HttpServerExit, InboundCallConnectorDriver, InboundCallEvent, InboundCallResponse,
     InboundCallResponseStart, InboundCallTimeout, InboundCallTimeoutStart, InboundConnectorDriver,
-    InboundExchangeRef, IngressDecision, IngressProposal, IngressProposalHandle, IngressSubmission,
+    InboundExchangeId, IngressDecision, IngressProposal, IngressProposalHandle, IngressSubmission,
 };
 use crate::connector::{ConnectorRoles, ContractId};
 use crate::plan::ValidatedExecutionPlan;
@@ -312,7 +312,7 @@ impl InboundConnectorDriver for HttpServerLabDriver {
         input.pending = None;
         if let IngressDecision::Accepted(accepted) = decision {
             match accepted.exchange {
-                Some(InboundExchangeRef::Call(call_id)) if input.terminal.is_none() => {
+                Some(InboundExchangeId::Call(call_id)) if input.terminal.is_none() => {
                     // A fixture scripts a decoded request and successful fixed
                     // ACK. Only the accepting commit supplies its Call identity.
                     input.terminal = Some(InboundCallEvent {

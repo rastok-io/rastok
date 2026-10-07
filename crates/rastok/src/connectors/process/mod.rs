@@ -1767,7 +1767,7 @@ graph hoarse : App {
     #[test]
     fn an_unframeable_request_never_reaches_the_call_boundary() {
         // B2 resolves the whole route to `text`: a structured ingress
-        // refuses at the final pin before any mailbox or outbound fact.
+        // refuses at the final pin before any mailbox or EGRESS fact.
         // The Driver-level framing refusal remains a defence for forged
         // plans, not a state a checked graph can normally reach.
         let source = r#"

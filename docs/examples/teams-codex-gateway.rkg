@@ -64,7 +64,7 @@ graph sessions {
 
   connector codex_logs : File {
     // Prospective append/log profile, not the executable one-file
-    // read/atomic-replace contract of rastok/file@1.
+    // read/atomic-replace contract of std/file@3.
     path = "/var/codex/" + session_key + "/codex.stderr.log"
     codec = text
   }

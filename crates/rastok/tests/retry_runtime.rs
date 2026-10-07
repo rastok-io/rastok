@@ -910,7 +910,7 @@ graph app : App {
 }
 
 #[test]
-fn loop_and_retry_readmissions_share_the_retained_timer_order_after_recovery() {
+fn loop_and_retry_readmissions_share_the_recorded_deadline_order_after_recovery() {
     use rastok::journal::loop_protocol::Fact as LoopFact;
 
     let (plan, hash, _) = checked(
@@ -1014,7 +1014,7 @@ graph app : App {
                 _ => None,
             })
             .collect();
-        assert_eq!(admissions, expected, "arming order {order:?}");
+        assert_eq!(admissions, expected, "creation order {order:?}");
         assert_eq!(
             vm.outputs().len(),
             2,
@@ -1045,7 +1045,7 @@ graph app : App {
             {
                 assert_eq!(
                     actual, expected,
-                    "arming order {order:?}, cut {cut}, resume {resume_at}, record {index}"
+                    "creation order {order:?}, cut {cut}, resume {resume_at}, record {index}"
                 );
             }
             assert_eq!(restored.outputs(), vm.outputs());
@@ -1183,7 +1183,7 @@ graph app : App {
                 {
                     assert_eq!(
                         actual, expected,
-                        "expiry target {expiry_target}, arming order {order:?}, cut {cut}, resume {resume_at}, record {index}"
+                        "expiry target {expiry_target}, creation order {order:?}, cut {cut}, resume {resume_at}, record {index}"
                     );
                 }
                 assert_eq!(restored.outputs(), vm.outputs());

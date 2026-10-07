@@ -12,7 +12,7 @@ use crate::node;
 impl Vm<'_> {
     /// A delayed run still owns its future command slot. Count retained runs
     /// plus opening deliveries not yet folded into Open; neither an empty
-    /// host mailbox nor moving a command to the timer releases that capacity.
+    /// host mailbox nor scheduling a delayed command releases that capacity.
     pub(super) fn loop_admission_load(&self) -> usize {
         let fold = self.loop_manager.as_deref();
         let live = |state: &protocol::RunState| {
@@ -142,7 +142,7 @@ impl Vm<'_> {
         {
             return Ok(false);
         }
-        let opening = protocol::OpeningAdmissionRef::Delivery(ids::delivery_id(
+        let opening = protocol::OpeningAdmissionId::Delivery(ids::delivery_id(
             &delivery.edge,
             delivery.envelope.meta().sys().id(),
         ));
@@ -225,7 +225,7 @@ impl Vm<'_> {
         {
             return Ok(());
         }
-        let opening = protocol::OpeningAdmissionRef::Delivery(ids::delivery_id(edge, envelope));
+        let opening = protocol::OpeningAdmissionId::Delivery(ids::delivery_id(edge, envelope));
         let run = protocol::run_ref(instance, &opening);
         let record = manager_record(
             instance,
@@ -558,9 +558,9 @@ impl Vm<'_> {
                     ));
                 }
                 if let Some(timeout) = call_timeout {
-                    self.retain_timer_arms(
+                    self.retain_deadlines(
                         &mut record,
-                        vec![crate::journal::timing::Deadline {
+                        vec![crate::journal::deadline::Deadline {
                             kind: crate::journal::DeadlineKind::CallTimeout,
                             reference: ids::delivery_id(&edge, envelope.meta().sys().id()),
                             due_at: self.now.saturating_add(timeout),
@@ -595,7 +595,7 @@ impl Vm<'_> {
                     }]
                 });
                 if let Some(timeout) = call_timeout {
-                    self.scheduler.arm(
+                    self.scheduler.schedule(
                         self.now.saturating_add(timeout),
                         DatedPayload::DeliveryBudget {
                             connector: self.plan.nodes[slot.index()].path.clone(),
@@ -743,16 +743,16 @@ impl Vm<'_> {
         record.emissions.extend(emission);
         self.retain_graph_verdicts(&mut record)?;
         if let Some(due_at) = due {
-            let timer = (
+            let deadline = (
                 crate::journal::DeadlineKind::RecurrenceDelay,
                 protocol::admission_ref(run, current.iteration + 1, command.reference),
             );
-            record.deadline_ids.push(timer);
-            let schedule = crate::journal::timing::Deadlines::try_new(
+            record.deadline_ids.push(deadline);
+            let schedule = crate::journal::deadline::Deadlines::try_new(
                 self.now,
-                vec![crate::journal::timing::Deadline {
-                    kind: timer.0,
-                    reference: timer.1,
+                vec![crate::journal::deadline::Deadline {
+                    kind: deadline.0,
+                    reference: deadline.1,
                     due_at,
                 }],
             )
@@ -772,7 +772,7 @@ impl Vm<'_> {
             None => self.route_graph_emissions(owner, &current.instance, prepared),
         }
         if let Some(at) = due {
-            self.scheduler.arm(
+            self.scheduler.schedule(
                 at,
                 DatedPayload::LoopDelay {
                     owner,

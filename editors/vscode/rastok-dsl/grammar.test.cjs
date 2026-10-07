@@ -6,6 +6,7 @@ const grammar = require("./syntaxes/rkg.tmLanguage.json");
 
 test("the editor bundle registers .rkg against the shared grammar", () => {
   const manifest = require("./package.json");
+  assert.doesNotMatch(`${manifest.displayName} ${manifest.description}`, /\bv\d+\b|\b(?:package|format)\s+\d+/i);
   const language = manifest.contributes.languages.find(language => language.id === "rkg");
   const registration = manifest.contributes.grammars.find(grammar => grammar.language === language.id);
   assert.deepEqual(language.extensions, [".rkg"]);
@@ -39,7 +40,7 @@ test("manager commands, annotations and spatial arrows have distinct scopes", ()
   assert.equal(new RegExp(grammar.repository.declarations.match).exec("connector model")[2], "model");
 });
 
-test("v19 annotations, Retry and idempotence reflect the executable language", () => {
+test("annotations, Retry and idempotence reflect the executable language", () => {
   const matches = (word, scope) => grammar.patterns.some(rule => rule.match && rule.name === scope && new RegExp(rule.match).test(word));
   for (const word of ["Retry.attempts", "Retry.delay", "Retry.on"]) assert.ok(matches(word, "support.variable.retry.rkg"), word);
   assert.ok(matches("Retry", "entity.other.inherited-class.rkg"));

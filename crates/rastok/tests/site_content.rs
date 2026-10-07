@@ -303,11 +303,11 @@ fn current_journal_tables_include_retry_retention_without_saga_key_rules() {
             "identity.md omits the unsealed field {key}: {name}"
         );
     }
-    let timers = source
+    let deadline_ids = source
         .lines()
         .find(|line| line.starts_with("| 24 | deadline_ids |"))
         .unwrap();
-    assert!(timers.contains("Loop") && timers.contains("Retry"));
+    assert!(deadline_ids.contains("Loop") && deadline_ids.contains("Retry"));
     let key = source
         .lines()
         .find(|line| line.starts_with("| 29 | call_key |"))

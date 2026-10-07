@@ -4,7 +4,7 @@
 use super::*;
 use crate::envelope;
 use crate::instance;
-use crate::journal::loop_protocol::{self as protocol, Fact, OpeningAdmissionRef, Packet};
+use crate::journal::loop_protocol::{self as protocol, Fact, OpeningAdmissionId, Packet};
 use crate::node;
 use crate::plan::{Endpoint, EndpointOwner, LoopCommandTarget, RouteDestination, RouteSelection};
 
@@ -18,7 +18,7 @@ pub(super) struct BoundaryRoute {
 struct Admission {
     owner: node::OwnerSlot,
     instance: instance::Generation,
-    opening: OpeningAdmissionRef,
+    opening: OpeningAdmissionId,
     delivery: envelope::Delivery,
 }
 
@@ -330,12 +330,12 @@ impl Vm<'_> {
                 owner,
                 instance: target.reference.clone(),
                 opening: if self.plan.owners[owner.index()].path.is_root() {
-                    OpeningAdmissionRef::Ingress {
+                    OpeningAdmissionId::Ingress {
                         inbound: envelope.meta().sys().id(),
                         port: to.port.clone(),
                     }
                 } else {
-                    OpeningAdmissionRef::Delivery(reference)
+                    OpeningAdmissionId::Delivery(reference)
                 },
                 delivery: envelope::Delivery {
                     port: to.port.clone(),
@@ -646,9 +646,9 @@ impl Vm<'_> {
             packet.routes = contexts.clone();
             packet.routes.sort_by_key(|route| route.delivery);
         }
-        self.retain_timer_arms(
+        self.retain_deadlines(
             &mut record,
-            self.route_timer_arms(&routes, &candidates, &envelope),
+            self.route_deadlines(&routes, &candidates, &envelope),
         )?;
         journal.commit(record).map_err(VmError::Journal)?;
         if let Some(graph) = self.graph_loops.as_deref_mut() {
@@ -1214,10 +1214,10 @@ impl Vm<'_> {
                         "Graph expansion disagrees with its retained routes or contexts",
                     ));
                 }
-                self.check_recovered_delivery_timers(
+                self.check_recovered_delivery_deadlines(
                     index,
                     record.deadlines.as_deref(),
-                    &self.route_timer_arms(&routes, &candidates, envelope),
+                    &self.route_deadlines(&routes, &candidates, envelope),
                 )?;
                 if let Some(graph) = self.graph_loops.as_deref_mut() {
                     if let Some(opening) = opening {
@@ -1264,7 +1264,7 @@ impl Vm<'_> {
                         "a Graph command was consumed before causal quiescence",
                     ));
                 }
-                let mut arms = Vec::new();
+                let mut deadlines = Vec::new();
                 if let Fact::Advance {
                     to_iteration,
                     due_at,
@@ -1279,7 +1279,7 @@ impl Vm<'_> {
                         return Err(invalid("a Graph recurrence changed its logical delay"));
                     }
                     if let Some(due_at) = due_at {
-                        arms.push(crate::journal::timing::Deadline {
+                        deadlines.push(crate::journal::deadline::Deadline {
                             kind: crate::journal::DeadlineKind::RecurrenceDelay,
                             reference: protocol::admission_ref(run, *to_iteration, *command),
                             due_at: *due_at,
@@ -1297,12 +1297,12 @@ impl Vm<'_> {
                 {
                     return Err(invalid("a Graph transition changed its expiry routes"));
                 }
-                arms.extend(self.emission_timer_arms(&prepared));
+                deadlines.extend(self.emission_deadlines(&prepared));
                 if record
                     .deadlines
                     .as_deref()
                     .map_or(&[][..], |schedule| schedule.items())
-                    != arms
+                    != deadlines
                 {
                     return Err(invalid(
                         "Graph transition deadlines contradict its retained obligations",
@@ -1315,7 +1315,7 @@ impl Vm<'_> {
                     ..
                 } = fact
                 {
-                    self.scheduler.arm(
+                    self.scheduler.schedule(
                         *due_at,
                         DatedPayload::LoopDelay {
                             owner,

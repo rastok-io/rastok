@@ -61,7 +61,7 @@ from `watchdog.expired`: the checker refuses `E-UNWIRED-OUTPUT` before execution
 
 ## Read the golden difference
 
-The threshold edit changes a retained Operator transaction, including its
+The threshold edit changes a recorded Operator transaction, including its
 state delta and emitted alarm. The diff gives the first changed record,
 expected/actual values and causal trigger. The missing expiry route is a
 static error, not a runtime golden difference.

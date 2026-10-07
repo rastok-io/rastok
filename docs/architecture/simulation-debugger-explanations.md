@@ -14,7 +14,7 @@ command. No golden is re-blessed.
 Compiler source-arm locations are debug side metadata, outside the executable
 plan. The Lab exposes the last assertion's existing observation window. The VM
 inspection exposes its existing shared mailbox capacity. Neither accessor
-changes admission, consumption, timers, state or commit. The timeline's action
+changes admission, consumption, deadlines, state or commit. The timeline's action
 index is a disposable view field, not a semantic fact.
 
 The read model re-derives decisions with the exact consumed envelopes, named
@@ -46,7 +46,7 @@ The per-item test map lives in [ui.md](../spec/ui.md#evidence-for-this-presentat
 - Clickable envelope lineage and exact produced/consumed command-to-Admit links;
   Done commands do not acquire a fictitious next admission.
 - Bidirectional authored-action/timeline selection, pending deliveries and
-  retained timer deadlines, failure evidence including `expect nothing`, keyboard
+  retained deadlines, failure evidence including `expect nothing`, keyboard
   navigation/search, and two-column instance/session comparison.
 
 All browser pages collect both uncaught exceptions and console errors. This
@@ -140,7 +140,7 @@ preceding qualification, not this retest. Existing user sessions were untouched.
 - Unknown predicate evaluation is not a failed predicate or zero matching
   envelopes. Arbitrary assertion expressions do not gain invented field diffs.
 - A Session handshake whose opening delivery is no longer inspectable is not
-  projected without its exact correlation. Later message timers cannot stand in
+  projected without its exact correlation. Later message deadlines cannot stand in
   for that opening. Pending items are obligations, not a predicted execution order.
 - Comparison aligns retained transition ordinals; equal columns do not prove
   semantic equivalence. A missing transition remains unavailable.

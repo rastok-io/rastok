@@ -112,7 +112,7 @@ type. It propagates through every computation that can depend on the value.
 M1 permits one executable path:
 
 ```text
-secret("path") -> SecretRef -> secret-compatible Connector setting
+secret("path") -> SecretName -> secret-compatible Connector setting
                -> late Driver resolution
 ```
 

@@ -29,7 +29,7 @@ lookup or build service. `run --ui` and `check --ui` refuse before effects.
 A build without the capability refuses by name.
 
 For a diagnostic recording, `rastok replay capture.rkrec --ui [--ui-port PORT]`
-opens at the empty prefix. Each subsequent transition selects one more retained
+opens at the empty prefix. Each subsequent transition selects one more recorded
 record. Next transition/Finish navigate locally; Replay/Pause, Back and the
 slider inspect the recorded timeline. Reset, retry, scenario actions and all
 server execution commands refuse. The reader never constructs a physical
@@ -51,33 +51,33 @@ Capability and ownership enter no graph, journal, diagnostic or accounting fact.
 Every selection starts paused at B0, before admission. Controls are:
 
 - **Next transition**: exactly the next authored action or ready VM transition,
-  not both (`advance one retained transition`).
+  not both (`advance one recorded transition`).
 - **Next action**: one authored action to its effect, available when the
   previous action is quiescent (`run one authored action to its effect`).
-  The status reports the number of retained transitions advanced by this command.
+  The status reports the number of recorded transitions advanced by this command.
   It reads `1 transition` for one, `n transitions` otherwise.
   Intermediate states are retained before the controller pauses at quiescence;
   executing an `advance` does not compress its ready transactions into one frame.
 - **Run to expect**: stop before the next assertion.
-- **Replay / Pause**: present the same retained transitions at one or four events
+- **Replay / Pause**: present the same recorded transitions at one or four events
   per second; Pause stops buffered playback even after the engine completes.
 - **Finish**: run to completion without pedagogical pacing.
 - **Retry**: available only when a refusal still owns retryable reserved work.
 - **Reset**: fresh VM, mock world, journal and clock for the selected scenario.
-  Reloading the browser only reconnects to the retained session; it is not Reset.
+  Reloading the browser only reconnects to the recorded session; it is not Reset.
 
 At B0 the status reads `Paused before admission · Next transition advances
 one step`; the first navigation gesture dismisses it. There is no tour or modal.
 Tooltips retain their action description and append a reason when disabled.
 
-The server may run ahead while the browser reads retained frames. Replay first
+The server may run ahead while the browser reads recorded frames. Replay first
 finishes the engine when necessary: `engine finishing, then replay`. The header
 distinguishes engine state from buffered playback or historical inspection.
 Pacing never changes logical time, scheduling or causal facts. Simulation time
 advances through Lab actions; viewing a paused frame cannot age a timeout.
 After completion or fault, history remains until Close or process termination.
 
-A = authored action; B = retained coherent transition, beginning at zero;
+A = authored action; B = recorded coherent transition, beginning at zero;
 R = journal record index. These are different things. The interface spells out
 `action · transition · record` and `LIVE · Main · transition 9`; B remains an
 internal ordinal, not a public label. A transition may contain several
@@ -106,9 +106,9 @@ Its status says `no VM work ready · advanced to A4` (using the actual action).
 
 ## 3. Read-only time navigation
 
-Back, the transition slider and history rows select an immutable retained frame.
+Back, the transition slider and history rows select an immutable recorded frame.
 They do not rerun a producer, change the live VM, fork a journal or edit DATA.
-Forward playback can revisit retained frames. Return to live names the current
+Forward playback can revisit recorded frames. Return to live names the current
 session/head. Mutating controls are disabled in history with a reason.
 
 Reset and scenario selection increment a physical **session** ordinal and
@@ -119,7 +119,7 @@ No branch command, authoring API or replay-to-mutate operation exists.
 Every frame is retained under `(session, boundary)` before the replaceable
 live notification is published. SSE is bounded and never blocks execution;
 a missed notification creates no timeline hole. Reconnect obtains the current
-index and can read every retained frame. This complete in-memory history is
+index and can read every recorded frame. This complete in-memory history is
 disposable debugger state, not another causal ledger or a durable backup.
 
 ## 4. Graph and inspector
@@ -133,7 +133,7 @@ boundary ports come from the plan. The UI never infers execution from geometry.
   belong to their real boundary. Disposed outputs remain local ports: neither
   `nothing` nor an unused output creates a root-level sink or a fake pipe.
   Clicking an App output pin, or pressing Enter while it is focused, inspects
-  its latest retained output. This references the original emission, not an
+  its latest recorded output. This references the original emission, not an
   extra observation or synthetic emission at the App boundary.
 - Only physical edges are pipes. `Loop.next`, `Loop.again` and `Loop.done`
   are listed as manager commands in definitions and source-port details,
@@ -141,10 +141,10 @@ boundary ports come from the plan. The UI never infers execution from geometry.
   its source `retry ⇢ Loop.next`. Exhaustion uses the host's resolved ordinary
   terminal; no `Loop.expired` pin or extra pipe exists.
 - `≡ n` is current mailbox occupancy, not cumulative traffic. Selecting it
-  opens the exact retained FIFO with instance, sequence, META and DATA.
+  opens the exact recorded FIFO with instance, sequence, META and DATA.
   A claimed Call head still occupies the mailbox until consumed. Large FIFOs
   render a bounded initial slice with access to all in-memory entries.
-  Hover or keyboard focus previews the first five retained envelopes with
+  Hover or keyboard focus previews the first five recorded envelopes with
   redacted DATA and abbreviated ids; it names the full occupancy and preview
   limit. The tab still exposes the complete in-memory FIFO in bounded slices.
 - `⧉ n` counts currently opened instances, derived from lifecycle facts.
@@ -173,7 +173,7 @@ applications, not Advance facts: `0` before the first Admit, `1` during the
 first application, `2` only after the second Admit. Close or Expired resets the
 dial to `0`. With multiple active runs, `⟳ n ·k` shows the highest admitted
 ordinal and number of active runs. Selecting an instance filters those runs.
-An armed delay adds `⏱ 1.0 s` (time remaining at the selected logical instant)
+A pending delay adds `⏱ 1.0 s` (time remaining at the selected logical instant)
 without incrementing the dial. Hover exposes run ref,
 remaining/initial fuel, due instant and resolved exhaustion target. History
 and replay use the selected journal prefix, never the live head. Instances
@@ -184,8 +184,8 @@ History displays r2 facts as `l:open`, `l:admit`, `l:advance`, `l:close` and
 Definition shows each Extension once, including the root App.
 Retry history separately names admission, holding, scheduling, final publication
 and stopping. A held batch can highlight its consumed input, never an outgoing
-public/discard route inferred from static topology. The future strip shows an
-armed Retry deadline from the accepted fold, not a new predicted action.
+public/discard route inferred from static topology. The future strip shows a
+pending Retry deadline from the accepted fold, not a new predicted action.
 History counts envelope observations, not deliveries: a held source emission
 remains observable without ever reaching a downstream mailbox.
 Live, historical and recorded views use the same selected-prefix projection.
@@ -220,8 +220,8 @@ Crossings may remain, but geometry must not invent topology. Layout tests cover
 label/pin clearance and manager-command exclusion. Visual qualification includes
 1352×760 and a narrow viewport; automated geometry checks do not replace it.
 
-An exact route at a retained boundary highlights its pipe; lifecycle highlights
-the owner. A boundary without a spatial route pulses its label rather than
+An exact route at a recorded transition highlights its pipe; lifecycle highlights
+the owner. A transition without a spatial route pulses its label rather than
 inventing an envelope. Reduced-motion preference removes animation, not the
 static evidence. Logical time is readable in fractional seconds/minutes, with
 the exact nanoseconds retained in the read model.
@@ -247,7 +247,7 @@ The same conservative rule applies to mailbox and delivery views at a
 `variant` pin, or one without a resolved schema, in a classified plan: an
 untyped copy before validation is not evidence of public data. Typed pins
 keep their field-level redaction. The webhook showcase regression inspects
-every retained transition, including the mailbox before its first typed
+every recorded transition, including the mailbox before its first typed
 Operator, and refuses any visible email or physical credential.
 The browser test `the webhook gallery remains classified in LIVE, HISTORY
 and REPLAY without a measurement report` covers all six flagship scenarios with a synthetic
@@ -300,22 +300,22 @@ append a record or modify the live machine.
 - **Decisions.** Selecting an Operator transaction in history and opening
   Definition highlights its chosen authored arm. The read model resolves consumed
   ids from journal routes/cursors, folds private state up to but **not including**
-  this transaction, and reconstructs retained META, logical time, immutable
+  this transaction, and reconstructs recorded META, logical time, immutable
   bindings, named join inputs and Loop state. The core's pure Dispatch evaluator
   selects the arm; the explanation shows only open-match predicates evaluated
   before and including the first true one. Closed arms use the actual typed tag.
   Compiler source spans are a debug side table, never part of plan identity.
   A chosen outer arm does not highlight unchosen nested arms.
   A case-routed pipe highlights the case of its selected/latest source envelope.
-- **Causal links.** Envelope selection highlights the retained origin lineage in
-  pipes, nodes and journal rows. Origin and parent links navigate to retained
+- **Causal links.** Envelope selection highlights the recorded origin lineage in
+  pipes, nodes and journal rows. Origin and parent links navigate to recorded
   envelopes; system metadata without a DATA observation says so. Command links explicitly
   connect `CommandProduced`, `CommandConsumed`, and the resulting `Admit` through
   the r2 command reference and `(run, iteration)`, not by matching a convenient
   business key. A Done command has no Admit link. Nothing beyond the selected
   prefix is offered as already happened.
 - **Scenario and timeline.** Action source lines are keyboard/click targets for
-  their first retained effect transition. Selecting a transition highlights its
+  their first recorded effect transition. Selecting a transition highlights its
   responsible action in the authored DSL. Unexecuted actions have no invented
   position. This uses the controller's existing action index, not source parsing
   in JavaScript.
@@ -327,10 +327,10 @@ append a record or modify the live machine.
   performed at inspection time. The list is an inventory, not a predicted order
   of future transactions. A Session handshake already removed from its mailbox
   is not projected until its precise opening-delivery correlation is exposed;
-  later message timers cannot masquerade as new handshake obligations.
+  later message deadlines cannot masquerade as new handshake obligations.
 - **Assertion evidence.** A failed expect automatically selects Assertion with
   the authored assertion, exact Lab target window, observed/matching counts and
-  retained envelopes. Direct field comparisons show observed/expected values;
+  recorded envelopes. Direct field comparisons show observed/expected values;
   `expect nothing` shows its offenders. Evidence is re-derived by the existing
   assertion evaluator, not a second definition of success. Unsupported comparison
   shapes retain the assertion and envelope evidence, without an invented field
@@ -342,10 +342,10 @@ append a record or modify the live machine.
   redraw preserves focus on surviving graph targets. Escape restores an enabled
   focus target even at completion, so `/` works after leaving the timeline input.
 - **Comparison.** Compare shows two keyed Loop instances at the selected
-  transition, or two retained simulation sessions at the same transition ordinal.
+  transition, or two recorded simulation sessions at the same transition ordinal.
   The shared graph remains selected; two state columns show logical time, private
   state, application, remaining fuel, phase and due instant, with value differences
-  highlighted. Missing transitions say not retained. Alignment by ordinal is not
+  highlighted. Missing transitions say not recorded. Alignment by ordinal is not
   an assertion of semantic equivalence and no equality is called a replay proof.
 
 Classified programs suppress predicate values and assertion/source evidence
@@ -363,20 +363,21 @@ Every item has a browser or projection regression; browser tests are in
 | Brief item | Regression |
 | --- | --- |
 | Transports, transition vocabulary, first contact, action count | `transitions have explicit transport names…` |
+| Recorded-completion snapshot field, with no old-name alias | `exchange_snapshots_name_recorded_completion_without_an_alias` |
 | Folded ids across five examples and three viewing states | `echo/jsonl/gauge/countdown/keyed-retry: live, history and replay…` |
 | Dial and delayed recurrences, stable selected-prefix values | `transitions have explicit transport names…`; `Loop dials follow historical admissions…`. The original B21–B22 positions predate fine-grained advance; tests now select the actual waiting folds rather than accidental ordinals |
 | Every graph hover, mailbox head preview by pointer and keyboard without navigation, exact future timeout and cancellation | `explanatory hovers expose types…` |
 | Readable compound layout at 1352×760 and narrow width; text/curve clearance; HISTORY clears zoom; four-digit mailbox badges | `the flagship keeps readable graph text…`; `vertically stacked scopes reuse horizontal ranks…`; `a four-digit mailbox count fits…` |
 | Closed/open decisions, selected route case, prestate and joined inputs | `Operator decisions highlight…`; `open_match_explains_only_evaluated_predicates_using_prestate`; `join_decisions_use_named_inputs_and_the_retained_completing_port` |
 | Causal links without forward leakage | `causal selection links opening admission…`; `decisions_use_consumed_envelopes_and_the_selected_prefix` |
-| Scenario/action links, `a` and `n` on a fresh LIVE session, keyboard navigation | `scenario actions select their retained transition…`; `the explanatory path is reachable with Tab and keyboard alone`; `keyboard node selection retains focus…` |
+| Scenario/action links, `a` and `n` on a fresh LIVE session, keyboard navigation | `scenario actions select their recorded transition…`; `the explanatory path is reachable with Tab and keyboard alone`; `keyboard node selection retains focus…` |
 | Assertion diff, expect-nothing offender and redaction | `failed expect shows…`; `failure_explanation_uses_the_exact_assertion_window_and_field`; `classified_predicates_and_assertion_values_are_not_explanation_channels` |
 | Aligned comparisons, separate read-only sessions | `comparison aligns two keyed Loop instances…` |
 | Resident Process gateway, no child in simulation, correct scripted reply counts in LIVE/HISTORY/REPLAY | `the resident gateway explains independent Process Sessions…`; `resident_gateway_steps_deliver_opening_before_frames_like_the_batch_lab` compares the complete batch/step trace |
 | Typed Responses values remain inspectable without the deployment bearer or a measurement report | `the Responses adapter preserves typed evidence…`; `responses_debugger_projects_each_transition_without_materializing_the_bearer` covers every scenario prefix |
 | Complete Contract/Extension subtitles fit their node before and after admission | `Connector subtitles and Extension labels fit…`; `the flagship keeps readable graph text…` checks real SVG labels and pipes |
 | Individually inspectable advance transactions, original App output, folded history cells | `an authored advance retains each transaction…`; Rust `advancing_time_keeps_each_ready_transaction_individually_inspectable` compares the complete batch/step result |
-| Admission keys from retained routes, including a misleading `tenant` field | `injection history names the retained routing key…` |
+| Admission keys from recorded routes, including a misleading `tenant` field | `injection history names the recorded routing key…` |
 | Toolbar zoom keeps the canvas centre fixed, Fit is 100%, splitter remains usable | `the complete tour stays inspectable by mouse and keyboard` |
 
 The browser harness checks both uncaught exceptions and console errors on every

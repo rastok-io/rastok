@@ -15,7 +15,7 @@ rastok replay echo.rkrec
 rastok replay echo.rkrec --ui
 ```
 
-The first command runs the real Process and records its retained facts. The
+The first command runs the real Process and records its recorded facts. The
 second prints the same App outputs and reports the same causal seal without
 starting that Process. The third opens the existing loopback debugger over
 immutable prefixes. `--ui-port PORT` selects its port; `hosted-ui` must be
@@ -27,15 +27,15 @@ On Unix, newly created recordings have mode 0600. Creation precedes Driver
 binding/effects. The recording is sensitive diagnostic evidence, not a file
 to commit or publish indiscriminately.
 
-`replay` is **retained-state reconstruction**, not a second execution of the
+`replay` is **recorded-state reconstruction**, not a second execution of the
 DSL and not a generated Lab scenario. Journal acceptance and existing VM
 recovery validate and reconstruct the prefix. Pure Contract projections
 reconstruct scheduler completions; physical Drivers, handlers and guests
-never run. This proves preservation of the retained facts, not authenticity
+never run. This proves preservation of the recorded facts, not authenticity
 of an arbitrary file or correctness of a freshly re-executed producer.
 The production-to-Lab extraction in simulation-semantics §9 remains deferred.
 
-## What is retained
+## What is recorded
 
 - Independently validated plan package and declared semantic hash.
 - Source definitions and arm positions for inspection; presentation data,
@@ -43,12 +43,12 @@ The production-to-Lab extraction in simulation-semantics §9 remains deferred.
 - Deployment graph version and whether an empty deployment header existed.
 - Complete INGRESS, TRANSACTION and EGRESS records, including typed DATA,
   META, prepared request bytes, completion extension metadata, manager
-  commands, Loop states and exact retained timer schedules.
+  commands, Loop states and exact unsealed deadlines.
 - Checkpoint prefix lengths and explicit logical observation instants.
 - On normal completion, a footer containing record count and causal seal.
 
 The golden projection is deliberately insufficient as the storage codec: it
-omits non-causal retained fields needed for faithful recovery. The diagnostic
+omits unsealed fields needed for faithful recovery. The diagnostic
 codec therefore preserves those fields without fabricating journal facts.
 Raw DATA is distinguished from a graph-born ccbor byte value; encoded and
 materialized ccbor are representation states of the same payload. Decimals
@@ -83,18 +83,18 @@ checkpoints from the hosted pump and synchronize the final footer. They do
 not implement write-ahead durability, fsync-before-effect, automatic restart,
 continued execution, rotation or retention enforcement.
 
-Bounds: 64 MiB per file and 100,000 retained records. The optional debugger
+Bounds: 64 MiB per file and 100,000 recorded records. The optional debugger
 additionally admits at most 1,000 records and 64 MiB of serialized snapshot
 history; larger recordings remain available to CLI replay within its bounds.
-Snapshots are reconstructed from prefixes, not retained as another authority.
+Snapshots are reconstructed from prefixes, not recorded as another authority.
 
 ## Time and debugger
 
-Replay starts at transition zero. Each following position is a retained record
+Replay starts at transition zero. Each following position is a recorded record
 prefix, not a claim about an independently stepable live execution. A hosted
 pump checkpoint can contain several records. For an interior prefix, the
 displayed logical time is that checkpoint's **observation instant**, not an
-invented exact commit timestamp. Retained due times and Loop ordinals remain
+invented exact commit timestamp. Recorded due times and Loop ordinals remain
 facts of the selected prefix.
 
 Next transition, Back, the slider, Replay/Pause and Finish only navigate these
@@ -105,7 +105,7 @@ source, cost and causal views consume the same validated projection.
 
 ## Privacy and first-slice limits
 
-`@personal` may be retained in the attested in-memory execution journal. That
+`@personal` may be recorded in the attested in-memory execution journal. That
 capability does not authorize persistence: this recording format refuses a
 plan containing personal-data policy **before file creation or effects**.
 The check includes boundary/child ports, owner values, state and local bindings.

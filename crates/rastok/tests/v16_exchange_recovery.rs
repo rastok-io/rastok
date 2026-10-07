@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::boundary::{
-    Completion, Draft, HttpServerExit, InboundCallEvent, InboundExchangeRef, IngressAdmission,
+    Completion, Draft, HttpServerExit, InboundCallEvent, InboundExchangeId, IngressAdmission,
     IngressEnvelopeProvenance, IngressProposal, IngressProposalHandle, IngressSubmission,
     SubmissionSequence,
 };
@@ -86,7 +86,7 @@ graph app : App {{
             else {
                 panic!("uncongested ingress");
             };
-            let Some(InboundExchangeRef::Call(call)) = accepted.exchange else {
+            let Some(InboundExchangeId::Call(call)) = accepted.exchange else {
                 panic!("Call reference");
             };
             calls.push(call);

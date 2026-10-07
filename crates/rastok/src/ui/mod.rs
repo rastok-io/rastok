@@ -466,7 +466,7 @@ fn historical_snapshot(request: &Request<Incoming>, context: &ServerContext) -> 
                 response(
                     StatusCode::NOT_FOUND,
                     "text/plain; charset=utf-8",
-                    "unknown retained boundary",
+                    "unknown recorded transition",
                 )
             },
             |snapshot| response(StatusCode::OK, "application/json", snapshot.json.clone()),
@@ -677,7 +677,7 @@ async fn command(
         return response(
             StatusCode::CONFLICT,
             "text/plain; charset=utf-8",
-            "a recording is read-only; navigate its retained timeline",
+            "a recording is read-only; navigate its recorded timeline",
         );
     }
     match context.command_tx.try_send(command) {
@@ -1139,7 +1139,7 @@ mod tests {
         assert_eq!(
             historical.split_once("\r\n\r\n").map(|(_, body)| body),
             retained.split_once("\r\n\r\n").map(|(_, body)| body),
-            "reset never rewrites a retained frame"
+            "reset never rewrites a recorded frame"
         );
     }
 

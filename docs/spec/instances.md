@@ -210,7 +210,7 @@ The runtime distinguishes successive instances by a **generation**. It is the
 zero-based ordinal of `l:start` for that address, derived from the journal and
 never from a RAM counter. An **instance reference** is the pair `(logical
 address, generation)` used by routes, transactions, mailboxes, state, and
-lifecycle facts. Generation fences stale deliveries, timers, lifecycle
+lifecycle facts. Generation fences stale deliveries, deadlines, lifecycle
 messages, and old ownership. It is not part of the logical address, call
 identity, or source vocabulary.
 
@@ -339,7 +339,7 @@ does not make an envelope's whole traversal a transaction.
 
 Every logical Executor instance owns one bounded activation mailbox. Its
 mailbox, derived immutable bindings, semantic state, open calls, lifecycle,
-armed events, and consumed cursors use the same instance reference. A temporal
+scheduled events, and consumed cursors use the same instance reference. A temporal
 Extension manager has a separate bounded command inbox derived from the
 journal. A Graph instance owns lifecycle and containment but no application
 mailbox.
@@ -384,18 +384,18 @@ these meanings.
 
 ### 6.1 Persistent
 
-No deadline is armed. Explicit stop, deployment shutdown, or supervision may
+No deadline is created. Explicit stop, deployment shutdown, or supervision may
 still request closure under the bounded closing contract.
 
 ### 6.2 Idle
 
 Mailbox admission is activity. Admission records the causing envelope and
-arms `last_admission + after` with the current journal-derived instance
+creates a deadline at `last_admission + after` with the current journal-derived instance
 reference. The unique causal last-admission id additionally fences a deadline
 superseded within that generation. A later admission supersedes the earlier
 cause; a later generation cannot be mistaken for the expired one.
 
-Idle measures admission silence. An armed call, Loop delay, or other dated
+Idle measures admission silence. An open Call, Loop delay, or other dated
 obligation does not silently rewrite that definition. If the idle deadline
 wins, the instance enters Closing; its outstanding obligations are then
 drained, cancelled, settled, or retained according to their own protocol and
@@ -409,7 +409,7 @@ optional: it bounds an individual invocation during normal operation, while
 
 ### 6.3 Fixed
 
-The creating admission arms `start + after`. Later traffic does not move the
+The creating admission creates a deadline at `start + after`. Later traffic does not move the
 deadline. At expiry the instance enters Closing. The dated event carries the
 complete generation-bearing instance reference, so an old event cannot close
 a later generation at the same address.
@@ -450,7 +450,7 @@ Event-time and watermarks are a separate additive layer.
 The first admission to an absent address reserves the next journal-derived
 generation. Every selected Graph and Node owner records exactly one lazy
 `l:start`, including persistent singletons; persistent only means that no
-deadline is armed. Before `l:start`, the runtime purely evaluates and validates
+deadline is created. Before `l:start`, the runtime purely evaluates and validates
 that owner's per-instance `val`s and instance-bound Connector settings into a
 candidate bundle. A failure leaves the delivery unconsumed, commits no
 `l:start`, and performs no Driver effect. Once the bundle is valid, the
@@ -671,7 +671,7 @@ that owns its handler. Presence joins zip arrivals in that instance's mailbox
 order. The delivery that first completes presence is the causal trigger; the
 tuple itself stays in source-declared port order. With `where`, FIFO candidate
 tuples are tested lexicographically and a false predicate consumes nothing.
-`within` and `last` bound retained candidates independently: the former arms a
+`within` and `last` bound retained candidates independently: the former creates a
 dated obligation per delivery, while the latter evicts the oldest excess
 candidate per port. In the M1.4 surface either bound requires the conventional
 typed output `expired: union { JoinExpired {} }`; eviction emits that ordinary

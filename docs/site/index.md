@@ -42,7 +42,7 @@ or state left by the previous one.
 Run the scenario, inspect the graph, make the suggested edit on disk, and read
 the first golden difference. Restore the edit before continuing. Keep a new
 scenario when you discover a useful failure: it becomes a check for your next
-revision. The debugger explains retained execution; it does not edit the flow
+revision. The debugger explains recorded execution; it does not edit the flow
 or fork an alternative world.
 
 By the end, the same ideas apply to a file, a partner API and an agent:
@@ -52,7 +52,7 @@ goes. You do not need a different testing model for each integration.
 ## What is available today
 
 Rastok is experimental. The deployment journal is in memory; durable storage
-is later work. Diagnostic replay restores retained facts, not the world.
+is later work. Diagnostic replay restores recorded facts, not the world.
 The six chapters are executable; the complete AI gateway and the full
 opening qualification remain in progress. No reading-time claim is made before
 independent quickstart trials.

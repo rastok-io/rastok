@@ -3,7 +3,7 @@ skinparam backgroundColor white
 skinparam shadowing false
 skinparam packageStyle rectangle
 top to bottom direction
-title Rastok — current Rust modules and crate boundary (v19, 2026-09-18)
+title Rastok — current Rust modules and crate boundary (registry: identity.md)
 
 package "rastok — hosted / compiler crate" as HOSTED {
   rectangle "main / render / diagnostics\nCLI assembly, source spans, named errors" as ENTRY
@@ -21,13 +21,13 @@ package "rastok-core — no_std + alloc" as CORE {
   rectangle "node / connector\nPath, Port, Kind, Extension, Trigger\nContractId, roles, exchange profiles" as NODE
   rectangle "datatype / value / envelope\nDataType, Value, Envelope, Data\none logical type/value authority" as DATA
   rectangle "expr / json / trivia\nTree, Signature, EvalValue\nbounded pure evaluation and exact readers" as EXPR
-  rectangle "identity / canonical_cbor\nInstanceAddress, InstanceRef\ntagged values and canonical byte discipline" as IDENTITY
+  rectangle "instance / canonical / canonical_cbor\nIdentity, Segment, Generation\ncanonical registry and byte discipline" as IDENTITY
   rectangle "plan / loop_proof\nValidatedExecutionPlan, Owner, Dispatch\nRouteRule, ExtensionSpec, LoopSpec/LoopExpiry, RetrySpec\nindependent scope, type and proof validation" as PLAN
   rectangle "runtime\nHandlerExecutor, Vm, Mailboxes, Scheduler\nLoop / Retry managers; spatial/exchange recovery\nGraph has no application handler" as VM
-  rectangle "boundary\nInbound/Outbound Driver traits\nIntent, Completion, CallRef, SessionRef\nDispatcher and Contract completion gates" as BOUNDARY
-  rectangle "journal / loop_protocol / retry_protocol / instance_stop\nJournal, MemJournal, Record\nruns, Held/Consumed/Published and instance commands\nretained original deadlines; no disk backend" as JOURNAL
+  rectangle "boundary\nInbound/Outbound Driver traits\nIntent, Completion, CallId, SessionId\nDispatcher and Contract completion gates" as BOUNDARY
+  rectangle "journal / deadline / codec / loop_protocol / retry_protocol / instance_stop\nJournal, MemJournal, Record\nruns, Held/Consumed/Published and instance commands\nunsealed original deadlines; no disk backend" as JOURNAL
   rectangle "schema_annotation / data_policy\nSchemaPath; four standard annotations, typed metadata\nindependent propagation and redaction" as POLICY
-  rectangle "deployment\nBootReference, BootBindings, SecretRef\nrun-scoped privacy/price attestations" as DEPLOY
+  rectangle "deployment\nBootReference, BootBindings, SecretName\nrun-scoped privacy/price attestations" as DEPLOY
   rectangle "observation / accounting\nRecordObservation / AccountingObservation\nindividual exact samples and provenance\nno report or automatic pricing" as REPORT
 }
 

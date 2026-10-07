@@ -126,11 +126,12 @@ fn run(source: &str) -> Vec<Record> {
 }
 
 #[test]
-fn retained_call_time_is_unsealed_but_retry_context_and_arm_identity_are_causal() {
+fn call_time_is_unsealed_but_retry_context_and_deadline_identity_are_causal() {
     use rastok::canonical_cbor::{self, Value as Cbor};
     use rastok::journal::{
-        CallStatus, DeadlineKind, EgressRecord, retry_protocol as retry,
-        timing::{Deadline, Deadlines},
+        CallStatus, DeadlineKind, EgressRecord,
+        deadline::{Deadline, Deadlines},
+        retry_protocol as retry,
     };
     let original = run(M0_PROBE);
     let index = original
@@ -360,7 +361,7 @@ fn a_stale_stored_golden_is_named_by_the_diff() {
     let stale = rendered.replace("73616c7574", "6175747265"); // "salut" -> "autre"
     assert_ne!(stale, rendered, "the alteration took");
     let divergence = diff(&project(&records), &stored_trace(&stale)).expect("the traces differ");
-    assert_eq!(divergence.record, 0, "the inbound record");
+    assert_eq!(divergence.record, 0, "the INGRESS record");
     assert!(
         divergence.path.contains("data(5)"),
         "the diff names the payload key: {divergence}"

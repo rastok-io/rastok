@@ -29,7 +29,7 @@ graph agent_gateway : App {
   }
 
   connector audit_log : File {
-    // Prospective append/log profile. rastok/file@1 currently supports one
+    // Prospective append/log profile. std/file@3 currently supports one
     // explicit read or atomic replace per invocation; it never traverses a
     // directory and does not yet watch or append.
     path = "/var/log/rastok/audit.jsonl"

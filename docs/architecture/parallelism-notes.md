@@ -24,7 +24,7 @@ mailbox rule; placement never changes program meaning.
 
 One logical **Executor** instance owns one bounded delivery mailbox. At most
 one worker claims that mailbox for a transaction at a time. Its immutable
-bindings, semantic state, open exchanges, lifecycle, armed events and consumer
+bindings, semantic state, open exchanges, lifecycle, scheduled events and consumer
 cursors share the same canonical instance reference `(logical address,
 generation)`. An Operator's semantic state is its DSL `var`; a Connector's is
 the core-owned Contract/exchange fold. Physical Driver handles are rebuilt and

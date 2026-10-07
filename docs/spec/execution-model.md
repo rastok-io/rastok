@@ -154,7 +154,7 @@ recovery consume that recorded fact; neither re-routes by evaluating the
 expression after commit. The hierarchical address selects placement; its
 journal-derived generation forms the instance reference that indexes mailbox,
 derived immutable instance bindings, Executor state, open calls, lifecycle,
-armed events, and consumer cursor. Type checking follows the ordinary total
+scheduled events, and consumer cursor. Type checking follows the ordinary total
 port solver and creates no second inference mechanism.
 
 When a route enters several nested owners, selection is ordered outermost to
@@ -173,7 +173,7 @@ Admission of a delivery into an absent address starts a new **instance**:
 3. commit `l:start` with the admitted envelope as cause and the reserved
    instance reference;
 4. commit the envelope's port transaction only after the start;
-5. arm any lifetime deadline with that generation;
+5. create any lifetime deadline with that generation;
 6. treat an event carrying an older generation as a harmless stale
    observation.
 
@@ -306,7 +306,7 @@ the transaction's inputs are (journal-relative) identical.
 
 An ordered multi-emission creates one EnvelopeId per target and commits all
 emissions or none. It differs from `source -> { a b }`: that routing set
-creates one envelope with several DeliveryRefs, and its target order is
+creates one envelope with several delivery ids, and its target order is
 canonical rather than semantic.
 
 
@@ -336,12 +336,12 @@ plane decides enters the graph as a **journaled event**:
 
 Concretely, the supervision plane maintains **one queue of dated events**:
 
-| Dated event | Armed by | Delivered as |
+| Dated event | Created by | Delivered as |
 |---|---|---|
 | timer event | a declared `Timer` Connector | a root timestamp envelope (inbound) |
 | per-call timeout | a Connector's `timeout` (§6) | `TimeoutExpired` on the contract's typed call-exit port (`exit` for Process) |
 | join eviction | a join's `within` / `last` (§7) | `JoinExpired` on the Operator's declared typed expiry output (conventionally `expired`) |
-| instance lifetime expiry | `lifetime = { … }` | the instance's `on stop` sequence (parent = **the envelope that armed the deadline** — last admission for `idle`, creator for `fixed`, creating admission for its tumbling box) |
+| instance lifetime expiry | `lifetime = { … }` | the instance's `on stop` sequence (parent = **the envelope that created the deadline** — last admission for `idle`, creator for `fixed`, creating admission for its tumbling box) |
 | Loop re-entry delay | `Loop.delay` ([loop.md](loop.md) §9) | manager consumes a durable Next/Again command, then exactly-once `l:next` re-admits on the remembered entry when due |
 | saga completion budget | future Saga decision | not executable in M1; no timeout or output contract is inferred |
 
@@ -351,19 +351,19 @@ identical in both modes**; that identity is the foundation of two-mode
 equivalence. Replay re-reads the journaled events ; it never re-observes and
 never re-runs a race.
 
-Arming/due instants and host commit time remain journal annotations and
+Creation/due instants and host commit time remain journal annotations and
 observability facts — **never** envelope fields. The narrow exception is an
 explicit `now()` observation: the transaction's fixed logical instant is
 sealed under canonical key 39 because it may change control flow. It remains
 absent from time-insensitive firings (the `created_at` lesson,
 envelope.md §8).
 
-Unsealed key 41 retains for exact timer schedules alongside
+Unsealed key 41 records exact deadlines alongside
 their accepting records, outside the causal projection. This retention is
 atomic and integrity-protected, not best-effort observability. Its ordered
-arms preserve the original due instants and tie order; a restart cannot turn
+deadlines preserve the original due instants and tie order; a restart cannot turn
 a missing instant into `now + duration`. Recovery restores supported Loop, Retry, Call, join and lifecycle obligations
-from the original retained instants.
+from the original unsealed instants.
 
 A resumed sweep preserves the unfinished dated frontier before executing
 lifecycle work queued by an expiry. Only an instance's own lifetime is fenced
@@ -378,7 +378,7 @@ that instant.
 
 ### 6.1 What is bounded
 
-`timeout = duration("30s")` on a Connector is a **per-call budget** : armed **at delivery
+`timeout = duration("30s")` on a Connector is a **per-call budget** : created **at delivery
 into the Connector's mailbox** (not at transaction start — the budget
 deliberately includes queueing : a backlogged Connector can time out calls it
 never began, and the call-closed rule applies identically), cleared when the
@@ -405,7 +405,7 @@ codex.exit ────► typed outcome envelope TimeoutExpired
 ```
 
 *`l:timeout` is general for every currently admitted timeout budget: its
-parent is the exact envelope which armed that budget. Saga has no executable
+parent is the exact envelope which created that budget. Saga has no executable
 timeout contract in M1; its future decision must either reuse this rule or
 allocate a distinct fact explicitly.*
 
@@ -499,7 +499,7 @@ ordinary bounded mailbox remains claimed; only the pump retries it. `Started`
 transfers exactly once. The Driver then reports correlated opened,
 write-settled, inbound-message and terminal facts. The terminal projects as
 `l:exit`, after which the fold accepts neither another message nor another
-exit. Handshake timeout uses timer kind 9 and is fenced by the logical
+exit. Handshake timeout uses deadline kind 8 (`SessionHandshake`) and is fenced by the logical
 `SessionId`, never a socket or task handle.
 
 At the retained Closing settlement deadline, a Session without an observed
@@ -540,7 +540,7 @@ transport and byte permits outside the causal fold. H5.2's generic direct
 response path similarly leaves a committed response in the ordinary claimed
 mailbox while the Driver says `Pending`; no protocol bytes exist yet. Late,
 duplicate or unmatched response deliveries commit a consume-only discard.
-Final H5 executes `respond`. A positive request deadline is armed with the
+Final H5 executes `respond`. A positive request deadline is created with the
 accepting root, and the retained response and scheduler timeout compete for
 one protocol action and one `l:reply`. A root-mixing return path is rejected
 unless its explicit direct-path correlator selects the opening reference
@@ -552,7 +552,7 @@ before route commit.
 A buffered join partner may never arrive. The join contract bounds the wait —
 `within duration("15m")` (time window) and `last 100` (count bound), evicted
 **lazily** (checked at arrivals and at dated events, never a background
-timer). **The `within` chrono is armed when an envelope is first buffered**
+timer). **The `within` deadline is created when an envelope is first buffered**
 (per buffered envelope) and cleared when presence completes and the transaction
 consumes it. Eviction cannot be a silent drop; the rule is:
 
@@ -572,12 +572,12 @@ silent).
 
 R6 fixes candidate selection precisely. Correlation never leaves the owning
 Operator instance. The arrival that first completes a presence set is its
-causal trigger, but the selected tuple and transaction key 34 remain in the
+causal trigger, but the selected tuple and transaction key 21 remain in the
 handler's declared port order. For a content predicate, candidate tuples are
 visited lexicographically by per-port FIFO position; a false `where` consumes
 nothing. `last N` retains at most N candidates on each declared input and
-evicts the oldest excess candidate. `within D` arms timer kind 2 for each
-routed candidate; a stale timer whose cursor was already consumed is a no-op.
+evicts the oldest excess candidate. `within D` creates a kind-2 deadline (`JoinWithin`) for each
+routed candidate; a stale deadline whose cursor was already consumed is a no-op.
 If both bounds apply, the first runnable eviction fact wins through the same
 reserve/commit/remove discipline as a firing.
 
@@ -586,7 +586,7 @@ output `expired: union { JoinExpired {} }`. This name is an ordinary typed
 port convention, not a privileged error channel; the requirement keeps v1
 expiry routing statically enumerable. `having` remains a named future gate.
 A partial join with no runnable tuple is quiescent retained mailbox state, so
-`drain` may rest while its dated obligation remains armed.
+`drain` may rest while its dated obligation remains pending.
 
 **The boundary that avoids the false friend** : this rule applies to **join
 buffers only** (an envelope that awaited presence and never got it = a lost
@@ -626,7 +626,7 @@ advance Δ :                     (target = t + Δ)
 ```
 
 ```
-t=0   inject(msg) ──► drain : msg → route → codex.in   (chrono armed : expires t=5)
+t=0   inject(msg) ──► drain : msg → route → codex.in   (deadline created : expires t=5)
 advance duration("30s") (target 30) :
   earliest ≤ 30 ?  t=5  TimeoutExpired(codex) → deliver → drain (triage → alert)
   earliest ≤ 30 ?  t=10 Timer event           → deliver → drain (stats emits)
@@ -636,10 +636,10 @@ expect …  ──► evaluated on the STABLE state at t=30
 
 Edge rules :
 - **Simultaneity** (two events with the same date) : deterministic tie-break =
-  **arming order** (first armed fires first).
+  **creation order** (first created fires first).
 - **Every fixture step drains** : `inject`, `advance`, `expect` each complete
   on a stable (empty-mailbox) state — an `expect` never reads an in-between.
-- A cascade may arm new dated events ; if they fall ≤ target they are swept in
+- A cascade may schedule new dated events ; if they fall ≤ target they are swept in
   turn, in date order.
 
 In production the same queue runs against the hosted time source; the delivery contract
@@ -720,7 +720,7 @@ an anonymous out-of-graph name.
 
 ## 12. Conformance scenarios
 
-Reference simulations 1–2 must exercise date order, the arming-order
+Reference simulations 1–2 must exercise date order, the creation-order
 tie-break at equal dates, zero-duration computation, time advancement
 only on empty mailboxes, and byte-identical per-address traces across runs.
 

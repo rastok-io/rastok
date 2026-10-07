@@ -35,15 +35,15 @@ pub enum Error {
     /// A typed canonical field cannot be decoded.
     Read(crate::canonical_cbor::DecodeError),
     /// The decoded deadlines violate their typed invariant.
-    Deadlines(journal::timing::Error),
+    Deadlines(journal::deadline::Error),
     /// A Call's unsealed timing contradicts its sealed facts.
-    CallTiming(journal::timing::Error),
+    CallTiming(journal::deadline::Error),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Invalid(reason) => write!(f, "invalid retained record: {reason}"),
+            Self::Invalid(reason) => write!(f, "invalid journal record: {reason}"),
             Self::Read(error) => error.fmt(f),
             Self::Deadlines(error) => error.fmt(f),
             Self::CallTiming(error) => error.fmt(f),
@@ -251,7 +251,7 @@ fn read_deadline_ids(value: &Cbor) -> Result<Vec<(journal::DeadlineKind, Id)>, E
         })
         .collect()
 }
-fn schedule(value: Option<&journal::timing::Deadlines>) -> Cbor {
+fn schedule(value: Option<&journal::deadline::Deadlines>) -> Cbor {
     optional(value, |value| {
         list([
             integer(value.created_at()),
@@ -265,14 +265,14 @@ fn schedule(value: Option<&journal::timing::Deadlines>) -> Cbor {
         ])
     })
 }
-fn read_schedule(value: &Cbor) -> Result<Option<Box<journal::timing::Deadlines>>, Error> {
+fn read_schedule(value: &Cbor) -> Result<Option<Box<journal::deadline::Deadlines>>, Error> {
     read_optional(value, |value| {
         let [created_at, deadlines] = array(value)?;
         let items = items(deadlines)?
             .iter()
             .map(|value| {
                 let [kind, reference, due_at] = array(value)?;
-                Ok(journal::timing::Deadline {
+                Ok(journal::deadline::Deadline {
                     kind: journal::DeadlineKind::try_from(
                         u8::try_from(uint(kind)?)
                             .map_err(|_| Error::Invalid("deadline kind exceeds u8"))?,
@@ -283,7 +283,7 @@ fn read_schedule(value: &Cbor) -> Result<Option<Box<journal::timing::Deadlines>>
                 })
             })
             .collect::<Result<_, Error>>()?;
-        journal::timing::Deadlines::try_new(signed(created_at)?, items)
+        journal::deadline::Deadlines::try_new(signed(created_at)?, items)
             .map(Box::new)
             .map_err(Error::Deadlines)
     })
@@ -532,11 +532,11 @@ fn loop_fact(value: &lp::Fact) -> Cbor {
             id(run.id()),
             instance.tree(),
             match opening {
-                lp::OpeningAdmissionRef::Ingress {
+                lp::OpeningAdmissionId::Ingress {
                     inbound: ingress,
                     port,
                 } => list([Cbor::Uint(1), id(*ingress), word(port)]),
-                lp::OpeningAdmissionRef::Delivery(value) => list([Cbor::Uint(2), id(*value)]),
+                lp::OpeningAdmissionId::Delivery(value) => list([Cbor::Uint(2), id(*value)]),
             },
             word(entry),
             Cbor::Uint(*fuel),
@@ -695,11 +695,11 @@ impl Decoder {
         let envelope = self.envelope(envelope)?;
         let exchange = read_optional(exchange, |value| {
             Ok(Box::new(match items(value)? {
-                [Cbor::Uint(1), reference, owner, timers] => {
+                [Cbor::Uint(1), reference, owner, deadline_ids] => {
                     journal::InboundExchangeRecord::Call(journal::InboundCallIngressRecord {
                         reference: InboundCallId::from_root(read_id(reference)?),
                         instance: instance(owner)?,
-                        deadline_ids: read_deadline_ids(timers)?,
+                        deadline_ids: read_deadline_ids(deadline_ids)?,
                     })
                 }
                 [Cbor::Uint(2), reference] => journal::InboundExchangeRecord::Session(
@@ -753,7 +753,7 @@ impl Decoder {
             delta,
             emitted,
             routed,
-            timers,
+            deadline_ids,
             schedule,
             instance_commands,
             retry,
@@ -847,7 +847,7 @@ impl Decoder {
                     })
                 })
                 .collect::<Result<_, Error>>()?,
-            deadline_ids: read_deadline_ids(timers)?,
+            deadline_ids: read_deadline_ids(deadline_ids)?,
             deadlines: read_schedule(schedule)?,
             instance_commands: read_optional(instance_commands, |value| {
                 journal::instance_stop::Packet::from_tree(value)
@@ -989,12 +989,12 @@ impl Decoder {
                 run: run(reference)?,
                 instance: instance(instance_ref)?,
                 opening: match items(opening)? {
-                    [Cbor::Uint(1), inbound, port] => lp::OpeningAdmissionRef::Ingress {
+                    [Cbor::Uint(1), inbound, port] => lp::OpeningAdmissionId::Ingress {
                         inbound: read_id(inbound)?,
                         port: read_port(port)?,
                     },
                     [Cbor::Uint(2), delivery] => {
-                        lp::OpeningAdmissionRef::Delivery(read_id(delivery)?)
+                        lp::OpeningAdmissionId::Delivery(read_id(delivery)?)
                     }
                     _ => return Err(Error::Invalid("Loop opening")),
                 },

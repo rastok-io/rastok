@@ -1,7 +1,7 @@
 ---
 title: Two tenants — whose state is this?
 description: Watch Bob finish once while Alice alone times out, waits for backoff and retries in an isolated keyed instance.
-teaches: Keyed instances, idle lifetime, nested Graph, native Retry, pinned requests and retained attempts
+teaches: Keyed instances, idle lifetime, nested Graph, native Retry, pinned requests and recorded attempts
 graph: examples/keyed-retry.rkg
 golden: crates/rastok/tests/golden/gallery/two-tenants/ui_tour.two_tenants.trace
 command: rastok simulate examples/keyed-retry.rkg
@@ -51,7 +51,7 @@ receives no second Call. The `lifetime` scenario advances through ten seconds
 of silence, then proves that a new admission uses a fresh instance generation.
 
 `⧉` counts instances. The Instances tab's Retry table shows Bob's one attempt
-and Alice's two distinct Calls. Alice's timeout is retained as **Held**, not
+and Alice's two distinct Calls. Alice's timeout is recorded as **Held**, not
 delivered to the `failed` output; the final attempt is **Published**. The audit
 runs once per incoming request, not again for an internal retry. No `⟳` Loop
 dial or temporal back-edge is invented for Retry.
@@ -67,7 +67,7 @@ expecting Alice's answer fails. Bob still finishes once. There is no new
 
 Add `--golden crates/rastok/tests/golden/gallery/two-tenants` to compare every
 record. The unedited example matches. After your edit, the CLI names the first
-difference and retained context, which can precede the final missing answer.
+difference and recorded context, which can precede the final missing answer.
 Restore the attempt bound afterward.
 
 ## Carry forward
@@ -92,5 +92,5 @@ The fixed backoff is one second; this example does not benchmark model latency.
 ## NiFi / MuleSoft equivalent
 
 Keyed processing, a nested process group and a bounded retry policy. The visual
-debugger exposes state isolation and retained attempts. A Loop would be the
+debugger exposes state isolation and recorded attempts. A Loop would be the
 right tool for evolving an authored state; Retry repeats this same operation.

@@ -562,7 +562,7 @@ impl Checker<'_, '_> {
 
     pub(super) fn route_destination_ref(
         &mut self,
-        reference: &PortRef,
+        reference: &PortPath,
         graph: &Graph,
     ) -> Option<RouteDestination> {
         if is_instance_stop_ref(reference) {
@@ -585,7 +585,7 @@ impl Checker<'_, '_> {
 
     fn instance_stop_target(
         &mut self,
-        reference: &PortRef,
+        reference: &PortPath,
         graph: &Graph,
     ) -> Option<InstanceStopTarget> {
         let child = match reference.segments.as_slice() {
@@ -635,7 +635,7 @@ impl Checker<'_, '_> {
 
     pub(super) fn loop_command_target(
         &mut self,
-        reference: &PortRef,
+        reference: &PortPath,
         graph: &Graph,
     ) -> Option<LoopCommandTarget> {
         let (owner_name, command) = match reference.segments.as_slice() {
@@ -916,7 +916,7 @@ impl Checker<'_, '_> {
 
     pub(super) fn port_ref(
         &mut self,
-        reference: &PortRef,
+        reference: &PortPath,
         graph: &Graph,
         is_source: bool,
     ) -> Option<Endpoint> {
@@ -1115,7 +1115,7 @@ impl Checker<'_, '_> {
 
     pub(super) fn removed_loop_port(
         &mut self,
-        reference: &PortRef,
+        reference: &PortPath,
         graph: &Graph,
     ) -> Option<Endpoint> {
         let [owner_name, extension, endpoint] = reference.segments.as_slice() else {
@@ -1205,7 +1205,7 @@ pub(super) fn endpoint_pinned_type(endpoint: &Endpoint, graph: &Graph) -> Option
 /// Stable human spelling for checked endpoints. Diagnostics use the checked
 /// owner rather than reconstructing source sugar, so a default port and its
 /// explicit spelling report the same location.
-fn is_instance_stop_ref(reference: &PortRef) -> bool {
+fn is_instance_stop_ref(reference: &PortPath) -> bool {
     reference.segments.len() >= 2
         && reference.segments[reference.segments.len() - 2].text == "instance"
         && reference

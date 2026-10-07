@@ -792,7 +792,7 @@ fn a_rejected_transaction_does_not_update_the_journal_loop_projection() {
             ..
         } = fact
         {
-            *opening = rastok::journal::loop_protocol::OpeningAdmissionRef::Delivery(
+            *opening = rastok::journal::loop_protocol::OpeningAdmissionId::Delivery(
                 rastok::envelope::Id::derive(rastok::envelope::IdKind::Root, &[b"another-opening"]),
             );
             *run = rastok::journal::loop_protocol::run_ref(instance, opening);
@@ -1045,7 +1045,7 @@ lab app {
 }
 
 #[test]
-fn recovery_rearms_the_retained_deadline_not_a_fresh_delay() {
+fn recovery_reschedules_the_original_deadline_not_a_fresh_delay() {
     let plan = compile(
         r#"
       Loop.fuel = 2
@@ -1073,8 +1073,8 @@ fn recovery_rearms_the_retained_deadline_not_a_fresh_delay() {
 }
 
 #[test]
-fn retained_timer_bytes_are_required_for_delays_but_not_part_of_the_causal_seal() {
-    use rastok::journal::timing::Deadlines;
+fn unsealed_deadline_bytes_are_required_for_delays_but_not_part_of_the_causal_seal() {
+    use rastok::journal::deadline::Deadlines;
     let plan = compile(
         r#"
       Loop.fuel = 2
@@ -1113,10 +1113,10 @@ fn retained_timer_bytes_are_required_for_delays_but_not_part_of_the_causal_seal(
             0 => transaction.deadlines = None,
             1 => {
                 let schedule = transaction.deadlines.as_deref().unwrap();
-                let mut arms = schedule.items().to_vec();
-                arms[0].due_at += 1;
+                let mut deadlines = schedule.items().to_vec();
+                deadlines[0].due_at += 1;
                 transaction.deadlines = Some(Box::new(
-                    Deadlines::try_new(schedule.created_at(), arms).unwrap(),
+                    Deadlines::try_new(schedule.created_at(), deadlines).unwrap(),
                 ));
             }
             2 => {
@@ -1128,9 +1128,9 @@ fn retained_timer_bytes_are_required_for_delays_but_not_part_of_the_causal_seal(
             }
             _ => {
                 let schedule = transaction.deadlines.as_deref().unwrap();
-                let arm = schedule.items()[0];
+                let deadline = schedule.items()[0];
                 transaction.deadlines = Some(Box::new(
-                    Deadlines::try_new(schedule.created_at(), vec![arm, arm]).unwrap(),
+                    Deadlines::try_new(schedule.created_at(), vec![deadline, deadline]).unwrap(),
                 ));
             }
         }

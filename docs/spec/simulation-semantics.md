@@ -179,7 +179,7 @@ not invented. `meta.app` and `meta.sys` remain forbidden fixture writes.
 
 The source path and sequence enter the ordinary `IngressSubmission`.
 `RuntimeBindings` proves ownership; VM admission reserves every destination
-and commits INGRESS before the Lab receives the `InboundCallRef`. The Lab
+and commits INGRESS before the Lab receives the `InboundCallId`. The Lab
 then reports `Completed { status: 202 }`; the core commits the ordinary
 correlated `l:reply` transaction and `exit`. `expect listener.out` reads the
 INGRESS root once, including when the explicit disposition is `nothing`.
@@ -364,8 +364,8 @@ typed join expiry through ordinary App ports; they never inspect a mailbox,
 key, generation, or private `var`. A partial join is stable retained state, so
 an expectation window may close with no output until a matching injection or
 `advance` makes its `within` obligation runnable. The canonical trace remains
-the independent structural witness: transaction key 31 exposes the selected
-instance reference and key 34 exposes join contributions in declared-port
+the independent structural witness: transaction key 18 exposes the selected
+instance reference and key 21 exposes join contributions in declared-port
 order.
 
 ### 5.3 Civil time in scenarios — `origin`
@@ -420,7 +420,7 @@ Byte-identical **iff** :
 4. same guest-language, compiler/lowering-profile and `GuestExecutor` versions
    (jq / SQL pinned in the manifest) ;
 5. **the fingerprint covers the CAUSAL CORE only** — `committed_at` and
-   scheduler arming/due instants are observation annotations, journaled when
+   scheduler creation/due instants are observation annotations, journaled when
    useful but outside blake3. The transaction-fixed logical instant is sealed
    only when a checked handler can observe `now()`; equivalent Lab execution
    must therefore supply the same logical timeline, without waiting in real
@@ -447,7 +447,7 @@ index leave no fingerprint.
    expectation looks → a trace diff.
 2. **The determinism leak-detector** : two runs of one scenario must give the
    same bytes — or nondeterminism escaped (an unsorted map, a hidden clock,
-   a violated arming order).
+   a violated creation order).
 3. **The runtime's conformance suite** : the reference simulations' golden
    traces are derived *by hand from the spec* ; every conforming runtime must
    reproduce them byte-for-byte. This gives the specification executable

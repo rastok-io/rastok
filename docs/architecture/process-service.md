@@ -1,6 +1,7 @@
 # Resident Process — implementation and qualification
 
-14 September 2026. D-2026-09-14-1 implements the approved resident transport,
+Current implementation, updated 7 October 2026; format authority:
+[identity.md](../spec/identity.md). D-2026-09-14-1 implements the approved resident transport,
 following the [contract review](process-contract-review.md). The visible
 invariant is one child per exact Node instance, reusable across messages,
 with journal-before-write and exactly one observed or unknown resource exit.
@@ -9,15 +10,14 @@ with journal-before-write and exactly one observed or unknown resource exit.
 
 | Profile | Exact Contract | Exchange / roles | Publication |
 |---|---|---|---|
-| `job`, default | `rastok/process@2` | Call / outbound | Bounded captured frames and one exit, atomic |
-| `service` | `rastok/process@3` | Session / inbound and outbound | Complete frames while alive, one resource exit |
+| `job`, default | `std/process@4` | Call / outbound | Bounded captured frames and one exit, atomic |
+| `service` | `std/process@5` | Session / inbound and outbound | Complete frames while alive, one resource exit |
 
 The source catalogue's resolved profile can select an exact protocol id,
 roles and exchange. Colliding profile/catalogue identities refuse. All three
-fields already travel in v18; core validation accepts only the exact sheet
-for the selected id. No new package version, journal key, tag or dependency
-is needed. The existing job's semantic hash, requests and causal witnesses
-must not change. The new dialogue owns new goldens, not replacement old ones.
+fields travel in the validated plan; core accepts only the exact sheet for
+the selected id. The current identities and witnesses were qualified in the
+[human-review inventory](human-review-v20-identity.md).
 
 The opening's prepared bytes seal command, arguments, cwd, explicit environment,
 codecs, frame cap and first framed input. The real Driver and the Lab use the
@@ -78,7 +78,7 @@ a business reply timeout belongs to an application Operator, not Process.
 
 ## Lab and recovery
 
-The Lab binds `process@3` without a physical Process Driver. Each input executes
+The Lab binds `std/process@5` without a physical Process Driver. Each input executes
 the existing checked `match` Dispatch: zero or more frames, optionally one
 final exit. It keeps resource identity across inputs; the first request is
 evaluated once. A terminating mock resource admits no later writes while its

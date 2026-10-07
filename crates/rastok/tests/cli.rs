@@ -344,7 +344,7 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
     for _ in 0..16 {
         if after_step["exchanges"]["calls"]
             .as_array()
-            .is_some_and(|calls| calls.iter().any(|call| call["completion_retained"] == true))
+            .is_some_and(|calls| calls.iter().any(|call| call["completion_recorded"] == true))
         {
             break;
         }
@@ -362,7 +362,7 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
     assert!(
         after_step["exchanges"]["calls"]
             .as_array()
-            .is_some_and(|calls| { calls.iter().any(|call| call["completion_retained"] == true) }),
+            .is_some_and(|calls| { calls.iter().any(|call| call["completion_recorded"] == true) }),
         "the returned Call is inspectable before its settlement handler runs: {after_step}"
     );
     assert!(

@@ -4,9 +4,10 @@ This directory contains implementation views derived from the normative
 specification. It answers *how Rastok is built*; it does not define new
 language or runtime behavior.
 
-The checkout uses v19/recording v3 with [public Retry admission](retry-c4-inspection.md)
-and generic annotated measurements. The [common qualification ledger](retry-c4-qualification.md)
-records fixture migration and the final verification campaign. Earlier migration evidence is recorded in
+The [format registry](../spec/identity.md) names the current package and
+recording formats. The checkout includes [public Retry admission](retry-c4-inspection.md)
+and generic annotated measurements. The [human-review identity inventory](human-review-v20-identity.md)
+records the current qualification and single blessing. Earlier migration evidence is recorded in
 [R9 qualification](rework-r9-qualification.md) for the v16 rework and the
 [v17 host-terminal amendment](loop-host-terminal-v17.md), followed by
 [v18 exact-instance closure](instance-stop-command.md). Core/HIR share Dispatch and
@@ -99,7 +100,7 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
   data forms, interfaces, dependency direction, and current status;
 - [`spec-to-code.md`](spec-to-code.md) for the map from normative
   documents to implementation responsibilities;
-- [`plan-package.md`](plan-package.md) for the categorical v19 package and
+- [`plan-package.md`](plan-package.md) for the categorical package and
   independent validation boundary, with earlier format ledgers marked historical;
 - [`parallelism-notes.md`](parallelism-notes.md) for the keyed-mailbox
   concurrency model and the decisions left for physical parallelism;
@@ -110,9 +111,8 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 - `03-rastok-components` for current logical responsibilities inside the
   executable;
 - `04-app-lab-effect-cycle` for the main runtime interaction;
-- `05-rastok-packages` for the **archived pre-build M0** Rust module and
-  type sketch. It deliberately preserves superseded names and must not
-  be read as the current API;
+- `05-rastok-packages` for the current core data types: envelopes, instances,
+  the canonical registry, records and unsealed deadlines;
 - `06-rastok-modules-overview` for the current Rust module inventory and
   one-way crate dependency;
 - `07-node-executor-extension` for semantic ownership: Graph, Executor,
@@ -144,14 +144,9 @@ The initial views were checked with PlantUML 1.2026.6. The source should
 remain compatible with the bundled C4 standard library rather than rely
 on a machine-specific include path.
 
-The 14 September documentation follow-up renders views 02, 03, 06 and 07
-with the existing PlantUML 1.2026.8 installation: v18, exact-instance closure,
-Process job/service and diagnostic record/replay. View 04 remains explicitly
-an outbound **Call**, not the resident Session frame protocol. Views 01, 04
-and archived 05 render unchanged; no renderer or frontend dependency is added.
-
-The 18 September follow-up renders the same seven views with that installed
-renderer and visually checks 02/03/06/07 at readable raster size. They now show
-v19, native Retry, current Contract versions, original two-field measurements
-and the separate deferred observation/export layer. No measured report,
-OTLP implementation, Budget manager or plugin loader is implied by these views.
+The 7 October documentation sweep refreshes views 03–07 against the current
+format registry and regenerates their SVG with the installed PlantUML renderer.
+View 05 now describes implemented types rather than a pre-build design. View 04
+remains explicitly an outbound **Call**, not the resident Session frame protocol.
+No measured report, OTLP implementation, Budget manager or plugin loader is
+implied by these views; no renderer or frontend dependency is added.

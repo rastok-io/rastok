@@ -253,7 +253,7 @@ execution-model §1) — keys `17–26`, `34–36`, `38–40`, `42–43`:
 | 21 | join_inputs | array | for a join trigger, the presence-completing set (envelope.md §3), each a envelope `id` (bytes 16), **in the handler's declared port order**; this array is deliberately not lexicographically re-sorted, because tuple order is identity; omitted otherwise |
 | 22 | state_delta | array | canonical **sorted pair list** `[field_path (text), tagged_value]` of the firing Node's private `var` changes `state → state'` (sub-form below; fields sorted by `field_path`); omitted when empty |
 | 23 | emissions | array | **in text/`emission_index` order** (execution-model §4) ; each entry a fixed tuple `[port (text), emission_index (uint), envelope (canonical keys 1–6)]` |
-| 24 | deadline_ids | array | dated obligations armed by a transaction, accepting INGRESS fact or Retry EGRESS closure — each a fixed tuple `[kind (uint), ref (bytes)]`, sorted by `(kind, ref)`. Kinds are `1 = call timeout`, `2 = join within`, `3 = instance lifetime`, `4 = recurrence delay`, `5 = instance drain`, `6 = instance settlement`, `7 = inbound Call timeout`, `8 = Session handshake`. Kind 3 uses InstanceLifetime; kind 4 names the exact Loop/Retry admission; kinds 5/6 use InstanceClosing plus their kind; kind 7 uses the InboundCallId; kind 8 uses the SessionId. The due instant is NOT sealed (retained separately for recovery). |
+| 24 | deadline_ids | array | dated obligations created by a transaction, accepting INGRESS fact or Retry EGRESS closure — each a fixed tuple `[kind (uint), ref (bytes)]`, sorted by `(kind, ref)`. Kinds are `1 = call timeout`, `2 = join within`, `3 = instance lifetime`, `4 = recurrence delay`, `5 = instance drain`, `6 = instance settlement`, `7 = inbound Call timeout`, `8 = Session handshake`. Kind 3 uses InstanceLifetime; kind 4 names the exact Loop/Retry admission; kinds 5/6 use InstanceClosing plus their kind; kind 7 uses the InboundCallId; kind 8 uses the SessionId. The due instant is NOT sealed (retained separately for recovery). |
 | 25 | routes | array | target admissions made before commit, each `[delivery_id (bytes16), edge (text), target_instance_generation]`, sorted by canonical tuple; omitted only when the transaction creates no routed delivery. This is the recovery authority for a delivery not yet consumed by its target; replay never re-evaluates `instance.key` and never substitutes a later generation. |
 | 26 | cause_id | bytes(16) | causal envelope of a lifecycle transaction. Normally key 20 identifies the same cause and this field is omitted; `l:start`, `l:stop` and later `l:evict` have no consumed cursor, while a graph-response `l:reply` deliberately carries both: key 20 names the response delivery and key 26 preserves the distinct opening root as causal parent. This keeps lifecycle causality autonomous rather than relying on record order. |
 | 34 | parent_instance_generation | array | present exactly on `l:start` for a non-root owner; the fixed `[instance_address, generation]` of the enclosing Graph instance. It opens the replayable parent/child lifecycle obligation and is omitted only for the root App owner. A logical child address contains ancestor key/time segments but not ancestor generations, so this fact is not derivable from key 18. |
@@ -334,14 +334,14 @@ The delay's dates belong to keys 41 and 44, not this packet.
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
-| 41 | deadlines | array | `[created_at_ns, [[kind, reference_bytes16, due_at_ns], ...]]`, retained atomically beside the accepting INGRESS, TRANSACTION or Retry EGRESS closure. Instants are signed i64 logical nanoseconds; due ≥ created-at. The eight admitted kinds are 1 through 8; unknown bytes refuse. Arms retain actual order, including ordered renewals, never sort by reference. Empty schedules are omitted. |
-| 44 | closed_at | int | Original signed logical nanoseconds of every winning outbound Call closure, including non-Retry Calls. Absent on Open and on INGRESS/TRANSACTION/Session facts. A Retry delay arm uses this instant as its key-41 `created_at`; recovery never substitutes restart time. |
+| 41 | deadlines | array | `[created_at_ns, [[kind, reference_bytes16, due_at_ns], ...]]`, retained atomically beside the accepting INGRESS, TRANSACTION or Retry EGRESS closure. Instants are signed i64 logical nanoseconds; due ≥ created-at. The eight admitted kinds are 1 through 8; unknown bytes refuse. Deadlines retain creation order, including ordered renewals, never sort by reference. Empty schedules are omitted. |
+| 44 | closed_at | int | Original signed logical nanoseconds of every winning outbound Call closure, including non-Retry Calls. Absent on Open and on INGRESS/TRANSACTION/Session facts. A Retry delay deadline uses this instant as its key-41 `created_at`; recovery never substitutes restart time. |
 
 Storage integrity must cover this required recovery evidence independently of
-the causal seal. Key 24 keeps its existing sealed timer references; key 39
+the causal seal. Key 24 keeps its existing sealed deadline ids; key 39
 keeps its observable `now()` meaning. Key 41 changes neither graph identity,
 package bytes nor causal projection. A causal trace alone is not a complete
-recovery backup. The field codec and every admitted timer producer retain original dates;
+recovery backup. The field codec and every admitted deadline producer retain original dates;
 recovery restores Calls, joins, lifetimes, Closing, Loop and Retry wakes from accepting
 prefixes. Missing dates never default to restart time. Storage is still an
 in-memory implementation; this is not a durable-backend claim.
@@ -362,7 +362,7 @@ unsealed `41` and `44` are described above:
 
 Every outbound Call closure also retains **key 44**, `closed_at` as signed
 logical nanoseconds; an Open has no value. This field is outside the causal
-projection. Retry closures may carry causal timer references at key 24,
+projection. Retry closures may carry causal deadline ids at key 24,
 unsealed schedule key 41 (`created_at = closed_at`) and correlation key 43.
 The next-admission reference names the Retry operation/ordinal/preceding Call,
 not a Loop command. Recovery never restarts that delay from reboot time.

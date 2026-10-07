@@ -8,8 +8,9 @@ use crate::instance;
 use crate::node;
 
 use crate::journal::{
-    Emission, ids,
-    timing::{Deadline, Deadlines},
+    Emission,
+    deadline::{Deadline, Deadlines},
+    ids,
 };
 use crate::node::Path;
 use crate::plan::PlanConstant;
@@ -326,7 +327,7 @@ fn retry_manager_retention_does_not_invent_a_semantic_now_read() {
         true,
     );
     // Pin.opened_at retains preparation time; no DSL expression read now().
-    // Later admissions retain their time in the mandatory Call timeout arm.
+    // Later admissions retain their time in the mandatory Call timeout deadline.
     opened.logical_time = None;
     validate_transaction(&opened).unwrap();
     opened.logical_time = Some(0);
@@ -778,7 +779,7 @@ fn policy_and_saturating_delays_are_closed_and_bounded_without_hidden_time() {
 }
 
 #[test]
-fn missing_renewed_foreign_and_final_timer_arms_refuse_atomically() {
+fn missing_renewed_foreign_and_final_deadlines_refuse_atomically() {
     let f = Fixture::new(3);
     let mut fold = f.start();
     let intent = f.intent(&fold);

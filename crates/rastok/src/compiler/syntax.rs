@@ -729,9 +729,9 @@ pub struct EdgeDecl {
 #[derive(Debug, Clone, PartialEq)]
 pub enum EdgeEndpoint {
     /// A port reference.
-    Ref(PortRef),
+    Ref(PortPath),
     /// `{ a ; b }` in source position: independent mpsc producers.
-    SourceSet(Vec<PortRef>),
+    SourceSet(Vec<PortPath>),
     /// `{ a ; b }` in destination position: one atomic delivery set.
     DestinationSet(Vec<EdgeDestination>),
     /// Closed case routing after an arrow.
@@ -744,7 +744,7 @@ pub enum EdgeEndpoint {
 #[derive(Debug, Clone, PartialEq)]
 pub enum EdgeDestination {
     /// Ordinary endpoint or a qualified manager command, resolved later.
-    Ref(PortRef),
+    Ref(PortPath),
     /// Explicit discard. A set mixing it with another destination is rejected
     /// by the checker with `E-ROUTE-MIXED`.
     Nothing(Span),
@@ -782,7 +782,7 @@ pub enum EdgeCaseSet {
 
 /// `node`, `node.port`, a composed path, or the graph boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PortRef {
+pub struct PortPath {
     /// Whether the reference starts at the graph's own boundary
     /// (leading `.`): bare `.` has no segments, `.foo` has one.
     pub boundary: bool,
@@ -985,17 +985,17 @@ mod tests {
                 removed_per: None,
                 body: vec![GraphItem::Edge(EdgeDecl {
                     endpoints: vec![
-                        EdgeEndpoint::Ref(PortRef {
+                        EdgeEndpoint::Ref(PortPath {
                             boundary: true,
                             segments: vec![],
                             span: span(17..18),
                         }),
-                        EdgeEndpoint::Ref(PortRef {
+                        EdgeEndpoint::Ref(PortPath {
                             boundary: false,
                             segments: vec![name("shout", 22..27)],
                             span: span(22..27),
                         }),
-                        EdgeEndpoint::Ref(PortRef {
+                        EdgeEndpoint::Ref(PortPath {
                             boundary: true,
                             segments: vec![],
                             span: span(31..32),

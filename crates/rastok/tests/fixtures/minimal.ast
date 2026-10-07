@@ -129,7 +129,7 @@ SyntaxTree {
                         EdgeDecl {
                             endpoints: [
                                 Ref(
-                                    PortRef {
+                                    PortPath {
                                         boundary: false,
                                         segments: [
                                             Name {
@@ -153,7 +153,7 @@ SyntaxTree {
                                     },
                                 ),
                                 Ref(
-                                    PortRef {
+                                    PortPath {
                                         boundary: false,
                                         segments: [
                                             Name {
@@ -177,7 +177,7 @@ SyntaxTree {
                                     },
                                 ),
                                 Ref(
-                                    PortRef {
+                                    PortPath {
                                         boundary: false,
                                         segments: [
                                             Name {

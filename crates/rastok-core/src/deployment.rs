@@ -92,7 +92,7 @@ impl SecretProviderId {
     pub fn new(id: impl Into<String>) -> Result<Self, DeploymentError> {
         let id = id.into();
         if !stable_ref_holds(&id) {
-            return Err(DeploymentError::InvalidStableRef(id));
+            return Err(DeploymentError::InvalidStableName(id));
         }
         Ok(Self(id))
     }
@@ -117,7 +117,7 @@ impl SecretVersion {
     pub fn new(version: impl Into<String>) -> Result<Self, DeploymentError> {
         let version = version.into();
         if !stable_ref_holds(&version) {
-            return Err(DeploymentError::InvalidStableRef(version));
+            return Err(DeploymentError::InvalidStableName(version));
         }
         Ok(Self(version))
     }
@@ -296,7 +296,7 @@ impl PrivacyProfileName {
     pub fn new(reference: impl Into<String>) -> Result<Self, DeploymentError> {
         let reference = reference.into();
         if !stable_ref_holds(&reference) {
-            return Err(DeploymentError::InvalidStableRef(reference));
+            return Err(DeploymentError::InvalidStableName(reference));
         }
         Ok(Self(reference))
     }
@@ -321,7 +321,7 @@ impl PolicyName {
     pub fn new(reference: impl Into<String>) -> Result<Self, DeploymentError> {
         let reference = reference.into();
         if !stable_ref_holds(&reference) {
-            return Err(DeploymentError::InvalidStableRef(reference));
+            return Err(DeploymentError::InvalidStableName(reference));
         }
         Ok(Self(reference))
     }
@@ -706,7 +706,7 @@ pub enum DeploymentError {
     /// Invalid logical secret path.
     InvalidSecretName(String),
     /// Invalid stable reference or version.
-    InvalidStableRef(String),
+    InvalidStableName(String),
     /// Invalid provider lookup path.
     InvalidProviderPath,
     /// A keyed secret binding names another logical reference.
@@ -729,7 +729,7 @@ impl fmt::Display for DeploymentError {
                     "`{reference}` is not a canonical logical secret reference"
                 )
             }
-            Self::InvalidStableRef(reference) => {
+            Self::InvalidStableName(reference) => {
                 write!(formatter, "`{reference}` is not a bounded stable reference")
             }
             Self::InvalidProviderPath => formatter.write_str("the provider path is invalid"),

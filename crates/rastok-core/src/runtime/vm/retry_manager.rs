@@ -4,9 +4,9 @@
 use super::*;
 use crate::envelope;
 use crate::instance;
+use crate::journal::deadline::{Deadline, Deadlines};
 use crate::journal::loop_protocol::{Fact as LoopFact, Phase as LoopPhase};
 use crate::journal::retry_protocol::{self as protocol, AttemptId, Fact, Fold, Packet, Phase};
-use crate::journal::timing::{Deadline, Deadlines};
 use crate::journal::{CallRecord, CallStatus, Closure, Record, TransactionRecord};
 
 pub(super) fn error(error: protocol::Error) -> VmError {
@@ -233,13 +233,13 @@ impl Vm<'_> {
             let state = fold
                 .operation(attempt.operation)
                 .ok_or_else(|| error(protocol::Error::UnknownOperation))?;
-            for arm in schedule.items() {
-                self.scheduler.arm(
-                    arm.due_at,
+            for deadline in schedule.items() {
+                self.scheduler.schedule(
+                    deadline.due_at,
                     DatedPayload::RetryDelay {
                         instance: state.instance.clone(),
                         attempt,
-                        admission: arm.reference,
+                        admission: deadline.reference,
                     },
                 );
             }
@@ -347,7 +347,7 @@ impl Vm<'_> {
         occupied
     }
 
-    /// Dated Loop and Retry admissions share the retained arm order even
+    /// Dated Loop and Retry admissions share the recorded deadline creation order even
     /// after the scheduler has acknowledged their wakeups. Derive this head
     /// from current folds and the journal, without a second ready queue.
     pub(super) fn next_dated_recurrence(
@@ -365,9 +365,9 @@ impl Vm<'_> {
                 let Some(schedule) = record.deadlines() else {
                     return;
                 };
-                for arm in schedule.items().iter().filter(|arm| {
-                    arm.kind == crate::journal::DeadlineKind::RecurrenceDelay
-                        && arm.due_at <= self.now
+                for deadline in schedule.items().iter().filter(|deadline| {
+                    deadline.kind == crate::journal::DeadlineKind::RecurrenceDelay
+                        && deadline.due_at <= self.now
                 }) {
                     let eligible = match record {
                         Record::Transaction(record) => {
@@ -378,8 +378,8 @@ impl Vm<'_> {
                                     };
                                     loops.and_then(|fold| fold.run(*run)).is_some_and(|state| {
                                         state.phase == LoopPhase::AwaitingAdmission
-                                            && state.admission == arm.reference
-                                            && state.due_at == Some(arm.due_at)
+                                            && state.admission == deadline.reference
+                                            && state.due_at == Some(deadline.due_at)
                                             && self.graph_admission_is_head(*run)
                                             && !self.closing.contains(&state.instance)
                                     })
@@ -396,15 +396,15 @@ impl Vm<'_> {
                             .is_some_and(|state| {
                                 state.phase == Phase::AwaitingAdmission
                                     && state.call == Some(call.intent.call_id)
-                                    && state.due_at == Some(arm.due_at)
+                                    && state.due_at == Some(deadline.due_at)
                                     && !self.closing.contains(&state.instance)
                             }),
                         _ => false,
                     };
-                    // Equal dates keep the first retained arm, not a policy
+                    // Equal dates keep the first recorded deadline, not a policy
                     // priority or the ordering of derived run identities.
-                    if eligible && head.is_none_or(|(due, _)| arm.due_at < due) {
-                        head = Some((arm.due_at, arm.reference));
+                    if eligible && head.is_none_or(|(due, _)| deadline.due_at < due) {
+                        head = Some((deadline.due_at, deadline.reference));
                     }
                 }
             })
@@ -424,9 +424,9 @@ impl Vm<'_> {
             .retry_manager
             .as_deref()
             .ok_or_else(|| error(protocol::Error::UnknownOperation))?;
-        // Equal deadlines inherit the winning closures' arm order. Hash order
-        // is stable, but is not the retained scheduler tie-breaker. Reading the
-        // prefix also preserves this order after a late recovery.
+        // Equal deadlines inherit the winning closures' deadline creation order.
+        // Hash order is stable, but is not the recorded scheduler tie-breaker.
+        // Reading the prefix preserves this order after a late recovery.
         let mut selected = None;
         let mut deferred = false;
         let mut index = 0usize;
@@ -453,7 +453,7 @@ impl Vm<'_> {
                                 schedule
                                     .items()
                                     .iter()
-                                    .any(|arm| arm.reference == reference)
+                                    .any(|deadline| deadline.reference == reference)
                             })
                         });
                     if ready && in_turn {
@@ -596,7 +596,7 @@ impl Vm<'_> {
             record
                 .deadline_ids
                 .push((crate::journal::DeadlineKind::CallTimeout, reference));
-            self.retain_timer_arms(
+            self.retain_deadlines(
                 &mut record,
                 vec![Deadline {
                     kind: crate::journal::DeadlineKind::CallTimeout,
@@ -626,7 +626,7 @@ impl Vm<'_> {
                 )
                 .map_err(|_| error(protocol::Error::AdmissionIdentity))?;
             if let Some(ns) = timeout {
-                self.scheduler.arm(
+                self.scheduler.schedule(
                     self.now.saturating_add(ns),
                     DatedPayload::DeliveryBudget {
                         connector: self.plan.nodes[slot.index()].path.clone(),

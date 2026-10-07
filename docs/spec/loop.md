@@ -94,10 +94,10 @@ identity is:
 LoopRunId =
   derive(rastok.loop.r2,
          instance::Generation,
-         OpeningAdmissionRef)
+         OpeningAdmissionId)
 ```
 
-`OpeningAdmissionRef` is the exact admitted delivery/cursor occurrence, not
+`OpeningAdmissionId` is the exact admitted delivery/cursor occurrence, not
 only `origin_id`. This distinction permits two fan-out deliveries from one
 business origin to open two runs in the same keyed instance without collision.
 
@@ -204,7 +204,7 @@ validated Dispatch/routes prove such a path, checking rejects it as
 
 A produced command may wait before application quiescence. The manager
 consumes it only after all obligations with the same run context have closed:
-internal deliveries, application transactions, Calls, timers, and descendant
+internal deliveries, application transactions, Calls, deadlines, and descendant
 commands. Work for another run does not block it. No application overlaps the
 next application of the same run.
 
@@ -370,7 +370,7 @@ Graph instance.
 Closing wins over recurrence:
 
 - no new re-admission;
-- stale timers are inert;
+- stale deadlines are inert;
 - pending commands close with the run;
 - nothing migrates to a successor generation;
 - descendants close inner-first.
@@ -380,7 +380,7 @@ Close, and Expired evidence. The current wire keys are specified in
 [identity.md §3](identity.md#3-the-canonical-record-form).
 
 Spatial recovery reconstructs instance generations, state deltas, unconsumed
-deliveries and cursors, Calls, timers, runs, pending commands, and due
+deliveries and cursors, Calls, deadlines, runs, pending commands, and due
 re-admissions. A produced but unconsumed command reappears; its producer is not
 re-executed. RAM queues are caches over this fold, never authority.
 

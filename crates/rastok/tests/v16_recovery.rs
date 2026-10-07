@@ -114,7 +114,7 @@ fn inject(vm: &mut Vm<'_>, journal: &mut MemJournal, port: &str, value: i64) {
     .unwrap();
 }
 
-const DELIVERY_TIMERS: &str = r#"
+const DELIVERY_DEADLINES: &str = r#"
 graph app : App {
   input in: int
   input right: int
@@ -600,7 +600,7 @@ fn call_recovery_restores_the_held_delivery_without_restarting_the_driver() {
         after_response.inspection().calls,
         restored.inspection().calls
     );
-    assert!(after_response.inspection().calls[0].completion_retained);
+    assert!(after_response.inspection().calls[0].completion_recorded);
     assert_eq!(journal.records(), retained);
     after_response.step(&mut journal).unwrap(); // completion produces Again
     let retained = journal.records().to_vec();
@@ -626,14 +626,14 @@ fn call_recovery_restores_the_held_delivery_without_restarting_the_driver() {
 fn delivery_deadlines_are_retained_at_both_ingress_and_producer_commits() {
     for direct in [false, true] {
         let source = if direct {
-            DELIVERY_TIMERS
+            DELIVERY_DEADLINES
                 .replace("in -> forward", "in -> { pair.left; call.in }")
                 .replace(
                     "forward.out -> { pair.left; call.in }",
                     "forward.out -> nothing",
                 )
         } else {
-            DELIVERY_TIMERS.into()
+            DELIVERY_DEADLINES.into()
         };
         let plan = compile(&source);
         let mut vm = Vm::boot_at(&plan, GraphVersion(1), 7_000_000_000);
@@ -672,21 +672,21 @@ fn delivery_deadlines_are_retained_at_both_ingress_and_producer_commits() {
                     .collect(),
             )
         };
-        let schedule = schedule.expect("every delivery timer has a retained due instant");
+        let schedule = schedule.expect("every delivery deadline has a retained due instant");
         assert_eq!(schedule.created_at(), 7_000_000_000);
         assert_eq!(schedule.items().len(), 2);
-        for arm in schedule.items() {
+        for deadline in schedule.items() {
             assert!(
                 routes
                     .iter()
-                    .any(|(edge, envelope)| ids::delivery_id(edge, *envelope) == arm.reference)
+                    .any(|(edge, envelope)| ids::delivery_id(edge, *envelope) == deadline.reference)
             );
             assert_eq!(
-                arm.due_at,
-                match arm.kind {
+                deadline.due_at,
+                match deadline.kind {
                     DeadlineKind::JoinWithin => 9_000_000_000,
                     DeadlineKind::CallTimeout => 10_000_000_000,
-                    _ => panic!("unexpected timer kind"),
+                    _ => panic!("unexpected deadline kind"),
                 }
             );
         }
@@ -795,7 +795,7 @@ fn scheduler_closed_calls_recover_through_pure_contract_projection_only() {
             .unwrap();
         assert_eq!(world.starts, 0);
         assert_eq!(journal.records(), before);
-        assert!(restored.inspection().calls[0].completion_retained);
+        assert!(restored.inspection().calls[0].completion_recorded);
         restored.step(&mut journal).unwrap();
         assert!(restored.inspection().calls.is_empty());
         let mut after = Vm::boot_at(&plan, GraphVersion(1), 3_000_000_000);

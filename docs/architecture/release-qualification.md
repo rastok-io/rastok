@@ -172,7 +172,7 @@ did not waive those gates.
 
 The three real flagship PNGs and 30-second GIF now live in
 `docs/site/assets/` and are linked from the chapter and README. They show
-`webhook.timeout_then_success`, 1352×760, transitions 0, 18 (armed delay),
+`webhook.timeout_then_success`, 1352×760, transitions 0, 18 (pending delay),
 and 29 (success after two applications). The machine-readable capture manifest
 maps all 120 GIF frames to retained prefixes; `ffprobe` verified 30.000 seconds.
 All three PNGs were visually inspected locally. Reproduction:
@@ -238,7 +238,7 @@ remain unperformed.
 
 The 18 September Fable prereview identifies repeated full-prefix traversal in
 `runtime/vm/retry_manager.rs`: `synchronize_retry_closures` scans when Calls
-are open, `next_dated_recurrence` scans for retained arm order when both manager
+are open, `next_dated_recurrence` scans for retained creation order when both manager
 folds exist, and `step_retry_manager` scans when work is ready. `MemJournal`
 also performs linear `find_call` / `find_envelope` lookups. This is a structural
 cost analysis, not a measured latency claim: S eligible steps over a prefix
@@ -246,7 +246,7 @@ of up to J records can cost O(S × J), hence O(J²) when both grow together.
 
 This remains a named M2 scalability debt, not a newly failed M1 gate. Before
 durable storage, qualify derived indexes for exact Calls, envelopes and the
-winning retained timer-arm order, including recovery reconstruction and
+winning retained deadline creation order, including recovery reconstruction and
 bounded-memory costs. Do not turn a retained-prefix traversal into disk I/O
 on every step or replace the journal's tie-breaker with RAM/scheduler order.
 No optimization, index format, journal fact or golden change is made in this
@@ -254,7 +254,15 @@ documentation follow-up.
 
 ## Embedded code-size watch before Saga
 
-**Current v19 measurement — 18 September:** the unchanged Retry/full-recovery
+**Current measurement — 7 October:** both fixed Cortex-M33 workloads pass.
+Echo uses **112,656 B peak heap / 973,028 B code**, leaving **18,416 B /
+75,548 B** under 128 KiB / 1 MiB. Retry with full recovery uses **130,560 B /
+1,041,440 B**, leaving **512 B / 7,136 B**. The
+[human-review inventory](human-review-v20-identity.md) records the executed
+commands. No core growth is accepted without reclaiming bytes first. These
+are workload measurements, not bounds for all admitted programs.
+
+**Dated measurement — 18 September (v19):** the unchanged Retry/full-recovery
 package passes QEMU with 17 records and **1,041,724 B code / 130,560 B heap**.
 That leaves **6,852 B / 512 B** under the existing 1 MiB / 128 KiB gates.
 The freshly blessed echo image passes with 67 records, **973,524 B code** and

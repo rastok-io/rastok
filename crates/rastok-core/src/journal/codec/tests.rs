@@ -1,8 +1,8 @@
 use super::*;
-use crate::journal::timing::{Deadline, Deadlines};
+use crate::journal::deadline::{Deadline, Deadlines};
 use alloc::vec;
 
-fn arm(kind: u8, due_at: i64) -> Deadline {
+fn deadline(kind: u8, due_at: i64) -> Deadline {
     Deadline {
         kind: journal::DeadlineKind::try_from(kind).unwrap(),
         reference: Id::from_bytes([kind; 16]),
@@ -56,7 +56,7 @@ fn deadline_kinds_keep_their_explicit_bytes_and_reject_unknown_wire_tags() {
 
 #[test]
 fn deadlines_have_an_exact_inline_signed_instant_encoding() {
-    let deadlines = Deadlines::try_new(-1, vec![arm(5, 100)]).unwrap();
+    let deadlines = Deadlines::try_new(-1, vec![deadline(5, 100)]).unwrap();
     let mut expected = vec![0x82, 0x20, 0x81, 0x83, 0x05, 0x50];
     expected.extend_from_slice(&[5; 16]);
     expected.extend_from_slice(&[0x18, 0x64]);
@@ -75,9 +75,9 @@ fn deadlines_have_an_exact_inline_signed_instant_encoding() {
 fn every_registered_deadline_keeps_its_due_time_and_creation_order() {
     let mut items: Vec<_> = [8, 7, 6, 5, 4, 3, 2, 1]
         .into_iter()
-        .map(|kind| arm(kind, i64::MAX))
+        .map(|kind| deadline(kind, i64::MAX))
         .collect();
-    items.push(arm(8, i64::MAX)); // a renewal is not sorted or deduplicated
+    items.push(deadline(8, i64::MAX)); // a renewal is not sorted or deduplicated
     let deadlines = Deadlines::try_new(i64::MIN, items.clone()).unwrap();
     let tree = schedule(Some(&deadlines));
     let restored = read_schedule(&tree).unwrap().unwrap();
@@ -89,10 +89,10 @@ fn every_registered_deadline_keeps_its_due_time_and_creation_order() {
 
 #[test]
 fn no_empty_unknown_or_backdated_schedule_is_constructible() {
-    use journal::timing::Error as TimingError;
+    use journal::deadline::Error as DeadlineError;
     assert_eq!(
         Deadlines::try_new(0, vec![]),
-        Err(TimingError::EmptySchedule)
+        Err(DeadlineError::EmptySchedule)
     );
     for kind in [0, 9, 10, u8::MAX] {
         assert_eq!(
@@ -101,24 +101,24 @@ fn no_empty_unknown_or_backdated_schedule_is_constructible() {
         );
     }
     assert_eq!(
-        Deadlines::try_new(0, vec![arm(1, -1)]),
-        Err(TimingError::DeadlinePrecedesCreation)
+        Deadlines::try_new(0, vec![deadline(1, -1)]),
+        Err(DeadlineError::DeadlinePrecedesCreation)
     );
-    assert!(Deadlines::try_new(i64::MAX, vec![arm(1, i64::MAX)]).is_ok());
+    assert!(Deadlines::try_new(i64::MAX, vec![deadline(1, i64::MAX)]).is_ok());
 }
 
 #[test]
 fn decoding_distinguishes_carrier_errors_from_deadline_invariants() {
-    use journal::timing::Error as TimingError;
+    use journal::deadline::Error as DeadlineError;
     for (rows, expected) in [
-        (vec![], TimingError::EmptySchedule),
+        (vec![], DeadlineError::EmptySchedule),
         (
             vec![list([
                 Cbor::Uint(1),
                 id(Id::from_bytes([0; 16])),
                 Cbor::Negative(0),
             ])],
-            TimingError::DeadlinePrecedesCreation,
+            DeadlineError::DeadlinePrecedesCreation,
         ),
     ] {
         assert_eq!(
@@ -134,7 +134,7 @@ fn decoding_distinguishes_carrier_errors_from_deadline_invariants() {
 
 #[test]
 fn malformed_deadlines_are_refused_without_repair() {
-    let valid = schedule(Some(&Deadlines::try_new(0, vec![arm(1, 1)]).unwrap()));
+    let valid = schedule(Some(&Deadlines::try_new(0, vec![deadline(1, 1)]).unwrap()));
     // No byte-string or map wrapper is a second spelling for this field.
     assert!(read_schedule(&Cbor::Bytes(crate::canonical_cbor::encode(&valid))).is_err());
     assert!(read_schedule(&Cbor::Map(BTreeMap::from([(41, valid.clone())]))).is_err());

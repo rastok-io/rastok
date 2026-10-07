@@ -48,7 +48,7 @@ Retry operation/attempt facts):
                    lifecycle cause      (when no consumed cursor names it)
    annotations   : committed_at (UTC in production, virtual in simulation —
                    the REGULATORY timestamp, commit-authoritative),
-                   … every clock-valued field (e.g. an EGRESS's arming t)
+                   … every clock-valued field (e.g. an EGRESS's creation t)
 
    ONE commit covers both. Before it : the transaction never happened.
                           After it  : it happened entirely.
@@ -70,7 +70,7 @@ worlds close cleanly :
   retry invisible.
 - **Crash after commit** → the emissions are durable facts ; delivery resumes
   from the journal. A keyed target resumes from the route bytes retained by
-  its producer (INGRESS key 25 / TRANSACTION key 38); recovery never
+  its producer (INGRESS key 13 / TRANSACTION key 25); recovery never
   re-evaluates `instance.key` against old traffic or substitutes a later
   generation.
 
@@ -156,7 +156,11 @@ Three accumulations, three answers — nothing can grow without limit :
    exceed it.
 
 
-## 4. The boundary — outbound records and the unknown outcome
+## 4. The boundary — EGRESS records and the unknown outcome
+
+An EGRESS record describes an effect initiated by the graph. The response to
+an inbound Call is instead the `exchange_exit` of a TRANSACTION; it does not
+open an outbound Call or create an EGRESS Call record.
 
 ### 4.1 The cursed window
 
@@ -175,14 +179,14 @@ instant where **the truth exists nowhere** :
       Nobody knows (two-generals — undecidable, not a bug).
 ```
 
-### 4.2 The outbound record — the write-ahead of the call
+### 4.2 The EGRESS record — the write-ahead of the call
 
 The journal is the WAL, including the **attempt trace**. Before ③, the
-Connector journals an **outbound record**; the call has exactly one
+Connector journals an **EGRESS record**; the call has exactly one
 closure (the call-closed rule, execution-model §6.3) :
 
 ```
-   outbound record :
+   EGRESS record :
      open       { call, idempotency_key, request digest, t }     ← BEFORE the call
      closed     (response completion)  XOR  (timeout — the l:timeout event)
                 XOR  (abandoned — written when recovery triage or bounded Closing resolves by
@@ -197,11 +201,11 @@ particular, the `File` Driver's prepared descriptor includes the exact
 logical path (and replacement bytes for `mode = replace`); two paths cannot
 share a request digest merely because their trigger payloads are equal. The
 resolved setting map is an execution carrier, not a new causal record field:
-the outbound record retains the canonical digest authority.
+the EGRESS record retains the canonical digest authority.
 
 D-2026-08-30-3 defines the one M1 credential exception without weakening
 journal-before-effect. An authorized secret setting contributes its logical
-`SecretRef` to the prepared descriptor, while material is fixed by provider
+`SecretName` to the prepared descriptor, while material is fixed by provider
 coordinate/version in the immutable run header and never becomes request
 bytes in the journal. The Driver may inspect that material during pure
 pre-open validation and may transport it only after the EGRESS open wins.
@@ -306,11 +310,11 @@ Stripe-semantics rule) :
 
 ### 4.4 Recovery — a triage, not a gamble
 
-At restart, `open` outbound records without closure = the set of unknowns :
+At restart, `open` EGRESS records without closure = the set of unknowns :
 
 | Situation | Resolution |
 |---|---|
-| emission delivered, **no** outbound record | no effect started; an explicit continuation may open/start the Call after ordinary admission checks. Read-only replay does not. |
+| emission delivered, **no** EGRESS record | no effect started; an explicit continuation may open/start the Call after ordinary admission checks. Read-only replay does not. |
 | open, no closure, regardless of idempotence guarantee or key | reconstruct the unresolved Call; never automatically recall it. Resume uses its retained timeout or the explicit bounded-Closing settlement; replay only inspects it. |
 | retained timeout wins | close exactly once as Timeout; emit the Contract's TimeoutExpired terminal through the ordinary completion transaction |
 | bounded settlement exhausts without a confirmed outcome | emit **OutcomeUnknown** on the Contract terminal (normally exit; trigger **l:recover**, parent = request) and close as abandoned; no invented success or silent recall |
@@ -334,12 +338,12 @@ replay and compensation need no second unknown-outcome protocol.
 **The general principle: recovery rebuilds the dated-events
 queue by the same fold that rebuilds state.** Every dated obligation is
 derivable from (journal, state): an open call's REMAINING budget (its
-arming `t` annotation + `timeout`), a buffered join half's `within` deadline
+creation `t` annotation + `timeout`), a buffered join half's `within` deadline
 (its buffering annotation + the window), a live instance's lifetime (last
 admission + `idle`, creator + `fixed`, or epoch-aligned tumbling
 arithmetic), and a Loop's produced/consumed command fold plus pending delayed
 re-entry.
-At restart each obligation is re-armed for its remainder ; obligations
+At restart each obligation is rescheduled for its remainder ; obligations
 already past **fire immediately, in date order** — a call whose budget
 expired during the outage delivers its `TimeoutExpired` late by
 circumstance, never silently ; a join half past its window is evicted
@@ -600,7 +604,7 @@ unresolved gates. Until they are decided, every Saga source form fails closed.
 |---|---|
 | Inside the graph | **effectively-once observable** (at-least-once + derived-id dedup by cursor) |
 | At the boundary | at-least-once + byte-same idempotency key → effectively-once when the partner dedups ; `OutcomeUnknown` (loud) when nothing safer exists |
-| Across a crash, `durability ≥ local` | full recovery of currently specified cursors, state, Calls, Sessions, timers, and Loop r2 fold |
+| Across a crash, `durability ≥ local` | full recovery of currently specified cursors, state, Calls, Sessions, deadlines, and Loop r2 fold |
 | Across a crash, `durability = none` | **at-most-once: loss, never doubling** |
 | Ordering | FIFO per (edge × source instance reference); cross-edge = journal-relative (envelope.md §2.0) |
 

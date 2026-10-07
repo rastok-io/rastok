@@ -60,7 +60,7 @@ const rasterSize = { width: 1352, height: 760 };
       await page.locator("#timeline-position").filter({ hasText: new RegExp(`transition ${transition}$`) }).waitFor();
       await render();
     };
-    // Save a real retained waiting state; no invented timer or pasted label.
+    // Save a real recorded waiting state; no invented deadline or pasted label.
     let waiting;
     for (let transition = 1; transition < head; transition++) {
       await seek(transition);

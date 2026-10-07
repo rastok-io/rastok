@@ -13,9 +13,9 @@ participant "External system" as World
 Caller -> Entry: execute checked plan
 Entry -> Core: inject explicit typed input
 Core -> Core: prepare identity, routes and capacity
-Core -> Journal: commit INBOUND + selected routes
+Core -> Journal: commit INGRESS + selected routes
 Core -> Core: consume ready work; prepare exact request
-Core -> Journal: commit OUTBOUND open before any effect
+Core -> Journal: commit EGRESS open before any effect
 
 alt real Driver
   Core -> Driver: start committed Call intent
@@ -28,15 +28,15 @@ end
 
 Driver --> Core: correlated typed completion
 Core -> Core: validate Contract; select routes; reserve capacity
-Core -> Journal: close OUTBOUND once; commit completion transition
+Core -> Journal: close EGRESS once; commit completion transition
 Core -> Core: publish ordered frames / terminal and deliveries
-Core --> Entry: retained state and causal evidence
+Core --> Entry: recorded state and causal evidence
 Entry --> Caller: result / report / read-only projection
 
 note over Core,Journal
 If capacity is unavailable, no partial publication.
 A timeout is a scheduler decision, not a Driver reply.
-An outbound result is not a new INBOUND root.
+An outbound result is not a new INGRESS root.
 end note
 note over Driver,World
 Drivers never mint envelopes or write journal records.

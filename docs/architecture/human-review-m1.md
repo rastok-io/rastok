@@ -886,7 +886,141 @@ are gone, without an old-spelling alias. Package/trace identity and the sole
 additional recording-byte movement are measured in the final section of the
 [v20 inventory](human-review-v20-identity.md) before blessing.
 
+**Documentation sweep — 7 October (Fable): residues of A-T2-4, A-T2-5,
+A-T2-7 and of the format-20 renumbering in live prose.** Method: grep over
+every tracked text surface except dated evidence (review registers,
+decisions, errata, milestone ledgers, bannered historical simulations), each
+hit checked against `identity.md` §3 and the three byte enums. Confirmed,
+owner Astra, zero bytes, before the 24 October freeze:
+
+1. **Numbers not renumbered.** `delivery-semantics.md:73` (routes "INGRESS
+   key 25 / TRANSACTION key 38" → 13 / 25); `execution-model.md:575` (join
+   tuple "key 34" → 21) and `:502` ("timer kind 9" → `SessionHandshake` = 8);
+   `simulation-semantics.md:367-368` ("key 31 … key 34" → 18 / 21);
+   `stdlib.md:206` ("Timer kind 8" → `InboundCallTimeout` = 7);
+   `boundary.rs:1945,1954` ("timer kind 5" → `RecurrenceDelay` = 4);
+   `journal.rs:554` ("keys 20–28" → 8–16), `:687` ("keys 30–39 and 48–55" →
+   17–26 and 34–40), `:567` ("key 24" → 12); `tests/multiport.rs:6` ("key 24"
+   → 12, contradicted by its own line 260).
+2. **Record kinds.** `delivery-semantics.md` §4 (lines 159, 178, 181, 185,
+   200, 309, 313) still says "outbound record" for the EGRESS record while
+   its line 73 already says INGRESS/TRANSACTION; rustdoc and user-visible
+   strings `journal.rs:1142` ("no outbound record for this call"),
+   `boundary.rs:1523,1988,2154`, `vm.rs:1450,4461,5934-5935`,
+   `golden.rs:1088`, `tests/golden_trace.rs:363`; `ARCHITECTURE.md:76`.
+   Adjectives (`InboundCallId`, `open_outbound_session`, `UnboundOutbound`)
+   stay, per A-T2-4.
+3. **Deadline vocabulary on the journal side.** `identity.md:341,344,365`,
+   `envelope.md:210`, `execution-model.md:361`, `diagnostic-recording.md:46,51`
+   ("retained timer schedules", "non-causal retained fields" → unsealed
+   deadlines / unsealed fields), `components.md:389`; `journal.rs:131,144,
+   560,603,697,1031`, `retry_protocol/fold.rs:94`; "domain tag" → `IdKind`
+   in `envelope.rs:114` and `journal.rs:50`; locals and parameters named
+   `timers` in `acceptance.rs:50`, `codec.rs:698-850`, `golden.rs:795-800`.
+   VM-side "timer" and "scheduler" stay (A-T2-5 b).
+4. **Renamed ids still spelled `*Ref`** in spec and examples: `SessionRef`
+   (`stdlib.md:458,463,633,648`, `connector-drivers.md:127,235,308`,
+   `examples/agent-chat.rkg:123`, `docs/examples/codex-websocket-gateway.rkg:6`),
+   `SessionWriteRef` (`connector-drivers.md:235`), `SecretRef`
+   (`delivery-semantics.md:204`, `observability.md:115`, `stdlib.md:248`),
+   `InboundCallRef` (`simulation-semantics.md:182`), `DeliveryRef`
+   (`grammar.md:823`).
+5. **"Current" format labels and `rastok/` Contract ids in live docs.**
+   `ARCHITECTURE.md:5` (v19), `docs/architecture/README.md:7` (v19 /
+   recording v3), `components.md:4,432-436` (v17, `rastok/process@2`…),
+   `connector-drivers.md:3,34`, `spec-to-code.md:3` (v18),
+   `process-service.md:12-13`, `docs/examples/dsl-examples.md:3,59`,
+   `dsl-showcase-complex.rkg:32`, `teams-codex-gateway.rkg:67`,
+   `editors/vscode/rastok-dsl/{README.md:1,16,93, package.json:4,
+   grammar.test.cjs:42}` (v19), `release-qualification.md:257` ("Current v19
+   measurement" below a 7 October "current representation"). Target: the
+   current format is stated once (`identity.md` header); every other live
+   surface points to it or says "format 20, public format 1 at publication";
+   the 7 October embedded figures sit in `release-qualification.md`.
+6. **UML sources** `03`, `04`, `05`, `06`, `07` and their SVG carry
+   `InboundRecord`/`OutboundRecord`, INBOUND/OUTBOUND, "six-field spine",
+   "Tier 1", `CallRef`/`SessionRef`/`SecretRef`/`InstanceRef`; regenerated at
+   v18 per `docs/architecture/README.md:148`. Refresh for format 20 or label
+   the views as a v18 snapshot.
+
+Decisions (Yoann, 2026-10-07): "arm / armed / arms" leaves the deadline
+vocabulary entirely, verb included — a deadline is *created* at
+`created_at` (`timing.rs:2,93,107`, `journal.rs:309,561,602,795`,
+`identity.md:256,338`, `runtime.rs:1265 armed_budgets`, `retry_manager.rs`,
+`recovery.rs:550 expected_arms`, `release-qualification.md:241,249`; about
+166 lines outside the `match` sense). "Timer" is reserved for the mechanism
+that fires an action after a delay or periodically — the `Timer` Contract,
+the host's monotonic timer, the VM's wake-up queue; every mention of a
+journal deadline says deadline (`loop.md:207,373,383`, `ui.md:330`,
+`simulation-debugger-explanations.md:17,49,143`, locals `timers` in
+`runtime.rs`, `vm.rs`, `golden.rs`, `acceptance.rs`, `codec.rs`, "stale /
+message / handshake / delivery timer" in `vm.rs:3177-3178`, `recovery.rs`,
+tests), and `journal/timing.rs` is renamed after what it holds
+(`journal/deadline.rs`, `journal::deadline::{Deadline, Deadlines, Error}`).
+The A-T2-1 rule applies to the remaining code types: `InboundExchangeRef` →
+`InboundExchangeId`, `OpeningAdmissionRef` → `OpeningAdmissionId`; the
+non-identities lose `Ref` too — `PayloadRef` → `PayloadSource`, `PortRef` →
+`PortPath` — and `TypeRef` keeps the grammar's own name (`type_ref`,
+grammar.md:1545). User-facing "retained" (debugger labels, `docs/site`,
+README/WHITEPAPER prose, `diagnostic-recording.md`) becomes "recorded",
+including the snapshot field `completion_retained` (`app.js:2130`) without
+alias; the GDPR sense of "retention" and code locals stay. Owner: Astra,
+one zero-byte lot before the freeze.
+Verified clean: no envelope `role`, no
+`*_tag` helper, no `timing::DecodeError`, no `journal::retention`, no
+non-dotted third-party namespace in code; `LoopDelay` is the Loop `delay`
+setting, `Timer`/`Calendar` are Contract names, "retention" in privacy prose
+is the GDPR sense.
+
 ## Landed changes
+
+### Documentation sweep — 7 October (implementation)
+
+The commit containing this entry closes the seven-point documentation brief
+above without another format movement. Live key/kind/domain references were
+checked against `identity.md` and the byte enums. Record nouns are
+INGRESS/EGRESS; inbound/outbound remain directions. Journal obligations use
+deadline/creation/unsealed vocabulary, while timers remain mechanisms and
+match arms remain decision branches.
+
+`journal::deadline` replaces `journal::timing`, without an alias. RustRover
+performed the requested identity/selector/path renames and the remaining
+deadline-helper renames. Moving the module and fixing imports used ordinary
+edits; eleven cfg-gated WebSocket test references missed by the IDE were
+updated explicitly. `TypeRef` keeps its grammar meaning. The inspection
+snapshot now publishes only `completion_recorded`, with a dedicated
+Call/Session regression. Displayed English uses recorded; privacy retention
+and intentionally retained requests are different concepts and keep their words.
+
+UML 03–07 and all five SVGs were regenerated and visually checked; diagram 05
+is a current selected-type view, not the old pre-build inventory. Current
+architecture headers point to the format registry, editor metadata no longer
+embeds a package version, and the 7 October embedded measurements are labelled
+current without presenting them as a new measurement of this documentation pass.
+The dated review entries, including Fable's uncommitted sweep, are preserved.
+
+The 48 tracked packages, traces, recording and fixture files were compared
+byte-for-byte with the parent. The only permitted difference is the separately
+approved AST witness: three `PortRef` names become `PortPath` in `minimal.ast`.
+No source program, causal golden, package or recording is re-blessed; the
+`.rkg` changes are comments only. The public-format-1 TODO and the human T2
+reading at `loop_protocol.rs` remain; this pass authorizes no push or publication.
+
+**Qualification.** `cargo fmt --all -- --check`, strict workspace Clippy
+(`--all-targets --all-features -- -D warnings`), `cargo doc --workspace --no-deps`
+and `cargo test --workspace --all-features --no-fail-fast` pass: **1,572 tests,
+zero failures or ignored tests, 61 result groups**. After the final assertion-wording
+corrections, `meta_zones` and `multiport` pass again (**77 tests**), with fmt,
+strict Clippy and rustdoc rerun. The layout/editor/link-check unit tests pass
+**26 tests**; the rustdoc-link scan checks **210 Rust files**, with no relative
+Markdown link. The real-browser suite passes **35 tests**, with no skipped
+test or application console error, using the CI's Playwright **1.58.2** and
+local Chrome. Initial browser runs exposed an outdated local Playwright/CSP
+combination and two stale `rastok/process@4` expectations; the expectations
+now name `std/process@4`, without weakening CSP or changing a timeout.
+The CLI still reports echo `562396de…`, JSONL `0aeff047…` and gauge `0d3ad43d…`.
+No `no_std` target or embedded workload was rerun in this documentation pass;
+their qualification remains the separately dated cutover evidence.
 
 ### Consolidated action disposition — 7 October
 

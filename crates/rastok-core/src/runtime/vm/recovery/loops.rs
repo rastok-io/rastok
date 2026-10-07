@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::instance;
-use protocol::{Fact, OpeningAdmissionRef, Phase};
+use protocol::{Fact, OpeningAdmissionId, Phase};
 
 impl Vm<'_> {
     pub(super) fn check_node_manager(
@@ -55,7 +55,7 @@ impl Vm<'_> {
                 fuel,
                 state,
             } => {
-                let OpeningAdmissionRef::Delivery(reference) = opening else {
+                let OpeningAdmissionId::Delivery(reference) = opening else {
                     return Err(invalid(
                         index,
                         "an Executor Loop needs a spatial opening delivery",

@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::instance;
-use crate::journal::timing::{Deadline, Deadlines};
+use crate::journal::deadline::{Deadline, Deadlines};
 
 impl Vm<'_> {
     pub(super) fn admission_deadlines(
@@ -16,7 +16,7 @@ impl Vm<'_> {
         if !self.has_lifetime_deadlines {
             return Vec::new();
         }
-        let mut arms = Vec::new();
+        let mut deadlines = Vec::new();
         for reference in &target.admitted {
             let live = self.instances.get(reference);
             let waiting = self.waiting.get(reference);
@@ -57,7 +57,7 @@ impl Vm<'_> {
                 ),
                 _ => continue,
             };
-            arms.push((
+            deadlines.push((
                 Deadline {
                     kind: crate::journal::DeadlineKind::InstanceLifetime,
                     reference: ids::instance_lifetime_id(reference),
@@ -71,7 +71,7 @@ impl Vm<'_> {
                 },
             ));
         }
-        arms
+        deadlines
     }
 
     pub(super) fn delivery_deadlines(
@@ -89,7 +89,7 @@ impl Vm<'_> {
         };
         let node = &self.plan.nodes[slot.index()];
         // A Graph-boundary admission retains its own source path; its
-        // executable projection alone cannot identify the delivery timer.
+        // executable projection alone cannot identify the delivery deadline.
         let edge = self.prepared_edge_text(route);
         let delivery = envelope.meta().sys().id();
         let reference = ids::delivery_id(&edge, delivery);
@@ -178,47 +178,47 @@ impl Vm<'_> {
         deadlines
     }
 
-    pub(super) fn route_timer_arms(
+    pub(super) fn route_deadlines(
         &self,
         routes: &[PreparedEdge],
         candidates: &BTreeMap<instance::Generation, InstanceCandidate>,
         envelope: &Envelope,
     ) -> Vec<Deadline> {
-        self.route_timer_arms_with_activity(routes, candidates, envelope, &mut BTreeMap::new())
+        self.route_deadlines_with_activity(routes, candidates, envelope, &mut BTreeMap::new())
     }
 
-    pub(super) fn route_timer_arms_with_activity(
+    pub(super) fn route_deadlines_with_activity(
         &self,
         routes: &[PreparedEdge],
         candidates: &BTreeMap<instance::Generation, InstanceCandidate>,
         envelope: &Envelope,
         activity: &mut BTreeMap<instance::Generation, Id>,
     ) -> Vec<Deadline> {
-        let mut arms = Vec::new();
+        let mut deadlines = Vec::new();
         for route in routes {
             if let Some(target) = &route.target {
-                arms.extend(
+                deadlines.extend(
                     self.admission_deadlines(target, candidates, envelope, activity)
                         .into_iter()
-                        .map(|(arm, _)| arm),
+                        .map(|(deadline, _)| deadline),
                 );
-                arms.extend(
+                deadlines.extend(
                     self.delivery_deadlines(route, target, candidates, envelope)
                         .into_iter()
-                        .map(|(arm, _)| arm),
+                        .map(|(deadline, _)| deadline),
                 );
             }
         }
-        arms
+        deadlines
     }
 
-    pub(super) fn emission_timer_arms(&self, prepared: &PreparedEmissions) -> Vec<Deadline> {
+    pub(super) fn emission_deadlines(&self, prepared: &PreparedEmissions) -> Vec<Deadline> {
         let mut activity = BTreeMap::new();
         prepared
             .emissions
             .iter()
             .flat_map(|emission| {
-                self.route_timer_arms_with_activity(
+                self.route_deadlines_with_activity(
                     &emission.routes,
                     &prepared.candidates,
                     &emission.emission.envelope,
@@ -238,16 +238,16 @@ impl Vm<'_> {
         if let Some(packet) = record.loop_record.as_deref_mut() {
             packet.routes = prepared.contexts.clone();
         }
-        let mut arms = record
+        let mut deadlines = record
             .close_scope
             .as_ref()
-            .map(|instance| self.closing_timer_arms(instance))
+            .map(|instance| self.closing_deadlines(instance))
             .unwrap_or_default();
-        arms.extend(self.emission_timer_arms(prepared));
-        self.retain_timer_arms(record, arms)
+        deadlines.extend(self.emission_deadlines(prepared));
+        self.retain_deadlines(record, deadlines)
     }
 
-    pub(super) fn closing_timer_arms(&self, reference: &instance::Generation) -> Vec<Deadline> {
+    pub(super) fn closing_deadlines(&self, reference: &instance::Generation) -> Vec<Deadline> {
         let Some(instance) = self.instances.get(reference) else {
             return Vec::new();
         };
@@ -271,12 +271,12 @@ impl Vm<'_> {
         .collect()
     }
 
-    pub(super) fn retain_timer_arms(
+    pub(super) fn retain_deadlines(
         &self,
         record: &mut crate::journal::TransactionRecord,
-        arms: Vec<Deadline>,
+        deadlines: Vec<Deadline>,
     ) -> Result<(), VmError> {
-        if arms.is_empty() {
+        if deadlines.is_empty() {
             return Ok(());
         }
         let mut combined = record
@@ -284,13 +284,16 @@ impl Vm<'_> {
             .as_ref()
             .map(|schedule| schedule.items().to_vec())
             .unwrap_or_default();
-        combined.extend(arms);
+        combined.extend(deadlines);
         record.deadlines = Some(Box::new(Self::create_deadlines(self.now, combined)?));
         Ok(())
     }
 
-    pub(super) fn create_deadlines(at: i64, arms: Vec<Deadline>) -> Result<Deadlines, VmError> {
-        Deadlines::try_new(at, arms)
+    pub(super) fn create_deadlines(
+        at: i64,
+        deadlines: Vec<Deadline>,
+    ) -> Result<Deadlines, VmError> {
+        Deadlines::try_new(at, deadlines)
             .map_err(|error| VmError::Journal(crate::journal::Error::InvalidDeadlines(error)))
     }
 }

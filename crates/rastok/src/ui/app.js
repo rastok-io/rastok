@@ -38,9 +38,9 @@ let graphTextSync = null;
 const graphViewport = { scale: 1, x: 0, y: 0 };
 
 const COMMAND_HINTS = Object.freeze({
-  resume: "Replay: replay retained transitions at the selected speed",
+  resume: "Replay: replay recorded transitions at the selected speed",
   pause: "Pause: stop replay or execution at the next safe transition",
-  step: "Next transition: advance one retained transition",
+  step: "Next transition: advance one recorded transition",
   "retry-step": "Retry: retry the reserved transaction",
   "run-to-completion": "Finish: run to completion",
   "next-scenario-action": "Next action: run one authored action to its effect",
@@ -189,7 +189,7 @@ function renderExecutionState(snapshot) {
   const atLive = sameTimelinePoint(snapshot, liveSnapshot);
   const pill = document.querySelector("#execution-state");
   const recording = snapshot?.mode === "replay";
-  pill.title = recording ? "Read-only recording; no execution engine is running" : `Engine ${liveState}; ${atLive ? "viewing the live head" : "viewing a retained transition"}`;
+  pill.title = recording ? "Read-only recording; no execution engine is running" : `Engine ${liveState}; ${atLive ? "viewing the live head" : "viewing a recorded transition"}`;
   if (!atLive && (bufferedPlayback || replayPaused)) {
     text("execution-state", replayPaused ? "replay paused" : "replaying");
     pill.className = `execution-state state-${replayPaused ? "paused" : "running"}`;
@@ -454,7 +454,7 @@ function renderFuture(snapshot) {
     const row = document.createElement("button");
     row.type = "button";
     row.textContent = `${obligation.kind} · ${obligation.owner || "App"}${obligation.port ? `.${obligation.port}` : ""}${obligation.due_at_ns == null ? "" : ` · due ${formatLogicalTime(obligation.due_at_ns)}`}`;
-    row.title = `${row.textContent} · retained obligation, not an execution-order prediction`;
+    row.title = `${row.textContent} · recorded obligation, not an execution-order prediction`;
     if (obligation.envelope_id) row.addEventListener("click", () => selectEnvelope(obligation.envelope_id));
     items.append(row);
   }
@@ -614,8 +614,8 @@ function updateControls() {
     const base = COMMAND_HINTS[command] || command;
     let reason = "";
     if (button.disabled) {
-      if (pendingCommandRevision !== null) reason = "the previous command is still being retained";
-      else if (liveSnapshot?.mode === "replay" && command !== "close") reason = "recordings are read-only; only retained timeline navigation is available";
+      if (pendingCommandRevision !== null) reason = "the previous command is still being recorded";
+      else if (liveSnapshot?.mode === "replay" && command !== "close") reason = "recordings are read-only; only recorded timeline navigation is available";
       else if (!controls) reason = "this browser is an observer; take control first";
       else if (!atLive && !physicalControl) {
         reason = "available in LIVE only; select Return live";
@@ -636,8 +636,8 @@ function updateControls() {
   const back = document.querySelector("#back-boundary");
   back.disabled = frames.findIndex((frame) => Number(frame.boundary) === boundary) <= 0;
   back.title = back.disabled
-    ? "Back — no earlier retained transition exists on this session."
-    : "Back: view the previous retained transition";
+    ? "Back — no earlier recorded transition exists on this session."
+    : "Back: view the previous recorded transition";
   document.querySelector("#take-control").hidden = controls;
 }
 
@@ -647,7 +647,7 @@ function renderFault(fault) {
   if (!fault) return;
   text("fault-title", "Execution fault");
   text("fault-message", fault.message || "The transaction faulted.");
-  text("fault-help", fault.help || "Inspect the retained state before choosing a legal action.");
+  text("fault-help", fault.help || "Inspect the recorded state before choosing a legal action.");
   text("fault-commit", fault.commit || "Nothing from the faulting transaction was committed.");
 }
 
@@ -1449,9 +1449,9 @@ function envelopePanel(snapshot) {
   if (selectedEnvelopeId && !delivery) {
     const sysFields = (snapshot.history?.envelopes || []).find(envelope => envelope.envelope_id === selectedEnvelopeId);
     position.textContent = `Transition ${snapshot.timeline.boundary}`;
-    title.textContent = 'Retained causal envelope';
+    title.textContent = 'Recorded causal envelope';
     panel.append(identifier(selectedEnvelopeId, 'envelope'));
-    if (sysFields) panel.append(envelopeZones({ sys: { id: sysFields.envelope_id, origin_id: sysFields.origin_id, parent_id: sysFields.parent_id } }, { content: 'No DATA observation is retained for this envelope at this transition.' }));
+    if (sysFields) panel.append(envelopeZones({ sys: { id: sysFields.envelope_id, origin_id: sysFields.origin_id, parent_id: sysFields.parent_id } }, { content: 'No DATA observation is recorded for this envelope at this transition.' }));
     else panel.append(document.createTextNode('This envelope is outside the selected journal prefix.'));
     return panel;
   }
@@ -1695,7 +1695,7 @@ async function renderComparison() {
   }
   const left = document.querySelector('#compare-left').value;
   const right = document.querySelector('#compare-right').value;
-  if (!left || !right || left === right) { empty(target, 'Select two distinct Loop instances or retained sessions.'); return; }
+  if (!left || !right || left === right) { empty(target, 'Select two distinct Loop instances or recorded sessions.'); return; }
   let snapshots = [snapshot, snapshot];
   if (mode === 'sessions') {
     try {
@@ -1727,7 +1727,7 @@ async function renderComparison() {
     for (const column of columns) {
       const cell = document.createElement('div');
       const label = document.createElement('h4'); label.textContent = field.replaceAll('_', ' '); cell.append(label);
-      if (column) appendDataTree(cell, column[field]); else cell.append(document.createTextNode('This transition is not retained in this session.'));
+      if (column) appendDataTree(cell, column[field]); else cell.append(document.createTextNode('This transition is not recorded in this session.'));
       row.append(cell);
     }
     target.append(row);
@@ -1799,7 +1799,7 @@ function appendLoopDial(label, item) {
   dial.setAttribute("aria-label", `Loop: ${admitted} admitted applications; ${runs.length} active runs`);
   const title = svgElement("title");
   title.textContent = runs.length ? runs.map((run) =>
-    `${String(run.reference).slice(0, 8)} · ${run.remaining}/${run.fuel} applications remaining · ${run.waiting ? `waiting until ${formatLogicalTime(run.due_at_ns)}` : "no armed delay"} · exhaustion: ${run.expired_port || "proved impossible"}`
+    `${String(run.reference).slice(0, 8)} · ${run.remaining}/${run.fuel} applications remaining · ${run.waiting ? `waiting until ${formatLogicalTime(run.due_at_ns)}` : "no pending delay"} · exhaustion: ${run.expired_port || "proved impossible"}`
   ).join("\n") : "No active Loop run · 0 admitted applications";
   dial.append(title);
   attachTooltip(dial, title.textContent);
@@ -1868,7 +1868,7 @@ function renderHistory(history, selection) {
   const suffix = selection ? ` Filtered by ${selection.label}.` : "";
   text("history-summary", `${records.length} causal record${records.length === 1 ? "" : "s"}; ${deliveries.length} envelope observation${deliveries.length === 1 ? "" : "s"}.${suffix}`);
   if (!records.length && !deliveries.length) {
-    empty(target, selection ? "No retained activity for this selection." : "No committed records.");
+    empty(target, selection ? "No recorded activity for this selection." : "No committed records.");
     document.querySelector("#show-older").hidden = true;
     return;
   }
@@ -1954,7 +1954,7 @@ async function showRecordBoundary(recordIndex) {
   const session = Number(currentSnapshot?.timeline?.session || 0);
   const boundary = boundaryForRecord(recordIndex);
   const frame = timelineFrames(session).find((candidate) => Number(candidate.boundary) === boundary);
-    if (!frame) throw new Error(`no retained transition contains record ${recordIndex}`);
+    if (!frame) throw new Error(`no recorded transition contains record ${recordIndex}`);
   clearPlaybackTimer();
   bufferedPlayback = false;
   replayPaused = false;
@@ -2082,10 +2082,10 @@ function renderInstances(instances, selection) {
 
 function renderLoopRuns(runs, selection) {
   const target = document.querySelector("#loop-runs");
-  if (!Array.isArray(runs)) { empty(target, runs?.error || "No retained Loop run."); return; }
+  if (!Array.isArray(runs)) { empty(target, runs?.error || "No recorded Loop run."); return; }
   const visible = runs.filter((run) => rowMatchesSelection(run, selection, ["owner"])
     && (!selectedLoopInstance || (run.owner === selectedLoopInstance.owner && sameInstance(run.instance, selectedLoopInstance.reference))));
-  if (!visible.length) { empty(target, "No retained Loop run for this selection."); return; }
+  if (!visible.length) { empty(target, "No recorded Loop run for this selection."); return; }
   const table = document.createElement("table");
   const header = document.createElement("tr");
   for (const name of ["Run", "Application", "Remaining", "Due", "State"]) {
@@ -2127,7 +2127,7 @@ function renderExchanges(exchanges, selection) {
     heading.textContent = `${exchange.kind} · ${exchange.connector}`;
     const meta = document.createElement("p");
     meta.className = "card-meta";
-    meta.textContent = `${exchange.direction}; ${exchange.completion_retained ? "terminal outcome retained" : "open"}`;
+    meta.textContent = `${exchange.direction}; ${exchange.completion_recorded ? "terminal outcome recorded" : "open"}`;
     card.append(heading, meta);
     return card;
   }));
@@ -2137,7 +2137,7 @@ function renderRetryOperations(operations, selection) {
   const target = document.querySelector("#retry-operations");
   const visible = (operations || []).filter(operation => rowMatchesSelection(operation, selection, ["owner"])
     && (!selectedLoopInstance || (operation.owner === selectedLoopInstance.owner && sameInstance(operation.instance, selectedLoopInstance.reference))));
-  if (!visible.length) { empty(target, "No retained Retry operation for this selection."); return; }
+  if (!visible.length) { empty(target, "No recorded Retry operation for this selection."); return; }
   target.className = "card-stack";
   target.replaceChildren(...visible.map(operation => {
     const card = document.createElement("article");
@@ -2179,7 +2179,7 @@ function renderRetryOperations(operations, selection) {
       const emissions = attempt.emissions || [];
       if (emissions.length) {
         const details = document.createElement("details");
-        const summary = document.createElement("summary"); summary.textContent = `${emissions.length} retained envelopes`;
+        const summary = document.createElement("summary"); summary.textContent = `${emissions.length} recorded envelopes`;
         details.append(summary);
         for (const id of emissions) details.append(identifier(id, "envelope", () => selectEnvelope(id)));
         evidence.append(details);
@@ -2598,7 +2598,7 @@ function renderSearchResults() {
     button.addEventListener('click', () => { document.querySelector('#search-panel').hidden = true; result.open(); });
     target.append(button);
   }
-  if (!target.children.length) target.textContent = 'No matching node, port or retained envelope.';
+  if (!target.children.length) target.textContent = 'No matching node, port or recorded envelope.';
 }
 
 document.querySelector('#open-search').addEventListener('click', openSearch);

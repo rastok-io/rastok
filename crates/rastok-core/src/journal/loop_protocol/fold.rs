@@ -2,7 +2,7 @@
 //! are obligations of the plan and Worker, not facts this fold invents.
 
 use super::{
-    CommandProduced, CommandValue, Fact, OpeningAdmissionRef, Packet, admission_ref, command_ref,
+    CommandProduced, CommandValue, Fact, OpeningAdmissionId, Packet, admission_ref, command_ref,
     run_ref,
 };
 use crate::envelope::{Envelope, Id};
@@ -337,13 +337,13 @@ impl Fold {
                     return Err(Error::OpenIdentity);
                 }
                 let admission = match opening {
-                    OpeningAdmissionRef::Ingress { inbound, port } => {
+                    OpeningAdmissionId::Ingress { inbound, port } => {
                         if port != entry || *inbound != state.meta().sys().id() {
                             return Err(Error::OpenIdentity);
                         }
                         *inbound
                     }
-                    OpeningAdmissionRef::Delivery(delivery) => *delivery,
+                    OpeningAdmissionId::Delivery(delivery) => *delivery,
                 };
                 if self.runs.contains_key(run) {
                     return Err(Error::DuplicateRun);
@@ -588,7 +588,7 @@ mod tests {
     ) -> (LoopRunId, instance::Generation, Vec<Packet>) {
         let entry = Port::new("request").unwrap();
         let state = state(2);
-        let opening = OpeningAdmissionRef::Ingress {
+        let opening = OpeningAdmissionId::Ingress {
             inbound: state.meta().sys().id(),
             port: entry.clone(),
         };

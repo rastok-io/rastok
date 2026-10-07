@@ -201,7 +201,7 @@ impl ActivityView {
         } else {
             (
                 "connector-boundary",
-                String::from("a Connector exchange fact was retained; no Node fired"),
+                String::from("a Connector exchange fact was recorded; no Node fired"),
             )
         };
         Some(Self {
@@ -1252,7 +1252,7 @@ fn exchanges(inspection: &VmInspection) -> JsonValue {
                 "direction": direction,
                 "connector": call.connector.to_string(),
                 "instance": instance_ref_json(&call.instance),
-                "completion_retained": call.completion_retained,
+                "completion_recorded": call.completion_recorded,
             })
         })
         .collect::<Vec<_>>();
@@ -1270,7 +1270,7 @@ fn exchanges(inspection: &VmInspection) -> JsonValue {
                 "instance": instance_ref_json(&session.instance),
                 "opened": session.opened,
                 "pending_writes": session.pending_writes,
-                "completion_retained": session.completion_retained,
+                "completion_recorded": session.completion_recorded,
             })
         })
         .collect::<Vec<_>>();
@@ -1581,6 +1581,50 @@ fn hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn exchange_snapshots_name_recorded_completion_without_an_alias() {
+        use crate::boundary::{CallId, SessionId};
+        use crate::envelope::Id;
+        use crate::runtime::vm::{CallInspection, SessionInspection};
+
+        let connector = crate::node::Path::new(["peer"]).unwrap();
+        let generation = instance::Generation::new(
+            instance::Identity::singleton(&crate::node::OwnerPath::new(["peer"]).unwrap()),
+            0,
+        );
+        for completed in [false, true] {
+            let inspection = VmInspection {
+                mailbox_capacity: 1024,
+                instances: vec![],
+                mailboxes: vec![],
+                calls: vec![CallInspection {
+                    reference: CallReferenceInspection::Outbound(CallId::new(Id::from_bytes(
+                        [1; 16],
+                    ))),
+                    direction: CallDirectionInspection::Outbound,
+                    connector: connector.clone(),
+                    instance: generation.clone(),
+                    completion_recorded: completed,
+                }],
+                sessions: vec![SessionInspection {
+                    reference: SessionId::new(Id::from_bytes([2; 16])),
+                    direction: SessionDirectionInspection::Inbound,
+                    connector: connector.clone(),
+                    instance: generation.clone(),
+                    opened: true,
+                    pending_writes: 0,
+                    completion_recorded: completed,
+                }],
+            };
+            let view = exchanges(&inspection);
+            for kind in ["calls", "sessions"] {
+                let exchange = &view[kind][0];
+                assert_eq!(exchange["completion_recorded"], completed);
+                assert!(exchange.get("completion_retained").is_none());
+            }
+        }
+    }
+
     #[test]
     fn retry_inspection_agrees_in_steps_batch_and_every_recorded_prefix() {
         let compilation = crate::compiler::compile(

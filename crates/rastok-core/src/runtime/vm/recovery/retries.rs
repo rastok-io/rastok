@@ -1,10 +1,10 @@
 //! Bind Retry facts to the original program and exact prefix deliveries.
 //! The protocol validates policy transitions; this fold independently proves
-//! owner, cursor, timer, spatial disposition and enclosing Loop authority.
+//! owner, cursor, deadline, spatial disposition and enclosing Loop authority.
 
 use super::*;
+use crate::journal::deadline::Deadline;
 use crate::journal::retry_protocol::{self as retry, Fact};
-use crate::journal::timing::Deadline;
 
 impl Vm<'_> {
     pub(super) fn restore_retry_manager(
@@ -143,7 +143,7 @@ impl Vm<'_> {
         next.apply(packet, authority.as_ref(), self.now)
             .map_err(super::super::retry_manager::error)?;
         let mut expected_routes = Vec::new();
-        let mut expected_arms = Vec::new();
+        let mut expected_deadlines = Vec::new();
         let mut expected_loop = (!context.is_empty()).then(|| {
             Box::new(protocol::Packet {
                 context: context.clone(),
@@ -165,7 +165,7 @@ impl Vm<'_> {
                     "Retry admission has no bounded Call timeout",
                 ));
             };
-            expected_arms.push(Deadline {
+            expected_deadlines.push(Deadline {
                 kind: crate::journal::DeadlineKind::CallTimeout,
                 reference,
                 due_at: self.now.saturating_add(*timeout),
@@ -181,17 +181,21 @@ impl Vm<'_> {
             || record.routes != expected_routes
             || record.loop_record != expected_loop
             || record.deadline_ids
-                != expected_arms
+                != expected_deadlines
                     .iter()
-                    .map(|arm| (arm.kind, arm.reference))
+                    .map(|deadline| (deadline.kind, deadline.reference))
                     .collect::<Vec<_>>()
         {
             return Err(invalid(
                 index,
-                "Retry manager changed its cause, routes, contexts or timer presence",
+                "Retry manager changed its cause, routes, contexts or deadline presence",
             ));
         }
-        self.check_recovered_delivery_timers(index, record.deadlines.as_deref(), &expected_arms)?;
+        self.check_recovered_delivery_deadlines(
+            index,
+            record.deadlines.as_deref(),
+            &expected_deadlines,
+        )?;
         if let Some((edge, envelope)) = routed {
             self.scheduler
                 .mailboxes
@@ -204,9 +208,9 @@ impl Vm<'_> {
                     envelope.clone(),
                 )
                 .map_err(|_| invalid(index, "Retry admission exceeded its reserved mailbox"))?;
-            for arm in expected_arms {
-                self.scheduler.arm(
-                    arm.due_at,
+            for deadline in expected_deadlines {
+                self.scheduler.schedule(
+                    deadline.due_at,
                     DatedPayload::DeliveryBudget {
                         connector: self.plan.nodes[slot.index()].path.clone(),
                         edge: edge.clone(),
