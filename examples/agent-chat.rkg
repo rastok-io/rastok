@@ -166,9 +166,9 @@ lab agent_chat {
       app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "method": "initialized" } } }
       app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "bob", "kind": "rpc", "rpc": { "method": "initialized" } } }
       expect nothing app.reply
-      app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "id": 1, "method": "thread/start", "params": { "approvalPolicy": "never", "sandbox": "read-only" } } } }
+      app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "id": 1, "method": "thread/start", "params": { "approvalPolicy": "never", "sandbox": "read-only", "ephemeral": true } } } }
       expect app.reply count == 1
-      app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "bob", "kind": "rpc", "rpc": { "id": 1, "method": "thread/start", "params": { "approvalPolicy": "never", "sandbox": "read-only" } } } }
+      app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "bob", "kind": "rpc", "rpc": { "id": 1, "method": "thread/start", "params": { "approvalPolicy": "never", "sandbox": "read-only", "ephemeral": true } } } }
       expect app.reply count == 1
       app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "id": 2, "method": "turn/start", "params": { "threadId": "thread-1", "input": [{ "type": "text", "text": "Hello Alice" }] } } } }
       expect app.reply count == 3 where meta.ext.session_id == alice_session

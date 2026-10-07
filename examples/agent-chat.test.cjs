@@ -81,7 +81,7 @@ function client() {
   return { get, connect, ready, sockets, document };
 }
 
-test("the page is standalone and the handshake waits for each response", () => {
+test("the standalone handshake waits for each response and requests an ephemeral thread", () => {
   assert.doesNotMatch(html, /<script\b[^>]*\bsrc=|<link\b[^>]*rel="stylesheet"/);
   const { get, connect } = client();
   assert.equal(get("send").disabled, true);
@@ -97,7 +97,7 @@ test("the page is standalone and the handshake waits for each response", () => {
   socket.rpc({ id: 0, result: {} });
   assert.deepEqual(socket.sent.slice(1).map(frame => frame.rpc), [
     { method: "initialized", params: {} },
-    { id: 1, method: "thread/start", params: { approvalPolicy: "never", sandbox: "read-only" } },
+    { id: 1, method: "thread/start", params: { approvalPolicy: "never", sandbox: "read-only", ephemeral: true } },
   ]);
   socket.rpc({ id: 1, result: { thread: { id: "thread-1" } } });
   assert.equal(get("send").disabled, false);

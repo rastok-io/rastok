@@ -60,7 +60,7 @@
     <textarea id="prompt" rows="2" maxlength="8000" required disabled></textarea>
     <button id="send" type="submit" disabled>Send</button>
   </form>
-  <footer>Local teaching demo. No accounts or reconnection. Codex may keep its own local history.</footer>
+  <footer>Local teaching demo. No accounts or reconnection. New Codex threads are ephemeral: no saved local conversation history. Technical logs may remain.</footer>
 
   <script>
     "use strict";
@@ -138,7 +138,9 @@
         }
         if (method === "initialize") {
           sendRpc({ method: "initialized", params: {} });
-          request("thread/start", { approvalPolicy: "never", sandbox: "read-only" });
+          // Keep this conversation in memory instead of saving Codex history.
+          // Ephemeral is a per-thread option, not an app-server CLI flag.
+          request("thread/start", { approvalPolicy: "never", sandbox: "read-only", ephemeral: true });
         } else if (method === "thread/start") {
           threadId = message.result?.thread?.id;
           if (typeof threadId !== "string") {

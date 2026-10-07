@@ -84,6 +84,19 @@ multicore and independent-flow placement choices are documented in
 [parallelism-notes.md](parallelism-notes.md), explicitly post-M1. One Worker
 already permits this I/O concurrency; no parallel Operator execution is claimed.
 
+### Ephemeral browser conversations — 7 October
+
+The browser now sends `ephemeral: true` in every `thread/start`, and the
+Alice/Bob Lab scenario uses the same parameter. The installed Codex CLI
+0.160.0 exposes this field in its non-experimental generated schema; its
+`Thread.ephemeral` documentation specifies that the thread is not materialized
+on disk. This supersedes the local-history caveat in the 17 September
+checkpoint above. Existing history is not deleted. Technical logs, Rastok's
+in-memory journal and provider-side retention are outside this option's scope.
+The standalone handshake regression checks the exact request; no live model
+call is needed to exercise it. The changed embedded HTML intentionally changes
+this demo's plan identity; no runtime format or pinned witness changes.
+
 ## Two independently runnable layers
 
 - `examples/agent-dialogue.rkg` teaches a typed conversation adapter with an

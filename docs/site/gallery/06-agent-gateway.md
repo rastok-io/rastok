@@ -112,7 +112,12 @@ Bob. It is never a magic line sent to Codex's stdin. The acknowledgement means
 “closure requested”, not “the child exited successfully”. Closing a browser
 tab without Quit is different: the abandoned conversation has a five-minute
 idle lifetime. This page has no reconnect/resume feature or saved history.
-Codex may keep its own local thread history; Quit is not a deletion request.
+It sends `ephemeral: true` on each `thread/start`: new Codex conversations
+stay in memory instead of being saved as local thread history. This option
+is part of the [app-server protocol](https://learn.chatgpt.com/docs/app-server),
+not a Process flag. It does not delete earlier histories or disable technical
+logs, Rastok's in-memory journal, or the model provider's data retention.
+Quit still requests process closure, not deletion of files.
 
 The page selects the app-server read-only sandbox and no-approval policy;
 this is a trusted local example, not a security boundary. Do not expose the
