@@ -29,6 +29,14 @@ below preserves the paths present when that reading was planned. T2 resumes
 at `journal/loop_protocol.rs`. This closes the approved implementation brief,
 not M1, the rest of the human review or the external opening gates.
 
+**Reading — 8 October.** `fedada7` was deposited on 7 October and no longer
+moves; the review continues on working branches under GitHub flow. T2 is read
+to its end (Loop protocol and fold, Retry protocol, carriers, causal projection
+and fold, explicit instance closing) and T4 has its first pass. Each finding
+below carries its lot: zero-byte corrections before the freeze, v21 after the
+opening, or M2. The priorities for the external Rust review of 26–30 October
+are in their own section before the parked remarks.
+
 Rastok promises that the same validated plan and the same journaled inputs
 produce the same execution, identities and trace. The review reads what
 carries that promise first (identity, journal, validated plan, VM), then what
@@ -612,6 +620,256 @@ starts at format 1. Dated reports under `docs/architecture/` stay as evidence;
 no live specification describes an earlier format. The consolidated brief
 handed to Astra on 2026-10-05 carries the lots and the cutover protocol.
 
+### `loop_protocol.rs` and `loop_protocol/fold.rs` — read 2026-10-08
+
+Read in full by Fable (brief for Yoann); the reading resumed on the working
+branch after the 7 October deposit of `fedada7`. The protocol is small and
+closed: three derived identities (`run_ref`, `command_ref`, `admission_ref`),
+five facts, one sparse packet; the fold refuses every contradiction it can
+see without the plan and clones itself before each application so a refusal
+changes nothing. Verified conforming: `Fact::Advance.due_at` is retained by
+the lossless codec (`codec.rs:552-561`) and excluded from the key-40 causal
+form (`identity.md:300-303`, `golden.rs:532-543`), and journal acceptance
+checks it against the key-41 deadline (`acceptance.rs:78-120`), so the
+field's comment "outside causal identity" is exact; the identity recipes
+frame every part with its length (`envelope.rs:127-139`); a command of an
+inner run names the enclosing runs in its context and the fold requires them
+to be active and strictly nested (`fold.rs:258-282`).
+
+**A-T2-8 — Stale identity-domain labels (zero bytes, before the freeze).**
+The three recipe comments still name the string domains of the pre-`IdKind`
+cutover: `rastok.loop-run.r2`, `rastok.loop-command.r1`,
+`rastok.loop-admission.r1` (`loop_protocol.rs:279,298,316`), while the code
+derives with `IdKind::LoopRun`/`LoopCommand`/`LoopAdmission` and the
+specification says "Domains are run `0x08`, command `0x09` and re-admission
+`0x03`" (`identity.md:302`). The live Loop specification carries the same
+residue in its recipe block, `derive(rastok.loop.r2, instance::Generation,
+OpeningAdmissionId)` (`loop.md:93-98`), which contradicts `identity.md`; the
+protocol domain `rastok.loop.r2` of the plan stream (`identity.md:106`,
+`lower.rs:134`) is not an identity domain and stays. Residue of the accepted
+7 October sweep; comment and specification text only. Owner: Astra.
+
+**A-T2-9 — The Loop fold accepts `Close { Stopped }` without closing
+evidence (v21).** `fold.rs:486-488` closes a run on a `Stopped` reason on any
+transaction of the owner instance, dropping a pending command, because the
+fold tracks only `l:start`/`l:stop` links (`parents`, `fold.rs:114`) and not
+the closing scope. The VM produces that fact on the owner's stop record
+(`loop_manager.rs:51-78`), on a handler transaction carrying bare `stop`
+(`loop_manager.rs:314-319`) and on a standalone `l:next` manager record once
+the instance has left `Open` (`loop_manager.rs:482-504`); recovery refuses a
+manager stop whose instance is still `Open` (`recovery/loops.rs:162-175`),
+but journal acceptance runs the fold alone (`journal.rs:2062-2072`). The
+instance-closing fold already derives the closing scope from
+`close_scope_generation` (`instance_stop.rs:463-488`); the Loop fold can do
+the same and require, for `Stopped`, that the run's instance is within a
+retained closing scope. Not visible, not a format: v21, with the
+regression "a `Stopped` close on a live instance refuses". Owner: Astra.
+
+**A-T2-10 — The key-40 causal projection lives outside the core (v21,
+zero bytes).** The sealed form of the Loop packet is encoded by
+`rastok::golden::loop_packet_tree` (`golden.rs:428-596`, inserted at
+`golden.rs:719`), whereas the instance-closing and Retry packets project
+themselves (`instance_stop::Packet::tree`, `instance_stop.rs:94`;
+`retry_protocol::Packet::tree`, `retry_protocol.rs:244`, sharing
+`encoding::packet_tree` with the lossless carrier). The rule that `due_at`
+is excluded from the seal is therefore enforced two crates away from the
+type that documents it. Target: `loop_protocol::Packet::tree`, shared with
+the codec the way Retry's `encoding.rs` is; `golden.rs` calls it. Bytes
+unchanged; the trace goldens are the regression. Owner: Astra.
+
+### `retry_protocol.rs`, `carriers.rs`, `encoding.rs` and `retry_protocol/fold.rs` — read 2026-10-08
+
+Verified conforming: the pin's `opened_at` and the prepared request bytes
+stay out of the causal form (`encoding.rs:14-30`, `identity.md:326-328`);
+the fold re-derives the operation identity from the opening authority and
+never from a fact (`fold.rs:325-338`); every attempt's Call must repeat the
+pinned request, settings and key (`check_intent`, `fold.rs:466-479`); the
+winning closure fixes `withhold` before any later Closing (`fold.rs:516-517`)
+and a held batch is consumed or published exactly once; the recurrence
+deadline is checked against the policy and the closure instant
+(`fold.rs:525-544`). Journal acceptance runs only the carrier check
+(`carriers::validate_transaction`, `journal.rs:2055`); the fold needs the
+original plan (`Opening`), so it runs in the VM and in recovery
+(`retry_manager.rs`, `recovery/retries.rs`). Accepted, with the reason
+recorded here.
+
+**A-T2-11 — Retry's carrier matrix and completion checks are written
+several times (v21, zero bytes).** The admissible packet shapes are listed
+twice, in `carriers.rs:29-84` and in the fold's `apply_inner`
+(`fold.rs:242-307`); the "batch equals the ordered emissions" check exists in
+`carriers::producer` (`carriers.rs:129-137`) and `Fold::validate_emissions`
+(`fold.rs:626-633`); the terminal case of a completion is read two ways,
+from the last output's union case in `closure_schedule`
+(`retry_manager.rs:679-690`) and from the terminal port through the Contract
+in `closure_case` (`retry_manager.rs:721-727`) and `validate_emissions`
+(`fold.rs:640-649`), beside the Contract check of `call_completion.rs:22-61`.
+Same class as A-T2-6(2): one owner per rule. Also `fold.rs:334` refuses an
+opening dated after `at` as `OriginalBinding` where `admit` classifies the
+same contradiction as `Timing` (`fold.rs:407-409`). Owner: Astra.
+
+### `journal/instance_stop.rs` — read 2026-10-08
+
+Verified conforming: the command identity covers source, scope, target and
+cause (`instance_stop.rs:60-79`) and is re-derived at decode
+(`instance_stop.rs:182-191`); the target is resolved only along the exact
+parent-generation chain and never by choosing a newest generation
+(`resolve`, `instance_stop.rs:364-419`); consumption follows production
+order across targets, requires the winning `l:closing` of the command's own
+target and settles redundant requests by that same close
+(`instance_stop.rs:456-498, 571-610`); the VM queue is a projection with the
+same order (`vm/instance_stop.rs:143-213`) and recovery rebuilds it from the
+fold (`recovery.rs:120-130`). Nothing to change. One cost note joins A-T2-3:
+`MemJournal::instance_commands` re-folds the whole journal on every call
+(`journal.rs:1888-1890`), on each accepted transaction that carries commands
+(`journal.rs:2058`) and twice per producing transaction in the VM
+(`vm/instance_stop.rs:95,128`), where `loop_protocol()` returns the fold the
+journal already maintains (`journal.rs:1879-1885`). M2 with the indexes.
+
+**T2 is read.** Conforming and not recorded elsewhere: `deadline.rs`,
+`acceptance.rs` and `codec.rs` were read with the lot-3 complements. Found
+across the three folds, M2 design note next to A-T2-2(b): each fold rebuilds
+its own lifecycle tree — Loop from `l:start`/`l:stop` (`fold.rs:114,172-184`),
+instance closing from start, close scope and stop (`instance_stop.rs:256-260`),
+Retry from a set the VM feeds (`begin_closing`, `fold.rs:208-210`,
+`vm.rs:3850-3852`) — and each `apply` clones the whole fold, envelopes and
+pinned request bytes included (`fold.rs:149-154`, `retry fold.rs:230-234,
+488`, `instance_stop.rs:338-343`). One lifecycle fold consulted by the three
+protocols is the natural shape for the durable journal; not before.
+
+## T4 — The VM, the deterministic step
+
+### First pass — read 2026-10-08
+
+Read in full: `vm/advance.rs`, `vm/closing.rs`, `vm/call_completion.rs`,
+`vm/instance_stop.rs`, `vm/timing.rs`, `vm/loop_manager.rs`,
+`vm/retry_manager.rs`, `vm/recovery.rs`, `recovery/{loops,retries,calls,
+ingress}.rs`, `runtime/dispatch.rs`, the mailboxes (`runtime.rs:205-432`).
+Read selectively in `vm.rs`: the scheduler (`:916-958`), `step_with_bindings`
+and the join scan (`:2108-2319`), `advance`/`peek_due`/`expire`
+(`:2718-3103`), the session handshake and lifetime expiries (`:3105-3293`),
+`request_close` through `fire_lifecycle_next` and `promote_waiting`
+(`:3786-4362`), `settle_next` (`:4367-4455`), `operator_work`,
+`fire_operator`, `fire_connector` (`:4573-4849`), `open_call` and
+`retain_call_open` (`:5476-5605`), `validate_and_prepare_emissions`
+(`:5630-5690`), `check_room_for_routes` through `install_target`
+(`:6598-6877`); in `graph_loop.rs`, `restore_graph_manager`
+(`:1003-1233`). Not yet read: `inject_submission` (`vm.rs:1673-2107`),
+`prepare_routes`/`prepare_owner_target`/`candidate_owner`
+(`vm.rs:5695-6330`), `recovery/exchanges.rs`, the rest of `graph_loop.rs`,
+`boot_at_inner`, `runtime.rs` outside the mailboxes.
+
+Verified conforming, the promise's load-bearing parts:
+
+- **One step order, journal first.** `step_with_bindings` tries, in a fixed
+  order, retry-closure synchronization, instance commands, single-pass
+  close, closures, lifecycle work, Graph Loop openings, the dated recurrence
+  head, the Loop and Retry managers, settled inbound Calls, Sessions and
+  Calls, then the first runnable mailbox in canonical `(slot, instance)`
+  order (`vm.rs:2118-2223`, `runtime.rs:289-336`). Every transaction commits
+  its record before any mailbox, state or scheduler mutation, and those
+  mutations are infallible by prior reservation (`fire_operator`,
+  `vm.rs:4793-4812`; `settle_next`, `:4434-4453`; `retain_call_open`,
+  `:5586-5604`; `route_prepared`, `:6742-6754`).
+- **Expiry is reserved, not consumed.** `peek_due` keeps the deadline until
+  the expiry commits (`vm.rs:943-957`, `advance.rs:137-149`); an open Call
+  closes once with its Timeout fact and its Driver cancel is proved before
+  the close-once mutation (`vm.rs:2855-2890`); a Call that expires in its
+  queue still opens and closes with the same causality (`vm.rs:2906-3100`);
+  a ready mailbox whose budget is already due is expired before any intent
+  reaches a Driver (`open_call`, `vm.rs:5484-5495`).
+- **Closing is inner-first and deterministic.** `progress_closures` stops one
+  instance per call, deepest owner path first then identity order, only when
+  its scope is quiescent, it has no descendants and no stop product can still
+  reach it (`vm.rs:3890-3933`, `closing.rs`); a Graph request marks the
+  subtree and later children inherit the close (`activate_close`,
+  `vm.rs:3836-3888`; `install_target`, `:6821-6863`).
+- **Recovery re-derives and compares; it never re-runs a producer.** Retained
+  instants must be monotone and not after the resume instant
+  (`recovery.rs:64-98`); routes, routed contexts, deadlines and instance
+  commands are recomputed from the plan and the admission prefix and must
+  equal the record (`recovery.rs:441-521`, `recovery/ingress.rs:212-279`,
+  `recovery/retries.rs:145-198`); an open Call is rebuilt as pending without
+  restarting the effect and a closure needs its retained opening
+  (`recovery/calls.rs:38-118, 120-186`); every manager transition is checked
+  against the fold and the deployed Loop, including the stop authority
+  (`recovery/loops.rs`, `graph_loop.rs:1003-1233`); Loop deadlines come from
+  retained `Advance` facts, never from the boot instant
+  (`recovery.rs:530-552`).
+- **The cursor key is `(edge, source instance)`** as key 20 seals it
+  (`runtime.rs:262-266`); a successor generation starts its own sequence.
+- **Dispatch is a pure selection** with a depth budget, closed matches
+  requiring exactly one arm and open matches taking the first true
+  predicate (`dispatch.rs`).
+- **Typed and untyped materialization agree** where the Loop expiry needs
+  them to: the VM builds `LoopExpired.last_state` through the entry type
+  (`loop_manager.rs:699-708`) and the fold checks a `Text` payload through
+  the typed reading and anything else through `data_value`
+  (`fold.rs:534-546`); `DataSlot::materialize` differs from `data_value` only
+  for raw bytes read as `Text` (`runtime.rs:2065-2093, 2479-2498`).
+
+**A-T4-1 — The drain expiry mutates before its fallible Driver cancel
+(v21).** `expire_closing` for `ClosingDeadline::Drain` calls
+`begin_settlement` (`vm.rs:4004`), which moves every instance of the scope
+to `Settling` and residualizes mailboxes, before cancelling the pending Calls
+through the Driver (`vm.rs:4005-4021`). A cancel refusal leaves the deadline
+reserved, as designed, but the replay finds `stage == Settling`, so the
+guarded arm (`vm.rs:4003`) no longer matches and the empty `Drain` arm
+(`vm.rs:4148`) acknowledges the deadline: the remaining Calls are never
+cancelled and wait for the settlement deadline, which abandons them
+(`vm.rs:4051-4086`). The journal stays consistent, so this is robustness,
+not correctness. Target: prove every cancel before `begin_settlement`, as
+`expire` already does for one Call (`vm.rs:2855-2868`), or make the
+`Settling` replay re-issue the cancels. The settlement arm is already
+replayable (`abandon_egress` answers `AlreadyClosed`). Owner: Astra;
+regression with a Driver whose first cancel refuses.
+
+**A-T4-2 — Fuel resolution is written three times (v21, zero bytes).**
+`loop_manager.rs:159-174`, `recovery/loops.rs:75-90` and
+`graph_loop.rs:1078-1093` each resolve the Loop fuel from `spec.fuel` or the
+proof's measure; the second spells the conversion `*n as u64` where the
+others use `u64::try_from`. One `fn resolved_fuel(spec, envelope, instance)`.
+Cosmetic beside it: `loop_manager.rs:341-350` assigns `context: vec![run]`
+and overwrites it at `:349`; `loop_manager.rs:748,781-782` recompute
+`current.iteration + 1` unchecked after the checked addition at `:643-646`.
+Owner: Astra.
+
+**A-T4-3 — Whole-journal scans on the step path (A-T2-3, M2).** Recorded so
+the M2 index design has its list: `next_dated_recurrence`
+(`retry_manager.rs:353-413`) runs on every step once a Loop or Retry exists
+(`vm.rs:2143`), `synchronize_retry_closures` (`retry_manager.rs:188-197`) on
+every step (`vm.rs:2124`), `step_retry_manager` (`retry_manager.rs:433-473`),
+`step_instance_commands` (`vm/instance_stop.rs:182-198`), `expire`
+(`vm.rs:2840-2851`) and `restore_instance_closure` (`recovery.rs:742-763`)
+each scan the records, besides the `find_call`/`find_envelope` lookups
+already named by A-T2-3. The mailbox sequence table `edge_seq`
+(`runtime.rs:215, 262-266`) is never pruned for stopped generations. Not
+v21: the behaviour is the deliberately linear M1 implementation.
+
+**Specification precision, before the freeze (zero bytes).** Key 24 lists
+kind 3 among the sealed deadline ids and says "Kind 3 uses InstanceLifetime"
+(`identity.md:256`); the VM retains lifetime deadlines at key 41 only
+(`vm/timing.rs:9-75`, `retain_deadlines`) and never seals one, and recovery
+refuses a sealed kind 3 (`recovery.rs:223-233`). One sentence: lifetime
+deadlines are retained, never sealed. Owner: Astra, with A-T2-8.
+
+### Disposition of the 8 October findings
+
+| Lot | Items |
+|---|---|
+| Before the 23/24 October freeze, zero bytes | A-T2-8 (three comments, `loop.md` recipe); key-24 precision in `identity.md` |
+| v21, after the opening | A-T2-9 (Loop fold learns the closing scope), A-T2-10 (`loop_protocol::Packet::tree`), A-T2-11 (one Retry carrier matrix, one terminal-case reading, `Timing` classification), A-T4-1 (drain cancels before `begin_settlement`), A-T4-2 (one fuel resolution, two cosmetic residues) |
+| M2, with the durable journal | A-T4-3 and the `instance_commands` re-fold (A-T2-3), one lifecycle fold for the three protocols (A-T2-2(b)) |
+
+Yoann's 8 October brief dates the real freeze **Friday 23 October**; this
+ledger, `ROADMAP.md:59`, `opening-showcase.md:3` and `decisions.md:137` say
+24 October, a Saturday. To align in the next documentation touch; the brief
+is taken as the intent.
+
+**Still to read in T4** before the external review: `inject_submission`,
+`prepare_routes` through `candidate_owner`, `recovery/exchanges.rs`, the
+Graph Loop manager (`graph_loop.rs` except its recovery check), and the
+`unreachable!`/`unwrap_or_else` sites of `vm.rs` one by one.
+
 ## Implementation follow-up — 2026-10-05, lot 1
 
 The consolidated brief's vocabulary lot lands on `eb3f396` in the commit
@@ -1112,6 +1370,69 @@ vocabulary of `E-TYPE-BUDGET`/`E-PLAN-DEPTH`; `DeploymentError::InvalidSecretRef
 still say "spine" (`machine_executor.rs:109,166`). Still open from those
 actions: the `instance` module move (M2), the `IdKind` enum (v20), the
 specification prose (v21 docs sweep).
+
+## External Rust review (26–30 October) — priorities
+
+The reviewer reads the frozen branch. In order of value for the promise
+(same plan, same inputs, same execution, identities and trace), with the
+question each item should answer:
+
+1. **Same-instant ordering, live and recovered.** The scheduler breaks ties
+   with a VM-local `creation_seq` that is not journaled (`vm.rs:916-937`).
+   Loop and Retry re-derive their dated head from the record order
+   (`retry_manager.rs:350-413`); every other deadline kind relies on
+   recovery re-scheduling in the same order the live VM did
+   (`recovery.rs`, `route_prepared`, `install_target`). Question: can two
+   deadlines of different kinds, due at the same instant, expire in a
+   different order after recovery, and would that change the record
+   sequence? A targeted test with a lifetime and a Call timeout due together
+   would settle it.
+2. **Facts first, then mutation — every path.** The discipline is explicit
+   in `expire` for an open Call (`vm.rs:2855-2868`) and broken once in the
+   drain expiry (A-T4-1). Question: is there any other place where a
+   fallible Driver or journal call follows a VM mutation, so a refusal
+   leaves the VM and the journal disagreeing? Candidates: `expire_closing`
+   both arms, `expire_session_handshake` (`vm.rs:3105-3261`), `settle_next`,
+   `step_retry_manager` (`retry_manager.rs:608-640`).
+3. **Every `unreachable!` and `unwrap_or_else(|| unreachable!)`.** `vm.rs`
+   uses them for reserved capacity and planned paths (`:2894, :2924, :5594,
+   :5614-5616, :6739, :6752-6754`). Question: is each one proved by a
+   reservation made in the same step, or could a recovered or
+   concurrently-mutated state reach it? A panic in the core is a correctness
+   bug under AGENTS.md.
+4. **Recovery re-derivation has no hidden input.** Recovery recomputes
+   routes, settings and deadlines and compares them with the record
+   (`recovery.rs:441-521`, `recovery/retries.rs:80-91`,
+   `recovery/calls.rs:90-101`). Question: does any recomputation read
+   `self.now`, the boot instant, environment or an unjournaled value, so
+   that a correct journal could be refused or a wrong one accepted? Note the
+   instant handling at `recovery.rs:64-98` and `recovery/retries.rs:74`.
+5. **The Loop fold's blind spots.** A-T2-9 (`Stopped` without closing
+   evidence) and the invariant that every enclosing run named in a manager
+   record's context is still active when that record commits
+   (`fold.rs:269-282` refuses otherwise; producers at
+   `loop_manager.rs:488-504, 519-532, 615-619`). Question: can an outer run
+   close by a natural or explicit verdict while an inner run still owes a
+   manager record, so the journal refuses the VM's own record?
+6. **Retry: three readers of one rule.** A-T2-11. Question: is there an
+   input accepted by the carrier matrix and refused by the fold, or a
+   completion whose terminal case reads differently in `closure_schedule`
+   and `closure_case`?
+7. **Arithmetic at the edges.** `u64` ordinals and `i64` nanosecond instants:
+   `saturating_add` on due instants (`vm/timing.rs`, `loop_manager.rs:649`),
+   `entry_measure_budget` (`loop_manager.rs:791-828`), the unchecked `+ 1`
+   of A-T4-2, `creation_seq.wrapping_add`. Question: does any saturation or
+   wrap silently change a journaled value?
+8. **Backpressure accounting.** `check_room_for_routes` and
+   `recurrence_admission_load` (`vm.rs:6598-6670`, `retry_manager.rs:319-348`,
+   `loop_manager.rs:16-49`) count reservations against
+   `WORKER_MAILBOX_CAPACITY`. Question: can a batch pass the pre-commit check
+   and still hit a full mailbox after commit (the `unreachable!` of item 3)?
+
+Out of scope for that week: tiers T3 and T5–T11, vocabulary, the dated
+review evidence, and the M2 index design (A-T4-3). Tests are evidence, not
+reading matter; the two folds' test modules name the invariants if a brief
+is needed.
 
 ## Parked remarks (outside the current theme)
 
