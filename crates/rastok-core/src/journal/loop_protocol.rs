@@ -276,7 +276,7 @@ impl Packet {
     }
 }
 
-/// `rastok.loop-run.r2`: instance plus the exact opening admission.
+/// `IdKind::LoopRun` (0x08): instance plus the exact opening admission.
 #[must_use]
 pub fn run_ref(instance: &instance::Generation, opening: &OpeningAdmissionId) -> LoopRunId {
     let (tag, reference, port) = match opening {
@@ -295,7 +295,7 @@ pub fn run_ref(instance: &instance::Generation, opening: &OpeningAdmissionId) ->
     ))
 }
 
-/// `rastok.loop-command.r1`: one verdict obligation for one application.
+/// `IdKind::LoopCommand` (0x09): one verdict obligation for one application.
 #[must_use]
 pub fn command_ref(run: LoopRunId, iteration: u64, value: &CommandValue) -> CommandId {
     let provenance = match value {
@@ -313,7 +313,7 @@ pub fn command_ref(run: LoopRunId, iteration: u64, value: &CommandValue) -> Comm
     ))
 }
 
-/// `rastok.loop-admission.r1`: temporal admission caused by one consumed command.
+/// `IdKind::LoopAdmission` (0x03): temporal admission caused by one consumed command.
 #[must_use]
 pub fn admission_ref(run: LoopRunId, iteration: u64, command: CommandId) -> Id {
     Id::derive(

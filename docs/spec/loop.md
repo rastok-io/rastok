@@ -91,14 +91,13 @@ carrying an existing recurrence reference continues that run. The stable
 identity is:
 
 ```text
-LoopRunId =
-  derive(rastok.loop.r2,
-         instance::Generation,
-         OpeningAdmissionId)
+LoopRunId = blake3-derive( 0x08, instance::Generation ‖ OpeningAdmissionId )
 ```
 
-`OpeningAdmissionId` is the exact admitted delivery/cursor occurrence, not
-only `origin_id`. This distinction permits two fan-out deliveries from one
+`0x08` is `IdKind::LoopRun` in the closed identity registry (envelope.md §2);
+the string `rastok.loop.r2` names the protocol in the plan stream, never an
+identity domain. `OpeningAdmissionId` is the exact admitted delivery/cursor
+occurrence, not only `origin_id`. This distinction permits two fan-out deliveries from one
 business origin to open two runs in the same keyed instance without collision.
 
 Every run carries an explicit `LoopContext` containing at least owner,

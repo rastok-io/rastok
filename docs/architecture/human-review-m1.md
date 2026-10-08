@@ -647,7 +647,14 @@ residue in its recipe block, `derive(rastok.loop.r2, instance::Generation,
 OpeningAdmissionId)` (`loop.md:93-98`), which contradicts `identity.md`; the
 protocol domain `rastok.loop.r2` of the plan stream (`identity.md:106`,
 `lower.rs:134`) is not an identity domain and stays. Residue of the accepted
-7 October sweep; comment and specification text only. Owner: Astra.
+7 October sweep; comment and specification text only. **Landed 8 October by
+Fable on the review branch**, with the key-24 precision below: the three
+comments name `IdKind::LoopRun`/`LoopCommand`/`LoopAdmission` with their
+bytes, `loop.md` writes `blake3-derive( 0x08, … )` in the envelope.md §2
+notation and says that `rastok.loop.r2` names the protocol, never an identity
+domain. Verified: fmt, strict Clippy and rustdoc on the core, the rustdoc
+link checker, and the spec-reading suites (`site_content`, `golden_trace`,
+`plan_package`, `jsonl_fixture`, `plan_validation`) pass; no witness moves.
 
 **A-T2-9 — The Loop fold accepts `Close { Stopped }` without closing
 evidence (v21).** `fold.rs:486-488` closes a run on a `Stopped` reason on any
@@ -850,13 +857,13 @@ kind 3 among the sealed deadline ids and says "Kind 3 uses InstanceLifetime"
 (`identity.md:256`); the VM retains lifetime deadlines at key 41 only
 (`vm/timing.rs:9-75`, `retain_deadlines`) and never seals one, and recovery
 refuses a sealed kind 3 (`recovery.rs:223-233`). One sentence: lifetime
-deadlines are retained, never sealed. Owner: Astra, with A-T2-8.
+deadlines are retained, never sealed. Landed with A-T2-8 (8 October).
 
 ### Disposition of the 8 October findings
 
 | Lot | Items |
 |---|---|
-| Before the 23/24 October freeze, zero bytes | A-T2-8 (three comments, `loop.md` recipe); key-24 precision in `identity.md` |
+| Before the 23/24 October freeze, zero bytes | A-T2-8 (three comments, `loop.md` recipe); key-24 precision in `identity.md` — both landed 8 October |
 | v21, after the opening | A-T2-9 (Loop fold learns the closing scope), A-T2-10 (`loop_protocol::Packet::tree`), A-T2-11 (one Retry carrier matrix, one terminal-case reading, `Timing` classification), A-T4-1 (drain cancels before `begin_settlement`), A-T4-2 (one fuel resolution, two cosmetic residues) |
 | M2, with the durable journal | A-T4-3 and the `instance_commands` re-fold (A-T2-3), one lifecycle fold for the three protocols (A-T2-2(b)) |
 
