@@ -37,6 +37,12 @@ below carries its lot: zero-byte corrections before the freeze, v21 after the
 opening, or M2. The priorities for the external Rust review of 26–30 October
 are in their own section before the parked remarks.
 
+**Reading — 10 October.** Preparing the T4 second pass raised a T1 question
+on temporal carriers: dates are bounded to 1678–2262 and the two time planes
+meet in `now()` and the hosted boot instant. Yoann settled it as
+D-2026-10-10-1; it is recorded as A-T1-12 below, lot v21. The T4 second pass
+itself has not started.
+
 Rastok promises that the same validated plan and the same journaled inputs
 produce the same execution, identities and trace. The review reads what
 carries that promise first (identity, journal, validated plan, VM), then what
@@ -396,6 +402,35 @@ constructors, `TypeOrderKey` and the key-admission rules were not read in
 this pass;
 `Value` versus `DataType` is one type system with a checked runtime
 conformance relation, not a second type system.
+
+### Temporal carriers and the logical timeline — decided 2026-10-10
+
+**A-T1-12 — Widen the instant carriers and make the logical timeline
+explicitly relative (v21, bytes move).** `Value::Timestamp` and
+`Value::TimestampNtz` are signed i64 nanoseconds (`value.rs:33-41`; tags 10
+and 11 in identity.md §3), so every date is bounded to 1678–2262 whatever the
+port's unit, because the unit is normalized away before the value is carried
+(types.md, "V1 value bound"). Business sentinels such as 9999-12-31, pre-1678
+history and in-range Arrow or Postgres instants refuse at the door; the
+refusal itself is correct and checked (`datatype.rs:1906-1913`). At the same
+time the hosted runner boots the VM at the civil instant (`main.rs:389-391`)
+and `now()` exposes the raw logical instant as a `timestamp`
+(`runtime.rs:736-738`), fusing the two planes of execution-model §5 that the
+Lab keeps apart: it boots at 0, and the scenario `origin` is parsed
+(`parser.rs:720`) but not applied. Decision D-2026-10-10-1: a relative i64
+timeline from `t₀ = 0`, a civil `origin` as an unsealed retained boot input,
+`now() = origin + instant`, tumbling boxes on `origin + k·every`, and
+`timestamp`/`timestamp_ntz` carried as `[seconds, nanoseconds]` under the new
+tags 22 and 23, tags 10 and 11 retired. Scope: `value.rs`, `canonical.rs`,
+`datatype.rs` conformance, `expr.rs` temporal parsing and arithmetic,
+`instance.rs` box segment, the `now` binding in `runtime.rs`, the hosted
+time source, Lab `origin`, the recording header; identity.md §3, types.md,
+execution-model §5, simulation-semantics §5.3 and the `Timer` payload in
+stdlib.md. Every envelope carrying an instant and every box address
+re-blesses with its reason. Owner: Astra. Lot: v21, with A-T1-6, A-T1-7 and
+A-T1-9. Before the opening, zero bytes: README "Status and known limits"
+states the V1 bound and the relative timeline, and types.md points to the
+decision [landed 10 October by Fable on the review branch].
 
 ## T2 — The journal, replayable truth
 

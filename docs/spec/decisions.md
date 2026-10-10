@@ -5,6 +5,63 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-10-10-1 — The logical timeline is relative; civil time is a retained external input
+
+Yoann settles (2026-10-10) how instants are carried, after preparing the T4
+second pass showed the two planes of execution-model §5 fused in one place:
+`now()` exposes the raw logical instant as a `timestamp`, the hosted runner
+boots the VM at the civil instant while the Lab boots at 0, and every date
+is carried as signed i64 nanoseconds, bounded to 1678–2262 whatever the
+port's declared unit (types.md, "V1 value bound").
+
+1. **Logical timeline.** Signed i64 nanoseconds, relative: `t₀ = 0` at the
+   journal's first boot, monotone across recoveries (a recovered VM resumes at
+   or after its last retained instant). Deadlines, lifetimes, delays, budgets,
+   `created_at`, `due_at` and `closed_at` live on it. It is never widened: it
+   bounds continuous execution to 292 years and bounds no date.
+2. **Civil anchor.** `t₀ ≡ origin`, one civil instant supplied by the host
+   at the first boot, and by the scenario attribute `origin` in the Lab
+   (simulation-semantics §5.3; epoch default). It is real-world data, hence an
+   unsealed retained input: the "host information" column of identity.md's
+   sealed/unsealed table, required for recovery (box re-derivation) but never
+   compared by a golden. It is retained in the journal's boot fact, designed
+   with v21, and in the recording header. The hosted time source passes
+   `origin` separately and feeds elapsed time only.
+3. **`now()`.** `origin + logical instant`, typed `timestamp` on the wide
+   carrier; the observing transaction seals the resulting value exactly as
+   today (expressions.md §1.2). The examples comparing `now()` with
+   `timestamp("1970-01-01T00:00:00Z")` stay exact under the epoch default.
+4. **Tumbling.** Boxes align on `origin + k·every`; instances.md §6.5 keeps
+   its meaning and the box-start segment payload follows the wide carrier.
+   This is the one place where civil time shapes an identity, sealed as today.
+5. **Carriers.** `timestamp` and `timestamp_ntz` move to
+   `[signed seconds since epoch (i64), nanoseconds within the second (uint < 10⁹)]`,
+   a domain of ±292 billion years: wide enough for 9999-12-31 business
+   sentinels, pre-1678 history and every in-range Arrow, Postgres, .NET or
+   Java instant. The value registry being extend-only, they take the next
+   free tags **22** and **23**; tags 10 and 11 are retired, never reused
+   (precedent: D-2026-08-07-2). `duration` stays tag 14 as i64 nanoseconds;
+   `date`, `time` and `interval` do not change. The `processing_time_box`
+   segment payload (identity.md §3, segment kind 2) changes with the carrier.
+
+Every envelope carrying an instant and every box address moves, so this is
+**v21** work, the single post-opening byte movement, with A-T1-6, A-T1-7 and
+A-T1-9. Before the opening, zero bytes: README "Status and known limits"
+states the V1 bound and the relative timeline; types.md keeps the bound and
+points here. No M1 journal is durable, so nothing migrates.
+
+**Rejected:** keeping i64 nanoseconds for dates (pandas' 1677–2262 bound,
+refusing valid business and historical data at the door); carrying the value
+in the port's declared unit, Arrow-style (the value stops being
+self-describing and two equal instants get different identities by unit,
+against the one-registry rule); i128 nanoseconds (software arithmetic on
+Cortex-M and a larger carrier for no gain over the pair); widening the
+logical timeline itself (it bounds execution length, not dates, and would
+touch every retained instant); boot-relative tumbling boxes (instances.md
+§6.5 requires `epoch + k·every`, never relative to the first envelope);
+`now()` as a `duration` (breaks comparisons with business dates without a
+Connector, and the existing examples).
+
 ## D-2026-10-07-1 — Bless the reviewed format-20 representation once
 
 Yoann approves the single blessing after Fable's review of `2de737a`, with

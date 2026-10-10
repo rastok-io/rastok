@@ -117,7 +117,9 @@ The materialized carriers are consequently smaller than the type algebra:
   canonical nanoseconds; an interval carries its month/day/nanosecond
   components. Unit, timezone and external physical width remain type
   parameters. The V1 value bound is the published i64 nanosecond domain;
-  an external value outside it refuses instead of overflowing;
+  an external value outside it refuses instead of overflowing.
+  D-2026-10-10-1 schedules wider `timestamp`/`timestamp_ntz` carriers
+  for the first post-opening format;
 - UUID carries exactly 16 network-order bytes;
 - `map<text,V>` uses the unique text-keyed form; other admitted key types use
   canonical tagged key values. Two canonically equal keys refuse;
