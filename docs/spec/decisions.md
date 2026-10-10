@@ -5,6 +5,91 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-10-11-1 — Realign the plan and the runtime on the specification's Node ontology before the opening
+
+Yoann decides (2026-10-11) that the executable plan and the runtime
+organization are brought back to the taxonomy extensions.md §1 already
+fixes — Node = Graph | Executor, Executor = Operator | Connector, an
+Extension attached to one Node owner — **before the public opening**, as an
+opening condition, not as M2 work by default. The reason is not cosmetic: a
+reader who knows the design cannot recognize it in the types. `plan::Node`
+is narrower than the specification's Node; an Executor is an `Owner` row and
+a `Node` row that point at each other; handlers live in a third table with an
+`owner` back-reference; ports sit in three places (`boundary`,
+`Owner::ports`, `Node::ports`); the wiring exists three times (`edges`,
+`routes`, `boundary_routes`) and `plan/composition.rs` recomposes it to check
+that the copies agree. Learning that second representation is the price of
+reading the first. Correcting the engine is necessary but does not make the
+core ready to publish; the project will not open with an organization it
+already intends to replace.
+
+Scope, from Astra's proposal of 11 October, accepted as the direction:
+
+1. One table of Nodes, the root App first. Each row carries name, parent,
+   ports, instance policy, immutable values and Extensions, then a body by
+   nature: Graph (wiring), Operator (`var` cells and handlers), Connector
+   (Contract and configuration). A Graph gains no mailbox or transaction by
+   sitting in that table. Handlers belong to their Operator and
+   `Handler::owner` disappears; owner/node reciprocity, Operator-only
+   handlers and port-less Node owners become structural instead of checked.
+2. One typed index into that table replaces `Slot` and `OwnerSlot`. An
+   endpoint is an index plus a port name; the App boundary is the root
+   Node's ports, so `EdgeEnd::node == None` carries no meaning any more.
+   Destinations stay an explicit enum: port, discard, Loop command,
+   instance stop, with the command's allowed scope checked from the Graph
+   that holds the route.
+3. One reference wiring per Graph, normalized to "source → all these
+   destinations" or "source → destinations by case". Composed routes,
+   handler access and scope chains are derived by the validated plan and
+   kept private, never transported as a second description. Composition
+   keeps every Graph passage: outer-to-inner instance selection, lifetimes
+   and Loop contexts depend on it.
+4. Execution, read-only inspection and debugger presentation are separate
+   modules. Inspection types leave `runtime/vm.rs` and lose fields that
+   restate their identity; Calls and Sessions are not merged into one
+   optional-field type.
+5. Business concepts use the specification's words; technical mechanisms
+   get explicit names.
+
+Not in scope: removing small types for their own sake, or replacing typed
+indexes with bare integers. An abstraction stays when it carries a meaning
+or a guarantee. The T4 second pass continues on the current code and feeds
+this work without widening it.
+
+**Guarantees.** No new semantics: Graph remains a scope; Loop, Retry,
+transactions, causal identities, Closing and recovery are unchanged. No
+identity recipe reads a `Slot` or `OwnerSlot` — `instance.rs` seals an
+Identity from an `OwnerPath` and its segments, and `envelope.rs`,
+`canonical.rs` and `journal/codec.rs` are path-based — and the semantic hash
+seals the canonical HIR, so the realignment moves the package
+representation and nothing else. Acceptance compares the two
+representations on the same programs: same admissions, emissions, causal
+identities, dispositions and recovery results, on the existing goldens,
+with no weakened test.
+
+**To qualify, not decided.** The physical layout — heterogeneous table,
+boxed bodies or compact side tables — against the embedded entry
+constraint (512 B of heap and 7,136 B of code under the gates, per the
+review ledger): the rp2350 spike decodes the package at boot, so routes
+derived at load are paid there. Peak at load, resident memory and code size
+are measured before the layout is chosen. The embedded constraint is an
+acceptance criterion, not a reason to keep the current model.
+
+**Format consequence.** This is a package movement before publication. It
+takes the next package number and becomes the representation the
+public-format-1 TODO relabels; the compact registry stays extend-only (new
+keys appended, retired keys never reused); package witnesses, the embedded
+echo package and the recording pin regenerate once with an inventory, as
+D-2026-10-07-1 did. That supersedes "bless once" for the package
+representation, not for traces, whose identities must not move. The lot of
+D-2026-10-10-1 keeps its definition, "the first post-opening format",
+whatever its number; nothing from it rides this movement unless Yoann says
+so.
+
+**Governance.** Any impact on the 23 October freeze, the 26–30 October
+external review or the 5 November opening is submitted to Yoann in the
+review ledger, never reclassified after publication by default.
+
 ## D-2026-10-10-1 — The logical timeline is relative; civil time is a retained external input
 
 Yoann settles (2026-10-10) how instants are carried, after preparing the T4

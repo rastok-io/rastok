@@ -42,6 +42,18 @@ the expiry edge removed, and observable evictions. The three refusal probes
 failed before the correction and pass after it. The unbounded case remains
 dead when no handler emits on that port.
 
+Yoann decided on 11 October that the plan and the runtime are realigned on
+the specification's Node ontology before the opening
+([D-2026-10-11-1](../spec/decisions.md); ledger section
+[Realignment on the Node ontology](human-review-m1.md#realignment-on-the-node-ontology--decided-2026-10-11)):
+one Node table with a body by nature, handlers inside their Operator, one
+typed index, one reference wiring per Graph with derived execution indexes,
+and execution separated from read-only inspection and debugger
+presentation. No new semantics and no identity movement; the package
+representation moves once more before publication and is what the format-1
+relabel names. Layout and embedded cost remain to qualify; the calendar
+impact is submitted to Yoann in the ledger, not reclassified.
+
 ## Delivery ledger
 
 | Item | State | Evidence / next gate |

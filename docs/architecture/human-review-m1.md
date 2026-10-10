@@ -43,6 +43,15 @@ meet in `now()` and the hosted boot instant. Yoann settled it as
 D-2026-10-10-1; it is recorded as A-T1-12 below, lot v21. The T4 second pass
 itself has not started.
 
+**Reading — 11 October.** Astra proposed realigning the plan on the Node
+ontology of extensions.md §1 (one Node table, one typed index, one reference
+wiring with derived indexes, inspection out of `vm.rs`); Fable verified it
+against the code and placed it in M2 as a format movement. Yoann decided the
+same day that it is an **opening condition** (D-2026-10-11-1). The section
+[Realignment on the Node ontology](#realignment-on-the-node-ontology--decided-2026-10-11)
+separates what is decided, what is to qualify and the calendar impact
+submitted to Yoann. The T4 second pass continues on the current code.
+
 Rastok promises that the same validated plan and the same journaled inputs
 produce the same execution, identities and trace. The review reads what
 carries that promise first (identity, journal, validated plan, VM), then what
@@ -912,6 +921,103 @@ is taken as the intent.
 Graph Loop manager (`graph_loop.rs` except its recovery check), and the
 `unreachable!`/`unwrap_or_else` sites of `vm.rs` one by one.
 
+## Realignment on the Node ontology — decided 2026-10-11
+
+Astra's 11 October proposal, verified by Fable against the code, and
+Yoann's decision the same day ([D-2026-10-11-1](../spec/decisions.md)).
+As the decision asks, this section separates what is decided, what remains
+to qualify and what is submitted to Yoann.
+
+**Decided — an opening condition, not M2 by default.** The plan and the
+runtime are brought back to extensions.md §1 (Node = Graph | Executor;
+Executor = Operator | Connector) before the opening. Today `plan::Node` is
+narrower than the specification's Node; an Executor is an `Owner` row and a
+`Node` row pointing at each other, and `OwnerNodeMismatch` checks the
+reciprocity; handlers form a third table with an `owner` back-reference,
+and `NonOperatorHandler` keeps them on Operators; ports live in `boundary`,
+`Owner::ports` and `Node::ports`; the wiring exists as `edges`, `routes`
+and `boundary_routes`, and `plan/composition.rs` recomposes the inventory
+whenever a nested Graph, a Graph Loop or an `InstanceStop` destination is
+present, to check that the three agree. Scope, as the decision states it:
+one Node table with a body by nature and handlers inside their Operator;
+one typed index and explicit destinations; one reference wiring per Graph
+with derived, private execution indexes; execution, read-only inspection
+and debugger presentation in separate modules (`CallInspection::direction`
+restates its `reference` variant); the specification's words for business
+concepts. Not in scope: removing small types for their own sake or
+replacing typed indexes with bare integers. No new semantics, and
+identities cannot move: `instance.rs` seals an Identity from an `OwnerPath`
+and its segments; `envelope.rs`, `canonical.rs` and `journal/codec.rs`
+never read a `Slot` or `OwnerSlot`; the semantic hash seals the canonical
+HIR. The only `OwnerSlot` outside the plan is `instance::Live::owner`,
+live state. Owner: Astra. Review: Fable, then Yoann.
+
+**To qualify — layout and cost.** Heterogeneous table, boxed bodies or
+compact side tables, measured against the M2 entry constraint recorded
+below (512 B of heap and 7,136 B of code under the gates): the rp2350
+spike decodes the package at boot (`pkg_decode`), so routes derived at
+load are paid there, where transported routes cost package bytes and no
+heap. Peak at load, resident memory and code size, plus the differential
+comparison (same admissions, emissions, causal identities, dispositions,
+recovery) on the existing goldens, decide the layout, not the current
+model's incumbency. One invariant to write before coding: a Graph boundary
+port's face is given by the Graph whose wiring names it (outer face in the
+parent's wiring, inner face in its own), or the two meanings of
+`EdgeEnd::node == None` come back under another name.
+
+**Submitted to Yoann — calendar impact.** Measured surface on `fedada7`:
+65 files reference the plan model (`Slot`, `OwnerSlot`, `owners`,
+`handlers`, `boundary_routes`, `OwnerKind`), 45 sources and 20 test files.
+The densest are `runtime/vm.rs` (103 sites, 6,884 lines),
+`plan/validation.rs` (95 sites, 5,032 lines), `plan/annotation_resolution.rs`
+(59), `plan/serialization.rs` (52 sites, 4,482 lines), `runtime.rs` (52),
+`compiler/lower.rs` (23) and the debugger views (`ui/view.rs`,
+`ui/view/explanation.rs`). Precedents on this code with a settled design:
+the v16 cutover, including the plan change that removed Graph handler
+states and realigned the debugger, landed 5–7 September after the rework;
+v19 landed 15–18 September with documentation on the 22nd; the v20
+candidate 5–6 October, blessed on the 7th. This work is semantics-free but
+broader than any single cutover since v16: it changes the model every
+module reads and rewrites the package layout. Fable's estimate, to be
+corrected by Astra's own: lot 1 (plan model, serialization, lowering,
+validator, VM access paths, tests, witness inventory and bless) six to
+eight working days from Monday 13 October, landing 21–23 October at best;
+lot 2 (runtime split, inspection and debugger separation, naming) two to
+three days after lot 1, since both touch `vm.rs`; one day for Fable to
+re-anchor this ledger and the external brief. Median landing of both lots:
+around 28 October, inside the external review week. Options, Fable's
+recommendation first:
+
+1. Keep 23 October and 5 November as targets, lot 1 then lot 2, with a
+   checkpoint on **Monday 20 October**: lot 1 in Fable's review by then,
+   or Yoann chooses between options 2 and 3 that day. Ask the external
+   reviewer this week whether 2–6 November is possible, so that option 2
+   exists.
+2. Shift one week: freeze Friday 30 October, external review 2–6 November,
+   opening around Thursday 12 November. The reviewer then reads the
+   realigned code, which is the point of the decision.
+3. Keep the dates; land lot 1 only before the freeze and lot 2 after the
+   external review, before the opening. The reviewer reads the new plan
+   and the old runtime organization. This narrows the decision, so only
+   Yoann can choose it.
+
+Consequences already visible: this is a package movement before
+publication, so it takes the next package number and becomes what the
+public-format-1 TODO relabels; D-2026-10-07-1's "bless once" is superseded
+for the package witnesses, the embedded echo package and the recording pin
+(regenerated once, with an inventory), not for traces, whose identities
+must not move. D-2026-10-10-1's lot keeps its definition, "the first
+post-opening format", whatever its number; nothing from it rides this
+movement unless Yoann says so. The line references of this ledger and of
+the external brief are anchored on `fedada7` until the realignment lands.
+
+**Where the review feeds it.** The T4 second pass continues on the current
+code; its findings name functions and invariants, not positions, so they
+survive the move. Block 4 (`plan/composition.rs`, Graph Loop admission) and
+the owner/node reciprocity checks are exactly what the realignment makes
+structural; reading them with that lens is useful, widening the scope is
+not.
+
 ## Implementation follow-up — 2026-10-05, lot 1
 
 The consolidated brief's vocabulary lot lands on `eb3f396` in the commit
@@ -1415,7 +1521,9 @@ specification prose (v21 docs sweep).
 
 ## External Rust review (26–30 October) — priorities
 
-The reviewer reads the frozen branch. In order of value for the promise
+The reviewer reads the frozen branch. Line references in this section are
+anchored on `fedada7`; they are re-anchored once D-2026-10-11-1 lands, before
+the review starts. In order of value for the promise
 (same plan, same inputs, same execution, identities and trace), with the
 question each item should answer:
 
