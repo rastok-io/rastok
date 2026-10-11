@@ -332,14 +332,14 @@ timeline.
 
 | Term today | What it is | Yoann's decision | Status |
 |---|---|---|---|
-| `Draft` | the part of an envelope the world provides: `data` + `ext`; no `sys`, no `app` | **`EnvelopeContent`**, or a field `content` of `Envelope`. Not `envelope_data`: `data` already names the payload alone, and the content also carries `ext` | decided (two types stay: content without identity, envelope with it) |
+| `Draft` | the part of an envelope the world provides: `data` + `ext`; no `sys`, no `app` | **`EnvelopeContent`** (Fable's recommendation under rule 4) or `EnvelopeDraft` (acceptable to Yoann); one of the two to close. Not `envelope_data`: `data` already names the payload alone, and the content also carries `ext` | decided in substance, word to close |
 | mint (doc comments: "the journal mints the id") | derive and assign the definitive identity | **identify** / **assign_identity** | decided |
 | `pump` | one boundary round with the Drivers | **`poll_drivers`** | decided |
 | `CompletionGate`, `OpenGate` | a conformance check of a Driver's completion against the Contract | **`CompletionCheck`** | decided |
 | bless (goldens, witnesses) | accept a new reference | **approve** | decided |
 | `Fold` | a projection rebuilt from committed journal facts (Loop, Retry, instance commands) | to discuss: "projection" is the specification's word but already carries three meanings in the code | open |
-| `Intent` (`SessionOpenIntent`, `SessionWriteIntent`) | the journaled open fact of an outbound effect, before the effect | to discuss | open |
-| `Packet` (loop, retry, instance_stop) | one sparse protocol sub-record carried by a transaction; its fields are already named `*_record` | to discuss | open |
+| `Intent` (`SessionOpenIntent`, `SessionWriteIntent`) | the description of an outbound effect handed to the Driver after its open fact committed | name the effect, drop the suffix: **`CallOpen`**, **`SessionOpen`**, **`SessionWrite`**; journal-before-effect is stated once, on the Dispatcher | decided |
+| `Packet` (loop, retry, instance_stop) | the protocol's sparse contribution to one transaction (its own doc line): Loop = contexts, routes, commands produced and consumed, facts; Retry = attempt context and facts; instance stop = commands produced and consumed | Yoann proposes CQRS naming (event / command). The inner words already exist and are CQRS: `Fact` (Rastok's word for an event, since `Event` is a Contract exchange kind) and `Command`. Candidates for the container: `Contribution` (the doc's word), or by content | open |
 
 ## What validation produces
 
