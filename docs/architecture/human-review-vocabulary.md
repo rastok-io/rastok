@@ -1,4 +1,4 @@
-# Vocabulary ledger — the named entities of the code, for validation
+   # Vocabulary ledger — the named entities of the code, for validation
 
 > Draft of 11 October 2026, prepared by Fable for Yoann's validation during
 > the M1 human review. Status: **nothing here is decided**. Each line marked
@@ -31,6 +31,11 @@ themselves **⟂** to confirm:
    Contract, Dispatch, Driver) is never reused for a mechanism.
 3. **Nestings are not synonyms.** Three names for three wrappings of one
    object are a smell unless each wrapping adds a fact a reader needs.
+4. **Plain over imagery** (Yoann, 11 October). A name must unfold into a
+   sentence without its doc comment. An image is kept only where the
+   specification adopted it and the public reads it: `Envelope`, `mailbox`,
+   `budget`, `deadline`, `drain`, `worker`, `sealed` / `unsealed` /
+   `retained`, `trace`.
 
 ## Collisions to settle first
 
@@ -322,6 +327,19 @@ timeline.
 **⟂ 11b.** `ScenarioSession` reuses "session", the Connector exchange word.
 **⟂ 11c.** The HIR mirrors plan names (`hir::Node`, `Graph`, `Handler`,
 `Edge`) — same word, previous layer. Acceptable by module path; confirm.
+
+## Validated so far — 11 October, evening
+
+| Term today | What it is | Yoann's decision | Status |
+|---|---|---|---|
+| `Draft` | the part of an envelope the world provides: `data` + `ext`; no `sys`, no `app` | **`EnvelopeContent`**, or a field `content` of `Envelope`. Not `envelope_data`: `data` already names the payload alone, and the content also carries `ext` | decided (two types stay: content without identity, envelope with it) |
+| mint (doc comments: "the journal mints the id") | derive and assign the definitive identity | **identify** / **assign_identity** | decided |
+| `pump` | one boundary round with the Drivers | **`poll_drivers`** | decided |
+| `CompletionGate`, `OpenGate` | a conformance check of a Driver's completion against the Contract | **`CompletionCheck`** | decided |
+| bless (goldens, witnesses) | accept a new reference | **approve** | decided |
+| `Fold` | a projection rebuilt from committed journal facts (Loop, Retry, instance commands) | to discuss: "projection" is the specification's word but already carries three meanings in the code | open |
+| `Intent` (`SessionOpenIntent`, `SessionWriteIntent`) | the journaled open fact of an outbound effect, before the effect | to discuss | open |
+| `Packet` (loop, retry, instance_stop) | one sparse protocol sub-record carried by a transaction; its fields are already named `*_record` | to discuss | open |
 
 ## What validation produces
 
