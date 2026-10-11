@@ -72,7 +72,11 @@ Ranked by the cost of leaving them to the external reviewer.
 4. **Emission.** Two types of that name: `journal::Emission` ("one emission
    of a transaction, in text order") and `plan::emission::Emission` ("what an
    emission builds"). Same word, two layers, both public. **⟂** the plan
-   side is a builder or a template, not an emission.
+   side is a builder or a template, not an emission. **Settled 11 October,
+   night (Yoann): `plan::EmissionSpec`.** The plan already names its
+   checked description of an authored declaration `*Spec` (`ConnectorSpec`,
+   `LoopSpec`, `RetrySpec`, `ExtensionSpec`); the lowered right-hand side of
+   `out = …` is one more. `journal::Emission` keeps the specification's word.
 5. **Profile.** Six meanings: `deployment::DeploymentProfile`,
    `PrivacyProfile`, `accounting::CostProfile`, `conformance::Profile`
    (Call/Event/Session provocation profiles), `contract::Profile` (Contract
@@ -156,14 +160,23 @@ the shared transaction is `admit_proposal`.
 | `AccountingObservation`, `ObservationScope` | accounting | measurement observations | — |
 | `BoundaryEvent` | boundary | doc: "one routable boundary fact for the VM"; actually a settled outbound call's completion awaiting its transaction, an observation → `BoundaryObservation` (11 October) | fact 110 |
 
-**⟂ 2a.** Collision 4 (two `Emission`). Proposed 11 October, awaiting
-Yoann: `journal::Emission { port, index, envelope }` is exactly the
-specification's emission and stays; `plan::emission::Emission` (`Identity |
-Patch | FreshData | Data`) is the classified *form* of the `out = …`
-statement, the specification's "ENVELOPE form" / "the form decides" →
-**`EmissionForm`**. Not `EmissionRecipe`: "recipe" is reserved for the
-identity recipes (root, id, birth). `EmissionBuffer`, `BoundaryOutput`,
-`PortOutput` (= `EnvelopeDraft` + port) are plain and stay.
+**⟂ 2a.** Collision 4 (two `Emission`). **Settled 11 October, night:**
+`journal::Emission { port, index, envelope }` is exactly the specification's
+emission and stays; `plan::emission::Emission` (`Identity | Patch |
+FreshData | Data | Nothing`, held as `value` on a Dispatch leaf) →
+**`EmissionSpec`**, the plan's `*Spec` convention. Examined and not
+retained: `journal::EmittedEnvelope` (loses the specification's word, and
+fails the last-word test: it is an envelope with its emission coordinates,
+not an envelope); `EmissionForm` (Yoann: no); `EmissionRule` (`RouteRule`
+is a checker decision, not an authored declaration); `EmissionRecipe`
+("recipe" is the identity recipes' word). Still proposed, awaiting Yoann:
+`PortOutput { port, data, ext }` → `PortOutput { port, draft: EnvelopeDraft }`
+(same name, reuses the draft instead of copying its two fields: the Driver
+proposes, the VM mints, in both directions); crate-private `Built`,
+`BuiltData` → `BuiltEmission`, `BuiltPayload`; `RoutedDelivery` (journal
+fact) and `Delivery` (mailbox entry) keep their names, their two doc lines
+state the layer. `EmissionBuffer`, `BoundaryOutput`, `ConsumedPosition`
+stay.
 **⟂ 2b.** Observed / RecordObservation / AccountingObservation /
 `observations()`: "observation" is used for a debugger surface, a journal
 projection and a measurement. The specification uses "retained
@@ -173,6 +186,14 @@ Driver's report before commit). Proposed 11 October, awaiting Yoann:
 `AccountingObservation` → **`Measurement`**; `RecordObservation` stays: the
 specification's "retained observation" has the same sense, what was seen
 without carrying identity.
+**⟂ 2d.** `Delivery { port, edge: String, seq, source_instance, envelope }`
+carries two derivable fields: `port` follows from the edge, and `edge` is
+canonical text where it is a wiring index, text that also enters
+`delivery_id` and the budget key. Yoann's remark (11 October, "a sequence
+should be an index"); for realignment lot 1 (D-2026-10-11-1): `edge` as an
+index, `port` derived. `index` (per port, per transaction, identity) and
+`seq` (per edge × source instance, the cursor) count two different things
+and both stay.
 **⟂ 2c.** "fact" is the specification's and the doc comments' word for a
 committed record (110 uses) but names no type; `Record` does. Confirm that
 "fact" stays prose and `Record` stays the type. **Settled 11 October:** fact
@@ -386,6 +407,7 @@ Loop protocol, no collision.
 | command | what a protocol asks the next transaction to do: Loop `Command`, `CommandProduced`, `CommandId`; instance-stop `Command`; `instance_commands` on the transaction record | **kept.** With fact, the two CQRS words of the journal protocols; no third word for them | decided |
 | admission | the specification's central word (186 uses, ten files): a delivery entering an address, root or internal; the "admission point" is mailbox reservation plus the producer's route commit; `OpeningAdmissionId`, Loop re-admission, the `idle` deadline runs from the last admission | **kept**, examined for removal and refused: no existing word covers every delivery (ingress = roots only, acceptance = the positive outcome only, entry = the Loop's entry port, enter = no verdict); "admission control" is the standard systems term for a bounded entry with accept / pending / reject; removing it is a specification change, not a code rename | decided |
 | the ingress chain: `IngressSubmission`, `SubmissionSequence`, `IngressProposal` (with its `reference` field), `IngressEnvelopeProvenance`, `IngressAcceptance`, `IngressDecision`, `inject_submission` | the door's wrappings and verdicts, eight words for one thing offered and judged | **flattened to the specification's words** (11 October, night): `IngressProposal { provenance, port, draft: EnvelopeDraft, sequence: IngressSequence, session }` is what is proposed, by the host or a Driver (`IngressSubmission` disappears into it; `SubmissionSequence` → `IngressSequence { Next, Explicit }`); `RetainedProposal { handle, proposal }` is the proposal a Driver keeps while it waits; `IngressEnvelopeProvenance` → `IngressProvenance`; `IngressAdmission { Accepted(AdmittedIngress), Pending, Rejected(IngressRejection) }` stays the verdict; `IngressAcceptance` → **`AdmittedIngress { envelope, exchange }`**, named by its place in the chain beside `PreparedIngress` and `CommittedIngress` (Yoann: not `AdmittedRoot`; "root" reads as an image even though the specification uses it 192 times); `IngressDecision` → `Result<AdmittedIngress, IngressRejection>`, the verdict without `Pending` as a standard type; the one transaction behind both doors, `inject_submission`, → `admit_proposal`; `inject` and `admit_ingress` stay as the two doors. Words after: draft, proposal, admission, rejection, ingress; gone: submission, acceptance, decision. `AdmittedIngress` is what the Driver is told (two ids, portable); `CommittedIngress` is the journal's return (seq, envelope, record): the two doc lines must state that difference. Cost: `IngressSubmission` in 16 files, `IngressDecision` in 8, all host Drivers; a code lot, with the realignment or after the opening | decided |
+| `plan::emission::Emission` | the lowered right-hand side of `out = …`: `Identity`, `Patch`, `FreshData`, `Data`, `Nothing`; what the author declared, checked | **`EmissionSpec`** (Yoann): the plan's `*Spec` convention, beside `ConnectorSpec`, `LoopSpec`, `RetrySpec`, `ExtensionSpec`. `journal::Emission` keeps the specification's word. Collision 4 closed. The `*Spec` suffix means "the plan's checked description of an authored declaration", to be said once where the plan lives; collision 7 concerns only the bare `instance::Spec` | decided |
 | `Packet` (loop, retry, instance_stop) | the protocol's sparse contribution to one transaction (its own doc line): Loop = contexts, routes, commands produced and consumed, facts; Retry = attempt context and facts; instance stop = commands produced and consumed | The inner words are validated (fact, command, rows above). The container word is still open: `Contribution` (the doc's word), or by content | open |
 
 ## What validation produces
