@@ -50,7 +50,8 @@ against the code and placed it in M2 as a format movement. Yoann decided the
 same day that it is an **opening condition** (D-2026-10-11-1). The section
 [Realignment on the Node ontology](#realignment-on-the-node-ontology--decided-2026-10-11)
 separates what is decided, what is to qualify and the calendar impact
-submitted to Yoann. The T4 second pass continues on the current code.
+submitted to Yoann. The T4 second pass started the same evening with block
+1, `inject_submission`: A-T4-4 below, two of its four questions settled.
 
 Rastok promises that the same validated plan and the same journaled inputs
 produce the same execution, identities and trace. The review reads what
@@ -903,6 +904,81 @@ kind 3 among the sealed deadline ids and says "Kind 3 uses InstanceLifetime"
 refuses a sealed kind 3 (`recovery.rs:223-233`). One sentence: lifetime
 deadlines are retained, never sealed. Landed with A-T2-8 (8 October).
 
+### Second pass — read 2026-10-11
+
+Block 1 of the planned second pass, read in full by Fable (brief for
+Yoann) on the current code: `inject_submission` (`vm.rs:1673-2107`), its
+two public faces `inject` and `admit_ingress` (`vm.rs:1439-1492`), the
+journal's preparation contract (`journal.rs:1236-1273`) and the Driver side
+of the door (`RuntimeBindings::pump_inbound`, `registry.rs:614-640`;
+`IngressProposal`, `boundary.rs:1808`). Blocks 2–7 are not yet read.
+
+Verified conforming:
+
+- **One door, one order.** Every root entering the graph — boundary
+  injection or a Connector-origin fact — passes the same transaction:
+  preflight, exact endpoint from the validated plan, `meta.ext` judged
+  against the travelling schema, pins judged for the ingress port and every
+  destination, root minted by the journal, source instance selected for a
+  Call or Session, routes prepared outermost-to-innermost as pure
+  candidates, room checked, instance commands prepared, deadlines
+  collected, `commit_ingress`, then install and `route_prepared`. Nothing
+  executes; the fact waits in a mailbox for `step`.
+- **Preparation is read-only, by signature.** `prepare_ingress`,
+  `prepare_connector_ingress` and `prepare_session_ingress` take `&self`
+  and the contract says "only `commit_ingress` consumes the sequence". A
+  `MailboxFull` (`:1821`, `:1881`) or `PlanInvariant` refusal after the
+  root is minted (`:1776`) therefore leaves no journal trace, for any
+  implementation. Block-1 question 1 is settled.
+- **Backpressure without loss.** `admit_ingress` maps `MailboxFull` and
+  `InstanceClosing` to `Pending`, the four peer/data refusals to a typed
+  `Rejected`; `pump_inbound` retains both the proposal and the Driver's
+  transport unit while `Pending`, and the Driver learns `Accepted` only
+  after the commit. External priority 8 holds on this door.
+- **The peer's `session_id` never reaches a key.** The `meta.ext` loop
+  skips `session_id` when framing is present (`:1735-1737`); the journal
+  derives or verifies the logical ref and overwrites the projection inside
+  `prepare_session_ingress`; routes and keys are then prepared from
+  `inbound.envelope()`. Block-1 question 4 is settled.
+
+Still open from block 1: whether a Session message's ancestor-scope
+preservation (`:1944-1950`) selects the same generation as `restore_session`
+at recovery, and where recovery reconstructs the handshake seed that
+`opening_only` deliberately routes nowhere (`:1934-1941`) — both for
+block 3.
+
+**A-T4-4 — `inject_submission` is one 435-line transaction, with a rule
+written twice and one fallible branch after its commit (realignment,
+lot 1).** The function is thirteen commented paragraphs without function
+names. Three things the length hides. (1) The source-instance reservation
+— first owner of the chain, `prepare_target`, held obligations counted
+against `WORKER_MAILBOX_CAPACITY`, `MailboxFull` — is written twice, for
+the inbound Call (`:1800-1825`) and for the Session opening
+(`:1860-1885`); family A-T4-2. (2) `source_target` and `session_target`
+are `Option<(Slot, PreparedTarget, bool)>` whose boolean means "opening":
+an unwritten four-case enum (none, Call, Session opening, Session message)
+whose constructor is the five-arm framing matrix (`:1833-1925`) and its
+four `PlanInvariant` refusals. (3) After `commit_ingress` (`:2009-2011`)
+one `PlanInvariant` can still return (`:2073`, "a committed Session opening
+lost its logical reference"): by then `enqueue_instance_commands` and
+`install_target` have run, `sessions.insert` and `route_prepared` have
+not. The committed exchange derives from the prepared Session record, so
+the branch is unreachable by construction — but it is exactly the shape
+external priority 2 hunts, and the only post-commit refusal on this path.
+Target: the `fire_operator` pattern, prepare (pure, fallible) → commit →
+install (infallible): `resolve_ingress_endpoint`, `judge_ingress_metadata`,
+`judge_ingress_pins`, `mint_root`, `admit_inbound_exchange` returning the
+enum, `prepare_root_routes`, `reserve_root_admission`,
+`attach_ingress_deadlines`, then `install_inbound_exchange` after the
+commit; one `reserve_source_instance` shared by Call and Session; the
+exchange id derived before the commit, or exposed typed by
+`CommittedIngress`, so nothing after the commit can refuse. Zero bytes;
+no semantic change. Owner: Astra. Lot: realignment lot 1 rather than lot 2,
+because the endpoint resolution (`EdgeEnd { node: None }` versus a
+Connector slot, `:1683-1727`) is what the single typed index rewrites. Not
+before the freeze: this is the most sensitive core path and the external
+brief references it by line.
+
 ### Disposition of the 8 October findings
 
 | Lot | Items |
@@ -910,6 +986,7 @@ deadlines are retained, never sealed. Landed with A-T2-8 (8 October).
 | Before the 23/24 October freeze, zero bytes | A-T2-8 (three comments, `loop.md` recipe); key-24 precision in `identity.md` — both landed 8 October |
 | v21, after the opening | A-T2-9 (Loop fold learns the closing scope), A-T2-10 (`loop_protocol::Packet::tree`), A-T2-11 (one Retry carrier matrix, one terminal-case reading, `Timing` classification), A-T4-1 (drain cancels before `begin_settlement`), A-T4-2 (one fuel resolution, two cosmetic residues) |
 | M2, with the durable journal | A-T4-3 and the `instance_commands` re-fold (A-T2-3), one lifecycle fold for the three protocols (A-T2-2(b)) |
+| Realignment lot 1 (D-2026-10-11-1), after the opening | A-T4-4 (11 October) |
 
 Yoann's 8 October brief dates the real freeze **Friday 23 October**; this
 ledger, `ROADMAP.md:59`, `opening-showcase.md:3` and `decisions.md:137` say
@@ -920,6 +997,8 @@ is taken as the intent.
 `prepare_routes` through `candidate_owner`, `recovery/exchanges.rs`, the
 Graph Loop manager (`graph_loop.rs` except its recovery check), and the
 `unreachable!`/`unwrap_or_else` sites of `vm.rs` one by one.
+Block 1, `inject_submission`, was read on 11 October: see the second pass
+above; blocks 2–7 remain.
 
 ## Realignment on the Node ontology — decided 2026-10-11
 
@@ -1585,6 +1664,30 @@ reading matter; the two folds' test modules name the invariants if a brief
 is needed.
 
 ## Parked remarks (outside the current theme)
+
+- **The hosted Worker has no name and no type** (raised 2026-10-11, during
+  T4, by Yoann: "le main paraît un peu monolithique"). execution-model.md
+  names the Worker that takes one mailbox and processes one transaction
+  (`:119`) and says the M1 machine is its one-worker physical case
+  (`:143`); the code has it twice, unnamed: `main.rs` `run` (`:397`, about
+  185 lines: time source, stdin thread, the advance/inject/drain/pump/drain
+  round, recorder checkpoint, log projection, 10 ms idle sleep) with
+  `drive_boundary` (`:665`), and the Lab's scenario round (`lab.rs:835-880`)
+  with the same sequence and the same 64-round bound. The Lab's interactive
+  session already exposes the high-level verbs (`step_transaction`,
+  `poll_world`, `settle_current_action`); the CLI has the loop bare. Target,
+  for realignment lot 2: a `Worker` type in the `rastok` crate — never in
+  the core, which stays loop-free — owning the round with two faces, hosted
+  and Lab; host verbs outside the instance-lifecycle vocabulary (`start`,
+  `stop`, `close` are spec words): `run`, `round`, `step`, `shutdown`. The
+  10 ms idle poll is acceptable for M1 and to revisit for the resident
+  service. Same reading, zero bytes, any time: the `Vm` doc comment should
+  say which kind of machine it is — state as a projection of the journal,
+  each step a transaction proposed to the journal, the host driving. Names
+  weighed and set aside for `Vm`: Monitor (a lock to C#/Java readers,
+  supervision, hypervisor), Mediator (one role, ESB vocabulary); `Machine`
+  is the specification's own word if it is ever renamed; public surfaces
+  keep "VM".
 
 - **Animated PNG instead of GIF for the public tour** (raised 2026-09-25,
   during T1). Premise check: GIF's LZW patents expired in 2004, so the format
