@@ -52,6 +52,9 @@ same day that it is an **opening condition** (D-2026-10-11-1). The section
 separates what is decided, what is to qualify and the calendar impact
 submitted to Yoann. The T4 second pass started the same evening with block
 1, `inject_submission`: A-T4-4 below, two of its four questions settled.
+The same evening a [vocabulary ledger](human-review-vocabulary.md) was
+drafted at Yoann's request: every public type of both crates by family, the
+overlapping terms first, 42 questions for his validation.
 
 Rastok promises that the same validated plan and the same journaled inputs
 produce the same execution, identities and trace. The review reads what
@@ -1096,6 +1099,8 @@ survive the move. Block 4 (`plan/composition.rs`, Graph Loop admission) and
 the owner/node reciprocity checks are exactly what the realignment makes
 structural; reading them with that lens is useful, widening the scope is
 not.
+Point 5 of the decision, the specification's words for business concepts,
+is prepared by the [vocabulary ledger](human-review-vocabulary.md).
 
 ## Implementation follow-up — 2026-10-05, lot 1
 
