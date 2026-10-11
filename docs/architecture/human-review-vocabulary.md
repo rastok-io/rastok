@@ -36,6 +36,14 @@ themselves **⟂** to confirm:
    specification adopted it and the public reads it: `Envelope`, `mailbox`,
    `budget`, `deadline`, `drain`, `worker`, `sealed` / `unsealed` /
    `retained`, `trace`.
+5. **A state is a type, an alternative is an enum** (Yoann, 11 October,
+   night). Successive states of one thing are distinct types, and the step
+   to the next state consumes the value: a prepared ingress cannot be
+   committed twice, an uncommitted one cannot be routed, because the
+   compiler refuses it. Alternatives true at one instant are one enum. A
+   `status` field with `Option` fields for the data of other states is
+   refused: it makes a false state representable. Renaming removes the
+   names that duplicate a state without adding one.
 
 ## Collisions to settle first
 
@@ -120,13 +128,16 @@ doc line, and the specification's count for the bare word (across
 
 **⟂ 1a.** Draft ⊂ Submission ⊂ Proposal are three wrappings of one offered
 fact. The specification says "draft" and "proposal", and "submission" twice
-in total. Candidates: keep `Draft`, fold `IngressSubmission` into the
-proposal, or rename it to the specification's word.
+in total. **Settled 11 October, night:** `EnvelopeDraft` inside one flat
+`IngressProposal`; `RetainedProposal` for the Driver's waiting copy. See
+"Validated so far".
 **⟂ 1b.** Admission / Acceptance / Decision / Rejection: four result nouns
-for one verdict. `IngressAdmission` already carries the three outcomes.
+for one verdict. **Settled:** admission (verdict) and rejection (reason)
+stay; acceptance → `AdmittedIngress`; decision → `Result`.
 **⟂ 1c.** `inject` is the Lab's and host's word (simulation-semantics:
-"injections"), `admit` the Driver's. Both are specification words; confirm
-that the pair stays, with the asymmetry stated once in the `Vm` docs.
+"injections"), `admit` the Driver's. **Settled:** the pair stays, the
+host door has neither handle nor `Pending`, stated once in the `Vm` docs;
+the shared transaction is `admit_proposal`.
 
 ### 2. Messages — envelope, delivery, emission, output, observation
 
@@ -145,11 +156,23 @@ that the pair stays, with the asymmetry stated once in the `Vm` docs.
 | `AccountingObservation`, `ObservationScope` | accounting | measurement observations | — |
 | `BoundaryEvent` | boundary | doc: "one routable boundary fact for the VM"; actually a settled outbound call's completion awaiting its transaction, an observation → `BoundaryObservation` (11 October) | fact 110 |
 
-**⟂ 2a.** Collision 4 (two `Emission`).
+**⟂ 2a.** Collision 4 (two `Emission`). Proposed 11 October, awaiting
+Yoann: `journal::Emission { port, index, envelope }` is exactly the
+specification's emission and stays; `plan::emission::Emission` (`Identity |
+Patch | FreshData | Data`) is the classified *form* of the `out = …`
+statement, the specification's "ENVELOPE form" / "the form decides" →
+**`EmissionForm`**. Not `EmissionRecipe`: "recipe" is reserved for the
+identity recipes (root, id, birth). `EmissionBuffer`, `BoundaryOutput`,
+`PortOutput` (= `EnvelopeDraft` + port) are plain and stay.
 **⟂ 2b.** Observed / RecordObservation / AccountingObservation /
 `observations()`: "observation" is used for a debugger surface, a journal
 projection and a measurement. The specification uses "retained
-observation" for the second.
+observation" for the second. Sharpened by collision 8 (observation = a
+Driver's report before commit). Proposed 11 October, awaiting Yoann:
+`Observed` → **`DeliveryView`** (the `*View` decision);
+`AccountingObservation` → **`Measurement`**; `RecordObservation` stays: the
+specification's "retained observation" has the same sense, what was seen
+without carrying identity.
 **⟂ 2c.** "fact" is the specification's and the doc comments' word for a
 committed record (110 uses) but names no type; `Record` does. Confirm that
 "fact" stays prose and `Record` stays the type. **Settled 11 October:** fact
@@ -350,7 +373,7 @@ Loop protocol, no collision.
 
 | Term today | What it is | Yoann's decision | Status |
 |---|---|---|---|
-| `Draft` | the part of an envelope the world provides: `data` + `ext`; no `sys`, no `app` | **`EnvelopeContent`** (Fable's recommendation under rule 4) or `EnvelopeDraft` (acceptable to Yoann); one of the two to close. Not `envelope_data`: `data` already names the payload alone, and the content also carries `ext` | decided in substance, word to close |
+| `Draft` | the part of an envelope the world provides: `data` + `ext`; no `sys`, no `app` | **`EnvelopeDraft`** (closed 11 October, night). Draft is the specification's word (26 uses) and says the state: not yet an envelope, it becomes one if the admission commits. `EnvelopeContent` dropped: structural, and too close to `data`, the payload alone. Not `envelope_data` | decided |
 | mint (doc comments: "the journal mints the id") | derive and assign the definitive identity | **identify** / **assign_identity** | decided |
 | `pump` | one boundary round with the Drivers | **`poll_drivers`** | decided |
 | `CompletionGate`, `OpenGate` | a conformance check of a Driver's completion against the Contract | **`CompletionCheck`** | decided |
@@ -361,6 +384,8 @@ Loop protocol, no collision.
 | event | the exchange kind a Contract declares (`ConnectorExchange::Event`): the world speaks first, each firing is one spontaneous inbound root, nothing is owed back; Timer and Calendar in the stdlib | **kept for the exchange kind only.** The Contract sheet has two independent axes: Direction (who starts: `ConnectorRoles`) and Exchange (what is owed back: nothing / exactly one `exit` / messages then one `exit`). Examined and not retained: InboundCall / OutboundCall / Session, which fuses direction into two of the three kinds, would need Accepted/Opened for sessions, and loses event ≠ inbound call (zero `exit` vs exactly one, enforced by the validator). The empty cell, an outbound event, is the closed-call rule | decided |
 | observation | what a Driver reports from the world before any transaction commits it: a response arrived, a session opened, a write settled, the host restarted. A tick and an HTTP request arrive by the same carrier (`IngressProposal`); the Contract's exchange kind says which place the observation takes | **new plain word**, already the word of 23 doc comments in `boundary.rs`. Rename the four carriers: `BoundaryEvent` → `BoundaryObservation`, `InboundCallEvent` → `InboundCallObservation`, `SessionDriverEvent` → `SessionObservation`, `LifecycleEvent` → `LifecycleObservation`; fix the `BoundaryEvent` doc ("one routable boundary fact for the VM": it is not yet a fact). `IngressProposal` keeps its name. Spec sentence to align with the realignment: extensions.md §1 "A Driver supplies a typed event" → observation | decided; the renames are a code lot |
 | command | what a protocol asks the next transaction to do: Loop `Command`, `CommandProduced`, `CommandId`; instance-stop `Command`; `instance_commands` on the transaction record | **kept.** With fact, the two CQRS words of the journal protocols; no third word for them | decided |
+| admission | the specification's central word (186 uses, ten files): a delivery entering an address, root or internal; the "admission point" is mailbox reservation plus the producer's route commit; `OpeningAdmissionId`, Loop re-admission, the `idle` deadline runs from the last admission | **kept**, examined for removal and refused: no existing word covers every delivery (ingress = roots only, acceptance = the positive outcome only, entry = the Loop's entry port, enter = no verdict); "admission control" is the standard systems term for a bounded entry with accept / pending / reject; removing it is a specification change, not a code rename | decided |
+| the ingress chain: `IngressSubmission`, `SubmissionSequence`, `IngressProposal` (with its `reference` field), `IngressEnvelopeProvenance`, `IngressAcceptance`, `IngressDecision`, `inject_submission` | the door's wrappings and verdicts, eight words for one thing offered and judged | **flattened to the specification's words** (11 October, night): `IngressProposal { provenance, port, draft: EnvelopeDraft, sequence: IngressSequence, session }` is what is proposed, by the host or a Driver (`IngressSubmission` disappears into it; `SubmissionSequence` → `IngressSequence { Next, Explicit }`); `RetainedProposal { handle, proposal }` is the proposal a Driver keeps while it waits; `IngressEnvelopeProvenance` → `IngressProvenance`; `IngressAdmission { Accepted(AdmittedIngress), Pending, Rejected(IngressRejection) }` stays the verdict; `IngressAcceptance` → **`AdmittedIngress { envelope, exchange }`**, named by its place in the chain beside `PreparedIngress` and `CommittedIngress` (Yoann: not `AdmittedRoot`; "root" reads as an image even though the specification uses it 192 times); `IngressDecision` → `Result<AdmittedIngress, IngressRejection>`, the verdict without `Pending` as a standard type; the one transaction behind both doors, `inject_submission`, → `admit_proposal`; `inject` and `admit_ingress` stay as the two doors. Words after: draft, proposal, admission, rejection, ingress; gone: submission, acceptance, decision. `AdmittedIngress` is what the Driver is told (two ids, portable); `CommittedIngress` is the journal's return (seq, envelope, record): the two doc lines must state that difference. Cost: `IngressSubmission` in 16 files, `IngressDecision` in 8, all host Drivers; a code lot, with the realignment or after the opening | decided |
 | `Packet` (loop, retry, instance_stop) | the protocol's sparse contribution to one transaction (its own doc line): Loop = contexts, routes, commands produced and consumed, facts; Retry = attempt context and facts; instance stop = commands produced and consumed | The inner words are validated (fact, command, rows above). The container word is still open: `Contribution` (the doc's word), or by content | open |
 
 ## What validation produces
