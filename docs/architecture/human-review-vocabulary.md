@@ -82,8 +82,17 @@ Ranked by the cost of leaving them to the external reviewer.
 8. **Event.** An exchange cardinality (`ConnectorExchange::Event`), four
    observation carriers (`BoundaryEvent`, `InboundCallEvent`,
    `SessionDriverEvent`, `LifecycleEvent`), and a syntax trigger
-   (`syntax::ExtensionEvent`). **⟂** reserve "event" for the exchange kind
-   the Contract declares; observations are observations.
+   (`syntax::ExtensionEvent`). **Settled 11 October (Yoann): four words
+   are kept, one each.** *event* = the exchange kind a Contract declares
+   (`ConnectorExchange::Event`; Timer and Calendar in the stdlib);
+   *observation* = what a Driver reports before any transaction commits it
+   (the four `*Event` carriers become `*Observation`); *fact* = a committed
+   record; *command* = what a protocol asks of the next transaction. The
+   table under "Validated so far" carries the definitions.
+   `syntax::ExtensionEvent` is a recovery-only capture of the removed
+   `.start`/`.stop` forms in the host parser, a third use of the word;
+   **⟂** rename it with the recovery it serves (`RemovedLifecycleHook`) or
+   leave it, Yoann to confirm.
 
 ## Families
 
@@ -134,7 +143,7 @@ that the pair stays, with the asymmetry stated once in the `Vm` docs.
 | `Observed` | vm | one observed delivery — the debugger-shaped observation surface | — |
 | `RecordObservation`, `RecordObservationKind`, `RecordCorrelation`, `ExchangeCorrelation` | observation | one retained, non-causal projection of a causal record | retained 169 |
 | `AccountingObservation`, `ObservationScope` | accounting | measurement observations | — |
-| `BoundaryEvent` | boundary | one routable boundary fact for the VM: which connector, which port, which cause | fact 110 |
+| `BoundaryEvent` | boundary | doc: "one routable boundary fact for the VM"; actually a settled outbound call's completion awaiting its transaction, an observation → `BoundaryObservation` (11 October) | fact 110 |
 
 **⟂ 2a.** Collision 4 (two `Emission`).
 **⟂ 2b.** Observed / RecordObservation / AccountingObservation /
@@ -143,7 +152,9 @@ projection and a measurement. The specification uses "retained
 observation" for the second.
 **⟂ 2c.** "fact" is the specification's and the doc comments' word for a
 committed record (110 uses) but names no type; `Record` does. Confirm that
-"fact" stays prose and `Record` stays the type.
+"fact" stays prose and `Record` stays the type. **Settled 11 October:** fact
+is kept as the word for a committed record (collision 8). Whether the record
+types take the word (`Record` vs `Fact`) was not discussed.
 
 ### 3. The world answers — call, completion, closure, settlement, terminal
 
@@ -276,6 +287,11 @@ split (Fault = evaluation, VmError = machine) or merge the words.
 **⟂ 8a.** Collision 2 (`Dispatch`/`Dispatcher`) and 3 (`Bindings`).
 **⟂ 8b.** "pump" has one meaning (a boundary round) and three report types.
 Confirm the verb; it is not in the specification's main vocabulary (18).
+**⟂ 8c.** `ConnectorRoles { Inbound, Outbound, InboundAndOutbound }`
+implements row 2 of the Contract sheet, *Direction* (who starts), not row 1,
+*Role* (what it bridges). Plain word: `ConnectorDirection`; but
+`node::Direction` already names a port's Input/Output, so one of the two
+must yield the word (raised 11 October).
 
 ### 9. Time — budget, deadline, timeout, lifetime, expiry, delay
 
@@ -311,7 +327,9 @@ timeline.
 **⟂ 10a.** `Fold` is the code's word for what the specification calls a
 *projection* (100 uses: journal projection, scheduler projection). Confirm
 "fold" as the mechanism name, "projection" as the concept, or merge.
-**⟂ 10b.** `loop_protocol::Fact` vs prose "fact" (= any record).
+**⟂ 10b.** `loop_protocol::Fact` vs prose "fact" (= any record). Settled
+with collision 8: fact is the word; a `loop_protocol::Fact` is a fact of the
+Loop protocol, no collision.
 
 ### 11. Lab and tooling — scenario, injection, trace, recording, conformance
 
@@ -337,9 +355,13 @@ timeline.
 | `pump` | one boundary round with the Drivers | **`poll_drivers`** | decided |
 | `CompletionGate`, `OpenGate` | a conformance check of a Driver's completion against the Contract | **`CompletionCheck`** | decided |
 | bless (goldens, witnesses) | accept a new reference | **approve** | decided |
-| `Fold` | a projection rebuilt from committed journal facts (Loop, Retry, instance commands) | to discuss: "projection" is the specification's word but already carries three meanings in the code | open |
+| `Fold` | a read model rebuilt from committed journal facts: for Loop, every open run with its instance, entry port, iteration, remaining budget, state envelope, admission and pending command | **`LoopView`**, **`RetryView`**, **`InstanceCommandView`** — "a view of" something, less academic than projection (Yoann) | decided |
 | `Intent` (`SessionOpenIntent`, `SessionWriteIntent`) | the description of an outbound effect handed to the Driver after its open fact committed | name the effect, drop the suffix: **`CallOpen`**, **`SessionOpen`**, **`SessionWrite`**; journal-before-effect is stated once, on the Dispatcher | decided |
-| `Packet` (loop, retry, instance_stop) | the protocol's sparse contribution to one transaction (its own doc line): Loop = contexts, routes, commands produced and consumed, facts; Retry = attempt context and facts; instance stop = commands produced and consumed | Yoann proposes CQRS naming (event / command). The inner words already exist and are CQRS: `Fact` (Rastok's word for an event, since `Event` is a Contract exchange kind) and `Command`. Candidates for the container: `Contribution` (the doc's word), or by content | open |
+| fact | the specification's word for a committed journal record (110 uses); `Fact` in the Loop and Retry protocols | **kept.** A fact is an assertion the journal answers for: it exists once committed, replay reproduces it on any machine, and it carries the transaction's verdict. An event is an occurrence; a fact is an established assertion, and may describe no occurrence at all ("the Loop admitted iteration 3") | decided |
+| event | the exchange kind a Contract declares (`ConnectorExchange::Event`): the world speaks first, each firing is one spontaneous inbound root, nothing is owed back; Timer and Calendar in the stdlib | **kept for the exchange kind only.** The Contract sheet has two independent axes: Direction (who starts: `ConnectorRoles`) and Exchange (what is owed back: nothing / exactly one `exit` / messages then one `exit`). Examined and not retained: InboundCall / OutboundCall / Session, which fuses direction into two of the three kinds, would need Accepted/Opened for sessions, and loses event ≠ inbound call (zero `exit` vs exactly one, enforced by the validator). The empty cell, an outbound event, is the closed-call rule | decided |
+| observation | what a Driver reports from the world before any transaction commits it: a response arrived, a session opened, a write settled, the host restarted. A tick and an HTTP request arrive by the same carrier (`IngressProposal`); the Contract's exchange kind says which place the observation takes | **new plain word**, already the word of 23 doc comments in `boundary.rs`. Rename the four carriers: `BoundaryEvent` → `BoundaryObservation`, `InboundCallEvent` → `InboundCallObservation`, `SessionDriverEvent` → `SessionObservation`, `LifecycleEvent` → `LifecycleObservation`; fix the `BoundaryEvent` doc ("one routable boundary fact for the VM": it is not yet a fact). `IngressProposal` keeps its name. Spec sentence to align with the realignment: extensions.md §1 "A Driver supplies a typed event" → observation | decided; the renames are a code lot |
+| command | what a protocol asks the next transaction to do: Loop `Command`, `CommandProduced`, `CommandId`; instance-stop `Command`; `instance_commands` on the transaction record | **kept.** With fact, the two CQRS words of the journal protocols; no third word for them | decided |
+| `Packet` (loop, retry, instance_stop) | the protocol's sparse contribution to one transaction (its own doc line): Loop = contexts, routes, commands produced and consumed, facts; Retry = attempt context and facts; instance stop = commands produced and consumed | The inner words are validated (fact, command, rows above). The container word is still open: `Contribution` (the doc's word), or by content | open |
 
 ## What validation produces
 
