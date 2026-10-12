@@ -28,7 +28,7 @@ use rastok::boundary::{
 use rastok::compiler::compile;
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Encoding, Namespace, Value};
-use rastok::journal::loop_protocol::{Fact as LoopFact, Fold as LoopFold, Phase as LoopPhase};
+use rastok::journal::loop_protocol::{Fact as LoopFact, LoopView as LoopFold, Phase as LoopPhase};
 use rastok::journal::{CallStatus, CloseVerdict, EgressRecord, MemJournal, Record};
 
 fn loop_state(
@@ -432,7 +432,7 @@ fn tenant_submission(tenant: &str, user: i64) -> IngressSubmission {
 }
 
 fn source_exit_cases<'a>(vm: &'a Vm<'_>) -> Vec<&'a str> {
-    vm.observations()
+    vm.envelope_views()
         .iter()
         .filter_map(|observed| {
             if observed.node.is_none() || observed.port.name() != "exit" {
@@ -2928,7 +2928,7 @@ fn stderr_and_terminal_status_leave_on_independent_ports() {
     assert_eq!(transaction.emissions[0].port.name(), "err");
     assert_eq!(transaction.emissions[1].port.name(), "exit");
     let stderr: Vec<_> = vm
-        .observations()
+        .envelope_views()
         .iter()
         .filter(|observed| observed.node.is_some() && observed.port.name() == "err")
         .collect();
@@ -4358,7 +4358,7 @@ graph websocket : App {
     assert!(vm.is_stable());
     assert_eq!(source_exit_cases(&vm), ["Closed", "Closed"]);
     let exit_sessions = vm
-        .observations()
+        .envelope_views()
         .iter()
         .filter(|observed| observed.node.is_some() && observed.port.name() == "exit")
         .filter_map(
@@ -4412,7 +4412,7 @@ on in {
         "the faulted transaction must not consume or emit"
     );
     assert!(
-        vm.observations()
+        vm.envelope_views()
             .iter()
             .all(|event| event.port.name() != "err"),
         "no implicit err output exists"
@@ -4462,7 +4462,7 @@ impl Journal for FlakyJournal {
 
     fn loop_protocol(
         &self,
-    ) -> Result<rastok::journal::loop_protocol::Fold, rastok::journal::Error> {
+    ) -> Result<rastok::journal::loop_protocol::LoopView, rastok::journal::Error> {
         self.inner.loop_protocol()
     }
     fn retained_observations_from(
@@ -4677,7 +4677,7 @@ graph app : App {
 
 #[test]
 fn recovery_binds_loop_context_to_the_consumed_delivery_not_just_its_owner() {
-    use rastok::journal::loop_protocol::{CommandProduced, Fact, Fold};
+    use rastok::journal::loop_protocol::{CommandProduced, Fact, LoopView};
 
     let compilation = compile(
         &[r#"
@@ -4736,7 +4736,7 @@ graph app : App {
         panic!("application");
     };
     let first_run = transaction.loop_protocol().unwrap().context[0];
-    let fold = Fold::from_records(&prefix).unwrap();
+    let fold = LoopView::from_records(&prefix).unwrap();
     let other = *fold.runs().find(|(run, _)| **run != first_run).unwrap().0;
     prefix.push(producer);
     journal.recovery_records = Some(prefix.clone());
@@ -4767,7 +4767,7 @@ graph app : App {
         }
         // Protocol algebra and owner membership are necessary but do not
         // establish which queued input the producer actually consumed.
-        Fold::from_records(&forged).unwrap();
+        LoopView::from_records(&forged).unwrap();
         journal.recovery_records = Some(forged);
         let mut rejected = Vm::boot(&compilation.plan, GraphVersion(1));
         let before = rejected.inspection();
@@ -4895,7 +4895,7 @@ fn graph_call_commits_and_openings_are_atomic_under_storage_refusal() {
 
 #[test]
 fn graph_call_recovery_refuses_missing_contexts_and_unsettled_obligations() {
-    use rastok::journal::loop_protocol::{Fact, Fold};
+    use rastok::journal::loop_protocol::{Fact, LoopView};
     let compilation = compile(&[GRAPH_CALL_PROBE], &ContractCatalog::try_m0().unwrap()).unwrap();
     let mut journal = FlakyJournal::healthy(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
@@ -4950,7 +4950,7 @@ fn graph_call_recovery_refuses_missing_contexts_and_unsettled_obligations() {
                 record.loop_record = None;
             }
         }
-        Fold::from_records(&prefix)
+        LoopView::from_records(&prefix)
             .unwrap_or_else(|error| panic!("sabotage {sabotage}: {error:?}"));
         journal.recovery_records = Some(prefix);
         let before = vm.inspection();
@@ -4998,7 +4998,7 @@ fn graph_manager_commit_failures_preserve_the_next_boundary() {
 
 #[test]
 fn graph_recovery_rederives_admission_context_and_quiescence() {
-    use rastok::journal::loop_protocol::{CommandProduced, CommandValue, Fact, Fold};
+    use rastok::journal::loop_protocol::{CommandProduced, CommandValue, Fact, LoopView};
     let compilation = compile(&[GRAPH_MANAGER_PROBE], &ContractCatalog::try_m0().unwrap()).unwrap();
     let mut journal = FlakyJournal::healthy(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
@@ -5042,7 +5042,7 @@ fn graph_recovery_rederives_admission_context_and_quiescence() {
             }
             _ => prefix.retain(|record| !matches!(record, Record::Transaction(record) if record.owner_path.to_string() == "cycle.z_audit" && matches!(record.trigger, node::Trigger::Port(_)))),
         }
-        Fold::from_records(&prefix).unwrap();
+        LoopView::from_records(&prefix).unwrap();
         journal.recovery_records = Some(prefix);
         let before = vm.inspection();
         assert!(
@@ -5109,7 +5109,7 @@ graph app : App {
             assert!(steps < 100, "the finite probe must make progress");
             let records = journal.inner.records().to_vec();
             let inspection = vm.inspection();
-            let observations = vm.observations().to_vec();
+            let observations = vm.envelope_views().to_vec();
             let effects = world.started.clone();
             journal.refuse_commits = faulted;
             journal.refuse_opens = faulted;
@@ -5131,7 +5131,7 @@ graph app : App {
                     );
                     assert_eq!(journal.inner.records(), records);
                     assert_eq!(vm.inspection(), inspection);
-                    assert_eq!(vm.observations(), observations);
+                    assert_eq!(vm.envelope_views(), observations);
                     assert_eq!(world.started, effects);
                     assert!(sweep.advance_once(vm, journal, world).unwrap());
                 }
@@ -5339,7 +5339,7 @@ graph app : App {
 
 #[test]
 fn call_recovery_requires_run_admission_and_the_retained_terminal_verdict() {
-    use rastok::journal::loop_protocol::{CommandProduced, CommandValue, Fold};
+    use rastok::journal::loop_protocol::{CommandProduced, CommandValue, LoopView};
 
     let compilation = compile(
         &[r#"
@@ -5417,7 +5417,7 @@ graph app : App {
                 Data::Materialized(Value::TaggedUnion(value)) if value.case == "Exited"
             ));
         }
-        Fold::from_records(&forged).unwrap();
+        LoopView::from_records(&forged).unwrap();
         journal.recovery_records = Some(forged);
         let mut recovered = Vm::boot(&compilation.plan, GraphVersion(1));
         let before = recovered.inspection();
@@ -5699,7 +5699,7 @@ fn a_silent_driver_expires_into_a_typed_timeout() {
     );
     assert_eq!(transaction.emissions[0].port.name(), "exit");
     assert!(
-        vm.observations()
+        vm.envelope_views()
             .iter()
             .all(|event| event.port.name() != "err")
     );
@@ -5963,7 +5963,7 @@ fn an_answer_and_an_expiry_race_to_a_single_closure() {
     assert_eq!(closures, 1, "close-once");
     assert_eq!(vm.outputs().len(), 1);
     assert!(
-        vm.observations()
+        vm.envelope_views()
             .iter()
             .all(|event| event.port.name() != "err"),
         "no phantom timeout"
@@ -6107,7 +6107,7 @@ fn a_refused_commit_on_a_queued_expiry_loses_nothing() {
     vm.run_ready(&mut journal).unwrap();
     assert!(vm.is_stable());
     assert!(
-        vm.observations()
+        vm.envelope_views()
             .iter()
             .all(|event| event.port.name() != "err")
     );

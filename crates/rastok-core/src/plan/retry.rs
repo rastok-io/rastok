@@ -93,8 +93,8 @@ pub(super) fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> 
         }
         let constants = match &spec.delay {
             None => &[][..],
-            Some(LoopDelay::Fixed { after }) => core::slice::from_ref(after),
-            Some(LoopDelay::Exponential { first, ceiling }) => {
+            Some(DelayPolicy::Fixed { after }) => core::slice::from_ref(after),
+            Some(DelayPolicy::Exponential { first, ceiling }) => {
                 for constant in [first, ceiling] {
                     if !validation::plan_constant_holds(plan, constant, &DataType::DURATION)? {
                         return Err(error("Retry.delay is not its claimed plan constant"));

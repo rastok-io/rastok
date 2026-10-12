@@ -121,7 +121,7 @@ fn drive(vm: &mut Vm<'_>, journal: &mut MemJournal, bindings: &mut RuntimeBindin
 }
 
 fn source_exit_cases(vm: &Vm<'_>) -> Vec<String> {
-    vm.observations()
+    vm.envelope_views()
         .iter()
         .filter_map(|observed| {
             if observed.node.is_none() || observed.port.name() != "exit" {
@@ -136,7 +136,7 @@ fn source_exit_cases(vm: &Vm<'_>) -> Vec<String> {
 }
 
 fn source_bytes(vm: &Vm<'_>) -> Vec<Vec<u8>> {
-    vm.observations()
+    vm.envelope_views()
         .iter()
         .filter_map(|observed| {
             if observed.node.is_none() || observed.port.name() != "out" {

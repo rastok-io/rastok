@@ -27,7 +27,7 @@ use crate::connectors::{
 use crate::envelope::{Data, Envelope, Namespace, Value, WriteTarget};
 use crate::journal::{MemJournal, Record};
 use crate::plan::{GraphVersion, SemanticHash, ValidatedExecutionPlan};
-use crate::runtime::vm::{Observed, TimeAdvance, Vm};
+use crate::runtime::vm::{EnvelopeView, TimeAdvance, Vm};
 use crate::{expr, node, runtime};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -342,7 +342,7 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
         else {
             return None;
         };
-        let window = &self.vm.observations()[self.window_start..];
+        let window = &self.vm.envelope_views()[self.window_start..];
         let outputs = &self.vm.outputs()[self.output_window_start..];
         let envelopes = expectation_envelopes(
             expectation,
@@ -498,7 +498,7 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
         };
         let kind = match step {
             ScenarioStep::Inject { target, value, seq } => {
-                self.window_start = self.vm.observations().len();
+                self.window_start = self.vm.envelope_views().len();
                 self.output_window_start = self.vm.outputs().len();
                 self.record_window_start = self.journal.records().len();
                 let candidate = self
@@ -549,7 +549,7 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
                 ScenarioActionKind::Inject
             }
             ScenarioStep::Advance { nanos } => {
-                self.window_start = self.vm.observations().len();
+                self.window_start = self.vm.envelope_views().len();
                 self.output_window_start = self.vm.outputs().len();
                 self.record_window_start = self.journal.records().len();
                 let target = self.vm.now().saturating_add(*nanos);
@@ -560,7 +560,7 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
             ScenarioStep::Expect(expectation) => {
                 let envelopes = expectation_envelopes(
                     expectation,
-                    &self.vm.observations()[self.window_start..],
+                    &self.vm.envelope_views()[self.window_start..],
                     &self.vm.outputs()[self.output_window_start..],
                     &self.journal.records()[self.record_window_start..],
                 );
@@ -955,7 +955,7 @@ fn injection_port<'plan>(
 
 fn expectation_envelopes<'a>(
     expectation: &Expectation,
-    window: &'a [Observed],
+    window: &'a [EnvelopeView],
     boundary: &'a [crate::runtime::vm::BoundaryOutput],
     records: &'a [Record],
 ) -> Vec<&'a Envelope> {
@@ -1961,7 +1961,7 @@ lab m0_probe {
         );
         assert_eq!(session.next_action(), Ok(Some(ScenarioActionKind::Inject)));
         assert!(matches!(
-            session.vm().observations().first().map(|observed| observed.envelope.data()),
+            session.vm().envelope_views().first().map(|observed| observed.envelope.data()),
             Some(Data::Materialized(Value::Struct(fields)))
                 if fields == &vec![(String::from("text"), Value::Text(String::from("edited")))]
         ));

@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::instance;
-use crate::journal::instance_stop::{Command, Disposition, Error, Packet};
+use crate::journal::instance_stop::{Command, Disposition, Error, InstanceCommands};
 use crate::node;
 use crate::plan::{Endpoint, InstanceStopTarget, RouteDestination};
 
@@ -212,9 +212,9 @@ impl Vm<'_> {
         }
     }
 
-    pub(super) fn retained_command_packet(commands: &[Command]) -> Option<Box<Packet>> {
+    pub(super) fn retained_command_packet(commands: &[Command]) -> Option<Box<InstanceCommands>> {
         (!commands.is_empty()).then(|| {
-            Box::new(Packet {
+            Box::new(InstanceCommands {
                 produced: commands.to_vec(),
                 consumed: None,
             })

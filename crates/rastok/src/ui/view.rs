@@ -706,8 +706,8 @@ fn manager_commands(plan: &crate::plan::ExecutionPlan) -> Vec<JsonValue> {
 }
 
 fn loop_runs(plan: &ValidatedExecutionPlan, records: &[Record]) -> JsonValue {
-    use crate::journal::loop_protocol::{CommandValue, Fact, Fold, Phase};
-    let fold = match Fold::from_records(records) {
+    use crate::journal::loop_protocol::{CommandValue, Fact, LoopView, Phase};
+    let fold = match LoopView::from_records(records) {
         Ok(fold) => fold,
         Err(error) => return json!({ "error": error.to_string() }),
     };
@@ -955,7 +955,7 @@ fn history(plan: &ValidatedExecutionPlan, vm: &Vm<'_>, journal: &MemJournal) -> 
         })
         .collect::<Vec<_>>();
     let deliveries = vm
-        .observations()
+        .envelope_views()
         .iter()
         .enumerate()
         .map(|(index, observed)| {

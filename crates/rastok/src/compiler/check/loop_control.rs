@@ -691,7 +691,7 @@ impl Checker<'_, '_> {
                 }
                 ty.clone()
             };
-            Some(crate::plan::LoopExpiry {
+            Some(crate::plan::LoopExpiredOutput {
                 port: target,
                 ty: effective,
             })

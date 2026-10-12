@@ -833,7 +833,7 @@ fn run_boundary_probe(plan: &rastok::plan::ValidatedExecutionPlan) -> (Vec<Strin
         .collect();
     (
         outputs,
-        vm.observations()
+        vm.envelope_views()
             .iter()
             .filter(|event| event.node.is_some() && event.port.name() == "err")
             .count(),

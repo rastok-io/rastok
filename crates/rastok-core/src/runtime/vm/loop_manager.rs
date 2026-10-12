@@ -5,7 +5,7 @@ use super::*;
 use crate::envelope;
 use crate::instance;
 use crate::journal::loop_protocol::{
-    self as protocol, CloseReason, CommandValue, Fact, Packet, Phase,
+    self as protocol, CloseReason, CommandValue, Fact, LoopRecord, Phase,
 };
 use crate::node;
 
@@ -71,7 +71,7 @@ impl Vm<'_> {
         if !facts.is_empty() {
             let packet = record
                 .loop_record
-                .get_or_insert_with(|| Box::new(Packet::default()));
+                .get_or_insert_with(|| Box::new(LoopRecord::default()));
             packet.facts.extend(facts);
         }
         Ok(())
@@ -175,7 +175,7 @@ impl Vm<'_> {
         let record = manager_record(
             instance,
             delivery.envelope.meta().sys().id(),
-            Packet {
+            LoopRecord {
                 context: self.graph_context(delivery).to_vec(),
                 facts: vec![Fact::Open {
                     run,
@@ -185,7 +185,7 @@ impl Vm<'_> {
                     fuel,
                     state: delivery.envelope.clone(),
                 }],
-                ..Packet::default()
+                ..LoopRecord::default()
             },
         );
         journal.commit(record).map_err(VmFault::Journal)?;
@@ -230,7 +230,7 @@ impl Vm<'_> {
         let record = manager_record(
             instance,
             envelope,
-            Packet {
+            LoopRecord {
                 context: self.graph_context(&delivery).to_vec(),
                 facts: vec![Fact::Admit {
                     run,
@@ -238,7 +238,7 @@ impl Vm<'_> {
                     admission: ids::delivery_id(edge, envelope),
                     envelope: delivery.envelope,
                 }],
-                ..Packet::default()
+                ..LoopRecord::default()
             },
         );
         journal.commit(record).map_err(VmFault::Journal)?;
@@ -338,9 +338,9 @@ impl Vm<'_> {
             return Ok(());
         };
         if application.instance != *instance {
-            record.loop_record = Some(Box::new(Packet {
+            record.loop_record = Some(Box::new(LoopRecord {
                 context: vec![run],
-                ..Packet::default()
+                ..LoopRecord::default()
             }));
             // Closing this Call settles one obligation of the containing
             // Graph, not the whole application. Only its selected routes can
@@ -357,14 +357,14 @@ impl Vm<'_> {
             node: node.path.clone(),
             reason,
         };
-        let mut packet = Packet {
+        let mut packet = LoopRecord {
             context: application
                 .enclosing
                 .iter()
                 .copied()
                 .chain(core::iter::once(run))
                 .collect(),
-            ..Packet::default()
+            ..LoopRecord::default()
         };
         for emission in &record.emissions {
             for rule in self.plan.routes.iter().filter(|rule| {
@@ -488,14 +488,14 @@ impl Vm<'_> {
             let record = manager_record(
                 &current.instance,
                 current.state.meta().sys().id(),
-                Packet {
+                LoopRecord {
                     context: current.enclosing.clone(),
                     facts: vec![Fact::Close {
                         run,
                         iteration: current.iteration,
                         reason: CloseReason::Stopped,
                     }],
-                    ..Packet::default()
+                    ..LoopRecord::default()
                 },
             );
             journal.commit(record).map_err(VmFault::Journal)?;
@@ -519,7 +519,7 @@ impl Vm<'_> {
             let mut record = manager_record(
                 &current.instance,
                 envelope.meta().sys().id(),
-                Packet {
+                LoopRecord {
                     context: current.enclosing.clone(),
                     facts: vec![Fact::Admit {
                         run,
@@ -527,7 +527,7 @@ impl Vm<'_> {
                         admission: current.admission,
                         envelope: envelope.clone(),
                     }],
-                    ..Packet::default()
+                    ..LoopRecord::default()
                 },
             );
             let edge = manager_edge(run, &current.entry);
@@ -597,7 +597,7 @@ impl Vm<'_> {
                 if let Some(timeout) = call_timeout {
                     self.scheduler.schedule(
                         self.now.saturating_add(timeout),
-                        DatedPayload::DeliveryBudget {
+                        Obligation::DeliveryBudget {
                             connector: self.plan.nodes[slot.index()].path.clone(),
                             edge,
                             delivery: envelope.meta().sys().id(),
@@ -612,10 +612,10 @@ impl Vm<'_> {
         let command = current.pending.as_ref().ok_or_else(|| {
             loop_error(&current.instance, "LoopNoVerdict: the application became quiescent without Next, Again, Done, or stop")
         })?;
-        let mut packet = Packet {
+        let mut packet = LoopRecord {
             context: current.enclosing.clone(),
             consumed: vec![command.reference],
-            ..Packet::default()
+            ..LoopRecord::default()
         };
         let mut emission = None;
         let mut due = None;
@@ -774,7 +774,7 @@ impl Vm<'_> {
         if let Some(at) = due {
             self.scheduler.schedule(
                 at,
-                DatedPayload::LoopDelay {
+                Obligation::LoopDelay {
                     owner,
                     instance: current.instance.clone(),
                     run,
@@ -867,7 +867,7 @@ fn loop_error(instance: &instance::Generation, reason: &'static str) -> VmFault 
 pub(super) fn manager_record(
     instance: &instance::Generation,
     cause: Id,
-    packet: Packet,
+    packet: LoopRecord,
 ) -> crate::journal::TransactionRecord {
     crate::journal::TransactionRecord {
         owner_path: instance.address().owner().clone(),

@@ -4,7 +4,7 @@
 use super::*;
 use crate::envelope;
 use crate::instance;
-use crate::journal::loop_protocol::{self as protocol, Fact, OpeningAdmissionId, Packet};
+use crate::journal::loop_protocol::{self as protocol, Fact, LoopRecord, OpeningAdmissionId};
 use crate::node;
 use crate::plan::{Endpoint, EndpointOwner, LoopCommandTarget, RouteDestination, RouteSelection};
 
@@ -491,7 +491,7 @@ impl Vm<'_> {
         let record = super::loop_manager::manager_record(
             &admission.instance,
             admission.delivery.envelope.meta().sys().id(),
-            Packet {
+            LoopRecord {
                 context: self.graph_context(&admission.delivery).to_vec(),
                 facts: vec![Fact::Open {
                     run: protocol::run_ref(&admission.instance, &admission.opening),
@@ -501,7 +501,7 @@ impl Vm<'_> {
                     fuel,
                     state: admission.delivery.envelope,
                 }],
-                ..Packet::default()
+                ..LoopRecord::default()
             },
         );
         journal.commit(record).map_err(VmFault::Journal)?;
@@ -590,7 +590,7 @@ impl Vm<'_> {
         let mut record = super::loop_manager::manager_record(
             &current.instance,
             envelope.meta().sys().id(),
-            Packet {
+            LoopRecord {
                 context: current.enclosing.clone(),
                 facts: vec![Fact::Admit {
                     run,
@@ -598,7 +598,7 @@ impl Vm<'_> {
                     admission: current.admission,
                     envelope: envelope.clone(),
                 }],
-                ..Packet::default()
+                ..LoopRecord::default()
             },
         );
         let opening = if current.iteration == 0 {
@@ -879,10 +879,10 @@ impl Vm<'_> {
         Ok(Some(super::loop_manager::manager_record(
             &current.instance,
             current.state.meta().sys().id(),
-            Packet {
+            LoopRecord {
                 context,
                 produced,
-                ..Packet::default()
+                ..LoopRecord::default()
             },
         )))
     }
@@ -978,7 +978,7 @@ impl Vm<'_> {
                     envelope: emission.emission.envelope.clone(),
                 });
             }
-            self.observed.push(Observed {
+            self.observed.push(EnvelopeView {
                 node: node::Path::new(
                     self.plan.owners[owner.index()]
                         .path
@@ -1317,7 +1317,7 @@ impl Vm<'_> {
                 {
                     self.scheduler.schedule(
                         *due_at,
-                        DatedPayload::LoopDelay {
+                        Obligation::LoopDelay {
                             owner,
                             instance: record.instance.clone(),
                             run,

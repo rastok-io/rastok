@@ -1,14 +1,14 @@
 use super::*;
 use crate::connector::ContractId;
 use crate::journal::retry_protocol::{
-    self as rp, AttemptId, Batch, CloseReason, Fact, Packet, Pin,
+    self as rp, AttemptId, Batch, CloseReason, Fact, Pin, RetryRecord,
 };
 use crate::plan::SemanticHash;
 use alloc::collections::BTreeSet;
 
 /// Lossless key 43 payload. An empty packet must be omitted by its carrier.
 #[must_use]
-pub fn retry_packet(packet: &Packet) -> Cbor {
+pub fn retry_packet(packet: &RetryRecord) -> Cbor {
     rp::encoding::packet_tree(packet, retained_pin, envelope)
 }
 
@@ -58,7 +58,7 @@ impl Decoder {
     /// # Errors
     /// Empty/unknown fields, malformed tags and references, noncanonical pins,
     /// or missing parents. The protocol fold still validates carriers and state.
-    pub fn retry_packet(&mut self, value: &Cbor) -> Result<Packet, Error> {
+    pub fn retry_packet(&mut self, value: &Cbor) -> Result<RetryRecord, Error> {
         let Cbor::Map(fields) = value else {
             return Err(Error::Invalid("Retry packet map"));
         };
@@ -84,7 +84,7 @@ impl Decoder {
         } else {
             Vec::new()
         };
-        Ok(Packet { context, facts })
+        Ok(RetryRecord { context, facts })
     }
 
     fn retry_fact(&mut self, value: &Cbor) -> Result<Fact, Error> {
@@ -187,7 +187,7 @@ mod tests {
     use crate::canonical_cbor::{decode, encode};
     use alloc::vec;
 
-    fn fixture() -> (Decoder, Envelope, rp::OperationId, Packet) {
+    fn fixture() -> (Decoder, Envelope, rp::OperationId, RetryRecord) {
         let source = Envelope::new(
             Meta::new(MetaSys::root(Id::from_bytes([1; 16]), 1)),
             Data::materialized(Value::Text("request".into())),
@@ -195,7 +195,7 @@ mod tests {
         let mut reader = Decoder::default();
         reader.envelope(&envelope(&source)).unwrap();
         let operation = rp::OperationId::from_id(Id::from_bytes([2; 16]));
-        let packet = Packet {
+        let packet = RetryRecord {
             context: None,
             facts: vec![Fact::Opened {
                 operation,
@@ -230,7 +230,7 @@ mod tests {
             call: CallId::new(Id::from_bytes([5; 16])),
             emissions: vec![Id::from_bytes([9; 16]), Id::from_bytes([7; 16])],
         };
-        let manager = |facts| Packet {
+        let manager = |facts| RetryRecord {
             context: None,
             facts,
         };
@@ -241,11 +241,11 @@ mod tests {
                 envelope: source,
                 delivery: Id::from_bytes([3; 16]),
             }]),
-            Packet {
+            RetryRecord {
                 context: Some(attempt),
                 facts: vec![],
             },
-            Packet {
+            RetryRecord {
                 context: Some(attempt),
                 facts: vec![Fact::Held(batch.clone())],
             },
@@ -257,7 +257,7 @@ mod tests {
                     call: batch.call,
                 },
             ]),
-            Packet {
+            RetryRecord {
                 context: Some(attempt),
                 facts: vec![
                     Fact::Published(batch.clone()),
@@ -341,7 +341,7 @@ mod tests {
             (4, Fact::Consumed(batch.clone())),
             (6, Fact::Published(batch.clone())),
         ] {
-            let packet = Packet {
+            let packet = RetryRecord {
                 context: Some(attempt),
                 facts: vec![fact],
             };

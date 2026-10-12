@@ -46,7 +46,7 @@ fn retry_plan() -> plan::ExecutionPlan {
         .push(plan::ExtensionSpec::Retry(Box::new(plan::RetrySpec {
             attempts: constant("3"),
             cases: vec!["TimeoutExpired".into()],
-            delay: Some(plan::LoopDelay::Fixed {
+            delay: Some(plan::DelayPolicy::Fixed {
                 after: constant("duration(\"100ms\")"),
             }),
             entry: Port::new("in").unwrap(),
@@ -138,7 +138,7 @@ fn hostile_retry_policies_are_rederived_in_core() {
             5 => spec.entry = Port::new("out").unwrap(),
             6 => spec.terminal = Port::new("out").unwrap(),
             _ => {
-                spec.delay = Some(plan::LoopDelay::Fixed {
+                spec.delay = Some(plan::DelayPolicy::Fixed {
                     after: constant("duration(\"0s\")"),
                 })
             }

@@ -145,7 +145,7 @@ impl Vm<'_> {
         let mut expected_routes = Vec::new();
         let mut expected_deadlines = Vec::new();
         let mut expected_loop = (!context.is_empty()).then(|| {
-            Box::new(protocol::Packet {
+            Box::new(protocol::LoopRecord {
                 context: context.clone(),
                 ..Default::default()
             })
@@ -211,7 +211,7 @@ impl Vm<'_> {
             for deadline in expected_deadlines {
                 self.scheduler.schedule(
                     deadline.due_at,
-                    DatedPayload::DeliveryBudget {
+                    Obligation::DeliveryBudget {
                         connector: self.plan.nodes[slot.index()].path.clone(),
                         edge: edge.clone(),
                         delivery: envelope.meta().sys().id(),

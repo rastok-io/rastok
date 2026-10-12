@@ -414,7 +414,7 @@ The structural observation of a committed record carries correlation already
 owned by causal history: `origin_id`, owner/instance, Connector and a typed
 inbound/outbound Call or Session/write reference. Stream order associates it
 with record order; no second ordinal or placement fact is invented. The VM's
-payload-bearing `Observed` delivery log is a distinct Lab/debugger surface,
+payload-bearing `EnvelopeView` delivery log is a distinct Lab/debugger surface,
 not this retained accounting plane.
 
 The journal and its associated validated plan are the measurement authority.

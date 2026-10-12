@@ -1169,7 +1169,7 @@ mod tests {
     use crate::envelope::Namespace;
     use crate::journal::{CallStatus, MemJournal, Record};
     use crate::plan::GraphVersion;
-    use crate::runtime::vm::{Observed, Vm};
+    use crate::runtime::vm::{EnvelopeView, Vm};
 
     const CAT_PROBE: &str = r#"
 graph real : App {
@@ -1218,7 +1218,7 @@ graph real : App {
     fn run_submission(
         source: &str,
         submission: IngressSubmission,
-    ) -> (MemJournal, Vec<Envelope>, Vec<Envelope>, Vec<Observed>) {
+    ) -> (MemJournal, Vec<Envelope>, Vec<Envelope>, Vec<EnvelopeView>) {
         let compilation = compile(
             &[source],
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1254,20 +1254,23 @@ graph real : App {
                 .iter()
                 .map(|output| output.envelope.clone())
                 .collect(),
-            vm.observations()
+            vm.envelope_views()
                 .iter()
                 .filter(|item| item.node.is_some() && item.port.name() == "err")
                 .map(|item| item.envelope.clone())
                 .collect(),
-            vm.observations().to_vec(),
+            vm.envelope_views().to_vec(),
         )
     }
 
-    fn run(source: &str, text: &str) -> (MemJournal, Vec<Envelope>, Vec<Envelope>, Vec<Observed>) {
+    fn run(
+        source: &str,
+        text: &str,
+    ) -> (MemJournal, Vec<Envelope>, Vec<Envelope>, Vec<EnvelopeView>) {
         run_submission(source, submission(text))
     }
 
-    fn source_values<'a>(observed: &'a [Observed], port: &str) -> Vec<&'a Value> {
+    fn source_values<'a>(observed: &'a [EnvelopeView], port: &str) -> Vec<&'a Value> {
         observed
             .iter()
             .filter(|item| item.node.is_some() && item.port.name() == port)
@@ -1278,7 +1281,7 @@ graph real : App {
             .collect()
     }
 
-    fn one_exit<'a>(observed: &'a [Observed], case: &str) -> &'a [(String, Value)] {
+    fn one_exit<'a>(observed: &'a [EnvelopeView], case: &str) -> &'a [(String, Value)] {
         let values = source_values(observed, "exit");
         assert_eq!(values.len(), 1, "one terminal fact per invocation");
         let Value::TaggedUnion(tagged) = values[0] else {

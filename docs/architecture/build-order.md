@@ -125,7 +125,7 @@ The world-facing traits (`InboundConnectorDriver`,
 input
 and the journal-driven machinery: `IngressSubmission`,
 `IngressEnvelopeProvenance`, `CallOpen`, `Response`, `CallId`, `DriverPoller`,
-`DatedPayload`, `LifecycleObservation`.
+`Obligation`, `LifecycleObservation`.
 
 Exit: dispatcher tests against a scripted Outbound Driver, asserting journaled
 intents and correlated responses.

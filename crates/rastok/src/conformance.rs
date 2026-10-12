@@ -1033,7 +1033,7 @@ fn run_provocation(
 }
 
 fn source_exit_case(vm: &Vm<'_>) -> Option<String> {
-    let mut cases = vm.observations().iter().filter_map(|observed| {
+    let mut cases = vm.envelope_views().iter().filter_map(|observed| {
         if observed.node.is_none() || observed.port.name() != "exit" {
             return None;
         }

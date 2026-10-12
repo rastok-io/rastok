@@ -187,7 +187,7 @@ impl rastok::boundary::CallConnectorDriver for World {
 
 #[test]
 fn a_nested_call_run_recovers_timeouts_and_never_restarts_an_old_effect() {
-    use rastok::journal::loop_protocol::{Fold, Phase};
+    use rastok::journal::loop_protocol::{LoopView, Phase};
     let plan = compile(
         r#"
 graph app : App + Loop {
@@ -271,7 +271,7 @@ graph app : App + Loop {
             vm.outputs()[0].port.name(),
             if exhausted { "exhausted" } else { "out" }
         );
-        let fold = Fold::from_records(journal.records()).unwrap();
+        let fold = LoopView::from_records(journal.records()).unwrap();
         assert_eq!(fold.runs().count(), 2);
         assert!(
             fold.runs()
@@ -342,7 +342,7 @@ graph app : App {
 
 #[test]
 fn graph_commands_wait_for_calls_and_recovery_never_restarts_them() {
-    use rastok::journal::loop_protocol::{Fold, Phase};
+    use rastok::journal::loop_protocol::{LoopView, Phase};
 
     let plan = compile(GRAPH_CALLS);
     let mut vm = Vm::boot(&plan, GraphVersion(1));
@@ -353,7 +353,7 @@ fn graph_commands_wait_for_calls_and_recovery_never_restarts_them() {
         .unwrap();
     vm.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(world.starts, 1);
-    let fold = Fold::from_records(journal.records()).unwrap();
+    let fold = LoopView::from_records(journal.records()).unwrap();
     let (_, state) = fold.runs().next().unwrap();
     assert_eq!((state.iteration, state.phase), (0, Phase::Active));
     assert!(
@@ -417,14 +417,14 @@ fn graph_commands_wait_for_calls_and_recovery_never_restarts_them() {
         );
     }
     assert_eq!(restored.outputs().len(), 1);
-    let fold = Fold::from_records(journal.records()).unwrap();
+    let fold = LoopView::from_records(journal.records()).unwrap();
     assert!(fold.runs().all(|(_, state)| state.phase == Phase::Closed));
     assert_eq!(fold.runs().count(), 1);
 }
 
 #[test]
 fn graph_call_deadlines_survive_recovery_without_extending_the_application() {
-    use rastok::journal::loop_protocol::{Fold, Phase};
+    use rastok::journal::loop_protocol::{LoopView, Phase};
     let plan = compile(GRAPH_CALLS);
     let mut vm = Vm::boot_at(&plan, GraphVersion(1), 7_000_000_000);
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -445,7 +445,7 @@ fn graph_call_deadlines_survive_recovery_without_extending_the_application() {
             .unwrap();
         assert_eq!(world.starts, starts);
         restored.advance(&mut journal, &mut world, at).unwrap();
-        let fold = Fold::from_records(journal.records()).unwrap();
+        let fold = LoopView::from_records(journal.records()).unwrap();
         let (_, run) = fold.runs().next().unwrap();
         assert_eq!((run.iteration, run.phase), (iteration, phase), "at {at}");
         let retained = journal.records().to_vec();
@@ -468,7 +468,7 @@ fn graph_call_deadlines_survive_recovery_without_extending_the_application() {
 
 #[test]
 fn a_graph_call_from_another_instance_does_not_delay_run_quiescence() {
-    use rastok::journal::loop_protocol::{Fold, Phase};
+    use rastok::journal::loop_protocol::{LoopView, Phase};
     let source = GRAPH_CALLS.replace(
         "graph cycle : Loop {",
         "graph cycle : Loop {\n    instance = { key = data }",
@@ -483,7 +483,7 @@ fn a_graph_call_from_another_instance_does_not_delay_run_quiescence() {
         .unwrap();
     vm.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(world.starts, 2);
-    let fold = Fold::from_records(journal.records()).unwrap();
+    let fold = LoopView::from_records(journal.records()).unwrap();
     let (finished_run, state) = fold
         .runs()
         .find(|(_, run)| run.state.data() == &Data::materialized(Value::Int(0)))
@@ -508,7 +508,7 @@ fn a_graph_call_from_another_instance_does_not_delay_run_quiescence() {
     vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    let fold = Fold::from_records(journal.records()).unwrap();
+    let fold = LoopView::from_records(journal.records()).unwrap();
     assert_eq!(fold.run(*finished_run).unwrap().phase, Phase::Closed);
     assert_eq!(
         fold.runs()
@@ -530,7 +530,7 @@ fn a_graph_call_from_another_instance_does_not_delay_run_quiescence() {
 
 #[test]
 fn closing_a_graph_call_run_cancels_recurrence_and_recovers_settlement() {
-    use rastok::journal::loop_protocol::{Fold, Phase};
+    use rastok::journal::loop_protocol::{LoopView, Phase};
     let source = GRAPH_CALLS
         .replacen("graph app : App {", "graph app : App {\n  lifetime = { kind = fixed; after = duration(\"2s\") }\n  closing = { drain_for = duration(\"1s\"); settle_for = duration(\"1s\") }", 1)
         .replace("duration(\"3s\")", "duration(\"10s\")");
@@ -562,7 +562,7 @@ fn closing_a_graph_call_run_cancels_recurrence_and_recovers_settlement() {
     );
     assert!(vm.outputs().is_empty());
     assert!(vm.is_stable());
-    let fold = Fold::from_records(journal.records()).unwrap();
+    let fold = LoopView::from_records(journal.records()).unwrap();
     assert!(
         fold.runs()
             .all(|(_, run)| run.phase == Phase::Closed && run.iteration == 0)

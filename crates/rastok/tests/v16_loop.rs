@@ -9,7 +9,7 @@ use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::{
     Journal, MemJournal, Record,
-    loop_protocol::{Error as LoopError, Fact, Fold, Phase},
+    loop_protocol::{Error as LoopError, Fact, LoopView, Phase},
 };
 use rastok::node;
 use rastok::plan::{self, GraphVersion};
@@ -114,7 +114,7 @@ fn two_graph_loop_admissions_with_one_origin_open_distinct_runs() {
         vm.outputs()[0].envelope.meta().sys().origin_id(),
         vm.outputs()[1].envelope.meta().sys().origin_id()
     );
-    let fold = Fold::from_records(journal.records()).unwrap();
+    let fold = LoopView::from_records(journal.records()).unwrap();
     assert_eq!(fold.runs().count(), 2);
     assert!(fold.runs().all(|(_, run)| run.phase == Phase::Closed));
     let mut restored = Vm::boot(&compilation.plan, GraphVersion(1));
@@ -186,7 +186,7 @@ fn a_graph_loop_retains_one_boundary_admission_before_its_internal_fanout() {
     let mut journal = MemJournal::new(GraphVersion(1));
     inject(&mut vm, &mut journal, 2);
     vm.run_ready(&mut journal).unwrap();
-    let fold = Fold::from_records(journal.records()).unwrap();
+    let fold = LoopView::from_records(journal.records()).unwrap();
     assert_eq!(
         fold.runs().count(),
         1,
@@ -232,7 +232,7 @@ fn graph_loop_commands_wait_for_siblings_and_keep_concurrent_runs_separate() {
     inject(&mut vm, &mut journal, 1);
     vm.run_ready(&mut journal).unwrap();
     assert_eq!(vm.outputs().len(), 2);
-    let fold = Fold::from_records(journal.records()).unwrap();
+    let fold = LoopView::from_records(journal.records()).unwrap();
     assert_eq!(fold.runs().count(), 2);
     assert!(fold.runs().all(|(_, state)| state.phase == Phase::Closed));
     // Every manager consumption follows exactly one audit for that iteration.
@@ -321,7 +321,7 @@ fn graph_again_retains_state_and_explicit_done_emits_no_domain_output() {
         let mut journal = MemJournal::new(GraphVersion(1));
         inject(&mut vm, &mut journal, input);
         vm.run_ready(&mut journal).unwrap();
-        let fold = Fold::from_records(journal.records()).unwrap();
+        let fold = LoopView::from_records(journal.records()).unwrap();
         let (_, run) = fold.runs().next().unwrap();
         assert_eq!(run.phase, expected);
         assert_eq!(run.state.data(), &Data::materialized(Value::Int(input)));
@@ -386,7 +386,7 @@ fn graph_loop_delay_and_expiry_recover_without_restarting_the_wait() {
         .unwrap();
     assert_eq!(restored.outputs().len(), 1);
     assert_eq!(restored.outputs()[0].port.name(), "expired");
-    let fold = Fold::from_records(journal.records()).unwrap();
+    let fold = LoopView::from_records(journal.records()).unwrap();
     assert!(
         fold.runs()
             .all(|(_, state)| state.phase == Phase::Expired && state.iteration == 1)
@@ -415,7 +415,7 @@ fn closing_a_graph_loop_invalidates_its_pending_reentry() {
     assert!(vm.outputs().is_empty());
     let records = journal.records().to_vec();
     assert!(
-        Fold::from_records(&records)
+        LoopView::from_records(&records)
             .unwrap()
             .runs()
             .all(|(_, state)| state.phase == Phase::Closed)
@@ -447,7 +447,7 @@ fn logical_advance_drains_graph_admissions_before_a_future_closure() {
     // `advance` drains the current instant before moving to a future deadline.
     assert_eq!(vm.outputs().len(), 12);
     assert_eq!(
-        Fold::from_records(journal.records())
+        LoopView::from_records(journal.records())
             .unwrap()
             .runs()
             .count(),
@@ -532,7 +532,7 @@ lab app {
         runs[0].report.failures,
         runs[0].records
     );
-    let fold = Fold::from_records(&runs[0].records).unwrap();
+    let fold = LoopView::from_records(&runs[0].records).unwrap();
     let (_, state) = fold.runs().next().unwrap();
     assert_eq!(
         (state.iteration, state.remaining, state.phase),
@@ -552,7 +552,7 @@ lab app {
         compiler::compile(&[&concurrent], &ContractCatalog::try_m0().unwrap()).unwrap();
     let runs = rastok::lab::run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
     assert!(runs[0].report.passed(), "{:?}", runs[0].report.failures);
-    let fold = Fold::from_records(&runs[0].records).unwrap();
+    let fold = LoopView::from_records(&runs[0].records).unwrap();
     assert_eq!(fold.runs().count(), 2);
     assert!(fold.runs().all(|(_, run)| run.phase == Phase::Expired));
 }
@@ -575,7 +575,7 @@ fn every_committed_prefix_restores_cursors_state_and_pending_loop_commands() {
     while reference.step(&mut expected).unwrap() {
         assert_eq!(
             expected.loop_protocol().unwrap(),
-            Fold::from_records(expected.records()).unwrap(),
+            LoopView::from_records(expected.records()).unwrap(),
             "the fast projection must equal independent replay after every commit"
         );
     }
@@ -735,7 +735,7 @@ fn assert_loop_record_refused(
     let mut records = reference[..index].to_vec();
     records.push(Record::Transaction(Box::new(forged.clone())));
     assert_eq!(
-        Fold::from_records(&records),
+        LoopView::from_records(&records),
         Err(error),
         "forged record {index} replay"
     );
@@ -812,7 +812,7 @@ fn a_rejected_transaction_does_not_update_the_journal_loop_projection() {
     assert_eq!(journal.loop_protocol().unwrap(), fold);
     assert_eq!(
         journal.loop_protocol().unwrap(),
-        Fold::from_records(&before).unwrap()
+        LoopView::from_records(&before).unwrap()
     );
 }
 
@@ -864,7 +864,7 @@ fn delayed_runs_reserve_manager_capacity_before_the_next_ingress_commit() {
     assert_eq!(vm.outputs().len(), 1024);
     vm.inject(&mut journal, incoming()).unwrap();
     vm.run_ready(&mut journal).unwrap();
-    let fold = Fold::from_records(journal.records()).unwrap();
+    let fold = LoopView::from_records(journal.records()).unwrap();
     assert_eq!(
         fold.runs()
             .filter(|(_, run)| run.phase == Phase::AwaitingAdmission)
@@ -936,7 +936,7 @@ lab app {{
             "{contract}: {:?}",
             runs[0].report.failures
         );
-        let fold = Fold::from_records(&runs[0].records).unwrap();
+        let fold = LoopView::from_records(&runs[0].records).unwrap();
         let (_, state) = fold.runs().next().unwrap();
         assert_eq!(
             (state.iteration, state.remaining, state.phase),
@@ -983,7 +983,7 @@ lab app {
     let compilation = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let runs = rastok::lab::run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
     assert!(runs[0].report.passed(), "{:?}", runs[0].report.failures);
-    let fold = Fold::from_records(&runs[0].records).unwrap();
+    let fold = LoopView::from_records(&runs[0].records).unwrap();
     let (_, run) = fold.runs().next().unwrap();
     assert_eq!((run.iteration, run.phase), (1, Phase::Expired));
     assert_eq!(run.state.data(), &Data::materialized(Value::Int(9)));
@@ -1217,7 +1217,7 @@ fn a_rederived_measure_bounds_commands_without_authored_fuel() {
             vm.run_ready(&mut journal).unwrap();
             assert_eq!(vm.outputs().len(), 1);
             assert_eq!(vm.outputs()[0].port.name(), "out");
-            let fold = Fold::from_records(journal.records()).unwrap();
+            let fold = LoopView::from_records(journal.records()).unwrap();
             let run = fold.runs().next().unwrap().1;
             assert_eq!(run.phase, Phase::Closed);
             assert_eq!(run.iteration, u64::try_from(value).unwrap_or(0));
@@ -1398,7 +1398,7 @@ fn again_keeps_data_and_private_state_but_not_the_previous_causal_identity() {
                 && env.meta().sys().origin_id() == admissions[0].meta().sys().origin_id())
     );
     assert_eq!(
-        Fold::from_records(journal.records())
+        LoopView::from_records(journal.records())
             .unwrap()
             .runs()
             .next()
@@ -1423,7 +1423,7 @@ fn expiry_contains_the_proposed_next_state_without_an_extra_application() {
     };
     assert_eq!(value.case, "LoopExpired");
     assert_eq!(value.payload, [("last_state".into(), Value::Int(9))]);
-    let fold = Fold::from_records(journal.records()).unwrap();
+    let fold = LoopView::from_records(journal.records()).unwrap();
     let run = fold.runs().next().unwrap().1;
     assert_eq!(
         (run.iteration, run.remaining, run.phase),
@@ -1446,7 +1446,7 @@ fn delayed_commands_wait_on_logical_time_without_reserving_reentry() {
     inject(&mut vm, &mut journal, 1);
     vm.run_ready(&mut journal).unwrap();
     assert!(vm.outputs().is_empty());
-    let fold = Fold::from_records(journal.records()).unwrap();
+    let fold = LoopView::from_records(journal.records()).unwrap();
     let run = fold.runs().next().unwrap().1;
     assert_eq!(run.phase, Phase::AwaitingAdmission);
     assert_eq!(run.due_at, Some(1_000_000_000));
@@ -1533,7 +1533,7 @@ graph app : App {
         vm.outputs()[0].envelope.meta().sys().origin_id(),
         vm.outputs()[1].envelope.meta().sys().origin_id()
     );
-    let fold = Fold::from_records(journal.records()).unwrap();
+    let fold = LoopView::from_records(journal.records()).unwrap();
     let runs: Vec<_> = fold.runs().collect();
     assert_eq!(runs.len(), 2);
     assert_ne!(runs[0].0, runs[1].0);
@@ -1593,13 +1593,13 @@ fn lifetime_closure_invalidates_pending_reentry_before_the_next_generation() {
     vm.run_ready(&mut journal).unwrap();
     vm.advance(&mut journal, &mut bindings, 1_000_000_000)
         .unwrap();
-    let fold = Fold::from_records(journal.records()).unwrap();
+    let fold = LoopView::from_records(journal.records()).unwrap();
     assert_eq!(fold.runs().next().unwrap().1.phase, Phase::Closed);
     inject(&mut vm, &mut journal, 8);
     vm.run_ready(&mut journal).unwrap();
     vm.advance(&mut journal, &mut bindings, 2_000_000_000)
         .unwrap();
-    let fold = Fold::from_records(journal.records()).unwrap();
+    let fold = LoopView::from_records(journal.records()).unwrap();
     assert_eq!(fold.runs().count(), 2);
     assert!(fold.runs().all(|(_, run)| run.iteration == 1));
     assert!(vm.outputs().is_empty());

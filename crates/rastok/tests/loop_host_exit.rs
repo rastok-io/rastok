@@ -185,7 +185,7 @@ fn expiry_and_pending_commands_recover_on_the_resolved_host_terminal() {
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::{
         MemJournal,
-        loop_protocol::{Fold, Phase},
+        loop_protocol::{LoopView, Phase},
     };
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
@@ -242,7 +242,7 @@ fn expiry_and_pending_commands_recover_on_the_resolved_host_terminal() {
         assert_eq!(value.case, "LoopExpired");
         assert_eq!(value.payload, [("last_state".to_string(), Value::Int(2))]);
         assert!(
-            Fold::from_records(journal.records())
+            LoopView::from_records(journal.records())
                 .unwrap()
                 .runs()
                 .all(|(_, run)| run.phase == Phase::Expired)

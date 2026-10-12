@@ -79,16 +79,17 @@ impl Command {
     }
 }
 
-/// Sparse causal extension, omitted rather than stored empty.
+/// Exact-instance commands carried by an INGRESS or TRANSACTION record,
+/// never a standalone journal record. Omitted rather than stored empty.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Packet {
+pub struct InstanceCommands {
     /// Commands in strictly increasing identity order.
     pub produced: Vec<Command>,
     /// Present only on the winning target-owned `l:closing` transaction.
     pub consumed: Option<Id>,
 }
 
-impl Packet {
+impl InstanceCommands {
     /// Canonical field value shared by causal projection and full recording.
     #[must_use]
     pub fn tree(&self) -> crate::canonical_cbor::Value {
@@ -125,7 +126,7 @@ impl Packet {
     }
 
     /// Reads the exact field algebra. Acceptance additionally requires the
-    /// prefix proof in [`Fold`] and the plan's routing/target proof.
+    /// prefix proof in [`InstanceCommandView`] and the plan's routing/target proof.
     ///
     /// # Errors
     /// Unknown keys, wrong arities, invalid references or command identities,
@@ -259,10 +260,11 @@ struct Instance {
     closing: Option<usize>,
 }
 
-/// Pure reconstruction of lifecycle links and command dispositions. No wall
-/// clock, Driver, latest-generation lookup, or mutable queue is authoritative.
+/// A read-only view of lifecycle links and instance-command dispositions for
+/// consumers, rebuilt from the journal. Its update methods reconstruct the
+/// view; no clock, Driver, latest-generation lookup or queue is authoritative.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Fold {
+pub struct InstanceCommandView {
     instances: BTreeMap<instance::Generation, Instance>,
     commands: Vec<(Command, Disposition)>,
     records: usize,
@@ -318,7 +320,7 @@ fn owner_path(owner: &EndpointOwner) -> node::OwnerPath {
     }
 }
 
-impl Fold {
+impl InstanceCommandView {
     /// Reconstructs the complete supplied prefix or rejects it.
     ///
     /// # Errors
@@ -517,7 +519,11 @@ impl Fold {
         false
     }
 
-    fn produce(&mut self, packet: &Packet, source: impl Fn(&Command) -> bool) -> Result<(), Error> {
+    fn produce(
+        &mut self,
+        packet: &InstanceCommands,
+        source: impl Fn(&Command) -> bool,
+    ) -> Result<(), Error> {
         if packet.produced.is_empty()
             || packet.consumed.is_some()
             || packet
@@ -571,7 +577,7 @@ impl Fold {
     fn consume(
         &mut self,
         record: &TransactionRecord,
-        packet: &Packet,
+        packet: &InstanceCommands,
         id: Id,
     ) -> Result<(), Error> {
         if !packet.produced.is_empty()

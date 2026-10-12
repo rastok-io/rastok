@@ -1270,7 +1270,7 @@ impl<'plan> TransactionPreparer<'plan> {
                 exchange_exit: None,
                 retry_record: None,
                 loop_record: application.map(|application| {
-                    Box::new(crate::journal::loop_protocol::Packet {
+                    Box::new(crate::journal::loop_protocol::LoopRecord {
                         context: vec![application.run],
                         produced: commands,
                         ..Default::default()

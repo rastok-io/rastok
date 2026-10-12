@@ -1885,11 +1885,11 @@ pub struct Draft {
     pub ext: envelope::Namespace,
 }
 
-/// What a dated event carries. Per-call timeout budgets are
-/// scheduler-owned; further obligations (lifetimes, windows) join
-/// with their stages.
+/// The work selected when a scheduler deadline is reached. Each variant
+/// carries the exact delivery, run or instance to which the obligation belongs;
+/// the scheduler does not infer a current generation when it fires.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DatedPayload {
+pub enum Obligation {
     /// A delivery's call budget expired. The budget runs from the
     /// DELIVERY into the connector's mailbox (execution-model §8) —
     /// queue time counts — and the obligation resolves by its

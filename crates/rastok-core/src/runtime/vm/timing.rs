@@ -12,7 +12,7 @@ impl Vm<'_> {
         candidates: &BTreeMap<instance::Generation, InstanceCandidate>,
         envelope: &Envelope,
         activity: &mut BTreeMap<instance::Generation, Id>,
-    ) -> Vec<(Deadline, DatedPayload)> {
+    ) -> Vec<(Deadline, Obligation)> {
         if !self.has_lifetime_deadlines {
             return Vec::new();
         }
@@ -63,7 +63,7 @@ impl Vm<'_> {
                     reference: ids::instance_lifetime_id(reference),
                     due_at,
                 },
-                DatedPayload::InstanceLifetime {
+                Obligation::InstanceLifetime {
                     owner,
                     instance: reference.clone(),
                     cause,
@@ -80,7 +80,7 @@ impl Vm<'_> {
         target: &PreparedTarget,
         candidates: &BTreeMap<instance::Generation, InstanceCandidate>,
         envelope: &Envelope,
-    ) -> Vec<(Deadline, DatedPayload)> {
+    ) -> Vec<(Deadline, Obligation)> {
         let Some(to) = &route.edge.to else {
             return Vec::new();
         };
@@ -111,7 +111,7 @@ impl Vm<'_> {
                     reference,
                     due_at: self.now.saturating_add(within),
                 },
-                DatedPayload::JoinWithin {
+                Obligation::JoinWithin {
                     operator: node.path.clone(),
                     edge: edge.clone(),
                     delivery,
@@ -167,7 +167,7 @@ impl Vm<'_> {
                     reference,
                     due_at: self.now.saturating_add(budget),
                 },
-                DatedPayload::DeliveryBudget {
+                Obligation::DeliveryBudget {
                     connector: node.path.clone(),
                     edge,
                     delivery,

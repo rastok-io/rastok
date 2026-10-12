@@ -166,7 +166,7 @@ fn call_time_is_unsealed_but_retry_context_and_deadline_identity_are_causal() {
         operation,
         ordinal: 1,
     };
-    call.retry_record = Some(Box::new(retry::Packet {
+    call.retry_record = Some(Box::new(retry::RetryRecord {
         context: Some(context),
         facts: vec![],
     }));
@@ -190,7 +190,7 @@ fn call_time_is_unsealed_but_retry_context_and_deadline_identity_are_causal() {
     assert_eq!(
         keys.get(&43),
         Some(
-            &retry::Packet {
+            &retry::RetryRecord {
                 context: Some(context),
                 facts: vec![]
             }

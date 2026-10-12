@@ -392,7 +392,7 @@ pub fn encode(value: &Record) -> Cbor {
             schedule(value.deadlines.as_deref()),
             optional(
                 value.instance_commands.as_deref(),
-                journal::instance_stop::Packet::tree,
+                journal::instance_stop::InstanceCommands::tree,
             ),
         ]),
         Record::Transaction(value) => {
@@ -442,7 +442,7 @@ pub fn encode(value: &Record) -> Cbor {
                 schedule(value.deadlines.as_deref()),
                 optional(
                     value.instance_commands.as_deref(),
-                    journal::instance_stop::Packet::tree,
+                    journal::instance_stop::InstanceCommands::tree,
                 ),
                 optional(value.retry_record.as_deref(), retry_packet),
             ])
@@ -490,7 +490,7 @@ pub fn encode(value: &Record) -> Cbor {
     }
 }
 
-fn loop_packet(value: &lp::Packet) -> Cbor {
+fn loop_packet(value: &lp::LoopRecord) -> Cbor {
     list([
         list(value.context.iter().map(|value| id(value.id()))),
         list(value.routes.iter().map(|value| {
@@ -720,7 +720,7 @@ impl Decoder {
             exchange,
             deadlines: read_schedule(schedule)?,
             instance_commands: read_optional(instance_commands, |value| {
-                journal::instance_stop::Packet::from_tree(value)
+                journal::instance_stop::InstanceCommands::from_tree(value)
                     .map(Box::new)
                     .map_err(|_| Error::Invalid("instance-stop packet"))
             })?,
@@ -850,7 +850,7 @@ impl Decoder {
             deadline_ids: read_deadline_ids(deadline_ids)?,
             deadlines: read_schedule(schedule)?,
             instance_commands: read_optional(instance_commands, |value| {
-                journal::instance_stop::Packet::from_tree(value)
+                journal::instance_stop::InstanceCommands::from_tree(value)
                     .map(Box::new)
                     .map_err(|_| Error::Invalid("instance-stop packet"))
             })?,
@@ -916,7 +916,7 @@ impl Decoder {
             },
         ))))
     }
-    fn loop_packet(&mut self, value: &Cbor) -> Result<lp::Packet, Error> {
+    fn loop_packet(&mut self, value: &Cbor) -> Result<lp::LoopRecord, Error> {
         let [context, routes, produced, consumed, facts] = array(value)?;
         let produced = items(produced)?
             .iter()
@@ -948,7 +948,7 @@ impl Decoder {
                 Ok(command)
             })
             .collect::<Result<_, Error>>()?;
-        Ok(lp::Packet {
+        Ok(lp::LoopRecord {
             context: read_runs(context)?,
             routes: items(routes)?
                 .iter()

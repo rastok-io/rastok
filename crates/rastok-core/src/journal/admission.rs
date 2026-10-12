@@ -12,7 +12,7 @@ pub(crate) trait InstanceAdmissions {
         &self,
         address: &instance::Identity,
     ) -> Result<instance::Generation, Error>;
-    fn instance_commands(&self) -> Result<instance_stop::Fold, Error>;
+    fn instance_commands(&self) -> Result<instance_stop::InstanceCommandView, Error>;
 }
 
 impl<T: Journal + ?Sized> InstanceAdmissions for &T {
@@ -22,7 +22,7 @@ impl<T: Journal + ?Sized> InstanceAdmissions for &T {
     ) -> Result<instance::Generation, Error> {
         Journal::instance_generation_for_admission(*self, address)
     }
-    fn instance_commands(&self) -> Result<instance_stop::Fold, Error> {
+    fn instance_commands(&self) -> Result<instance_stop::InstanceCommandView, Error> {
         Journal::instance_commands(*self)
     }
 }
@@ -196,13 +196,14 @@ impl Fold {
 #[derive(Default)]
 pub(crate) struct AdmissionPrefix {
     admissions: Fold,
-    instance_commands: Option<Box<instance_stop::Fold>>,
+    instance_commands: Option<Box<instance_stop::InstanceCommandView>>,
 }
 
 impl AdmissionPrefix {
     pub(crate) fn retaining_instance_commands(enabled: bool) -> Self {
         Self {
-            instance_commands: enabled.then(|| Box::new(instance_stop::Fold::default())),
+            instance_commands: enabled
+                .then(|| Box::new(instance_stop::InstanceCommandView::default())),
             ..Self::default()
         }
     }
@@ -227,7 +228,7 @@ impl InstanceAdmissions for AdmissionPrefix {
         self.admissions.instance_generation_for_admission(address)
     }
 
-    fn instance_commands(&self) -> Result<instance_stop::Fold, Error> {
+    fn instance_commands(&self) -> Result<instance_stop::InstanceCommandView, Error> {
         self.instance_commands
             .as_deref()
             .cloned()

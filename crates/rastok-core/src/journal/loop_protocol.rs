@@ -9,7 +9,7 @@ use crate::node::Port;
 use alloc::vec::Vec;
 
 mod fold;
-pub use fold::{Error, Fold, Phase, RunState};
+pub use fold::{Error, LoopView, Phase, RunState};
 
 /// Exact admission which opens a run, not its possibly shared business origin.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -227,10 +227,11 @@ pub struct RoutedContext {
     pub runs: Vec<LoopRunId>,
 }
 
-/// Sparse Loop contribution to an ordinary TRANSACTION. Its presence does not
-/// create another ledger; ordinary transactions carry no allocation for it.
+/// The Loop protocol's part of a TRANSACTION record, carried by that record
+/// and never standalone. It adds no journal record kind; transactions without
+/// Loop carry no allocation for it.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct Packet {
+pub struct LoopRecord {
     /// Context inherited from the consumed admission.
     pub context: Vec<LoopRunId>,
     /// Contexts of outgoing deliveries, sorted by delivery reference.
@@ -243,7 +244,7 @@ pub struct Packet {
     pub facts: Vec<Fact>,
 }
 
-impl Packet {
+impl LoopRecord {
     /// State envelopes retained by this packet, in producer/fact order.
     pub fn envelopes(&self) -> impl Iterator<Item = &Envelope> {
         self.produced

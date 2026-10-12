@@ -2,8 +2,8 @@
 //! are obligations of the plan and Worker, not facts this fold invents.
 
 use super::{
-    CommandProduced, CommandValue, Fact, OpeningAdmissionId, Packet, admission_ref, command_ref,
-    run_ref,
+    CommandProduced, CommandValue, Fact, LoopRecord, OpeningAdmissionId, admission_ref,
+    command_ref, run_ref,
 };
 use crate::envelope::{Envelope, Id};
 use crate::instance;
@@ -105,16 +105,18 @@ pub struct RunState {
     pub pending: Option<CommandProduced>,
 }
 
-/// Pure replay fold, with no Driver, scheduler, clock or additional ledger.
+/// A read-only view of Loop runs for consumers, rebuilt by folding committed
+/// transactions. Its update methods validate and reconstruct that view; the
+/// journal remains authoritative. No Driver, scheduler or clock is consulted.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct Fold {
+pub struct LoopView {
     runs: BTreeMap<LoopRunId, RunState>,
     /// Active parent-generation links from lifecycle records. An owner path
     /// alone cannot distinguish tenants or successive enclosing generations.
     parents: BTreeMap<instance::Generation, Option<instance::Generation>>,
 }
 
-impl Fold {
+impl LoopView {
     /// Reconstructs every r2 run from committed transactions.
     ///
     /// # Errors
@@ -146,7 +148,7 @@ impl Fold {
     ///
     /// # Errors
     /// A malformed packet or invalid transition. `self` is unchanged.
-    pub fn apply(&mut self, packet: &Packet) -> Result<(), Error> {
+    pub fn apply(&mut self, packet: &LoopRecord) -> Result<(), Error> {
         let mut candidate = self.clone();
         candidate.apply_inner(packet)?;
         *self = candidate;
@@ -281,7 +283,7 @@ impl Fold {
         Ok(())
     }
 
-    fn apply_inner(&mut self, packet: &Packet) -> Result<(), Error> {
+    fn apply_inner(&mut self, packet: &LoopRecord) -> Result<(), Error> {
         if packet.is_empty()
             || !packet.consumed.windows(2).all(|pair| pair[0] < pair[1])
             || !packet
@@ -574,7 +576,7 @@ mod tests {
         Envelope::new(Meta::new(sys), Data::materialized(Value::Int(value)))
     }
 
-    fn open(fuel: u64) -> (LoopRunId, instance::Generation, Vec<Packet>) {
+    fn open(fuel: u64) -> (LoopRunId, instance::Generation, Vec<LoopRecord>) {
         let instance = instance::Generation::new(
             instance::Identity::singleton(&node::OwnerPath::new(["host"]).unwrap()),
             0,
@@ -585,7 +587,7 @@ mod tests {
     fn open_at(
         instance: instance::Generation,
         fuel: u64,
-    ) -> (LoopRunId, instance::Generation, Vec<Packet>) {
+    ) -> (LoopRunId, instance::Generation, Vec<LoopRecord>) {
         let entry = Port::new("request").unwrap();
         let state = state(2);
         let opening = OpeningAdmissionId::Ingress {
@@ -594,7 +596,7 @@ mod tests {
         };
         let run = run_ref(&instance, &opening);
         let packets = vec![
-            Packet {
+            LoopRecord {
                 facts: vec![Fact::Open {
                     run,
                     instance: instance.clone(),
@@ -603,22 +605,22 @@ mod tests {
                     fuel,
                     state: state.clone(),
                 }],
-                ..Packet::default()
+                ..LoopRecord::default()
             },
-            Packet {
+            LoopRecord {
                 facts: vec![Fact::Admit {
                     run,
                     iteration: 0,
                     admission: state.meta().sys().id(),
                     envelope: state.clone(),
                 }],
-                ..Packet::default()
+                ..LoopRecord::default()
             },
         ];
         (run, instance, packets)
     }
 
-    fn record(instance: &instance::Generation, packet: Packet) -> Record {
+    fn record(instance: &instance::Generation, packet: LoopRecord) -> Record {
         Record::Transaction(Box::new(TransactionRecord {
             owner_path: instance.address().owner().clone(),
             instance: instance.clone(),
@@ -642,7 +644,7 @@ mod tests {
     }
 
     fn start(instance: &instance::Generation, parent: Option<&instance::Generation>) -> Record {
-        let Record::Transaction(mut transaction) = record(instance, Packet::default()) else {
+        let Record::Transaction(mut transaction) = record(instance, LoopRecord::default()) else {
             unreachable!()
         };
         transaction.trigger = Trigger::Lifecycle(Lifecycle::Start);
@@ -665,15 +667,15 @@ mod tests {
         let command = CommandProduced::new(run, 0, CommandValue::Next(state(1)));
         records.push(record(
             &instance,
-            Packet {
+            LoopRecord {
                 context: vec![run],
                 produced: vec![command.clone()],
-                ..Packet::default()
+                ..LoopRecord::default()
             },
         ));
-        let recovered = Fold::from_records(&records).unwrap();
+        let recovered = LoopView::from_records(&records).unwrap();
         assert_eq!(recovered.run(run).unwrap().pending.as_ref(), Some(&command));
-        let consumption = Packet {
+        let consumption = LoopRecord {
             consumed: vec![command.reference],
             facts: vec![Fact::Advance {
                 run,
@@ -684,12 +686,12 @@ mod tests {
                 state: state(1),
                 due_at: Some(100),
             }],
-            ..Packet::default()
+            ..LoopRecord::default()
         };
         let mut live = recovered;
         live.apply(&consumption).unwrap();
         records.push(record(&instance, consumption.clone()));
-        assert_eq!(Fold::from_records(&records).unwrap(), live);
+        assert_eq!(LoopView::from_records(&records).unwrap(), live);
         assert_eq!(live.run(run).unwrap().phase, Phase::AwaitingAdmission);
         assert_eq!(live.run(run).unwrap().due_at, Some(100));
         let checkpoint = live.clone();
@@ -698,7 +700,7 @@ mod tests {
             live, checkpoint,
             "repeating consumption cannot advance twice"
         );
-        live.apply(&Packet {
+        live.apply(&LoopRecord {
             facts: vec![Fact::Admit {
                 run,
                 iteration: 1,
@@ -712,7 +714,7 @@ mod tests {
                     state(1).data().clone(),
                 ),
             }],
-            ..Packet::default()
+            ..LoopRecord::default()
         })
         .unwrap();
         let done = CommandProduced::new(
@@ -723,20 +725,20 @@ mod tests {
                 kind: super::super::DoneKind::Natural,
             },
         );
-        live.apply(&Packet {
+        live.apply(&LoopRecord {
             context: vec![run],
             produced: vec![done.clone()],
-            ..Packet::default()
+            ..LoopRecord::default()
         })
         .unwrap();
-        live.apply(&Packet {
+        live.apply(&LoopRecord {
             consumed: vec![done.reference],
             facts: vec![Fact::Close {
                 run,
                 iteration: 1,
                 reason: super::super::CloseReason::Natural,
             }],
-            ..Packet::default()
+            ..LoopRecord::default()
         })
         .unwrap();
         assert_eq!(live.run(run).unwrap().phase, Phase::Closed);
@@ -752,10 +754,10 @@ mod tests {
             0,
         );
         records.push(start(&child, Some(&instance)));
-        let fold = Fold::from_records(&records).unwrap();
-        let context = Packet {
+        let fold = LoopView::from_records(&records).unwrap();
+        let context = LoopRecord {
             context: vec![run],
-            ..Packet::default()
+            ..LoopRecord::default()
         };
         let Record::Transaction(valid) = record(&child, context.clone()) else {
             unreachable!()
@@ -807,7 +809,7 @@ mod tests {
         records.push(start(&child, Some(&parent)));
         let (inner, _, packets) = open_at(child.clone(), 2);
         records.extend(packets.into_iter().map(|packet| record(&child, packet)));
-        let fold = Fold::from_records(&records).unwrap();
+        let fold = LoopView::from_records(&records).unwrap();
         for (context, expected) in [
             (vec![outer, inner], Ok(())),
             (vec![inner, outer], Err(Error::ContextOwner)),
@@ -815,9 +817,9 @@ mod tests {
         ] {
             let Record::Transaction(transaction) = record(
                 &child,
-                Packet {
+                LoopRecord {
                     context,
-                    ..Packet::default()
+                    ..LoopRecord::default()
                 },
             ) else {
                 unreachable!()
@@ -866,7 +868,7 @@ mod tests {
             start(&bob_child, Some(&bob)),
         ];
         records.extend(packets.into_iter().map(|packet| record(&alice, packet)));
-        let fold = Fold::from_records(&records).unwrap();
+        let fold = LoopView::from_records(&records).unwrap();
         for (actor, expected) in [
             (&alice_child, Ok(())),
             (&bob_child, Err(Error::ContextOwner)),
@@ -874,9 +876,9 @@ mod tests {
         ] {
             let Record::Transaction(transaction) = record(
                 actor,
-                Packet {
+                LoopRecord {
                     context: vec![run],
-                    ..Packet::default()
+                    ..LoopRecord::default()
                 },
             ) else {
                 unreachable!()
@@ -892,7 +894,7 @@ mod tests {
         let (run, instance, packets) = open(2);
         let mut records = rooted(&instance);
         records.extend(packets.into_iter().map(|packet| record(&instance, packet)));
-        let fold = Fold::from_records(&records).unwrap();
+        let fold = LoopView::from_records(&records).unwrap();
         let target = instance::Generation::new(
             instance::Identity::singleton(&node::OwnerPath::new(["host", "child"]).unwrap()),
             0,
@@ -909,10 +911,10 @@ mod tests {
         };
         let Record::Transaction(mut transaction) = record(
             &instance,
-            Packet {
+            LoopRecord {
                 context: vec![run],
                 routes: vec![context],
-                ..Packet::default()
+                ..LoopRecord::default()
             },
         ) else {
             unreachable!()
@@ -938,7 +940,7 @@ mod tests {
     #[test]
     fn consumption_and_transition_are_atomic_and_again_cannot_replace_state() {
         let (run, _, packets) = open(2);
-        let mut fold = Fold::default();
+        let mut fold = LoopView::default();
         for packet in packets {
             fold.apply(&packet).unwrap();
         }
@@ -947,24 +949,24 @@ mod tests {
             0,
             CommandValue::Again(Id::derive(crate::envelope::IdKind::Root, &[b"exit"])),
         );
-        let production = Packet {
+        let production = LoopRecord {
             context: vec![run],
             produced: vec![command.clone()],
-            ..Packet::default()
+            ..LoopRecord::default()
         };
         fold.apply(&production).unwrap();
         let before = fold.clone();
         assert_eq!(fold.apply(&production), Err(Error::DuplicateVerdict));
         assert_eq!(fold, before);
         assert_eq!(
-            fold.apply(&Packet {
+            fold.apply(&LoopRecord {
                 consumed: vec![command.reference],
-                ..Packet::default()
+                ..LoopRecord::default()
             }),
             Err(Error::UnappliedCommand)
         );
         assert_eq!(fold, before);
-        let mut advance = Packet {
+        let mut advance = LoopRecord {
             consumed: vec![command.reference],
             facts: vec![Fact::Advance {
                 run,
@@ -975,7 +977,7 @@ mod tests {
                 state: state(1),
                 due_at: None,
             }],
-            ..Packet::default()
+            ..LoopRecord::default()
         };
         assert_eq!(fold.apply(&advance), Err(Error::Transition));
         assert_eq!(fold, before);
@@ -990,7 +992,7 @@ mod tests {
     #[test]
     fn again_retains_business_state_but_readmission_cannot_repeat_emission_identity() {
         let (run, _, packets) = open(3);
-        let mut fold = Fold::default();
+        let mut fold = LoopView::default();
         for packet in packets {
             fold.apply(&packet).unwrap();
         }
@@ -1023,13 +1025,13 @@ mod tests {
                 iteration,
                 CommandValue::Again(current.meta().sys().id()),
             );
-            fold.apply(&Packet {
+            fold.apply(&LoopRecord {
                 context: vec![run],
                 produced: vec![command.clone()],
-                ..Packet::default()
+                ..LoopRecord::default()
             })
             .unwrap();
-            fold.apply(&Packet {
+            fold.apply(&LoopRecord {
                 consumed: vec![command.reference],
                 facts: vec![Fact::Advance {
                     run,
@@ -1040,18 +1042,18 @@ mod tests {
                     state: current.clone(),
                     due_at: None,
                 }],
-                ..Packet::default()
+                ..LoopRecord::default()
             })
             .unwrap();
             let admission = admission_ref(run, iteration + 1, command.reference);
-            let mut packet = Packet {
+            let mut packet = LoopRecord {
                 facts: vec![Fact::Admit {
                     run,
                     iteration: iteration + 1,
                     admission,
                     envelope: current.clone(),
                 }],
-                ..Packet::default()
+                ..LoopRecord::default()
             };
             let checkpoint = fold.clone();
             assert_eq!(fold.apply(&packet), Err(Error::Transition));
@@ -1073,20 +1075,20 @@ mod tests {
     #[test]
     fn exhausted_fuel_publishes_expiry_without_an_admission() {
         let (run, instance, packets) = open(1);
-        let mut fold = Fold::default();
+        let mut fold = LoopView::default();
         for packet in packets {
             fold.apply(&packet).unwrap();
         }
         let command = CommandProduced::new(run, 0, CommandValue::Next(state(1)));
-        fold.apply(&Packet {
+        fold.apply(&LoopRecord {
             context: vec![run],
             produced: vec![command.clone()],
-            ..Packet::default()
+            ..LoopRecord::default()
         })
         .unwrap();
         let checkpoint = fold.clone();
         assert_eq!(
-            fold.apply(&Packet {
+            fold.apply(&LoopRecord {
                 consumed: vec![command.reference],
                 facts: vec![Fact::Advance {
                     run,
@@ -1097,12 +1099,12 @@ mod tests {
                     state: state(1),
                     due_at: None
                 }],
-                ..Packet::default()
+                ..LoopRecord::default()
             }),
             Err(Error::Transition)
         );
         assert_eq!(fold, checkpoint);
-        let mut expiry = Packet {
+        let mut expiry = LoopRecord {
             consumed: vec![command.reference],
             facts: vec![Fact::Expired {
                 run,
@@ -1111,7 +1113,7 @@ mod tests {
                 last_state: state(1),
                 output: state(-1),
             }],
-            ..Packet::default()
+            ..LoopRecord::default()
         };
         assert_eq!(
             fold.apply(&expiry),
@@ -1141,14 +1143,14 @@ mod tests {
         fold.apply(&expiry).unwrap();
         assert_eq!(fold.run(run).unwrap().phase, Phase::Expired);
         assert_eq!(
-            fold.apply(&Packet {
+            fold.apply(&LoopRecord {
                 facts: vec![Fact::Admit {
                     run,
                     iteration: 1,
                     admission: admission_ref(run, 1, command.reference),
                     envelope: state(1),
                 }],
-                ..Packet::default()
+                ..LoopRecord::default()
             }),
             Err(Error::Transition)
         );
@@ -1157,7 +1159,7 @@ mod tests {
     #[test]
     fn unknown_contexts_and_command_field_forgery_are_rejected() {
         let (run, _, packets) = open(2);
-        let mut fold = Fold::default();
+        let mut fold = LoopView::default();
         for packet in packets {
             fold.apply(&packet).unwrap();
         }
@@ -1165,17 +1167,17 @@ mod tests {
             CommandProduced::new(run, 0, CommandValue::Again(state(2).meta().sys().id()));
         command.iteration = 1;
         assert_eq!(
-            fold.apply(&Packet {
+            fold.apply(&LoopRecord {
                 context: vec![run],
                 produced: vec![command],
-                ..Packet::default()
+                ..LoopRecord::default()
             }),
             Err(Error::CommandIdentity)
         );
         assert_eq!(
-            fold.apply(&Packet {
+            fold.apply(&LoopRecord {
                 context: vec![run, run],
-                ..Packet::default()
+                ..LoopRecord::default()
             }),
             Err(Error::Context)
         );
@@ -1187,27 +1189,27 @@ mod tests {
                 kind: super::super::DoneKind::Explicit,
             },
         );
-        fold.apply(&Packet {
+        fold.apply(&LoopRecord {
             context: vec![run],
             produced: vec![command.clone()],
-            ..Packet::default()
+            ..LoopRecord::default()
         })
         .unwrap();
-        fold.apply(&Packet {
+        fold.apply(&LoopRecord {
             consumed: vec![command.reference],
             facts: vec![Fact::Close {
                 run,
                 iteration: 0,
                 reason: super::super::CloseReason::ExplicitDone,
             }],
-            ..Packet::default()
+            ..LoopRecord::default()
         })
         .unwrap();
         assert_eq!(
-            fold.apply(&Packet {
+            fold.apply(&LoopRecord {
                 context: vec![run],
                 produced: vec![command],
-                ..Packet::default()
+                ..LoopRecord::default()
             }),
             Err(Error::Context)
         );

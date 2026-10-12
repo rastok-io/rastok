@@ -6,7 +6,9 @@ use crate::envelope;
 use crate::instance;
 use crate::journal::deadline::{Deadline, Deadlines};
 use crate::journal::loop_protocol::{Fact as LoopFact, Phase as LoopPhase};
-use crate::journal::retry_protocol::{self as protocol, AttemptId, Fact, Fold, Packet, Phase};
+use crate::journal::retry_protocol::{
+    self as protocol, AttemptId, Fact, Phase, RetryRecord, RetryView,
+};
 use crate::journal::{CallRecord, CallStatus, Closure, Record, TransactionRecord};
 
 pub(super) fn error(error: protocol::Error) -> VmFault {
@@ -89,7 +91,7 @@ impl Vm<'_> {
             .ok_or_else(|| error(protocol::Error::OriginalBinding))?;
         let opening = ids::delivery_id(&delivery.edge, delivery.envelope.meta().sys().id());
         let operation = protocol::operation_ref(instance, &spec.entry, opening);
-        let packet = Packet {
+        let packet = RetryRecord {
             context: None,
             facts: vec![
                 Fact::Opened {
@@ -138,7 +140,7 @@ impl Vm<'_> {
         let mut record = manager_record(instance, intent.emitting_id, packet);
         let context = self.graph_context(delivery);
         if !context.is_empty() {
-            record.loop_record = Some(Box::new(crate::journal::loop_protocol::Packet {
+            record.loop_record = Some(Box::new(crate::journal::loop_protocol::LoopRecord {
                 context: context.to_vec(),
                 ..Default::default()
             }));
@@ -236,7 +238,7 @@ impl Vm<'_> {
             for deadline in schedule.items() {
                 self.scheduler.schedule(
                     deadline.due_at,
-                    DatedPayload::RetryDelay {
+                    Obligation::RetryDelay {
                         instance: state.instance.clone(),
                         attempt,
                         admission: deadline.reference,
@@ -253,7 +255,7 @@ impl Vm<'_> {
         delivery: &envelope::Delivery,
         call: CallId,
         record: &mut TransactionRecord,
-    ) -> Result<Option<(Box<Fold>, bool)>, VmFault> {
+    ) -> Result<Option<(Box<RetryView>, bool)>, VmFault> {
         let Some(attempt) = self.retry_attempt(instance, delivery) else {
             return Ok(None);
         };
@@ -274,7 +276,7 @@ impl Vm<'_> {
                 .collect(),
         };
         let held = state.withholds();
-        let packet = Packet {
+        let packet = RetryRecord {
             context: Some(attempt),
             facts: if held {
                 vec![Fact::Held(batch)]
@@ -547,7 +549,7 @@ impl Vm<'_> {
             });
             admission = Some((edge, envelope));
         }
-        let packet = Packet {
+        let packet = RetryRecord {
             context: None,
             facts,
         };
@@ -565,7 +567,7 @@ impl Vm<'_> {
         );
         let context = self.graph_context_for(state.opening).to_vec();
         if !context.is_empty() {
-            record.loop_record = Some(Box::new(crate::journal::loop_protocol::Packet {
+            record.loop_record = Some(Box::new(crate::journal::loop_protocol::LoopRecord {
                 context: context.clone(),
                 ..Default::default()
             }));
@@ -628,7 +630,7 @@ impl Vm<'_> {
             if let Some(ns) = timeout {
                 self.scheduler.schedule(
                     self.now.saturating_add(ns),
-                    DatedPayload::DeliveryBudget {
+                    Obligation::DeliveryBudget {
                         connector: self.plan.nodes[slot.index()].path.clone(),
                         edge,
                         delivery: envelope.meta().sys().id(),
@@ -664,7 +666,7 @@ pub(super) fn policy(
 }
 
 pub(super) fn closure_schedule(
-    fold: Option<&Fold>,
+    fold: Option<&RetryView>,
     intent: &CallOpen,
     completion: &Completion,
     now: i64,
@@ -759,7 +761,7 @@ pub(super) fn hold_emissions(record: &TransactionRecord) -> PreparedEmissions {
 pub(super) fn manager_record(
     instance: &instance::Generation,
     cause: Id,
-    packet: Packet,
+    packet: RetryRecord,
 ) -> TransactionRecord {
     TransactionRecord {
         owner_path: instance.address().owner().clone(),

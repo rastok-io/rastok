@@ -5,7 +5,7 @@
 
 use rastok::compiler;
 use rastok::contract::ContractCatalog;
-use rastok::journal::loop_protocol::{Fold, Phase};
+use rastok::journal::loop_protocol::{LoopView, Phase};
 use rastok::plan::{self, GraphVersion};
 
 const HTTP_GRAPH: &str = r#"
@@ -103,7 +103,7 @@ lab app {{
         let (plan, _) = plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap();
         let runs = rastok::lab::run(&plan, GraphVersion(1), &compiled.labs[0]);
         assert!(runs[0].report.passed(), "{:?}", runs[0].report.failures);
-        let fold = Fold::from_records(&runs[0].records).unwrap();
+        let fold = LoopView::from_records(&runs[0].records).unwrap();
         let (_, run) = fold.runs().next().unwrap();
         assert_eq!((run.phase, run.iteration), (phase, iteration));
         assert_eq!(fold.runs().count(), 1, "the Call is not a second Loop");
@@ -177,7 +177,7 @@ lab app {{
             "{mode}: {:?}",
             runs[0].report.failures
         );
-        let fold = Fold::from_records(&runs[0].records).unwrap();
+        let fold = LoopView::from_records(&runs[0].records).unwrap();
         let (_, run) = fold.runs().next().unwrap();
         assert_eq!((run.iteration, run.phase), (1, Phase::Expired), "{mode}");
     }

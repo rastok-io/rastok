@@ -1,4 +1,10 @@
 //! Dated obligations created and accepted with one record, outside the causal projection.
+//!
+//! A budget is an allowed duration; a deadline is the logical instant at which
+//! an obligation becomes due; a timeout is the outcome when an operation has
+//! not completed within its budget. Not every deadline is a timeout: a Loop
+//! or Retry delay makes a new admission eligible instead.
+//!
 //! Creation order belongs to recovery: sorting equal-due deadlines by reference would
 //! silently change which timeout wins after a restart.
 

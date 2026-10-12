@@ -2395,7 +2395,7 @@ fn data_materializes_only_on_demand() {
         (
             result,
             vm.outputs().to_vec(),
-            vm.observations()
+            vm.envelope_views()
                 .iter()
                 .filter(|event| event.node.is_some() && event.port.name() == "err")
                 .count(),
@@ -2483,7 +2483,7 @@ fn short_circuits_never_demand_the_data() {
         (
             result,
             vm.outputs().to_vec(),
-            vm.observations()
+            vm.envelope_views()
                 .iter()
                 .filter(|event| event.node.is_some() && event.port.name() == "err")
                 .count(),
@@ -2584,7 +2584,7 @@ fn the_carry_is_as_lazy_as_the_name() {
         vm.run_ready(&mut journal)
             .expect("no forced materialization");
         assert_eq!(
-            vm.observations()
+            vm.envelope_views()
                 .iter()
                 .filter(|event| event.node.is_some() && event.port.name() == "err")
                 .count(),

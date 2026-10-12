@@ -8,7 +8,7 @@ use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::{
     MemJournal,
-    loop_protocol::{Fold, Phase},
+    loop_protocol::{LoopView, Phase},
 };
 use rastok::plan::{self, GraphVersion};
 use rastok::runtime::vm::Vm;
@@ -71,7 +71,8 @@ graph app : App {{
             }
         }
         assert!(vm.is_stable());
-        let fold = rastok::journal::loop_protocol::Fold::from_records(journal.records()).unwrap();
+        let fold =
+            rastok::journal::loop_protocol::LoopView::from_records(journal.records()).unwrap();
         let run = fold.runs().next().unwrap().1;
         assert!(matches!(
             run.phase,
@@ -174,7 +175,7 @@ graph app : App {
     values.sort();
     assert_eq!(values, [3, 30]);
     assert_eq!(
-        Fold::from_records(journal.records())
+        LoopView::from_records(journal.records())
             .unwrap()
             .runs()
             .count(),
@@ -257,7 +258,7 @@ graph app : App {{
                 assert_eq!(restored.inspection(), vm.inspection());
                 vm = restored;
                 if vm.is_stable() {
-                    if let Some(due) = Fold::from_records(journal.records())
+                    if let Some(due) = LoopView::from_records(journal.records())
                         .unwrap()
                         .runs()
                         .filter_map(|(_, run)| {
@@ -285,7 +286,7 @@ graph app : App {{
                 vm.outputs()[0].port.name(),
                 if n == 1 { "out" } else { "exhausted" }
             );
-            let fold = Fold::from_records(journal.records()).unwrap();
+            let fold = LoopView::from_records(journal.records()).unwrap();
             assert_eq!(fold.runs().count(), 2);
             assert!(
                 fold.runs()
@@ -338,7 +339,7 @@ graph app : App {{
         assert!(vm.step(&mut journal).unwrap());
     }
     assert!(vm.is_stable());
-    let fold = Fold::from_records(journal.records()).unwrap();
+    let fold = LoopView::from_records(journal.records()).unwrap();
     let (_, run) = fold.runs().next().unwrap();
     assert_eq!((run.phase, run.iteration), (Phase::Closed, 5));
     assert_eq!(vm.outputs().len(), 1);
@@ -405,7 +406,7 @@ graph app : App {{
             assert!(vm.step(&mut journal).unwrap());
         }
         assert!(vm.is_stable());
-        let fold = Fold::from_records(journal.records()).unwrap();
+        let fold = LoopView::from_records(journal.records()).unwrap();
         assert_eq!(fold.runs().count(), 2);
         assert!(fold.runs().all(|(_, run)| run.phase == Phase::Closed));
         assert_eq!(vm.outputs().len(), if wiring.contains('{') { 2 } else { 1 });

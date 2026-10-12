@@ -243,7 +243,7 @@ impl Vm<'_> {
         if held {
             let context = self.graph_context(&pending.delivery);
             if !context.is_empty() {
-                expected.record.loop_record = Some(Box::new(protocol::Packet {
+                expected.record.loop_record = Some(Box::new(protocol::LoopRecord {
                     context: context.to_vec(),
                     ..Default::default()
                 }));

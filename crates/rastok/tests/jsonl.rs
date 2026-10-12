@@ -61,7 +61,7 @@ fn drive(
     }
     assert!(vm.is_stable(), "the run must settle");
     let errors = vm
-        .observations()
+        .envelope_views()
         .iter()
         .filter(|observed| observed.node.is_some() && observed.port.name() == "err")
         .map(|observed| match observed.envelope.data() {
@@ -70,7 +70,7 @@ fn drive(
         })
         .collect();
     let exits = vm
-        .observations()
+        .envelope_views()
         .iter()
         .filter(|observed| observed.node.is_some() && observed.port.name() == "exit")
         .map(|observed| match observed.envelope.data() {

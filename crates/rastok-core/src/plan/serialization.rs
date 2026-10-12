@@ -29,10 +29,10 @@ use crate::expr;
 
 use crate::node;
 use crate::plan::{
-    AttrSetting, ConnectorSpec, DispatchStep, Edge, EdgeEnd, EmitValue, EvaluationSite,
-    ExecutionPlan, ExtensionSpec, FieldWrite, Handler, LoopDelay, LoopSpec, Node, NodeExecution,
-    Owner, OwnerKind, OwnerValue, PlanConstant, PlanValidationError, PortDecl, SemanticHash, Slot,
-    ValidatedExecutionPlan, VarCell,
+    AttrSetting, ConnectorSpec, DelayPolicy, DispatchStep, Edge, EdgeEnd, EmitValue,
+    EvaluationSite, ExecutionPlan, ExtensionSpec, FieldWrite, Handler, LoopSpec, Node,
+    NodeExecution, Owner, OwnerKind, OwnerValue, PlanConstant, PlanValidationError, PortDecl,
+    SemanticHash, Slot, ValidatedExecutionPlan, VarCell,
 };
 use crate::schema_annotation::{
     AnnotationApplication, AnnotationBinding, AnnotationSet, AnnotationTable, DataAnnotation,
@@ -520,10 +520,10 @@ fn loop_proof_tree(proof: &crate::loop_proof::Certificate) -> Cbor {
     Cbor::Map(fields)
 }
 
-fn loop_delay_tree(delay: &LoopDelay) -> Cbor {
+fn loop_delay_tree(delay: &DelayPolicy) -> Cbor {
     match delay {
-        LoopDelay::Fixed { after } => Cbor::Array(vec![Cbor::Uint(1), plan_constant_tree(after)]),
-        LoopDelay::Exponential { first, ceiling } => Cbor::Array(vec![
+        DelayPolicy::Fixed { after } => Cbor::Array(vec![Cbor::Uint(1), plan_constant_tree(after)]),
+        DelayPolicy::Exponential { first, ceiling } => Cbor::Array(vec![
             Cbor::Uint(2),
             plan_constant_tree(first),
             plan_constant_tree(ceiling),
@@ -1219,8 +1219,8 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
             };
             match delay {
                 None => {}
-                Some(LoopDelay::Fixed { after }) => plan_constant(after, 7, &mut max, &mut stack),
-                Some(LoopDelay::Exponential { first, ceiling }) => {
+                Some(DelayPolicy::Fixed { after }) => plan_constant(after, 7, &mut max, &mut stack),
+                Some(DelayPolicy::Exponential { first, ceiling }) => {
                     plan_constant(first, 7, &mut max, &mut stack);
                     plan_constant(ceiling, 7, &mut max, &mut stack);
                 }
@@ -1841,7 +1841,7 @@ fn loop_spec_from(tree: &Cbor) -> Result<LoopSpec, DecodeError> {
                 let [port, ty] = array_of(value, "Loop exhaustion target")? else {
                     return Err(err("Loop exhaustion target"));
                 };
-                Ok(super::LoopExpiry {
+                Ok(super::LoopExpiredOutput {
                     port: node::Port::new(text_of(port, "Loop exhaustion port")?)
                         .map_err(|_| err("Loop exhaustion port"))?,
                     ty: type_from(ty)?,
@@ -1870,12 +1870,12 @@ fn loop_proof_from(tree: &Cbor) -> Result<crate::loop_proof::Certificate, Decode
     })
 }
 
-fn loop_delay_from(tree: &Cbor) -> Result<LoopDelay, DecodeError> {
+fn loop_delay_from(tree: &Cbor) -> Result<DelayPolicy, DecodeError> {
     match array_of(tree, "Loop delay")? {
-        [Cbor::Uint(1), after] => Ok(LoopDelay::Fixed {
+        [Cbor::Uint(1), after] => Ok(DelayPolicy::Fixed {
             after: plan_constant_from(after)?,
         }),
-        [Cbor::Uint(2), first, ceiling] => Ok(LoopDelay::Exponential {
+        [Cbor::Uint(2), first, ceiling] => Ok(DelayPolicy::Exponential {
             first: plan_constant_from(first)?,
             ceiling: plan_constant_from(ceiling)?,
         }),
@@ -4365,7 +4365,7 @@ mod tests {
         categorical.owners[0].extensions = vec![ExtensionSpec::Loop(Box::new(LoopSpec {
             entry: port("in"),
             terminals: vec![port("out")],
-            expired: Some(crate::plan::LoopExpiry {
+            expired: Some(crate::plan::LoopExpiredOutput {
                 port: port("out"),
                 ty: nested_type.clone(),
             }),
@@ -4373,7 +4373,7 @@ mod tests {
                 expr: tree(nested_maplit.clone()),
                 resolved: nested_value.clone(),
             }),
-            delay: Some(LoopDelay::Exponential {
+            delay: Some(DelayPolicy::Exponential {
                 first: PlanConstant {
                     expr: tree(expr::Expr::Literal(Value::Duration(1))),
                     resolved: Value::Duration(1),

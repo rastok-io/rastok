@@ -2253,10 +2253,10 @@ fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
             }
             match &spec.delay {
                 None => {}
-                Some(crate::plan::LoopDelay::Fixed { after }) => {
+                Some(crate::plan::DelayPolicy::Fixed { after }) => {
                     tree_type_at(&after.expr, format!("Loop delay on `{}`", owner.path))?;
                 }
-                Some(crate::plan::LoopDelay::Exponential { first, ceiling }) => {
+                Some(crate::plan::DelayPolicy::Exponential { first, ceiling }) => {
                     tree_type_at(&first.expr, format!("Loop delay on `{}`", owner.path))?;
                     tree_type_at(
                         &ceiling.expr,
@@ -2931,7 +2931,7 @@ fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
         }
         match &spec.delay {
             None => {}
-            Some(crate::plan::LoopDelay::Fixed { after }) => {
+            Some(crate::plan::DelayPolicy::Fixed { after }) => {
                 validate_constant(
                     after,
                     &DataType::DURATION,
@@ -2944,7 +2944,7 @@ fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
                     });
                 }
             }
-            Some(crate::plan::LoopDelay::Exponential { first, ceiling }) => {
+            Some(crate::plan::DelayPolicy::Exponential { first, ceiling }) => {
                 validate_constant(
                     first,
                     &DataType::DURATION,

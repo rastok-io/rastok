@@ -93,7 +93,7 @@ pub(super) fn future(inspection: &VmInspection, records: &[Record]) -> JsonValue
             }
         }
     }
-    if let Ok(fold) = protocol::Fold::from_records(records) {
+    if let Ok(fold) = protocol::LoopView::from_records(records) {
         for (reference, run) in fold.runs() {
             if run.phase == protocol::Phase::AwaitingAdmission
                 && let Some(due) = run.due_at
@@ -286,7 +286,7 @@ pub(super) fn history(plan: &ValidatedExecutionPlan, records: &[Record]) -> Hist
     let mut envelopes = BTreeMap::<Id, (&Envelope, usize)>::new();
     let mut positions = BTreeMap::<(String, instance::Generation), Vec<Id>>::new();
     let mut state = State::new();
-    let mut fold = protocol::Fold::default();
+    let mut fold = protocol::LoopView::default();
     let mut context_valid = true;
     let mut output = Vec::new();
     let mut commands = BTreeMap::<String, JsonValue>::new();
@@ -490,7 +490,7 @@ fn decision(
     slot: Slot,
     inputs: &[&Envelope],
     state: &State,
-    fold: &protocol::Fold,
+    fold: &protocol::LoopView,
     protected: bool,
 ) -> JsonValue {
     let input_ports: Vec<_> = tx

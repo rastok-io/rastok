@@ -1306,7 +1306,7 @@ graph app : App {
         use crate::envelope::{Data, Namespace};
         use crate::journal::{
             MemJournal, Record,
-            loop_protocol::{Fact, Fold, Phase},
+            loop_protocol::{Fact, LoopView, Phase},
         };
         use crate::runtime::vm::Vm;
         use crate::value::Value;
@@ -1375,7 +1375,7 @@ graph app : App {
             .collect();
         assert_eq!(opens.len(), 2);
         assert_ne!(opens[0], opens[1]);
-        let fold = Fold::from_records(journal.records()).expect("both folds are valid");
+        let fold = LoopView::from_records(journal.records()).expect("both folds are valid");
         assert_eq!(fold.runs().count(), 2);
         for run in opens {
             assert_eq!(

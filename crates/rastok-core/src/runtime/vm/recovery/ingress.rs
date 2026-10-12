@@ -284,7 +284,7 @@ impl Vm<'_> {
                     if let Some(timeout) = timeout {
                         self.scheduler.schedule(
                             self.now.saturating_add(timeout),
-                            DatedPayload::InboundCallBudget {
+                            Obligation::InboundCallBudget {
                                 call_id: call.reference,
                                 instance: target.reference.clone(),
                             },

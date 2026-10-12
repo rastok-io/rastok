@@ -915,7 +915,7 @@ fn simulate_with_ui(
     let mut golden_failures = Vec::new();
     loop {
         let records_before = session.journal().records().len();
-        let observations_before = session.vm().observations().len();
+        let observations_before = session.vm().envelope_views().len();
         let failures_before = session.failures().len();
         let mut dirty = false;
         let mut activity_decided = false;
@@ -1280,7 +1280,7 @@ fn simulate_with_ui(
             dirty = true;
         }
         dirty |= records_before != session.journal().records().len()
-            || observations_before != session.vm().observations().len()
+            || observations_before != session.vm().envelope_views().len()
             || failures_before != session.failures().len();
         if records_before != session.journal().records().len() && !activity_decided {
             boundary_ordinal = boundary_ordinal.saturating_add(1);

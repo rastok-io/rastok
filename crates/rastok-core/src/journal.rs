@@ -555,7 +555,7 @@ pub(crate) fn observations_for_records_from(
 #[derive(Debug, Clone, PartialEq)]
 pub struct IngressRecord {
     /// Exact-instance commands retained atomically with this root (key 42).
-    pub instance_commands: Option<Box<instance_stop::Packet>>,
+    pub instance_commands: Option<Box<instance_stop::InstanceCommands>>,
     /// Unsealed creation and due instants (key 41), atomically accepted with
     /// this ingress. Omitted when this record creates no deadline.
     pub deadlines: Option<Box<deadline::Deadlines>>,
@@ -690,9 +690,9 @@ impl fmt::Display for LoopRunId {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TransactionRecord {
     /// Sparse pinned-operation facts/correlation (causal key 43).
-    pub retry_record: Option<Box<retry_protocol::Packet>>,
+    pub retry_record: Option<Box<retry_protocol::RetryRecord>>,
     /// Exact-instance command production or winning consumption (key 42).
-    pub instance_commands: Option<Box<instance_stop::Packet>>,
+    pub instance_commands: Option<Box<instance_stop::InstanceCommands>>,
     /// Unsealed creation and due instants (key 41), outside causal identity.
     /// Absence is not evidence from which recovery may invent a deadline.
     pub deadlines: Option<Box<deadline::Deadlines>>,
@@ -724,7 +724,7 @@ pub struct TransactionRecord {
     pub exchange_exit: Option<Box<InboundExchangeExitRecord>>,
     /// One sparse Loop protocol packet. Boxing keeps its absence to one
     /// pointer in every retained non-Loop transaction.
-    pub loop_record: Option<Box<loop_protocol::Packet>>,
+    pub loop_record: Option<Box<loop_protocol::LoopRecord>>,
     /// The transaction's fixed logical instant when one of its checked
     /// expressions can observe `now()`. Omitted for handlers that do not read
     /// time, so old causal facts and time-insensitive programs keep their
@@ -756,7 +756,7 @@ pub struct TransactionRecord {
 impl TransactionRecord {
     /// Command-based Loop packet, absent on all other transactions.
     #[must_use]
-    pub fn loop_protocol(&self) -> Option<&loop_protocol::Packet> {
+    pub fn loop_protocol(&self) -> Option<&loop_protocol::LoopRecord> {
         self.loop_record.as_deref()
     }
 }
@@ -788,7 +788,7 @@ pub enum EgressRecord {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CallRecord {
     /// Attempt correlation (causal key 43), absent outside Retry.
-    pub retry_record: Option<Box<retry_protocol::Packet>>,
+    pub retry_record: Option<Box<retry_protocol::RetryRecord>>,
     /// Winning logical closure instant (unsealed key 44); absent only on Open.
     pub closed_at: Option<i64>,
     /// Original closure-based recurrence deadline (unsealed 41, causal presence 24).
@@ -880,7 +880,7 @@ pub struct CommittedIngress {
 /// succeeds. [`Journal::commit_ingress`] revalidates the sequence atomically.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedIngress {
-    instance_commands: Option<Box<instance_stop::Packet>>,
+    instance_commands: Option<Box<instance_stop::InstanceCommands>>,
     submission: IngressSubmission,
     connector_path: Option<node::Path>,
     seq: u64,
@@ -892,7 +892,7 @@ pub struct PreparedIngress {
 impl PreparedIngress {
     /// Retain commands with their accepting root, never in a Worker-only queue.
     #[must_use]
-    pub fn with_instance_commands(mut self, packet: instance_stop::Packet) -> Self {
+    pub fn with_instance_commands(mut self, packet: instance_stop::InstanceCommands) -> Self {
         self.instance_commands = Some(Box::new(packet));
         self
     }
@@ -1315,14 +1315,14 @@ pub trait Journal {
     ///
     /// # Errors
     /// A contradictory r2 history. No Worker state contributes to this fold.
-    fn loop_protocol(&self) -> Result<loop_protocol::Fold, Error>;
+    fn loop_protocol(&self) -> Result<loop_protocol::LoopView, Error>;
 
     /// Reconstruct exact-instance commands from one retained prefix.
     ///
     /// # Errors
     /// An unreadable prefix or a contradictory command/lifecycle fact.
-    fn instance_commands(&self) -> Result<instance_stop::Fold, Error> {
-        let mut fold = instance_stop::Fold::default();
+    fn instance_commands(&self) -> Result<instance_stop::InstanceCommandView, Error> {
+        let mut fold = instance_stop::InstanceCommandView::default();
         let mut result = Ok(());
         self.visit_records(&mut |record| {
             if result.is_ok() {
@@ -1459,7 +1459,7 @@ pub struct MemJournal {
     /// Replay-derived Loop fold, replaced only with the committed record.
     /// The independent Fold reader reconstructs it from `records`; ordinary
     /// non-Loop journals allocate nothing for this index.
-    command_loops: Option<Box<loop_protocol::Fold>>,
+    command_loops: Option<Box<loop_protocol::LoopView>>,
 }
 
 #[derive(Debug, Clone)]
@@ -1875,16 +1875,16 @@ impl Journal for MemJournal {
         Ok(())
     }
 
-    fn loop_protocol(&self) -> Result<loop_protocol::Fold, Error> {
+    fn loop_protocol(&self) -> Result<loop_protocol::LoopView, Error> {
         match self.command_loops.as_deref() {
             Some(fold) => Ok(fold.clone()),
-            None => {
-                loop_protocol::Fold::from_records(&self.records).map_err(Error::InvalidLoopProtocol)
-            }
+            None => loop_protocol::LoopView::from_records(&self.records)
+                .map_err(Error::InvalidLoopProtocol),
         }
     }
-    fn instance_commands(&self) -> Result<instance_stop::Fold, Error> {
-        instance_stop::Fold::from_records(&self.records).map_err(Error::InvalidInstanceCommand)
+    fn instance_commands(&self) -> Result<instance_stop::InstanceCommandView, Error> {
+        instance_stop::InstanceCommandView::from_records(&self.records)
+            .map_err(Error::InvalidInstanceCommand)
     }
     fn deployment_attestation(&self) -> Option<&crate::deployment::DeploymentAttestation> {
         self.deployment_attestation.as_ref()
@@ -2331,7 +2331,7 @@ impl Journal for MemJournal {
             closed_at: None,
             deadlines: None,
             retry_record: attempt.map(|context| {
-                Box::new(retry_protocol::Packet {
+                Box::new(retry_protocol::RetryRecord {
                     context: Some(context),
                     facts: Vec::new(),
                 })
@@ -2714,7 +2714,7 @@ mod tests {
             operation: retry_protocol::OperationId::from_id(Id::from_bytes([8; 16])),
             ordinal: 1,
         };
-        call.retry_record = Some(Box::new(retry_protocol::Packet {
+        call.retry_record = Some(Box::new(retry_protocol::RetryRecord {
             context: None,
             facts: vec![],
         }));
@@ -2741,7 +2741,7 @@ mod tests {
             acceptance::validate_call(&call),
             Err(DeadlineError::DeadlineWithoutRetryContext)
         );
-        call.retry_record = Some(Box::new(retry_protocol::Packet {
+        call.retry_record = Some(Box::new(retry_protocol::RetryRecord {
             context: Some(retry_protocol::AttemptId {
                 ordinal: u64::MAX,
                 ..attempt
@@ -2797,7 +2797,7 @@ mod tests {
             .unwrap()
             .envelope()
             .clone();
-        record.loop_record = Some(Box::new(loop_protocol::Packet {
+        record.loop_record = Some(Box::new(loop_protocol::LoopRecord {
             facts: vec![loop_protocol::Fact::Advance {
                 run,
                 from_iteration: 0,
@@ -2895,7 +2895,7 @@ mod tests {
                 0 => closed.closed_at = None,
                 1 => closed.intent.idempotency_key = Some("changed".into()),
                 _ => {
-                    closed.retry_record = Some(Box::new(retry_protocol::Packet {
+                    closed.retry_record = Some(Box::new(retry_protocol::RetryRecord {
                         context: Some(retry_protocol::AttemptId {
                             operation: retry_protocol::OperationId::from_id(Id::from_bytes(
                                 [3; 16],

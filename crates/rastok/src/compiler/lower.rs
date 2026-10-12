@@ -26,8 +26,8 @@ use crate::datatype::{
 use crate::expr;
 use crate::node;
 use crate::plan::{
-    AttrSetting, ConnectorSpec, DispatchStep, Edge, EdgeEnd, EvaluationSite, ExecutionPlan,
-    ExtensionSpec, FieldWrite, Handler, LoopDelay as PlanLoopDelay, LoopSpec as PlanLoopSpec, Node,
+    AttrSetting, ConnectorSpec, DelayPolicy, DispatchStep, Edge, EdgeEnd, EvaluationSite,
+    ExecutionPlan, ExtensionSpec, FieldWrite, Handler, LoopSpec as PlanLoopSpec, Node,
     NodeExecution, Owner, OwnerKind, OwnerValue, PlanConstant, SemanticHash, Slot, SymbolTable,
     VarCell,
 };
@@ -805,17 +805,17 @@ fn lower_loop_spec(
 fn lower_delay(
     delay: Option<&crate::compiler::hir::LoopDelay>,
     constants: &std::collections::BTreeMap<String, crate::value::Value>,
-) -> Option<PlanLoopDelay> {
+) -> Option<DelayPolicy> {
     let constant = |value: &crate::compiler::hir::Const| PlanConstant {
         expr: substitute_tree(&value.tree, constants),
         resolved: value.value.clone(),
     };
     delay.map(|delay| match delay {
-        crate::compiler::hir::LoopDelay::Fixed { after } => PlanLoopDelay::Fixed {
+        crate::compiler::hir::LoopDelay::Fixed { after } => DelayPolicy::Fixed {
             after: constant(after),
         },
         crate::compiler::hir::LoopDelay::Exponential { first, ceiling } => {
-            PlanLoopDelay::Exponential {
+            DelayPolicy::Exponential {
                 first: constant(first),
                 ceiling: constant(ceiling),
             }

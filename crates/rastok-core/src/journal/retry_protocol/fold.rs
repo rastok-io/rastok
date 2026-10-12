@@ -184,14 +184,16 @@ impl Operation {
     }
 }
 
-/// Pure fold of accepted operation facts. No Driver or clock is accessible.
+/// A read-only view of Retry operations for consumers, rebuilt from accepted
+/// journal facts. Its update methods validate and reconstruct that view, not
+/// a second authority. No Driver or clock is consulted.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct Fold {
+pub struct RetryView {
     operations: BTreeMap<OperationId, Operation>,
     closing: BTreeSet<instance::Generation>,
 }
 
-impl Fold {
+impl RetryView {
     /// Inspect one exact operation.
     #[must_use]
     pub fn operation(&self, reference: OperationId) -> Option<&Operation> {
@@ -223,7 +225,7 @@ impl Fold {
     /// Contradictory facts leave the entire fold unchanged.
     pub fn apply(
         &mut self,
-        packet: &Packet,
+        packet: &RetryRecord,
         opening: Option<&Opening<'_>>,
         at: i64,
     ) -> Result<(), Error> {
@@ -235,7 +237,7 @@ impl Fold {
 
     fn apply_inner(
         &mut self,
-        packet: &Packet,
+        packet: &RetryRecord,
         opening: Option<&Opening<'_>>,
         at: i64,
     ) -> Result<(), Error> {
@@ -614,7 +616,11 @@ impl Fold {
     ///
     /// # Errors
     /// Missing, reordered, duplicated or alien emission/terminal references.
-    pub fn validate_emissions(&self, packet: &Packet, emissions: &[Emission]) -> Result<(), Error> {
+    pub fn validate_emissions(
+        &self,
+        packet: &RetryRecord,
+        emissions: &[Emission],
+    ) -> Result<(), Error> {
         let batch = match packet.facts.first() {
             Some(Fact::Held(batch) | Fact::Published(batch)) => batch,
             _ => return Err(Error::PacketShape),

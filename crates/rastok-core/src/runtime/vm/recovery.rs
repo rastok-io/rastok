@@ -162,7 +162,7 @@ impl Vm<'_> {
                 self.restore_transaction(journal, admissions, index, transaction, resume_at)?;
                 if self.has_loops {
                     self.loop_manager
-                        .get_or_insert_with(|| Box::new(protocol::Fold::default()))
+                        .get_or_insert_with(|| Box::new(protocol::LoopView::default()))
                         .apply_transaction(transaction)
                         .map_err(|error| {
                             VmFault::Journal(crate::journal::Error::InvalidLoopProtocol(error))
@@ -539,7 +539,7 @@ impl Vm<'_> {
                 {
                     self.scheduler.schedule(
                         *due_at,
-                        DatedPayload::LoopDelay {
+                        Obligation::LoopDelay {
                             owner,
                             instance: record.instance.clone(),
                             run: *run,
@@ -557,7 +557,7 @@ impl Vm<'_> {
             if let Some(deadline) = deadline {
                 self.scheduler.schedule(
                     deadline.due_at,
-                    DatedPayload::DeliveryBudget {
+                    Obligation::DeliveryBudget {
                         connector: self.plan.nodes[slot.index()].path.clone(),
                         edge: edge.clone(),
                         delivery: envelope.meta().sys().id(),
@@ -685,7 +685,7 @@ impl Vm<'_> {
                 })
                 .ok_or_else(|| invalid(index, "a stop has no retained close request"))?;
             let drain_at = self.scheduler.dated.iter().find_map(|((at, _), payload)| {
-                matches!(payload, DatedPayload::InstanceClosing { instance, deadline: ClosingDeadline::Drain, .. } if instance == &scope).then_some(*at)
+                matches!(payload, Obligation::InstanceClosing { instance, deadline: ClosingDeadline::Drain, .. } if instance == &scope).then_some(*at)
             }).filter(|at| *at <= resume_at).ok_or_else(|| invalid(index, "a non-quiescent stop has no elapsed retained drain deadline"))?;
             // The stop seals every residual cursor of its instance. Its
             // ability to run proves that this scope's retained drain has won;

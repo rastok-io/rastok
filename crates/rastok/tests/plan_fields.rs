@@ -401,7 +401,7 @@ graph app : App {
         vm.outputs()[0].envelope.data(),
         &Data::materialized(Value::Int(0))
     );
-    let fold = rastok::journal::loop_protocol::Fold::from_records(journal.records()).unwrap();
+    let fold = rastok::journal::loop_protocol::LoopView::from_records(journal.records()).unwrap();
     let runs: Vec<_> = fold.runs().collect();
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].1.iteration, 2);

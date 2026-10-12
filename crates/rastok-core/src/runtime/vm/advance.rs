@@ -1,6 +1,6 @@
 //! Resumable control of the existing discrete-time sweep.
 
-use super::{ClosingDeadline, DatedPayload, Journal, OutboundConnectorBindings, Vm, VmFault};
+use super::{ClosingDeadline, Journal, Obligation, OutboundConnectorBindings, Vm, VmFault};
 
 /// An in-progress advance on one VM. This is a caller-owned control cursor,
 /// not a journal fact or a second timer queue. Do not interleave other VM
@@ -21,11 +21,11 @@ enum Phase {
     Due,
     Settlement {
         key: (i64, u64),
-        payload: DatedPayload,
+        payload: Obligation,
     },
     Expiry {
         key: (i64, u64),
-        payload: DatedPayload,
+        payload: Obligation,
     },
     Done,
 }
@@ -91,7 +91,7 @@ impl TimeAdvance {
                         if !self.polled_at_settlement
                             && matches!(
                                 payload,
-                                DatedPayload::InstanceClosing {
+                                Obligation::InstanceClosing {
                                     deadline: ClosingDeadline::Settlement,
                                     ..
                                 }
@@ -137,7 +137,7 @@ impl TimeAdvance {
                 Phase::Expiry { key, payload } => {
                     self.saw_drain |= matches!(
                         payload,
-                        DatedPayload::InstanceClosing {
+                        Obligation::InstanceClosing {
                             deadline: ClosingDeadline::Drain,
                             ..
                         }

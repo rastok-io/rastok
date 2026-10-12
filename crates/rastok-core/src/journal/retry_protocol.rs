@@ -10,7 +10,7 @@ use crate::envelope::{Envelope, Id};
 use crate::instance;
 
 use crate::node::Port;
-use crate::plan::{LoopDelay, SemanticHash};
+use crate::plan::{DelayPolicy, SemanticHash};
 use crate::value::Value;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -20,7 +20,7 @@ mod carriers;
 pub(crate) mod encoding;
 pub(crate) use carriers::validate_transaction;
 mod fold;
-pub use fold::{Error, Fold, Opening, Operation, Phase, Settlement};
+pub use fold::{Error, Opening, Operation, Phase, RetryView, Settlement};
 
 #[cfg(test)]
 mod tests;
@@ -73,7 +73,7 @@ pub struct Policy {
     call: CallSemantics,
     attempts: u64,
     cases: Vec<String>,
-    delay: Option<LoopDelay>,
+    delay: Option<DelayPolicy>,
 }
 
 impl Policy {
@@ -87,7 +87,7 @@ impl Policy {
         call: CallSemantics,
         attempts: u64,
         cases: Vec<String>,
-        delay: Option<LoopDelay>,
+        delay: Option<DelayPolicy>,
         idempotent: bool,
     ) -> Result<Self, Error> {
         if attempts == 0
@@ -220,16 +220,18 @@ impl Fact {
     }
 }
 
-/// Sparse contribution; context alone correlates an EGRESS Call fact.
+/// The Retry protocol's part of a TRANSACTION or EGRESS Call record, never a
+/// standalone journal record. Context alone correlates an EGRESS Call fact;
+/// transaction records also carry operation facts.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct Packet {
+pub struct RetryRecord {
     /// Attempt of a Call or Connector completion, absent on manager records.
     pub context: Option<AttemptId>,
     /// Facts in causal commit order, not sorted by kind.
     pub facts: Vec<Fact>,
 }
 
-impl Packet {
+impl RetryRecord {
     /// Admissions are retained envelopes even though managers emit no port.
     pub fn envelopes(&self) -> impl Iterator<Item = &Envelope> {
         self.facts.iter().filter_map(|fact| match fact {

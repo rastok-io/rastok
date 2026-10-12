@@ -1399,7 +1399,7 @@ graph app : App {
         vm.poll_drivers(&mut journal, &mut world).unwrap();
         let before = journal.records().to_vec();
         let inspection = vm.inspection();
-        let observations = vm.observations().to_vec();
+        let observations = vm.envelope_views().to_vec();
         let result = vm.step_with_bindings(&mut journal, &mut world);
         if frames == capacity {
             assert!(result.unwrap());
@@ -1435,7 +1435,7 @@ graph app : App {
             );
             assert_eq!(journal.records(), before);
             assert_eq!(vm.inspection(), inspection);
-            assert_eq!(vm.observations(), observations);
+            assert_eq!(vm.envelope_views(), observations);
             assert!(matches!(
                 vm.step_with_bindings(&mut journal, &mut world),
                 Err(rastok::runtime::vm::VmFault::MailboxFull { .. })

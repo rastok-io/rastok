@@ -29,8 +29,8 @@ fn duration(ns: i64) -> PlanConstant {
     }
 }
 
-fn fixed(ns: i64) -> Option<LoopDelay> {
-    Some(LoopDelay::Fixed {
+fn fixed(ns: i64) -> Option<DelayPolicy> {
+    Some(DelayPolicy::Fixed {
         after: duration(ns),
     })
 }
@@ -156,8 +156,8 @@ impl Fixture {
         }
     }
 
-    fn start(&self) -> Fold {
-        let mut fold = Fold::default();
+    fn start(&self) -> RetryView {
+        let mut fold = RetryView::default();
         fold.apply(
             &manager(vec![self.opened(), self.admitted(1, None)]),
             Some(&self.authority()),
@@ -167,7 +167,7 @@ impl Fixture {
         fold
     }
 
-    fn intent(&self, fold: &Fold) -> CallOpen {
+    fn intent(&self, fold: &RetryView) -> CallOpen {
         let state = fold.operation(self.operation).unwrap();
         let edge = if state.ordinal == 1 {
             "App.in -> pay.in".into()
@@ -188,7 +188,7 @@ impl Fixture {
 
     fn settle(
         &self,
-        fold: &mut Fold,
+        fold: &mut RetryView,
         ordinal: u64,
         case: &str,
         at: i64,
@@ -270,8 +270,8 @@ impl Fixture {
     }
 }
 
-fn manager(facts: Vec<Fact>) -> Packet {
-    Packet {
+fn manager(facts: Vec<Fact>) -> RetryRecord {
+    RetryRecord {
         context: None,
         facts,
     }
@@ -279,7 +279,7 @@ fn manager(facts: Vec<Fact>) -> Packet {
 
 fn carrier(
     f: &Fixture,
-    packet: Packet,
+    packet: RetryRecord,
     emissions: Vec<Emission>,
     manager: bool,
 ) -> crate::journal::TransactionRecord {
@@ -399,14 +399,14 @@ fn retry_admissions_are_resolved_as_retained_envelopes_without_port_emissions() 
         Some(&f.envelope)
     );
 }
-fn held(batch: &Batch) -> Packet {
-    Packet {
+fn held(batch: &Batch) -> RetryRecord {
+    RetryRecord {
         context: Some(batch.attempt),
         facts: vec![Fact::Held(batch.clone())],
     }
 }
-fn publish(batch: &Batch) -> Packet {
-    Packet {
+fn publish(batch: &Batch) -> RetryRecord {
+    RetryRecord {
         context: Some(batch.attempt),
         facts: vec![
             Fact::Published(batch.clone()),
@@ -417,7 +417,7 @@ fn publish(batch: &Batch) -> Packet {
         ],
     }
 }
-fn advance(batch: &Batch) -> Packet {
+fn advance(batch: &Batch) -> RetryRecord {
     manager(vec![
         Fact::Consumed(batch.clone()),
         Fact::Advance {
@@ -428,7 +428,7 @@ fn advance(batch: &Batch) -> Packet {
     ])
 }
 
-fn refuses_unchanged(fold: &mut Fold, packet: &Packet, expected: Error, at: i64) {
+fn refuses_unchanged(fold: &mut RetryView, packet: &RetryRecord, expected: Error, at: i64) {
     let before = fold.clone();
     assert_eq!(fold.apply(packet, None, at), Err(expected));
     assert_eq!(*fold, before);
@@ -699,7 +699,7 @@ fn atomic_pairs_whole_batch_and_exact_admissions_cannot_be_forged() {
 #[test]
 fn pending_initial_stop_has_no_fake_admission_and_successor_generation_is_independent() {
     let f = Fixture::new(3);
-    let mut fold = Fold::default();
+    let mut fold = RetryView::default();
     fold.apply(&manager(vec![f.opened()]), Some(&f.authority()), 0)
         .unwrap();
     fold.begin_closing(&instance::Generation::new(f.instance.address().clone(), 1));
@@ -746,7 +746,7 @@ fn policy_and_saturating_delays_are_closed_and_bounded_without_hidden_time() {
         );
     }
     assert!(Policy::try_new(f.call, 3, vec!["SpawnFailed".into()], None, false).is_ok());
-    let exponential = LoopDelay::Exponential {
+    let exponential = DelayPolicy::Exponential {
         first: duration(3),
         ceiling: duration(10),
     };
@@ -905,7 +905,7 @@ fn missing_renewed_foreign_and_final_deadlines_refuse_atomically() {
 fn opening_is_bound_to_original_plan_contract_input_and_exact_identity() {
     let f = Fixture::new(3);
     let packet = manager(vec![f.opened(), f.admitted(1, None)]);
-    let mut fold = Fold::default();
+    let mut fold = RetryView::default();
     assert_eq!(fold.apply(&packet, None, 0), Err(Error::OriginalBinding));
     let mut authority = f.authority();
     authority.delivery = Id::from_bytes([80; 16]);
@@ -913,7 +913,7 @@ fn opening_is_bound_to_original_plan_contract_input_and_exact_identity() {
         fold.apply(&packet, Some(&authority), 0),
         Err(Error::OriginalBinding)
     );
-    assert_eq!(fold, Fold::default());
+    assert_eq!(fold, RetryView::default());
     let other_call = outbound_call_semantics(
         &ContractId::parse(crate::connector::FILE_CONNECTOR_ID).unwrap(),
         ConnectorDirection::Outbound,
@@ -928,7 +928,7 @@ fn opening_is_bound_to_original_plan_contract_input_and_exact_identity() {
         fold.apply(&packet, Some(&authority), 0),
         Err(Error::OriginalBinding)
     );
-    assert_eq!(fold, Fold::default());
+    assert_eq!(fold, RetryView::default());
     for which in 0..5 {
         let mut bad = packet.clone();
         if let Fact::Opened {
@@ -948,7 +948,7 @@ fn opening_is_bound_to_original_plan_contract_input_and_exact_identity() {
             }
         }
         assert!(fold.apply(&bad, Some(&f.authority()), 0).is_err());
-        assert_eq!(fold, Fold::default());
+        assert_eq!(fold, RetryView::default());
     }
     // A bad initial admission rolls back Opened in the same transaction too.
     let mut bad = packet.clone();
@@ -959,7 +959,7 @@ fn opening_is_bound_to_original_plan_contract_input_and_exact_identity() {
         fold.apply(&bad, Some(&f.authority()), 0),
         Err(Error::AdmissionIdentity)
     );
-    assert_eq!(fold, Fold::default());
+    assert_eq!(fold, RetryView::default());
     fold.apply(&packet, Some(&f.authority()), 0).unwrap();
     let before = fold.clone();
     assert_eq!(
@@ -967,10 +967,10 @@ fn opening_is_bound_to_original_plan_contract_input_and_exact_identity() {
         Err(Error::DuplicateOperation)
     );
     assert_eq!(fold, before);
-    refuses_unchanged(&mut fold, &Packet::default(), Error::PacketShape, 0);
+    refuses_unchanged(&mut fold, &RetryRecord::default(), Error::PacketShape, 0);
     refuses_unchanged(
         &mut fold,
-        &Packet {
+        &RetryRecord {
             context: Some(f.attempt(1)),
             facts: vec![],
         },
@@ -983,11 +983,11 @@ fn opening_is_bound_to_original_plan_contract_input_and_exact_identity() {
 fn each_algebra_prefix_reconstructs_without_a_saved_manager_or_driver() {
     #[derive(Clone)]
     enum Retained {
-        Packet(Packet, i64),
+        Packet(RetryRecord, i64),
         Open(CallOpen, AttemptId),
         Settle(CallOpen, AttemptId, String, i64, Option<Deadlines>),
     }
-    fn apply(f: &Fixture, fold: &mut Fold, fact: &Retained) {
+    fn apply(f: &Fixture, fold: &mut RetryView, fact: &Retained) {
         match fact {
             Retained::Packet(packet, at) => fold.apply(packet, Some(&f.authority()), *at).unwrap(),
             Retained::Open(intent, attempt) => fold.open_call(*attempt, intent).unwrap(),
@@ -1052,10 +1052,10 @@ fn each_algebra_prefix_reconstructs_without_a_saved_manager_or_driver() {
             history.push(Retained::Packet(packet, at + 250));
         }
     }
-    let mut expected = Fold::default();
+    let mut expected = RetryView::default();
     for (index, fact) in history.iter().enumerate() {
         apply(&f, &mut expected, fact);
-        let mut recovered = Fold::default();
+        let mut recovered = RetryView::default();
         for retained in &history[..=index] {
             apply(&f, &mut recovered, retained);
         }

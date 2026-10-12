@@ -123,7 +123,7 @@ fn production(
             Data::materialized(Value::Int(1)),
         ),
     });
-    record.instance_commands = Some(Box::new(Packet {
+    record.instance_commands = Some(Box::new(InstanceCommands {
         produced: vec![command.clone()],
         consumed: None,
     }));
@@ -134,7 +134,7 @@ fn close(command: &Command) -> Record {
     let mut record = transaction(&command.target, Trigger::Lifecycle(Lifecycle::Closing));
     record.cause = Some(command.cause);
     record.close_scope = Some(command.target.clone());
-    record.instance_commands = Some(Box::new(Packet {
+    record.instance_commands = Some(Box::new(InstanceCommands {
         produced: vec![],
         consumed: Some(command.id),
     }));
@@ -144,7 +144,7 @@ fn close(command: &Command) -> Record {
 #[test]
 fn target_selection_follows_parent_instance_not_the_connector_path() {
     let (records, alice, worker, decide) = initial();
-    let fold = Fold::from_records(&records).unwrap();
+    let fold = InstanceCommandView::from_records(&records).unwrap();
     assert_eq!(
         fold.resolve(&decide, &target("conversation.worker"))
             .unwrap(),
@@ -175,7 +175,7 @@ fn closure_is_once_per_generation_and_repeated_commands_are_retained() {
     records.push(Record::Transaction(Box::new(stop)));
     let (late, late_command) = production(&decide, &alice, &worker, 3);
     records.push(late);
-    let fold = Fold::from_records(&records).unwrap();
+    let fold = InstanceCommandView::from_records(&records).unwrap();
     assert_eq!(
         fold.commands()
             .map(|(command, state)| (command.id, state))
@@ -201,7 +201,7 @@ fn closure_is_once_per_generation_and_repeated_commands_are_retained() {
             ),
         ]
     );
-    let mut recovered = Fold::from_records(&crash_prefix).unwrap();
+    let mut recovered = InstanceCommandView::from_records(&crash_prefix).unwrap();
     assert_eq!(
         recovered
             .commands()
@@ -239,7 +239,7 @@ fn multiple_keyed_children_require_an_exact_source_binding() {
         0,
     );
     records.push(start(&second, Some(&alice)));
-    let fold = Fold::from_records(&records).unwrap();
+    let fold = InstanceCommandView::from_records(&records).unwrap();
     assert_eq!(
         fold.resolve(&decide, &target("conversation.worker")),
         Err(Error::AmbiguousTarget)
@@ -259,13 +259,13 @@ fn a_retained_command_cannot_stop_bob_or_a_successor() {
         instance("conversation.worker", "alice", 1),
     ] {
         let (record, _) = production(&decide, &alice, &wrong, 1);
-        let mut fold = Fold::from_records(&records).unwrap();
+        let mut fold = InstanceCommandView::from_records(&records).unwrap();
         let before = fold.clone();
         assert_eq!(fold.apply(&record), Err(Error::Target));
         assert_eq!(fold, before);
     }
     let (record, command) = production(&decide, &alice, &worker, 1);
-    let mut fold = Fold::from_records(&records).unwrap();
+    let mut fold = InstanceCommandView::from_records(&records).unwrap();
     fold.apply(&record).unwrap();
     let Record::Transaction(mut forged) = close(&command) else {
         unreachable!()
@@ -285,7 +285,7 @@ fn consumption_preserves_pending_order_across_distinct_instances() {
     let bob_worker = instance("conversation.worker", "bob", 0);
     let (second, second_command) = production(&bob_worker, &bob, &bob_worker, 2);
     records.extend([first, second]);
-    let mut fold = Fold::from_records(&records).unwrap();
+    let mut fold = InstanceCommandView::from_records(&records).unwrap();
     let before = fold.clone();
     assert_eq!(fold.apply(&close(&second_command)), Err(Error::Consumption));
     assert_eq!(fold, before);
@@ -301,7 +301,7 @@ fn parent_closure_settles_only_its_own_descendant_requests() {
     let mut close_parent = transaction(&alice, Trigger::Lifecycle(Lifecycle::Closing));
     close_parent.close_scope = Some(alice.clone());
     records.push(Record::Transaction(Box::new(close_parent)));
-    let fold = Fold::from_records(&records).unwrap();
+    let fold = InstanceCommandView::from_records(&records).unwrap();
     assert_eq!(
         fold.commands().next().unwrap(),
         (&child_command, Disposition::Superseded { record: 7 })
@@ -340,11 +340,11 @@ fn retention_round_trip_rejects_changed_authority_and_empty_packets() {
     let (_, alice, worker, decide) = initial();
     let (_, command) = production(&decide, &alice, &worker, 1);
     for packet in [
-        Packet {
+        InstanceCommands {
             produced: vec![command.clone()],
             consumed: None,
         },
-        Packet {
+        InstanceCommands {
             produced: vec![],
             consumed: Some(command.id),
         },
@@ -352,17 +352,17 @@ fn retention_round_trip_rejects_changed_authority_and_empty_packets() {
         let bytes = encode(&packet.tree());
         let (tree, consumed) = decode(&bytes).unwrap();
         assert_eq!(consumed, bytes.len());
-        assert_eq!(Packet::from_tree(&tree).unwrap(), packet);
+        assert_eq!(InstanceCommands::from_tree(&tree).unwrap(), packet);
     }
     assert_eq!(
-        Packet::from_tree(&Cbor::Map(BTreeMap::new())),
+        InstanceCommands::from_tree(&Cbor::Map(BTreeMap::new())),
         Err(Error::PacketShape)
     );
     let mut forged = command;
     forged.target = instance("conversation.worker", "bob", 0);
     assert_eq!(
-        Packet::from_tree(
-            &Packet {
+        InstanceCommands::from_tree(
+            &InstanceCommands {
                 produced: vec![forged],
                 consumed: None
             }

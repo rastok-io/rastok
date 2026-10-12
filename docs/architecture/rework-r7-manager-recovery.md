@@ -31,10 +31,10 @@ records. The regressions first failed because replay accepted the forgeries.
 
 ## 2. Record-aware fold
 
-`Fold::apply_transaction` is now the acceptance path for MemJournal, independent
+`LoopView::apply_transaction` is now the acceptance path for MemJournal, independent
 replay and the existing persistent-Operator recovery path. It checks the
 packet and its record in one scratch fold, publishing neither on refusal.
-The lower-level `Fold::apply` still checks packet algebra in isolation;
+The lower-level `LoopView::apply` still checks packet algebra in isolation;
 it is not a journal-acceptance API.
 
 The fold derives active `InstanceRef -> parent InstanceRef` links from the

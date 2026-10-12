@@ -175,7 +175,7 @@ queue is bounded at 1,024 pending requests; a full queue refuses the complete
 fan-out before commit. Plans with no such command build no command fold on
 their execution hot path. No Connector Contract or Driver code changes.
 
-The pure `journal::instance_stop::Fold` reconstructs target bindings and all
+The pure `journal::instance_stop::InstanceCommandView` reconstructs target bindings and all
 pending/consumed/superseded dispositions. VM recovery re-derives each production
 from the source and prefix routing, then restores only pending commands. A
 recording carries the same packet losslessly. No target is re-selected when a

@@ -425,7 +425,7 @@ fn key_name(key: u64) -> String {
 
 // ----- projection: the per-species tables -----
 
-fn loop_packet_tree(packet: &crate::journal::loop_protocol::Packet) -> Cbor {
+fn loop_packet_tree(packet: &crate::journal::loop_protocol::LoopRecord) -> Cbor {
     use crate::journal::loop_protocol::{CloseReason, CommandValue, Fact, OpeningAdmissionId};
     let id = |id: crate::envelope::Id| Cbor::Bytes(id.as_bytes().to_vec());
     let mut fields = BTreeMap::new();
@@ -951,7 +951,7 @@ mod tests {
 
     #[test]
     fn the_loop_protocol_registry_pins_open_admit_and_observed_time() {
-        use crate::journal::loop_protocol::{Fact, OpeningAdmissionId, Packet, run_ref};
+        use crate::journal::loop_protocol::{Fact, LoopRecord, OpeningAdmissionId, run_ref};
         let owner = crate::node::OwnerPath::root();
         let instance =
             crate::instance::Generation::new(crate::instance::Identity::singleton(&owner), 0);
@@ -975,7 +975,7 @@ mod tests {
             cause: Some(root),
             exchange_exit: None,
             retry_record: None,
-            loop_record: Some(Box::new(Packet {
+            loop_record: Some(Box::new(LoopRecord {
                 facts: vec![Fact::Open {
                     run,
                     instance: instance.clone(),
@@ -984,7 +984,7 @@ mod tests {
                     fuel: 9,
                     state: state.clone(),
                 }],
-                ..Packet::default()
+                ..LoopRecord::default()
             })),
             logical_time: None,
             deadlines: None,
@@ -1038,14 +1038,14 @@ mod tests {
             unreachable!("the fixture is a transaction")
         };
         admit.trigger = crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Next);
-        admit.loop_record = Some(Box::new(Packet {
+        admit.loop_record = Some(Box::new(LoopRecord {
             facts: vec![Fact::Admit {
                 run,
                 iteration: 0,
                 admission: root,
                 envelope: state.clone(),
             }],
-            ..Packet::default()
+            ..LoopRecord::default()
         }));
         let Cbor::Map(admit_tree) = record_tree(&Record::Transaction(admit)) else {
             panic!("an admission projects as a canonical map")

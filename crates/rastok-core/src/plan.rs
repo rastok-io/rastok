@@ -724,7 +724,7 @@ pub struct RetrySpec {
     /// Nonduplicated canonical terminal names, never runtime predicates.
     pub cases: Vec<String>,
     /// Original closure-based delay between attempts.
-    pub delay: Option<LoopDelay>,
+    pub delay: Option<DelayPolicy>,
     /// Resolved Contract request input.
     pub entry: node::Port,
     /// Resolved Contract terminal, with no contributed output or wrapper.
@@ -739,28 +739,29 @@ pub struct LoopSpec {
     /// Canonical terminal business outputs. Calls use their Contract exit.
     pub terminals: Vec<node::Port>,
     /// Resolved host output for manager exhaustion; absent when impossible.
-    pub expired: Option<LoopExpiry>,
+    pub expired: Option<LoopExpiredOutput>,
     /// Optional positive maximum number of body applications. A verified
     /// measure may stand alone; when both exist this remains the runtime cap.
     pub fuel: Option<PlanConstant>,
     /// Optional re-admission delay.
-    pub delay: Option<LoopDelay>,
+    pub delay: Option<DelayPolicy>,
     /// Optional small termination certificate, re-verified after decode.
     pub proof: Option<crate::loop_proof::Certificate>,
 }
 
-/// A host-owned terminal and its complete effective union, not a new port.
+/// The existing host output chosen to publish `LoopExpired`, with its complete
+/// effective union. This is not a new port or the set of business terminals.
 #[derive(Debug, Clone, PartialEq)]
-pub struct LoopExpiry {
+pub struct LoopExpiredOutput {
     /// Existing output selected during checking.
     pub port: node::Port,
     /// Complete effective pin, independently re-derived after package decode.
     pub ty: DataType,
 }
 
-/// Closed Loop delay policy.
+/// Closed delay policy shared by Loop applications and Retry attempts.
 #[derive(Debug, Clone, PartialEq)]
-pub enum LoopDelay {
+pub enum DelayPolicy {
     /// Every recurrence waits the same duration.
     Fixed {
         /// Positive delay.
@@ -775,7 +776,7 @@ pub enum LoopDelay {
     },
 }
 
-impl LoopDelay {
+impl DelayPolicy {
     /// Positive delay after a one-based application/attempt ordinal, shared
     /// by recurrence policies. Saturation precedes multiplication overflow.
     /// `None` denotes malformed resolved bounds, never a zero-delay policy.

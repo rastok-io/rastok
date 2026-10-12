@@ -19,11 +19,11 @@
 
 use crate::boundary::{
     BoundaryObservation, CallId, CallOpen, ClosingDeadline, Completion, CompletionCheck,
-    DatedPayload, DriverPoller, InboundCallId, InboundCallObservation, InboundCallResponse,
-    InboundCallTimeout, InboundSession, IngressAcceptance, IngressAdmission, IngressProposal,
-    IngressRejection, IngressSubmission, InstanceDeadline, OutboundConnectorBindings,
-    RequestPreparation, Response, SchedulerCompletion, SessionId, SessionObservation, SessionOpen,
-    SessionStart, SessionWrite, SessionWriteId,
+    DriverPoller, InboundCallId, InboundCallObservation, InboundCallResponse, InboundCallTimeout,
+    InboundSession, IngressAcceptance, IngressAdmission, IngressProposal, IngressRejection,
+    IngressSubmission, InstanceDeadline, Obligation, OutboundConnectorBindings, RequestPreparation,
+    Response, SchedulerCompletion, SessionId, SessionObservation, SessionOpen, SessionStart,
+    SessionWrite, SessionWriteId,
 };
 use crate::connector::{ConnectorExchange, SessionOpening, session_opening};
 use crate::envelope;
@@ -764,17 +764,16 @@ pub struct BoundaryOutput {
     pub envelope: Envelope,
 }
 
-/// One observed delivery — the debugger-shaped observation surface:
-/// every envelope reaching a node port or the App boundary is logged
-/// here in arrival order. Expectations read
-/// windows of this log; nothing consumes it.
+/// An envelope seen at a port, leaving its producer or arriving at a target.
+/// This is the debugger's live log, not another journal record. Readers and
+/// Lab expectations inspect windows of it without consuming any delivery.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Observed {
-    /// The receiving node, or `None` at the App boundary.
+pub struct EnvelopeView {
+    /// The observed node, or `None` at the App boundary.
     pub node: Option<node::Path>,
-    /// The receiving port.
+    /// The source or destination port where the envelope was seen.
     pub port: node::Port,
-    /// The delivered envelope.
+    /// The observed envelope.
     pub envelope: Envelope,
 }
 
@@ -919,7 +918,7 @@ pub struct Scheduler {
     /// creation sequence breaks ties deterministically. Typed on the
     /// boundary vocabulary so every future obligation (join windows,
     /// lifetimes) crosses the same frontier as call budgets.
-    dated: BTreeMap<(i64, u64), DatedPayload>,
+    dated: BTreeMap<(i64, u64), Obligation>,
     creation_seq: u64,
 }
 
@@ -932,7 +931,7 @@ impl Scheduler {
         }
     }
 
-    fn schedule(&mut self, at: i64, payload: DatedPayload) {
+    fn schedule(&mut self, at: i64, payload: Obligation) {
         self.dated.insert((at, self.creation_seq), payload);
         self.creation_seq = self.creation_seq.wrapping_add(1);
     }
@@ -943,8 +942,8 @@ impl Scheduler {
     fn peek_due(
         &self,
         target: i64,
-        eligible: impl Fn(&DatedPayload) -> bool,
-    ) -> Option<((i64, u64), DatedPayload)> {
+        eligible: impl Fn(&Obligation) -> bool,
+    ) -> Option<((i64, u64), Obligation)> {
         self.dated
             .range(..=(target, u64::MAX))
             .find(|(_, payload)| eligible(payload))
@@ -963,7 +962,7 @@ impl Scheduler {
 pub struct Vm<'plan> {
     plan: &'plan ValidatedExecutionPlan,
     original_hash: Option<crate::plan::SemanticHash>,
-    retry_manager: Option<Box<crate::journal::retry_protocol::Fold>>,
+    retry_manager: Option<Box<crate::journal::retry_protocol::RetryView>>,
     /// First still-unsupported classified schema, computed once at boot. Raw
     /// secret payloads remain closed; personal data opens only under the
     /// attested run-scoped privacy profile.
@@ -1028,7 +1027,7 @@ pub struct Vm<'plan> {
     /// detached `l:stop` precedes the following generation.
     lifecycle: VecDeque<LifecycleWork>,
     /// Disposable index reconstructed from the journal's command protocol.
-    loop_manager: Option<Box<crate::journal::loop_protocol::Fold>>,
+    loop_manager: Option<Box<crate::journal::loop_protocol::LoopView>>,
     /// Won closures awaiting their completion transaction — replayable:
     /// an entry leaves this queue only when its transaction commits.
     settled: VecDeque<SettledEntry>,
@@ -1039,7 +1038,7 @@ pub struct Vm<'plan> {
     /// [`Self::advance`] moves it, discretely.
     now: i64,
     outputs: Vec<BoundaryOutput>,
-    observed: Vec<Observed>,
+    observed: Vec<EnvelopeView>,
 }
 
 fn first_annotation_location(
@@ -1351,7 +1350,7 @@ impl<'plan> Vm<'plan> {
                 .owners
                 .iter()
                 .any(|owner| owner.retry_spec().is_some())
-                .then(|| Box::new(crate::journal::retry_protocol::Fold::default())),
+                .then(|| Box::new(crate::journal::retry_protocol::RetryView::default())),
             unsupported_data_policy: first_unsupported_data_policy_location(plan, boot),
             missing_deployment_binding: first_missing_deployment_binding(plan, boot),
             requires_personal_retention: personal_data_requirements(plan).personal,
@@ -1978,10 +1977,11 @@ impl<'plan> Vm<'plan> {
         };
         self.check_instance_command_room(&&*journal, &commands)?;
         if !commands.is_empty() {
-            inbound = inbound.with_instance_commands(crate::journal::instance_stop::Packet {
-                produced: commands.clone(),
-                consumed: None,
-            });
+            inbound =
+                inbound.with_instance_commands(crate::journal::instance_stop::InstanceCommands {
+                    produced: commands.clone(),
+                    consumed: None,
+                });
         }
         let recorded_routes = self.inbound_route_targets(&prepared);
         let mut activity = BTreeMap::new();
@@ -2046,7 +2046,7 @@ impl<'plan> Vm<'plan> {
             if let Some(timeout) = timeout {
                 self.scheduler.schedule(
                     self.now.saturating_add(*timeout),
-                    DatedPayload::InboundCallBudget {
+                    Obligation::InboundCallBudget {
                         call_id,
                         instance: target.reference.clone(),
                     },
@@ -2727,9 +2727,9 @@ impl<'plan> Vm<'plan> {
         Ok(())
     }
 
-    fn peek_due(&self, target: i64) -> Option<((i64, u64), DatedPayload)> {
+    fn peek_due(&self, target: i64) -> Option<((i64, u64), Obligation)> {
         self.scheduler.peek_due(target, |payload| {
-            !matches!(payload, DatedPayload::InstanceLifetime { instance, .. }
+            !matches!(payload, Obligation::InstanceLifetime { instance, .. }
                 if self.waiting.contains_key(instance)
                     || self.lifecycle.iter().any(|work|
                         work.instance == *instance && work.lifecycle == node::Lifecycle::Start))
@@ -2741,16 +2741,16 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
-        payload: DatedPayload,
+        payload: Obligation,
     ) -> Result<(), VmFault> {
         let (connector, edge, delivery, instance) = match payload {
-            DatedPayload::DeliveryBudget {
+            Obligation::DeliveryBudget {
                 connector,
                 edge,
                 delivery,
                 instance,
             } => (connector, edge, delivery, instance),
-            DatedPayload::InboundCallBudget { call_id, instance } => {
+            Obligation::InboundCallBudget { call_id, instance } => {
                 if self
                     .settled_inbound_calls
                     .iter()
@@ -2773,7 +2773,7 @@ impl<'plan> Vm<'plan> {
                 timeout.requested = true;
                 return Ok(());
             }
-            DatedPayload::JoinWithin {
+            Obligation::JoinWithin {
                 operator,
                 edge,
                 delivery,
@@ -2790,12 +2790,12 @@ impl<'plan> Vm<'plan> {
                 }
                 return Ok(());
             }
-            DatedPayload::LoopDelay { .. } | DatedPayload::RetryDelay { .. } => {
+            Obligation::LoopDelay { .. } | Obligation::RetryDelay { .. } => {
                 // The wakeup only dates eligibility. The manager rechecks the
                 // committed run, generation and deadline before any admission.
                 return Ok(());
             }
-            DatedPayload::InstanceLifetime {
+            Obligation::InstanceLifetime {
                 owner,
                 instance,
                 cause,
@@ -2804,7 +2804,7 @@ impl<'plan> Vm<'plan> {
                 self.expire_instance(journal, owner, instance, cause, deadline)?;
                 return Ok(());
             }
-            DatedPayload::InstanceClosing {
+            Obligation::InstanceClosing {
                 instance,
                 cause,
                 deadline,
@@ -3324,10 +3324,10 @@ impl<'plan> Vm<'plan> {
             .map(crate::plan::ResolvedPort::annotations)
     }
 
-    /// Every delivery the machine made, in arrival order — the
-    /// observation log expectations read windows of.
+    /// Read-only envelope views in observation order: emissions at their
+    /// source ports and deliveries at their destinations.
     #[must_use]
-    pub fn observations(&self) -> &[Observed] {
+    pub fn envelope_views(&self) -> &[EnvelopeView] {
         &self.observed
     }
 
@@ -3765,7 +3765,7 @@ impl<'plan> Vm<'plan> {
         let drain_at = self.now.saturating_add(policy.drain_for);
         self.scheduler.schedule(
             drain_at,
-            DatedPayload::InstanceClosing {
+            Obligation::InstanceClosing {
                 instance: reference.clone(),
                 cause,
                 deadline: ClosingDeadline::Drain,
@@ -3773,7 +3773,7 @@ impl<'plan> Vm<'plan> {
         );
         self.scheduler.schedule(
             drain_at.saturating_add(policy.settle_for),
-            DatedPayload::InstanceClosing {
+            Obligation::InstanceClosing {
                 instance: reference.clone(),
                 cause,
                 deadline: ClosingDeadline::Settlement,
@@ -3810,7 +3810,7 @@ impl<'plan> Vm<'plan> {
             logical_time: None,
             deadlines: None,
             instance_commands: command.map(|id| {
-                Box::new(crate::journal::instance_stop::Packet {
+                Box::new(crate::journal::instance_stop::InstanceCommands {
                     produced: Vec::new(),
                     consumed: Some(id),
                 })
@@ -4412,7 +4412,7 @@ impl<'plan> Vm<'plan> {
             let context = self.graph_context(&request.delivery);
             if !context.is_empty() {
                 outcome.record.loop_record =
-                    Some(Box::new(crate::journal::loop_protocol::Packet {
+                    Some(Box::new(crate::journal::loop_protocol::LoopRecord {
                         context: context.to_vec(),
                         ..Default::default()
                     }));
@@ -5486,7 +5486,7 @@ impl<'plan> Vm<'plan> {
         // already due. Settle that exact delivery before handing any intent
         // to the Driver, even when the caller drains before `advance`.
         let overdue = self.scheduler.dated.range(..=(self.now, u64::MAX)).find(|(_, payload)| {
-            matches!(payload, DatedPayload::DeliveryBudget { edge, delivery: id, instance: target, .. }
+            matches!(payload, Obligation::DeliveryBudget { edge, delivery: id, instance: target, .. }
                 if edge == &delivery.edge && *id == delivery.envelope.meta().sys().id() && target == instance)
         }).map(|(key, payload)| (*key, payload.clone()));
         if let Some((key, payload)) = overdue {
@@ -6688,7 +6688,7 @@ impl<'plan> Vm<'plan> {
         for PreparedEmission { emission, routes } in emissions {
             // The emission itself is observable at its source port —
             // `expect relay.out` watches departures, not arrivals.
-            self.observed.push(Observed {
+            self.observed.push(EnvelopeView {
                 node: Some(self.plan.nodes[slot.index()].path.clone()),
                 port: emission.port.clone(),
                 envelope: emission.envelope.clone(),
@@ -6758,7 +6758,7 @@ impl<'plan> Vm<'plan> {
                         {
                             self.scheduler.schedule(deadline.due_at, payload);
                         }
-                        self.observed.push(Observed {
+                        self.observed.push(EnvelopeView {
                             node: Some(self.plan.nodes[target.index()].path.clone()),
                             port: to.port.clone(),
                             envelope: envelope.clone(),
