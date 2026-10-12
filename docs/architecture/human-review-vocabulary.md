@@ -121,8 +121,11 @@ Ranked by the cost of leaving them to the external reviewer.
    and digest only; not `PrivacyFacts`, Yoann: "fact" already has its
    sense); `CostProfile` → **`PriceBook`** (its own doc's word);
    `json::HydrationProfile` → **`HydrationPolicy`** (its own doc's word);
-   `conformance::Profile` ("what one connector offers the harness") to read
-   before naming.
+   `conformance::Profile` read 12 October: the contract under test, a
+   happy-path probe with its submission and exit case, one provocation per
+   provocable terminal case, the unprovable cases with their reasons, the
+   mute probe for the timeout battery, the interleaved-correlation probe →
+   **`DriverProbes`**, "probe" being the module's own word for each of them.
 6. **Node.** `plan::Node` is an executable row only, narrower than the
    specification's Node, which includes Graph. Settled by D-2026-10-11-1;
    listed here for completeness.
@@ -274,6 +277,10 @@ settlement nor completion.
 fact of an outbound effect; the specification says "open fact" more often.
 Confirm "intent".
 
+**Settled 11 October:** the `Intent` types take the effect's name
+(`CallOpen`, `SessionOpen`, `SessionWrite`); "open fact" stays the
+specification's prose; journal-before-effect is stated once, on the
+`DriverPoller`.
 ### 4. Identity — id, identity, reference, address, generation, slot, path
 
 | Code | Where | Meaning | Spec (uses) |
@@ -327,6 +334,11 @@ itself has no specification word. Confirm "live instance" / "bundle" or
 pick one.
 **Settled 12 October (Yoann):** `Live` → **`LiveInstance`**; the name of
 its immutable values ("bundle", 8 uses) is read before it is chosen.
+Read 12 October: `Live` is crate-private, `{ owner, parent, frames,
+values, settings, created_by, last_activity, residual, phase }`; "bundle" is
+only its doc's word for the immutable `values` and `settings`, no field
+carries it. The doc says "its immutable values and settings"; nothing else
+to name.
 **⟂ 5c.** "scope" carries three meanings; the specification mostly means the
 closing or containing scope. Confirm or qualify (`Edge::scope` is an owner).
 
@@ -443,6 +455,9 @@ and unclaimed mailboxes") is not a closing → **`run_ready`**,
 `drain_with_bindings` → `run_ready_with_bindings`; `try_drain` to follow
 once read. Not `run_until_idle`: "idle" is the specification's instance
 lifetime word.
+`try_drain` read 12 October: host observability, "drains every line
+currently available without waiting" from a channel; this is the Rust
+standard library's own verb (`Vec::drain`, `HashMap::drain`), kept.
 **⟂ 8c.** `ConnectorRoles { Inbound, Outbound, InboundAndOutbound }`
 implements row 2 of the Contract sheet, *Direction* (who starts), not row 1,
 *Role* (what it bridges). Plain word: `ConnectorDirection`; but
