@@ -1,6 +1,6 @@
 //! Resumable control of the existing discrete-time sweep.
 
-use super::{ClosingDeadline, DatedPayload, Journal, OutboundConnectorBindings, Vm, VmError};
+use super::{ClosingDeadline, DatedPayload, Journal, OutboundConnectorBindings, Vm, VmFault};
 
 /// An in-progress advance on one VM. This is a caller-owned control cursor,
 /// not a journal fact or a second timer queue. Do not interleave other VM
@@ -56,12 +56,12 @@ impl TimeAdvance {
     /// # Errors
     /// The same transaction, expiry or binding refusals as [`Vm::advance`].
     /// A refused transaction/expiry retains its cursor for retry.
-    pub fn step(
+    pub fn advance_once(
         &mut self,
         vm: &mut Vm<'_>,
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
-    ) -> Result<bool, VmError> {
+    ) -> Result<bool, VmFault> {
         loop {
             match &self.phase {
                 Phase::Ready => {

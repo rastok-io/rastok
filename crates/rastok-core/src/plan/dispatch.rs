@@ -6,7 +6,7 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use super::Emission;
+use super::EmitValue;
 use crate::schema_annotation::AnnotationTable;
 use crate::{expr, node};
 
@@ -78,7 +78,7 @@ impl Dispatch {
     pub fn may_emit(&self, port: &node::Port) -> bool {
         self.steps().any(|step| {
             step.emissions()
-                .any(|(target, value)| target == port && !matches!(value, Emission::Nothing))
+                .any(|(target, value)| target == port && !matches!(value, EmitValue::Nothing))
         })
     }
 
@@ -159,7 +159,7 @@ pub enum DispatchStep {
         /// The emission port.
         port: node::Port,
         /// What is emitted.
-        value: Emission,
+        value: EmitValue,
     },
     /// Ordered atomic production of several distinct envelopes.
     MultiEmit {
@@ -184,7 +184,7 @@ pub enum DispatchStep {
 impl DispatchStep {
     /// Business emissions in authored order. A broadcast retains one builder
     /// with several targets; it is not expanded into repeated evaluations.
-    pub fn emissions(&self) -> impl Iterator<Item = (&node::Port, &Emission)> {
+    pub fn emissions(&self) -> impl Iterator<Item = (&node::Port, &EmitValue)> {
         let mut index = 0;
         core::iter::from_fn(move || {
             let current = index;
@@ -253,7 +253,7 @@ impl DispatchStep {
             single
                 .into_iter()
                 .chain(tuple)
-                .flat_map(Emission::expressions),
+                .flat_map(EmitValue::expressions),
         )
     }
 }
@@ -262,16 +262,16 @@ impl DispatchStep {
 #[derive(Debug, Clone, PartialEq)]
 pub enum MultiEmitValues {
     /// Evaluate once, then build one envelope for every target.
-    Broadcast(Emission),
+    Broadcast(EmitValue),
     /// Evaluate and pair values with targets from left to right.
-    Tuple(Vec<Emission>),
+    Tuple(Vec<EmitValue>),
 }
 
 /// Loop manager commands. They are neither ports nor spatial emissions.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LoopCommand {
     /// Supply the next entry envelope.
-    Next(Emission),
+    Next(EmitValue),
     /// Retain the current `Loop.state`.
     Again,
     /// Close without a business envelope.
@@ -300,8 +300,8 @@ mod tests {
     };
     use alloc::vec;
 
-    fn value(number: i64) -> Emission {
-        Emission::Data(Tree {
+    fn value(number: i64) -> EmitValue {
+        EmitValue::Data(Tree {
             root: Expr::Literal(Value::Int(number)),
             ty: DataType::INT,
         })

@@ -159,7 +159,7 @@ No manager execution or ContractViolation runtime gate is claimed here.
 
 ## 6. One envelope-construction algebra
 
-Checked Dispatch and the executable plan now carry the same `Emission` and
+Checked Dispatch and the executable plan now carry the same `EmitValue` and
 ordered `FieldWrite` types. Source checking, expression/type/policy proofs,
 Loop measure verification, CBOR transport and runtime construction consume
 that one model. The duplicate Dispatch-only emission/write types and the
@@ -183,7 +183,7 @@ The executable handler now carries the same `DispatchStep` leaves as HIR.
 The duplicate `Step` enum and statement-copy bridges are removed, without a
 compatibility alias. Lowering substitutes constants inside that shared model;
 it no longer relies on `unreachable!` to convert its additional variants.
-`HandlerExecutor` now names the existing handler transaction preparer, leaving
+`TransactionPreparer` now names the existing handler transaction preparer, leaving
 Executor as the semantic category shared by Operators and Connectors.
 
 Business-output traversal preserves authored target order and does not mistake

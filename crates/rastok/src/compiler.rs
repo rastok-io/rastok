@@ -1091,7 +1091,7 @@ graph app : App {{
                 },
             )
             .expect("the root is admitted before Loop work");
-            vm.drain(&mut journal)
+            vm.run_ready(&mut journal)
                 .expect("the immediate Loop reaches one terminal fact");
             (vm, journal)
         }
@@ -1260,7 +1260,7 @@ graph app : App {
             .recover_from_journal(&journal)
             .expect("the open run is reconstructed from journal facts");
         recovered
-            .drain(&mut journal)
+            .run_ready(&mut journal)
             .expect("the recovered run reaches its original terminal");
         assert_eq!(recovered.outputs().len(), 1);
         assert_eq!(
@@ -1354,7 +1354,7 @@ graph app : App {
             )
             .expect("both roots fit the host mailbox");
         }
-        vm.drain(&mut journal)
+        vm.run_ready(&mut journal)
             .expect("both runs terminate independently");
         assert_eq!(vm.outputs().len(), 2);
         assert!(vm.outputs().iter().all(|output| {

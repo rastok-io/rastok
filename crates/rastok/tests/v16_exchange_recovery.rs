@@ -104,7 +104,7 @@ graph app : App {{
                 completion,
             };
             assert_eq!(vm.queue_inbound_call_events(vec![event.clone()]).queued, 1);
-            vm.drain(&mut journal).unwrap();
+            vm.run_ready(&mut journal).unwrap();
             recover(&mut vm, &journal);
             assert_eq!(
                 vm.queue_inbound_call_events(vec![event]).queued,

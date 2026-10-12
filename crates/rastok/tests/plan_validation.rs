@@ -97,7 +97,7 @@ fn a_handler_owner_is_bounds_checked_before_any_signature_is_derived() {
 fn raw_commands_require_an_owning_loop_application() {
     let variants = [
         (
-            DispatchStep::LoopCommand(plan::LoopCommand::Next(plan::Emission::Identity)),
+            DispatchStep::LoopCommand(plan::LoopCommand::Next(plan::EmitValue::Identity)),
             "a Loop command without an owning Loop application",
         ),
         (
@@ -267,7 +267,7 @@ fn loop_claims_are_rederived_from_the_host_interface_and_dispatch() {
 
     let mut wrong_next = raw_loop();
     wrong_next.handlers[0].dispatch = plan::Dispatch::Linear(vec![DispatchStep::LoopCommand(
-        plan::LoopCommand::Next(plan::Emission::Data(expr::Tree {
+        plan::LoopCommand::Next(plan::EmitValue::Data(expr::Tree {
             root: expr::Expr::Literal(rastok::value::Value::Int(3)),
             ty: DataType::INT,
         })),
@@ -292,7 +292,7 @@ fn loop_claims_are_rederived_from_the_host_interface_and_dispatch() {
     let mut unbound_asset = raw_loop();
     let handler = &mut unbound_asset.handlers[0];
     let DispatchStep::Emit {
-        value: plan::Emission::Data(tree),
+        value: plan::EmitValue::Data(tree),
         ..
     } = &mut linear_statements(handler)[0]
     else {
@@ -312,7 +312,7 @@ fn loop_progress_is_reproved_registry_free_from_the_transported_body() {
     let DispatchStep::Emit { value, .. } = &mut linear_statements(handler)[0] else {
         panic!("the Operator emits its result")
     };
-    *value = plan::Emission::Nothing;
+    *value = plan::EmitValue::Nothing;
     assert!(matches!(
         ValidatedExecutionPlan::try_new(silent),
         Err(PlanValidationError::InvalidLoopControl { detail, .. })
@@ -1897,7 +1897,7 @@ fn a_bounded_join_never_invents_an_untyped_or_missing_expiry_channel() {
     else {
         panic!("the fixture emits")
     };
-    *value = plan::Emission::Identity;
+    *value = plan::EmitValue::Identity;
     assert!(matches!(
         ValidatedExecutionPlan::try_new(identity).unwrap_err(),
         PlanValidationError::AmbiguousJoinIdentity { node } if node.to_string() == "pair"
@@ -1972,7 +1972,7 @@ graph attributed : App {
         .find(|handler| forged.nodes[handler.owner.index()].path.to_string() == "pair")
         .expect("the join handler");
     let DispatchStep::Emit {
-        value: plan::Emission::FreshData(writes),
+        value: plan::EmitValue::FreshData(writes),
         ..
     } = &mut linear_statements(pair)[0]
     else {

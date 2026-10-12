@@ -14,7 +14,7 @@ impl Vm<'_> {
         source: &Endpoint,
         source_instance: Option<&instance::Generation>,
         envelope: &Envelope,
-    ) -> Result<Vec<Command>, VmError> {
+    ) -> Result<Vec<Command>, VmFault> {
         if self.instance_commands.is_none() {
             return Ok(Vec::new());
         }
@@ -35,7 +35,7 @@ impl Vm<'_> {
                         if value.is_none() {
                             value = Some(
                                 crate::runtime::data_value(envelope.data())
-                                    .map_err(VmError::Fault)?,
+                                    .map_err(VmFault::Fault)?,
                             );
                         }
                         rule.selection
@@ -92,7 +92,7 @@ impl Vm<'_> {
             )?
             .reference
         };
-        let fold = journal.instance_commands().map_err(VmError::Journal)?;
+        let fold = journal.instance_commands().map_err(VmFault::Journal)?;
         let mut commands = Vec::with_capacity(targets.len());
         for target in targets {
             let (scope, target_ref) = fold
@@ -110,8 +110,8 @@ impl Vm<'_> {
         Ok(commands)
     }
 
-    fn command_error(&self, owner: &node::OwnerPath, reason: Error) -> VmError {
-        VmError::InstanceCommand {
+    fn command_error(&self, owner: &node::OwnerPath, reason: Error) -> VmFault {
+        VmFault::InstanceCommand {
             owner: owner.clone(),
             reason,
         }
@@ -121,11 +121,11 @@ impl Vm<'_> {
         &self,
         journal: &dyn InstanceAdmissions,
         commands: &[Command],
-    ) -> Result<(), VmError> {
+    ) -> Result<(), VmFault> {
         if commands.is_empty() {
             return Ok(());
         }
-        let fold = journal.instance_commands().map_err(VmError::Journal)?;
+        let fold = journal.instance_commands().map_err(VmFault::Journal)?;
         let occupied = fold
             .commands()
             .filter(|(_, disposition)| *disposition == Disposition::Pending)
@@ -135,7 +135,7 @@ impl Vm<'_> {
             .filter(|command| fold.closing_record(&command.target).is_none())
             .count();
         if occupied.saturating_add(added) > WORKER_MAILBOX_CAPACITY {
-            return Err(VmError::InstanceCommandQueueFull);
+            return Err(VmFault::InstanceCommandQueueFull);
         }
         Ok(())
     }
@@ -163,7 +163,7 @@ impl Vm<'_> {
     pub(super) fn step_instance_commands(
         &mut self,
         journal: &mut dyn Journal,
-    ) -> Result<bool, VmError> {
+    ) -> Result<bool, VmFault> {
         loop {
             let Some(command) = self
                 .instance_commands
@@ -195,7 +195,7 @@ impl Vm<'_> {
                         }
                         _ => {}
                     })
-                    .map_err(VmError::Journal)?;
+                    .map_err(VmFault::Journal)?;
                 let cause = cause.ok_or_else(|| {
                     self.command_error(command.target.address().owner(), Error::Source)
                 })?;

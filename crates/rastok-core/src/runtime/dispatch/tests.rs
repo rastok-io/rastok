@@ -1,7 +1,7 @@
 use super::*;
 use crate::expr::{Expr, Signature, Tree};
 use crate::node::Port;
-use crate::plan::{ClosedArm, Emission, OpenArm};
+use crate::plan::{ClosedArm, EmitValue, OpenArm};
 use crate::schema_annotation::AnnotationTable;
 use crate::value::Value;
 use alloc::{boxed::Box, vec, vec::Vec};
@@ -16,7 +16,7 @@ fn boolean(value: bool) -> Tree {
 fn output(name: &str) -> Dispatch {
     Dispatch::Linear(vec![DispatchStep::Emit {
         port: Port::new(name).unwrap(),
-        value: Emission::Identity,
+        value: EmitValue::Identity,
     }])
 }
 

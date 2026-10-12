@@ -21,8 +21,7 @@ use crate::instance;
 use crate::journal::{ConsumedPosition, Emission, TransactionRecord, ids};
 use crate::node;
 use crate::plan::{
-    DispatchStep, Emission as PlanEmission, ExecutionPlan, GraphVersion, Handler, Slot,
-    ValidatedExecutionPlan,
+    DispatchStep, EmitValue, ExecutionPlan, GraphVersion, Handler, Slot, ValidatedExecutionPlan,
 };
 use crate::value::{Value, ValueError};
 use alloc::boxed::Box;
@@ -40,7 +39,7 @@ pub use dispatch::{DispatchSelection, select_dispatch};
 
 /// Pure, deterministic, budgeted guest execution — the contract the
 /// jq and SQL engines will implement; no engine ships in M0.
-pub trait GuestExecutor {
+pub trait GuestRunner {
     /// Runs an opaque guest program over a value within a budget.
     ///
     /// # Errors
@@ -579,17 +578,16 @@ pub(crate) struct JoinCandidate<'a> {
 /// Prepares a handler transaction in scratch isolation. State and emissions
 /// become visible together only when its caller commits the returned record.
 #[derive(Debug)]
-pub struct HandlerExecutor<'plan> {
+pub struct TransactionPreparer<'plan> {
     plan: &'plan ValidatedExecutionPlan,
     graph_version: GraphVersion,
     logical_time: i64,
 }
 
-impl<'plan> HandlerExecutor<'plan> {
-    /// An executor over a validated plan. The executor dereferences
-    /// the plan without checking, so the proof enters here — the
-    /// internal reference stays raw, but no public path constructs
-    /// an executor around an unvalidated plan.
+impl<'plan> TransactionPreparer<'plan> {
+    /// A transaction preparer over a validated plan. Preparation trusts the
+    /// plan's invariants, so validation must precede this constructor; no
+    /// public path wraps an unvalidated plan.
     #[must_use]
     pub fn new(plan: &'plan ValidatedExecutionPlan, graph_version: GraphVersion) -> Self {
         Self {
@@ -599,7 +597,7 @@ impl<'plan> HandlerExecutor<'plan> {
         }
     }
 
-    /// An executor at one explicit logical instant. The VM supplies this from
+    /// A transaction preparer at one explicit logical instant. The VM supplies this from
     /// its deterministic scheduler; the evaluator never reads an ambient
     /// clock. Every expression in one firing therefore sees the same value.
     #[must_use]
@@ -1170,14 +1168,14 @@ impl<'plan> HandlerExecutor<'plan> {
                                 port: port.clone(),
                             };
                             let data = match built.data {
-                                BuiltData::Carried(data) => {
+                                BuiltPayload::Carried(data) => {
                                     if let Data::Materialized(current) = &data {
                                         crossing_pins_hold(self.plan, &from, current)
                                             .map_err(PinViolation::into_fault)?;
                                     }
                                     data
                                 }
-                                BuiltData::Value(value) => {
+                                BuiltPayload::Value(value) => {
                                     crossing_pins_hold(self.plan, &from, &value)
                                         .map_err(PinViolation::into_fault)?;
                                     Data::materialized(value)
@@ -1225,8 +1223,8 @@ impl<'plan> HandlerExecutor<'plan> {
                                 ))
                             })?;
                             let data = match built.data {
-                                BuiltData::Carried(data) => data,
-                                BuiltData::Value(value) => Data::materialized(value),
+                                BuiltPayload::Carried(data) => data,
+                                BuiltPayload::Value(value) => Data::materialized(value),
                             };
                             let port = node::Port::new("Loop.next")
                                 .map_err(|error| Fault::Unrepresentable(error.to_string()))?;
@@ -1626,9 +1624,9 @@ impl<'plan> HandlerExecutor<'plan> {
 /// original representation (encoded bytes included) and content-type hint,
 /// per the "no structural read, no transcode" rule.
 #[derive(Clone)]
-pub(crate) struct Built {
+pub(crate) struct BuiltEmission {
     /// The built payload.
-    pub(crate) data: BuiltData,
+    pub(crate) data: BuiltPayload,
     /// The outgoing application zone.
     pub(crate) app: envelope::Namespace,
     /// The outgoing external-context zone — `content_type` already
@@ -1638,7 +1636,7 @@ pub(crate) struct Built {
 
 /// A builder's payload verdict.
 #[derive(Clone)]
-pub(crate) enum BuiltData {
+pub(crate) enum BuiltPayload {
     /// One input's physical representation ships as-is.
     Carried(Data),
     /// The payload was (re)built as one materialized core value.
@@ -1650,8 +1648,8 @@ pub(crate) enum BuiltData {
 /// and target envelope creation both retain authored order.
 fn evaluate_emissions(
     step: &DispatchStep,
-    mut evaluate: impl FnMut(&PlanEmission) -> Result<Option<Built>, Fault>,
-    mut stage: impl FnMut(&node::Port, Built) -> Result<(), Fault>,
+    mut evaluate: impl FnMut(&EmitValue) -> Result<Option<BuiltEmission>, Fault>,
+    mut stage: impl FnMut(&node::Port, BuiltEmission) -> Result<(), Fault>,
 ) -> Result<(), Fault> {
     match step {
         DispatchStep::Emit { port, value } => {
@@ -1709,7 +1707,7 @@ fn evaluate_emissions(
 /// MACHINE mints (connector completions and operator faults): `app` carries
 /// whole, `ext` carries minus `content_type` (the minted payload is
 /// always fresh). Builder emissions spell the same rule through
-/// [`Built`].
+/// [`BuiltEmission`].
 fn inherit_zones(meta: Meta, input: &Meta) -> Meta {
     let mut ext = input.ext().clone();
     ext.remove("content_type");
@@ -1717,12 +1715,12 @@ fn inherit_zones(meta: Meta, input: &Meta) -> Meta {
 }
 
 fn emitted_content(
-    emission: &PlanEmission,
+    emission: &EmitValue,
     input: &Envelope,
     base: &BTreeMap<String, expr::EvalValue>,
     slots: &PayloadSlots<'_>,
     plan: &crate::plan::ExecutionPlan,
-) -> Result<Option<Built>, Fault> {
+) -> Result<Option<BuiltEmission>, Fault> {
     let assets: &[crate::plan::AssetBlob] = &plan.assets;
     // The atomic order of D-2026-08-10-4: copy the zones, decide
     // the payload, DERIVE `content_type` from that decision (a kept
@@ -1731,13 +1729,13 @@ fn emitted_content(
     let fresh = |data: Value| {
         let mut ext = input.meta().ext().clone();
         ext.remove("content_type");
-        Built {
-            data: BuiltData::Value(data),
+        BuiltEmission {
+            data: BuiltPayload::Value(data),
             app: input.meta().app().clone(),
             ext,
         }
     };
-    let carried = |reference: &expr::PayloadSource| -> Result<Built, Fault> {
+    let carried = |reference: &expr::PayloadSource| -> Result<BuiltEmission, Fault> {
         let source = slots.source(reference).ok_or_else(|| {
             Fault::Eval(expr::Error {
                 kind: expr::ErrorKind::Evaluation,
@@ -1760,16 +1758,16 @@ fn emitted_content(
                 ext
             }
         };
-        Ok(Built {
-            data: BuiltData::Carried(source.data.data.clone()),
+        Ok(BuiltEmission {
+            data: BuiltPayload::Carried(source.data.data.clone()),
             app: input.meta().app().clone(),
             ext,
         })
     };
     match emission {
-        PlanEmission::Nothing => Ok(None),
-        PlanEmission::Identity => Ok(Some(carried(&expr::PayloadSource::Input)?)),
-        PlanEmission::Data(expr) => {
+        EmitValue::Nothing => Ok(None),
+        EmitValue::Identity => Ok(Some(carried(&expr::PayloadSource::Input)?)),
+        EmitValue::Data(expr) => {
             // No spelling-dependent special case, in EITHER
             // direction: the evaluator preserves the struct and
             // laziness witnesses. A whole payload
@@ -1799,8 +1797,8 @@ fn emitted_content(
             let value = resolve_payload_with_slots(value, slots)?;
             Ok(Some(fresh(value)))
         }
-        PlanEmission::Patch(writes) | PlanEmission::FreshData(writes) => {
-            let replace = matches!(emission, PlanEmission::FreshData(_));
+        EmitValue::Patch(writes) | EmitValue::FreshData(writes) => {
+            let replace = matches!(emission, EmitValue::FreshData(_));
             // The whole-data CARRY: a builder whose only payload
             // write is the bare witness (`data = data`,
             // `data = a.data`) keeps the representation — the
@@ -1908,7 +1906,7 @@ fn emitted_content(
                 }
             }
             if let Some(value) = data {
-                built.data = BuiltData::Value(value);
+                built.data = BuiltPayload::Value(value);
             }
             Ok(Some(built))
         }

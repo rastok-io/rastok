@@ -88,9 +88,11 @@ pub(super) fn run(plan: &ValidatedExecutionPlan, hash: SemanticHash) -> usize {
     }
     let mut now = 0;
     for _ in 0..4096 {
-        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut world)
+            .unwrap();
         vm.pump(&mut journal, &mut world).unwrap();
-        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut world)
+            .unwrap();
         if vm.is_stable() {
             break;
         }

@@ -19,7 +19,7 @@ use crate::schema_annotation::{
 
 use super::type_resolution::ResolvedPortTable;
 use super::{
-    DispatchStep, EdgeEnd, Emission, Endpoint, EndpointOwner, ExecutionPlan, Handler, LoopCommand,
+    DispatchStep, EdgeEnd, EmitValue, Endpoint, EndpointOwner, ExecutionPlan, Handler, LoopCommand,
     LoopCommandKind, OwnerKind, RouteDestination, RouteSelection, Slot,
 };
 
@@ -792,7 +792,7 @@ impl<'a> Solver<'a> {
 
     fn emission(
         &self,
-        emission: &Emission,
+        emission: &EmitValue,
         input: Option<&AnnotationTable>,
         environment: &Environment,
         output_type: DataType,
@@ -800,12 +800,12 @@ impl<'a> Solver<'a> {
     ) -> Result<Option<AnnotationTable>, ResolutionError> {
         let location = format!("handler {handler_index} emission");
         let result = match emission {
-            Emission::Nothing => return Ok(None),
-            Emission::Identity => input.cloned().unwrap_or_default(),
-            Emission::Data(tree) => data_policy::expression(tree, environment)
+            EmitValue::Nothing => return Ok(None),
+            EmitValue::Identity => input.cloned().unwrap_or_default(),
+            EmitValue::Data(tree) => data_policy::expression(tree, environment)
                 .map_err(|reason| ResolutionError { location, reason })?,
-            Emission::Patch(writes) | Emission::FreshData(writes) => {
-                let mut result = if matches!(emission, Emission::Patch(_)) {
+            EmitValue::Patch(writes) | EmitValue::FreshData(writes) => {
+                let mut result = if matches!(emission, EmitValue::Patch(_)) {
                     input.cloned().unwrap_or_default()
                 } else {
                     AnnotationTable::empty()

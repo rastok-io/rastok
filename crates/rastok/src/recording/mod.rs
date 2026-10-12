@@ -18,7 +18,7 @@ use crate::compiler::{Compilation, SourceDefinition};
 use crate::deployment::{BootBindings, DeploymentAttestation};
 use crate::journal::{Journal, MemJournal, Record};
 use crate::plan::{self, GraphVersion, SemanticHash, ValidatedExecutionPlan};
-use crate::runtime::vm::{Vm, VmError};
+use crate::runtime::vm::{Vm, VmFault};
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{Read as _, Write as _};
@@ -51,7 +51,7 @@ pub enum Error {
     /// Retained journal acceptance refusal.
     Journal(crate::journal::Error),
     /// Retained-state reconstruction refusal.
-    Recovery(VmError),
+    Recovery(VmFault),
     /// Pure Contract projection could not bind.
     Contract(String),
     /// Physical debugger startup or projection failure.

@@ -267,11 +267,11 @@ fn authenticated_boot(url: String) -> BootBindings {
 fn drive(vm: &mut Vm<'_>, journal: &mut MemJournal, world: &mut RuntimeBindings<'_>) {
     let mut settled = false;
     for _ in 0..250 {
-        vm.drain_with_bindings(journal, world)
+        vm.run_ready_with_bindings(journal, world)
             .expect("the authenticated graph drains");
         vm.pump(journal, world)
             .expect("the authenticated Driver pumps");
-        vm.drain_with_bindings(journal, world)
+        vm.run_ready_with_bindings(journal, world)
             .expect("the authenticated completion drains");
         if !vm.has_open_obligations() {
             settled = true;

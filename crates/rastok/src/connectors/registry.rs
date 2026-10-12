@@ -15,7 +15,7 @@ use crate::connector::{ConnectorExchange, ConnectorRoles, ContractId};
 use crate::envelope::{Data, Envelope};
 use crate::node;
 use crate::plan::ValidatedExecutionPlan;
-use crate::runtime::vm::{InboundCallPumpReport, Vm, VmError};
+use crate::runtime::vm::{InboundCallPumpReport, Vm, VmFault};
 use crate::{boundary::IngressAdmission, journal::Journal};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -232,7 +232,7 @@ pub enum InboundPumpError {
     /// The bound Driver registry contradicted its retained routing state.
     Driver(DriverRouteError),
     /// The VM or journal raised a fail-stop integrity fault.
-    Machine(VmError),
+    Machine(VmFault),
 }
 
 /// One bounded pass offering already-journaled graph responses to inbound
@@ -2466,7 +2466,7 @@ graph api : App {
         let report = bindings.pump_inbound_call_events(&mut vm).unwrap();
         assert_eq!(report.queued, 1);
         assert!(report.rejected.is_empty());
-        vm.drain_with_bindings(&mut journal, &mut bindings)
+        vm.run_ready_with_bindings(&mut journal, &mut bindings)
             .expect("start then reply commit in causal order");
         assert!(journal.open_inbound_calls().is_empty());
         let terminals = journal
@@ -2615,7 +2615,7 @@ graph api : App {
                 crate::journal::Record::Transaction(_) | crate::journal::Record::Egress(_) => None,
             })
             .expect("the accepted Call records its exact source instance");
-        vm.drain_with_bindings(&mut journal, &mut bindings)
+        vm.run_ready_with_bindings(&mut journal, &mut bindings)
             .expect("the graph response reaches the retained connector cursor");
         let response_target = journal
             .records()
@@ -2658,7 +2658,7 @@ graph api : App {
         let report = bindings.pump_inbound_call_events(&mut vm).unwrap();
         assert_eq!(report.queued, 1);
         assert!(report.rejected.is_empty());
-        vm.drain_with_bindings(&mut journal, &mut bindings)
+        vm.run_ready_with_bindings(&mut journal, &mut bindings)
             .expect("the observed protocol completion closes the original Call");
 
         let terminals = journal
@@ -2735,7 +2735,7 @@ graph api : App {
             bindings.pump_inbound_call_events(&mut vm).unwrap().queued,
             1
         );
-        vm.drain_with_bindings(&mut journal, &mut bindings)
+        vm.run_ready_with_bindings(&mut journal, &mut bindings)
             .expect("the accepted terminal and late graph response settle deterministically");
 
         let response_report = bindings.pump_inbound_call_responses(&mut vm).unwrap();
@@ -3000,10 +3000,12 @@ graph api : App {
         )
         .unwrap();
         for _ in 0..2 {
-            vm.drain_with_bindings(&mut journal, &mut bindings).unwrap();
+            vm.run_ready_with_bindings(&mut journal, &mut bindings)
+                .unwrap();
             vm.pump(&mut journal, &mut bindings).unwrap();
         }
-        vm.drain_with_bindings(&mut journal, &mut bindings).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut bindings)
+            .unwrap();
 
         assert_eq!(
             *starts.lock().unwrap(),

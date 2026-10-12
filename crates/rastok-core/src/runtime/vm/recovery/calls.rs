@@ -11,7 +11,7 @@ impl Vm<'_> {
         bindings: &mut dyn OutboundConnectorBindings,
         index: usize,
         record: &CallRecord,
-    ) -> Result<(), VmError> {
+    ) -> Result<(), VmFault> {
         let intent = &record.intent;
         let slot = self
             .plan
@@ -149,7 +149,7 @@ impl Vm<'_> {
                 let completion = bindings
                     .scheduler_completion(&intent.connector_path, terminal)
                     .map_err(crate::boundary::DispatchError::Driver)
-                    .map_err(VmError::Dispatch)?;
+                    .map_err(VmFault::Dispatch)?;
                 (
                     completion,
                     node::Trigger::Lifecycle(if record.status == CallStatus::Abandoned {
@@ -193,7 +193,7 @@ impl Vm<'_> {
         slot: Slot,
         record: &TransactionRecord,
         consumed: &ConsumedPosition,
-    ) -> Result<bool, VmError> {
+    ) -> Result<bool, VmFault> {
         let Some((call, pending)) = self
             .pending
             .iter()
@@ -214,7 +214,7 @@ impl Vm<'_> {
             .position(|entry| entry.event.call_id == call)
             .ok_or_else(|| invalid(index, "a Call transaction consumes an unsettled request"))?;
         let entry = &self.settled[settled];
-        let mut expected = HandlerExecutor::at(self.plan, self.graph_version, self.now)
+        let mut expected = TransactionPreparer::at(self.plan, self.graph_version, self.now)
             .connector_completion(
                 slot,
                 &pending.instance,
@@ -222,7 +222,7 @@ impl Vm<'_> {
                 &entry.trigger,
                 &entry.event.completion,
             )
-            .map_err(VmError::Fault)?;
+            .map_err(VmFault::Fault)?;
         if record.trigger != entry.trigger
             || record.consumed != expected.record.consumed
             || record.emissions != expected.record.emissions

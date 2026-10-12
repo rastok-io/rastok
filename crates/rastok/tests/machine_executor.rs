@@ -15,7 +15,7 @@ use rastok::node;
 
 use rastok::journal::ids;
 use rastok::plan::{GraphVersion, Slot, ValidatedExecutionPlan};
-use rastok::runtime::{Fault, HandlerExecutor, Mailboxes, State, meta_value};
+use rastok::runtime::{Fault, Mailboxes, State, TransactionPreparer, meta_value};
 use std::collections::BTreeMap;
 
 use rastok::compiler::compile;
@@ -118,7 +118,7 @@ fn an_identity_emission_inherits_everything_but_its_sys_fields() {
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
-    let executor = HandlerExecutor::new(&compilation.plan, GraphVersion(1));
+    let executor = TransactionPreparer::new(&compilation.plan, GraphVersion(1));
     let slot = Slot::new(0);
     let state = State::new()
         .cell(&compilation.plan, slot, &singleton())
@@ -224,7 +224,7 @@ fn the_meta_projection_carries_all_sys_fields() {
 #[test]
 fn the_activation_pattern_is_not_the_causal_trigger() {
     let (plan, slot) = probe();
-    let executor = HandlerExecutor::new(&plan, GraphVersion(1));
+    let executor = TransactionPreparer::new(&plan, GraphVersion(1));
     let state = State::new().cell(&plan, slot, &singleton()).unwrap();
     // A handler is *selected* by its declared activation pattern…
     let activation = node::HandlerActivation::Port(node::Port::new("in").unwrap());
@@ -294,7 +294,7 @@ fn metadata_writes_land_where_the_spec_says() {
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
-    let executor = HandlerExecutor::new(&compilation.plan, GraphVersion(1));
+    let executor = TransactionPreparer::new(&compilation.plan, GraphVersion(1));
     let slot = Slot::new(0);
     let state = State::new()
         .cell(&compilation.plan, slot, &singleton())
@@ -349,7 +349,7 @@ fn metadata_writes_land_where_the_spec_says() {
 #[test]
 fn a_transaction_commits_everything_together() {
     let (plan, slot) = probe();
-    let executor = HandlerExecutor::new(&plan, GraphVersion(1));
+    let executor = TransactionPreparer::new(&plan, GraphVersion(1));
     let state = State::new().cell(&plan, slot, &singleton()).unwrap();
     assert_eq!(state.get("count"), Some(&rastok::value::Value::Int(0)));
     let delivery = input("salut");
@@ -386,7 +386,7 @@ fn a_transaction_commits_everything_together() {
 #[test]
 fn execution_is_deterministic() {
     let (plan, slot) = probe();
-    let executor = HandlerExecutor::new(&plan, GraphVersion(1));
+    let executor = TransactionPreparer::new(&plan, GraphVersion(1));
     let state = State::new().cell(&plan, slot, &singleton()).unwrap();
     let delivery = input("salut");
     let once = executor
@@ -401,7 +401,7 @@ fn execution_is_deterministic() {
 #[test]
 fn a_false_guard_consumes_without_effect() {
     let (plan, slot) = probe();
-    let executor = HandlerExecutor::new(&plan, GraphVersion(1));
+    let executor = TransactionPreparer::new(&plan, GraphVersion(1));
     let state = State::new().cell(&plan, slot, &singleton()).unwrap();
     let outcome = executor
         .fire(slot, &singleton(), &input(""), &state)
@@ -418,7 +418,7 @@ fn a_false_guard_consumes_without_effect() {
 #[test]
 fn a_faulted_transaction_changes_nothing() {
     let (plan, slot) = probe();
-    let executor = HandlerExecutor::new(&plan, GraphVersion(1));
+    let executor = TransactionPreparer::new(&plan, GraphVersion(1));
     let state = State::new().cell(&plan, slot, &singleton()).unwrap();
     // Avro payloads cannot be materialized in this build: the
     // handler faults, and the caller applies nothing.
@@ -638,7 +638,7 @@ fn a_claimed_mailbox_is_skipped_until_released() {
 #[test]
 fn the_connector_completion_matches_the_reference_trace() {
     let (plan, _) = probe();
-    let executor = HandlerExecutor::new(&plan, GraphVersion(1));
+    let executor = TransactionPreparer::new(&plan, GraphVersion(1));
     let request = input("salut");
     let connector_path = node::Path::new(["echo"]).unwrap();
     let connector_slot = Slot::new(
@@ -708,7 +708,7 @@ fn the_connector_completion_matches_the_reference_trace() {
 #[test]
 fn a_connector_output_overlays_only_its_external_observations() {
     let (plan, _) = probe();
-    let executor = HandlerExecutor::new(&plan, GraphVersion(1));
+    let executor = TransactionPreparer::new(&plan, GraphVersion(1));
     let mut request = input("salut");
     let mut app = Namespace::new();
     app.insert(
@@ -795,7 +795,7 @@ fn a_caller_supplied_slot_is_verified_not_trusted() {
             .unwrap_err(),
         Fault::UnknownSlot(ghost)
     );
-    let executor = HandlerExecutor::new(&plan, GraphVersion(1));
+    let executor = TransactionPreparer::new(&plan, GraphVersion(1));
     assert_eq!(
         executor
             .fire(ghost, &singleton(), &input("salut"), &BTreeMap::new())

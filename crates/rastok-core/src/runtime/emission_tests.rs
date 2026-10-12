@@ -5,24 +5,24 @@ fn ports() -> Vec<node::Port> {
     vec![node::Port::new("z").unwrap(), node::Port::new("a").unwrap()]
 }
 
-fn emitted(number: i64) -> PlanEmission {
-    PlanEmission::Data(expr::Tree {
+fn emitted(number: i64) -> EmitValue {
+    EmitValue::Data(expr::Tree {
         root: expr::Expr::Literal(Value::Int(number)),
         ty: crate::datatype::DataType::INT,
     })
 }
 
-fn build(value: &PlanEmission) -> Result<Option<Built>, Fault> {
+fn build(value: &EmitValue) -> Result<Option<BuiltEmission>, Fault> {
     match value {
-        PlanEmission::Data(expr::Tree {
+        EmitValue::Data(expr::Tree {
             root: expr::Expr::Literal(value),
             ..
-        }) => Ok(Some(Built {
-            data: BuiltData::Value(value.clone()),
+        }) => Ok(Some(BuiltEmission {
+            data: BuiltPayload::Value(value.clone()),
             app: BTreeMap::new(),
             ext: BTreeMap::new(),
         })),
-        PlanEmission::Nothing => Ok(None),
+        EmitValue::Nothing => Ok(None),
         _ => Err(Fault::Unrepresentable(String::from(
             "test builder requires a literal",
         ))),
@@ -32,9 +32,9 @@ fn build(value: &PlanEmission) -> Result<Option<Built>, Fault> {
 fn capture(
     outputs: &mut Vec<(String, Value)>,
     port: &node::Port,
-    built: Built,
+    built: BuiltEmission,
 ) -> Result<(), Fault> {
-    let BuiltData::Value(value) = built.data else {
+    let BuiltPayload::Value(value) = built.data else {
         return Err(Fault::Unrepresentable(String::from(
             "test builder materializes literals",
         )));
@@ -70,7 +70,7 @@ fn broadcast_evaluates_once_and_creates_outputs_in_authored_order() {
 fn tuple_evaluates_each_value_once_in_order_and_keeps_nothing_absent() {
     for values in [
         vec![emitted(2), emitted(1)],
-        vec![PlanEmission::Nothing, emitted(1)],
+        vec![EmitValue::Nothing, emitted(1)],
     ] {
         let mut evaluated = Vec::new();
         let mut outputs = Vec::new();
@@ -90,7 +90,7 @@ fn tuple_evaluates_each_value_once_in_order_and_keeps_nothing_absent() {
         assert_eq!(outputs.last(), Some(&("a".into(), Value::Int(1))));
         assert_eq!(
             outputs.len(),
-            if matches!(values[0], PlanEmission::Nothing) {
+            if matches!(values[0], EmitValue::Nothing) {
                 1
             } else {
                 2

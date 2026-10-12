@@ -191,7 +191,7 @@ fn the_machine_verifies_the_ingress_port() {
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::{Vm, VmError};
+    use rastok::runtime::vm::{Vm, VmFault};
 
     let compilation = compile(
         &[MERGER_GRAPH],
@@ -211,11 +211,11 @@ fn the_machine_verifies_the_ingress_port() {
     };
     assert!(matches!(
         vm.inject(&mut journal, submission("out")).unwrap_err(),
-        VmError::UnknownIngress(port) if port.name() == "out"
+        VmFault::UnknownIngress(port) if port.name() == "out"
     ));
     assert!(matches!(
         vm.inject(&mut journal, submission("ghost")).unwrap_err(),
-        VmError::UnknownIngress(port) if port.name() == "ghost"
+        VmFault::UnknownIngress(port) if port.name() == "ghost"
     ));
     // The declared input accepts.
     vm.inject(&mut journal, submission("alpha"))
@@ -802,7 +802,7 @@ fn the_braced_record_is_physically_a_struct() {
         },
     )
     .expect("the injection lands");
-    vm.drain(&mut journal).expect("the drain completes");
+    vm.run_ready(&mut journal).expect("the drain completes");
     let output = &vm.outputs()[0];
     let Data::Materialized(Value::Struct(fields)) = output.envelope.data() else {
         panic!("a STRUCT, not a map: {:?}", output.envelope.data());
@@ -918,7 +918,7 @@ fn an_empty_brace_is_an_empty_record() {
         },
     )
     .expect("the injection lands");
-    vm.drain(&mut journal).expect("the drain completes");
+    vm.run_ready(&mut journal).expect("the drain completes");
     assert_eq!(
         vm.outputs()[0].envelope.data(),
         &Data::materialized(Value::Struct(Vec::new())),
@@ -961,7 +961,7 @@ fn a_whole_data_write_is_the_payload_itself() {
         },
     )
     .expect("the injection lands");
-    vm.drain(&mut journal).expect("the drain completes");
+    vm.run_ready(&mut journal).expect("the drain completes");
     assert_eq!(
         vm.outputs()[0].envelope.data(),
         &Data::materialized(Value::Int(1)),
@@ -1076,7 +1076,7 @@ fn identity_re_emits_the_materialized_envelope_whole() {
         },
     )
     .expect("the injection lands");
-    vm.drain(&mut journal).expect("the drain completes");
+    vm.run_ready(&mut journal).expect("the drain completes");
     let output = &vm.outputs()[0];
     assert_eq!(
         output.envelope.data(),
@@ -1131,7 +1131,7 @@ fn an_empty_nested_record_is_a_value_not_an_absence() {
             },
         )
         .expect("the injection lands");
-        vm.drain(&mut journal).expect("the drain completes");
+        vm.run_ready(&mut journal).expect("the drain completes");
         vm.outputs()[0].envelope.data().clone()
     };
     let empty = || Value::Struct(Vec::new());
@@ -1368,7 +1368,7 @@ fn boundary_outputs_carry_their_port() {
         },
     )
     .expect("the injection lands");
-    vm.drain(&mut journal).expect("the drain completes");
+    vm.run_ready(&mut journal).expect("the drain completes");
     let ports: Vec<&str> = vm
         .outputs()
         .iter()
@@ -1858,7 +1858,7 @@ fn the_bare_data_relay_preserves_the_logical_type() {
             },
         )
         .expect("the injection lands");
-        vm.drain(&mut journal).expect("the drain completes");
+        vm.run_ready(&mut journal).expect("the drain completes");
         vm.outputs()[0].envelope.data().clone()
     };
     // Struct in, Struct out — tag 15 stays tag 15.
@@ -1887,7 +1887,7 @@ fn an_ingress_pin_violation_is_a_named_error() {
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::{Vm, VmError};
+    use rastok::runtime::vm::{Vm, VmFault};
 
     let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  alpha -> o.a\n  o -> out\n}\n";
     let compilation = compile(
@@ -1919,7 +1919,7 @@ fn an_ingress_pin_violation_is_a_named_error() {
     // itself; a fan-out destination names itself instead).
     assert!(matches!(
         error,
-        VmError::IngressPinViolation { ingress, rejected_at, .. }
+        VmFault::IngressPinViolation { ingress, rejected_at, .. }
             if ingress.name() == "alpha"
                 && rejected_at.node.is_none()
                 && rejected_at.port.name() == "alpha"
@@ -2122,7 +2122,7 @@ fn the_struct_witness_survives_every_equivalent_spelling() {
             },
         )
         .expect("the injection lands");
-        vm.drain(&mut journal).expect("the drain completes");
+        vm.run_ready(&mut journal).expect("the drain completes");
         vm.outputs()[0].envelope.data().clone()
     };
     let a_struct = || Value::Struct(vec![(String::from("field"), Value::Int(7))]);
@@ -2238,7 +2238,7 @@ fn an_encoded_bare_relay_passes_the_representation_through() {
         },
     )
     .expect("the injection lands");
-    vm.drain(&mut journal).expect("an Avro RELAY works");
+    vm.run_ready(&mut journal).expect("an Avro RELAY works");
     let output = &vm.outputs()[0];
     assert!(
         matches!(
@@ -2391,7 +2391,7 @@ fn data_materializes_only_on_demand() {
             },
         )
         .expect("the injection lands");
-        let result = vm.drain(&mut journal);
+        let result = vm.run_ready(&mut journal);
         (
             result,
             vm.outputs().to_vec(),
@@ -2479,7 +2479,7 @@ fn short_circuits_never_demand_the_data() {
             },
         )
         .expect("the injection lands");
-        let result = vm.drain(&mut journal);
+        let result = vm.run_ready(&mut journal);
         (
             result,
             vm.outputs().to_vec(),
@@ -2522,7 +2522,7 @@ fn short_circuits_never_demand_the_data() {
         "graph g : App {\n  input in: variant\n  operator o {\n    on in where true && (data as bool) { out = . }\n  }\n  in -> o -> out\n}\n",
     );
     assert!(
-        matches!(result, Err(rastok::runtime::vm::VmError::Fault(_))),
+        matches!(result, Err(rastok::runtime::vm::VmFault::Fault(_))),
         "a real read reaches supervision"
     );
     assert_eq!(
@@ -2581,7 +2581,8 @@ fn the_carry_is_as_lazy_as_the_name() {
             },
         )
         .expect("the injection lands");
-        vm.drain(&mut journal).expect("no forced materialization");
+        vm.run_ready(&mut journal)
+            .expect("no forced materialization");
         assert_eq!(
             vm.observations()
                 .iter()
@@ -2673,7 +2674,7 @@ fn an_inspection_then_identity_ships_the_filled_cell() {
         },
     )
     .expect("the injection lands");
-    vm.drain(&mut journal).expect("the drain completes");
+    vm.run_ready(&mut journal).expect("the drain completes");
     let output = &vm.outputs()[0];
     match output.envelope.data() {
         Data::Encoded { bytes, .. } => {
@@ -2791,7 +2792,7 @@ fn the_conformance_judgement_is_matchable() {
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::{Vm, VmError};
+    use rastok::runtime::vm::{Vm, VmFault};
     use rastok_core::runtime::{ConformanceReason, ValueKind};
 
     let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  alpha -> o.a\n  o -> out\n}\n";
@@ -2817,7 +2818,7 @@ fn the_conformance_judgement_is_matchable() {
         .unwrap_err();
     assert!(matches!(
         error,
-        VmError::IngressPinViolation { violation, .. }
+        VmFault::IngressPinViolation { violation, .. }
             if violation.expected == rastok::datatype::DataType::INT
                 && violation.found == ValueKind::Text
                 && violation.reason == ConformanceReason::TypeMismatch
@@ -2827,7 +2828,7 @@ fn the_conformance_judgement_is_matchable() {
         .unwrap_err();
     assert!(matches!(
         error,
-        VmError::IngressPinViolation { violation, .. }
+        VmFault::IngressPinViolation { violation, .. }
             if matches!(
                 violation.reason,
                 ConformanceReason::SignedIntegerOutOfRange { value, bits: 32 }

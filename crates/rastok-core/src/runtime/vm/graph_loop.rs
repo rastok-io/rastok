@@ -47,7 +47,7 @@ impl Vm<'_> {
         }
     }
 
-    fn endpoint_owner(&self, endpoint: &Endpoint) -> Result<node::OwnerSlot, VmError> {
+    fn endpoint_owner(&self, endpoint: &Endpoint) -> Result<node::OwnerSlot, VmFault> {
         let path = match &endpoint.owner {
             EndpointOwner::Node(path) => node::OwnerPath::from(path),
             EndpointOwner::Graph(path) => path.clone(),
@@ -60,7 +60,7 @@ impl Vm<'_> {
             .ok_or_else(|| graph_error(&path, "a routed endpoint lost its declared owner"))
     }
 
-    fn endpoint_ref(&self, endpoint: &Endpoint) -> Result<EdgeEnd, VmError> {
+    fn endpoint_ref(&self, endpoint: &Endpoint) -> Result<EdgeEnd, VmFault> {
         let node = match &endpoint.owner {
             EndpointOwner::Graph(_) => None,
             EndpointOwner::Node(path) => Some(
@@ -104,7 +104,7 @@ impl Vm<'_> {
         &self,
         source: &Endpoint,
         envelope: &Envelope,
-    ) -> Result<Selection, VmError> {
+    ) -> Result<Selection, VmFault> {
         let mut selected = Selection {
             destinations: BTreeSet::new(),
             commands: Vec::new(),
@@ -133,7 +133,7 @@ impl Vm<'_> {
                         if value.is_none() {
                             value = Some(
                                 crate::runtime::data_value(envelope.data())
-                                    .map_err(VmError::Fault)?,
+                                    .map_err(VmFault::Fault)?,
                             );
                         }
                         rule.selection
@@ -198,7 +198,7 @@ impl Vm<'_> {
         &self,
         source: &Endpoint,
         envelope: &Envelope,
-    ) -> Result<Vec<crate::plan::InstanceStopTarget>, VmError> {
+    ) -> Result<Vec<crate::plan::InstanceStopTarget>, VmFault> {
         Ok(self.select_graph_routes(source, envelope)?.instance_stops)
     }
 
@@ -210,7 +210,7 @@ impl Vm<'_> {
         envelope: &Envelope,
         candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
         expand_entry: bool,
-    ) -> Result<Vec<PreparedEdge>, VmError> {
+    ) -> Result<Vec<PreparedEdge>, VmFault> {
         let destinations =
             if !expand_entry && source_instance.is_none() && self.graph_entry(source).is_some() {
                 BTreeSet::from([source.clone()])
@@ -455,7 +455,7 @@ impl Vm<'_> {
         }
     }
 
-    pub(super) fn open_graph_loop(&mut self, journal: &mut dyn Journal) -> Result<bool, VmError> {
+    pub(super) fn open_graph_loop(&mut self, journal: &mut dyn Journal) -> Result<bool, VmFault> {
         let next = self.next_graph_admission().cloned();
         let Some(admission) = next else {
             return Ok(false);
@@ -504,7 +504,7 @@ impl Vm<'_> {
                 ..Packet::default()
             },
         );
-        journal.commit(record).map_err(VmError::Journal)?;
+        journal.commit(record).map_err(VmFault::Journal)?;
         self.refresh_loop_manager(journal)?;
         Ok(true)
     }
@@ -567,7 +567,7 @@ impl Vm<'_> {
         run: LoopRunId,
         current: &protocol::RunState,
         envelope: Envelope,
-    ) -> Result<bool, VmError> {
+    ) -> Result<bool, VmFault> {
         let source = Endpoint {
             owner: EndpointOwner::Graph(self.plan.owners[owner.index()].path.clone()),
             port: current.entry.clone(),
@@ -582,7 +582,7 @@ impl Vm<'_> {
             true,
         )?;
         match self.check_room_for_routes(core::iter::once(routes.as_slice())) {
-            Err(VmError::MailboxFull { .. } | VmError::RecurrenceQueueFull { .. }) => {
+            Err(VmFault::MailboxFull { .. } | VmFault::RecurrenceQueueFull { .. }) => {
                 return Ok(false);
             }
             result => result?,
@@ -650,7 +650,7 @@ impl Vm<'_> {
             &mut record,
             self.route_deadlines(&routes, &candidates, &envelope),
         )?;
-        journal.commit(record).map_err(VmError::Journal)?;
+        journal.commit(record).map_err(VmFault::Journal)?;
         if let Some(graph) = self.graph_loops.as_deref_mut() {
             if let Some(opening) = opening {
                 graph.admissions.remove(&opening);
@@ -722,7 +722,7 @@ impl Vm<'_> {
     pub(super) fn retain_graph_verdicts(
         &self,
         record: &mut crate::journal::TransactionRecord,
-    ) -> Result<(), VmError> {
+    ) -> Result<(), VmFault> {
         if self.graph_loops.is_none() {
             return Ok(());
         }
@@ -769,7 +769,7 @@ impl Vm<'_> {
         &self,
         context: &[LoopRunId],
         sources: impl IntoIterator<Item = (Endpoint, &'e Envelope)>,
-    ) -> Result<Vec<protocol::CommandProduced>, VmError> {
+    ) -> Result<Vec<protocol::CommandProduced>, VmFault> {
         let mut produced = Vec::new();
         let mut terminals = BTreeMap::new();
         for (source, envelope) in sources {
@@ -844,7 +844,7 @@ impl Vm<'_> {
         &self,
         run: LoopRunId,
         current: &protocol::RunState,
-    ) -> Result<Option<crate::journal::TransactionRecord>, VmError> {
+    ) -> Result<Option<crate::journal::TransactionRecord>, VmFault> {
         if current.phase != protocol::Phase::Active
             || current.pending.is_some()
             || !self
@@ -926,7 +926,7 @@ impl Vm<'_> {
         owner: node::OwnerSlot,
         instance: &instance::Generation,
         record: &crate::journal::TransactionRecord,
-    ) -> Result<PreparedEmissions, VmError> {
+    ) -> Result<PreparedEmissions, VmFault> {
         let mut candidates = BTreeMap::new();
         let mut emissions = Vec::new();
         let mut commands = Vec::new();
@@ -1008,8 +1008,8 @@ impl Vm<'_> {
         owner: node::OwnerSlot,
         record: &crate::journal::TransactionRecord,
         resume_at: i64,
-    ) -> Result<(), VmError> {
-        let invalid = |reason| VmError::InvalidRecovery {
+    ) -> Result<(), VmFault> {
+        let invalid = |reason| VmFault::InvalidRecovery {
             record: index,
             reason,
         };
@@ -1341,8 +1341,8 @@ fn endpoint_text(endpoint: &Endpoint) -> String {
     }
 }
 
-fn graph_error(owner: &node::OwnerPath, reason: &'static str) -> VmError {
-    VmError::InvalidLoopDecision {
+fn graph_error(owner: &node::OwnerPath, reason: &'static str) -> VmFault {
+    VmFault::InvalidLoopDecision {
         owner: owner.clone(),
         reason,
     }

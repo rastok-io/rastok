@@ -1982,7 +1982,7 @@ graph api : App {
         assert!(report.discarded.is_empty());
         assert!(report.uncorrelated.is_empty());
         assert!(report.rejected.is_empty());
-        vm.drain(journal)
+        vm.run_ready(journal)
             .expect("the request and its terminal exit commit");
         assert!(journal.open_inbound_calls().is_empty());
         assert_eq!(
@@ -2195,7 +2195,7 @@ graph api : App {
         server.decide(proposal.reference, IngressDecision::Accepted(accepted));
         assert_eq!(response.try_recv(), Err(TryRecvError::Empty));
 
-        vm.drain(&mut journal)
+        vm.run_ready(&mut journal)
             .expect("the graph produces its response");
         let ready = vm.ready_inbound_call_responses();
         let [ready] = ready.as_slice() else {
@@ -2220,7 +2220,7 @@ graph api : App {
         let terminal = wait_for_terminal(&mut server);
         assert_eq!(terminal.call_id, call_id);
         assert_eq!(vm.queue_inbound_call_events([terminal]).queued, 1);
-        vm.drain(&mut journal)
+        vm.run_ready(&mut journal)
             .expect("the one response cursor and Call terminal commit");
         assert!(journal.open_inbound_calls().is_empty());
     }
@@ -2284,7 +2284,7 @@ graph api : App {
         let terminal = wait_for_terminal(&mut server);
         assert_eq!(terminal.call_id, call_id);
         assert_eq!(vm.queue_inbound_call_events([terminal]).queued, 1);
-        vm.drain(&mut journal)
+        vm.run_ready(&mut journal)
             .expect("the timeout closes the retained response cursor once");
         assert!(journal.open_inbound_calls().is_empty());
     }
@@ -2325,7 +2325,7 @@ graph api : App {
             panic!("the HTTP/3 request must be admitted")
         };
         server.decide(proposal.reference, IngressDecision::Accepted(accepted));
-        vm.drain(&mut journal)
+        vm.run_ready(&mut journal)
             .expect("the graph produces the HTTP/3 response");
         let ready = vm.ready_inbound_call_responses();
         let [ready] = ready.as_slice() else {
@@ -2346,7 +2346,7 @@ graph api : App {
         );
         let terminal = wait_for_terminal(&mut server);
         assert_eq!(vm.queue_inbound_call_events([terminal]).queued, 1);
-        vm.drain(&mut journal)
+        vm.run_ready(&mut journal)
             .expect("the HTTP/3 Call closes exactly once");
         assert!(journal.open_inbound_calls().is_empty());
     }
@@ -2428,7 +2428,7 @@ graph api : App {
         );
         let first_terminal = wait_for_terminal(&mut server);
         assert_eq!(vm.queue_inbound_call_events([first_terminal]).queued, 1);
-        vm.drain(&mut journal).expect("the first Call settles");
+        vm.run_ready(&mut journal).expect("the first Call settles");
 
         admit_and_close(
             &mut server,
@@ -2503,7 +2503,7 @@ graph api : App {
             "the second proposal remains retained"
         );
         assert_eq!(vm.queue_inbound_call_events([terminal]).queued, 1);
-        vm.drain(&mut journal).expect("the first Call settles");
+        vm.run_ready(&mut journal).expect("the first Call settles");
 
         let second_reference = server
             .pending

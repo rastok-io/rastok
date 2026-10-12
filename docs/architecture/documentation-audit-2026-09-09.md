@@ -86,7 +86,7 @@ References:
   expiry special case, but not the timed join's runtime expiry producer.
 - [`may_produce`](../../crates/rastok-core/src/plan/productibility.rs) mirrors
   that omission at the independent package gate.
-- [`HandlerExecutor::join_expired`](../../crates/rastok-core/src/runtime.rs)
+- [`TransactionPreparer::join_expired`](../../crates/rastok-core/src/runtime.rs)
   actually constructs `JoinExpired`; [`Vm::evict_join_delivery`](../../crates/rastok-core/src/runtime/vm.rs)
   journals and routes that emission.
 

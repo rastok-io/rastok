@@ -42,7 +42,7 @@ fn emitted(body: &str) -> rastok::envelope::Data {
         },
     )
     .expect("the injection lands");
-    vm.drain(&mut journal).expect("the drain completes");
+    vm.run_ready(&mut journal).expect("the drain completes");
     vm.outputs()[0].envelope.data().clone()
 }
 
@@ -144,7 +144,7 @@ fn base64_with_a_content_type_is_whole_payload() {
         },
     )
     .expect("the injection lands");
-    vm.drain(&mut journal).expect("the drain completes");
+    vm.run_ready(&mut journal).expect("the drain completes");
     let output = &vm.outputs()[0];
     assert_eq!(
         output.envelope.data(),
@@ -420,7 +420,7 @@ fn an_asset_emission_runs_and_carries_its_type() {
         },
     )
     .expect("the injection lands");
-    vm.drain(&mut journal).expect("the drain completes");
+    vm.run_ready(&mut journal).expect("the drain completes");
     let output = &vm.outputs()[0];
     assert_eq!(
         output.envelope.data(),
@@ -593,7 +593,8 @@ fn the_carry_survives_a_dead_earlier_write() {
         },
     )
     .expect("the injection lands");
-    vm.drain(&mut journal).expect("no forced materialization");
+    vm.run_ready(&mut journal)
+        .expect("no forced materialization");
     let output = &vm.outputs()[0];
     assert!(
         matches!(
@@ -985,7 +986,7 @@ fn asset_order_is_digest_canonical() {
 #[test]
 fn nested_dispatch_arms_follow_the_canonical_asset_remap() {
     use rastok::compiler::compile_with_assets;
-    use rastok::plan::{DispatchStep, Emission};
+    use rastok::plan::{DispatchStep, EmitValue};
     use std::io::Write;
 
     let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("dispatch-asset-order");
@@ -1045,7 +1046,7 @@ graph app : App {{
         .flat_map(|handler| handler.dispatch.steps())
         .filter_map(|step| {
             let DispatchStep::Emit {
-                value: Emission::Data(tree),
+                value: EmitValue::Data(tree),
                 ..
             } = step
             else {
@@ -1273,7 +1274,7 @@ fn a_decimal_meta_value_round_trips_through_a_copy() {
         },
     )
     .expect("the injection lands");
-    vm.drain(&mut journal).expect("the copy converts");
+    vm.run_ready(&mut journal).expect("the copy converts");
     assert_eq!(
         vm.outputs()[0].envelope.meta().app().get("price"),
         Some(&MetaValue::Scalar(Scalar::Decimal {

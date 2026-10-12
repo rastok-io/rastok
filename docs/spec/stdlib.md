@@ -745,7 +745,7 @@ tested against CEL, but CEL owns neither Rastok payload types nor the full
 language. Expressions are not a guest module. A
 tagged frontend carries source in a **guest language** — for example
 `jq! { }` and `sql! { }` — which the build
-turns into a versioned **`GuestProgram`**. A **`GuestExecutor`** executes a
+turns into a versioned **`GuestProgram`**. A **`GuestRunner`** executes a
 pure `GuestProgram` inside the enclosing Operator's node transaction. A pure
 guest exists only by signing these six clauses:
 

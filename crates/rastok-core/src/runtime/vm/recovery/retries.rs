@@ -11,7 +11,7 @@ impl Vm<'_> {
         &mut self,
         index: usize,
         record: &TransactionRecord,
-    ) -> Result<(), VmError> {
+    ) -> Result<(), VmFault> {
         let instance = self
             .instances
             .get(&record.instance)

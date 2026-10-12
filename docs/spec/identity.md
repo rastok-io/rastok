@@ -41,7 +41,7 @@ port tables, Connector `ContractId` values and required roles, attributes,
 annotations, `variant` clauses ; `var` defaults
 (the recovery fold reads them) ; guest-language block bodies (opaque — raw bytes
 after common-indentation stripping) and the pinned guest language,
-frontend/compiler/lowering profile, ABI and `GuestExecutor` identities.
+frontend/compiler/lowering profile, ABI and `GuestRunner` identities.
 
 Rules :
 

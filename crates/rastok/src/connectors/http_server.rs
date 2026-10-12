@@ -514,7 +514,8 @@ mod lab_tests {
             0,
             "one ACK only"
         );
-        vm.drain_with_bindings(&mut journal, &mut bindings).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut bindings)
+            .unwrap();
         assert!(journal.open_inbound_calls().is_empty());
         assert!(input.borrow_mut().take_fault().is_none());
     }
@@ -571,7 +572,8 @@ mod lab_tests {
                 .offer(submission(Value::Text("replacement".into())), 9999)
                 .is_err()
         );
-        vm.drain_with_bindings(&mut journal, &mut bindings).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut bindings)
+            .unwrap();
         assert!(matches!(
             bindings.pump_inbound(&mut vm, &mut journal).unwrap(),
             Some(IngressAdmission::Accepted(_))

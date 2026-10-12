@@ -7,7 +7,7 @@
 
 use crate::envelope::WriteTarget;
 use crate::expr::{self, BinaryOp, Expr};
-use crate::plan::{Dispatch, DispatchStep, Emission, LoopCommand};
+use crate::plan::{Dispatch, DispatchStep, EmitValue, LoopCommand};
 use crate::value::Value;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -221,15 +221,15 @@ fn is_true(tree: &expr::Tree) -> bool {
         && tree.ty == crate::datatype::DataType::Bool
 }
 
-fn measured_update<'a>(emission: &'a Emission, measure: &[String]) -> Option<&'a Expr> {
+fn measured_update<'a>(emission: &'a EmitValue, measure: &[String]) -> Option<&'a Expr> {
     match emission {
-        Emission::Data(tree) => {
+        EmitValue::Data(tree) => {
             let (root, field_path) = measure.split_first()?;
             (root == "data")
                 .then(|| expression_field(&tree.root, field_path))
                 .flatten()
         }
-        Emission::Patch(fields) | Emission::FreshData(fields) => {
+        EmitValue::Patch(fields) | EmitValue::FreshData(fields) => {
             let (root, field_path) = measure.split_first()?;
             if root != "data" || field_path.is_empty() {
                 return None;
@@ -250,7 +250,7 @@ fn measured_update<'a>(emission: &'a Emission, measure: &[String]) -> Option<&'a
             }
             selected
         }
-        Emission::Identity | Emission::Nothing => None,
+        EmitValue::Identity | EmitValue::Nothing => None,
     }
 }
 
@@ -366,7 +366,7 @@ mod tests {
         expr::Tree { root, ty }
     }
 
-    fn guarded(guard: Expr, update: Emission) -> Dispatch {
+    fn guarded(guard: Expr, update: EmitValue) -> Dispatch {
         Dispatch::OpenMatch {
             prefix: vec![],
             arms: vec![OpenArm {
@@ -384,7 +384,7 @@ mod tests {
     fn recurrent(guard: Expr, after: Expr) -> Dispatch {
         guarded(
             guard,
-            Emission::FreshData(vec![FieldWrite {
+            EmitValue::FreshData(vec![FieldWrite {
                 target: WriteTarget::Data(vec![String::from("n")]),
                 value: tree(after, DataType::INT),
             }]),
@@ -459,7 +459,7 @@ mod tests {
             target: WriteTarget::Data(vec![String::from("n")]),
             value: tree(root, DataType::INT),
         };
-        let dispatch = |writes| guarded(positive_guard(), Emission::FreshData(writes));
+        let dispatch = |writes| guarded(positive_guard(), EmitValue::FreshData(writes));
         assert_eq!(
             derive_dispatch(
                 certificate(vec![]).measure,

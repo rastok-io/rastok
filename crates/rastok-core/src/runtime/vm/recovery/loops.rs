@@ -13,7 +13,7 @@ impl Vm<'_> {
         slot: Slot,
         record: &TransactionRecord,
         resume_at: i64,
-    ) -> Result<(), VmError> {
+    ) -> Result<(), VmFault> {
         let packet = record
             .loop_protocol()
             .ok_or_else(|| invalid(index, "a manager transition has no protocol"))?;

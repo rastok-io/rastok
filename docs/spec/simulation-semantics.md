@@ -417,7 +417,7 @@ Byte-identical **iff** :
 2. same scenario text (the fixture is the world-half, by construction) ;
 3. same normative schema revision (the `meta.sys` Avro schema is
    specification-owned) ;
-4. same guest-language, compiler/lowering-profile and `GuestExecutor` versions
+4. same guest-language, compiler/lowering-profile and `GuestRunner` versions
    (jq / SQL pinned in the manifest) ;
 5. **the fingerprint covers the CAUSAL CORE only** — `committed_at` and
    scheduler creation/due instants are observation annotations, journaled when

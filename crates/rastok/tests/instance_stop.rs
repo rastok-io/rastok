@@ -77,7 +77,7 @@ fn closure_commits_its_request_before_the_exact_target_closes() {
         let mut vm = Vm::boot(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         inject(&mut vm, &mut journal, rastok::envelope::Value::Int(1));
-        vm.drain(&mut journal).unwrap();
+        vm.run_ready(&mut journal).unwrap();
         let produced = journal.records().iter().position(|record| matches!(record, Record::Transaction(record) if record.instance_commands.as_ref().is_some_and(|packet| !packet.produced.is_empty()))).unwrap();
         let closing = journal.records().iter().position(|record| matches!(record, Record::Transaction(record) if record.instance_commands.as_ref().is_some_and(|packet| packet.consumed.is_some()))).unwrap();
         assert!(produced < closing);
@@ -94,7 +94,7 @@ fn closure_commits_its_request_before_the_exact_target_closes() {
             let mut recovered = Vm::boot(&plan, GraphVersion(1));
             recovered.recover_from_journal(&recovered_journal).unwrap();
             assert_eq!(recovered_journal.records(), &journal.records()[..prefix]);
-            recovered.drain(&mut recovered_journal).unwrap();
+            recovered.run_ready(&mut recovered_journal).unwrap();
             assert_eq!(recovered_journal.records(), journal.records());
         }
     }
@@ -144,7 +144,7 @@ fn inject_at(
     journal: &mut rastok::journal::MemJournal,
     port: &str,
     value: rastok::envelope::Value,
-) -> Result<rastok::envelope::Id, rastok::runtime::vm::VmError> {
+) -> Result<rastok::envelope::Id, rastok::runtime::vm::VmFault> {
     use rastok::boundary::{
         Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
     };
@@ -236,7 +236,7 @@ fn child_and_graph_closure_preserve_the_other_tenant_and_survive_every_prefix() 
                 ("action".into(), Value::Text(action.into())),
             ]),
         );
-        vm.drain(&mut journal).unwrap();
+        vm.run_ready(&mut journal).unwrap();
     }
     let counts: Vec<_> = vm
         .outputs()
@@ -291,7 +291,7 @@ fn an_unopened_child_refuses_without_creating_it_or_committing_the_producer() {
             ("action".into(), Value::Text("child".into())),
         ]),
     );
-    let error = vm.drain(&mut journal).unwrap_err();
+    let error = vm.run_ready(&mut journal).unwrap_err();
     assert!(error.to_string().contains("never opened"), "{error}");
     let records = journal.records().to_vec();
     assert_eq!(vm.step(&mut journal).unwrap_err(), error);
@@ -309,7 +309,7 @@ fn command_saturation_refuses_the_entire_inbound_fanout_before_commit() {
     use rastok::envelope::Value;
     use rastok::journal::{Journal, MemJournal};
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::{Vm, VmError};
+    use rastok::runtime::vm::{Vm, VmFault};
     let compiled = compile(
         r#"graph app : App {
       input in: int
@@ -324,7 +324,7 @@ fn command_saturation_refuses_the_entire_inbound_fanout_before_commit() {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compiled.plan, GraphVersion(1));
     inject(&mut vm, &mut journal, Value::Int(0));
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     let capacity = vm.inspection().mailbox_capacity;
     for _ in 0..capacity {
         inject_at(&mut vm, &mut journal, "close", Value::Int(1)).unwrap();
@@ -332,11 +332,11 @@ fn command_saturation_refuses_the_entire_inbound_fanout_before_commit() {
     let before = journal.records().len();
     assert_eq!(
         inject_at(&mut vm, &mut journal, "close", Value::Int(1)),
-        Err(VmError::InstanceCommandQueueFull)
+        Err(VmFault::InstanceCommandQueueFull)
     );
     assert_eq!(journal.records().len(), before);
     assert_eq!(vm.outputs().len(), capacity);
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert!(journal.instance_commands().unwrap().commands().all(
         |(_, disposition)| disposition != rastok::journal::instance_stop::Disposition::Pending
     ));
@@ -362,10 +362,10 @@ fn independent_pending_targets_are_each_closed_once() {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compiled.plan, GraphVersion(1));
     inject(&mut vm, &mut journal, Value::Int(0));
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     inject_at(&mut vm, &mut journal, "close", Value::Int(1)).unwrap();
     let produced = journal.records().len();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert_eq!(
         journal
             .instance_commands()
@@ -379,7 +379,7 @@ fn independent_pending_targets_are_each_closed_once() {
         MemJournal::from_records(GraphVersion(1), None, &journal.records()[..produced]).unwrap();
     let mut recovered = Vm::boot(&compiled.plan, GraphVersion(1));
     recovered.recover_from_journal(&retained).unwrap();
-    recovered.drain(&mut retained).unwrap();
+    recovered.run_ready(&mut retained).unwrap();
     assert_eq!(retained.records(), journal.records());
 }
 
@@ -405,7 +405,7 @@ fn an_ordinary_full_destination_prevents_the_closure_request_too() {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compiled.plan, GraphVersion(1));
     inject(&mut vm, &mut journal, Value::Int(0));
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     for _ in 0..vm.inspection().mailbox_capacity {
         inject_at(&mut vm, &mut journal, "fill", Value::Int(1)).unwrap();
     }
@@ -425,7 +425,7 @@ fn recovery_requires_the_command_in_the_validated_plan() {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&authorized.plan, GraphVersion(1));
     inject(&mut vm, &mut journal, rastok::envelope::Value::Int(1));
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     let mut recovered = Vm::boot(&ordinary.plan, GraphVersion(1));
     let error = recovered.recover_from_journal(&journal).unwrap_err();
     assert!(
@@ -449,7 +449,7 @@ fn recovery_rederives_command_presence_and_target_from_the_plan() {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compiled.plan, GraphVersion(1));
     inject(&mut vm, &mut journal, rastok::envelope::Value::Int(1));
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     let producer = journal.records().iter().position(|record| matches!(record, Record::Transaction(record) if record.instance_commands.as_ref().is_some_and(|packet| !packet.produced.is_empty()))).unwrap();
     for missing in [true, false] {
         let mut records = journal.records()[..=producer].to_vec();
@@ -627,14 +627,14 @@ fn a_loop_scope_can_be_stopped_without_a_port_or_a_loop_verdict_command() {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compiled.plan, GraphVersion(1));
     inject(&mut vm, &mut journal, rastok::envelope::Value::Int(1));
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert!(journal.records().iter().any(|record| matches!(record, Record::Transaction(record) if record.loop_protocol().is_some_and(|packet| packet.facts.iter().any(|fact| matches!(fact, Fact::Close { reason: CloseReason::Stopped, .. }))))));
     for through in 0..=journal.records().len() {
         let mut retained =
             MemJournal::from_records(GraphVersion(1), None, &journal.records()[..through]).unwrap();
         let mut vm = Vm::boot(&compiled.plan, GraphVersion(1));
         vm.recover_from_journal(&retained).unwrap();
-        vm.drain(&mut retained).unwrap();
+        vm.run_ready(&mut retained).unwrap();
         if through > 0 {
             assert_eq!(retained.records(), journal.records());
         }

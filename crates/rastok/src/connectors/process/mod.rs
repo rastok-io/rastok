@@ -1230,9 +1230,11 @@ graph real : App {
         vm.inject(&mut journal, submission).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         loop {
-            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+            vm.run_ready_with_bindings(&mut journal, &mut world)
+                .unwrap();
             let report = vm.pump(&mut journal, &mut world).unwrap();
-            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+            vm.run_ready_with_bindings(&mut journal, &mut world)
+                .unwrap();
             if vm.is_stable() {
                 break;
             }

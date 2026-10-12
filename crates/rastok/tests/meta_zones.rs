@@ -331,7 +331,7 @@ fn content_type_follows_the_payload_not_the_merge() {
             },
         )
         .expect("the injection lands");
-        vm.drain(&mut journal).expect("the drain completes");
+        vm.run_ready(&mut journal).expect("the drain completes");
         vm.outputs()[0]
             .envelope
             .meta()

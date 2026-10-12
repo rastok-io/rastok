@@ -108,7 +108,7 @@ fn two_graph_loop_admissions_with_one_origin_open_distinct_runs() {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));
     inject(&mut vm, &mut journal, 1);
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert_eq!(vm.outputs().len(), 2);
     assert_eq!(
         vm.outputs()[0].envelope.meta().sys().origin_id(),
@@ -155,7 +155,7 @@ fn graph_admissions_consume_each_edge_in_delivery_order() {
     for _ in 0..12 {
         inject(&mut vm, &mut journal, 0);
     }
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     let consumed: Vec<_> = journal
         .records()
         .iter()
@@ -185,7 +185,7 @@ fn a_graph_loop_retains_one_boundary_admission_before_its_internal_fanout() {
     let mut vm = Vm::boot(&plan, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));
     inject(&mut vm, &mut journal, 2);
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     let fold = Fold::from_records(journal.records()).unwrap();
     assert_eq!(
         fold.runs().count(),
@@ -213,7 +213,7 @@ fn a_graph_loop_retains_one_boundary_admission_before_its_internal_fanout() {
             .recover_from_journal(&prefix)
             .unwrap_or_else(|error| panic!("cut {cut}: {error}"));
         assert_eq!(prefix.records().len(), cut);
-        restored.drain(&mut prefix).unwrap();
+        restored.run_ready(&mut prefix).unwrap();
         assert_eq!(prefix.records(), expected, "cut {cut}");
         assert_eq!(restored.outputs(), vm.outputs(), "cut {cut}");
     }
@@ -230,7 +230,7 @@ fn graph_loop_commands_wait_for_siblings_and_keep_concurrent_runs_separate() {
     let mut journal = MemJournal::new(GraphVersion(1));
     inject(&mut vm, &mut journal, 2);
     inject(&mut vm, &mut journal, 1);
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert_eq!(vm.outputs().len(), 2);
     let fold = Fold::from_records(journal.records()).unwrap();
     assert_eq!(fold.runs().count(), 2);
@@ -298,7 +298,7 @@ fn graph_loop_state_belongs_to_the_consumed_application() {
     let mut vm = Vm::boot(&plan, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));
     inject(&mut vm, &mut journal, 2);
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert_eq!(vm.outputs().len(), 1);
     assert_eq!(
         vm.outputs()[0].envelope.data(),
@@ -320,7 +320,7 @@ fn graph_again_retains_state_and_explicit_done_emits_no_domain_output() {
         let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         inject(&mut vm, &mut journal, input);
-        vm.drain(&mut journal).unwrap();
+        vm.run_ready(&mut journal).unwrap();
         let fold = Fold::from_records(journal.records()).unwrap();
         let (_, run) = fold.runs().next().unwrap();
         assert_eq!(run.phase, expected);
@@ -360,7 +360,7 @@ fn graph_manager_admissions_reserve_capacity_before_ingress_commits() {
         .unwrap_err();
     assert!(matches!(
         error,
-        rastok::runtime::vm::VmError::RecurrenceQueueFull { .. }
+        rastok::runtime::vm::VmFault::RecurrenceQueueFull { .. }
     ));
     assert_eq!(journal.records().len(), count);
 }
@@ -375,7 +375,7 @@ fn graph_loop_delay_and_expiry_recover_without_restarting_the_wait() {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));
     inject(&mut vm, &mut journal, 2);
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert!(vm.outputs().is_empty());
     let mut restored = Vm::boot_at(&compilation.plan, GraphVersion(1), 500_000_000);
     restored.recover_from_journal(&journal).unwrap();
@@ -410,7 +410,7 @@ fn closing_a_graph_loop_invalidates_its_pending_reentry() {
     let mut world =
         RuntimeBindings::try_new(&compilation.plan, &DriverRegistry::default()).unwrap();
     inject(&mut vm, &mut journal, 2);
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     vm.advance(&mut journal, &mut world, 2_000_000_000).unwrap();
     assert!(vm.outputs().is_empty());
     let records = journal.records().to_vec();
@@ -458,7 +458,7 @@ fn logical_advance_drains_graph_admissions_before_a_future_closure() {
     restored.recover_from_journal(&journal).unwrap();
     assert!(restored.is_stable());
     inject(&mut restored, &mut journal, 0);
-    restored.drain(&mut journal).unwrap();
+    restored.run_ready(&mut journal).unwrap();
     assert_eq!(
         restored.outputs().len(),
         13,
@@ -595,7 +595,7 @@ fn every_committed_prefix_restores_cursors_state_and_pending_loop_commands() {
             .unwrap_or_else(|error| panic!("prefix {prefix}: {error}"));
         assert_eq!(journal.records().len(), prefix, "recovery must not append");
         assert_eq!(restored.inspection(), before, "prefix {prefix}");
-        restored.drain(&mut journal).unwrap();
+        restored.run_ready(&mut journal).unwrap();
         assert_eq!(journal.records(), expected_records, "prefix {prefix}");
         assert_eq!(restored.outputs(), reference.outputs(), "prefix {prefix}");
         assert!(restored.is_stable());
@@ -608,7 +608,7 @@ fn a_loop_packet_cannot_borrow_another_executors_transaction() {
     let mut vm = Vm::boot(&plan, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));
     inject(&mut vm, &mut journal, 7);
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     let root = journal
         .records()
         .iter()
@@ -645,7 +645,7 @@ fn a_routed_loop_context_must_name_a_retained_delivery() {
     let mut vm = Vm::boot(&plan, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));
     inject(&mut vm, &mut journal, 7);
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     let (index, mut forged) = journal
         .records()
         .iter()
@@ -687,7 +687,7 @@ fn loop_expiry_cannot_be_folded_without_its_public_emission() {
     let mut vm = Vm::boot(&plan, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));
     inject(&mut vm, &mut journal, 7);
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     let (index, forged) = journal
         .records()
         .iter()
@@ -763,7 +763,7 @@ fn a_rejected_transaction_does_not_update_the_journal_loop_projection() {
     let mut vm = Vm::boot(&plan, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));
     inject(&mut vm, &mut journal, 7);
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     let mut transaction = journal
         .records()
         .iter()
@@ -831,7 +831,7 @@ fn delayed_runs_reserve_manager_capacity_before_the_next_ingress_commit() {
     for _ in 0..1024 {
         inject(&mut vm, &mut journal, 1);
     }
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert!(
         vm.inspection()
             .mailboxes
@@ -850,7 +850,7 @@ fn delayed_runs_reserve_manager_capacity_before_the_next_ingress_commit() {
     };
     assert!(matches!(
         vm.inject(&mut journal, incoming()),
-        Err(rastok::runtime::vm::VmError::RecurrenceQueueFull { .. })
+        Err(rastok::runtime::vm::VmFault::RecurrenceQueueFull { .. })
     ));
     assert_eq!(
         journal.records(),
@@ -860,10 +860,10 @@ fn delayed_runs_reserve_manager_capacity_before_the_next_ingress_commit() {
     let mut bindings = RuntimeBindings::try_new(&plan, &DriverRegistry::default()).unwrap();
     vm.advance(&mut journal, &mut bindings, 1_000_000_000)
         .unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert_eq!(vm.outputs().len(), 1024);
     vm.inject(&mut journal, incoming()).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     let fold = Fold::from_records(journal.records()).unwrap();
     assert_eq!(
         fold.runs()
@@ -1056,18 +1056,18 @@ fn recovery_reschedules_the_original_deadline_not_a_fresh_delay() {
     let mut interrupted = Vm::boot(&plan, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));
     inject(&mut interrupted, &mut journal, 1);
-    interrupted.drain(&mut journal).unwrap();
+    interrupted.run_ready(&mut journal).unwrap();
     let before = journal.records().len();
     let mut restored = Vm::boot_at(&plan, GraphVersion(1), 750_000_000);
     restored.recover_from_journal(&journal).unwrap();
-    restored.drain(&mut journal).unwrap();
+    restored.run_ready(&mut journal).unwrap();
     assert!(restored.outputs().is_empty());
     assert_eq!(journal.records().len(), before);
     let mut bindings = RuntimeBindings::try_new(&plan, &DriverRegistry::default()).unwrap();
     restored
         .advance(&mut journal, &mut bindings, 1_000_000_000)
         .unwrap();
-    restored.drain(&mut journal).unwrap();
+    restored.run_ready(&mut journal).unwrap();
     assert_eq!(restored.outputs().len(), 1);
     assert!(restored.is_stable());
 }
@@ -1085,7 +1085,7 @@ fn unsealed_deadline_bytes_are_required_for_delays_but_not_part_of_the_causal_se
     let mut vm = Vm::boot_at(&plan, GraphVersion(1), 7_000_000_000);
     let mut journal = MemJournal::new(GraphVersion(1));
     inject(&mut vm, &mut journal, 1);
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     let index = journal
         .records()
         .iter()
@@ -1170,7 +1170,7 @@ graph app : App {
     let mut vm = Vm::boot(&plan, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));
     inject(&mut vm, &mut journal, 7);
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     let transaction = journal
         .records()
         .iter()
@@ -1186,7 +1186,7 @@ graph app : App {
     let error = vm.recover_from_journal(&journal).unwrap_err();
     assert!(matches!(
         error,
-        rastok::runtime::vm::VmError::InvalidRecovery {
+        rastok::runtime::vm::VmFault::InvalidRecovery {
             reason: "a consumed cursor has no pending delivery",
             ..
         }
@@ -1214,7 +1214,7 @@ fn a_rederived_measure_bounds_commands_without_authored_fuel() {
             let mut vm = Vm::boot(&plan, GraphVersion(1));
             let mut journal = MemJournal::new(GraphVersion(1));
             inject(&mut vm, &mut journal, value);
-            vm.drain(&mut journal).unwrap();
+            vm.run_ready(&mut journal).unwrap();
             assert_eq!(vm.outputs().len(), 1);
             assert_eq!(vm.outputs()[0].port.name(), "out");
             let fold = Fold::from_records(journal.records()).unwrap();
@@ -1233,7 +1233,7 @@ fn explicit_fuel_remains_a_cap_even_when_a_measure_is_proved() {
     let mut vm = Vm::boot(&plan, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));
     inject(&mut vm, &mut journal, 8);
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert_eq!(vm.outputs().len(), 1);
     assert_eq!(vm.outputs()[0].port.name(), "expired");
 }
@@ -1362,7 +1362,7 @@ fn again_keeps_data_and_private_state_but_not_the_previous_causal_identity() {
     let mut vm = Vm::boot(&plan, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));
     inject(&mut vm, &mut journal, 42);
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert_eq!(vm.outputs().len(), 1);
     assert_eq!(vm.outputs()[0].port.name(), "out");
     assert_eq!(
@@ -1415,7 +1415,7 @@ fn expiry_contains_the_proposed_next_state_without_an_extra_application() {
     let mut vm = Vm::boot(&plan, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));
     inject(&mut vm, &mut journal, 7);
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert_eq!(vm.outputs().len(), 1);
     assert_eq!(vm.outputs()[0].port.name(), "expired");
     let Data::Materialized(Value::TaggedUnion(value)) = vm.outputs()[0].envelope.data() else {
@@ -1444,7 +1444,7 @@ fn delayed_commands_wait_on_logical_time_without_reserving_reentry() {
     let mut vm = Vm::boot(&plan, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));
     inject(&mut vm, &mut journal, 1);
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert!(vm.outputs().is_empty());
     let fold = Fold::from_records(journal.records()).unwrap();
     let run = fold.runs().next().unwrap().1;
@@ -1453,11 +1453,11 @@ fn delayed_commands_wait_on_logical_time_without_reserving_reentry() {
     let mut bindings = RuntimeBindings::try_new(&plan, &DriverRegistry::default()).unwrap();
     vm.advance(&mut journal, &mut bindings, 999_999_999)
         .unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert!(vm.outputs().is_empty());
     vm.advance(&mut journal, &mut bindings, 1_000_000_000)
         .unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert_eq!(vm.outputs().len(), 1);
     assert_eq!(
         vm.outputs()[0].envelope.data(),
@@ -1523,7 +1523,7 @@ graph app : App {
     let mut vm = Vm::boot(&decoded, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));
     inject(&mut vm, &mut journal, 1);
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert_eq!(vm.outputs().len(), 2);
     assert_ne!(
         vm.outputs()[0].envelope.meta().sys().id(),
@@ -1567,7 +1567,7 @@ graph app : App {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));
     inject(&mut vm, &mut journal, 1);
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert_eq!(vm.outputs().len(), 1);
     assert_eq!(
         vm.outputs()[0].envelope.data(),
@@ -1590,13 +1590,13 @@ fn lifetime_closure_invalidates_pending_reentry_before_the_next_generation() {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut bindings = RuntimeBindings::try_new(&plan, &DriverRegistry::default()).unwrap();
     inject(&mut vm, &mut journal, 7);
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     vm.advance(&mut journal, &mut bindings, 1_000_000_000)
         .unwrap();
     let fold = Fold::from_records(journal.records()).unwrap();
     assert_eq!(fold.runs().next().unwrap().1.phase, Phase::Closed);
     inject(&mut vm, &mut journal, 8);
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     vm.advance(&mut journal, &mut bindings, 2_000_000_000)
         .unwrap();
     let fold = Fold::from_records(journal.records()).unwrap();

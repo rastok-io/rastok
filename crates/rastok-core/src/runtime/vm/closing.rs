@@ -27,7 +27,7 @@ impl Vm<'_> {
                     .dispatch
                     .steps()
                     .flat_map(|step| step.emissions())
-                    .filter(|(_, value)| !matches!(value, crate::plan::Emission::Nothing))
+                    .filter(|(_, value)| !matches!(value, crate::plan::EmitValue::Nothing))
                     .map(|(port, _)| (handler.owner, port.clone())),
             );
         }
@@ -76,7 +76,7 @@ impl Vm<'_> {
                                     .steps()
                                     .flat_map(|step| step.emissions())
                                     .filter(|(_, value)| {
-                                        !matches!(value, crate::plan::Emission::Nothing)
+                                        !matches!(value, crate::plan::EmitValue::Nothing)
                                     })
                                     .map(|(port, _)| (slot, port.clone())),
                             );

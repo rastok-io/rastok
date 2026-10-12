@@ -76,7 +76,7 @@ fn a_forged_presence_call_cannot_hide_its_receiver_or_key_type() {
             panic!("one linear handler")
         };
         let plan::DispatchStep::Emit {
-            value: plan::Emission::Data(value),
+            value: plan::EmitValue::Data(value),
             ..
         } = &mut steps[0]
         else {

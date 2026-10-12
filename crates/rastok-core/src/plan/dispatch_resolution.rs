@@ -1,7 +1,7 @@
 //! Close source inference placeholders after port resolution. Package readers
 //! never call this pass: a transported decision must already carry its proof.
 
-use super::{Dispatch, DispatchStep, Emission, LoopCommand, MultiEmitValues};
+use super::{Dispatch, DispatchStep, EmitValue, LoopCommand, MultiEmitValues};
 use crate::{datatype::DataType, expr};
 use alloc::vec;
 
@@ -13,11 +13,11 @@ fn resolve_tree(tree: &mut expr::Tree, scope: &expr::Signature) {
     }
 }
 
-fn resolve_emission(value: &mut Emission, scope: &expr::Signature) {
+fn resolve_emission(value: &mut EmitValue, scope: &expr::Signature) {
     match value {
-        Emission::Identity | Emission::Nothing => {}
-        Emission::Data(tree) => resolve_tree(tree, scope),
-        Emission::Patch(writes) | Emission::FreshData(writes) => {
+        EmitValue::Identity | EmitValue::Nothing => {}
+        EmitValue::Data(tree) => resolve_tree(tree, scope),
+        EmitValue::Patch(writes) | EmitValue::FreshData(writes) => {
             for write in writes {
                 resolve_tree(&mut write.value, scope);
             }

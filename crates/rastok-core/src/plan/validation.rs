@@ -13,8 +13,8 @@ use crate::datatype::{DataType, TypeError};
 use crate::expr;
 use crate::node;
 use crate::plan::{
-    DispatchStep, EdgeEnd, Emission, EvaluationSite, ExecutionPlan, Node, NodeExecution, OwnerKind,
-    Slot,
+    DispatchStep, EdgeEnd, EmitValue, EvaluationSite, ExecutionPlan, Node, NodeExecution,
+    OwnerKind, Slot,
 };
 use crate::schema_annotation::{AnnotationTable, SchemaAnnotationError};
 
@@ -2315,9 +2315,9 @@ fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
                 }
                 DispatchStep::Stop => {}
                 DispatchStep::Emit { value, .. } => match value {
-                    Emission::Identity | Emission::Nothing => {}
-                    Emission::Data(tree) => tree_type_at(tree, location("data emission"))?,
-                    Emission::Patch(fields) | Emission::FreshData(fields) => {
+                    EmitValue::Identity | EmitValue::Nothing => {}
+                    EmitValue::Data(tree) => tree_type_at(tree, location("data emission"))?,
+                    EmitValue::Patch(fields) | EmitValue::FreshData(fields) => {
                         for (field_index, field) in fields.iter().enumerate() {
                             tree_type_at(
                                 &field.value,
@@ -4305,20 +4305,20 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                             });
                         }
                         match value {
-                            Emission::Data(tree) => {
+                            EmitValue::Data(tree) => {
                                 expr_canonical(&tree.root)?;
                                 asset_indexes_bound(plan, &tree.root)?;
                             }
-                            Emission::Patch(writes) | Emission::FreshData(writes) => {
+                            EmitValue::Patch(writes) | EmitValue::FreshData(writes) => {
                                 for write in writes {
                                     expr_canonical(&write.value.root)?;
                                     asset_indexes_bound(plan, &write.value.root)?;
                                     meta_target_known(plan, &write.target)?;
                                 }
                             }
-                            Emission::Identity | Emission::Nothing => {}
+                            EmitValue::Identity | EmitValue::Nothing => {}
                         }
-                        if matches!(value, Emission::Identity)
+                        if matches!(value, EmitValue::Identity)
                             && matches!(handler.activation, node::HandlerActivation::Join { .. })
                         {
                             return Err(PlanValidationError::AmbiguousJoinIdentity {
@@ -4453,7 +4453,7 @@ fn operator_loop_control(
             .iter()
             .flat_map(DispatchStep::emissions)
             .any(|(port, value)| {
-                spec.terminals.contains(port) && !matches!(value, Emission::Nothing)
+                spec.terminals.contains(port) && !matches!(value, EmitValue::Nothing)
             });
         let stopped = steps.iter().any(|step| matches!(step, DispatchStep::Stop));
         if commands + usize::from(terminal) + usize::from(stopped) != 1 {
@@ -4555,7 +4555,7 @@ fn join_metadata_presence_holds(plan: &ExecutionPlan) -> Result<(), PlanValidati
                 let DispatchStep::Emit { port, value } = step else {
                     continue;
                 };
-                if matches!(value, Emission::Nothing) {
+                if matches!(value, EmitValue::Nothing) {
                     continue;
                 }
                 let mut emitted = base.clone();
@@ -4705,9 +4705,9 @@ fn activation_presence(
     }
 }
 
-fn emission_meta_writes(emission: &Emission) -> MetaPresence {
+fn emission_meta_writes(emission: &EmitValue) -> MetaPresence {
     match emission {
-        Emission::Patch(writes) | Emission::FreshData(writes) => {
+        EmitValue::Patch(writes) | EmitValue::FreshData(writes) => {
             let mut presence = MetaPresence::new();
             for write in writes {
                 match &write.target {
@@ -4722,7 +4722,7 @@ fn emission_meta_writes(emission: &Emission) -> MetaPresence {
             }
             presence
         }
-        Emission::Identity | Emission::Data(_) | Emission::Nothing => MetaPresence::new(),
+        EmitValue::Identity | EmitValue::Data(_) | EmitValue::Nothing => MetaPresence::new(),
     }
 }
 

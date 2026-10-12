@@ -356,7 +356,7 @@ pub fn verify_event(profile: &EventProfile<'_>, drivers: &DriverRegistry) -> Rep
             .violations
             .push("the Driver was accepted before its envelope became journal-visible".into());
     }
-    if let Err(error) = vm.drain_with_bindings(&mut journal, &mut bindings) {
+    if let Err(error) = vm.run_ready_with_bindings(&mut journal, &mut bindings) {
         report
             .violations
             .push(format!("the admitted Event could not drain: {error}"));
@@ -932,7 +932,7 @@ fn drive(
         .map_err(|error| format!("the submission was refused: {error}"))?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     loop {
-        vm.drain_with_bindings(journal, driver)
+        vm.run_ready_with_bindings(journal, driver)
             .map_err(|error| format!("a step faulted: {error}"))?;
         let report = vm
             .pump(journal, driver)
@@ -943,7 +943,7 @@ fn drive(
                  produced a completion outside its declared contract"
             ));
         }
-        vm.drain_with_bindings(journal, driver)
+        vm.run_ready_with_bindings(journal, driver)
             .map_err(|error| format!("a step faulted: {error}"))?;
         if vm.is_stable() {
             return Ok(());
@@ -1169,12 +1169,12 @@ fn interleave_battery(
         .map_err(|error| format!("the interleave submission was refused: {error}"))?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     loop {
-        vm.drain_with_bindings(&mut journal, &mut bindings)
+        vm.run_ready_with_bindings(&mut journal, &mut bindings)
             .map_err(|error| format!("a step faulted: {error}"))?;
         let report = vm
             .pump(&mut journal, &mut bindings)
             .map_err(|error| format!("the boundary round faulted: {error}"))?;
-        vm.drain_with_bindings(&mut journal, &mut bindings)
+        vm.run_ready_with_bindings(&mut journal, &mut bindings)
             .map_err(|error| format!("a step faulted: {error}"))?;
         if vm.is_stable() {
             break;

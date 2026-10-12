@@ -81,7 +81,7 @@ graph accounting_probe : App {
         },
     )
     .expect("inbound commits");
-    vm.drain(&mut journal).expect("graph drains");
+    vm.run_ready(&mut journal).expect("graph drains");
 
     let first = accounting_observations(&compilation.plan, journal.records(), None)
         .expect("individual typed observations");
@@ -226,7 +226,7 @@ graph priced_call : App {
         },
     )
     .expect("inbound commits");
-    vm.drain_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut world)
         .expect("the Call opens");
     for _ in 0..200 {
         if vm.is_stable() && !vm.has_open_obligations() {
@@ -234,7 +234,7 @@ graph priced_call : App {
         }
         vm.pump(&mut journal, &mut world)
             .expect("the Driver progresses");
-        vm.drain_with_bindings(&mut journal, &mut world)
+        vm.run_ready_with_bindings(&mut journal, &mut world)
             .expect("the reply routes");
         std::thread::sleep(std::time::Duration::from_millis(5));
     }

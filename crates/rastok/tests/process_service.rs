@@ -258,10 +258,10 @@ mod real {
     ) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         loop {
-            vm.drain_with_bindings(journal, world).unwrap();
+            vm.run_ready_with_bindings(journal, world).unwrap();
             world.pump_inbound(vm, journal).unwrap();
             vm.pump(journal, world).unwrap();
-            vm.drain_with_bindings(journal, world).unwrap();
+            vm.run_ready_with_bindings(journal, world).unwrap();
             if predicate(vm, journal) {
                 return;
             }
@@ -336,7 +336,8 @@ mod real {
             });
             vm.inject(&mut journal, input("close", "close this generation"))
                 .unwrap();
-            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+            vm.run_ready_with_bindings(&mut journal, &mut world)
+                .unwrap();
             vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
             if ignore_term {
                 vm.advance(&mut journal, &mut world, 2_000_000_000).unwrap();

@@ -133,7 +133,7 @@ intents and correlated responses.
 ### Stage 11 — `runtime` core
 
 One atomic node transaction: `InstanceState`, `Mailboxes`,
-`EmissionBuffer`, `HandlerExecutor`.
+`EmissionBuffer`, `TransactionPreparer`.
 
 Exit: deterministic single-transaction tests, including emission order
 and state isolation between keys.

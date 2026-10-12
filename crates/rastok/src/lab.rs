@@ -586,7 +586,7 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
     pub fn step_transaction(&mut self) -> Result<bool, ScenarioStepError> {
         if let Some(advance) = &mut self.advance {
             let progressed = advance
-                .step(&mut self.vm, &mut self.journal, &mut self.driver)
+                .advance_once(&mut self.vm, &mut self.journal, &mut self.driver)
                 .map_err(|error| {
                     // A deadline can retain a closure before a Driver refuses.
                     // Do not advertise transaction rollback for this wider seam.
@@ -633,7 +633,7 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
     pub fn settle_current_action(&mut self) {
         if let Some(mut advance) = self.advance.take() {
             loop {
-                match advance.step(&mut self.vm, &mut self.journal, &mut self.driver) {
+                match advance.advance_once(&mut self.vm, &mut self.journal, &mut self.driver) {
                     Ok(true) => {}
                     Ok(false) => break,
                     Err(error) => {
@@ -840,7 +840,7 @@ fn settle<'plan>(
                 return;
             }
         };
-        if let Err(error) = vm.drain_with_bindings(journal, driver) {
+        if let Err(error) = vm.run_ready_with_bindings(journal, driver) {
             failures.push(format!("a step faulted: {error}"));
             return;
         }
@@ -870,7 +870,7 @@ fn settle<'plan>(
             "the machine did not settle within 64 boundary rounds",
         ));
     }
-    if let Err(error) = vm.drain_with_bindings(journal, driver) {
+    if let Err(error) = vm.run_ready_with_bindings(journal, driver) {
         failures.push(format!("a step faulted: {error}"));
     }
 }

@@ -248,7 +248,7 @@ pub(super) fn validate(
                         for (port, expression) in
                             handler.dispatch.steps().flat_map(DispatchStep::emissions)
                         {
-                            if !matches!(expression, Emission::Nothing) {
+                            if !matches!(expression, EmitValue::Nothing) {
                                 dependencies.insert(Work::Source(
                                     Endpoint {
                                         owner: input.owner.clone(),
@@ -416,7 +416,7 @@ pub(super) fn validate(
                                     }
                                 }
                                 for (port, _) in step.emissions().filter(|(_, expression)| {
-                                    !matches!(expression, Emission::Nothing)
+                                    !matches!(expression, EmitValue::Nothing)
                                 }) {
                                     let source = Work::Source(
                                         Endpoint {

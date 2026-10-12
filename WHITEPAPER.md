@@ -1176,7 +1176,7 @@ names all select the tagged-frontend production without reserving their
 identifier. The host never interprets a guest body; the registered
 frontend supplies its framer/compiler and typed boundary. The build
 produces a versioned `GuestProgram`, executed by a pinned
-`GuestExecutor`. Each frontend/executor profile is fixed, every block has
+`GuestRunner`. Each frontend/executor profile is fixed, every block has
 typed input and output, and no source region has two lexical owners. jq
 is the initial specified pure guest; SQL is planned and must
 satisfy the same six-clause contract in
@@ -2637,7 +2637,7 @@ all variations on the same host/guest pattern.
 ... }`, `sql! { ... }`, `json! <value>`) for embedding readers and
 guest languages without requiring the host parser to understand them. The guest
 language has its own evaluation rules; the DSL turns the body into a
-`GuestProgram` for the corresponding `GuestExecutor`.
+`GuestProgram` for the corresponding `GuestRunner`.
 
 **What Rastok leaves behind:** the open-ended escape-hatch posture.
 Each resolved frontend in Rastok has a fixed framer/compiler/executor

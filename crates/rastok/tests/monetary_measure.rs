@@ -350,7 +350,7 @@ graph adjustments : App {{
                 },
             )
             .expect("admission");
-            vm.drain(&mut journal)
+            vm.run_ready(&mut journal)
                 .expect("both signed emissions commit");
 
             let observations = accounting_observations(&decoded, journal.records(), None)

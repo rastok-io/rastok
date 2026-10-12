@@ -4,9 +4,10 @@ use alloc::vec::Vec;
 
 use crate::{envelope::WriteTarget, expr};
 
-/// What an emission builds. Field writes retain their authored evaluation order.
+/// The expression evaluated to build an envelope, not a computed value.
+/// Field writes retain their authored evaluation order.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Emission {
+pub enum EmitValue {
     /// Re-emit the input envelope, preserving its payload representation.
     Identity,
     /// Inherit the input and apply the listed data/metadata writes.
@@ -21,7 +22,7 @@ pub enum Emission {
     Nothing,
 }
 
-impl Emission {
+impl EmitValue {
     /// Expressions in the order the envelope builder evaluates them.
     pub(crate) fn expressions(&self) -> impl Iterator<Item = &expr::Tree> {
         let data = match self {

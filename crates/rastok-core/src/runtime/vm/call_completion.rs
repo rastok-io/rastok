@@ -7,7 +7,7 @@ impl Vm<'_> {
         &self,
         slot: Slot,
         record: &'record crate::journal::TransactionRecord,
-    ) -> Result<Option<&'record Emission>, VmError> {
+    ) -> Result<Option<&'record Emission>, VmFault> {
         let node = &self.plan.nodes[slot.index()];
         let Some(call) = node
             .connector()
@@ -15,7 +15,7 @@ impl Vm<'_> {
         else {
             return Ok(None);
         };
-        let violation = |reason| VmError::ContractViolation {
+        let violation = |reason| VmFault::ContractViolation {
             node: node.path.clone(),
             reason,
         };

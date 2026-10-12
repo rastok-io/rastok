@@ -1,6 +1,6 @@
 use super::*;
 use crate::node;
-use crate::plan::{DispatchErrorKind, Emission, FieldWrite, RouteErrorKind};
+use crate::plan::{DispatchErrorKind, EmitValue, FieldWrite, RouteErrorKind};
 use crate::schema_annotation::{AnnotationSet, AnnotationTable, SchemaPath};
 use crate::value::Value;
 use alloc::collections::BTreeMap;
@@ -30,7 +30,7 @@ fn open(predicate: expr::Tree, branch: Dispatch, fallback: Dispatch) -> Dispatch
 fn output(name: &str) -> Dispatch {
     Dispatch::Linear(vec![DispatchStep::Emit {
         port: node::Port::new(name).unwrap(),
-        value: Emission::Identity,
+        value: EmitValue::Identity,
     }])
 }
 
@@ -114,14 +114,14 @@ fn every_statement_builder_and_annotation_survives_transport() {
         DispatchStep::Stop,
     ];
     let builders = vec![
-        Emission::Identity,
-        Emission::Nothing,
-        Emission::Data(expression.clone()),
-        Emission::Patch(vec![FieldWrite {
+        EmitValue::Identity,
+        EmitValue::Nothing,
+        EmitValue::Data(expression.clone()),
+        EmitValue::Patch(vec![FieldWrite {
             target: crate::envelope::WriteTarget::Data(vec![]),
             value: expression.clone(),
         }]),
-        Emission::FreshData(vec![FieldWrite {
+        EmitValue::FreshData(vec![FieldWrite {
             target: crate::envelope::WriteTarget::Data(vec![]),
             value: expression,
         }]),
@@ -265,7 +265,7 @@ fn malformed_decisions_commands_and_tuple_arities_refuse() {
     );
     let mismatched = Dispatch::Linear(vec![DispatchStep::MultiEmit {
         ports: vec![node::Port::new("a").unwrap(), node::Port::new("b").unwrap()],
-        values: MultiEmitValues::Tuple(vec![Emission::Nothing]),
+        values: MultiEmitValues::Tuple(vec![EmitValue::Nothing]),
     }]);
     assert!(matches!(
         decode_dispatch(&encoded_raw(&mismatched), &signature),
@@ -320,7 +320,7 @@ fn authored_open_arm_and_multi_emission_order_survives() {
 
     let mut dispatch = Dispatch::Linear(vec![DispatchStep::MultiEmit {
         ports: vec![node::Port::new("b").unwrap(), node::Port::new("a").unwrap()],
-        values: MultiEmitValues::Broadcast(Emission::Identity),
+        values: MultiEmitValues::Broadcast(EmitValue::Identity),
     }]);
     let first = encode_dispatch(&dispatch, &signature).unwrap();
     let Dispatch::Linear(steps) = &mut dispatch else {
@@ -402,7 +402,7 @@ fn individually_shallow_values_can_exceed_the_combined_decision_budget() {
     }
     let mut dispatch = Dispatch::Linear(vec![DispatchStep::Emit {
         port: node::Port::conventional_out(),
-        value: Emission::Data(expr::Tree {
+        value: EmitValue::Data(expr::Tree {
             ty,
             root: expr::Expr::Literal(value),
         }),

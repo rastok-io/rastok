@@ -284,7 +284,7 @@ not a wiring alias.
 
 The completed Rust renames are `node::Aspect -> node::Extension`,
 `AspectSpec -> ExtensionSpec`, `ConnectorId -> ContractId`, and
-`TransactionExecutor -> HandlerExecutor`. The latter frees “Executor” for the
+`TransactionExecutor -> TransactionPreparer`. The latter frees “Executor” for the
 semantic category without asserting a trait. `ConnectorId -> ContractId`
 changes no encoded id text or contract identity; it removes only the obsolete
 suggestion that the id names a Node rather than its Contract.

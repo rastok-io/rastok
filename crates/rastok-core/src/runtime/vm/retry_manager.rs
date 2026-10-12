@@ -9,8 +9,8 @@ use crate::journal::loop_protocol::{Fact as LoopFact, Phase as LoopPhase};
 use crate::journal::retry_protocol::{self as protocol, AttemptId, Fact, Fold, Packet, Phase};
 use crate::journal::{CallRecord, CallStatus, Closure, Record, TransactionRecord};
 
-pub(super) fn error(error: protocol::Error) -> VmError {
-    VmError::Journal(crate::journal::Error::InvalidRetryProtocol(error))
+pub(super) fn error(error: protocol::Error) -> VmFault {
+    VmFault::Journal(crate::journal::Error::InvalidRetryProtocol(error))
 }
 
 impl Vm<'_> {
@@ -64,7 +64,7 @@ impl Vm<'_> {
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
         intent: &Intent,
-    ) -> Result<bool, VmError> {
+    ) -> Result<bool, VmFault> {
         let node = &self.plan.nodes[slot.index()];
         let Some(spec) = self.plan.owners[node.owner.index()].retry_spec() else {
             return Ok(false);
@@ -143,7 +143,7 @@ impl Vm<'_> {
                 ..Default::default()
             }));
         }
-        journal.commit(record).map_err(VmError::Journal)?;
+        journal.commit(record).map_err(VmFault::Journal)?;
         self.retry_manager = Some(Box::new(next));
         Ok(true)
     }
@@ -152,7 +152,7 @@ impl Vm<'_> {
         &mut self,
         attempt: Option<AttemptId>,
         intent: &Intent,
-    ) -> Result<(), VmError> {
+    ) -> Result<(), VmFault> {
         if let Some(attempt) = attempt {
             self.retry_manager
                 .as_deref_mut()
@@ -169,7 +169,7 @@ impl Vm<'_> {
     pub(super) fn synchronize_retry_closures(
         &mut self,
         journal: &dyn Journal,
-    ) -> Result<(), VmError> {
+    ) -> Result<(), VmFault> {
         let Some(fold) = self.retry_manager.as_deref() else {
             return Ok(());
         };
@@ -194,14 +194,14 @@ impl Vm<'_> {
                     closures.push(record.clone());
                 }
             })
-            .map_err(VmError::Journal)?;
+            .map_err(VmFault::Journal)?;
         for record in closures {
             self.retain_retry_closure(&record)?;
         }
         Ok(())
     }
 
-    pub(super) fn retain_retry_closure(&mut self, record: &CallRecord) -> Result<(), VmError> {
+    pub(super) fn retain_retry_closure(&mut self, record: &CallRecord) -> Result<(), VmFault> {
         let Some(attempt) = record
             .retry_record
             .as_deref()
@@ -253,7 +253,7 @@ impl Vm<'_> {
         delivery: &envelope::Delivery,
         call: CallId,
         record: &mut TransactionRecord,
-    ) -> Result<Option<(Box<Fold>, bool)>, VmError> {
+    ) -> Result<Option<(Box<Fold>, bool)>, VmFault> {
         let Some(attempt) = self.retry_attempt(instance, delivery) else {
             return Ok(None);
         };
@@ -353,7 +353,7 @@ impl Vm<'_> {
     pub(super) fn next_dated_recurrence(
         &self,
         journal: &dyn Journal,
-    ) -> Result<Option<Id>, VmError> {
+    ) -> Result<Option<Id>, VmFault> {
         let loops = self.loop_manager.as_deref();
         let retries = self.retry_manager.as_deref();
         if loops.is_none() && retries.is_none() {
@@ -408,7 +408,7 @@ impl Vm<'_> {
                     }
                 }
             })
-            .map_err(VmError::Journal)?;
+            .map_err(VmFault::Journal)?;
         Ok(head.map(|(_, reference)| reference))
     }
 
@@ -416,7 +416,7 @@ impl Vm<'_> {
         &mut self,
         journal: &mut dyn Journal,
         dated_admission: Option<Id>,
-    ) -> Result<bool, VmError> {
+    ) -> Result<bool, VmFault> {
         if !self.retry_manager_ready() {
             return Ok(false);
         }
@@ -470,7 +470,7 @@ impl Vm<'_> {
                 }
                 index += 1;
             })
-            .map_err(VmError::Journal)?;
+            .map_err(VmFault::Journal)?;
         let Some((_, operation)) = selected else {
             return if deferred {
                 Ok(false)
@@ -605,7 +605,7 @@ impl Vm<'_> {
                 }],
             )?;
         }
-        journal.commit(record).map_err(VmError::Journal)?;
+        journal.commit(record).map_err(VmFault::Journal)?;
         self.retry_manager = Some(next);
         if let Some((edge, envelope)) = admission {
             if !context.is_empty() {
@@ -644,7 +644,7 @@ impl Vm<'_> {
 pub(super) fn policy(
     connector: &crate::plan::ConnectorSpec,
     spec: &crate::plan::RetrySpec,
-) -> Result<protocol::Policy, VmError> {
+) -> Result<protocol::Policy, VmFault> {
     let attempts = match spec.attempts.resolved {
         crate::value::Value::Int(n) => u64::try_from(n).ok(),
         crate::value::Value::Uint(n) => Some(n),
@@ -712,7 +712,7 @@ pub(super) fn closure_schedule(
 pub(super) fn closure_case<'a>(
     connector: &crate::plan::ConnectorSpec,
     status: &'a CallStatus,
-) -> Result<&'a str, VmError> {
+) -> Result<&'a str, VmFault> {
     match status {
         CallStatus::Closed(Closure::Response(completion)) => {
             let call = connector

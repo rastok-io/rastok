@@ -54,7 +54,7 @@ fn execute(compiled: &Compilation) -> MemJournal {
         },
     )
     .expect("admission");
-    vm.drain(&mut journal).expect("atomic signed emissions");
+    vm.run_ready(&mut journal).expect("atomic signed emissions");
     journal
 }
 

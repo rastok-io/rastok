@@ -10,7 +10,7 @@ impl Vm<'_> {
         &mut self,
         index: usize,
         record: &SessionRecord,
-    ) -> Result<(), VmError> {
+    ) -> Result<(), VmFault> {
         let slot = self
             .plan
             .nodes
@@ -182,7 +182,7 @@ impl Vm<'_> {
         index: usize,
         slot: Slot,
         id: crate::envelope::Id,
-    ) -> Result<(instance::Generation, envelope::Delivery), VmError> {
+    ) -> Result<(instance::Generation, envelope::Delivery), VmFault> {
         let mut matches = self.instances.iter().filter_map(|(instance, state)| {
             if state.owner != self.plan.nodes[slot.index()].owner
                 || self.lifecycle.iter().any(|work| {
@@ -212,7 +212,7 @@ impl Vm<'_> {
         index: usize,
         slot: Slot,
         record: &TransactionRecord,
-    ) -> Result<Vec<ConsumedPosition>, VmError> {
+    ) -> Result<Vec<ConsumedPosition>, VmFault> {
         let Some(exchange) = record.exchange_exit.as_deref() else {
             return Ok(Vec::new());
         };
@@ -242,7 +242,7 @@ impl Vm<'_> {
         PlanGate { plan: self.plan }
             .admit(&self.plan.nodes[slot.index()].path, &completion)
             .map_err(|_| invalid(index, "an exchange terminal violates its Contract"))?;
-        let executor = HandlerExecutor::at(self.plan, self.graph_version, self.now);
+        let executor = TransactionPreparer::at(self.plan, self.graph_version, self.now);
         let mut held = Vec::new();
         let expected = match exchange {
             InboundExchangeExitRecord::Call(reference) => {
@@ -356,7 +356,7 @@ impl Vm<'_> {
                 )
             }
         }
-        .map_err(VmError::Fault)?
+        .map_err(VmFault::Fault)?
         .record;
         if record.trigger != expected.trigger
             || record.cause != expected.cause
@@ -394,7 +394,7 @@ impl Vm<'_> {
         slot: Slot,
         instance: &instance::Generation,
         cursor: &ConsumedPosition,
-    ) -> Result<envelope::Delivery, VmError> {
+    ) -> Result<envelope::Delivery, VmFault> {
         self.scheduler
             .mailboxes
             .queued(slot, instance)
@@ -409,7 +409,7 @@ impl Vm<'_> {
             .ok_or_else(|| invalid(index, "an exchange terminal consumes no retained cursor"))
     }
 
-    pub(super) fn retain_recovered_responses(&mut self) -> Result<(), VmError> {
+    pub(super) fn retain_recovered_responses(&mut self) -> Result<(), VmFault> {
         // A retained response may have reached the peer before the crash.
         // No durable fact distinguishes not-started from started: hold it for
         // the original exchange's terminal event, never offer it a second time.

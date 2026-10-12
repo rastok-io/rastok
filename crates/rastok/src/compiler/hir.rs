@@ -342,7 +342,7 @@ impl Handler {
 
 // Core owns the checked decision and envelope-construction algebra.
 pub use crate::plan::{
-    ClosedArm, Dispatch, DispatchStep as Statement, Emission as EmitValue, FieldWrite, LoopCommand,
+    ClosedArm, Dispatch, DispatchStep as Statement, EmitValue, FieldWrite, LoopCommand,
     MultiEmitValues, OpenArm,
 };
 

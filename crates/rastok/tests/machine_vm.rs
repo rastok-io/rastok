@@ -19,7 +19,7 @@ use rastok::instance;
 use rastok::journal::Journal;
 use rastok::node;
 use rastok::plan::{AttrSetting, EvaluationSite, GraphVersion, OwnerValue, ValidatedExecutionPlan};
-use rastok::runtime::vm::{Vm, VmError};
+use rastok::runtime::vm::{Vm, VmFault};
 
 use rastok::boundary::{
     Completion, Draft, IngressEnvelopeProvenance, PortOutput, ProcessExit, RequestPreparation,
@@ -456,9 +456,11 @@ fn run_probe() -> (MemJournal, Vec<rastok::runtime::vm::BoundaryOutput>) {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
     vm.inject(&mut journal, submission("salut")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     assert!(vm.is_stable());
     (journal, vm.outputs().to_vec())
 }
@@ -490,7 +492,7 @@ graph file_path : App {
 
     vm.inject(&mut journal, text_submission("objects/report.bin"))
         .expect("the text path is admitted");
-    vm.drain_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut world)
         .expect("resolution and call opening succeed");
 
     let expected = std::collections::BTreeMap::from([(
@@ -600,7 +602,7 @@ graph rooted : App {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(&mut journal, int_submission(7)).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
 
     let Record::Ingress(inbound) = &journal.records()[0] else {
         panic!("the first fact is ingress");
@@ -677,7 +679,7 @@ graph nested : App {
     for (tenant, user) in [("acme", 7), ("acme", 7), ("other", 7)] {
         vm.inject(&mut journal, tenant_submission(tenant, user))
             .unwrap();
-        vm.drain(&mut journal).unwrap();
+        vm.run_ready(&mut journal).unwrap();
     }
     assert_eq!(
         vm.outputs()
@@ -725,7 +727,7 @@ graph nested : App {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     for _ in 0..2 {
         vm.inject(&mut journal, text_submission("alice")).unwrap();
-        vm.drain(&mut journal).unwrap();
+        vm.run_ready(&mut journal).unwrap();
     }
 
     assert_eq!(vm.outputs().len(), 2);
@@ -807,14 +809,14 @@ fn a_public_join_consumes_one_presence_set_in_declared_port_order() {
 
     vm.inject(&mut journal, port_int_submission("left", 10))
         .unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert!(
         vm.outputs().is_empty(),
         "an incomplete presence emits nothing"
     );
     vm.inject(&mut journal, port_int_submission("right", 20))
         .unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
 
     let output = vm
         .outputs()
@@ -880,11 +882,11 @@ fn a_presence_join_uses_arrival_only_for_the_trigger_not_tuple_order() {
 
     vm.inject(&mut journal, port_int_submission("right", 20))
         .unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert!(vm.is_stable(), "retained partial presence is quiescent");
     vm.inject(&mut journal, port_int_submission("left", 10))
         .unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
 
     let transaction = journal
         .records()
@@ -953,7 +955,7 @@ fn a_theta_join_refines_fifo_candidates_without_consuming_a_false_pair() {
     for (port, value) in [("left", 1), ("left", 2), ("right", 2)] {
         vm.inject(&mut journal, port_int_submission(port, value))
             .unwrap();
-        vm.drain(&mut journal).unwrap();
+        vm.run_ready(&mut journal).unwrap();
     }
 
     let output = vm
@@ -986,7 +988,7 @@ fn last_evicts_the_oldest_candidate_before_correlating_new_work() {
     for value in [1, 2, 3] {
         vm.inject(&mut journal, port_int_submission("left", value))
             .unwrap();
-        vm.drain(&mut journal).unwrap();
+        vm.run_ready(&mut journal).unwrap();
     }
 
     let expiry = vm
@@ -1000,7 +1002,7 @@ fn last_evicts_the_oldest_candidate_before_correlating_new_work() {
     ));
     vm.inject(&mut journal, port_int_submission("right", 9))
         .unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     let joined = vm
         .outputs()
         .iter()
@@ -1057,7 +1059,7 @@ fn within_evicts_only_a_still_buffered_candidate() {
     expired
         .inject(&mut expired_journal, port_int_submission("left", 4))
         .unwrap();
-    expired.drain(&mut expired_journal).unwrap();
+    expired.run_ready(&mut expired_journal).unwrap();
     expired
         .advance(
             &mut expired_journal,
@@ -1077,11 +1079,11 @@ fn within_evicts_only_a_still_buffered_candidate() {
     joined
         .inject(&mut joined_journal, port_int_submission("left", 4))
         .unwrap();
-    joined.drain(&mut joined_journal).unwrap();
+    joined.run_ready(&mut joined_journal).unwrap();
     joined
         .inject(&mut joined_journal, port_int_submission("right", 5))
         .unwrap();
-    joined.drain(&mut joined_journal).unwrap();
+    joined.run_ready(&mut joined_journal).unwrap();
     joined
         .advance(
             &mut joined_journal,
@@ -1143,7 +1145,7 @@ fn a_join_correlates_only_inside_its_owning_operator_instance() {
     for (port, value) in [("left", 1), ("right", 2)] {
         vm.inject(&mut journal, port_int_submission(port, value))
             .unwrap();
-        vm.drain(&mut journal).unwrap();
+        vm.run_ready(&mut journal).unwrap();
     }
     assert!(
         vm.outputs().is_empty(),
@@ -1151,7 +1153,7 @@ fn a_join_correlates_only_inside_its_owning_operator_instance() {
     );
     vm.inject(&mut journal, port_int_submission("right", 1))
         .unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
 
     let transaction = journal
         .records()
@@ -1223,10 +1225,10 @@ graph attributed : App {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(&mut journal, port_int_submission("left", 1))
         .unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     vm.inject(&mut journal, port_int_submission("right", 2))
         .unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
 
     assert_eq!(
         vm.outputs()
@@ -1276,7 +1278,7 @@ graph attributed : App {
         for (port, value) in arrivals {
             vm.inject(&mut journal, port_int_submission(port, value))
                 .unwrap();
-            vm.drain(&mut journal).unwrap();
+            vm.run_ready(&mut journal).unwrap();
         }
         assert_eq!(
             vm.outputs()[0].envelope.meta().app().get("token"),
@@ -1329,7 +1331,7 @@ graph lazy_join : App {{
         ),
     )
     .unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     vm.inject(
         &mut journal,
         encoded_submission(
@@ -1340,7 +1342,7 @@ graph lazy_join : App {{
         ),
     )
     .unwrap();
-    vm.drain(&mut journal)
+    vm.run_ready(&mut journal)
         .expect("carrying left never asks either opaque decoder");
     let output = &vm.outputs()[0].envelope;
     assert!(matches!(
@@ -1371,13 +1373,13 @@ graph lazy_join : App {{
         ),
     )
     .unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     vm.inject(
         &mut journal,
         encoded_submission("left", Encoding::Raw, b"abc", "text/plain"),
     )
     .unwrap();
-    vm.drain(&mut journal)
+    vm.run_ready(&mut journal)
         .expect("only the structurally inspected left payload decodes");
     assert_eq!(
         vm.outputs()[0].envelope.data(),
@@ -1464,9 +1466,11 @@ graph dynamic_binding : App {
     vm.inject(&mut journal, text_submission("salut")).unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
-        vm.drain_with_bindings(&mut journal, &mut process).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut process)
+            .unwrap();
         vm.pump(&mut journal, &mut process).unwrap();
-        vm.drain_with_bindings(&mut journal, &mut process).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut process)
+            .unwrap();
         if vm.is_stable() {
             break;
         }
@@ -1534,7 +1538,7 @@ graph failing_bundle : App {
 
     assert!(matches!(
         vm.inject(&mut journal, int_submission(7)),
-        Err(VmError::Fault(_))
+        Err(VmFault::Fault(_))
     ));
     assert!(
         journal.records().is_empty(),
@@ -1581,7 +1585,7 @@ graph keyed : App {
 
     for value in [7, 9, 7] {
         vm.inject(&mut journal, int_submission(value)).unwrap();
-        vm.drain(&mut journal).unwrap();
+        vm.run_ready(&mut journal).unwrap();
     }
 
     let output_values: Vec<i64> = vm
@@ -1708,11 +1712,11 @@ graph lifecycle : App {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
 
     let first = vm.inject(&mut journal, int_submission(7)).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     let second = vm.inject(&mut journal, int_submission(7)).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     let other = vm.inject(&mut journal, int_submission(9)).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert_eq!(
         vm.outputs()
             .iter()
@@ -1805,7 +1809,7 @@ graph lifecycle : App {
     );
 
     let next = vm.inject(&mut journal, int_submission(7)).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     let last = vm
         .outputs()
         .iter()
@@ -1874,7 +1878,8 @@ graph nested_lifetimes : App {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let cause = vm.inject(&mut journal, text_submission("salut")).unwrap();
     let mut world = EchoWorld::default();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     assert!(vm.has_open_obligations());
 
     vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
@@ -1889,7 +1894,7 @@ graph nested_lifetimes : App {
     );
 
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     let shell_transactions: Vec<_> = journal
         .records()
         .iter()
@@ -1962,13 +1967,15 @@ graph draining : App {
     let mut world = EchoWorld::default();
 
     vm.inject(&mut journal, text_submission("salut")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     assert!(vm.has_open_obligations());
     assert_eq!(vm.outputs().len(), 1, "the seed creates collect first");
 
     vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
 
     assert_eq!(vm.outputs().len(), 2);
     assert!(journal.records().iter().any(|record| matches!(
@@ -2000,7 +2007,8 @@ fn a_confirmed_cancel_keeps_the_observed_exit_and_never_invents_unknown() {
     };
 
     vm.inject(&mut journal, text_submission("salut")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     assert_eq!(world.started.len(), 1);
 
@@ -2037,7 +2045,8 @@ fn silent_cancel_becomes_one_unknown_only_after_settlement() {
     let mut world = ClosingWorld::default();
 
     vm.inject(&mut journal, text_submission("salut")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     vm.advance(&mut journal, &mut world, 2_000_000_000).unwrap();
     assert_eq!(world.cancelled.len(), 1);
@@ -2121,7 +2130,8 @@ fn bounded_closing_interleavings_are_model_checked() {
             ..ClosingWorld::default()
         };
         vm.inject(&mut journal, text_submission("one")).unwrap();
-        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut world)
+            .unwrap();
         vm.pump(&mut journal, &mut world).unwrap();
         let call = world.started[0];
         let reply = || Response {
@@ -2142,13 +2152,14 @@ fn bounded_closing_interleavings_are_model_checked() {
         if matches!(reply_at, ReplyAt::BeforeDrain) {
             world.answers.push(reply());
             vm.pump(&mut journal, &mut world).unwrap();
-            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+            vm.run_ready_with_bindings(&mut journal, &mut world)
+                .unwrap();
         }
         vm.advance(&mut journal, &mut world, 2_000_000_000).unwrap();
         if matches!(reply_at, ReplyAt::DuringSettlement) {
             world.answers.push(reply());
             vm.pump(&mut journal, &mut world).unwrap();
-            vm.drain(&mut journal).unwrap();
+            vm.run_ready(&mut journal).unwrap();
         }
         vm.advance(&mut journal, &mut world, 3_000_000_000).unwrap();
         let late = if matches!(reply_at, ReplyAt::AfterSettlement) {
@@ -2157,7 +2168,7 @@ fn bounded_closing_interleavings_are_model_checked() {
         } else {
             Default::default()
         };
-        vm.drain(&mut journal).unwrap();
+        vm.run_ready(&mut journal).unwrap();
 
         let expected = if matches!(
             reply_at,
@@ -2229,7 +2240,8 @@ fn external_arrival_waits_for_the_clean_successor_generation() {
     };
 
     vm.inject(&mut journal, text_submission("first")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
     let second = vm
@@ -2314,7 +2326,8 @@ graph two_calls : App {
 
     vm.inject(&mut journal, text_submission("first")).unwrap();
     vm.inject(&mut journal, text_submission("queued")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     assert_eq!(
         world.started.len(),
@@ -2390,12 +2403,12 @@ graph finite : App {{
         let mut world = EchoWorld::default();
 
         vm.inject(&mut journal, int_submission(1)).unwrap();
-        vm.drain(&mut journal).unwrap();
+        vm.run_ready(&mut journal).unwrap();
         if needs_advance {
             vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
         }
         vm.inject(&mut journal, int_submission(2)).unwrap();
-        vm.drain(&mut journal).unwrap();
+        vm.run_ready(&mut journal).unwrap();
 
         let values: Vec<i64> = vm
             .outputs()
@@ -2581,7 +2594,7 @@ graph one : App {
     assert!(
         matches!(
             vm.inject(&mut journal, int_submission(3)),
-            Err(VmError::InstanceClosing { owner }) if owner.to_string() == "relay"
+            Err(VmFault::InstanceClosing { owner }) if owner.to_string() == "relay"
         ),
         "one exact successor generation is already reserved"
     );
@@ -2592,7 +2605,7 @@ graph one : App {
         )),
         "the successor delivery waits in its ordinary mailbox"
     );
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert_eq!(vm.outputs().len(), 2);
     let generations: Vec<_> = journal
         .records()
@@ -2632,9 +2645,9 @@ graph explicit_stop : App {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(&mut journal, int_submission(1)).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     vm.inject(&mut journal, int_submission(2)).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
 
     assert_eq!(
         vm.outputs()
@@ -2688,7 +2701,7 @@ graph windows : App {
     vm.inject(&mut journal, int_submission(2)).unwrap();
     vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
     vm.inject(&mut journal, int_submission(3)).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
 
     let values: Vec<i64> = vm
         .outputs()
@@ -2775,11 +2788,11 @@ graph clipped : App {
     vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
     assert!(matches!(
         vm.inject(&mut journal, int_submission(2)),
-        Err(VmError::ClosedTimeBox { owner, start_ns: 0 }) if owner.to_string() == "window"
+        Err(VmFault::ClosedTimeBox { owner, start_ns: 0 }) if owner.to_string() == "window"
     ));
     vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
     vm.inject(&mut journal, int_submission(2)).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert_eq!(vm.outputs().len(), 2);
 }
 
@@ -2811,7 +2824,7 @@ graph parent : App {
     vm.inject(&mut journal, int_submission(1)).unwrap();
     vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
     vm.inject(&mut journal, int_submission(2)).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     vm.advance(&mut journal, &mut world, 2_000_000_000).unwrap();
 
     let records_after_successor = journal.records().len();
@@ -2900,9 +2913,11 @@ fn stderr_and_terminal_status_leave_on_independent_ports() {
         ..EchoWorld::default()
     };
     vm.inject(&mut journal, submission("salut")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     // stderr is ordinary data on `err`; the non-zero child status is an
     // independent, typed `Exited` terminal fact.
     assert!(vm.outputs().is_empty());
@@ -2936,7 +2951,8 @@ fn malformed_terminal_facts_are_refused_loudly() {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut opener = EchoWorld::default();
     vm.inject(&mut journal, submission("salut")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut opener).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut opener)
+        .unwrap();
     let open = journal.open_calls();
     let mut world = ScriptedWorld {
         answers: vec![
@@ -2978,7 +2994,7 @@ fn malformed_terminal_facts_are_refused_loudly() {
     );
     assert!(report.rejected[1].1.contains("materialized"));
     assert_eq!(journal.open_calls().len(), 1, "no garbage closure");
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert!(!vm.is_stable(), "the obligation is still open");
 }
 
@@ -3241,7 +3257,8 @@ fn a_new_input_reopens_only_its_ended_session_without_resending_old_writes() {
         };
         for tenant in ["alice", "bob", "alice", "bob"] {
             vm.inject(&mut journal, text_submission(tenant)).unwrap();
-            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+            vm.run_ready_with_bindings(&mut journal, &mut world)
+                .unwrap();
             vm.pump(&mut journal, &mut world).unwrap();
         }
         let [alice, bob] = world.opened.as_slice() else {
@@ -3263,7 +3280,8 @@ fn a_new_input_reopens_only_its_ended_session_without_resending_old_writes() {
 
         world.close(alice);
         vm.pump(&mut journal, &mut world).unwrap();
-        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut world)
+            .unwrap();
         assert_eq!(journal.live_sessions(), vec![bob]);
         assert_eq!(journal.open_session_writes().len(), 1);
         assert_eq!(journal.open_session_writes()[0].session_id, bob);
@@ -3285,7 +3303,8 @@ fn a_new_input_reopens_only_its_ended_session_without_resending_old_writes() {
         assert_eq!(world.writes, original_writes, "no recovery resend");
 
         let fresh_input = vm.inject(&mut journal, text_submission("alice")).unwrap();
-        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut world)
+            .unwrap();
         vm.pump(&mut journal, &mut world).unwrap();
         assert_eq!(world.opened.len(), 3);
         let fresh_alice = world.opened[2];
@@ -3309,7 +3328,8 @@ fn a_new_input_reopens_only_its_ended_session_without_resending_old_writes() {
         let retained = journal.records().to_vec();
         let report = vm.pump(&mut journal, &mut world).unwrap();
         assert_eq!(report.uncorrelated_sessions.len(), 2);
-        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut world)
+            .unwrap();
         assert_eq!(
             journal.records(),
             retained,
@@ -3319,7 +3339,8 @@ fn a_new_input_reopens_only_its_ended_session_without_resending_old_writes() {
 
         for (tenant, resource) in [("alice", fresh_alice), ("bob", bob)] {
             vm.inject(&mut journal, text_submission(tenant)).unwrap();
-            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+            vm.run_ready_with_bindings(&mut journal, &mut world)
+                .unwrap();
             assert_eq!(world.writes.last().unwrap().0, resource);
         }
         assert_eq!(world.opened.len(), 3, "Bob was never reopened");
@@ -3349,7 +3370,8 @@ fn repeated_child_stop_closes_only_the_exact_session_instance() {
     let mut world = SessionWorld::default();
     for tenant in ["alice", "bob"] {
         vm.inject(&mut journal, text_submission(tenant)).unwrap();
-        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut world)
+            .unwrap();
         vm.pump(&mut journal, &mut world).unwrap();
     }
     let [alice, bob] = world.opened.as_slice() else {
@@ -3369,7 +3391,8 @@ fn repeated_child_stop_closes_only_the_exact_session_instance() {
         let mut close = text_submission("alice");
         close.port = node::Port::new("close").unwrap();
         vm.inject(&mut journal, close).unwrap();
-        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut world)
+            .unwrap();
         vm.advance(&mut journal, &mut world, through).unwrap();
     }
     assert_eq!(
@@ -3378,7 +3401,8 @@ fn repeated_child_stop_closes_only_the_exact_session_instance() {
         "no renewed drain or duplicate close"
     );
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.advance(&mut journal, &mut world, 3_000_000_000).unwrap();
     assert_eq!(journal.live_sessions(), vec![bob]);
     assert_eq!(world.opened, vec![alice, bob], "a stop does not respawn");
@@ -3390,9 +3414,11 @@ fn repeated_child_stop_closes_only_the_exact_session_instance() {
     let mut repeated = text_submission("alice");
     repeated.port = node::Port::new("close").unwrap();
     vm.inject(&mut journal, repeated).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.inject(&mut journal, text_submission("bob")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     assert_eq!(world.writes.last().unwrap().0, bob);
     assert_eq!(world.close_requests, vec![alice]);
@@ -3467,7 +3493,8 @@ graph app : App {
             for tenant in ["alice", "bob"] {
                 vm.inject(&mut journal, message(tenant, "hello", "in"))
                     .unwrap();
-                vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+                vm.run_ready_with_bindings(&mut journal, &mut world)
+                    .unwrap();
                 vm.pump(&mut journal, &mut world).unwrap();
             }
             let [alice, bob] = world.opened.as_slice() else {
@@ -3485,7 +3512,8 @@ graph app : App {
 
             vm.inject(&mut journal, message("alice", "quit", "in"))
                 .unwrap();
-            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+            vm.run_ready_with_bindings(&mut journal, &mut world)
+                .unwrap();
             assert_eq!(world.writes.len(), 1);
             assert_eq!(world.writes[0].0, alice);
             let writes = journal.open_session_writes();
@@ -3506,7 +3534,8 @@ graph app : App {
             if responds_to_quit {
                 world.close(alice);
                 vm.pump(&mut journal, &mut world).unwrap();
-                vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+                vm.run_ready_with_bindings(&mut journal, &mut world)
+                    .unwrap();
                 assert_eq!(source_exit_cases(&vm), ["Closed"]);
                 assert!(world.close_requests.is_empty());
                 assert!(
@@ -3519,7 +3548,8 @@ graph app : App {
             } else {
                 vm.inject(&mut journal, message("alice", "stop", "close"))
                     .unwrap();
-                vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+                vm.run_ready_with_bindings(&mut journal, &mut world)
+                    .unwrap();
                 assert!(world.close_requests.is_empty(), "admitted work can drain");
                 if recover {
                     vm.recover_from_journal(&journal).unwrap();
@@ -3531,7 +3561,8 @@ graph app : App {
                     vm.recover_from_journal(&journal).unwrap();
                 }
                 vm.advance(&mut journal, &mut world, 2_000_000_000).unwrap();
-                vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+                vm.run_ready_with_bindings(&mut journal, &mut world)
+                    .unwrap();
                 assert_eq!(source_exit_cases(&vm), ["OutcomeUnknown"]);
                 assert!(
                     !vm.inspection()
@@ -3545,7 +3576,8 @@ graph app : App {
             let before_late_exit = journal.records().to_vec();
             world.close(alice);
             let report = vm.pump(&mut journal, &mut world).unwrap();
-            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+            vm.run_ready_with_bindings(&mut journal, &mut world)
+                .unwrap();
             assert!(matches!(report.uncorrelated_sessions.as_slice(),
                 [SessionDriverEvent::Exited { session, .. }] if *session == alice));
             assert_eq!(journal.records(), before_late_exit);
@@ -3554,7 +3586,8 @@ graph app : App {
 
             vm.inject(&mut journal, message("bob", "still here", "in"))
                 .unwrap();
-            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+            vm.run_ready_with_bindings(&mut journal, &mut world)
+                .unwrap();
             assert_eq!(world.writes.last().unwrap().0, bob);
             assert_eq!(world.opened, [alice, bob]);
             assert_eq!(world.writes.len(), 2, "recovery never resends quit");
@@ -3595,14 +3628,16 @@ fn session_release_waits_for_the_committed_terminal_even_after_a_storage_failure
             };
             for tenant in ["alice", "bob"] {
                 vm.inject(&mut journal, text_submission(tenant)).unwrap();
-                vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+                vm.run_ready_with_bindings(&mut journal, &mut world)
+                    .unwrap();
                 vm.pump(&mut journal, &mut world).unwrap();
             }
             let (alice, bob) = (world.opened[0], world.opened[1]);
             let mut close = text_submission("alice");
             close.port = node::Port::new("close").unwrap();
             vm.inject(&mut journal, close).unwrap();
-            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+            vm.run_ready_with_bindings(&mut journal, &mut world)
+                .unwrap();
             vm.advance(&mut journal, &mut world, 999_999_999).unwrap();
             assert!(world.close_requests.is_empty());
             assert!(world.abort_requests.is_empty());
@@ -3625,7 +3660,7 @@ fn session_release_waits_for_the_committed_terminal_even_after_a_storage_failure
             let retained = journal.inner.records().to_vec();
             assert!(matches!(
                 vm.advance(&mut journal, &mut world, 2_000_000_000),
-                Err(VmError::Journal(_))
+                Err(VmFault::Journal(_))
             ));
             assert_eq!(journal.inner.records(), retained);
             assert!(
@@ -3678,7 +3713,8 @@ fn session_release_waits_for_the_committed_terminal_even_after_a_storage_failure
             );
             assert_eq!(journal.inner.records(), retained);
             vm.inject(&mut journal, text_submission("bob")).unwrap();
-            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+            vm.run_ready_with_bindings(&mut journal, &mut world)
+                .unwrap();
             assert_eq!(world.writes.last().unwrap().0, bob);
         }
     }
@@ -3728,23 +3764,26 @@ graph app : App {
         let mut seed = text_submission("waiting");
         seed.port = node::Port::new("seed").unwrap();
         vm.inject(&mut journal, seed).unwrap();
-        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut world)
+            .unwrap();
     }
     vm.inject(&mut journal, text_submission("open")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     let session = world.opened[0];
     let mut close = text_submission("stop");
     close.port = node::Port::new("close").unwrap();
     vm.inject(&mut journal, close).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
     assert_eq!(world.close_requests, [session]);
     assert!(world.abort_requests.is_empty());
     let retained = journal.records().to_vec();
     assert!(matches!(
         vm.advance(&mut journal, &mut world, 2_000_000_000),
-        Err(VmError::MailboxFull { node }) if node == node::Path::new(["hold"]).unwrap()
+        Err(VmFault::MailboxFull { node }) if node == node::Path::new(["hold"]).unwrap()
     ));
     assert_eq!(
         world.abort_requests,
@@ -3857,7 +3896,8 @@ graph app : App {
         ..SessionWorld::default()
     };
     vm.inject(&mut journal, text_submission("open")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     let retained = journal.inner.records().to_vec();
     for sabotage in 0..3 {
         let mut records = retained.clone();
@@ -3884,7 +3924,7 @@ graph app : App {
         let before = vm.inspection();
         assert!(matches!(
             vm.recover_from_journal(&journal),
-            Err(VmError::InvalidRecovery { .. })
+            Err(VmFault::InvalidRecovery { .. })
         ));
         assert_eq!(before, vm.inspection());
         assert_eq!(retained, journal.inner.records());
@@ -3948,7 +3988,7 @@ graph app : App {{
                 &mut journal,
                 &websocket_proposal(1, "", InboundSession::Open),
             ),
-            Err(VmError::PlanInvariant {
+            Err(VmFault::PlanInvariant {
                 reason: "this Contract does not admit peer Session openings",
                 ..
             })
@@ -3996,7 +4036,8 @@ graph app : App {
             if recover {
                 vm.recover_from_journal(&journal).unwrap();
             }
-            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+            vm.run_ready_with_bindings(&mut journal, &mut world)
+                .unwrap();
             assert_eq!(journal.live_sessions().len(), live_peers);
             assert!(world.opened.is_empty(), "an orphan cannot open a client");
             assert!(world.writes.is_empty(), "one live peer is not a correlator");
@@ -4055,7 +4096,7 @@ graph app : App {
         sessions.push(session);
         vm.recover_from_journal(&journal).unwrap();
     }
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     for (sequence, text, session) in [(3, "alice", sessions[0]), (4, "bob", sessions[1])] {
         vm.admit_ingress(
             &mut journal,
@@ -4068,7 +4109,7 @@ graph app : App {
     for session in sessions.into_iter().rev() {
         world.close(session);
         vm.pump(&mut journal, &mut world).unwrap();
-        vm.drain(&mut journal).unwrap();
+        vm.run_ready(&mut journal).unwrap();
         vm.recover_from_journal(&journal).unwrap();
     }
     assert_eq!(vm.outputs().len(), 4);
@@ -4102,7 +4143,8 @@ graph websocket : App {
     let mut world = SessionWorld::default();
 
     vm.inject(&mut journal, text_submission("hello")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     assert_eq!(world.opened.len(), 1);
     assert!(
         journal.live_sessions().is_empty(),
@@ -4112,7 +4154,8 @@ graph websocket : App {
     assert_eq!(journal.live_sessions().len(), 1);
 
     vm.inject(&mut journal, text_submission("again")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     assert_eq!(world.writes.len(), 1);
     assert_eq!(world.writes[0].0, world.opened[0]);
     vm.pump(&mut journal, &mut world).unwrap();
@@ -4120,7 +4163,8 @@ graph websocket : App {
 
     world.close(world.opened[0]);
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     assert!(journal.live_sessions().is_empty());
     assert!(vm.is_stable());
     assert_eq!(source_exit_cases(&vm), ["Closed"]);
@@ -4167,18 +4211,21 @@ graph websocket : App {
     };
 
     vm.inject(&mut journal, text_submission("open")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
 
     for _ in 0..1_024 {
         vm.inject(&mut journal, text_submission("held")).unwrap();
-        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut world)
+            .unwrap();
     }
     assert_eq!(world.writes.len(), 1_024);
 
     vm.inject(&mut journal, text_submission("still-bounded"))
         .unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     assert_eq!(
         world.writes.len(),
         1_024,
@@ -4187,7 +4234,8 @@ graph websocket : App {
 
     world.settle_write(0);
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     assert_eq!(world.writes.len(), 1_025);
 }
 
@@ -4219,7 +4267,8 @@ graph websocket : App {
     };
 
     vm.inject(&mut journal, text_submission("hello")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     assert_eq!(world.opened.len(), 1);
     assert_eq!(journal.open_session_writes().len(), 0);
     vm.pump(&mut journal, &mut world).unwrap();
@@ -4304,7 +4353,8 @@ graph websocket : App {
     world.close(second);
     world.close(first);
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     assert!(vm.is_stable());
     assert_eq!(source_exit_cases(&vm), ["Closed", "Closed"]);
     let exit_sessions = vm
@@ -4350,9 +4400,9 @@ on in {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(&mut journal, submission("salut")).unwrap();
     let error = vm
-        .drain(&mut journal)
+        .run_ready(&mut journal)
         .expect_err("a failed narrowing is a VM fault, not a domain result");
-    assert!(matches!(error, VmError::Fault(_)), "{error:?}");
+    assert!(matches!(error, VmFault::Fault(_)), "{error:?}");
     assert!(
         journal.records().iter().all(|record| !matches!(
             record,
@@ -4557,7 +4607,7 @@ fn a_refused_commit_leaves_the_delivery_replayable() {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(&mut journal, submission("salut")).unwrap();
     let error = vm.step(&mut journal).unwrap_err();
-    assert!(matches!(error, VmError::Journal(_)));
+    assert!(matches!(error, VmFault::Journal(_)));
     // The store recovers; the same delivery replays and commits —
     // nothing was consumed by the refusal.
     journal.refuse_commits = false;
@@ -4597,7 +4647,7 @@ graph app : App {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(&mut journal, text_submission("first")).unwrap();
     vm.step(&mut journal).unwrap();
-    assert!(matches!(vm.step(&mut journal), Err(VmError::Journal(_))));
+    assert!(matches!(vm.step(&mut journal), Err(VmFault::Journal(_))));
     let count_starts = |records: &[Record]| {
         records.iter().filter(|record| matches!(record,
         Record::Transaction(record) if record.owner_path.to_string() == "count" && record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Start))).count()
@@ -4609,7 +4659,7 @@ graph app : App {
     recovered.recover_from_journal(&journal).unwrap();
     assert_eq!(journal.inner.records(), prefix);
     assert!(recovered.has_ready_transaction());
-    recovered.drain(&mut journal).unwrap();
+    recovered.run_ready(&mut journal).unwrap();
     assert_eq!(
         count_starts(journal.inner.records()),
         1,
@@ -4623,7 +4673,7 @@ graph app : App {
     recovered
         .inject(&mut journal, text_submission("second"))
         .unwrap();
-    recovered.drain(&mut journal).unwrap();
+    recovered.run_ready(&mut journal).unwrap();
     assert_eq!(count_starts(journal.inner.records()), 2);
     assert_eq!(
         recovered.outputs()[1].envelope.data(),
@@ -4658,7 +4708,7 @@ graph app : App {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(&mut journal, text_submission("alice")).unwrap();
     vm.inject(&mut journal, text_submission("bob")).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
 
     // Both exact admissions may exist before either application consumes its
     // input. The following prefix differs only in manager scheduling, not in
@@ -4727,7 +4777,7 @@ graph app : App {
         journal.recovery_records = Some(forged);
         let mut rejected = Vm::boot(&compilation.plan, GraphVersion(1));
         let before = rejected.inspection();
-        let Err(VmError::InvalidRecovery { reason, .. }) = rejected.recover_from_journal(&journal)
+        let Err(VmFault::InvalidRecovery { reason, .. }) = rejected.recover_from_journal(&journal)
         else {
             panic!("sabotage {sabotage} did not refuse as invalid recovery");
         };
@@ -4812,7 +4862,7 @@ fn graph_call_commits_and_openings_are_atomic_under_storage_refusal() {
                     journal.refuse_opens = true;
                     assert!(matches!(
                         vm.step_with_bindings(&mut journal, &mut world),
-                        Err(VmError::Journal(rastok::journal::Error::Storage(_)))
+                        Err(VmFault::Journal(rastok::journal::Error::Storage(_)))
                     ));
                     assert_eq!(vm.inspection(), before);
                     assert_eq!(journal.inner.records(), records);
@@ -4857,7 +4907,8 @@ fn graph_call_recovery_refuses_missing_contexts_and_unsettled_obligations() {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = ClosingWorld::default();
     vm.inject(&mut journal, text_submission("same")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     world.answers.push(Response {
         call_id: world.started[0],
@@ -4912,7 +4963,7 @@ fn graph_call_recovery_refuses_missing_contexts_and_unsettled_obligations() {
         assert!(
             matches!(
                 vm.recover_with_bindings(&journal, &mut world),
-                Err(VmError::InvalidRecovery { .. })
+                Err(VmFault::InvalidRecovery { .. })
             ),
             "sabotage {sabotage}"
         );
@@ -4930,7 +4981,7 @@ fn graph_manager_commit_failures_preserve_the_next_boundary() {
     continuous
         .inject(&mut expected, text_submission("same"))
         .unwrap();
-    continuous.drain(&mut expected).unwrap();
+    continuous.run_ready(&mut expected).unwrap();
     let mut journal = FlakyJournal::healthy(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(&mut journal, text_submission("same")).unwrap();
@@ -4940,7 +4991,7 @@ fn graph_manager_commit_failures_preserve_the_next_boundary() {
         journal.refuse_commits = true;
         assert!(matches!(
             vm.step(&mut journal),
-            Err(VmError::Journal(rastok::journal::Error::Storage(_)))
+            Err(VmFault::Journal(rastok::journal::Error::Storage(_)))
         ));
         assert_eq!(vm.inspection(), before);
         assert_eq!(journal.inner.records(), records);
@@ -4958,7 +5009,7 @@ fn graph_recovery_rederives_admission_context_and_quiescence() {
     let mut journal = FlakyJournal::healthy(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(&mut journal, text_submission("same")).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     let original = journal.inner.records().to_vec();
     for sabotage in 0..4 {
         let index = original
@@ -5003,7 +5054,7 @@ fn graph_recovery_rederives_admission_context_and_quiescence() {
         assert!(
             matches!(
                 vm.recover_from_journal(&journal),
-                Err(VmError::InvalidRecovery { .. })
+                Err(VmFault::InvalidRecovery { .. })
             ),
             "sabotage {sabotage}"
         );
@@ -5068,7 +5119,7 @@ graph app : App {
             let effects = world.started.clone();
             journal.refuse_commits = faulted;
             journal.refuse_opens = faulted;
-            let result = sweep.step(vm, journal, world);
+            let result = sweep.advance_once(vm, journal, world);
             journal.refuse_commits = false;
             journal.refuse_opens = false;
             match result {
@@ -5077,8 +5128,8 @@ graph app : App {
                     assert!(
                         matches!(
                             error,
-                            VmError::Journal(rastok::journal::Error::Storage(_))
-                                | VmError::Dispatch(rastok::boundary::DispatchError::Journal(
+                            VmFault::Journal(rastok::journal::Error::Storage(_))
+                                | VmFault::Dispatch(rastok::boundary::DispatchError::Journal(
                                     rastok::journal::Error::Storage(_)
                                 ))
                         ),
@@ -5088,7 +5139,7 @@ graph app : App {
                     assert_eq!(vm.inspection(), inspection);
                     assert_eq!(vm.observations(), observations);
                     assert_eq!(world.started, effects);
-                    assert!(sweep.step(vm, journal, world).unwrap());
+                    assert!(sweep.advance_once(vm, journal, world).unwrap());
                 }
                 Err(error) => panic!("unfaulted transition: {error:?}"),
             }
@@ -5128,7 +5179,7 @@ graph app : App {
                 journal.refuse_closes = true;
                 assert!(matches!(
                     vm.pump(&mut journal, &mut world),
-                    Err(VmError::Dispatch(rastok::boundary::DispatchError::Journal(
+                    Err(VmFault::Dispatch(rastok::boundary::DispatchError::Journal(
                         rastok::journal::Error::Storage(_)
                     )))
                 ));
@@ -5214,7 +5265,8 @@ graph app : App {
         let mut world = ClosingWorld::default();
         vm.inject(&mut journal, text_submission("one fan-out"))
             .unwrap();
-        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut world)
+            .unwrap();
         vm.pump(&mut journal, &mut world).unwrap();
         assert_eq!(world.started.len(), 2);
         for call_id in &world.started {
@@ -5248,7 +5300,7 @@ graph app : App {
         journal.refuse_call = Some(world.started[refused]);
         assert!(matches!(
             vm.pump(&mut journal, &mut world),
-            Err(VmError::Dispatch(rastok::boundary::DispatchError::Journal(
+            Err(VmFault::Dispatch(rastok::boundary::DispatchError::Journal(
                 rastok::journal::Error::Storage(_)
             )))
         ));
@@ -5278,7 +5330,8 @@ graph app : App {
             "the invalid first answer stays observable"
         );
         assert_eq!(world.answers.len(), 1);
-        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut world)
+            .unwrap();
         assert_eq!(vm.outputs().len(), 2);
         assert!(vm.is_stable());
         assert_eq!(world.started.len(), 2);
@@ -5317,7 +5370,8 @@ graph app : App {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = ClosingWorld::default();
     vm.inject(&mut journal, text_submission("request")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     assert_eq!(world.started.len(), 1);
     let opening = journal.inner.records().to_vec();
@@ -5373,7 +5427,7 @@ graph app : App {
         journal.recovery_records = Some(forged);
         let mut recovered = Vm::boot(&compilation.plan, GraphVersion(1));
         let before = recovered.inspection();
-        let Err(VmError::InvalidRecovery { reason, .. }) =
+        let Err(VmFault::InvalidRecovery { reason, .. }) =
             recovered.recover_with_bindings(&journal, &mut world)
         else {
             panic!("sabotage {sabotage} did not refuse as invalid recovery");
@@ -5417,7 +5471,8 @@ graph app : App {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = ClosingWorld::default();
     vm.inject(&mut journal, text_submission("x")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     let call = journal.inner.open_calls()[0].call_id;
     journal
         .inner
@@ -5545,10 +5600,12 @@ graph logical_time : App {
     let mut world = EchoWorld::default();
 
     vm.inject(&mut journal, submission("first")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.advance(&mut journal, &mut world, 2_000).unwrap();
     vm.inject(&mut journal, submission("second")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
 
     let instants: Vec<_> = vm
         .outputs()
@@ -5603,7 +5660,8 @@ graph logical_time_guard : App {
     let mut world = EchoWorld::default();
 
     vm.inject(&mut journal, submission("filtered")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
 
     assert!(vm.outputs().is_empty(), "the false guard emits nothing");
     let observed: Vec<_> = journal
@@ -5628,7 +5686,8 @@ fn a_silent_driver_expires_into_a_typed_timeout() {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
     vm.inject(&mut journal, submission("salut")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     assert!(vm.has_open_obligations());
     // Nobody answers; the budget expires at the discrete advance.
     vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
@@ -5653,7 +5712,8 @@ fn a_silent_driver_expires_into_a_typed_timeout() {
     assert_eq!(source_exit_cases(&vm), ["TimeoutExpired"]);
     // The claim lifted: a second submission opens a second call.
     vm.inject(&mut journal, submission("encore")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     assert_eq!(journal.open_calls().len(), 1);
 }
 
@@ -5672,14 +5732,15 @@ fn a_scheduler_projection_refusal_precedes_the_timeout_close() {
         refuse_cancel: false,
     };
     vm.inject(&mut journal, submission("salut")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut bindings).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut bindings)
+        .unwrap();
     let facts_before = journal.records().len();
     assert_eq!(journal.open_calls().len(), 1);
 
     bindings.refuse_scheduler_completion = true;
     assert!(matches!(
         vm.advance(&mut journal, &mut bindings, 5_000_000_000),
-        Err(VmError::Dispatch(rastok::boundary::DispatchError::Driver(
+        Err(VmFault::Dispatch(rastok::boundary::DispatchError::Driver(
             DriverRouteError::UnavailableOutbound(_)
         )))
     ));
@@ -5707,11 +5768,12 @@ fn a_cancel_refusal_cannot_strand_an_expiring_call() {
         refuse_cancel: true,
     };
     vm.inject(&mut journal, submission("salut")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut bindings).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut bindings)
+        .unwrap();
 
     assert!(matches!(
         vm.advance(&mut journal, &mut bindings, 5_000_000_000),
-        Err(VmError::Dispatch(rastok::boundary::DispatchError::Driver(
+        Err(VmFault::Dispatch(rastok::boundary::DispatchError::Driver(
             DriverRouteError::UnavailableOutbound(_)
         )))
     ));
@@ -5749,7 +5811,8 @@ fn a_budget_runs_from_delivery_and_covers_queue_time() {
     let mut world = EchoWorld::default();
     vm.inject(&mut journal, submission("un")).unwrap();
     vm.inject(&mut journal, submission("deux")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     assert_eq!(journal.open_calls().len(), 1, "one open, one queued");
     // Nobody answers; both budgets expire at the same sweep.
     vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
@@ -5858,7 +5921,8 @@ on in { out = data.text }
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
     vm.inject(&mut journal, submission("salut")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     assert_eq!(journal.open_calls().len(), 2, "both calls opened");
     // Only beta's budget is due at 100ms.
     vm.advance(&mut journal, &mut world, 100_000_000).unwrap();
@@ -5882,11 +5946,13 @@ fn an_answer_and_an_expiry_race_to_a_single_closure() {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
     vm.inject(&mut journal, submission("salut")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     // The driver answers first; the expiry then loses the race —
     // one closure fact, one completion transaction, no duplicate.
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
     assert!(vm.is_stable());
     let closures = journal
@@ -5921,7 +5987,8 @@ fn a_late_answer_is_a_reported_observation_not_a_silence() {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
     vm.inject(&mut journal, submission("salut")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     let call_id = journal.open_calls()[0].call_id;
     // The budget expires first…
     vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
@@ -5963,7 +6030,8 @@ fn a_refused_expiry_stays_scheduled_and_replays() {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
     vm.inject(&mut journal, submission("salut")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     assert!(
         vm.advance(&mut journal, &mut world, 5_000_000_000).is_err(),
         "the refused closure surfaces"
@@ -5988,7 +6056,8 @@ fn a_refused_open_on_a_queued_expiry_replays_without_duplicates() {
     let mut world = EchoWorld::default();
     vm.inject(&mut journal, submission("un")).unwrap();
     vm.inject(&mut journal, submission("deux")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     assert_eq!(journal.inner.open_calls().len(), 1, "one open, one queued");
     journal.refuse_opens = true;
     assert!(vm.advance(&mut journal, &mut world, 5_000_000_000).is_err());
@@ -6041,7 +6110,7 @@ fn a_refused_commit_on_a_queued_expiry_loses_nothing() {
     // never acked — exactly one typed terminal fact results.
     journal.refuse_commits = false;
     vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert!(vm.is_stable());
     assert!(
         vm.observations()
@@ -6082,17 +6151,19 @@ fn a_suspended_call_keeps_its_mailbox_claimed() {
     let mut world = EchoWorld::default();
     vm.inject(&mut journal, submission("un")).unwrap();
     vm.inject(&mut journal, submission("deux")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     // Two requests reached the connector, but only one call is
     // open: the second waits for the mailbox claim to lift.
     assert_eq!(journal.open_calls().len(), 1);
     assert!(vm.has_open_obligations());
     // Settle, then the claim lifts and the second call opens.
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     assert_eq!(journal.open_calls().len(), 1, "the second call is now open");
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert!(vm.is_stable());
     assert_eq!(vm.outputs().len(), 2);
 }
@@ -6107,7 +6178,7 @@ fn a_filtered_input_reaches_stability_without_output() {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(&mut journal, submission("")).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert!(vm.is_stable(), "the guard filtered; nothing is pending");
     assert!(vm.outputs().is_empty());
     // The consumption is still a causal fact.
@@ -6151,7 +6222,7 @@ graph countdown : App + Loop {
         .inject(&mut journal, int_submission(2))
         .expect("the root is admitted");
     before_restart
-        .drain(&mut journal)
+        .run_ready(&mut journal)
         .expect("the first traversal schedules, rather than runs, its successor");
     let run = first_loop(&journal);
     let first = loop_state(&journal, run);
@@ -6247,7 +6318,7 @@ graph countdown : App + Loop {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
     vm.inject(&mut journal, int_submission(3)).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     let run = first_loop(&journal);
     assert_eq!(loop_state(&journal, run).due_at, Some(1_000_000_000));
     vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
@@ -6292,14 +6363,14 @@ graph countdown : App + Loop {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
     vm.inject(&mut journal, int_submission(1)).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     let old_run = first_loop(&journal);
 
     vm.advance(&mut journal, &mut world, 1_000_000_000)
         .expect("the lifetime closes before the later Loop wakeup");
     vm.inject(&mut journal, int_submission(0))
         .expect("the next root reserves a clean successor generation");
-    vm.drain(&mut journal)
+    vm.run_ready(&mut journal)
         .expect("the successor run reaches its own terminal branch");
     assert_eq!(vm.outputs().len(), 1);
     vm.advance(&mut journal, &mut world, 2_000_000_000)
@@ -6342,7 +6413,7 @@ graph countdown : App + Loop {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(&mut journal, int_submission(1)).unwrap();
     vm.inject(&mut journal, int_submission(2)).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     let runs: Vec<_> = journal
         .records()
         .iter()
@@ -6448,7 +6519,8 @@ graph retry : App + Loop {
     let mut world = ClosingWorld::default();
 
     vm.inject(&mut journal, text_submission("again")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     assert_eq!(journal.open_calls().len(), 1);
     let run = first_loop(&journal);
 
@@ -6542,7 +6614,8 @@ graph retry : App + Loop {
     let mut world = ClosingWorld::default();
 
     vm.inject(&mut journal, text_submission("again")).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.advance(&mut journal, &mut world, 1_000_000_000)
         .expect("the first Call timeout selects delayed recurrence");
     drop(vm);

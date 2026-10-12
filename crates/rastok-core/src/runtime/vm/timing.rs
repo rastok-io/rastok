@@ -232,7 +232,7 @@ impl Vm<'_> {
         &self,
         record: &mut crate::journal::TransactionRecord,
         prepared: &PreparedEmissions,
-    ) -> Result<(), VmError> {
+    ) -> Result<(), VmFault> {
         record.routes = self.routed_deliveries(prepared);
         record.instance_commands = Self::retained_command_packet(&prepared.commands);
         if let Some(packet) = record.loop_record.as_deref_mut() {
@@ -275,7 +275,7 @@ impl Vm<'_> {
         &self,
         record: &mut crate::journal::TransactionRecord,
         deadlines: Vec<Deadline>,
-    ) -> Result<(), VmError> {
+    ) -> Result<(), VmFault> {
         if deadlines.is_empty() {
             return Ok(());
         }
@@ -292,8 +292,8 @@ impl Vm<'_> {
     pub(super) fn create_deadlines(
         at: i64,
         deadlines: Vec<Deadline>,
-    ) -> Result<Deadlines, VmError> {
+    ) -> Result<Deadlines, VmFault> {
         Deadlines::try_new(at, deadlines)
-            .map_err(|error| VmError::Journal(crate::journal::Error::InvalidDeadlines(error)))
+            .map_err(|error| VmFault::Journal(crate::journal::Error::InvalidDeadlines(error)))
     }
 }

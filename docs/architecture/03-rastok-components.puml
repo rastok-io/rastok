@@ -12,7 +12,7 @@ Container_Boundary(executable, "rastok executable") {
   Component(entry, "CLI / Lab runner", "rastok", "Check, run, simulate, new and diagnostic replay. Explicit logical time; one engine.")
   Component(compiler, "Compiler / Contract catalogue", "rastok", "Parse, resolve, type, Dispatch and route checks; canonical HIR identity.")
   Component(plan, "Validated plan gate", "rastok-core, no_std + alloc", "Independent plan validation: scopes, Contracts, Dispatch, routes, instance commands, annotations, Loop proofs and Retry safety.")
-  Component(core, "VM / HandlerExecutor / managers", "rastok-core", "Reserve before commit; atomic state, emissions and commands; recover from recorded facts.")
+  Component(core, "VM / TransactionPreparer / managers", "rastok-core", "Reserve before commit; atomic state, emissions and commands; recover from recorded facts.")
   Component(binding, "Registry / runtime binding", "rastok", "Exact Contract id and role; pure request preparation shared by real and Lab Drivers.")
   Component(drivers, "Real or scripted Drivers", "rastok", "Effects after open; typed outcomes. Process job: Call; resident service: Session. Async stays private.")
   ComponentDb(journal, "Journal", "rastok-core: MemJournal", "INGRESS, TRANSACTION, EGRESS; routes, commands and unsealed original deadlines. No disk backend.")

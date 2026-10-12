@@ -15,7 +15,7 @@ use crate::envelope::WriteTarget;
 use crate::expr;
 use crate::node;
 use crate::plan::{
-    Dispatch, DispatchStep, EdgeEnd, Emission, ExecutionPlan, PlanValidationError, Slot,
+    Dispatch, DispatchStep, EdgeEnd, EmitValue, ExecutionPlan, PlanValidationError, Slot,
 };
 use crate::schema_annotation::AnnotationTable;
 
@@ -157,7 +157,7 @@ struct Flow {
 struct EmissionRule<'plan> {
     input: usize,
     output: usize,
-    emission: &'plan Emission,
+    emission: &'plan EmitValue,
     cases: Option<Vec<String>>,
 }
 
@@ -347,7 +347,7 @@ impl<'plan> Solver<'plan> {
                                             target: output,
                                             cases: cases.clone(),
                                         });
-                                    } else if !matches!(value, Emission::Nothing) {
+                                    } else if !matches!(value, EmitValue::Nothing) {
                                         self.emissions.push(EmissionRule {
                                             input,
                                             output,
@@ -812,19 +812,19 @@ fn positive_data_cases(expression: &expr::Expr) -> Option<Vec<String>> {
 }
 
 fn emission_type(
-    emission: &Emission,
+    emission: &EmitValue,
     input: Option<&DataType>,
     expected: Option<&DataType>,
     mut require_input: impl FnMut(TypeRequirement) -> Result<bool, PlanValidationError>,
 ) -> Result<Option<DataType>, PlanValidationError> {
     match emission {
-        Emission::Nothing => Ok(None),
-        Emission::Identity => Ok(input.cloned()),
-        Emission::Data(tree) => expression_type(tree, input, expected, &mut require_input),
-        Emission::Patch(fields) => {
+        EmitValue::Nothing => Ok(None),
+        EmitValue::Identity => Ok(input.cloned()),
+        EmitValue::Data(tree) => expression_type(tree, input, expected, &mut require_input),
+        EmitValue::Patch(fields) => {
             writes_type(fields, input.cloned(), input, expected, &mut require_input)
         }
-        Emission::FreshData(fields) => {
+        EmitValue::FreshData(fields) => {
             let empty = StructType::new(Vec::new())
                 .map(DataType::Struct)
                 .map_err(|reason| PlanValidationError::InvalidDataType {
@@ -837,7 +837,7 @@ fn emission_type(
 }
 
 pub(super) fn resolved_emission_type(
-    emission: &Emission,
+    emission: &EmitValue,
     input: &DataType,
     expected: &DataType,
 ) -> Result<Option<DataType>, PlanValidationError> {
@@ -906,13 +906,13 @@ fn writes_type(
     Ok(current)
 }
 
-fn emission_preserves_payload(emission: &Emission) -> bool {
+fn emission_preserves_payload(emission: &EmitValue) -> bool {
     match emission {
-        Emission::Identity => true,
-        Emission::Data(tree) => {
+        EmitValue::Identity => true,
+        EmitValue::Data(tree) => {
             matches!(&tree.root, expr::Expr::Path(path) if path.as_slice() == ["data"])
         }
-        Emission::Patch(fields) | Emission::FreshData(fields) => {
+        EmitValue::Patch(fields) | EmitValue::FreshData(fields) => {
             // Match the runtime's whole-payload witness rule: metadata-only
             // patches preserve data, and a final whole-data `data = data`
             // write makes every earlier payload write dead. This is a type
@@ -921,12 +921,12 @@ fn emission_preserves_payload(emission: &Emission) -> bool {
                 .iter()
                 .filter(|field| matches!(field.target, WriteTarget::Data(_)));
             let Some(last) = data_writes.next_back() else {
-                return matches!(emission, Emission::Patch(_));
+                return matches!(emission, EmitValue::Patch(_));
             };
             matches!(&last.target, WriteTarget::Data(path) if path.is_empty())
                 && matches!(&last.value.root, expr::Expr::Path(path) if path.as_slice() == ["data"])
         }
-        Emission::Nothing => false,
+        EmitValue::Nothing => false,
     }
 }
 

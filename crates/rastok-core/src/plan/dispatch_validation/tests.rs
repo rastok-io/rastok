@@ -33,7 +33,7 @@ fn local(name: &str, value: Tree) -> DispatchStep {
 fn emit(value: Tree) -> DispatchStep {
     DispatchStep::Emit {
         port: Port::conventional_out(),
-        value: Emission::Data(value),
+        value: EmitValue::Data(value),
     }
 }
 
@@ -304,7 +304,7 @@ fn every_effectful_prefix_refuses_before_a_branch_can_be_selected() {
         DispatchStep::LoopCommand(LoopCommand::Done),
         DispatchStep::MultiEmit {
             ports: vec![Port::conventional_out(), Port::new("other").unwrap()],
-            values: MultiEmitValues::Broadcast(Emission::Identity),
+            values: MultiEmitValues::Broadcast(EmitValue::Identity),
         },
     ] {
         let mut dispatch = closed(tree("true", &signature), &["false", "true"]);
@@ -530,8 +530,8 @@ fn multi_emission_keeps_authored_order_and_checks_every_value_and_target() {
     let signature = Signature::new();
     let a = Port::new("a").unwrap();
     let b = Port::new("b").unwrap();
-    let one = Emission::Data(tree("1", &signature));
-    let two = Emission::Data(tree("2", &signature));
+    let one = EmitValue::Data(tree("1", &signature));
+    let two = EmitValue::Data(tree("2", &signature));
     let make = |ports, values| Dispatch::Linear(vec![DispatchStep::MultiEmit { ports, values }]);
     let dispatch = make(
         vec![b.clone(), a.clone()],
@@ -559,7 +559,7 @@ fn multi_emission_keeps_authored_order_and_checks_every_value_and_target() {
             DispatchErrorKind::MultiEmission,
         );
     }
-    let bad = Emission::Data(literal(Value::Text("wrong".into()), DataType::INT));
+    let bad = EmitValue::Data(literal(Value::Text("wrong".into()), DataType::INT));
     assert_refusal(
         &make(vec![a, b], MultiEmitValues::Tuple(vec![one, bad])),
         &signature,
@@ -577,9 +577,9 @@ fn every_emission_shape_and_loop_next_have_the_same_expression_proof() {
         value: bad.clone(),
     };
     for (value, suffix) in [
-        (Emission::Data(bad.clone()), ""),
-        (Emission::Patch(vec![write.clone()]), ".writes[0]"),
-        (Emission::FreshData(vec![write]), ".writes[0]"),
+        (EmitValue::Data(bad.clone()), ""),
+        (EmitValue::Patch(vec![write.clone()]), ".writes[0]"),
+        (EmitValue::FreshData(vec![write]), ".writes[0]"),
     ] {
         for step in [
             DispatchStep::Emit {

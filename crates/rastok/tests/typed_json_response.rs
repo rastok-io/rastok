@@ -315,7 +315,7 @@ fn malformed_native_or_unhydrated_data_cannot_enter_the_outbound_journal() {
             },
         )
         .expect("admission");
-        vm.drain_with_bindings(&mut journal, &mut driver)
+        vm.run_ready_with_bindings(&mut journal, &mut driver)
             .expect("Call opened");
         let retained = journal.records().to_vec();
         let report = vm

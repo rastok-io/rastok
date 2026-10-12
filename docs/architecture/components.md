@@ -93,7 +93,7 @@ crates/rastok-core/src/       # the kernel — #![no_std] + alloc (split at M0.5
 ├── journal.rs, observation.rs # causal records plus retained typed correlation
 ├── boundary.rs               # host vocabulary, request framing, five traits
 ├── plan/                     # Dispatch, routing, composition, policy, validation, serialization
-└── runtime/                  # HandlerExecutor, VM, Loop/Retry managers, Closing and recovery
+└── runtime/                  # TransactionPreparer, VM, Loop/Retry managers, Closing and recovery
 
 crates/rastok/src/            # the std layer — re-exports the kernel
 ├── diagnostics.rs    # Diagnostic, Code, Severity, Phase, Span, Bag
@@ -307,11 +307,11 @@ the same VM surface; authored Lab crash/restart actions remain deferred.
 |---|---|---|---|---|
 | **Scheduler** | run-to-completion firing; the single dated-event queue — the **call budgets, created at DELIVERY** so queue time counts, referenced by `(edge, envelope id)`, resolved reserve→resolve→ack so a refused expiry replays (a timeout is the scheduler's dated event, never a Driver answer); virtual-time `advance`; drain-to-stable | plan + ordered events → transaction firings | [execution-model.md §1, §5–6, §8](../spec/execution-model.md) | M0 (single worker) |
 | **Mailboxes** | per-instance-reference FIFO order, arrival-order capture (the race outcome is journaled), bounded capacity | envelopes → ordered delivery within one address generation | [execution-model.md §2–3](../spec/execution-model.md) | M0 base; M1.4 R3 hierarchical rebase landed |
-| **HandlerExecutor** | the atomic node transaction: consumed input, state delta, emissions, and records commit together; scratch isolation while a handler runs | firing → transaction commit + emissions | [execution-model.md §1](../spec/execution-model.md) | M0 |
+| **TransactionPreparer** | the atomic node transaction: consumed input, state delta, emissions, and records commit together; scratch isolation while a handler runs | firing → transaction commit + emissions | [execution-model.md §1](../spec/execution-model.md) | M0 |
 | **EmissionBuffer** | per-port emission identity in text order (`emission_index`) | handler body → ordered emissions | [execution-model.md §4](../spec/execution-model.md) | M0 |
 | **Boundary completion** | one correlated completion closes a Call and carries ordered ordinary output drafts plus one final typed `exit`; the VM mints and commits all output envelopes atomically. Outbound Calls consume a delivery and close an EGRESS record; inbound Calls close their committed root through `l:reply`: fixed ack consumes no cursor, while a graph response consumes its one already-journaled delivery. The orthogonal Session path journals opening and individual write obligations, then publishes one terminal exit. | completion drafts or session facts → causal records and routed envelopes | [types.md](../spec/types.md); [m1.3 backlog](m1.3-type-system-backlog.md); [M1.6 backlog](m1.6-http-websocket-backlog.md) | M1.3 B7 outbound Call; M1.6 H1 Session fold; H5/H5.2 generic inbound Call |
 | **Instance Closing** | durable close-scope arbitration; successor-generation admission; bounded drain, canonical cancellation and settlement; residual cursor retirement; inner-first stop and state reclamation | `closing` policy + lifecycle cause + journal fold → terminal exits and `l:stop` | [instances.md §7](../spec/instances.md); [execution-model.md §2.1](../spec/execution-model.md) | M1.4 R5 |
-| **`GuestExecutor`** | the existing runtime seam future guest engines implement: `run(&[u8], value, budget)` — pure, deterministic, budgeted, inside the node transaction; the bytes become a typed/versioned `GuestProgram` only when that slice lands | opaque program bytes → value or typed error | [stdlib.md §5](../spec/stdlib.md) | seam only; no engine/program type yet |
+| **`GuestRunner`** | the existing runtime seam future guest engines implement: `run(&[u8], value, budget)` — pure, deterministic, budgeted, inside the node transaction; the bytes become a typed/versioned `GuestProgram` only when that slice lands | opaque program bytes → value or typed error | [stdlib.md §5](../spec/stdlib.md) | seam only; no engine/program type yet |
 | **`deployment::BootBindings`** | exact environment values, opaque SecretName/version bindings and privacy/price attestations; clear material stays at the Driver boundary | plan + typed deployment profile → bound settings and run attestation | [observability.md](../spec/observability.md) | M1.8 A4, narrow HttpClient sites |
 
 ### 3.5 The boundary (`boundary`) — host interfaces and explicit time
@@ -415,7 +415,7 @@ alone.
 
 The effectful and the pure halves of extension, on mirrored seams: a
 `connectors/*` implementation satisfies one or both boundary Driver roles; a future
-`guest_engines/*` engine implements `runtime::GuestExecutor` and will
+`guest_engines/*` engine implements `runtime::GuestRunner` and will
 pair with a compiler frontend registered only when the first real guest
 implementation lands. No placeholder `GuestFrontend` type exists in the
 current compiler. A guest program with I/O belongs behind a Connector,
@@ -475,7 +475,7 @@ main (bin)
    └──▶ run wiring (+ stdlib) ──────────────────┘        ▲                     │
                                                          │                     ▼
         connectors ── implement ─────────────────────────┘                 journal
-        future guest engines ── implement GuestExecutor ▶ runtime               ▲
+        future guest engines ── implement GuestRunner ▶ runtime               ▲
         boundary::Dispatcher ── drives open EGRESS facts, closes ───────────────┘
 
 compiler ──▶ plan (the execution plan) ◀── interprets ──────────────────── runtime
@@ -553,7 +553,7 @@ The slice stages of [`m0-slice.md`](m0-slice.md), in module terms:
 | Parse | `compiler` (parse), `diagnostics` |
 | Check | `compiler` (assemble, desugar, check vs `stdlib` contracts), `expr` (compile) |
 | Plan | `compiler` (canonicalize, lower), `plan::Manifest` |
-| Step | `runtime` (Scheduler, Mailboxes, HandlerExecutor, EmissionBuffer, error routing) |
+| Step | `runtime` (Scheduler, Mailboxes, TransactionPreparer, EmissionBuffer, error routing) |
 | Handle | `boundary::Dispatcher` + `boundary::OutboundConnectorDriver` behind `CompletionGate`; `connectors::Process` (App) or the Lab mock (Lab) |
 | Record | `journal` (semantic operations, id derivation) |
 | Compare | `golden` projection, seal, and diff; `lab`-returned records; `main --golden/--bless` |
@@ -610,7 +610,7 @@ The chronological detail and commit evidence remain in
 The R3–R9 rework and v17 amendment add the current load-bearing components:
 
 - `plan::{Dispatch,RouteRule}` and independent scope/type/composition validators;
-- `runtime::HandlerExecutor` with one selected Dispatch leaf and ordered multi-emission;
+- `runtime::TransactionPreparer` with one selected Dispatch leaf and ordered multi-emission;
 - `journal::loop_protocol` plus `runtime/vm/loop_manager`: distinct command
   production/consumption, exact admission identity, quiescence, fuel and delay;
 - `runtime/vm/recovery`: spatial/exchange/deadline/Loop/Retry reconstruction from a prefix;

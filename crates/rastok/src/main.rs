@@ -677,7 +677,7 @@ fn drive_boundary<'plan>(
             None => break,
         }
     }
-    vm.drain_with_bindings(journal, world)
+    vm.run_ready_with_bindings(journal, world)
         .map_err(|error| error.to_string())?;
     let responses = world
         .pump_inbound_call_responses(vm)
@@ -696,7 +696,7 @@ fn drive_boundary<'plan>(
         || timeouts.started > 0
         || inbound_events.queued > 0
         || outbound.settled > 0;
-    vm.drain_with_bindings(journal, world)
+    vm.run_ready_with_bindings(journal, world)
         .map_err(|error| error.to_string())?;
     Ok(progressed)
 }

@@ -26,10 +26,10 @@ use crate::datatype::{
 use crate::expr;
 use crate::node;
 use crate::plan::{
-    AttrSetting, ConnectorSpec, DispatchStep, Edge, EdgeEnd, Emission, EvaluationSite,
-    ExecutionPlan, ExtensionSpec, FieldWrite, Handler, LoopDelay as PlanLoopDelay,
-    LoopSpec as PlanLoopSpec, Node, NodeExecution, Owner, OwnerKind, OwnerValue, PlanConstant,
-    SemanticHash, Slot, SymbolTable, VarCell,
+    AttrSetting, ConnectorSpec, DispatchStep, Edge, EdgeEnd, EvaluationSite, ExecutionPlan,
+    ExtensionSpec, FieldWrite, Handler, LoopDelay as PlanLoopDelay, LoopSpec as PlanLoopSpec, Node,
+    NodeExecution, Owner, OwnerKind, OwnerValue, PlanConstant, SemanticHash, Slot, SymbolTable,
+    VarCell,
 };
 use crate::schema_annotation::{
     AnnotationTable, DataAnnotation, SchemaPathSegment, SensitivityLevel,
@@ -974,7 +974,7 @@ fn lower_dispatch(
     }
 }
 
-fn substitute_emission(value: &Emission, subst: &impl Fn(&expr::Tree) -> expr::Tree) -> Emission {
+fn substitute_emission(value: &EmitValue, subst: &impl Fn(&expr::Tree) -> expr::Tree) -> EmitValue {
     let writes = |fields: &[FieldWrite]| {
         fields
             .iter()
@@ -985,11 +985,11 @@ fn substitute_emission(value: &Emission, subst: &impl Fn(&expr::Tree) -> expr::T
             .collect()
     };
     match value {
-        Emission::Identity => Emission::Identity,
-        Emission::Patch(fields) => Emission::Patch(writes(fields)),
-        Emission::FreshData(fields) => Emission::FreshData(writes(fields)),
-        Emission::Data(tree) => Emission::Data(subst(tree)),
-        Emission::Nothing => Emission::Nothing,
+        EmitValue::Identity => EmitValue::Identity,
+        EmitValue::Patch(fields) => EmitValue::Patch(writes(fields)),
+        EmitValue::FreshData(fields) => EmitValue::FreshData(writes(fields)),
+        EmitValue::Data(tree) => EmitValue::Data(subst(tree)),
+        EmitValue::Nothing => EmitValue::Nothing,
     }
 }
 
@@ -2227,7 +2227,7 @@ mod tests {
     use crate::contract::ContractCatalog;
     use crate::diagnostics::{Bag, SourceId};
     use crate::node;
-    use crate::plan::{AttrSetting, DispatchStep, Emission, GraphVersion, Manifest};
+    use crate::plan::{AttrSetting, DispatchStep, EmitValue, GraphVersion, Manifest};
     use crate::schema_annotation::{
         AnnotationKind, AnnotationSet, AnnotationTable, DataAnnotation, SchemaPath,
         SensitivityLevel,
@@ -2289,7 +2289,7 @@ graph m0_probe : App {
         assert!(matches!(
             handler.dispatch.steps().next().unwrap(),
             DispatchStep::Emit {
-                value: Emission::Data(_),
+                value: EmitValue::Data(_),
                 ..
             }
         ));
@@ -2379,7 +2379,7 @@ graph m0_probe : App {
         let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
         assert!(matches!(
             vm.step(&mut journal),
-            Err(crate::runtime::vm::VmError::UnsupportedDataPolicy { .. })
+            Err(crate::runtime::vm::VmFault::UnsupportedDataPolicy { .. })
         ));
         assert!(journal.records().is_empty());
     }
@@ -2768,7 +2768,7 @@ graph app : App {
         };
         vm.inject(&mut journal, submission)
             .expect("the classified envelope is admitted");
-        vm.drain(&mut journal)
+        vm.run_ready(&mut journal)
             .expect("A3 executes a proved sensitive flow");
         assert_eq!(vm.outputs().len(), 1);
         let annotations = vm
@@ -2801,7 +2801,7 @@ graph app : App {
             .expect_err("personal data requires an A4 privacy attestation");
         assert!(matches!(
             error,
-            crate::runtime::vm::VmError::UnsupportedDataPolicy { .. }
+            crate::runtime::vm::VmFault::UnsupportedDataPolicy { .. }
         ));
         assert!(
             error
@@ -2887,7 +2887,7 @@ graph app : App {
             .expect_err("the run header is an execution precondition");
         assert_eq!(
             error,
-            crate::runtime::vm::VmError::DeploymentAttestationMismatch
+            crate::runtime::vm::VmFault::DeploymentAttestationMismatch
         );
         assert!(unattested_journal.records().is_empty());
 
@@ -2904,7 +2904,7 @@ graph app : App {
         );
         assert!(matches!(
             missing_conditions.step(&mut missing_conditions_journal),
-            Err(crate::runtime::vm::VmError::UnsupportedDataPolicy { .. })
+            Err(crate::runtime::vm::VmFault::UnsupportedDataPolicy { .. })
         ));
         assert!(missing_conditions_journal.records().is_empty());
 
@@ -2969,7 +2969,7 @@ graph app : App {
         );
         assert!(matches!(
             undeclared_recipient.step(&mut undeclared_recipient_journal),
-            Err(crate::runtime::vm::VmError::UnsupportedDataPolicy { .. })
+            Err(crate::runtime::vm::VmFault::UnsupportedDataPolicy { .. })
         ));
 
         let recipient_privacy = crate::deployment::PrivacyProfile::new(
@@ -3055,7 +3055,7 @@ graph app : App {
         let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
         assert!(matches!(
             unbound.step(&mut journal),
-            Err(crate::runtime::vm::VmError::MissingDeploymentBinding { .. })
+            Err(crate::runtime::vm::VmFault::MissingDeploymentBinding { .. })
         ));
         assert!(journal.records().is_empty());
     }

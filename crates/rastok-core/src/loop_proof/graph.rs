@@ -91,7 +91,7 @@ pub fn derive_graph(
             .dispatch
             .steps()
             .flat_map(DispatchStep::emissions)
-            .filter(|(_, value)| !matches!(value, crate::plan::Emission::Nothing))
+            .filter(|(_, value)| !matches!(value, crate::plan::EmitValue::Nothing))
             .map(|(port, _)| Endpoint {
                 owner: EndpointOwner::Node(node.path.clone()),
                 port: port.clone(),
@@ -219,7 +219,7 @@ fn replace_products(
                 }
                 projected.push(step.clone());
                 for (port, value) in step.emissions() {
-                    if ports.contains(port) && !matches!(value, crate::plan::Emission::Nothing) {
+                    if ports.contains(port) && !matches!(value, crate::plan::EmitValue::Nothing) {
                         projected.push(DispatchStep::LoopCommand(LoopCommand::Next(value.clone())));
                     }
                 }

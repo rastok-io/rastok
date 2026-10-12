@@ -77,7 +77,7 @@ graph app : App {
         let [
             plan::DispatchStep::MultiEmit {
                 ports,
-                values: plan::MultiEmitValues::Broadcast(plan::Emission::Data(tree)),
+                values: plan::MultiEmitValues::Broadcast(plan::EmitValue::Data(tree)),
             },
         ] = selected.statements
         else {
@@ -276,7 +276,7 @@ graph app : App {
             submission(Data::materialized(Value::Bool(value))),
         )
         .unwrap();
-        vm.drain(&mut journal).unwrap();
+        vm.run_ready(&mut journal).unwrap();
         assert_eq!(vm.outputs().len(), 1);
         assert_eq!(
             vm.outputs()[0].envelope.data(),
@@ -394,7 +394,7 @@ graph app : App {
     let mut journal = MemJournal::new(plan::GraphVersion(1));
     vm.inject(&mut journal, submission(Data::materialized(Value::Int(2))))
         .unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert!(vm.is_stable());
     assert_eq!(vm.outputs().len(), 1);
     assert_eq!(
@@ -442,7 +442,7 @@ graph app : App {
         )),
     )
     .unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert_eq!(vm.outputs().len(), 1);
     assert_eq!(
         vm.outputs()[0].envelope.data(),
@@ -477,8 +477,8 @@ graph app : App {
     vm.inject(&mut journal, submission(Data::materialized(Value::Int(0))))
         .unwrap();
     assert!(matches!(
-        vm.drain(&mut journal),
-        Err(rastok::runtime::vm::VmError::Fault(_))
+        vm.run_ready(&mut journal),
+        Err(rastok::runtime::vm::VmFault::Fault(_))
     ));
     assert!(vm.outputs().is_empty());
     assert!(!vm.is_stable(), "the failed input stays pending");

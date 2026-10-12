@@ -107,7 +107,7 @@ fn registry(root: &Path) -> DriverRegistry {
 
 fn drive(vm: &mut Vm<'_>, journal: &mut MemJournal, bindings: &mut RuntimeBindings<'_>) {
     for _ in 0..2_000 {
-        vm.drain_with_bindings(journal, bindings)
+        vm.run_ready_with_bindings(journal, bindings)
             .expect("ready File work commits");
         vm.pump(journal, bindings).expect("the File boundary pumps");
         if vm.is_stable() {
@@ -307,7 +307,7 @@ fn filesystem_observation_begins_only_after_the_outbound_open() {
     vm.inject(&mut journal, submission(Data::materialized(Value::Null)))
         .expect("the trigger is admitted");
 
-    vm.drain_with_bindings(&mut journal, &mut bindings)
+    vm.run_ready_with_bindings(&mut journal, &mut bindings)
         .expect("request preparation and EGRESS open succeed");
     assert_eq!(journal.open_calls().len(), 1);
     assert!(
@@ -337,7 +337,7 @@ fn replay_of_an_open_replace_never_reexecutes_the_file_effect() {
     .expect("the input is admitted");
     {
         let mut bindings = RuntimeBindings::try_new(&plan, &registry).expect("File binds");
-        vm.drain_with_bindings(&mut journal, &mut bindings)
+        vm.run_ready_with_bindings(&mut journal, &mut bindings)
             .expect("the call opens without starting the Driver");
     }
     assert_eq!(journal.open_calls().len(), 1);

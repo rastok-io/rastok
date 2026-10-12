@@ -113,7 +113,7 @@ fn retry_roundtrips_without_any_command_port_or_expired_wrapper() {
     let mut journal = rastok::journal::MemJournal::new(plan::GraphVersion(1));
     assert!(matches!(
         vm.step(&mut journal),
-        Err(rastok::runtime::vm::VmError::UnsupportedExtension {
+        Err(rastok::runtime::vm::VmFault::UnsupportedExtension {
             extension: rastok::node::Extension::Retry,
             ..
         })

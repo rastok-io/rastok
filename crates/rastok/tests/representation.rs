@@ -7,7 +7,7 @@ use rastok::envelope::{Data, Delivery, Encoding, Envelope, Id, Meta, MetaSys, Va
 use rastok::instance;
 use rastok::node::{OwnerPath, Port};
 use rastok::plan::{GraphVersion, Slot};
-use rastok::runtime::{Fault, HandlerExecutor};
+use rastok::runtime::{Fault, TransactionPreparer};
 use std::collections::BTreeMap;
 
 fn count(ty: &str, data: Data) -> Result<Value, Fault> {
@@ -26,7 +26,7 @@ fn count(ty: &str, data: Data) -> Result<Value, Fault> {
         source_instance: generation.clone(),
         envelope: Envelope::new(Meta::new(MetaSys::root(Id::from_bytes([1; 16]), 1)), data),
     };
-    let result = HandlerExecutor::new(&compiled.plan, GraphVersion(1)).fire(
+    let result = TransactionPreparer::new(&compiled.plan, GraphVersion(1)).fire(
         Slot::new(0),
         &generation,
         &delivery,
@@ -160,7 +160,7 @@ graph g : App {
         },
     )
     .unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.run_ready(&mut journal).unwrap();
     assert_eq!(
         vm.outputs()[0].envelope.data(),
         &Data::materialized(Value::Int(2))
@@ -226,7 +226,7 @@ fn loop_expiry_materializes_last_state_by_the_host_entry_type() {
                 },
             )
             .unwrap();
-            vm.drain(&mut journal).unwrap();
+            vm.run_ready(&mut journal).unwrap();
             assert_eq!(vm.outputs().len(), 1, "{host} with {ty} entry");
             let Value::TaggedUnion(output) =
                 rastok::runtime::data_value(vm.outputs()[0].envelope.data()).unwrap()

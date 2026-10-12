@@ -29,7 +29,7 @@ use crate::expr;
 
 use crate::node;
 use crate::plan::{
-    AttrSetting, ConnectorSpec, DispatchStep, Edge, EdgeEnd, Emission, EvaluationSite,
+    AttrSetting, ConnectorSpec, DispatchStep, Edge, EdgeEnd, EmitValue, EvaluationSite,
     ExecutionPlan, ExtensionSpec, FieldWrite, Handler, LoopDelay, LoopSpec, Node, NodeExecution,
     Owner, OwnerKind, OwnerValue, PlanConstant, PlanValidationError, PortDecl, SemanticHash, Slot,
     ValidatedExecutionPlan, VarCell,
@@ -777,13 +777,13 @@ fn step_tree(step: &DispatchStep) -> Cbor {
     }
 }
 
-fn emission_tree(emission: &Emission) -> Cbor {
+fn emission_tree(emission: &EmitValue) -> Cbor {
     match emission {
-        Emission::Identity => Cbor::Array(vec![Cbor::Uint(1)]),
-        Emission::Patch(writes) => Cbor::Array(vec![Cbor::Uint(2), writes_tree(writes)]),
-        Emission::FreshData(writes) => Cbor::Array(vec![Cbor::Uint(3), writes_tree(writes)]),
-        Emission::Data(tree) => Cbor::Array(vec![Cbor::Uint(4), tree_tree(tree)]),
-        Emission::Nothing => Cbor::Array(vec![Cbor::Uint(5)]),
+        EmitValue::Identity => Cbor::Array(vec![Cbor::Uint(1)]),
+        EmitValue::Patch(writes) => Cbor::Array(vec![Cbor::Uint(2), writes_tree(writes)]),
+        EmitValue::FreshData(writes) => Cbor::Array(vec![Cbor::Uint(3), writes_tree(writes)]),
+        EmitValue::Data(tree) => Cbor::Array(vec![Cbor::Uint(4), tree_tree(tree)]),
+        EmitValue::Nothing => Cbor::Array(vec![Cbor::Uint(5)]),
     }
 }
 
@@ -1039,12 +1039,17 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
         stack.push(Item::Ty(&tree.ty, level));
         stack.push(Item::Expr(&tree.root, level));
     }
-    fn emission<'a>(value: &'a Emission, level: usize, max: &mut usize, stack: &mut Vec<Item<'a>>) {
+    fn emission<'a>(
+        value: &'a EmitValue,
+        level: usize,
+        max: &mut usize,
+        stack: &mut Vec<Item<'a>>,
+    ) {
         *max = (*max).max(level + 1);
         match value {
-            Emission::Identity | Emission::Nothing => {}
-            Emission::Data(value) => tree(value, level + 2, stack),
-            Emission::Patch(writes) | Emission::FreshData(writes) => {
+            EmitValue::Identity | EmitValue::Nothing => {}
+            EmitValue::Data(value) => tree(value, level + 2, stack),
+            EmitValue::Patch(writes) | EmitValue::FreshData(writes) => {
                 for write in writes {
                     *max = (*max).max(level + if matches!(&write.target, WriteTarget::Data(path) if !path.is_empty()) { 5 } else { 4 });
                     tree(&write.value, level + 4, stack);
@@ -2250,13 +2255,13 @@ fn step_from(tree: &Cbor) -> Result<DispatchStep, DecodeError> {
     }
 }
 
-fn emission_from(tree: &Cbor) -> Result<Emission, DecodeError> {
+fn emission_from(tree: &Cbor) -> Result<EmitValue, DecodeError> {
     match array_of(tree, "emission")? {
-        [Cbor::Uint(1)] => Ok(Emission::Identity),
-        [Cbor::Uint(2), writes] => Ok(Emission::Patch(writes_from(writes)?)),
-        [Cbor::Uint(3), writes] => Ok(Emission::FreshData(writes_from(writes)?)),
-        [Cbor::Uint(4), tree] => Ok(Emission::Data(tree_from(tree)?)),
-        [Cbor::Uint(5)] => Ok(Emission::Nothing),
+        [Cbor::Uint(1)] => Ok(EmitValue::Identity),
+        [Cbor::Uint(2), writes] => Ok(EmitValue::Patch(writes_from(writes)?)),
+        [Cbor::Uint(3), writes] => Ok(EmitValue::FreshData(writes_from(writes)?)),
+        [Cbor::Uint(4), tree] => Ok(EmitValue::Data(tree_from(tree)?)),
+        [Cbor::Uint(5)] => Ok(EmitValue::Nothing),
         _ => Err(err("emission")),
     }
 }
@@ -3712,19 +3717,19 @@ mod tests {
                     },
                     DispatchStep::Emit {
                         port: port("out"),
-                        value: Emission::Identity,
+                        value: EmitValue::Identity,
                     },
                     DispatchStep::Emit {
                         port: port("out"),
-                        value: Emission::Nothing,
+                        value: EmitValue::Nothing,
                     },
                     DispatchStep::Emit {
                         port: port("out"),
-                        value: Emission::Data(tree(expr.clone())),
+                        value: EmitValue::Data(tree(expr.clone())),
                     },
                     DispatchStep::Emit {
                         port: port("out"),
-                        value: Emission::Patch(vec![
+                        value: EmitValue::Patch(vec![
                             FieldWrite {
                                 target: WriteTarget::Data(vec![text("a"), text("b")]),
                                 value: tree(expr),
@@ -3741,7 +3746,7 @@ mod tests {
                     },
                     DispatchStep::Emit {
                         port: port("out"),
-                        value: Emission::FreshData(vec![FieldWrite {
+                        value: EmitValue::FreshData(vec![FieldWrite {
                             target: WriteTarget::Data(vec![]),
                             value: tree(expr::Expr::Literal(Value::Duration(5))),
                         }]),
@@ -4411,14 +4416,14 @@ mod tests {
         }
 
         for value in [
-            Emission::Identity,
-            Emission::Nothing,
-            Emission::Data(tree(expr::Expr::Literal(Value::Int(1)))),
-            Emission::Patch(vec![FieldWrite {
+            EmitValue::Identity,
+            EmitValue::Nothing,
+            EmitValue::Data(tree(expr::Expr::Literal(Value::Int(1)))),
+            EmitValue::Patch(vec![FieldWrite {
                 target: WriteTarget::Data(vec![text("n")]),
                 value: tree(expr::Expr::Literal(Value::Int(1))),
             }]),
-            Emission::FreshData(vec![FieldWrite {
+            EmitValue::FreshData(vec![FieldWrite {
                 target: WriteTarget::App(text("tenant")),
                 value: tree(expr::Expr::Literal(Value::Text(text("alice")))),
             }]),

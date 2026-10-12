@@ -47,7 +47,7 @@ fn drive(
         },
     )
     .expect("the injection lands");
-    vm.drain_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut world)
         .expect("the request opens");
     for _ in 0..200 {
         if vm.is_stable() && !vm.has_open_obligations() {
@@ -55,7 +55,7 @@ fn drive(
         }
         vm.pump(&mut journal, &mut world)
             .expect("the world answers");
-        vm.drain_with_bindings(&mut journal, &mut world)
+        vm.run_ready_with_bindings(&mut journal, &mut world)
             .expect("the reply routes");
         std::thread::sleep(std::time::Duration::from_millis(5));
     }

@@ -128,14 +128,16 @@ fn only_the_final_batch_is_routed_and_preparation_runs_once() {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     assert_eq!(world.preparations, 1);
     for ordinal in 1..=3 {
         assert_eq!(world.starts.len(), ordinal);
         reply(&mut world, true);
         vm.pump(&mut journal, &mut world).unwrap();
-        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut world)
+            .unwrap();
         if ordinal < 3 {
             assert!(vm.outputs().is_empty());
             assert!(!vm.is_stable());
@@ -226,11 +228,13 @@ fn success_publishes_once_without_waiting_for_the_retry_bound() {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     reply(&mut world, false);
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.advance(&mut journal, &mut world, 10_000_000_000)
         .unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
@@ -247,7 +251,8 @@ fn real_timeout_retains_its_original_backoff_and_queue_time() {
     let mut world = World::default();
     inject(&mut vm, &mut journal);
     inject(&mut vm, &mut journal);
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     assert_eq!(
         world.starts.len(),
@@ -296,11 +301,13 @@ fn closing_in_backoff_does_not_publish_a_held_failure() {
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut world = World::default();
         inject(&mut vm, &mut journal);
-        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut world)
+            .unwrap();
         vm.pump(&mut journal, &mut world).unwrap();
         reply(&mut world, true);
         vm.pump(&mut journal, &mut world).unwrap();
-        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut world)
+            .unwrap();
         vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
         vm.pump(&mut journal, &mut world).unwrap();
         assert_eq!(world.starts.len(), 1);
@@ -369,7 +376,8 @@ graph app : App {{
             )
             .unwrap();
         }
-        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut world)
+            .unwrap();
         vm.pump(&mut journal, &mut world).unwrap();
         assert_eq!(
             world.starts.len(),
@@ -378,7 +386,8 @@ graph app : App {{
         );
         reply(&mut world, true);
         vm.pump(&mut journal, &mut world).unwrap();
-        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut world)
+            .unwrap();
         vm.advance(&mut journal, &mut world, 3_000_000_000).unwrap();
         vm.pump(&mut journal, &mut world).unwrap();
         assert_eq!(
@@ -439,13 +448,15 @@ fn single_pass_drain_never_transfers_an_operation_into_the_successor_generation(
             && record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Closing))));
     inject(&mut vm, &mut journal);
     for count in 1..=2 {
-        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut world)
+            .unwrap();
         vm.pump(&mut journal, &mut world).unwrap();
         assert_eq!(world.starts.len(), count, "one Call per exact generation");
         reply(&mut world, true);
         vm.pump(&mut journal, &mut world).unwrap();
     }
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.advance(&mut journal, &mut world, 3_000_000_000).unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     assert_eq!(world.starts.len(), 2);
@@ -489,7 +500,8 @@ fn recovery_cannot_bypass_retry_without_the_exact_retained_closing() {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     let forged: Vec<_> = journal
         .records()
         .iter()
@@ -527,7 +539,8 @@ fn every_retained_prefix_recovers_without_preparing_or_starting_an_effect() {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     reply(&mut world, true);
     vm.pump(&mut journal, &mut world).unwrap();
@@ -535,7 +548,8 @@ fn every_retained_prefix_recovers_without_preparing_or_starting_an_effect() {
     vm.pump(&mut journal, &mut world).unwrap();
     reply(&mut world, false);
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     for cut in 0..=journal.records().len() {
         let retained =
             MemJournal::from_records(GraphVersion(1), None, &journal.records()[..cut]).unwrap();
@@ -564,7 +578,8 @@ fn recovery_after_held_consumes_once_and_does_not_renew_the_backoff() {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     reply(&mut world, true);
     vm.pump(&mut journal, &mut world).unwrap();
@@ -579,7 +594,7 @@ fn recovery_after_held_consumes_once_and_does_not_renew_the_backoff() {
         .recover_with_bindings(&journal, &mut world_after)
         .unwrap();
     restored
-        .drain_with_bindings(&mut journal, &mut world_after)
+        .run_ready_with_bindings(&mut journal, &mut world_after)
         .unwrap();
     restored.pump(&mut journal, &mut world_after).unwrap();
     assert_eq!(
@@ -593,7 +608,7 @@ fn recovery_after_held_consumes_once_and_does_not_renew_the_backoff() {
     reply(&mut world_after, false);
     restored.pump(&mut journal, &mut world_after).unwrap();
     restored
-        .drain_with_bindings(&mut journal, &mut world_after)
+        .run_ready_with_bindings(&mut journal, &mut world_after)
         .unwrap();
     assert_eq!(restored.outputs().len(), 3);
     assert_eq!(journal.records().iter().filter(|r| matches!(r, Record::Transaction(r)
@@ -673,18 +688,21 @@ graph app : App + Loop {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     reply(&mut world, true);
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     assert!(!vm.is_stable());
     assert!(vm.outputs().is_empty());
     vm.advance(&mut journal, &mut world, 100_000_000).unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     reply(&mut world, false);
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     assert_eq!(vm.outputs().len(), 1);
     assert!(vm.is_stable());
     for cut in 0..=journal.records().len() {
@@ -726,11 +744,13 @@ graph app : App {
     let mut vm = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
     let mut world = World::default();
     inject(&mut vm, &mut journal);
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     reply(&mut world, false);
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     let mut records = journal.records().to_vec();
     let mut packet = records
         .iter()
@@ -779,7 +799,8 @@ fn a_retry_recording_restores_held_batches_at_every_selected_prefix() {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     reply(&mut world, true);
     vm.pump(&mut journal, &mut world).unwrap();
@@ -787,7 +808,8 @@ fn a_retry_recording_restores_held_batches_at_every_selected_prefix() {
     vm.pump(&mut journal, &mut world).unwrap();
     reply(&mut world, false);
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     let compilation = compiler::Compilation {
         symbols: plan::SymbolTable {
             nodes: plan
@@ -860,7 +882,8 @@ graph app : App {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     let mut openings: Vec<_> = journal
         .records()
@@ -882,7 +905,8 @@ graph app : App {
         })
         .collect();
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut world)
+        .unwrap();
     vm.advance(&mut journal, &mut world, 1_000_000).unwrap();
     let admissions: Vec<_> = journal
         .records()
@@ -977,12 +1001,14 @@ graph app : App {
                 },
             )
             .unwrap();
-            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+            vm.run_ready_with_bindings(&mut journal, &mut world)
+                .unwrap();
             if port == "retry" {
                 vm.pump(&mut journal, &mut world).unwrap();
                 reply(&mut world, true);
                 vm.pump(&mut journal, &mut world).unwrap();
-                vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+                vm.run_ready_with_bindings(&mut journal, &mut world)
+                    .unwrap();
             }
         }
         let before = journal.records().len();
@@ -1133,12 +1159,14 @@ graph app : App {
                     },
                 )
                 .unwrap();
-                vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+                vm.run_ready_with_bindings(&mut journal, &mut world)
+                    .unwrap();
                 if port == "retry" {
                     vm.pump(&mut journal, &mut world).unwrap();
                     reply(&mut world, true);
                     vm.pump(&mut journal, &mut world).unwrap();
-                    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+                    vm.run_ready_with_bindings(&mut journal, &mut world)
+                        .unwrap();
                 }
             }
             assert!(vm.outputs().is_empty());
@@ -1241,7 +1269,8 @@ graph app : App {{
                     },
                 )
                 .unwrap();
-                vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+                vm.run_ready_with_bindings(&mut journal, &mut world)
+                    .unwrap();
                 vm.pump(&mut journal, &mut world).unwrap();
                 if port == "retry" {
                     reply(&mut world, true);
@@ -1263,7 +1292,8 @@ graph app : App {{
                     )
                     .unwrap();
                 }
-                vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+                vm.run_ready_with_bindings(&mut journal, &mut world)
+                    .unwrap();
             }
             let before = journal.records().len();
             let due = delay_ms * 1_000_000;
@@ -1341,7 +1371,8 @@ graph app : App {
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut world = World::default();
         inject(&mut vm, &mut journal);
-        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut world)
+            .unwrap();
         vm.pump(&mut journal, &mut world).unwrap();
         reply(&mut world, true);
         vm.pump(&mut journal, &mut world).unwrap();
@@ -1394,7 +1425,7 @@ graph app : App {
             assert!(
                 matches!(
                     result,
-                    Err(rastok::runtime::vm::VmError::MailboxFull { .. })
+                    Err(rastok::runtime::vm::VmFault::MailboxFull { .. })
                 ),
                 "{result:?}"
             );
@@ -1403,7 +1434,7 @@ graph app : App {
             assert_eq!(vm.observations(), observations);
             assert!(matches!(
                 vm.step_with_bindings(&mut journal, &mut world),
-                Err(rastok::runtime::vm::VmError::MailboxFull { .. })
+                Err(rastok::runtime::vm::VmFault::MailboxFull { .. })
             ));
             assert_eq!(
                 journal.records(),
@@ -1424,7 +1455,7 @@ graph app : App {
         } else {
             assert!(matches!(
                 result,
-                Err(rastok::runtime::vm::VmError::MailboxFull { .. })
+                Err(rastok::runtime::vm::VmFault::MailboxFull { .. })
             ));
         }
         assert_eq!(retained.records(), journal.records());
@@ -1514,7 +1545,8 @@ graph app : App {
             }
             answered = world.starts.len();
             vm.pump(&mut journal, &mut world).unwrap();
-            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+            vm.run_ready_with_bindings(&mut journal, &mut world)
+                .unwrap();
         }
         assert_eq!(vm.outputs().len(), if now == 0 { 2 } else { 4 });
         assert!(
@@ -1630,7 +1662,8 @@ graph app : App {
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut world = World::default();
         inject(&mut vm, &mut journal);
-        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut world)
+            .unwrap();
         vm.pump(&mut journal, &mut world).unwrap();
         reply(&mut world, true);
         vm.pump(&mut journal, &mut world).unwrap();

@@ -164,11 +164,11 @@ lab builders {
     assert!(matches!(
         emissions.as_slice(),
         [
-            plan::Emission::Identity,
-            plan::Emission::Patch(_),
-            plan::Emission::FreshData(_),
-            plan::Emission::Data(_),
-            plan::Emission::Nothing,
+            plan::EmitValue::Identity,
+            plan::EmitValue::Patch(_),
+            plan::EmitValue::FreshData(_),
+            plan::EmitValue::Data(_),
+            plan::EmitValue::Nothing,
         ]
     ));
 
@@ -256,7 +256,7 @@ fn v16_retains_one_operator_loop_without_a_graph_handler_or_command_port() {
         },
     )
     .expect("the App routes the opening input to the Loop Operator");
-    vm.drain(&mut journal)
+    vm.run_ready(&mut journal)
         .expect("the terminal output reaches the public App boundary");
     assert_eq!(vm.outputs().len(), 1);
     assert_eq!(
@@ -825,7 +825,7 @@ fn run_boundary_probe(plan: &rastok::plan::ValidatedExecutionPlan) -> (Vec<Strin
     };
     vm.inject(&mut journal, submission)
         .expect("the injection lands");
-    vm.drain(&mut journal).expect("the drain completes");
+    vm.run_ready(&mut journal).expect("the drain completes");
     let outputs = vm
         .outputs()
         .iter()

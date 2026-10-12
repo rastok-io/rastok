@@ -10,7 +10,7 @@ impl Vm<'_> {
         admissions: &dyn InstanceAdmissions,
         index: usize,
         inbound: &IngressRecord,
-    ) -> Result<(), VmError> {
+    ) -> Result<(), VmFault> {
         if inbound.envelope.meta().sys().graph_version() != self.graph_version.0 {
             return Err(invalid(
                 index,
@@ -343,7 +343,7 @@ impl Vm<'_> {
         port: &node::Port,
         envelope: &Envelope,
         candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
-    ) -> Result<PreparedTarget, VmError> {
+    ) -> Result<PreparedTarget, VmFault> {
         let scope = self
             .owner_chain(self.plan.nodes[slot.index()].owner)?
             .first()

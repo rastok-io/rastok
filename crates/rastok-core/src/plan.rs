@@ -32,7 +32,7 @@ pub use dispatch::{
     ClosedArm, Dispatch, DispatchStep, LoopCommand, MAX_DISPATCH_DEPTH, MultiEmitValues, OpenArm,
 };
 pub use dispatch_validation::{DispatchErrorKind, DispatchValidationError, validate_dispatch};
-pub use emission::{Emission, FieldWrite};
+pub use emission::{EmitValue, FieldWrite};
 pub use retry::LoopRepeatWarning;
 pub use routing::{
     Endpoint, EndpointOwner, InstanceStopTarget, LoopCommandKind, LoopCommandTarget, RouteArm,
