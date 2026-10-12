@@ -381,6 +381,27 @@ split (Fault = evaluation, VmError = machine) or merge the words.
 **⟂ 8a.** Collision 2 (`Dispatch`/`Dispatcher`) and 3 (`Bindings`).
 **⟂ 8b.** "pump" has one meaning (a boundary round) and three report types.
 Confirm the verb; it is not in the specification's main vocabulary (18).
+**Settled 12 October:** the verb is `poll_drivers` (11 October) and every
+derivative follows: `PumpBatch` → `PollBatch`, `PumpReport` → `PollReport`,
+`InboundCallPumpReport`, `InboundCallResponsePumpReport`,
+`InboundCallTimeoutPumpReport` → `*PollReport`, `pump_inbound*` →
+`poll_inbound*`, `InboundPumpError` → `InboundPollError`. Polling is the
+architecture, not an image: no Driver ever calls the core, the VM decides
+when it looks at the world, which is what makes stepping and replay
+possible; the code's own docs already say "poll" ten times. The
+`DriverPoller` doc states the two halves of a round in one sentence: hand
+every journaled open call to its Driver, then collect and settle the
+answers that arrived since the last round, the sense of `Future::poll`.
+**"drain" (Yoann: still an image)** has two senses in the code and one in
+the specification. The specification's sense stays: the closing phase of
+an instance, no new admission while admitted work finishes; 56 uses and
+the grammar's `drain_for` attribute (15), the standard systems word
+("connection draining"). `ClosingStage::Draining` follows it. The VM's
+sense goes: `Vm::drain` ("runs every ready transaction: settled closures
+and unclaimed mailboxes") is not a closing → **`run_ready`**,
+`drain_with_bindings` → `run_ready_with_bindings`; `try_drain` to follow
+once read. Not `run_until_idle`: "idle" is the specification's instance
+lifetime word.
 **⟂ 8c.** `ConnectorRoles { Inbound, Outbound, InboundAndOutbound }`
 implements row 2 of the Contract sheet, *Direction* (who starts), not row 1,
 *Role* (what it bridges). Plain word: `ConnectorDirection`; but
@@ -423,6 +444,8 @@ timeline.
 **⟂ 10a.** `Fold` is the code's word for what the specification calls a
 *projection* (100 uses: journal projection, scheduler projection). Confirm
 "fold" as the mechanism name, "projection" as the concept, or merge.
+**Settled 11 October:** `LoopView`, `RetryView`, `InstanceCommandView`;
+"projection" stays the specification's prose word for the concept.
 **⟂ 10b.** `loop_protocol::Fact` vs prose "fact" (= any record). Settled
 with collision 8: fact is the word; a `loop_protocol::Fact` is a fact of the
 Loop protocol, no collision.
