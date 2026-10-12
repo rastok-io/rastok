@@ -147,13 +147,19 @@ Ranked by the cost of leaving them to the external reviewer.
    limit → `ReadLimitExceeded`; unprovable `PermissionDenied`, "no portable
    fixture can force host permission denial"). Yoann did not know the
    word "provocation", which settles it: the module takes the universal
-   test words. Proposed: `Profile` → **`DriverConformanceCases`**,
-   `EventProfile` / `SessionProfile` → **`EventConformanceCases`** /
-   **`SessionConformanceCases`**; `Provocation` → **`ExitCaseTest`**, an
-   input built to force one declared exit case; `unprovable` →
-   **`untestable`**, the declared cases no portable test can force, each
-   with its written reason. `DriverProbes` withdrawn: "probe" is the
-   module's word, not the reader's.
+   test words. **Settled 12 October (Yoann): `Profile` →
+   `DriverTestFixture`**, `EventProfile` / `SessionProfile` →
+   `EventTestFixture` / `SessionTestFixture`: the fixed material one Driver
+   brings to the shared battery, in the xUnit sense; the battery itself is
+   the suite, one for all Drivers, so `TestSuite` (also Yoann's question)
+   was not retained. The specification's simulation vocabulary already uses
+   "fixture" for a scenario's scripted world-half; same sense, prepared
+   material a runner consumes, said once: fixture = prepared test material,
+   a scenario's in the Lab, a Driver's in conformance. `Provocation` →
+   **`ExitCaseTest`**, an input built to force one declared exit case;
+   `unprovable` → **`untestable`**, the declared cases no portable test can
+   force, each with its written reason. `DriverProbes` and
+   `DriverConformanceCases` withdrawn.
 6. **Node.** `plan::Node` is an executable row only, narrower than the
    specification's Node, which includes Graph. Settled by D-2026-10-11-1;
    listed here for completeness.
