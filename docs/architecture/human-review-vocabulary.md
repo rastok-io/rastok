@@ -179,7 +179,7 @@ its emission coordinates, not an envelope); `EmissionForm` (Yoann: no);
 `EmissionRule` (`RouteRule` is a checker decision, not an authored
 declaration); `EmissionRecipe` ("recipe" is the identity recipes' word).
 **Settled 12 October:** `PortOutput` merges into `EnvelopeDraft { port,
-data, ext }` (see "Validated so far"). Still proposed, awaiting Yoann:
+data, ext }` (see "Validated so far"). Settled the same day (Yoann):
 crate-private `Built`, `BuiltData` → `BuiltEmission`, `BuiltPayload` (the
 chain then reads `EmitValue` in the plan, `BuiltEmission` in the
 transaction's scratch, `Emission` in the journal); `RoutedDelivery` (journal
@@ -190,7 +190,7 @@ stay.
 `observations()`: "observation" is used for a debugger surface, a journal
 projection and a measurement. The specification uses "retained
 observation" for the second. Sharpened by collision 8 (observation = a
-Driver's report before commit). Proposed, awaiting Yoann (12 October): `Observed { node, port, envelope }`
+Driver's report before commit). **Settled 12 October (Yoann):** `Observed { node, port, envelope }`
 → **`DeliveryView`**: a delivery as the debugger sees it (node, port,
 envelope; no edge, no cursor), read by the Lab's expectations, `main` and
 the UI view; the `*View` suffix is already validated, so no new word.
