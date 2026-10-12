@@ -62,7 +62,11 @@ with Yoann and closed: every **⟂** is settled, and its
 section is the rename lot, about forty renames and zero journal bytes. Yoann
 then decided to **stop the review here** and start the work it produced: the
 realignment of D-2026-10-11-1 (lots 1 and 2), A-T4-4 inside lot 1, and the
-rename lot with them, all before the opening. The T4 second pass is suspended
+rename lot with them, all before the opening. His reason: the rest of the
+reading is much easier on code that carries the validated names, for him and
+for the external reviewer alike; every later block is read once, on
+`TransactionPreparer`, `DriverPoller`, `Obligation` and `EnvelopeDraft`
+rather than on the words the ledger retired. The T4 second pass is suspended
 after block 1; blocks 2–7 are read on the realigned code. Astra's
 cross-check of the three documents found two stale sentences, the ledger
 header still saying "nothing here is decided" and the disposition row below
