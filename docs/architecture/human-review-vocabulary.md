@@ -361,11 +361,24 @@ collides with family 9.
 **⟂ 7a.** Collision 1 (`*Executor`).
 **⟂ 7b.** `Vm::step` is one transaction; `TimeAdvance::step` is one
 transaction, one expiry or one poll. Same verb, two granularities.
+**Proposed 12 October:** `Vm::step` keeps the specification's `step`, one
+transaction (33 uses); `TimeAdvance::step` → **`advance_once`**, one unit of
+the `advance` it slices (a transaction, an expiry or a poll).
 **⟂ 7c.** Fault / VmError / Error: "fault" is the specification's word for
 a transaction that committed nothing; `VmError` is also that. Confirm the
 split (Fault = evaluation, VmError = machine) or merge the words.
+**Proposed 12 October:** `Fault` stays (the specification's word, 34 uses;
+`TransactionFault` if Yoann wants both qualified); `VmError` → **`VmFault`**:
+its own doc says "a machine fault … never a business error", and "error" is
+the specification's word for the `err` port and business error values (170
+uses); with `DriverPoller`, `DispatchError` → **`PollFault`**. Module-local
+`Error` types stay, the `io::Error` convention.
 **⟂ 7d.** The spec's **Worker** has no type (ledger, parked remarks).
 
+**Proposed 12 October:** a **`Worker`** type in the `rastok` crate, the
+specification's word (64 uses), owning the hosted loop of `main.rs` and
+`lab.rs` (boot, rounds, stepping, shutdown); created with the runtime
+organisation lot of D-2026-10-11-1, not a rename.
 ### 8. The boundary — driver, contract, binding, dispatcher, gate, pump
 
 | Code | Where | Meaning | Spec (uses) |
@@ -425,11 +438,22 @@ must yield the word (raised 11 October). **Settled 12 October (Yoann):**
 runs (from the delivery), *deadline* as the journaled record, *timeout* as
 the terminal fact. The specification uses all three this way. Confirm, and
 state it once in `timing.rs`.
+**12 October:** confirmed as is; the three words and their stage are
+stated once at the head of `timing.rs`.
 **⟂ 9b.** `LoopExpiry` (6c).
 **⟂ 9c.** The decided time model (D-2026-10-10-1) adds *instant*, *origin*,
 *logical timeline*; reserve "date" for civil dates and "instant" for the
 timeline.
 
+**Settled 12 October (Yoann: "pas mal"):** `DatedPayload` →
+**`Obligation`**. The seven variants are the exact obligation to re-check
+when its instant arrives, and the `Scheduler` doc already says "every
+future obligation … crosses the same frontier". Not `Due*`: the value is
+held in the scheduler's queue while it waits, keyed by its due instant, so a
+`Due*` name would be false until that instant; "due" is the moment, already
+named by `due_at` and `peek_due`. "Dated" goes with it: since
+D-2026-10-10-1, "date" is civil and "instant" is the logical timeline; the
+prose for `now` says instant.
 ### 10. The journal — record, fact, packet, fold, protocol, projection
 
 | Code | Where | Meaning | Spec (uses) |
@@ -462,9 +486,23 @@ Loop protocol, no collision.
 
 **⟂ 11a.** Collision 5 (`Profile`).
 **⟂ 11b.** `ScenarioSession` reuses "session", the Connector exchange word.
+**Proposed 12 October:** `ScenarioSession` → **`Simulator`**, the
+specification's own word (simulation-semantics §1: "the simulator — the
+deterministic runner: virtual clock, mocks, scripted journal — one, in the
+runtime"); its fields are exactly that: plan, scenario, vm, journal, scripted
+driver, action cursor, windows. Not bare `Scenario` (Yoann's question):
+`hir::Scenario` is already "one checked scenario", the declaration, and
+that is the right owner of the bare word. Not `PlannedScenario`: scenarios
+never enter the core plan (zero mentions in `plan.rs`; the `lab` corpus is
+"never deployed"), and the live thing is not a declaration. `ScenarioWorld`
+withdrawn: "world" is the fixture half. `ScenarioRun { report, records }`
+stays, the result of one run.
 **⟂ 11c.** The HIR mirrors plan names (`hir::Node`, `Graph`, `Handler`,
 `Edge`) — same word, previous layer. Acceptable by module path; confirm.
 
+**Proposed 12 October:** accepted as is; same concept, previous layer, the
+module says the layer; the lowering, the one file holding both, prefixes
+`hir::`, as one writes `syn::Item`.
 ## Validated so far — 11 October, evening
 
 | Term today | What it is | Yoann's decision | Status |
