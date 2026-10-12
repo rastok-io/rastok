@@ -291,12 +291,24 @@ Confirm "intent".
 **⟂ 4a.** `Identity` is an instance *address*; `Id` is an envelope
 *identity*. Two readers will swap them. The doc lines already say "address"
 and "identity": the types could.
+**Settled 12 October (Yoann):** `Identity` → **`InstanceAddress`**, its own
+doc's words and the specification's (address 102: "admission of a delivery
+into an absent address starts a new instance"); `Id` stays.
 **⟂ 4b.** `Generation` is called "instance reference" in prose and
 `instance` in most field names. One of the three.
+**Settled 12 October:** `Generation` stays, always written
+`instance::Generation` and never imported bare (zero bare imports, 332
+qualified uses today); the prose says "generation", not "reference". Not
+`InstanceGeneration` (Yoann's question): the module already qualifies it,
+`instance::InstanceGeneration` would stutter.
 **⟂ 4c.** `frames: Vec<Segment>` — frame and segment for one thing.
+**Settled 12 October (Yoann):** `frames` → **`segments`**; "frame" is the
+word of Process frames.
 **⟂ 4d.** `Slot`/`OwnerSlot` disappear with D-2026-10-11-1 (one typed
 index); confirm the surviving word (index, not slot, not handle).
 
+**Settled 12 October (Yoann):** the surviving word is **index**,
+`NodeIndex`, with the realignment lot.
 ### 5. Instances — owner, scope, bundle, lifetime, closing
 
 | Code | Where | Meaning | Spec (uses) |
@@ -313,9 +325,13 @@ index); confirm the surviving word (index, not slot, not handle).
 **⟂ 5b.** "bundle" (8 uses) names the immutable values of a `Live`; `Live`
 itself has no specification word. Confirm "live instance" / "bundle" or
 pick one.
+**Settled 12 October (Yoann):** `Live` → **`LiveInstance`**; the name of
+its immutable values ("bundle", 8 uses) is read before it is chosen.
 **⟂ 5c.** "scope" carries three meanings; the specification mostly means the
 closing or containing scope. Confirm or qualify (`Edge::scope` is an owner).
 
+**Settled 12 October (Yoann):** "scope" keeps the specification's sense,
+the closing or containing scope; `Edge::scope` → **`owner`**.
 ### 6. The plan — nodes, wiring, routes, handlers
 
 | Code | Where | Meaning | Spec (uses) |
@@ -338,13 +354,25 @@ RouteTarget / target / destination: the wiring has one object, the end of
 an arrow, under four type names and two prose nouns. D-2026-10-11-1 fixes
 one `Endpoint` (index + port) and one `Destination` enum; confirm those
 two words and retire the rest.
+**Settled 12 October (Yoann):** **`Endpoint`** (index + port) and
+**`Destination`** with the realignment lot; `EdgeEnd`, `EndpointOwner`,
+`RouteDestination` go. `RouteTarget` stays: it is the selected *instance*,
+not an endpoint, and "target" is the specification's word (178).
 **⟂ 6b.** Activation / trigger / firing: `HandlerActivation` is the static
 shape, `Trigger` what fired at run time, `LoopFiring` / `LifecycleFiring` /
 `fire_*` the act. Three words, three meanings; confirm them, they recur in
 the journal.
+**Settled 12 October (Yoann):** the three words stay, three
+specification words with three senses: activation (static shape), trigger
+(what fired), firing (the act).
 **⟂ 6c.** `LoopExpiry` is "a host-owned terminal", not a dated expiry;
 collides with family 9.
 
+**Settled 12 October (Yoann):** `LoopExpiry { port, ty }` →
+**`LoopTermination`**: how the Loop terminates, on which existing port, with
+which effective type. Not `LoopTerminal` (Fable's first proposal): the
+specification reserves "terminal" for the Connectors' terminal facts, the
+`*Exit` types. "Expiry" returns to the time family.
 ### 7. Execution — transaction, step, firing, fault
 
 | Code | Where | Meaning | Spec (uses) |
@@ -441,6 +469,7 @@ state it once in `timing.rs`.
 **12 October:** confirmed as is; the three words and their stage are
 stated once at the head of `timing.rs`.
 **⟂ 9b.** `LoopExpiry` (6c).
+**Settled 12 October:** see 6c, `LoopTermination`.
 **⟂ 9c.** The decided time model (D-2026-10-10-1) adds *instant*, *origin*,
 *logical timeline*; reserve "date" for civil dates and "instant" for the
 timeline.
