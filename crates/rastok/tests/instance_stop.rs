@@ -145,21 +145,20 @@ fn inject_at(
     port: &str,
     value: rastok::envelope::Value,
 ) -> Result<rastok::envelope::Id, rastok::runtime::vm::VmFault> {
-    use rastok::boundary::{
-        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
-    };
+    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
     vm.inject(
         journal,
-        IngressSubmission {
-            provenance: IngressEnvelopeProvenance::single(
+        IngressProposal {
+            provenance: IngressProvenance::single(
                 rastok::node::Path::new(["instance-stop-test"]).unwrap(),
             ),
-            port: rastok::node::Port::new(port).unwrap(),
-            draft: Draft {
+            draft: EnvelopeDraft {
+                port: rastok::node::Port::new(port).unwrap(),
                 data: rastok::envelope::Data::materialized(value),
                 ext: rastok::envelope::Namespace::new(),
             },
-            sequence: SubmissionSequence::Next,
+            sequence: IngressSequence::Next,
+            session: None,
         },
     )
 }

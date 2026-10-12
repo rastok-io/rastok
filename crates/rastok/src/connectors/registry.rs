@@ -5,10 +5,10 @@
 //! meet only at binding; registration order is never selection policy.
 
 use crate::boundary::{
-    CallConnectorDriver, CallId, CallOpen, CallStart, Completion, DriverRouteError,
-    InboundCallResponseStart, InboundCallTimeoutStart, InboundConnectorDriver, InboundExchangeId,
-    IngressDecision, IngressProposal, OutboundConnectorBindings, OutboundConnectorDriver,
-    RequestPreparation, Response, SchedulerCompletion, SessionConnectorBindings,
+    AdmittedIngress, CallConnectorDriver, CallId, CallOpen, CallStart, Completion,
+    DriverRouteError, InboundCallResponseStart, InboundCallTimeoutStart, InboundConnectorDriver,
+    InboundExchangeId, IngressRejection, OutboundConnectorBindings, OutboundConnectorDriver,
+    RequestPreparation, Response, RetainedProposal, SchedulerCompletion, SessionConnectorBindings,
     SessionConnectorDriver, SessionId, SessionObservation, SessionOpen, SessionWrite,
 };
 use crate::connector::{ConnectorDirection, ConnectorExchange, ContractId};
@@ -214,7 +214,7 @@ struct BoundFamily<'plan> {
     uses_inbound: bool,
     inbound_paths: BTreeSet<node::Path>,
     exchange: ConnectorExchange,
-    pending_inbound: Option<IngressProposal>,
+    pending_inbound: Option<RetainedProposal>,
     outbound_path: Option<node::Path>,
     session_path: Option<node::Path>,
 }
@@ -223,7 +223,7 @@ struct BoundFamily<'plan> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoutedInboundProposal {
     connector: ContractId,
-    proposal: IngressProposal,
+    proposal: RetainedProposal,
 }
 
 /// Failure of one inbound Driver/VM boundary round.
@@ -276,7 +276,7 @@ impl RoutedInboundProposal {
 
     /// Retained proposal presented for atomic VM admission.
     #[must_use]
-    pub fn proposal(&self) -> &IngressProposal {
+    pub fn proposal(&self) -> &RetainedProposal {
         &self.proposal
     }
 }
@@ -508,7 +508,7 @@ impl<'plan> RuntimeBindings<'plan> {
                 return Err(DriverRouteError::UnavailableInbound(id.clone()));
             };
             if let Some(proposal) = driver.proposal() {
-                let source = proposal.submission.provenance.connector_path();
+                let source = proposal.proposal.provenance.connector_path();
                 if !family.inbound_paths.contains(source) {
                     return Err(DriverRouteError::InboundSourceMismatch {
                         connector: id.clone(),
@@ -517,9 +517,9 @@ impl<'plan> RuntimeBindings<'plan> {
                 }
                 let framing_matches = match family.exchange {
                     ConnectorExchange::Event | ConnectorExchange::Call => {
-                        proposal.session.is_none()
+                        proposal.proposal.session.is_none()
                     }
-                    ConnectorExchange::Session => proposal.session.is_some(),
+                    ConnectorExchange::Session => proposal.proposal.session.is_some(),
                 };
                 if !framing_matches {
                     return Err(DriverRouteError::InboundExchangeMismatch {
@@ -547,27 +547,27 @@ impl<'plan> RuntimeBindings<'plan> {
     pub fn decide_inbound(
         &mut self,
         routed: &RoutedInboundProposal,
-        decision: IngressDecision,
+        decision: Result<AdmittedIngress, IngressRejection>,
     ) -> Result<(), DriverRouteError> {
         let Some(family) = self.families.get_mut(&routed.connector) else {
             return Err(DriverRouteError::UnknownIngressProposal {
                 connector: routed.connector.clone(),
-                reference: routed.proposal.reference,
+                reference: routed.proposal.handle,
             });
         };
         let Some(pending) = &family.pending_inbound else {
             return Err(DriverRouteError::UnknownIngressProposal {
                 connector: routed.connector.clone(),
-                reference: routed.proposal.reference,
+                reference: routed.proposal.handle,
             });
         };
         if pending != &routed.proposal {
             return Err(DriverRouteError::UnknownIngressProposal {
                 connector: routed.connector.clone(),
-                reference: routed.proposal.reference,
+                reference: routed.proposal.handle,
             });
         }
-        if let IngressDecision::Accepted(accepted) = decision {
+        if let Ok(accepted) = decision {
             match accepted.exchange {
                 Some(InboundExchangeId::Call(call_id)) => {
                     if let Some(expected) = self.inbound_calls.get(&call_id)
@@ -601,7 +601,7 @@ impl<'plan> RuntimeBindings<'plan> {
                 routed.connector.clone(),
             ));
         };
-        driver.decide(routed.proposal.reference, decision);
+        driver.decide(routed.proposal.handle, decision);
         family.pending_inbound = None;
         Ok(())
     }
@@ -629,10 +629,10 @@ impl<'plan> RuntimeBindings<'plan> {
             .map_err(InboundPollError::Machine)?;
         match admission {
             IngressAdmission::Accepted(accepted) => self
-                .decide_inbound(&routed, IngressDecision::Accepted(accepted))
+                .decide_inbound(&routed, Ok(accepted))
                 .map_err(InboundPollError::Driver)?,
             IngressAdmission::Rejected(reason) => self
-                .decide_inbound(&routed, IngressDecision::Rejected(reason))
+                .decide_inbound(&routed, Err(reason))
                 .map_err(InboundPollError::Driver)?,
             IngressAdmission::Pending => {}
         }
@@ -1320,13 +1320,13 @@ mod tests {
         DriverRegistrationError, DriverRegistry, RuntimeBindings,
     };
     use crate::boundary::{
-        CallConnectorDriver, CallOpen, CallStart, Completion, Draft, HttpServerExit,
-        InboundCallConnectorDriver, InboundCallObservation, InboundCallResponse,
-        InboundCallResponseStart, InboundExchangeId, IngressDecision, IngressEnvelopeProvenance,
-        IngressProposal, IngressProposalHandle, IngressSubmission, OutboundConnectorBindings,
-        OutboundConnectorDriver, ProcessExit, RequestPreparation, Response, SchedulerCompletion,
-        SessionConnectorBindings, SessionConnectorDriver, SessionId, SessionObservation,
-        SessionOpen, SessionWrite, SubmissionSequence,
+        AdmittedIngress, CallConnectorDriver, CallOpen, CallStart, Completion, EnvelopeDraft,
+        HttpServerExit, InboundCallConnectorDriver, InboundCallObservation, InboundCallResponse,
+        InboundCallResponseStart, InboundExchangeId, IngressProposal, IngressProposalHandle,
+        IngressProvenance, IngressRejection, IngressSequence, OutboundConnectorBindings,
+        OutboundConnectorDriver, ProcessExit, RequestPreparation, Response, RetainedProposal,
+        SchedulerCompletion, SessionConnectorBindings, SessionConnectorDriver, SessionId,
+        SessionObservation, SessionOpen, SessionWrite,
     };
     use crate::compiler::compile;
     use crate::connector::{ConnectorDirection, ConnectorExchange, ContractId};
@@ -1414,11 +1414,16 @@ mod tests {
     struct EmptyInbound;
 
     impl crate::boundary::InboundConnectorDriver for EmptyInbound {
-        fn proposal(&mut self) -> Option<IngressProposal> {
+        fn proposal(&mut self) -> Option<RetainedProposal> {
             None
         }
 
-        fn decide(&mut self, _: IngressProposalHandle, _: IngressDecision) {}
+        fn decide(
+            &mut self,
+            _: IngressProposalHandle,
+            _: Result<AdmittedIngress, IngressRejection>,
+        ) {
+        }
     }
 
     struct RoutingDriver {
@@ -1648,12 +1653,17 @@ graph inbound : App {
     }
 
     impl crate::boundary::InboundConnectorDriver for DuplexDriver {
-        fn proposal(&mut self) -> Option<IngressProposal> {
+        fn proposal(&mut self) -> Option<RetainedProposal> {
             self.observations.lock().unwrap().push("inbound");
             None
         }
 
-        fn decide(&mut self, _: IngressProposalHandle, _: IngressDecision) {}
+        fn decide(
+            &mut self,
+            _: IngressProposalHandle,
+            _: Result<AdmittedIngress, IngressRejection>,
+        ) {
+        }
 
         fn call(&mut self) -> Option<&mut dyn InboundCallConnectorDriver> {
             Some(self)
@@ -1779,12 +1789,16 @@ graph inbound : App {
     }
 
     impl crate::boundary::InboundConnectorDriver for SessionDuplexDriver {
-        fn proposal(&mut self) -> Option<IngressProposal> {
+        fn proposal(&mut self) -> Option<RetainedProposal> {
             self.observations.lock().unwrap().push("inbound");
             None
         }
 
-        fn decide(&mut self, _: IngressProposalHandle, _: IngressDecision) {
+        fn decide(
+            &mut self,
+            _: IngressProposalHandle,
+            _: Result<AdmittedIngress, IngressRejection>,
+        ) {
             self.observations.lock().unwrap().push("decision");
         }
     }
@@ -1854,7 +1868,7 @@ graph inbound : App {
                     0,
                     SessionObservation::Exited {
                         session,
-                        exit: crate::boundary::PortOutput {
+                        exit: crate::boundary::EnvelopeDraft {
                             port: node::Port::conventional_exit(),
                             data: Data::materialized(
                                 ProcessExit::Exited {
@@ -1966,14 +1980,15 @@ graph inbound : App {
 
         let mut journal = MemJournal::new(GraphVersion(1));
         let request = journal
-            .append_ingress(IngressSubmission {
-                provenance: IngressEnvelopeProvenance::single(node::Path::new(["world"]).unwrap()),
-                port: node::Port::new("in").unwrap(),
-                draft: Draft {
+            .append_ingress(IngressProposal {
+                provenance: IngressProvenance::single(node::Path::new(["world"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: node::Port::new("in").unwrap(),
                     data: Data::materialized(Value::Text(String::from("hello"))),
                     ext: Namespace::new(),
                 },
-                sequence: SubmissionSequence::Next,
+                sequence: IngressSequence::Next,
+                session: None,
             })
             .unwrap()
             .envelope;
@@ -2143,8 +2158,11 @@ graph inbound : App {
 
     #[derive(Default)]
     struct InboundQueueState {
-        proposals: VecDeque<IngressProposal>,
-        decisions: Vec<(IngressProposalHandle, IngressDecision)>,
+        proposals: VecDeque<RetainedProposal>,
+        decisions: Vec<(
+            IngressProposalHandle,
+            Result<AdmittedIngress, IngressRejection>,
+        )>,
     }
 
     struct RetainedInboundDriver {
@@ -2152,17 +2170,21 @@ graph inbound : App {
     }
 
     impl crate::boundary::InboundConnectorDriver for RetainedInboundDriver {
-        fn proposal(&mut self) -> Option<IngressProposal> {
+        fn proposal(&mut self) -> Option<RetainedProposal> {
             self.state.lock().unwrap().proposals.front().cloned()
         }
 
-        fn decide(&mut self, reference: IngressProposalHandle, decision: IngressDecision) {
+        fn decide(
+            &mut self,
+            reference: IngressProposalHandle,
+            decision: Result<AdmittedIngress, IngressRejection>,
+        ) {
             let mut state = self.state.lock().unwrap();
             let retained = state
                 .proposals
                 .pop_front()
                 .expect("a decision follows a retained proposal");
-            assert_eq!(retained.reference, reference);
+            assert_eq!(retained.handle, reference);
             state.decisions.push((reference, decision));
         }
     }
@@ -2184,8 +2206,11 @@ graph inbound : App {
 
     #[derive(Default)]
     struct RetainedCallState {
-        proposals: VecDeque<IngressProposal>,
-        decisions: Vec<(IngressProposalHandle, IngressDecision)>,
+        proposals: VecDeque<RetainedProposal>,
+        decisions: Vec<(
+            IngressProposalHandle,
+            Result<AdmittedIngress, IngressRejection>,
+        )>,
         events: Vec<InboundCallObservation>,
         responses: Vec<InboundCallResponse>,
         acknowledge_on_accept: bool,
@@ -2197,19 +2222,23 @@ graph inbound : App {
     }
 
     impl crate::boundary::InboundConnectorDriver for RetainedCallDriver {
-        fn proposal(&mut self) -> Option<IngressProposal> {
+        fn proposal(&mut self) -> Option<RetainedProposal> {
             self.state.lock().unwrap().proposals.front().cloned()
         }
 
-        fn decide(&mut self, reference: IngressProposalHandle, decision: IngressDecision) {
+        fn decide(
+            &mut self,
+            reference: IngressProposalHandle,
+            decision: Result<AdmittedIngress, IngressRejection>,
+        ) {
             let mut state = self.state.lock().unwrap();
             let retained = state
                 .proposals
                 .pop_front()
                 .expect("a decision follows a retained proposal");
-            assert_eq!(retained.reference, reference);
+            assert_eq!(retained.handle, reference);
             if state.acknowledge_on_accept
-                && let IngressDecision::Accepted(accepted) = decision
+                && let Ok(accepted) = decision
             {
                 let Some(InboundExchangeId::Call(call_id)) = accepted.exchange else {
                     panic!("an inbound Call acceptance carries its Call ref")
@@ -2311,19 +2340,19 @@ graph inbound : App {
         }
     }
 
-    fn inbound_proposal(reference: u64, port: &str) -> IngressProposal {
-        IngressProposal {
-            reference: IngressProposalHandle::new(reference),
-            submission: IngressSubmission {
-                provenance: IngressEnvelopeProvenance::single(node::Path::new(["source"]).unwrap()),
-                port: node::Port::new(port).unwrap(),
-                draft: Draft {
+    fn inbound_proposal(reference: u64, port: &str) -> RetainedProposal {
+        RetainedProposal {
+            handle: IngressProposalHandle::new(reference),
+            proposal: IngressProposal {
+                provenance: IngressProvenance::single(node::Path::new(["source"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: node::Port::new(port).unwrap(),
                     data: Data::materialized(Value::Text(format!("event-{reference}"))),
                     ext: Namespace::new(),
                 },
-                sequence: SubmissionSequence::Next,
+                sequence: IngressSequence::Next,
+                session: None,
             },
-            session: None,
         }
     }
 
@@ -2422,20 +2451,18 @@ graph api : App {
             })
         ));
         let state = Arc::new(Mutex::new(RetainedCallState {
-            proposals: VecDeque::from([IngressProposal {
-                reference: IngressProposalHandle::new(1),
-                submission: IngressSubmission {
-                    provenance: IngressEnvelopeProvenance::single(
-                        node::Path::new(["server"]).unwrap(),
-                    ),
-                    port: node::Port::conventional_out(),
-                    draft: Draft {
+            proposals: VecDeque::from([RetainedProposal {
+                handle: IngressProposalHandle::new(1),
+                proposal: IngressProposal {
+                    provenance: IngressProvenance::single(node::Path::new(["server"]).unwrap()),
+                    draft: EnvelopeDraft {
+                        port: node::Port::conventional_out(),
                         data: Data::materialized(Value::Text(String::from("request"))),
                         ext: Namespace::new(),
                     },
-                    sequence: SubmissionSequence::Next,
+                    sequence: IngressSequence::Next,
+                    session: None,
                 },
-                session: None,
             }]),
             acknowledge_on_accept: true,
             ..RetainedCallState::default()
@@ -2557,20 +2584,18 @@ graph api : App {
     fn a_graph_response_closes_its_original_inbound_call_without_an_outbound_call() {
         let plan = inbound_call_response_plan();
         let state = Arc::new(Mutex::new(RetainedCallState {
-            proposals: VecDeque::from([IngressProposal {
-                reference: IngressProposalHandle::new(1),
-                submission: IngressSubmission {
-                    provenance: IngressEnvelopeProvenance::single(
-                        node::Path::new(["server"]).unwrap(),
-                    ),
-                    port: node::Port::conventional_out(),
-                    draft: Draft {
+            proposals: VecDeque::from([RetainedProposal {
+                handle: IngressProposalHandle::new(1),
+                proposal: IngressProposal {
+                    provenance: IngressProvenance::single(node::Path::new(["server"]).unwrap()),
+                    draft: EnvelopeDraft {
+                        port: node::Port::conventional_out(),
                         data: Data::materialized(Value::Text(String::from("request"))),
                         ext: Namespace::new(),
                     },
-                    sequence: SubmissionSequence::Next,
+                    sequence: IngressSequence::Next,
+                    session: None,
                 },
-                session: None,
             }]),
             hold_first_response: true,
             ..RetainedCallState::default()
@@ -2694,20 +2719,18 @@ graph api : App {
     fn a_response_after_the_inbound_call_closed_is_discarded_and_journaled() {
         let plan = inbound_call_response_plan();
         let state = Arc::new(Mutex::new(RetainedCallState {
-            proposals: VecDeque::from([IngressProposal {
-                reference: IngressProposalHandle::new(1),
-                submission: IngressSubmission {
-                    provenance: IngressEnvelopeProvenance::single(
-                        node::Path::new(["server"]).unwrap(),
-                    ),
-                    port: node::Port::conventional_out(),
-                    draft: Draft {
+            proposals: VecDeque::from([RetainedProposal {
+                handle: IngressProposalHandle::new(1),
+                proposal: IngressProposal {
+                    provenance: IngressProvenance::single(node::Path::new(["server"]).unwrap()),
+                    draft: EnvelopeDraft {
+                        port: node::Port::conventional_out(),
                         data: Data::materialized(Value::Text(String::from("late"))),
                         ext: Namespace::new(),
                     },
-                    sequence: SubmissionSequence::Next,
+                    sequence: IngressSequence::Next,
+                    session: None,
                 },
-                session: None,
             }]),
             acknowledge_on_accept: true,
             ..RetainedCallState::default()
@@ -2802,7 +2825,7 @@ graph api : App {
             assert_eq!(state.decisions.last().unwrap().0.get(), expected);
             assert!(matches!(
                 state.decisions.last().unwrap().1,
-                IngressDecision::Accepted(observed) if observed == accepted
+                Ok(observed) if observed == accepted
             ));
             assert!(journal.find_envelope(accepted.envelope).is_some());
         }
@@ -2829,7 +2852,7 @@ graph api : App {
         assert_eq!(journal.records().len(), records_before);
         assert_eq!(state.lock().unwrap().decisions.len(), 1024);
         let retained = bindings.next_inbound().unwrap().unwrap();
-        assert_eq!(retained.proposal().reference.get(), 1024);
+        assert_eq!(retained.proposal().handle.get(), 1024);
         assert_eq!(
             bindings.poll_inbound(&mut vm, &mut journal).unwrap(),
             Some(crate::boundary::IngressAdmission::Pending),
@@ -2866,7 +2889,7 @@ graph api : App {
             state.lock().unwrap().decisions,
             [(
                 IngressProposalHandle::new(7),
-                IngressDecision::Rejected(crate::boundary::IngressRejection::UnknownPort)
+                Err(crate::boundary::IngressRejection::UnknownPort)
             )]
         );
     }
@@ -2875,7 +2898,7 @@ graph api : App {
     fn inbound_session_framing_cannot_contradict_the_exchange_fact() {
         let plan = inbound_event_plan();
         let mut proposal = inbound_proposal(9, "out");
-        proposal.session = Some(crate::boundary::InboundSession::Open);
+        proposal.proposal.session = Some(crate::boundary::InboundSession::Open);
         let state = Arc::new(Mutex::new(InboundQueueState {
             proposals: VecDeque::from([proposal]),
             decisions: Vec::new(),
@@ -2901,8 +2924,8 @@ graph api : App {
     fn an_inbound_family_cannot_forge_another_connector_as_its_source() {
         let plan = inbound_event_plan();
         let mut proposal = inbound_proposal(11, "out");
-        proposal.submission.provenance =
-            IngressEnvelopeProvenance::single(node::Path::new(["other"]).unwrap());
+        proposal.proposal.provenance =
+            IngressProvenance::single(node::Path::new(["other"]).unwrap());
         let state = Arc::new(Mutex::new(InboundQueueState {
             proposals: VecDeque::from([proposal]),
             decisions: Vec::new(),
@@ -2988,14 +3011,15 @@ graph api : App {
         let mut vm = Vm::boot(&plan, GraphVersion(1));
         vm.inject(
             &mut journal,
-            IngressSubmission {
-                provenance: IngressEnvelopeProvenance::single(node::Path::new(["test"]).unwrap()),
-                port: node::Port::new("in").unwrap(),
-                draft: Draft {
+            IngressProposal {
+                provenance: IngressProvenance::single(node::Path::new(["test"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: node::Port::new("in").unwrap(),
                     data: Data::materialized(Value::Text(String::from("request"))),
                     ext: Namespace::new(),
                 },
-                sequence: SubmissionSequence::Next,
+                sequence: IngressSequence::Next,
+                session: None,
             },
         )
         .unwrap();

@@ -7,7 +7,7 @@
 // correct report is a panic.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use rastok::boundary::{Completion, PortOutput, ProcessExit};
+use rastok::boundary::{Completion, EnvelopeDraft, ProcessExit};
 use rastok::envelope;
 use rastok::envelope::{Data, Envelope, Meta, MetaSys, MetaValue, Namespace, Scalar};
 use rastok::instance;
@@ -742,12 +742,12 @@ fn a_connector_output_overlays_only_its_external_observations() {
         MetaValue::Scalar(Scalar::Text(String::from("application/new"))),
     );
     let completion = Completion::try_new(vec![
-        PortOutput {
+        EnvelopeDraft {
             port: node::Port::conventional_out(),
             data: Data::materialized(envelope::Value::Text(String::from("response"))),
             ext: observed_ext.clone(),
         },
-        PortOutput {
+        EnvelopeDraft {
             port: node::Port::conventional_exit(),
             data: Data::materialized(
                 ProcessExit::Exited {

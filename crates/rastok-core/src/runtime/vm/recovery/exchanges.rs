@@ -231,7 +231,7 @@ impl Vm<'_> {
             record
                 .emissions
                 .iter()
-                .map(|emission| crate::boundary::PortOutput {
+                .map(|emission| crate::boundary::EnvelopeDraft {
                     port: emission.port.clone(),
                     data: emission.envelope.data().clone(),
                     ext: emission.envelope.meta().ext().clone(),

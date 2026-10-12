@@ -8,9 +8,9 @@
 //! test double.
 
 use crate::boundary::{
-    CallConnectorDriver, CallOpen, CallStart, Completion, Draft, IngressAdmission,
-    IngressEnvelopeProvenance, IngressSubmission, OutboundConnectorDriver, PortOutput,
-    RequestPreparation, Response, SchedulerCompletion, SubmissionSequence,
+    CallConnectorDriver, CallOpen, CallStart, Completion, EnvelopeDraft, IngressAdmission,
+    IngressProposal, IngressProvenance, IngressSequence, OutboundConnectorDriver,
+    RequestPreparation, Response, SchedulerCompletion,
 };
 use crate::compiler::hir::{
     Cmp, EmitValue, ExpectTarget, Expectation, InjectionTarget, Lab, Mock, Quantifier, Scenario,
@@ -160,7 +160,7 @@ pub struct Simulator<'plan, 'scenario> {
     advance: Option<TimeAdvance>,
     quiescent: bool,
     last_action: Option<ScenarioActionKind>,
-    next_injection_override: Option<Draft>,
+    next_injection_override: Option<EnvelopeDraft>,
 }
 
 impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
@@ -396,7 +396,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
         };
         let resolved = injection_port(self.plan, target)?;
         let (draft, edited) = self.next_injection_override.as_ref().map_or_else(
-            || draft(value).map(|draft| (draft, false)),
+            || draft(target.port(), value).map(|draft| (draft, false)),
             |draft| Ok((draft.clone(), true)),
         )?;
         Ok(Some(ScenarioInjectionDraft {
@@ -442,7 +442,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
         let mut replacement = self
             .next_injection_override
             .take()
-            .map_or_else(|| draft(authored), Ok)?;
+            .map_or_else(|| draft(target.port(), authored), Ok)?;
         replacement.data = Data::materialized(value);
         self.next_injection_override = Some(replacement);
         Ok(())
@@ -504,22 +504,22 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
                 let candidate = self
                     .next_injection_override
                     .take()
-                    .map_or_else(|| draft(value), Ok);
+                    .map_or_else(|| draft(target.port(), value), Ok);
                 match candidate {
                     Ok(draft) => {
-                        let submission = IngressSubmission {
-                            provenance: IngressEnvelopeProvenance::single(
+                        let submission = IngressProposal {
+                            provenance: IngressProvenance::single(
                                 target.connector().cloned().unwrap_or_else(|| {
                                     node::Path::new(["lab"])
                                         .unwrap_or_else(|_| unreachable!("`lab` is a valid path"))
                                 }),
                             ),
-                            port: target.port().clone(),
                             draft,
                             sequence: match seq {
-                                Some(seq) => SubmissionSequence::Explicit(*seq),
-                                None => SubmissionSequence::Next,
+                                Some(seq) => IngressSequence::Explicit(*seq),
+                                None => IngressSequence::Next,
                             },
+                            session: None,
                         };
                         if target.connector().is_some() {
                             let offered = u64::try_from(self.next_action)
@@ -1085,13 +1085,14 @@ fn check_expectation(
 /// Builds a world-authored draft from an injection value: `data`
 /// writes shape the payload, `meta.ext.*` supplies world context. The graph's
 /// `meta.app` is not writable here. A draft inherits nothing.
-fn draft(value: &EmitValue) -> Result<Draft, String> {
+fn draft(port: &node::Port, value: &EmitValue) -> Result<EnvelopeDraft, String> {
     let empty = BTreeMap::new();
     match value {
         EmitValue::Data(tree) => {
             let value =
                 expr::eval(tree, &empty).map_err(|error| format!("the injection: {error}"))?;
-            Ok(Draft {
+            Ok(EnvelopeDraft {
+                port: port.clone(),
                 data: Data::materialized(
                     value
                         .into_value()
@@ -1132,7 +1133,8 @@ fn draft(value: &EmitValue) -> Result<Draft, String> {
                     }
                 }
             }
-            Ok(Draft {
+            Ok(EnvelopeDraft {
+                port: port.clone(),
                 data: Data::materialized(data),
                 ext,
             })
@@ -1271,7 +1273,7 @@ impl MockOutboundConnectorDriver<'_> {
         connector: &node::Path,
         logical_time: Option<i64>,
         request: &Envelope,
-    ) -> Option<Vec<PortOutput>> {
+    ) -> Option<Vec<EnvelopeDraft>> {
         let Some(mock) = self.mocks.get(connector).cloned() else {
             self.fault(format!(
                 "an uncovered call reached `{connector}`; mock it or script silence"
@@ -1393,7 +1395,7 @@ impl MockOutboundConnectorDriver<'_> {
         request: &Envelope,
         mut env: BTreeMap<String, expr::EvalValue>,
         slot: &runtime::DataSlot<'_>,
-    ) -> Option<Vec<PortOutput>> {
+    ) -> Option<Vec<EnvelopeDraft>> {
         use crate::compiler::hir::Statement;
         let mut outputs = Vec::new();
         for statement in body {
@@ -1413,7 +1415,7 @@ impl MockOutboundConnectorDriver<'_> {
                 }
                 Statement::Emit { port, value } => {
                     match self.mock_data(value, request, &env, slot) {
-                        Ok(Some(data)) => outputs.push(PortOutput {
+                        Ok(Some(data)) => outputs.push(EnvelopeDraft {
                             port: port.clone(),
                             data,
                             ext: crate::envelope::Namespace::new(),

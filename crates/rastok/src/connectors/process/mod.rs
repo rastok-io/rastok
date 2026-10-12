@@ -1161,9 +1161,7 @@ impl CallConnectorDriver for Process<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::boundary::{
-        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
-    };
+    use crate::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
     use crate::compiler::compile;
     use crate::contract::ContractCatalog;
     use crate::envelope::Namespace;
@@ -1192,19 +1190,20 @@ graph real : App {
 }
 "#;
 
-    fn submission_data(data: Data) -> IngressSubmission {
-        IngressSubmission {
-            provenance: IngressEnvelopeProvenance::single(crate::node::Path::new(["cli"]).unwrap()),
-            port: crate::node::Port::new("in").unwrap(),
-            draft: Draft {
+    fn submission_data(data: Data) -> IngressProposal {
+        IngressProposal {
+            provenance: IngressProvenance::single(crate::node::Path::new(["cli"]).unwrap()),
+            draft: EnvelopeDraft {
+                port: crate::node::Port::new("in").unwrap(),
                 data,
                 ext: Namespace::new(),
             },
-            sequence: SubmissionSequence::Next,
+            sequence: IngressSequence::Next,
+            session: None,
         }
     }
 
-    fn submission(text: &str) -> IngressSubmission {
+    fn submission(text: &str) -> IngressProposal {
         submission_data(Data::materialized(Value::Struct(vec![(
             String::from("text"),
             Value::Text(String::from(text)),
@@ -1217,7 +1216,7 @@ graph real : App {
     /// the Driver — mints the timeouts.
     fn run_submission(
         source: &str,
-        submission: IngressSubmission,
+        submission: IngressProposal,
     ) -> (MemJournal, Vec<Envelope>, Vec<Envelope>, Vec<EnvelopeView>) {
         let compilation = compile(
             &[source],

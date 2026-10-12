@@ -302,16 +302,15 @@ fn malformed_native_or_undeserialized_data_cannot_enter_the_outbound_journal() {
         let mut journal = MemJournal::new(GraphVersion(1));
         vm.inject(
             &mut journal,
-            IngressSubmission {
-                provenance: IngressEnvelopeProvenance::single(
-                    node::Path::new(["probe"]).expect("path"),
-                ),
-                port: node::Port::new("in").expect("port"),
-                sequence: SubmissionSequence::Next,
-                draft: Draft {
+            IngressProposal {
+                provenance: IngressProvenance::single(node::Path::new(["probe"]).expect("path")),
+                draft: EnvelopeDraft {
+                    port: node::Port::new("in").expect("port"),
                     data: Data::materialized(Value::Map(BTreeMap::new())),
                     ext: Namespace::new(),
                 },
+                sequence: IngressSequence::Next,
+                session: None,
             },
         )
         .expect("admission");

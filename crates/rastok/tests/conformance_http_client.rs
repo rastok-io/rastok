@@ -329,16 +329,17 @@ lab authenticated {
     let mut vm = Vm::boot_with_deployment(&compilation.plan, version, &boot);
     vm.inject(
         &mut journal,
-        rastok::boundary::IngressSubmission {
-            provenance: rastok::boundary::IngressEnvelopeProvenance::single(
+        rastok::boundary::IngressProposal {
+            provenance: rastok::boundary::IngressProvenance::single(
                 node::Path::new(["test"]).expect("valid provenance"),
             ),
-            port: node::Port::new("in").expect("valid input port"),
-            draft: rastok::boundary::Draft {
+            draft: rastok::boundary::EnvelopeDraft {
+                port: node::Port::new("in").expect("valid input port"),
                 data: Data::materialized(Value::Text(String::from("request"))),
                 ext: Namespace::new(),
             },
-            sequence: rastok::boundary::SubmissionSequence::Next,
+            sequence: rastok::boundary::IngressSequence::Next,
+            session: None,
         },
     )
     .expect("the request is admitted");
@@ -508,16 +509,17 @@ graph app : App {{
     let mut vm = Vm::boot_program(&compilation.plan, compilation.hash, version, 0, None);
     vm.inject(
         &mut journal,
-        rastok::boundary::IngressSubmission {
-            provenance: rastok::boundary::IngressEnvelopeProvenance::single(
+        rastok::boundary::IngressProposal {
+            provenance: rastok::boundary::IngressProvenance::single(
                 node::Path::new(["wire-test"]).expect("provenance"),
             ),
-            port: node::Port::new("in").expect("port"),
-            draft: rastok::boundary::Draft {
+            draft: rastok::boundary::EnvelopeDraft {
+                port: node::Port::new("in").expect("port"),
                 data: Data::materialized(Value::Map(BTreeMap::new())),
                 ext: Namespace::new(),
             },
-            sequence: rastok::boundary::SubmissionSequence::Next,
+            sequence: rastok::boundary::IngressSequence::Next,
+            session: None,
         },
     )
     .expect("admission");

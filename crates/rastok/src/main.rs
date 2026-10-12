@@ -11,7 +11,7 @@
 //! the rustc shape through [`rastok::render`]. `--resolve-open-api` owns one
 //! deterministic generated source without rewriting authored project files.
 
-use rastok::boundary::{Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence};
+use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
 use rastok::compiler::Compilation;
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
@@ -729,11 +729,11 @@ fn boundary_fault(message: String) -> rastok::ui::FaultView {
     }
 }
 
-fn cli_submission(inbound_path: &node::Path, line: String) -> IngressSubmission {
-    IngressSubmission {
-        provenance: IngressEnvelopeProvenance::single(inbound_path.clone()),
-        port: node::Port::new("in").unwrap_or_else(|_| unreachable!("`in` is a valid port")),
-        draft: Draft {
+fn cli_submission(inbound_path: &node::Path, line: String) -> IngressProposal {
+    IngressProposal {
+        provenance: IngressProvenance::single(inbound_path.clone()),
+        draft: EnvelopeDraft {
+            port: node::Port::new("in").unwrap_or_else(|_| unreachable!("`in` is a valid port")),
             data: Data::materialized(Value::Text(line)),
             ext: {
                 let mut ext = Namespace::new();
@@ -746,7 +746,8 @@ fn cli_submission(inbound_path: &node::Path, line: String) -> IngressSubmission 
                 ext
             },
         },
-        sequence: SubmissionSequence::Next,
+        sequence: IngressSequence::Next,
+        session: None,
     }
 }
 

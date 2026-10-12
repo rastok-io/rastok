@@ -157,9 +157,7 @@ fn keyed_retries_loops_and_bounded_joins_survive_recording_and_prefix_reconstruc
 
 #[test]
 fn encoded_data_and_nan_metadata_are_lossless_not_a_golden_only_projection() {
-    use crate::boundary::{
-        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
-    };
+    use crate::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
     use crate::envelope::{Data, Encoding, MetaValue, Scalar};
     let mut journal = MemJournal::new(GraphVersion(1));
     for data in [
@@ -170,19 +168,18 @@ fn encoded_data_and_nan_metadata_are_lossless_not_a_golden_only_projection() {
         }),
     ] {
         journal
-            .append_ingress(IngressSubmission {
-                provenance: IngressEnvelopeProvenance::single(
-                    crate::node::Path::new(["test"]).unwrap(),
-                ),
-                port: crate::node::Port::new("in").unwrap(),
-                sequence: SubmissionSequence::Next,
-                draft: Draft {
+            .append_ingress(IngressProposal {
+                provenance: IngressProvenance::single(crate::node::Path::new(["test"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: crate::node::Port::new("in").unwrap(),
                     data,
                     ext: std::collections::BTreeMap::from([(
                         String::from("nan"),
                         MetaValue::Scalar(Scalar::Double(f64::NAN)),
                     )]),
                 },
+                sequence: IngressSequence::Next,
+                session: None,
             })
             .unwrap();
     }

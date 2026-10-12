@@ -5,11 +5,11 @@
 //! network thread, and every finite queue is charged by the shared pump.
 
 use crate::boundary::{
-    Draft, InboundConnectorDriver, InboundExchangeId, InboundSession, IngressAcceptance,
-    IngressDecision, IngressEnvelopeProvenance, IngressProposal, IngressProposalHandle,
-    IngressSubmission, OutboundConnectorDriver, PortOutput, RequestPreparation,
-    SchedulerCompletion, SessionConnectorDriver, SessionId, SessionObservation, SessionOpen,
-    SessionStart, SessionWrite, SubmissionSequence, WebSocketExit,
+    AdmittedIngress, EnvelopeDraft, InboundConnectorDriver, InboundExchangeId, InboundSession,
+    IngressProposal, IngressProposalHandle, IngressProvenance, IngressRejection, IngressSequence,
+    OutboundConnectorDriver, RequestPreparation, RetainedProposal, SchedulerCompletion,
+    SessionConnectorDriver, SessionId, SessionObservation, SessionOpen, SessionStart, SessionWrite,
+    WebSocketExit,
 };
 use crate::connectors::network::pump::{
     EngineInput, EngineLimits, EventPoll, EventReservation, EventSender, HostedNetworkEngine,
@@ -246,8 +246,8 @@ enum DriverEvent {
 
 #[derive(Debug)]
 struct LiveProposal {
-    proposal: IngressProposal,
-    decision: oneshot::Sender<IngressDecision>,
+    proposal: RetainedProposal,
+    decision: oneshot::Sender<Result<AdmittedIngress, IngressRejection>>,
     _reservation: EventReservation,
 }
 
@@ -324,16 +324,20 @@ impl crate::connectors::BoundConnectorDriver for HostedWebSocket<'_> {
 }
 
 impl InboundConnectorDriver for HostedWebSocket<'_> {
-    fn proposal(&mut self) -> Option<IngressProposal> {
+    fn proposal(&mut self) -> Option<RetainedProposal> {
         self.poll_events();
         self.pending.front().map(|live| live.proposal.clone())
     }
 
-    fn decide(&mut self, reference: IngressProposalHandle, decision: IngressDecision) {
+    fn decide(
+        &mut self,
+        reference: IngressProposalHandle,
+        decision: Result<AdmittedIngress, IngressRejection>,
+    ) {
         let Some(live) = self.pending.front() else {
             return;
         };
-        if live.proposal.reference != reference {
+        if live.proposal.handle != reference {
             return;
         }
         if let Some(live) = self.pending.pop_front() {
@@ -642,7 +646,7 @@ fn verify_binding(
 fn exit_event(session: SessionId, exit: WebSocketExit, ext: Namespace) -> SessionObservation {
     SessionObservation::Exited {
         session,
-        exit: PortOutput {
+        exit: EnvelopeDraft {
             port: crate::node::Port::conventional_exit(),
             data: Data::materialized(exit.into_value()),
             ext,
@@ -1787,15 +1791,18 @@ async fn propose_message(
     })?;
     let reference = next_proposal_ref()?;
     let (decision, accepted) = oneshot::channel();
-    let proposal = IngressProposal {
-        reference,
-        submission: IngressSubmission {
-            provenance: IngressEnvelopeProvenance::single(connector.clone()),
-            port: crate::node::Port::conventional_out(),
-            draft: Draft { data, ext },
-            sequence: SubmissionSequence::Next,
+    let proposal = RetainedProposal {
+        handle: reference,
+        proposal: IngressProposal {
+            provenance: IngressProvenance::single(connector.clone()),
+            draft: EnvelopeDraft {
+                port: crate::node::Port::conventional_out(),
+                data,
+                ext,
+            },
+            sequence: IngressSequence::Next,
+            session: Some(InboundSession::Message(session)),
         },
-        session: Some(InboundSession::Message(session)),
     };
     events
         .emit(
@@ -1809,7 +1816,7 @@ async fn propose_message(
         .await
         .map_err(|_| WebSocketExit::TransportLost)?;
     match accepted.await {
-        Ok(IngressDecision::Accepted(IngressAcceptance {
+        Ok(Ok(AdmittedIngress {
             exchange: Some(InboundExchangeId::Session(accepted)),
             ..
         })) if accepted == session => Ok(()),
@@ -1911,7 +1918,7 @@ fn bind_h3_listeners(
 
 #[cfg(feature = "hosted-http3")]
 enum H3HandshakeState {
-    Pending(oneshot::Receiver<IngressDecision>),
+    Pending(oneshot::Receiver<Result<AdmittedIngress, IngressRejection>>),
     Accepted(SessionId),
     Rejected,
 }
@@ -1930,7 +1937,10 @@ struct H3LiveSession {
     ext: Namespace,
     outgoing: Vec<u8>,
     outgoing_offset: usize,
-    pending_decision: Option<(oneshot::Receiver<IngressDecision>, EventReservation)>,
+    pending_decision: Option<(
+        oneshot::Receiver<Result<AdmittedIngress, IngressRejection>>,
+        EventReservation,
+    )>,
     route: WebSocketServerBinding,
     session: SessionId,
     websocket: tungstenite::WebSocket<H3FrameIo>,
@@ -2129,18 +2139,18 @@ async fn progress_h3_peer(
                     selected.clone(),
                 );
                 let (decision, accepted) = oneshot::channel();
-                let proposal = IngressProposal {
-                    reference: IngressProposalHandle::new(reference_value),
-                    submission: IngressSubmission {
-                        provenance: IngressEnvelopeProvenance::single(route.node.clone()),
-                        port: crate::node::Port::conventional_out(),
-                        draft: Draft {
+                let proposal = RetainedProposal {
+                    handle: IngressProposalHandle::new(reference_value),
+                    proposal: IngressProposal {
+                        provenance: IngressProvenance::single(route.node.clone()),
+                        draft: EnvelopeDraft {
+                            port: crate::node::Port::conventional_out(),
                             data: neutral_data(&route.codec),
                             ext: ext.clone(),
                         },
-                        sequence: SubmissionSequence::Next,
+                        sequence: IngressSequence::Next,
+                        session: Some(InboundSession::Open),
                     },
-                    session: Some(InboundSession::Open),
                 };
                 events
                     .emit(
@@ -2226,7 +2236,7 @@ async fn progress_h3_handshakes(
             let pending = peer.pending.get_mut(&stream).ok_or(())?;
             match &mut pending.state {
                 H3HandshakeState::Pending(decision) => match decision.try_recv() {
-                    Ok(IngressDecision::Accepted(IngressAcceptance {
+                    Ok(Ok(AdmittedIngress {
                         exchange: Some(InboundExchangeId::Session(session)),
                         ..
                     })) => Some(H3HandshakeState::Accepted(session)),
@@ -2375,7 +2385,7 @@ async fn progress_h3_sessions(
         };
         if let Some((decision, _)) = &mut live.pending_decision {
             match decision.try_recv() {
-                Ok(IngressDecision::Accepted(IngressAcceptance {
+                Ok(Ok(AdmittedIngress {
                     exchange: Some(InboundExchangeId::Session(session)),
                     ..
                 })) if session == live.session => {
@@ -2505,18 +2515,18 @@ async fn drain_h3_server_messages(
         let reservation = events.reserve(bytes.len()).await.map_err(|_| ())?;
         let reference = next_proposal_ref().map_err(|_| ())?;
         let (decision, accepted) = oneshot::channel();
-        let proposal = IngressProposal {
-            reference,
-            submission: IngressSubmission {
-                provenance: IngressEnvelopeProvenance::single(live.route.node.clone()),
-                port: crate::node::Port::conventional_out(),
-                draft: Draft {
+        let proposal = RetainedProposal {
+            handle: reference,
+            proposal: IngressProposal {
+                provenance: IngressProvenance::single(live.route.node.clone()),
+                draft: EnvelopeDraft {
+                    port: crate::node::Port::conventional_out(),
                     data,
                     ext: live.ext.clone(),
                 },
-                sequence: SubmissionSequence::Next,
+                sequence: IngressSequence::Next,
+                session: Some(InboundSession::Message(live.session)),
             },
-            session: Some(InboundSession::Message(live.session)),
         };
         events
             .emit(
@@ -2821,20 +2831,20 @@ async fn serve_handshake(
     }
     let reference = IngressProposalHandle::new(reference_value);
     let ext = server_metadata(&request, selected.as_deref());
-    let draft = Draft {
+    let draft = EnvelopeDraft {
+        port: crate::node::Port::conventional_out(),
         data: neutral_data(&route.codec),
         ext: ext.clone(),
     };
     let (decision, accepted) = oneshot::channel();
-    let proposal = IngressProposal {
-        reference,
-        submission: IngressSubmission {
-            provenance: IngressEnvelopeProvenance::single(route.node.clone()),
-            port: crate::node::Port::conventional_out(),
+    let proposal = RetainedProposal {
+        handle: reference,
+        proposal: IngressProposal {
+            provenance: IngressProvenance::single(route.node.clone()),
             draft,
-            sequence: SubmissionSequence::Next,
+            sequence: IngressSequence::Next,
+            session: Some(InboundSession::Open),
         },
-        session: Some(InboundSession::Open),
     };
     if events
         .emit(
@@ -2851,11 +2861,11 @@ async fn serve_handshake(
         return Ok(empty_response(StatusCode::SERVICE_UNAVAILABLE));
     }
     let session = match accepted.await {
-        Ok(IngressDecision::Accepted(IngressAcceptance {
+        Ok(Ok(AdmittedIngress {
             exchange: Some(InboundExchangeId::Session(session)),
             ..
         })) => session,
-        Ok(IngressDecision::Rejected(_)) | Ok(IngressDecision::Accepted(_)) | Err(_) => {
+        Ok(Err(_)) | Ok(Ok(_)) | Err(_) => {
             return Ok(empty_response(StatusCode::SERVICE_UNAVAILABLE));
         }
     };
@@ -3251,7 +3261,7 @@ graph websocket : App {{
         .plan
     }
 
-    fn wait_for_proposal(server: &mut HostedWebSocket<'_>) -> IngressProposal {
+    fn wait_for_proposal(server: &mut HostedWebSocket<'_>) -> RetainedProposal {
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
             if let Some(proposal) = server.proposal() {
@@ -3430,7 +3440,7 @@ graph websocket : App {{
         };
 
         let opening = wait_for_proposal(&mut server);
-        assert_eq!(opening.session, Some(InboundSession::Open));
+        assert_eq!(opening.proposal.session, Some(InboundSession::Open));
         assert_eq!(
             peer.try_recv(),
             Err(TryRecvError::Empty),
@@ -3438,22 +3448,25 @@ graph websocket : App {{
         );
         let session = SessionId::new(Id::from_bytes([9; 16]));
         server.decide(
-            opening.reference,
-            IngressDecision::Accepted(IngressAcceptance {
+            opening.handle,
+            Ok(AdmittedIngress {
                 envelope: Id::from_bytes([7; 16]),
                 exchange: Some(InboundExchangeId::Session(session)),
             }),
         );
 
         let message = wait_for_proposal(&mut server);
-        assert_eq!(message.session, Some(InboundSession::Message(session)));
         assert_eq!(
-            message.submission.draft.data.materialized_value(),
+            message.proposal.session,
+            Some(InboundSession::Message(session))
+        );
+        assert_eq!(
+            message.proposal.draft.data.materialized_value(),
             Some(&Value::Text(String::from("hello")))
         );
         server.decide(
-            message.reference,
-            IngressDecision::Accepted(IngressAcceptance {
+            message.handle,
+            Ok(AdmittedIngress {
                 envelope: Id::from_bytes([8; 16]),
                 exchange: Some(InboundExchangeId::Session(session)),
             }),
@@ -3502,24 +3515,24 @@ graph websocket : App {{
         let alpha_open = wait_for_proposal(&mut server);
         let alpha_session = SessionId::new(Id::from_bytes([0x51; 16]));
         server.decide(
-            alpha_open.reference,
-            IngressDecision::Accepted(IngressAcceptance {
+            alpha_open.handle,
+            Ok(AdmittedIngress {
                 envelope: Id::from_bytes([0x52; 16]),
                 exchange: Some(InboundExchangeId::Session(alpha_session)),
             }),
         );
         let alpha_message = wait_for_proposal(&mut server);
         assert_eq!(
-            alpha_message.session,
+            alpha_message.proposal.session,
             Some(InboundSession::Message(alpha_session))
         );
         assert_eq!(
-            alpha_message.submission.draft.data.materialized_value(),
+            alpha_message.proposal.draft.data.materialized_value(),
             Some(&Value::Text(String::from("alpha")))
         );
         server.decide(
-            alpha_message.reference,
-            IngressDecision::Accepted(IngressAcceptance {
+            alpha_message.handle,
+            Ok(AdmittedIngress {
                 envelope: Id::from_bytes([0x53; 16]),
                 exchange: Some(InboundExchangeId::Session(alpha_session)),
             }),
@@ -3530,25 +3543,25 @@ graph websocket : App {{
         let beta_open = wait_for_proposal(&mut server);
         let beta_session = SessionId::new(Id::from_bytes([0x61; 16]));
         server.decide(
-            beta_open.reference,
-            IngressDecision::Accepted(IngressAcceptance {
+            beta_open.handle,
+            Ok(AdmittedIngress {
                 envelope: Id::from_bytes([0x62; 16]),
                 exchange: Some(InboundExchangeId::Session(beta_session)),
             }),
         );
         let beta_message = wait_for_proposal(&mut server);
         assert_eq!(
-            beta_message.session,
+            beta_message.proposal.session,
             Some(InboundSession::Message(beta_session))
         );
         assert_eq!(
-            beta_message.submission.draft.data.materialized_value(),
+            beta_message.proposal.draft.data.materialized_value(),
             Some(&Value::Text(String::from("beta")))
         );
         assert_ne!(alpha_session, beta_session);
         server.decide(
-            beta_message.reference,
-            IngressDecision::Accepted(IngressAcceptance {
+            beta_message.handle,
+            Ok(AdmittedIngress {
                 envelope: Id::from_bytes([0x63; 16]),
                 exchange: Some(InboundExchangeId::Session(beta_session)),
             }),
@@ -3591,16 +3604,16 @@ graph websocket : App {{
         let opening = wait_for_proposal(&mut server);
         let session = SessionId::new(Id::from_bytes([0x71; 16]));
         server.decide(
-            opening.reference,
-            IngressDecision::Accepted(IngressAcceptance {
+            opening.handle,
+            Ok(AdmittedIngress {
                 envelope: Id::from_bytes([0x72; 16]),
                 exchange: Some(InboundExchangeId::Session(session)),
             }),
         );
         let message = wait_for_proposal(&mut server);
         server.decide(
-            message.reference,
-            IngressDecision::Accepted(IngressAcceptance {
+            message.handle,
+            Ok(AdmittedIngress {
                 envelope: Id::from_bytes([0x73; 16]),
                 exchange: Some(InboundExchangeId::Session(session)),
             }),
@@ -3640,8 +3653,8 @@ graph websocket : App {{
         let opening = wait_for_proposal(&mut server);
         let session = SessionId::new(Id::from_bytes([0x74; 16]));
         server.decide(
-            opening.reference,
-            IngressDecision::Accepted(IngressAcceptance {
+            opening.handle,
+            Ok(AdmittedIngress {
                 envelope: Id::from_bytes([0x75; 16]),
                 exchange: Some(InboundExchangeId::Session(session)),
             }),
@@ -3712,14 +3725,15 @@ graph websocket : App {{
         };
         let mut journal = MemJournal::new(GraphVersion(1));
         let seed = journal
-            .append_ingress(IngressSubmission {
-                provenance: IngressEnvelopeProvenance::single(node),
-                port: crate::node::Port::conventional_out(),
-                draft: Draft {
+            .append_ingress(IngressProposal {
+                provenance: IngressProvenance::single(node),
+                draft: EnvelopeDraft {
+                    port: crate::node::Port::conventional_out(),
                     data,
                     ext: Namespace::new(),
                 },
-                sequence: SubmissionSequence::Next,
+                sequence: IngressSequence::Next,
+                session: None,
             })
             .expect("the seed commits")
             .envelope;
@@ -3886,14 +3900,15 @@ graph websocket : App {
         };
         let mut journal = MemJournal::new(GraphVersion(1));
         let seed = journal
-            .append_ingress(IngressSubmission {
-                provenance: IngressEnvelopeProvenance::single(node.clone()),
-                port: crate::node::Port::conventional_out(),
-                draft: Draft {
+            .append_ingress(IngressProposal {
+                provenance: IngressProvenance::single(node.clone()),
+                draft: EnvelopeDraft {
+                    port: crate::node::Port::conventional_out(),
                     data: data.clone(),
                     ext: Namespace::new(),
                 },
-                sequence: SubmissionSequence::Next,
+                sequence: IngressSequence::Next,
+                session: None,
             })
             .expect("the seed commits")
             .envelope;
@@ -3917,8 +3932,8 @@ graph websocket : App {
         };
         let server_session = SessionId::new(Id::from_bytes([0x32; 16]));
         server.decide(
-            opening.reference,
-            IngressDecision::Accepted(IngressAcceptance {
+            opening.handle,
+            Ok(AdmittedIngress {
                 envelope: Id::from_bytes([0x33; 16]),
                 exchange: Some(InboundExchangeId::Session(server_session)),
             }),
@@ -3937,16 +3952,16 @@ graph websocket : App {
         }
         let message = wait_for_proposal(&mut server);
         assert_eq!(
-            message.submission.draft.data.materialized_value(),
+            message.proposal.draft.data.materialized_value(),
             Some(&Value::Text(String::from("hello-h3")))
         );
         assert_eq!(
-            message.session,
+            message.proposal.session,
             Some(InboundSession::Message(server_session))
         );
         server.decide(
-            message.reference,
-            IngressDecision::Accepted(IngressAcceptance {
+            message.handle,
+            Ok(AdmittedIngress {
                 envelope: Id::from_bytes([0x34; 16]),
                 exchange: Some(InboundExchangeId::Session(server_session)),
             }),

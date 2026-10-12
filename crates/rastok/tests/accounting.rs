@@ -5,7 +5,7 @@
 use rastok::accounting::{
     ExactDecimal, PriceBook, PriceBookName, UnitPrice, accounting_observations,
 };
-use rastok::boundary::{Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence};
+use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
 use rastok::compiler::compile;
 use rastok::contract::ContractCatalog;
 use rastok::deployment::{
@@ -58,12 +58,12 @@ graph accounting_probe : App {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
         &mut journal,
-        IngressSubmission {
-            provenance: IngressEnvelopeProvenance::single(
+        IngressProposal {
+            provenance: IngressProvenance::single(
                 node::Path::new(["accounting-test"]).expect("valid provenance"),
             ),
-            port: node::Port::new("in").expect("conventional port"),
-            draft: Draft {
+            draft: EnvelopeDraft {
+                port: node::Port::new("in").expect("conventional port"),
                 data: Data::materialized(Value::Struct(vec![
                     (String::from("input_tokens"), Value::Uint(1_000)),
                     (String::from("cached_tokens"), Value::Uint(200)),
@@ -77,7 +77,8 @@ graph accounting_probe : App {
                 ])),
                 ext: Namespace::new(),
             },
-            sequence: SubmissionSequence::Next,
+            sequence: IngressSequence::Next,
+            session: None,
         },
     )
     .expect("inbound commits");
@@ -213,16 +214,17 @@ graph priced_call : App {
     let mut world = rastok::connectors::Process::try_new(&compilation.plan).expect("Process binds");
     vm.inject(
         &mut journal,
-        IngressSubmission {
-            provenance: IngressEnvelopeProvenance::single(
+        IngressProposal {
+            provenance: IngressProvenance::single(
                 node::Path::new(["accounting-test"]).expect("valid provenance"),
             ),
-            port: node::Port::new("in").expect("conventional port"),
-            draft: Draft {
+            draft: EnvelopeDraft {
+                port: node::Port::new("in").expect("conventional port"),
                 data: Data::materialized(Value::Int(1_000)),
                 ext: Namespace::new(),
             },
-            sequence: SubmissionSequence::Next,
+            sequence: IngressSequence::Next,
+            session: None,
         },
     )
     .expect("inbound commits");

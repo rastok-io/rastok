@@ -90,7 +90,7 @@ mailbox only after INGRESS admission. The Driver does not mint root envelopes:
 sequencing, routing, admission, identity and journal commit remain runtime authorities. The runtime answers
 accepted only after commit, pending without a callback under pressure, or a
 portable rejection. A proposal also names the exact Connector Node that owns
-its source output through its single `IngressEnvelopeProvenance` authority.
+its source output through its single `IngressProvenance` authority.
 Registry binding proves that path belongs to the Contract; the VM proves the
 output row. An App-boundary injection remains a separate explicit API
 category, never a provenance-string heuristic.

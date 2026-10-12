@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use rastok::boundary::{Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence};
+use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
 use rastok::compiler;
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
@@ -100,16 +100,17 @@ fn compile(source: &str) -> plan::ValidatedExecutionPlan {
 fn inject(vm: &mut Vm<'_>, journal: &mut MemJournal, port: &str, value: i64) {
     vm.inject(
         journal,
-        IngressSubmission {
-            provenance: IngressEnvelopeProvenance::single(
+        IngressProposal {
+            provenance: IngressProvenance::single(
                 rastok::node::Path::new(["recovery-test"]).unwrap(),
             ),
-            port: rastok::node::Port::new(port).unwrap(),
-            draft: Draft {
+            draft: EnvelopeDraft {
+                port: rastok::node::Port::new(port).unwrap(),
                 data: Data::materialized(Value::Int(value)),
                 ext: Namespace::new(),
             },
-            sequence: SubmissionSequence::Next,
+            sequence: IngressSequence::Next,
+            session: None,
         },
     )
     .unwrap();

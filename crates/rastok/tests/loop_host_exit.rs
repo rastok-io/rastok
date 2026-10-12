@@ -179,9 +179,7 @@ lab app {{ simulation forged on app {{
 
 #[test]
 fn expiry_and_pending_commands_recover_on_the_resolved_host_terminal() {
-    use rastok::boundary::{
-        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
-    };
+    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::{
         MemJournal,
@@ -205,16 +203,15 @@ fn expiry_and_pending_commands_recover_on_the_resolved_host_terminal() {
         let mut journal = MemJournal::new(GraphVersion(1));
         vm.inject(
             &mut journal,
-            IngressSubmission {
-                sequence: SubmissionSequence::Next,
-                port: rastok::node::Port::new("in").unwrap(),
-                draft: Draft {
+            IngressProposal {
+                provenance: IngressProvenance::single(rastok::node::Path::new(["test"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: rastok::node::Port::new("in").unwrap(),
                     data: Data::materialized(Value::Int(4)),
                     ext: Namespace::new(),
                 },
-                provenance: IngressEnvelopeProvenance::single(
-                    rastok::node::Path::new(["test"]).unwrap(),
-                ),
+                sequence: IngressSequence::Next,
+                session: None,
             },
         )
         .unwrap();

@@ -314,9 +314,7 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::boundary::{
-        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
-    };
+    use crate::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
     use crate::envelope::{Data, Namespace, Value};
     use crate::journal::MemJournal;
     use crate::node;
@@ -325,17 +323,16 @@ mod tests {
         AnnotationSet, DataAnnotation, SchemaPath, SchemaPathSegment, SensitivityLevel,
     };
 
-    fn submission(value: i64) -> IngressSubmission {
-        IngressSubmission {
-            provenance: IngressEnvelopeProvenance::single(
-                node::Path::new(["cli"]).expect("valid path"),
-            ),
-            port: node::Port::new("in").expect("valid port"),
-            draft: Draft {
+    fn submission(value: i64) -> IngressProposal {
+        IngressProposal {
+            provenance: IngressProvenance::single(node::Path::new(["cli"]).expect("valid path")),
+            draft: EnvelopeDraft {
+                port: node::Port::new("in").expect("valid port"),
                 data: Data::materialized(Value::Int(value)),
                 ext: Namespace::new(),
             },
-            sequence: SubmissionSequence::Next,
+            sequence: IngressSequence::Next,
+            session: None,
         }
     }
 

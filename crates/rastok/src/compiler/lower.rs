@@ -2753,18 +2753,19 @@ graph app : App {
         .expect("sensitive policy is executable after A3");
         let mut vm = crate::runtime::vm::Vm::boot(&compilation.plan, GraphVersion(1));
         let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
-        let submission = crate::boundary::IngressSubmission {
-            provenance: crate::boundary::IngressEnvelopeProvenance::single(
+        let submission = crate::boundary::IngressProposal {
+            provenance: crate::boundary::IngressProvenance::single(
                 node::Path::new(["test"]).expect("valid provenance path"),
             ),
-            port: node::Port::new("in").expect("valid port"),
-            draft: crate::boundary::Draft {
+            draft: crate::boundary::EnvelopeDraft {
+                port: node::Port::new("in").expect("valid port"),
                 data: crate::envelope::Data::materialized(crate::value::Value::Text(String::from(
                     "classified",
                 ))),
                 ext: crate::envelope::Namespace::new(),
             },
-            sequence: crate::boundary::SubmissionSequence::Next,
+            sequence: crate::boundary::IngressSequence::Next,
+            session: None,
         };
         vm.inject(&mut journal, submission)
             .expect("the classified envelope is admitted");
@@ -2861,18 +2862,19 @@ graph app : App {
             crate::journal::Journal::privacy_retention(&attested_journal),
             Some(crate::deployment::PrivacyRetention::RunScoped)
         );
-        let submission = crate::boundary::IngressSubmission {
-            provenance: crate::boundary::IngressEnvelopeProvenance::single(
+        let submission = crate::boundary::IngressProposal {
+            provenance: crate::boundary::IngressProvenance::single(
                 node::Path::new(["test"]).expect("valid provenance path"),
             ),
-            port: node::Port::new("in").expect("valid port"),
-            draft: crate::boundary::Draft {
+            draft: crate::boundary::EnvelopeDraft {
+                port: node::Port::new("in").expect("valid port"),
                 data: crate::envelope::Data::materialized(crate::value::Value::Text(String::from(
                     "subject-42",
                 ))),
                 ext: crate::envelope::Namespace::new(),
             },
-            sequence: crate::boundary::SubmissionSequence::Next,
+            sequence: crate::boundary::IngressSequence::Next,
+            session: None,
         };
         attested
             .inject(&mut attested_journal, submission)

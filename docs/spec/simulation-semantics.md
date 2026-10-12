@@ -177,7 +177,7 @@ successful fixed ACK, not a physical socket write. No `mock listener` is
 needed. The fixture may supply `meta.ext` explicitly; absent HTTP metadata is
 not invented. `meta.app` and `meta.sys` remain forbidden fixture writes.
 
-The source path and sequence enter the ordinary `IngressSubmission`.
+The source path and sequence enter the ordinary `IngressProposal`.
 `RuntimeBindings` proves ownership; VM admission reserves every destination
 and commits INGRESS before the Lab receives the `InboundCallId`. The Lab
 then reports `Completed { status: 202 }`; the core commits the ordinary

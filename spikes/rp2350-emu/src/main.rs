@@ -21,7 +21,7 @@ use embedded_alloc::LlffHeap as Heap;
 use panic_semihosting as _;
 
 use rastok_core::boundary::{
-    Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
+    EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence,
 };
 use rastok_core::envelope::{Data, Id, Namespace, Value};
 use rastok_core::journal;
@@ -124,18 +124,19 @@ fn spin(n: u32) {
     }
 }
 
-fn submission(text: &str, marker: u8) -> IngressSubmission {
+fn submission(text: &str, marker: u8) -> IngressProposal {
     let mut ext = Namespace::new();
     let _ = marker;
     let _ = &mut ext;
-    IngressSubmission {
-        provenance: IngressEnvelopeProvenance::single(Path::new(["pico"]).unwrap()),
-        port: rastok_core::node::Port::new("in").unwrap(),
-        draft: Draft {
+    IngressProposal {
+        provenance: IngressProvenance::single(Path::new(["pico"]).unwrap()),
+        draft: EnvelopeDraft {
+            port: rastok_core::node::Port::new("in").unwrap(),
             data: Data::materialized(Value::Text(String::from(text))),
             ext,
         },
-        sequence: SubmissionSequence::Next,
+        sequence: IngressSequence::Next,
+        session: None,
     }
 }
 

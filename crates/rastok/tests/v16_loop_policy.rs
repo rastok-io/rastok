@@ -6,9 +6,7 @@ use rastok::{compiler, contract::ContractCatalog, plan};
 
 #[test]
 fn recovered_graph_outputs_and_expiry_are_redacted_before_logging() {
-    use rastok::boundary::{
-        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
-    };
+    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::{Journal, MemJournal};
     use rastok::plan::GraphVersion;
@@ -48,10 +46,10 @@ graph app : App {
         let mut vm = Vm::boot(&plan, GraphVersion(1));
         vm.inject(
             &mut journal,
-            IngressSubmission {
-                sequence: SubmissionSequence::Next,
-                port: rastok::node::Port::new("in").unwrap(),
-                draft: Draft {
+            IngressProposal {
+                provenance: IngressProvenance::single(rastok::node::Path::new(["policy"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: rastok::node::Port::new("in").unwrap(),
                     data: Data::materialized(Value::Struct(vec![
                         ("n".into(), Value::Int(n)),
                         (
@@ -61,9 +59,8 @@ graph app : App {
                     ])),
                     ext: Namespace::new(),
                 },
-                provenance: IngressEnvelopeProvenance::single(
-                    rastok::node::Path::new(["policy"]).unwrap(),
-                ),
+                sequence: IngressSequence::Next,
+                session: None,
             },
         )
         .unwrap();

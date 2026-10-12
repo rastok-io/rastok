@@ -32,12 +32,12 @@ use core::fmt;
 /// keeping the replica opaque here leaves multi-host placement out of causal
 /// identity. In single-process execution the replica is 0.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct IngressEnvelopeProvenance {
+pub struct IngressProvenance {
     connector_path: node::Path,
     replica: u64,
 }
 
-impl IngressEnvelopeProvenance {
+impl IngressProvenance {
     /// The single-process provenance of one inbound Connector.
     #[must_use]
     pub fn single(connector_path: node::Path) -> Self {
@@ -1301,41 +1301,39 @@ impl SessionWrite {
     }
 }
 
-/// One ordinary output proposed by an external driver.
+/// A port, payload and external metadata supplied for an ingress or a
+/// Connector output, before the runtime constructs the envelope.
 ///
-/// This is deliberately not a journal [`crate::journal::Emission`]: the
-/// driver states a port and payload, while the VM alone mints envelopes,
-/// identities and the atomic transaction record.
+/// A draft has no `meta.sys` or `meta.app`. Ingress admission or the Connector
+/// transaction assigns its causal identity and commits the resulting envelope.
+/// It is not a journal [`crate::journal::Emission`].
 #[derive(Debug, Clone, PartialEq)]
-pub struct PortOutput {
-    /// Ordinary connector output port.
+pub struct EnvelopeDraft {
+    /// App input or Connector output carrying this draft.
     pub port: node::Port,
     /// Payload representation returned by the driver.
     pub data: envelope::Data,
-    /// External observations owned by this exact boundary output.
+    /// External metadata supplied with this draft.
     ///
     /// The VM validates and overlays these fields after ordinary request-zone
-    /// inheritance. Drivers never mint `meta.sys` or write `meta.app`.
+    /// inheritance. Drivers never assign `meta.sys` or write `meta.app`.
     pub ext: envelope::Namespace,
 }
 
-/// One admitted invocation's ordered boundary completion.
-///
-/// Construction seals the terminal barrier: exactly one conventional
-/// `exit` output exists and it is last. Consequently neither a driver nor a
-/// mock can represent an output that follows the invocation's terminal fact.
+/// Ordered output drafts for one Call completion. Exactly one draft targets
+/// `exit`, and it is last; Drivers and Lab mocks use the same checked form.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Completion {
-    outputs: Vec<PortOutput>,
+    outputs: Vec<EnvelopeDraft>,
 }
 
 impl Completion {
-    /// Builds one completion after proving its terminal barrier.
+    /// Checks that the drafts contain exactly one final `exit` output.
     ///
     /// # Errors
     ///
     /// Refuses a missing, repeated, or non-terminal `exit` output.
-    pub fn try_new(outputs: Vec<PortOutput>) -> Result<Self, CompletionError> {
+    pub fn try_new(outputs: Vec<EnvelopeDraft>) -> Result<Self, CompletionError> {
         // `exit` is the boundary protocol's conventional terminal port, not a
         // VM routing shortcut. The resolved port table owns its type and the
         // graph still routes it like every other named output.
@@ -1359,13 +1357,13 @@ impl Completion {
 
     /// Outputs in publication order, including the terminal `exit` last.
     #[must_use]
-    pub fn outputs(&self) -> &[PortOutput] {
+    pub fn outputs(&self) -> &[EnvelopeDraft] {
         &self.outputs
     }
 
     /// Gives the ordered drafts to the VM after the close race is won.
     #[must_use]
-    pub fn into_outputs(self) -> Vec<PortOutput> {
+    pub fn into_outputs(self) -> Vec<EnvelopeDraft> {
         self.outputs
     }
 
@@ -1377,17 +1375,17 @@ impl Completion {
     #[must_use]
     pub fn process(out: Vec<envelope::Data>, err: Vec<envelope::Data>, exit: ProcessExit) -> Self {
         let mut outputs = Vec::with_capacity(out.len().saturating_add(err.len()).saturating_add(1));
-        outputs.extend(out.into_iter().map(|data| PortOutput {
+        outputs.extend(out.into_iter().map(|data| EnvelopeDraft {
             port: node::Port::conventional_out(),
             data,
             ext: envelope::Namespace::new(),
         }));
-        outputs.extend(err.into_iter().map(|data| PortOutput {
+        outputs.extend(err.into_iter().map(|data| EnvelopeDraft {
             port: node::Port::conventional_err(),
             data,
             ext: envelope::Namespace::new(),
         }));
-        outputs.push(PortOutput {
+        outputs.push(EnvelopeDraft {
             port: node::Port::conventional_exit(),
             data: envelope::Data::materialized(exit.into_value()),
             ext: envelope::Namespace::new(),
@@ -1407,13 +1405,13 @@ impl Completion {
     pub fn file(out: Option<envelope::Data>, exit: FileExit) -> Self {
         let mut outputs = Vec::with_capacity(usize::from(out.is_some()).saturating_add(1));
         if let Some(data) = out {
-            outputs.push(PortOutput {
+            outputs.push(EnvelopeDraft {
                 port: node::Port::conventional_out(),
                 data,
                 ext: envelope::Namespace::new(),
             });
         }
-        outputs.push(PortOutput {
+        outputs.push(EnvelopeDraft {
             port: node::Port::conventional_exit(),
             data: envelope::Data::materialized(exit.into_value()),
             ext: envelope::Namespace::new(),
@@ -1429,7 +1427,7 @@ impl Completion {
 
     fn terminal_value(value: crate::value::Value) -> Self {
         Self {
-            outputs: alloc::vec![PortOutput {
+            outputs: alloc::vec![EnvelopeDraft {
                 port: node::Port::conventional_exit(),
                 data: envelope::Data::materialized(value),
                 ext: envelope::Namespace::new(),
@@ -1446,12 +1444,12 @@ impl Completion {
     ) -> Self {
         Self {
             outputs: alloc::vec![
-                PortOutput {
+                EnvelopeDraft {
                     port: node::Port::conventional_out(),
                     data: out,
                     ext,
                 },
-                PortOutput {
+                EnvelopeDraft {
                     port: node::Port::conventional_exit(),
                     data: envelope::Data::materialized(exit.into_value()),
                     ext: envelope::Namespace::new(),
@@ -1748,7 +1746,7 @@ pub struct BoundaryObservation {
 
 /// How a submission's sequence number is chosen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SubmissionSequence {
+pub enum IngressSequence {
     /// Allocate the next number — the live mode.
     Next,
     /// Replay an explicit number — fixtures replay recorded seqs; a
@@ -1756,20 +1754,18 @@ pub enum SubmissionSequence {
     Explicit(u64),
 }
 
-/// A draft proposed for atomic acceptance: inbound Drivers propose drafts,
-/// never envelopes — a root envelope cannot pre-exist its sequence.
+/// An ingress proposed for atomic admission. The runtime derives the root
+/// envelope's identity from its provenance and sequence before committing it.
 #[derive(Debug, Clone, PartialEq)]
-pub struct IngressSubmission {
+pub struct IngressProposal {
     /// Stable external origin shared by roots from this logical replica.
-    pub provenance: IngressEnvelopeProvenance,
-    /// Source port of the draft. Direct App injection uses `in` or another
-    /// boundary input; a Driver proposal uses one output of the Connector
-    /// named by [`Self::provenance`]. Journaled for exact replay.
-    pub port: node::Port,
-    /// The payload and birth metadata.
-    pub draft: Draft,
+    pub provenance: IngressProvenance,
+    /// App input or Connector output, payload and external metadata.
+    pub draft: EnvelopeDraft,
     /// How the sequence is chosen.
-    pub sequence: SubmissionSequence,
+    pub sequence: IngressSequence,
+    /// Opens or addresses a Session; absent for Event and Call ingress.
+    pub session: Option<InboundSession>,
 }
 
 /// Session meaning of one inbound proposal before the accepting commit.
@@ -1803,23 +1799,21 @@ impl IngressProposalHandle {
     }
 }
 
-/// One bounded world fact offered without pre-minting an envelope.
+/// A Driver's pending ingress and its local handle. The Driver keeps it until
+/// admission succeeds or returns a final rejection; backpressure leaves it pending.
 #[derive(Debug, Clone, PartialEq)]
-pub struct IngressProposal {
+pub struct RetainedProposal {
     /// Stable while the proposal remains pending in the Driver.
-    pub reference: IngressProposalHandle,
-    /// Draft and provenance to commit if admission succeeds. The provenance
-    /// names the exact Connector node whose output introduces the root; the
-    /// runtime verifies it against the bound family before committing.
-    pub submission: IngressSubmission,
-    /// Session framing when this fact opens or belongs to a session. `None`
-    /// is an Event or Call ingress.
-    pub session: Option<InboundSession>,
+    pub handle: IngressProposalHandle,
+    /// Ingress whose provenance names the bound source Connector.
+    pub proposal: IngressProposal,
 }
 
-/// Positive result returned only after the accepting journal commit.
+/// Admission acknowledgement returned to the Driver only after commit.
+/// It carries the envelope and exchange identities needed by the transport;
+/// [`crate::journal::CommittedIngress`] instead returns the full journal result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct IngressAcceptance {
+pub struct AdmittedIngress {
     /// Id of the committed root envelope.
     pub envelope: envelope::Id,
     /// Exchange-specific reference created by the accepting fact. Event
@@ -1849,40 +1843,16 @@ pub enum IngressRejection {
     SessionUnavailable,
 }
 
-/// A final decision delivered to the Driver for its retained proposal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IngressDecision {
-    /// The causal fact committed; peer-visible application acceptance may now
-    /// be sent.
-    Accepted(IngressAcceptance),
-    /// The proposal was refused without minting an envelope.
-    Rejected(IngressRejection),
-}
-
 /// Result of attempting one proposal against bounded runtime admission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IngressAdmission {
     /// The causal fact committed.
-    Accepted(IngressAcceptance),
+    Accepted(AdmittedIngress),
     /// No causal fact committed; the Driver must retain the proposal and
     /// withhold its application acknowledgement.
     Pending,
     /// No causal fact committed; the Driver receives a terminal refusal.
     Rejected(IngressRejection),
-}
-
-/// The payload and birth metadata of a submission; the runtime mints
-/// `meta.sys` — a draft never carries one.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Draft {
-    /// The payload.
-    pub data: envelope::Data,
-    /// The external-context zone seeded at birth — the world's
-    /// half: the transport's `content_type` and whatever the
-    /// boundary's sheet declares. `meta.app` is NEVER seeded at
-    /// ingress: the application writes its own zone
-    /// (D-2026-08-10-1).
-    pub ext: envelope::Namespace,
 }
 
 /// The work selected when a scheduler deadline is reached. Each variant
@@ -2016,11 +1986,15 @@ pub enum LifecycleObservation {
 pub trait InboundConnectorDriver {
     /// The next retained proposal, if one is waiting. Repeated polls before a
     /// decision must describe the same proposal reference and bytes.
-    fn proposal(&mut self) -> Option<IngressProposal>;
+    fn proposal(&mut self) -> Option<RetainedProposal>;
 
     /// Releases one retained proposal after a committed acceptance or a
     /// contract rejection. Pending admission deliberately makes no callback.
-    fn decide(&mut self, reference: IngressProposalHandle, decision: IngressDecision);
+    fn decide(
+        &mut self,
+        reference: IngressProposalHandle,
+        decision: Result<AdmittedIngress, IngressRejection>,
+    );
 
     /// Inbound Call completion view, when this bound contract is Call-shaped.
     /// Event and Session Drivers leave the default absent.
@@ -2217,7 +2191,7 @@ pub enum SessionObservation {
         /// Session that became terminal.
         session: SessionId,
         /// Typed terminal payload proposed for ordinary graph emission.
-        exit: PortOutput,
+        exit: EnvelopeDraft,
     },
 }
 
@@ -2872,7 +2846,7 @@ mod tests {
 
     #[test]
     fn inbound_provenance_stays_opaque_but_answers_the_recipes() {
-        let provenance = IngressEnvelopeProvenance::single(node::Path::new(["inbound"]).unwrap());
+        let provenance = IngressProvenance::single(node::Path::new(["inbound"]).unwrap());
         assert_eq!(provenance.connector_path().to_string(), "inbound");
         assert_eq!(provenance.replica(), 0);
     }
@@ -2977,16 +2951,15 @@ mod tests {
     fn seeded_journal() -> (MemJournal, CallOpen) {
         let mut journal = MemJournal::new(GraphVersion(1));
         let committed = journal
-            .append_ingress(IngressSubmission {
-                provenance: IngressEnvelopeProvenance::single(
-                    node::Path::new(["inbound"]).unwrap(),
-                ),
-                port: node::Port::new("in").unwrap(),
-                draft: Draft {
+            .append_ingress(IngressProposal {
+                provenance: IngressProvenance::single(node::Path::new(["inbound"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: node::Port::new("in").unwrap(),
                     data: Data::encoded(Encoding::Raw, *b"salut"),
                     ext: Namespace::new(),
                 },
-                sequence: SubmissionSequence::Next,
+                sequence: IngressSequence::Next,
+                session: None,
             })
             .unwrap();
         let connector_path = node::Path::new(["echo"]).unwrap();
@@ -3215,12 +3188,12 @@ mod tests {
 
     #[test]
     fn completion_construction_seals_the_terminal_barrier() {
-        let out = PortOutput {
+        let out = EnvelopeDraft {
             port: node::Port::conventional_out(),
             data: Data::materialized(crate::value::Value::Int(1)),
             ext: envelope::Namespace::new(),
         };
-        let exit = PortOutput {
+        let exit = EnvelopeDraft {
             port: node::Port::conventional_exit(),
             data: Data::materialized(ProcessExit::TimeoutExpired.into_value()),
             ext: envelope::Namespace::new(),

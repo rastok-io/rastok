@@ -19,8 +19,8 @@
 //! [`identity.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/identity.md
 
 use crate::boundary::{
-    CallId, CallOpen, Completion, InboundCallId, InboundSession, IngressEnvelopeProvenance,
-    IngressSubmission, SessionId, SessionOpen, SessionWrite, SessionWriteId, SubmissionSequence,
+    CallId, CallOpen, Completion, InboundCallId, InboundSession, IngressProposal,
+    IngressProvenance, IngressSequence, SessionId, SessionOpen, SessionWrite, SessionWriteId,
 };
 use crate::envelope::{Envelope, Id, IdKind, Meta, MetaSys};
 use crate::instance;
@@ -48,7 +48,7 @@ pub mod retry_protocol;
 /// Deterministic identity recipes — the injective blake3 framing of
 /// `envelope.md` §2, with its IdKind registry.
 pub mod ids {
-    use super::{CallId, Id, IdKind, IngressEnvelopeProvenance, SessionId, SessionWriteId, node};
+    use super::{CallId, Id, IdKind, IngressProvenance, SessionId, SessionWriteId, node};
     use crate::instance;
     use alloc::string::ToString;
     use alloc::vec::Vec;
@@ -58,7 +58,7 @@ pub mod ids {
     /// recipe; a non-zero replica joins the derivation when multi-host
     /// semantics land.
     #[must_use]
-    pub fn root_id(provenance: &IngressEnvelopeProvenance, seq: u64) -> Id {
+    pub fn root_id(provenance: &IngressProvenance, seq: u64) -> Id {
         Id::derive(
             IdKind::Root,
             &[
@@ -173,7 +173,7 @@ pub mod ids {
     /// already journal-derived; the subtype frame keeps the recipe disjoint
     /// from outbound openings under the shared session domain.
     #[must_use]
-    pub fn inbound_session_id(provenance: &IngressEnvelopeProvenance, opening: Id) -> SessionId {
+    pub fn inbound_session_id(provenance: &IngressProvenance, opening: Id) -> SessionId {
         let subtype = [1];
         let mut parts = Vec::with_capacity(
             provenance
@@ -560,7 +560,7 @@ pub struct IngressRecord {
     /// this ingress. Omitted when this record creates no deadline.
     pub deadlines: Option<Box<deadline::Deadlines>>,
     /// Stable provenance of the external root stream.
-    pub provenance: IngressEnvelopeProvenance,
+    pub provenance: IngressProvenance,
     /// Source port of the root: an App input when [`Self::connector_path`] is
     /// absent, otherwise that Connector's output. Replay re-routes from this
     /// causal fact. Projects as key 12, omitted for conventional `in`.
@@ -861,7 +861,9 @@ pub enum CloseVerdict {
     AlreadyClosed,
 }
 
-/// The result of one accepting inbound transaction.
+/// Complete result returned by the journal after an ingress commit: its
+/// sequence, envelope and record. The Driver receives only their portable
+/// identifiers in [`crate::boundary::AdmittedIngress`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct CommittedIngress {
     /// The allocated or validated sequence.
@@ -881,7 +883,7 @@ pub struct CommittedIngress {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedIngress {
     instance_commands: Option<Box<instance_stop::InstanceCommands>>,
-    submission: IngressSubmission,
+    submission: IngressProposal,
     connector_path: Option<node::Path>,
     seq: u64,
     envelope: Envelope,
@@ -1225,14 +1227,17 @@ pub trait Journal {
         self.retained_observations_from(0)
     }
 
-    /// Mints the complete ingress envelope without committing it. The result
+    /// Constructs the complete ingress envelope without committing it. The result
     /// is a read-only reservation: only [`Self::commit_ingress`] consumes the
     /// sequence.
     ///
     /// # Errors
     ///
     /// Sequence mismatch or exhaustion, as for [`Self::append_ingress`].
-    fn prepare_ingress(&self, submission: IngressSubmission) -> Result<PreparedIngress, Error>;
+    /// Session framing in the proposal also requires a valid lifecycle
+    /// transition; its identity is derived or checked and projected into
+    /// `meta.ext.session_id` by the journal.
+    fn prepare_ingress(&self, submission: IngressProposal) -> Result<PreparedIngress, Error>;
 
     /// Mints a Connector-origin root without committing it. The source node
     /// is derived from the typed provenance and recorded separately so replay
@@ -1241,25 +1246,10 @@ pub trait Journal {
     /// # Errors
     ///
     /// The same sequence failures as [`Self::prepare_ingress`], plus Session
-    /// lifecycle refusals when `session` carries framing.
+    /// lifecycle refusals when the proposal carries Session framing.
     fn prepare_connector_ingress(
         &self,
-        submission: IngressSubmission,
-        session: Option<InboundSession>,
-    ) -> Result<PreparedIngress, Error>;
-
-    /// Mints one session opening/message envelope without committing it. The
-    /// journal derives or verifies the logical session ref and overwrites the
-    /// reserved `meta.ext.session_id` projection.
-    ///
-    /// # Errors
-    ///
-    /// The same sequence failures as [`Self::prepare_ingress`], or an unknown,
-    /// terminal, or duplicate session transition.
-    fn prepare_session_ingress(
-        &self,
-        submission: IngressSubmission,
-        session: InboundSession,
+        submission: IngressProposal,
     ) -> Result<PreparedIngress, Error>;
 
     /// Atomically commits one prepared ingress and its destination routes.
@@ -1286,7 +1276,7 @@ pub trait Journal {
     /// [`Error::SequenceMismatch`] when an explicit sequence diverges
     /// from the journal; [`Error::SequenceOverflow`] when monotonicity
     /// cannot continue.
-    fn append_ingress(&mut self, submission: IngressSubmission) -> Result<CommittedIngress, Error> {
+    fn append_ingress(&mut self, submission: IngressProposal) -> Result<CommittedIngress, Error> {
         self.append_ingress_routed(submission, Vec::new())
     }
 
@@ -1296,7 +1286,7 @@ pub trait Journal {
     /// tests and callers whose plan has no keyed destination.
     fn append_ingress_routed(
         &mut self,
-        submission: IngressSubmission,
+        submission: IngressProposal,
         routes: Vec<RouteTarget>,
     ) -> Result<CommittedIngress, Error> {
         let prepared = self.prepare_ingress(submission)?;
@@ -1446,7 +1436,7 @@ pub struct MemJournal {
     graph_version: GraphVersion,
     deployment_attestation: Option<crate::deployment::DeploymentAttestation>,
     records: Vec<Record>,
-    next_seq: BTreeMap<IngressEnvelopeProvenance, u64>,
+    next_seq: BTreeMap<IngressProvenance, u64>,
     /// Replay-derived lifecycle fold, maintained atomically with `records`.
     /// It is an index over causal facts, never a second generation authority.
     admissions: admission::Fold,
@@ -1550,15 +1540,6 @@ impl MemJournal {
             let previous = journal.records.len();
             match record {
                 Record::Ingress(inbound) => {
-                    let submission = IngressSubmission {
-                        provenance: inbound.provenance.clone(),
-                        port: inbound.port.clone(),
-                        draft: crate::boundary::Draft {
-                            data: inbound.envelope.data().clone(),
-                            ext: inbound.envelope.meta().ext().clone(),
-                        },
-                        sequence: SubmissionSequence::Explicit(inbound.seq),
-                    };
                     let session = match inbound.exchange.as_deref() {
                         Some(InboundExchangeRecord::Session(SessionIngressRecord::Open(_))) => {
                             Some(InboundSession::Open)
@@ -1568,11 +1549,18 @@ impl MemJournal {
                         ))) => Some(InboundSession::Message(*reference)),
                         _ => None,
                     };
-                    let mut prepared = journal.prepare_ingress_fact(
-                        submission,
+                    let submission = IngressProposal {
+                        provenance: inbound.provenance.clone(),
+                        draft: crate::boundary::EnvelopeDraft {
+                            port: inbound.port.clone(),
+                            data: inbound.envelope.data().clone(),
+                            ext: inbound.envelope.meta().ext().clone(),
+                        },
+                        sequence: IngressSequence::Explicit(inbound.seq),
                         session,
-                        inbound.connector_path.clone(),
-                    )?;
+                    };
+                    let mut prepared =
+                        journal.prepare_ingress_fact(submission, inbound.connector_path.clone())?;
                     if let Some(InboundExchangeRecord::Call(call)) = inbound.exchange.as_deref() {
                         prepared =
                             prepared.into_call(call.instance.clone(), call.deadline_ids.clone())?;
@@ -1794,8 +1782,7 @@ impl MemJournal {
 
     fn prepare_ingress_fact(
         &self,
-        submission: IngressSubmission,
-        session: Option<InboundSession>,
+        submission: IngressProposal,
         connector_path: Option<node::Path>,
     ) -> Result<PreparedIngress, Error> {
         let next = self
@@ -1804,9 +1791,9 @@ impl MemJournal {
             .copied()
             .unwrap_or(0);
         let seq = match submission.sequence {
-            SubmissionSequence::Next => next,
-            SubmissionSequence::Explicit(seq) if seq == next => seq,
-            SubmissionSequence::Explicit(seq) => {
+            IngressSequence::Next => next,
+            IngressSequence::Explicit(seq) if seq == next => seq,
+            IngressSequence::Explicit(seq) => {
                 return Err(Error::SequenceMismatch {
                     expected: next,
                     got: seq,
@@ -1815,7 +1802,7 @@ impl MemJournal {
         };
         seq.checked_add(1).ok_or(Error::SequenceOverflow)?;
         let id = ids::root_id(&submission.provenance, seq);
-        let resolved_exchange = match session {
+        let resolved_exchange = match submission.session {
             None => None,
             Some(InboundSession::Open) => {
                 let reference = ids::inbound_session_id(&submission.provenance, id);
@@ -1898,25 +1885,16 @@ impl Journal for MemJournal {
         observations_for_records_from(&self.records, start)
     }
 
-    fn prepare_ingress(&self, submission: IngressSubmission) -> Result<PreparedIngress, Error> {
-        self.prepare_ingress_fact(submission, None, None)
+    fn prepare_ingress(&self, submission: IngressProposal) -> Result<PreparedIngress, Error> {
+        self.prepare_ingress_fact(submission, None)
     }
 
     fn prepare_connector_ingress(
         &self,
-        submission: IngressSubmission,
-        session: Option<InboundSession>,
+        submission: IngressProposal,
     ) -> Result<PreparedIngress, Error> {
         let connector_path = submission.provenance.connector_path().clone();
-        self.prepare_ingress_fact(submission, session, Some(connector_path))
-    }
-
-    fn prepare_session_ingress(
-        &self,
-        submission: IngressSubmission,
-        session: InboundSession,
-    ) -> Result<PreparedIngress, Error> {
-        self.prepare_ingress_fact(submission, Some(session), None)
+        self.prepare_ingress_fact(submission, Some(connector_path))
     }
 
     fn commit_ingress(
@@ -2001,7 +1979,7 @@ impl Journal for MemJournal {
             instance_commands: prepared.instance_commands,
             deadlines: prepared.deadlines,
             provenance: prepared.submission.provenance.clone(),
-            port: prepared.submission.port,
+            port: prepared.submission.draft.port,
             connector_path: prepared.connector_path,
             seq: prepared.seq,
             envelope: prepared.envelope.clone(),
@@ -2617,7 +2595,7 @@ impl Journal for MemJournal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::boundary::Draft;
+    use crate::boundary::EnvelopeDraft;
     use crate::envelope::{Data, Encoding, Namespace};
     use alloc::format;
     use alloc::string::ToString;
@@ -2628,15 +2606,15 @@ mod tests {
         instance::Generation::new(instance::InstanceAddress::singleton(&owner), generation)
     }
 
-    fn provenance(path: &str) -> IngressEnvelopeProvenance {
-        IngressEnvelopeProvenance::single(node::Path::new([path]).unwrap())
+    fn provenance(path: &str) -> IngressProvenance {
+        IngressProvenance::single(node::Path::new([path]).unwrap())
     }
 
-    fn submission(path: &str, sequence: SubmissionSequence) -> IngressSubmission {
-        IngressSubmission {
+    fn submission(path: &str, sequence: IngressSequence) -> IngressProposal {
+        IngressProposal {
             provenance: provenance(path),
-            port: node::Port::new("in").unwrap(),
-            draft: Draft {
+            draft: EnvelopeDraft {
+                port: node::Port::new("in").unwrap(),
                 data: Data::encoded(Encoding::Raw, *b"hello"),
                 ext: {
                     let mut ext = Namespace::new();
@@ -2650,6 +2628,7 @@ mod tests {
                 },
             },
             sequence,
+            session: None,
         }
     }
 
@@ -2793,7 +2772,7 @@ mod tests {
             loop_protocol::CommandValue::Again(Id::from_bytes([3; 16])),
         );
         let state = MemJournal::new(GraphVersion(1))
-            .prepare_connector_ingress(submission("clocked", SubmissionSequence::Next), None)
+            .prepare_connector_ingress(submission("clocked", IngressSequence::Next))
             .unwrap()
             .envelope()
             .clone();
@@ -3193,7 +3172,7 @@ mod tests {
     fn retained_observations_correlate_records_without_entering_causal_history() {
         let mut journal = MemJournal::new(GraphVersion(1));
         let inbound = journal
-            .append_ingress(submission("cli", SubmissionSequence::Next))
+            .append_ingress(submission("cli", IngressSequence::Next))
             .expect("the root commits");
         let origin = inbound.envelope.meta().sys().origin_id();
         activate_root(&mut journal);
@@ -3546,7 +3525,7 @@ mod tests {
         let reserved = instance::Generation::new(address.clone(), 0);
         activate_root(&mut journal);
         let prepared = journal
-            .prepare_ingress(submission("inbound", SubmissionSequence::Next))
+            .prepare_ingress(submission("inbound", IngressSequence::Next))
             .unwrap();
         journal
             .commit_ingress(
@@ -3714,7 +3693,7 @@ mod tests {
     fn an_accepted_inbound_is_its_own_origin() {
         let mut journal = MemJournal::new(GraphVersion(1));
         let committed = journal
-            .append_ingress(submission("inbound", SubmissionSequence::Next))
+            .append_ingress(submission("inbound", IngressSequence::Next))
             .unwrap();
         let sys = committed.envelope.meta().sys();
         assert_eq!(sys.id(), ids::root_id(&provenance("inbound"), 0));
@@ -3735,12 +3714,12 @@ mod tests {
         let mut journal = MemJournal::new(GraphVersion(1));
         for expected in 0..3 {
             let committed = journal
-                .append_ingress(submission("inbound", SubmissionSequence::Next))
+                .append_ingress(submission("inbound", IngressSequence::Next))
                 .unwrap();
             assert_eq!(committed.seq, expected);
         }
         let other = journal
-            .append_ingress(submission("webhook", SubmissionSequence::Next))
+            .append_ingress(submission("webhook", IngressSequence::Next))
             .unwrap();
         assert_eq!(other.seq, 0, "authorities count independently");
     }
@@ -3749,10 +3728,10 @@ mod tests {
     fn explicit_sequences_replay_or_refuse() {
         let mut journal = MemJournal::new(GraphVersion(1));
         journal
-            .append_ingress(submission("inbound", SubmissionSequence::Explicit(0)))
+            .append_ingress(submission("inbound", IngressSequence::Explicit(0)))
             .unwrap();
         let diverged = journal
-            .append_ingress(submission("inbound", SubmissionSequence::Explicit(5)))
+            .append_ingress(submission("inbound", IngressSequence::Explicit(5)))
             .unwrap_err();
         assert_eq!(
             diverged,
@@ -3767,7 +3746,7 @@ mod tests {
     fn replay_re_derives_identical_ids() {
         let run = |mut journal: MemJournal| {
             journal
-                .append_ingress(submission("inbound", SubmissionSequence::Next))
+                .append_ingress(submission("inbound", IngressSequence::Next))
                 .unwrap()
                 .envelope
                 .meta()
@@ -3922,7 +3901,7 @@ mod tests {
         activate(&mut journal, instance("shout", 0));
         let first_observed = journal.records().len();
         let committed = journal
-            .append_ingress(submission("inbound", SubmissionSequence::Next))
+            .append_ingress(submission("inbound", IngressSequence::Next))
             .unwrap();
         journal
             .commit(TransactionRecord {
@@ -3980,10 +3959,10 @@ mod tests {
     fn inbound_sessions_are_concurrent_correlated_and_silent_after_exit() {
         let mut journal = MemJournal::new(GraphVersion(1));
         let first = journal
-            .prepare_session_ingress(
-                submission("socket", SubmissionSequence::Next),
-                InboundSession::Open,
-            )
+            .prepare_ingress(IngressProposal {
+                session: Some(InboundSession::Open),
+                ..submission("socket", IngressSequence::Next)
+            })
             .unwrap();
         let first = journal.commit_ingress(first, vec![]).unwrap();
         let Some(InboundExchangeRecord::Session(SessionIngressRecord::Open(first_ref))) =
@@ -4000,10 +3979,10 @@ mod tests {
         );
 
         let second = journal
-            .prepare_session_ingress(
-                submission("socket", SubmissionSequence::Next),
-                InboundSession::Open,
-            )
+            .prepare_ingress(IngressProposal {
+                session: Some(InboundSession::Open),
+                ..submission("socket", IngressSequence::Next)
+            })
             .unwrap();
         let second = journal.commit_ingress(second, vec![]).unwrap();
         let Some(InboundExchangeRecord::Session(SessionIngressRecord::Open(second_ref))) =
@@ -4014,10 +3993,10 @@ mod tests {
         assert_ne!(first_ref, second_ref);
 
         let message = journal
-            .prepare_session_ingress(
-                submission("socket", SubmissionSequence::Next),
-                InboundSession::Message(first_ref),
-            )
+            .prepare_ingress(IngressProposal {
+                session: Some(InboundSession::Message(first_ref)),
+                ..submission("socket", IngressSequence::Next)
+            })
             .unwrap();
         let message = journal.commit_ingress(message, vec![]).unwrap();
         assert_eq!(
@@ -4047,10 +4026,10 @@ mod tests {
         journal.commit(terminal).unwrap();
         assert_eq!(journal.live_sessions(), vec![second_ref]);
         assert_eq!(
-            journal.prepare_session_ingress(
-                submission("socket", SubmissionSequence::Next),
-                InboundSession::Message(first_ref),
-            ),
+            journal.prepare_ingress(IngressProposal {
+                session: Some(InboundSession::Message(first_ref)),
+                ..submission("socket", IngressSequence::Next)
+            }),
             Err(Error::UnknownSession),
             "a terminal session can never speak again"
         );
@@ -4061,7 +4040,7 @@ mod tests {
         use deadline::{Deadline, Deadlines};
         let mut journal = MemJournal::new(GraphVersion(1));
         let prepared = journal
-            .prepare_connector_ingress(submission("server", SubmissionSequence::Next), None)
+            .prepare_connector_ingress(submission("server", IngressSequence::Next))
             .unwrap();
         let root = prepared.envelope().meta().sys().id();
         let deadline_id = (DeadlineKind::InboundCallTimeout, root);
@@ -4110,7 +4089,7 @@ mod tests {
         let mut journal = MemJournal::new(GraphVersion(1));
         let source = instance("server", 0);
         let prepared = journal
-            .prepare_connector_ingress(submission("server", SubmissionSequence::Next), None)
+            .prepare_connector_ingress(submission("server", IngressSequence::Next))
             .unwrap()
             .into_call(source.clone(), vec![])
             .unwrap();
@@ -4211,7 +4190,7 @@ mod tests {
 
         activate(&mut journal, instance("socket", 0));
         let envelope = journal
-            .append_ingress(submission("world", SubmissionSequence::Next))
+            .append_ingress(submission("world", IngressSequence::Next))
             .unwrap()
             .envelope;
         let mut terminal = lifecycle_transaction(instance("socket", 0), node::Lifecycle::Exit);

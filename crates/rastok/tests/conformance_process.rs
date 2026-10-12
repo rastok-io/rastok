@@ -8,7 +8,7 @@
 //! battery itself bites.
 
 use rastok::boundary::{
-    CallConnectorDriver, CallOpen, CallStart, Completion, OutboundConnectorDriver, PortOutput,
+    CallConnectorDriver, CallOpen, CallStart, Completion, EnvelopeDraft, OutboundConnectorDriver,
     ProcessExit, RequestPreparation, Response, SchedulerCompletion,
 };
 use rastok::conformance::{
@@ -296,7 +296,7 @@ impl CallConnectorDriver for Liar {
     fn start(&mut self, intent: &CallOpen, _request: &Envelope) -> CallStart {
         self.pending.push(Response {
             call_id: intent.call_id,
-            completion: Completion::try_new(vec![PortOutput {
+            completion: Completion::try_new(vec![EnvelopeDraft {
                 port: rastok::node::Port::conventional_exit(),
                 data: Data::materialized(Value::TaggedUnion(Box::new(
                     rastok::value::TaggedUnionValue {

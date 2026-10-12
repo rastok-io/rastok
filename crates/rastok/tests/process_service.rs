@@ -237,17 +237,16 @@ mod real {
         runtime::vm::Vm,
     };
 
-    fn input(port: &str, text: &str) -> IngressSubmission {
-        IngressSubmission {
-            provenance: IngressEnvelopeProvenance::single(
-                rastok::node::Path::new(["test"]).unwrap(),
-            ),
-            port: rastok::node::Port::new(port).unwrap(),
-            draft: Draft {
+    fn input(port: &str, text: &str) -> IngressProposal {
+        IngressProposal {
+            provenance: IngressProvenance::single(rastok::node::Path::new(["test"]).unwrap()),
+            draft: EnvelopeDraft {
+                port: rastok::node::Port::new(port).unwrap(),
                 data: Data::materialized(Value::Text(text.into())),
                 ext: Namespace::new(),
             },
-            sequence: SubmissionSequence::Next,
+            sequence: IngressSequence::Next,
+            session: None,
         }
     }
     fn until<'a>(

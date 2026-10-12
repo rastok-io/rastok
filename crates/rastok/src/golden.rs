@@ -1074,7 +1074,7 @@ mod tests {
         let record = Record::Ingress(Box::new(crate::journal::IngressRecord {
             deadlines: None,
             instance_commands: None,
-            provenance: crate::boundary::IngressEnvelopeProvenance::single(source.clone()),
+            provenance: crate::boundary::IngressProvenance::single(source.clone()),
             port: crate::node::Port::new("out").unwrap(),
             connector_path: Some(source),
             seq: 0,

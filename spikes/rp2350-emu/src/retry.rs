@@ -74,14 +74,15 @@ pub(super) fn run(plan: &ValidatedExecutionPlan, hash: SemanticHash) -> usize {
     for _ in 0..operations {
         vm.inject(
             &mut journal,
-            IngressSubmission {
-                provenance: IngressEnvelopeProvenance::single(Path::new(["spike"]).unwrap()),
-                port: Port::new("in").unwrap(),
-                sequence: SubmissionSequence::Next,
-                draft: Draft {
+            IngressProposal {
+                provenance: IngressProvenance::single(Path::new(["spike"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: Port::new("in").unwrap(),
                     data: Data::materialized(Value::Text(String::from("request"))),
                     ext: Namespace::new(),
                 },
+                sequence: IngressSequence::Next,
+                session: None,
             },
         )
         .unwrap();

@@ -3,9 +3,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::boundary::{
-    Completion, Draft, HttpServerExit, InboundCallObservation, InboundExchangeId, IngressAdmission,
-    IngressEnvelopeProvenance, IngressProposal, IngressProposalHandle, IngressSubmission,
-    SubmissionSequence,
+    Completion, EnvelopeDraft, HttpServerExit, InboundCallObservation, InboundExchangeId,
+    IngressAdmission, IngressProposal, IngressProposalHandle, IngressProvenance, IngressSequence,
+    RetainedProposal,
 };
 use rastok::compiler;
 use rastok::contract::ContractCatalog;
@@ -22,19 +22,19 @@ fn compile(source: &str) -> plan::ValidatedExecutionPlan {
         .0
 }
 
-fn proposal(reference: u64, text: &str) -> IngressProposal {
-    IngressProposal {
-        reference: IngressProposalHandle::new(reference),
-        submission: IngressSubmission {
-            provenance: IngressEnvelopeProvenance::single(node::Path::new(["server"]).unwrap()),
-            port: node::Port::conventional_out(),
-            draft: Draft {
+fn proposal(reference: u64, text: &str) -> RetainedProposal {
+    RetainedProposal {
+        handle: IngressProposalHandle::new(reference),
+        proposal: IngressProposal {
+            provenance: IngressProvenance::single(node::Path::new(["server"]).unwrap()),
+            draft: EnvelopeDraft {
+                port: node::Port::conventional_out(),
                 data: Data::materialized(Value::Text(text.into())),
                 ext: Namespace::new(),
             },
-            sequence: SubmissionSequence::Next,
+            sequence: IngressSequence::Next,
+            session: None,
         },
-        session: None,
     }
 }
 

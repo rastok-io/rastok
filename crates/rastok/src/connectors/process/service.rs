@@ -44,9 +44,9 @@ enum StreamCodec {
     Jsonl,
 }
 
-fn failure(failure: ProcessFailure) -> PortOutput {
+fn failure(failure: ProcessFailure) -> EnvelopeDraft {
     // Every Process failure constructor has exactly one exit.
-    PortOutput {
+    EnvelopeDraft {
         port: node::Port::conventional_exit(),
         data: failure.into_completion().outputs()[0].data.clone(),
         ext: Namespace::new(),
@@ -186,7 +186,7 @@ struct Service {
     resources: BTreeMap<SessionId, Resource>,
     retiring: Vec<std::thread::JoinHandle<()>>,
     events: Vec<SessionObservation>,
-    proposal: Option<IngressProposal>,
+    proposal: Option<RetainedProposal>,
     next_proposal: u64,
 }
 
@@ -206,7 +206,7 @@ enum Event {
     Opened,
     Written(SessionWriteId),
     Frame(node::Port, Data),
-    Exit(PortOutput),
+    Exit(EnvelopeDraft),
 }
 
 impl BoundConnectorDriver for Service {
@@ -334,7 +334,7 @@ impl SessionConnectorDriver for Service {
         if self
             .proposal
             .as_ref()
-            .is_some_and(|p| p.session == Some(InboundSession::Message(reference)))
+            .is_some_and(|p| p.proposal.session == Some(InboundSession::Message(reference)))
         {
             self.proposal = None;
         }
@@ -394,7 +394,7 @@ impl Service {
     }
 }
 impl InboundConnectorDriver for Service {
-    fn proposal(&mut self) -> Option<IngressProposal> {
+    fn proposal(&mut self) -> Option<RetainedProposal> {
         if self.proposal.is_some() {
             return self.proposal.clone();
         }
@@ -411,38 +411,38 @@ impl InboundConnectorDriver for Service {
             }
             if let Some(Event::Frame(port, data)) = resource.waiting.front() {
                 self.next_proposal = self.next_proposal.checked_add(1)?;
-                self.proposal = Some(IngressProposal {
-                    reference: IngressProposalHandle::new(self.next_proposal),
-                    submission: IngressSubmission {
-                        provenance: IngressEnvelopeProvenance::single(resource.connector.clone()),
-                        port: port.clone(),
-                        draft: Draft {
+                self.proposal = Some(RetainedProposal {
+                    handle: IngressProposalHandle::new(self.next_proposal),
+                    proposal: IngressProposal {
+                        provenance: IngressProvenance::single(resource.connector.clone()),
+                        draft: EnvelopeDraft {
+                            port: port.clone(),
                             data: data.clone(),
                             ext: Namespace::new(),
                         },
-                        sequence: SubmissionSequence::Next,
+                        sequence: IngressSequence::Next,
+                        session: Some(InboundSession::Message(*reference)),
                     },
-                    session: Some(InboundSession::Message(*reference)),
                 });
                 break;
             }
         }
         self.proposal.clone()
     }
-    fn decide(&mut self, reference: IngressProposalHandle, decision: IngressDecision) {
-        if self
-            .proposal
-            .as_ref()
-            .is_none_or(|p| p.reference != reference)
-        {
+    fn decide(
+        &mut self,
+        reference: IngressProposalHandle,
+        decision: Result<AdmittedIngress, IngressRejection>,
+    ) {
+        if self.proposal.as_ref().is_none_or(|p| p.handle != reference) {
             return;
         }
         if let Some(proposal) = self.proposal.take()
-            && let Some(InboundSession::Message(session)) = proposal.session
+            && let Some(InboundSession::Message(session)) = proposal.proposal.session
             && let Some(resource) = self.resources.get_mut(&session)
         {
             resource.waiting.pop_front();
-            if matches!(decision, IngressDecision::Rejected(_)) {
+            if decision.is_err() {
                 resource.control.fetch_max(FORCED, Ordering::Release);
             }
         }

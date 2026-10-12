@@ -10,9 +10,9 @@
 //! docs/architecture/human-review-v20-identity.md.
 
 use rastok::boundary::{
-    CallConnectorDriver, CallOpen, CallStart, Completion, Draft, IngressEnvelopeProvenance,
-    IngressSubmission, ProcessExit, RequestPreparation, Response, SchedulerCompletion,
-    SubmissionSequence,
+    CallConnectorDriver, CallOpen, CallStart, Completion, EnvelopeDraft, IngressProposal,
+    IngressProvenance, IngressSequence, ProcessExit, RequestPreparation, Response,
+    SchedulerCompletion,
 };
 use rastok::compiler::compile;
 use rastok::contract::ContractCatalog;
@@ -107,14 +107,15 @@ fn run(source: &str) -> Vec<Record> {
     let data = vec![(String::from("text"), Value::Text(String::from("salut")))];
     vm.inject(
         &mut journal,
-        IngressSubmission {
-            provenance: IngressEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
-            port: rastok::node::Port::new("in").unwrap(),
-            draft: Draft {
+        IngressProposal {
+            provenance: IngressProvenance::single(node::Path::new(["cli"]).unwrap()),
+            draft: EnvelopeDraft {
+                port: rastok::node::Port::new("in").unwrap(),
                 data: Data::materialized(Value::Struct(data)),
                 ext: Namespace::new(),
             },
-            sequence: SubmissionSequence::Next,
+            sequence: IngressSequence::Next,
+            session: None,
         },
     )
     .unwrap();

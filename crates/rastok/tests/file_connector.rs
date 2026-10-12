@@ -5,8 +5,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::boundary::{
-    AcceptAnyCompletion, Draft, DriverPoller, IngressEnvelopeProvenance, IngressSubmission,
-    SubmissionSequence,
+    AcceptAnyCompletion, DriverPoller, EnvelopeDraft, IngressProposal, IngressProvenance,
+    IngressSequence,
 };
 use rastok::compiler::compile;
 use rastok::connectors::{DriverRegistry, FileFactory, RuntimeBindings};
@@ -75,17 +75,18 @@ graph file_probe : App {{
     )
 }
 
-fn submission(data: Data) -> IngressSubmission {
-    IngressSubmission {
-        provenance: IngressEnvelopeProvenance::single(
+fn submission(data: Data) -> IngressProposal {
+    IngressProposal {
+        provenance: IngressProvenance::single(
             node::Path::new(["test"]).expect("a valid test provenance"),
         ),
-        port: node::Port::new("in").expect("the conventional port"),
-        draft: Draft {
+        draft: EnvelopeDraft {
+            port: node::Port::new("in").expect("the conventional port"),
             data,
             ext: Namespace::new(),
         },
-        sequence: SubmissionSequence::Next,
+        sequence: IngressSequence::Next,
+        session: None,
     }
 }
 

@@ -330,7 +330,7 @@ a declared host seam rather than an object the M1 VM consumes directly.
 
 | Interface | Owns | Real side | Lab side | Spec | Status |
 |---|---|---|---|---|---|
-| **`InboundConnectorDriver`** | one retained `IngressProposal` — draft, provenance, sequence request and optional Session framing — until the runtime answers accepted-after-commit or rejected; pending admission makes no callback and therefore applies bounded backpressure. It never births an envelope: only the journal's accepting transaction mints root/exchange identity. Call bindings expose retained acknowledgement/response; Session bindings correlate each admitted message to the committed logical `SessionId`. | live HttpServer and WebSocketServer over H1/H2/H3 | Contract-owned fake Drivers; direct scenario injection remains available through `Vm::inject` | [envelope.md §1.1, §2](../spec/envelope.md); [delivery-semantics.md §3, §4.4.1, §4.5, §6](../spec/delivery-semantics.md); [simulation-semantics.md](../spec/simulation-semantics.md) | M1.6 H1 generic protocol; H5 Calls; H6 Sessions |
+| **`InboundConnectorDriver`** | a `RetainedProposal`: a Driver-local handle and an `IngressProposal` containing provenance, an `EnvelopeDraft` (port, data, external metadata), sequence selection and optional Session framing. The Driver keeps it until the runtime returns `Result<AdmittedIngress, IngressRejection>`; pending admission makes no callback and therefore applies bounded backpressure. Only the journal assigns root/exchange identities. Call bindings expose recorded acknowledgement/response; Session bindings correlate each admitted message to the committed logical `SessionId`. | live HttpServer and WebSocketServer over H1/H2/H3 | Contract-owned fake Drivers; direct scenario injection remains available through `Vm::inject` | [envelope.md §1.1, §2](../spec/envelope.md); [delivery-semantics.md §3, §4.4.1, §4.5, §6](../spec/delivery-semantics.md); [simulation-semantics.md](../spec/simulation-semantics.md) | M1.6 H1 generic protocol; H5 Calls; H6 Sessions |
 | **`OutboundConnectorDriver`** | categorical exchange view: `CallConnectorDriver` launches journaled `CallOpen`s and answers by `CallId`; `SessionConnectorDriver` launches journaled open/write intents and reports by `SessionId`/`SessionWriteId`. Cancellation/timeout remain runtime policy and no Driver writes causal records. | Process/File/HttpClient Calls; WebSocketClient/Server Sessions | Contract-specific Call and Session mocks plus generic conformance batteries | [delivery-semantics.md §4](../spec/delivery-semantics.md); [execution-model.md §6.1, §6.6](../spec/execution-model.md); [M1.6 backlog](m1.6-http-websocket-backlog.md) | Call semantics M1.3 B7; role name M1.5 C0; live Sessions M1.6 H6 |
 | **Logical-time input** | `Vm::boot_at` fixes an origin and `Vm::advance(journal, driver, target)` advances one deterministic timeline. A hosted runner uses one wall-clock sample plus monotonic elapsed time; a microcontroller with no RTC may use zero or a supplied origin. `now()` observes the firing's fixed instant and seals it only when used. | hosted time source | scenario origin + `advance` | [execution-model.md §5, §8](../spec/execution-model.md); D-2026-08-28-5 | target-driven VM; handler observation current |
 | **`Supervisor`** | process lifecycle: boot, crash, restart; recovery must never require a clean shutdown | host lifecycle | not built; fault steps remain guarded | [delivery-semantics.md §4.4](../spec/delivery-semantics.md); [simulation-semantics.md §5.4](../spec/simulation-semantics.md) | declared seam; current wiring boots only |
@@ -392,7 +392,7 @@ against the STORED golden; the workflow (compare, explicit `--bless`)
 is driven by the lab's returned records, the golden tests, and `main`.
 
 `IngressRecord` carries the full root recipe — the opaque
-`IngressEnvelopeProvenance` (wrapping exactly the normative
+`IngressProvenance` (wrapping exactly the normative
 `(connector_path, replica)` pair) plus the sequence — so a record autonomously
 reconstructs its root id ([identity.md §3](../spec/identity.md)). The
 projection lives here because it also serves production replay and
@@ -524,7 +524,7 @@ items still constrain later slices.
   semantic operations over typed records. Segment files,
   snapshots-on-disk, and retention arrive later behind the same trait
   (`ARCHITECTURE.md`, boundary rule 5).
-- **Opaque ingress provenance.** `boundary::IngressEnvelopeProvenance` wraps
+- **Opaque ingress provenance.** `boundary::IngressProvenance` wraps
   exactly the normative `(connector_path, replica)` pair
   ([identity.md §3](../spec/identity.md)) but stays opaque: M0 code
   never assumes the replica component is a constant it may inline. The value

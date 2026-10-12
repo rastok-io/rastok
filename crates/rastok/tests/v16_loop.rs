@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use rastok::boundary::{Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence};
+use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
 use rastok::compiler;
 use rastok::connectors::{DriverRegistry, RuntimeBindings};
 use rastok::contract::ContractCatalog;
@@ -345,16 +345,15 @@ fn graph_manager_admissions_reserve_capacity_before_ingress_commits() {
     let error = vm
         .inject(
             &mut journal,
-            IngressSubmission {
-                provenance: IngressEnvelopeProvenance::single(
-                    rastok::node::Path::new(["test"]).unwrap(),
-                ),
-                port: rastok::node::Port::new("in").unwrap(),
-                draft: Draft {
+            IngressProposal {
+                provenance: IngressProvenance::single(rastok::node::Path::new(["test"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: rastok::node::Port::new("in").unwrap(),
                     data: Data::materialized(Value::Int(0)),
                     ext: Namespace::new(),
                 },
-                sequence: SubmissionSequence::Next,
+                sequence: IngressSequence::Next,
+                session: None,
             },
         )
         .unwrap_err();
@@ -839,14 +838,15 @@ fn delayed_runs_reserve_manager_capacity_before_the_next_ingress_commit() {
             .all(|mailbox| mailbox.deliveries.is_empty())
     );
     let before = journal.records().to_vec();
-    let incoming = || IngressSubmission {
-        provenance: IngressEnvelopeProvenance::single(rastok::node::Path::new(["test"]).unwrap()),
-        port: rastok::node::Port::new("in").unwrap(),
-        draft: Draft {
+    let incoming = || IngressProposal {
+        provenance: IngressProvenance::single(rastok::node::Path::new(["test"]).unwrap()),
+        draft: EnvelopeDraft {
+            port: rastok::node::Port::new("in").unwrap(),
             data: Data::materialized(Value::Int(1)),
             ext: Namespace::new(),
         },
-        sequence: SubmissionSequence::Next,
+        sequence: IngressSequence::Next,
+        session: None,
     };
     assert!(matches!(
         vm.inject(&mut journal, incoming()),
@@ -1308,16 +1308,15 @@ fn a_measure_refuses_an_unproved_fallback_or_an_unchanged_again() {
 fn inject(vm: &mut Vm<'_>, journal: &mut MemJournal, value: i64) {
     vm.inject(
         journal,
-        IngressSubmission {
-            provenance: IngressEnvelopeProvenance::single(
-                rastok::node::Path::new(["test"]).unwrap(),
-            ),
-            port: rastok::node::Port::new("in").unwrap(),
-            draft: Draft {
+        IngressProposal {
+            provenance: IngressProvenance::single(rastok::node::Path::new(["test"]).unwrap()),
+            draft: EnvelopeDraft {
+                port: rastok::node::Port::new("in").unwrap(),
                 data: Data::materialized(Value::Int(value)),
                 ext: Namespace::new(),
             },
-            sequence: SubmissionSequence::Next,
+            sequence: IngressSequence::Next,
+            session: None,
         },
     )
     .unwrap();

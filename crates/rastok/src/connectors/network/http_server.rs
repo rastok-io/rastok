@@ -1,9 +1,8 @@
 use crate::boundary::{
-    Draft, HttpServerExit, InboundCallConnectorDriver, InboundCallObservation, InboundCallResponse,
-    InboundCallResponseStart, InboundCallTimeout, InboundCallTimeoutStart, InboundConnectorDriver,
-    InboundExchangeId, IngressAcceptance, IngressDecision, IngressEnvelopeProvenance,
-    IngressProposal, IngressProposalHandle, IngressRejection, IngressSubmission,
-    SubmissionSequence,
+    AdmittedIngress, EnvelopeDraft, HttpServerExit, InboundCallConnectorDriver,
+    InboundCallObservation, InboundCallResponse, InboundCallResponseStart, InboundCallTimeout,
+    InboundCallTimeoutStart, InboundConnectorDriver, InboundExchangeId, IngressProposal,
+    IngressProposalHandle, IngressProvenance, IngressRejection, IngressSequence, RetainedProposal,
 };
 use crate::connectors::http_server::{HttpServerMode, bind_routes};
 use crate::connectors::http_shared::{HttpVersion, decode_body};
@@ -194,7 +193,7 @@ struct ListenerGroup {
 
 #[derive(Debug)]
 struct LiveProposal {
-    proposal: IngressProposal,
+    proposal: RetainedProposal,
     decision: tokio::sync::oneshot::Sender<ServerDecision>,
     response: Option<RetainedResponse>,
     _reservation: EventReservation,
@@ -590,28 +589,32 @@ impl<'plan> HttpServer<'plan> {
 }
 
 impl InboundConnectorDriver for HttpServer<'_> {
-    fn proposal(&mut self) -> Option<IngressProposal> {
+    fn proposal(&mut self) -> Option<RetainedProposal> {
         self.poll_events();
         self.pending.front().map(|pending| pending.proposal.clone())
     }
 
-    fn decide(&mut self, reference: IngressProposalHandle, decision: IngressDecision) {
+    fn decide(
+        &mut self,
+        reference: IngressProposalHandle,
+        decision: Result<AdmittedIngress, IngressRejection>,
+    ) {
         let Some(pending) = self.pending.front() else {
             return;
         };
-        if pending.proposal.reference != reference {
+        if pending.proposal.handle != reference {
             return;
         }
         let Some(pending) = self.pending.pop_front() else {
             return;
         };
         let decision = match decision {
-            IngressDecision::Accepted(IngressAcceptance {
+            Ok(AdmittedIngress {
                 exchange: Some(InboundExchangeId::Call(call_id)),
                 ..
             }) => ServerDecision::Accepted(call_id),
-            IngressDecision::Accepted(_) => ServerDecision::Rejected(IngressRejection::UnknownPort),
-            IngressDecision::Rejected(reason) => ServerDecision::Rejected(reason),
+            Ok(_) => ServerDecision::Rejected(IngressRejection::UnknownPort),
+            Err(reason) => ServerDecision::Rejected(reason),
         };
         match pending.decision.send(decision) {
             Ok(()) => {
@@ -1181,15 +1184,18 @@ async fn dispatch_http3_request(
         request.path,
         HttpVersion::Http3,
     );
-    let proposal = IngressProposal {
-        reference,
-        submission: IngressSubmission {
-            provenance: IngressEnvelopeProvenance::single(request.route.node.clone()),
-            port: crate::node::Port::conventional_out(),
-            draft: Draft { data, ext },
-            sequence: SubmissionSequence::Next,
+    let proposal = RetainedProposal {
+        handle: reference,
+        proposal: IngressProposal {
+            provenance: IngressProvenance::single(request.route.node.clone()),
+            draft: EnvelopeDraft {
+                port: crate::node::Port::conventional_out(),
+                data,
+                ext,
+            },
+            sequence: IngressSequence::Next,
+            session: None,
         },
-        session: None,
     };
     let (decision, accepted) = tokio::sync::oneshot::channel();
     let (retained, response) = tokio::sync::oneshot::channel();
@@ -1544,15 +1550,18 @@ async fn handle_request(
         parts.uri.to_string(),
         version,
     );
-    let proposal = IngressProposal {
-        reference,
-        submission: IngressSubmission {
-            provenance: IngressEnvelopeProvenance::single(route.node.clone()),
-            port: crate::node::Port::conventional_out(),
-            draft: Draft { data, ext },
-            sequence: SubmissionSequence::Next,
+    let proposal = RetainedProposal {
+        handle: reference,
+        proposal: IngressProposal {
+            provenance: IngressProvenance::single(route.node.clone()),
+            draft: EnvelopeDraft {
+                port: crate::node::Port::conventional_out(),
+                data,
+                ext,
+            },
+            sequence: IngressSequence::Next,
+            session: None,
         },
-        session: None,
     };
     let (decision, accepted) = tokio::sync::oneshot::channel();
     let (response, peer_response) = match route.mode {
@@ -1882,7 +1891,7 @@ graph api : App {
             .expect("the HTTP/3-only respond plan remains Registry-free valid")
     }
 
-    fn wait_for_proposal(server: &mut HttpServer<'_>) -> IngressProposal {
+    fn wait_for_proposal(server: &mut HttpServer<'_>) -> RetainedProposal {
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
             if let Some(proposal) = server.proposal() {
@@ -1920,19 +1929,19 @@ graph api : App {
     ) {
         let proposal = wait_for_proposal(server);
         assert_eq!(
-            proposal.submission.draft.data.materialized_value(),
+            proposal.proposal.draft.data.materialized_value(),
             Some(&Value::Text(expected_body.to_string()))
         );
         assert_eq!(
-            proposal.submission.draft.ext.get("content_type"),
+            proposal.proposal.draft.ext.get("content_type"),
             Some(&MetaValue::Scalar(Scalar::Text(String::from("text/plain"))))
         );
         assert_eq!(
-            proposal.submission.draft.ext.get("http_method"),
+            proposal.proposal.draft.ext.get("http_method"),
             Some(&MetaValue::Scalar(Scalar::Text(String::from("POST"))))
         );
         assert_eq!(
-            proposal.submission.draft.ext.get("http_version"),
+            proposal.proposal.draft.ext.get("http_version"),
             Some(&MetaValue::Scalar(Scalar::Text(String::from(
                 match expected_version {
                     Version::HTTP_11 => "http/1.1",
@@ -1941,8 +1950,7 @@ graph api : App {
                 }
             ))))
         );
-        let Some(MetaValue::Map(headers)) = proposal.submission.draft.ext.get("http_headers")
-        else {
+        let Some(MetaValue::Map(headers)) = proposal.proposal.draft.ext.get("http_headers") else {
             panic!("the admitted request must carry lossless headers")
         };
         assert_eq!(
@@ -1963,7 +1971,7 @@ graph api : App {
         let Some(InboundExchangeId::Call(call_id)) = accepted.exchange else {
             panic!("an accepted server request opens one Call")
         };
-        server.decide(proposal.reference, IngressDecision::Accepted(accepted));
+        server.decide(proposal.handle, Ok(accepted));
         assert_eq!(
             response
                 .recv_timeout(Duration::from_secs(3))
@@ -2192,7 +2200,7 @@ graph api : App {
         let Some(InboundExchangeId::Call(call_id)) = accepted.exchange else {
             panic!("the admitted request opens one Call")
         };
-        server.decide(proposal.reference, IngressDecision::Accepted(accepted));
+        server.decide(proposal.handle, Ok(accepted));
         assert_eq!(response.try_recv(), Err(TryRecvError::Empty));
 
         vm.run_ready(&mut journal)
@@ -2248,7 +2256,7 @@ graph api : App {
         let Some(InboundExchangeId::Call(call_id)) = accepted.exchange else {
             panic!("the admitted request opens one Call")
         };
-        server.decide(proposal.reference, IngressDecision::Accepted(accepted));
+        server.decide(proposal.handle, Ok(accepted));
 
         let registry = crate::connectors::DriverRegistry::default()
             .try_with(Box::new(
@@ -2324,7 +2332,7 @@ graph api : App {
         else {
             panic!("the HTTP/3 request must be admitted")
         };
-        server.decide(proposal.reference, IngressDecision::Accepted(accepted));
+        server.decide(proposal.handle, Ok(accepted));
         vm.run_ready(&mut journal)
             .expect("the graph produces the HTTP/3 response");
         let ready = vm.ready_inbound_call_responses();
@@ -2414,10 +2422,7 @@ graph api : App {
         else {
             panic!("the first request must be admitted")
         };
-        server.decide(
-            first_proposal.reference,
-            IngressDecision::Accepted(accepted),
-        );
+        server.decide(first_proposal.handle, Ok(accepted));
         assert_eq!(
             first
                 .recv_timeout(Duration::from_secs(3))
@@ -2468,7 +2473,7 @@ graph api : App {
             .proposal
             .clone();
         let body = proposal
-            .submission
+            .proposal
             .draft
             .data
             .materialized_value()
@@ -2486,7 +2491,7 @@ graph api : App {
         else {
             panic!("the first retained request must be accepted")
         };
-        server.decide(proposal.reference, IngressDecision::Accepted(accepted));
+        server.decide(proposal.handle, Ok(accepted));
         assert_eq!(
             accepted_response
                 .recv_timeout(Duration::from_secs(3))
@@ -2510,11 +2515,8 @@ graph api : App {
             .front()
             .expect("the second proposal remains")
             .proposal
-            .reference;
-        server.decide(
-            second_reference,
-            IngressDecision::Rejected(IngressRejection::UnknownPort),
-        );
+            .handle;
+        server.decide(second_reference, Err(IngressRejection::UnknownPort));
         assert_eq!(
             rejected_response
                 .recv_timeout(Duration::from_secs(3))

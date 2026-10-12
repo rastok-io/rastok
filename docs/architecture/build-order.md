@@ -123,8 +123,8 @@ Exit: ordering and close-once invariant tests, per
 The world-facing traits (`InboundConnectorDriver`,
 `OutboundConnectorDriver`, `Supervisor`) and the VM's explicit logical-time
 input
-and the journal-driven machinery: `IngressSubmission`,
-`IngressEnvelopeProvenance`, `CallOpen`, `Response`, `CallId`, `DriverPoller`,
+and the journal-driven machinery: `IngressProposal`,
+`IngressProvenance`, `CallOpen`, `Response`, `CallId`, `DriverPoller`,
 `Obligation`, `LifecycleObservation`.
 
 Exit: dispatcher tests against a scripted Outbound Driver, asserting journaled

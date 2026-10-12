@@ -302,7 +302,7 @@ fn read_completion(value: &Cbor) -> Result<Completion, Error> {
         .iter()
         .map(|value| {
             let [port, data, ext] = array(value)?;
-            Ok(PortOutput {
+            Ok(EnvelopeDraft {
                 port: read_port(port)?,
                 data: read_data(data)?,
                 ext: read_namespace(ext)?,
@@ -712,7 +712,7 @@ impl Decoder {
             }))
         })?;
         Ok(Record::Ingress(Box::new(journal::IngressRecord {
-            provenance: IngressEnvelopeProvenance::single(read_path(provenance)?),
+            provenance: IngressProvenance::single(read_path(provenance)?),
             port: read_port(port)?,
             connector_path: read_optional(connector, read_path)?,
             seq: uint(seq)?,

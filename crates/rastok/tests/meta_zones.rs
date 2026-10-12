@@ -292,9 +292,7 @@ fn content_type_follows_the_payload_not_the_merge() {
     // The lifecycle across spellings (D-2026-08-10-4): a kept
     // witness keeps it, fresh data strikes it, an explicit write
     // wins — variables and ternaries included.
-    use rastok::boundary::{
-        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
-    };
+    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
     use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -318,16 +316,15 @@ fn content_type_follows_the_payload_not_the_merge() {
         );
         vm.inject(
             &mut journal,
-            IngressSubmission {
-                provenance: IngressEnvelopeProvenance::single(
-                    rastok::node::Path::new(["probe"]).unwrap(),
-                ),
-                port: rastok::node::Port::new("in").unwrap(),
-                draft: Draft {
+            IngressProposal {
+                provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: rastok::node::Port::new("in").unwrap(),
                     data: Data::materialized(Value::Text(String::from("a,b"))),
                     ext,
                 },
-                sequence: SubmissionSequence::Next,
+                sequence: IngressSequence::Next,
+                session: None,
             },
         )
         .expect("the injection lands");

@@ -18,12 +18,12 @@
 //! the commit, nothing can fail.
 
 use crate::boundary::{
-    BoundaryObservation, CallId, CallOpen, ClosingDeadline, Completion, CompletionCheck,
-    DriverPoller, InboundCallId, InboundCallObservation, InboundCallResponse, InboundCallTimeout,
-    InboundSession, IngressAcceptance, IngressAdmission, IngressProposal, IngressRejection,
-    IngressSubmission, InstanceDeadline, Obligation, OutboundConnectorBindings, RequestPreparation,
-    Response, SchedulerCompletion, SessionId, SessionObservation, SessionOpen, SessionStart,
-    SessionWrite, SessionWriteId,
+    AdmittedIngress, BoundaryObservation, CallId, CallOpen, ClosingDeadline, Completion,
+    CompletionCheck, DriverPoller, InboundCallId, InboundCallObservation, InboundCallResponse,
+    InboundCallTimeout, InboundSession, IngressAdmission, IngressProposal, IngressRejection,
+    InstanceDeadline, Obligation, OutboundConnectorBindings, RequestPreparation, Response,
+    RetainedProposal, SchedulerCompletion, SessionId, SessionObservation, SessionOpen,
+    SessionStart, SessionWrite, SessionWriteId,
 };
 use crate::connector::{ConnectorExchange, SessionOpening, session_opening};
 use crate::envelope;
@@ -1438,9 +1438,9 @@ impl<'plan> Vm<'plan> {
     pub fn inject(
         &mut self,
         journal: &mut dyn Journal,
-        submission: IngressSubmission,
+        submission: IngressProposal,
     ) -> Result<Id, VmFault> {
-        self.inject_submission(journal, submission, None, None)
+        self.admit_proposal(journal, submission, None)
             .map(|accepted| accepted.envelope)
     }
 
@@ -1455,15 +1455,10 @@ impl<'plan> Vm<'plan> {
     pub fn admit_ingress(
         &mut self,
         journal: &mut dyn Journal,
-        proposal: &IngressProposal,
+        proposal: &RetainedProposal,
     ) -> Result<IngressAdmission, VmFault> {
-        let connector_path = proposal.submission.provenance.connector_path().clone();
-        match self.inject_submission(
-            journal,
-            proposal.submission.clone(),
-            proposal.session,
-            Some(connector_path),
-        ) {
+        let connector_path = proposal.proposal.provenance.connector_path().clone();
+        match self.admit_proposal(journal, proposal.proposal.clone(), Some(connector_path)) {
             Ok(accepted) => Ok(IngressAdmission::Accepted(accepted)),
             Err(VmFault::MailboxFull { .. } | VmFault::InstanceClosing { .. }) => {
                 Ok(IngressAdmission::Pending)
@@ -1669,15 +1664,14 @@ impl<'plan> Vm<'plan> {
         }
     }
 
-    fn inject_submission(
+    fn admit_proposal(
         &mut self,
         journal: &mut dyn Journal,
-        submission: IngressSubmission,
-        session: Option<InboundSession>,
+        submission: IngressProposal,
         connector_path: Option<node::Path>,
-    ) -> Result<IngressAcceptance, VmFault> {
+    ) -> Result<AdmittedIngress, VmFault> {
         self.preflight(journal)?;
-        let session_admission = session;
+        let session_admission = submission.session;
         // Boundary injection and Connector-origin roots are distinct causal
         // sources. The caller chooses the category; the validated plan proves
         // the exact endpoint before the journal reserves a sequence.
@@ -1692,7 +1686,7 @@ impl<'plan> Vm<'plan> {
                 .and_then(|(index, planned)| {
                     let spec = planned.connector()?;
                     let output = planned.ports.iter().any(|decl| {
-                        decl.port == submission.port
+                        decl.port == submission.draft.port
                             && decl.direction == node::PortDirection::Output
                     });
                     (spec.roles.has_inbound() && output).then_some((index, spec.exchange))
@@ -1700,31 +1694,31 @@ impl<'plan> Vm<'plan> {
             let Some((source, exchange)) = source else {
                 return Err(VmFault::UnknownInboundSource {
                     connector: connector.clone(),
-                    port: submission.port.clone(),
+                    port: submission.draft.port.clone(),
                 });
             };
             let source =
                 Slot::new(
                     u32::try_from(source).map_err(|_| VmFault::UnknownInboundSource {
                         connector: connector.clone(),
-                        port: submission.port.clone(),
+                        port: submission.draft.port.clone(),
                     })?,
                 );
             inbound_source = Some((source, exchange));
             EdgeEnd {
                 node: Some(source),
-                port: submission.port.clone(),
+                port: submission.draft.port.clone(),
             }
         } else {
             let ingress_ok = self.plan.boundary.iter().any(|decl| {
-                decl.port == submission.port && decl.direction == node::PortDirection::Input
+                decl.port == submission.draft.port && decl.direction == node::PortDirection::Input
             });
             if !ingress_ok {
-                return Err(VmFault::UnknownIngress(submission.port.clone()));
+                return Err(VmFault::UnknownIngress(submission.draft.port.clone()));
             }
             EdgeEnd {
                 node: None,
-                port: submission.port.clone(),
+                port: submission.draft.port.clone(),
             }
         };
         // The ext zone, held to the travelling schema BEFORE any
@@ -1735,7 +1729,7 @@ impl<'plan> Vm<'plan> {
             // Session correlation is derived by the accepting journal fact.
             // Peer spelling is ignored and overwritten, never trusted as a
             // causal session identity.
-            if session.is_some() && field == "session_id" {
+            if session_admission.is_some() && field == "session_id" {
                 continue;
             }
             // Name AND type, one shared rule (D-2026-08-10-1): the
@@ -1772,7 +1766,7 @@ impl<'plan> Vm<'plan> {
                 .map_err(|error| VmFault::Fault(crate::runtime::Fault::InvalidValue(error)))?;
             crate::runtime::crossing_pins_hold(self.plan, &from, value).map_err(|refused| {
                 VmFault::IngressPinViolation {
-                    ingress: submission.port.clone(),
+                    ingress: submission.draft.port.clone(),
                     rejected_at: refused.at,
                     violation: refused.violation,
                 }
@@ -1783,10 +1777,9 @@ impl<'plan> Vm<'plan> {
         // zero-id provisional envelope would be a semantic lie. Destination
         // admission and the accepting record commit only after this complete
         // envelope has selected every route.
-        let mut inbound = match (connector_path, session_admission) {
-            (Some(_), session) => journal.prepare_connector_ingress(submission, session),
-            (None, Some(session)) => journal.prepare_session_ingress(submission, session),
-            (None, None) => journal.prepare_ingress(submission),
+        let mut inbound = match connector_path {
+            Some(_) => journal.prepare_connector_ingress(submission),
+            None => journal.prepare_ingress(submission),
         }
         .map_err(VmFault::Journal)?;
         let mut candidates = BTreeMap::new();
@@ -2092,7 +2085,7 @@ impl<'plan> Vm<'plan> {
             );
         }
         self.route_prepared(prepared, &candidates, &committed.envelope, source_instance);
-        Ok(IngressAcceptance {
+        Ok(AdmittedIngress {
             envelope: id,
             exchange,
         })

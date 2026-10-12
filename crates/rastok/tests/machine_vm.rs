@@ -9,9 +9,9 @@
 
 use rastok::boundary::{
     CallConnectorDriver, CallOpen, CallStart, DriverRouteError, InboundExchangeId, InboundSession,
-    IngressAdmission, IngressProposal, IngressProposalHandle, IngressSubmission,
-    OutboundConnectorBindings, PreparedRequest, SessionId, SessionObservation, SessionOpen,
-    SessionStart, SessionWrite, SessionWriteId, WebSocketExit,
+    IngressAdmission, IngressProposal, IngressProposalHandle, OutboundConnectorBindings,
+    PreparedRequest, RetainedProposal, SessionId, SessionObservation, SessionOpen, SessionStart,
+    SessionWrite, SessionWriteId, WebSocketExit,
 };
 use rastok::envelope::{Data, Envelope};
 use rastok::instance;
@@ -22,8 +22,8 @@ use rastok::plan::{AttrSetting, EvaluationSite, GraphVersion, OwnerValue, Valida
 use rastok::runtime::vm::{Vm, VmFault};
 
 use rastok::boundary::{
-    Completion, Draft, IngressEnvelopeProvenance, PortOutput, ProcessExit, RequestPreparation,
-    Response, SchedulerCompletion, SubmissionSequence,
+    Completion, EnvelopeDraft, IngressProvenance, IngressSequence, ProcessExit, RequestPreparation,
+    Response, SchedulerCompletion,
 };
 use rastok::compiler::compile;
 use rastok::contract::ContractCatalog;
@@ -303,7 +303,7 @@ impl CallConnectorDriver for FileSettingsWorld {
     }
 
     fn scheduler_completion(&mut self, _: &node::Path, _: SchedulerCompletion) -> Completion {
-        Completion::try_new(vec![PortOutput {
+        Completion::try_new(vec![EnvelopeDraft {
             port: node::Port::conventional_exit(),
             data: Data::materialized(Value::TaggedUnion(Box::new(
                 rastok::value::TaggedUnionValue {
@@ -325,70 +325,74 @@ impl CallConnectorDriver for FileSettingsWorld {
     }
 }
 
-fn submission(text: &str) -> IngressSubmission {
+fn submission(text: &str) -> IngressProposal {
     let data = vec![(String::from("text"), Value::Text(String::from(text)))];
-    IngressSubmission {
-        provenance: IngressEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
-        port: rastok::node::Port::new("in").unwrap(),
-        draft: Draft {
+    IngressProposal {
+        provenance: IngressProvenance::single(node::Path::new(["cli"]).unwrap()),
+        draft: EnvelopeDraft {
+            port: rastok::node::Port::new("in").unwrap(),
             data: Data::materialized(Value::Struct(data)),
             ext: Namespace::new(),
         },
-        sequence: SubmissionSequence::Next,
+        sequence: IngressSequence::Next,
+        session: None,
     }
 }
 
-fn text_submission(text: &str) -> IngressSubmission {
-    IngressSubmission {
-        provenance: IngressEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
-        port: rastok::node::Port::new("in").unwrap(),
-        draft: Draft {
+fn text_submission(text: &str) -> IngressProposal {
+    IngressProposal {
+        provenance: IngressProvenance::single(node::Path::new(["cli"]).unwrap()),
+        draft: EnvelopeDraft {
+            port: rastok::node::Port::new("in").unwrap(),
             data: Data::materialized(Value::Text(String::from(text))),
             ext: Namespace::new(),
         },
-        sequence: SubmissionSequence::Next,
+        sequence: IngressSequence::Next,
+        session: None,
     }
 }
 
-fn websocket_proposal(reference: u64, text: &str, session: InboundSession) -> IngressProposal {
-    IngressProposal {
-        reference: IngressProposalHandle::new(reference),
-        submission: IngressSubmission {
-            provenance: IngressEnvelopeProvenance::single(
+fn websocket_proposal(reference: u64, text: &str, session: InboundSession) -> RetainedProposal {
+    RetainedProposal {
+        handle: IngressProposalHandle::new(reference),
+        proposal: IngressProposal {
+            provenance: IngressProvenance::single(
                 node::Path::new(["socket"]).expect("the fixture path is valid"),
             ),
-            port: node::Port::conventional_out(),
-            draft: Draft {
+            draft: EnvelopeDraft {
+                port: node::Port::conventional_out(),
                 data: Data::materialized(Value::Text(String::from(text))),
                 ext: Namespace::new(),
             },
-            sequence: SubmissionSequence::Next,
+            sequence: IngressSequence::Next,
+            session: Some(session),
         },
-        session: Some(session),
     }
 }
 
-fn int_submission(value: i64) -> IngressSubmission {
-    IngressSubmission {
-        provenance: IngressEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
-        port: rastok::node::Port::new("in").unwrap(),
-        draft: Draft {
+fn int_submission(value: i64) -> IngressProposal {
+    IngressProposal {
+        provenance: IngressProvenance::single(node::Path::new(["cli"]).unwrap()),
+        draft: EnvelopeDraft {
+            port: rastok::node::Port::new("in").unwrap(),
             data: Data::materialized(Value::Int(value)),
             ext: Namespace::new(),
         },
-        sequence: SubmissionSequence::Next,
+        sequence: IngressSequence::Next,
+        session: None,
     }
 }
 
-fn port_int_submission(port: &str, value: i64) -> IngressSubmission {
-    IngressSubmission {
-        provenance: IngressEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
-        port: rastok::node::Port::new(port).unwrap(),
-        draft: Draft {
+fn port_int_submission(port: &str, value: i64) -> IngressProposal {
+    IngressProposal {
+        provenance: IngressProvenance::single(node::Path::new(["cli"]).unwrap()),
+        draft: EnvelopeDraft {
+            port: rastok::node::Port::new(port).unwrap(),
             data: Data::materialized(Value::Int(value)),
             ext: Namespace::new(),
         },
-        sequence: SubmissionSequence::Next,
+        sequence: IngressSequence::Next,
+        session: None,
     }
 }
 
@@ -397,7 +401,7 @@ fn encoded_submission(
     encoding: Encoding,
     bytes: &'static [u8],
     content_type: &str,
-) -> IngressSubmission {
+) -> IngressProposal {
     let mut ext = Namespace::new();
     ext.insert(
         String::from("content_type"),
@@ -405,29 +409,31 @@ fn encoded_submission(
             content_type,
         ))),
     );
-    IngressSubmission {
-        provenance: IngressEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
-        port: rastok::node::Port::new(port).unwrap(),
-        draft: Draft {
+    IngressProposal {
+        provenance: IngressProvenance::single(node::Path::new(["cli"]).unwrap()),
+        draft: EnvelopeDraft {
+            port: rastok::node::Port::new(port).unwrap(),
             data: Data::encoded(encoding, bytes),
             ext,
         },
-        sequence: SubmissionSequence::Next,
+        sequence: IngressSequence::Next,
+        session: None,
     }
 }
 
-fn tenant_submission(tenant: &str, user: i64) -> IngressSubmission {
-    IngressSubmission {
-        provenance: IngressEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
-        port: rastok::node::Port::new("in").unwrap(),
-        draft: Draft {
+fn tenant_submission(tenant: &str, user: i64) -> IngressProposal {
+    IngressProposal {
+        provenance: IngressProvenance::single(node::Path::new(["cli"]).unwrap()),
+        draft: EnvelopeDraft {
+            port: rastok::node::Port::new("in").unwrap(),
             data: Data::materialized(Value::Struct(vec![
                 (String::from("tenant"), Value::Text(String::from(tenant))),
                 (String::from("user"), Value::Int(user)),
             ])),
             ext: Namespace::new(),
         },
-        sequence: SubmissionSequence::Next,
+        sequence: IngressSequence::Next,
+        session: None,
     }
 }
 
@@ -2960,7 +2966,7 @@ fn malformed_terminal_facts_are_refused_loudly() {
         answers: vec![
             Response {
                 call_id: open[0].call_id,
-                completion: Completion::try_new(vec![PortOutput {
+                completion: Completion::try_new(vec![EnvelopeDraft {
                     port: node::Port::conventional_exit(),
                     data: Data::materialized(Value::TaggedUnion(Box::new(
                         rastok::value::TaggedUnionValue {
@@ -2974,7 +2980,7 @@ fn malformed_terminal_facts_are_refused_loudly() {
             },
             Response {
                 call_id: open[0].call_id,
-                completion: Completion::try_new(vec![PortOutput {
+                completion: Completion::try_new(vec![EnvelopeDraft {
                     port: node::Port::conventional_exit(),
                     data: Data::encoded(rastok::envelope::Encoding::Raw, b"not a union"),
                     ext: rastok::envelope::Namespace::new(),
@@ -3391,7 +3397,7 @@ fn repeated_child_stop_closes_only_the_exact_session_instance() {
 
     for through in [500_000_000, 1_000_000_000] {
         let mut close = text_submission("alice");
-        close.port = node::Port::new("close").unwrap();
+        close.draft.port = node::Port::new("close").unwrap();
         vm.inject(&mut journal, close).unwrap();
         vm.run_ready_with_bindings(&mut journal, &mut world)
             .unwrap();
@@ -3414,7 +3420,7 @@ fn repeated_child_stop_closes_only_the_exact_session_instance() {
                 && record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Stop))));
 
     let mut repeated = text_submission("alice");
-    repeated.port = node::Port::new("close").unwrap();
+    repeated.draft.port = node::Port::new("close").unwrap();
     vm.inject(&mut journal, repeated).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
@@ -3474,7 +3480,7 @@ graph app : App {
         rastok::plan::decode(&rastok::plan::encode(&compilation.plan, &compilation.hash)).unwrap();
     let message = |tenant: &str, text: &str, port: &str| {
         let mut submission = text_submission(text);
-        submission.port = node::Port::new(port).unwrap();
+        submission.draft.port = node::Port::new(port).unwrap();
         submission.draft.data = Data::materialized(Value::Struct(vec![
             (String::from("tenant"), Value::Text(tenant.into())),
             (String::from("text"), Value::Text(text.into())),
@@ -3636,7 +3642,7 @@ fn session_release_waits_for_the_committed_terminal_even_after_a_storage_failure
             }
             let (alice, bob) = (world.opened[0], world.opened[1]);
             let mut close = text_submission("alice");
-            close.port = node::Port::new("close").unwrap();
+            close.draft.port = node::Port::new("close").unwrap();
             vm.inject(&mut journal, close).unwrap();
             vm.run_ready_with_bindings(&mut journal, &mut world)
                 .unwrap();
@@ -3764,7 +3770,7 @@ graph app : App {
     // these real deliveries saturate the terminal's destination mailbox.
     for _ in 0..1024 {
         let mut seed = text_submission("waiting");
-        seed.port = node::Port::new("seed").unwrap();
+        seed.draft.port = node::Port::new("seed").unwrap();
         vm.inject(&mut journal, seed).unwrap();
         vm.run_ready_with_bindings(&mut journal, &mut world)
             .unwrap();
@@ -3775,7 +3781,7 @@ graph app : App {
     vm.poll_drivers(&mut journal, &mut world).unwrap();
     let session = world.opened[0];
     let mut close = text_submission("stop");
-    close.port = node::Port::new("close").unwrap();
+    close.draft.port = node::Port::new("close").unwrap();
     vm.inject(&mut journal, close).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
@@ -4476,23 +4482,15 @@ impl Journal for FlakyJournal {
 
     fn prepare_ingress(
         &self,
-        submission: IngressSubmission,
+        submission: IngressProposal,
     ) -> Result<rastok::journal::PreparedIngress, rastok::journal::Error> {
         self.inner.prepare_ingress(submission)
     }
     fn prepare_connector_ingress(
         &self,
-        submission: IngressSubmission,
-        session: Option<InboundSession>,
+        submission: IngressProposal,
     ) -> Result<rastok::journal::PreparedIngress, rastok::journal::Error> {
-        self.inner.prepare_connector_ingress(submission, session)
-    }
-    fn prepare_session_ingress(
-        &self,
-        submission: IngressSubmission,
-        session: InboundSession,
-    ) -> Result<rastok::journal::PreparedIngress, rastok::journal::Error> {
-        self.inner.prepare_session_ingress(submission, session)
+        self.inner.prepare_connector_ingress(submission)
     }
     fn commit_ingress(
         &mut self,

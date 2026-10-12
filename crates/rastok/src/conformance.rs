@@ -20,9 +20,9 @@
 //! statically selected, and future plugin-hosted Drivers.
 
 use crate::boundary::{
-    Draft, IngressAdmission, IngressEnvelopeProvenance, IngressSubmission,
+    EnvelopeDraft, IngressAdmission, IngressProposal, IngressProvenance, IngressSequence,
     OutboundConnectorBindings, RequestPreparation, SessionConnectorBindings, SessionObservation,
-    SessionOpen, SessionWrite, SubmissionSequence,
+    SessionOpen, SessionWrite,
 };
 use crate::compiler::compile;
 use crate::connectors::{DriverRegistry, RuntimeBindings};
@@ -900,20 +900,21 @@ fn bind<'plan>(
         .map_err(|error| format!("the conformance composition cannot bind: {error}"))
 }
 
-fn submission(text: &str) -> IngressSubmission {
-    IngressSubmission {
-        provenance: IngressEnvelopeProvenance::single(
+fn submission(text: &str) -> IngressProposal {
+    IngressProposal {
+        provenance: IngressProvenance::single(
             node::Path::new(["conformance"]).unwrap_or_else(|_| unreachable!("a valid path")),
         ),
-        port: node::Port::new("in").unwrap_or_else(|_| unreachable!("a valid port")),
-        draft: Draft {
+        draft: EnvelopeDraft {
+            port: node::Port::new("in").unwrap_or_else(|_| unreachable!("a valid port")),
             data: Data::materialized(Value::Struct(vec![(
                 String::from("text"),
                 Value::Text(String::from(text)),
             )])),
             ext: Namespace::new(),
         },
-        sequence: SubmissionSequence::Next,
+        sequence: IngressSequence::Next,
+        session: None,
     }
 }
 
@@ -1153,16 +1154,17 @@ fn interleave_battery(
         (String::from("a"), Value::Text(String::from(probe.a))),
         (String::from("b"), Value::Text(String::from(probe.b))),
     ];
-    let paired = IngressSubmission {
-        provenance: IngressEnvelopeProvenance::single(
+    let paired = IngressProposal {
+        provenance: IngressProvenance::single(
             node::Path::new(["conformance"]).unwrap_or_else(|_| unreachable!("a valid path")),
         ),
-        port: node::Port::new("in").unwrap_or_else(|_| unreachable!("a valid port")),
-        draft: Draft {
+        draft: EnvelopeDraft {
+            port: node::Port::new("in").unwrap_or_else(|_| unreachable!("a valid port")),
             data: Data::materialized(Value::Struct(data)),
             ext: Namespace::new(),
         },
-        sequence: SubmissionSequence::Next,
+        sequence: IngressSequence::Next,
+        session: None,
     };
     vm.inject(&mut journal, paired)
         .map_err(|error| format!("the interleave submission was refused: {error}"))?;

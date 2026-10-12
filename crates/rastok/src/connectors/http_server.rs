@@ -10,10 +10,10 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use crate::boundary::{
-    Completion, HttpServerExit, InboundCallConnectorDriver, InboundCallObservation,
-    InboundCallResponse, InboundCallResponseStart, InboundCallTimeout, InboundCallTimeoutStart,
-    InboundConnectorDriver, InboundExchangeId, IngressDecision, IngressProposal,
-    IngressProposalHandle, IngressSubmission,
+    AdmittedIngress, Completion, HttpServerExit, InboundCallConnectorDriver,
+    InboundCallObservation, InboundCallResponse, InboundCallResponseStart, InboundCallTimeout,
+    InboundCallTimeoutStart, InboundConnectorDriver, InboundExchangeId, IngressProposal,
+    IngressProposalHandle, IngressRejection, RetainedProposal,
 };
 use crate::connector::{ConnectorDirection, ContractId};
 use crate::plan::ValidatedExecutionPlan;
@@ -256,26 +256,21 @@ pub(crate) fn bind_routes(
 /// owns envelopes, sequence allocation or journal records.
 #[derive(Debug, Default)]
 pub(crate) struct HttpServerLabInput {
-    pending: Option<IngressProposal>,
+    pending: Option<RetainedProposal>,
     terminal: Option<InboundCallObservation>,
     fault: Option<String>,
 }
 
 impl HttpServerLabInput {
-    pub(crate) fn offer(
-        &mut self,
-        submission: IngressSubmission,
-        action: u64,
-    ) -> Result<(), String> {
+    pub(crate) fn offer(&mut self, submission: IngressProposal, action: u64) -> Result<(), String> {
         if self.pending.is_some() || self.terminal.is_some() {
             return Err(String::from(
                 "the preceding HttpServer Lab request has not settled",
             ));
         }
-        self.pending = Some(IngressProposal {
-            reference: IngressProposalHandle::new(action),
-            submission,
-            session: None,
+        self.pending = Some(RetainedProposal {
+            handle: IngressProposalHandle::new(action),
+            proposal: submission,
         });
         Ok(())
     }
@@ -294,16 +289,20 @@ struct HttpServerLabDriver {
 }
 
 impl InboundConnectorDriver for HttpServerLabDriver {
-    fn proposal(&mut self) -> Option<IngressProposal> {
+    fn proposal(&mut self) -> Option<RetainedProposal> {
         self.input.borrow().pending.clone()
     }
 
-    fn decide(&mut self, reference: IngressProposalHandle, decision: IngressDecision) {
+    fn decide(
+        &mut self,
+        reference: IngressProposalHandle,
+        decision: Result<AdmittedIngress, IngressRejection>,
+    ) {
         let mut input = self.input.borrow_mut();
         if input
             .pending
             .as_ref()
-            .is_none_or(|proposal| proposal.reference != reference)
+            .is_none_or(|proposal| proposal.handle != reference)
         {
             input.fault = Some(String::from(
                 "the HttpServer Lab received an unmatched admission decision",
@@ -311,7 +310,7 @@ impl InboundConnectorDriver for HttpServerLabDriver {
             return;
         }
         input.pending = None;
-        if let IngressDecision::Accepted(accepted) = decision {
+        if let Ok(accepted) = decision {
             match accepted.exchange {
                 Some(InboundExchangeId::Call(call_id)) if input.terminal.is_none() => {
                     // A fixture scripts a decoded request and successful fixed
@@ -420,7 +419,7 @@ pub(crate) fn lab_factory(
 mod lab_tests {
     use super::*;
     use crate::boundary::{
-        Draft, IngressAdmission, IngressEnvelopeProvenance, IngressRejection, SubmissionSequence,
+        EnvelopeDraft, IngressAdmission, IngressProvenance, IngressRejection, IngressSequence,
     };
     use crate::connectors::{DriverRegistry, RuntimeBindings};
     use crate::envelope::{Data, Value};
@@ -428,17 +427,16 @@ mod lab_tests {
     use crate::plan::GraphVersion;
     use crate::runtime::vm::Vm;
 
-    fn submission(value: Value) -> IngressSubmission {
-        IngressSubmission {
-            provenance: IngressEnvelopeProvenance::single(
-                crate::node::Path::new(["listener"]).unwrap(),
-            ),
-            port: crate::node::Port::new("out").unwrap(),
-            draft: Draft {
+    fn submission(value: Value) -> IngressProposal {
+        IngressProposal {
+            provenance: IngressProvenance::single(crate::node::Path::new(["listener"]).unwrap()),
+            draft: EnvelopeDraft {
+                port: crate::node::Port::new("out").unwrap(),
                 data: Data::materialized(value),
                 ext: Default::default(),
             },
-            sequence: SubmissionSequence::Next,
+            sequence: IngressSequence::Next,
+            session: None,
         }
     }
 

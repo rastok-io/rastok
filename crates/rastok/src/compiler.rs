@@ -1037,9 +1037,7 @@ graph conflicting_instance : App {
 
     #[test]
     fn loop_fuel_reenters_without_a_spatial_cycle_and_expires_exactly() {
-        use crate::boundary::{
-            Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
-        };
+        use crate::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
         use crate::envelope::{Data, Namespace};
         use crate::journal::{MemJournal, Record, loop_protocol::Fact};
         use crate::runtime::vm::Vm;
@@ -1077,17 +1075,18 @@ graph app : App {{
             let mut vm = Vm::boot(plan, crate::plan::GraphVersion(1));
             vm.inject(
                 &mut journal,
-                IngressSubmission {
-                    provenance: IngressEnvelopeProvenance::single(
+                IngressProposal {
+                    provenance: IngressProvenance::single(
                         crate::node::Path::new(["loop-test"])
                             .expect("the provenance path is valid"),
                     ),
-                    port: crate::node::Port::new("in").expect("the input port is valid"),
-                    draft: Draft {
+                    draft: EnvelopeDraft {
+                        port: crate::node::Port::new("in").expect("the input port is valid"),
                         data: Data::materialized(Value::Int(3)),
                         ext: Namespace::new(),
                     },
-                    sequence: SubmissionSequence::Next,
+                    sequence: IngressSequence::Next,
+                    session: None,
                 },
             )
             .expect("the root is admitted before Loop work");
@@ -1191,9 +1190,7 @@ graph app : App {{
 
     #[test]
     fn an_open_loop_resumes_from_the_journal_without_regaining_fuel() {
-        use crate::boundary::{
-            Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
-        };
+        use crate::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
         use crate::envelope::{Data, Namespace};
         use crate::journal::{MemJournal, Record, loop_protocol::Fact};
         use crate::runtime::vm::Vm;
@@ -1228,17 +1225,18 @@ graph app : App {
         before_crash
             .inject(
                 &mut journal,
-                IngressSubmission {
-                    provenance: IngressEnvelopeProvenance::single(
+                IngressProposal {
+                    provenance: IngressProvenance::single(
                         crate::node::Path::new(["loop-recovery"])
                             .expect("the provenance path is valid"),
                     ),
-                    port: crate::node::Port::new("in").expect("the input port is valid"),
-                    draft: Draft {
+                    draft: EnvelopeDraft {
+                        port: crate::node::Port::new("in").expect("the input port is valid"),
                         data: Data::materialized(Value::Int(3)),
                         ext: Namespace::new(),
                     },
-                    sequence: SubmissionSequence::Next,
+                    sequence: IngressSequence::Next,
+                    session: None,
                 },
             )
             .expect("the root is admitted");
@@ -1300,9 +1298,7 @@ graph app : App {
 
     #[test]
     fn two_roots_keep_independent_loop_runs_in_one_instance() {
-        use crate::boundary::{
-            Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
-        };
+        use crate::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
         use crate::envelope::{Data, Namespace};
         use crate::journal::{
             MemJournal, Record,
@@ -1339,17 +1335,18 @@ graph app : App {
         for value in [2, 1] {
             vm.inject(
                 &mut journal,
-                IngressSubmission {
-                    provenance: IngressEnvelopeProvenance::single(
+                IngressProposal {
+                    provenance: IngressProvenance::single(
                         crate::node::Path::new(["concurrent-loops"])
                             .expect("the provenance path is valid"),
                     ),
-                    port: crate::node::Port::new("in").expect("the input port is valid"),
-                    draft: Draft {
+                    draft: EnvelopeDraft {
+                        port: crate::node::Port::new("in").expect("the input port is valid"),
                         data: Data::materialized(Value::Int(value)),
                         ext: Namespace::new(),
                     },
-                    sequence: SubmissionSequence::Next,
+                    sequence: IngressSequence::Next,
+                    session: None,
                 },
             )
             .expect("both roots fit the host mailbox");

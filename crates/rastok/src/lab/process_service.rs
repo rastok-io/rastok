@@ -1,9 +1,9 @@
 //! Effectless resident child: the script replaces replies, not Session state.
 use super::*;
 use crate::boundary::{
-    InboundConnectorDriver, InboundSession, IngressDecision, IngressProposal,
-    IngressProposalHandle, SessionConnectorDriver, SessionId, SessionObservation, SessionOpen,
-    SessionStart, SessionWrite,
+    AdmittedIngress, InboundConnectorDriver, InboundSession, IngressProposalHandle,
+    IngressRejection, RetainedProposal, SessionConnectorDriver, SessionId, SessionObservation,
+    SessionOpen, SessionStart, SessionWrite,
 };
 use crate::connectors::ProcessRequestSettings;
 use std::collections::VecDeque;
@@ -62,7 +62,7 @@ struct World<'plan> {
     resources: BTreeMap<SessionId, node::Path>,
     terminating: std::collections::BTreeSet<SessionId>,
     events: VecDeque<SessionObservation>,
-    proposals: VecDeque<IngressProposal>,
+    proposals: VecDeque<RetainedProposal>,
     next: u64,
 }
 impl World<'_> {
@@ -82,18 +82,18 @@ impl World<'_> {
                         return;
                     };
                     self.next = next;
-                    self.proposals.push_back(IngressProposal {
-                        reference: IngressProposalHandle::new(next),
-                        submission: IngressSubmission {
-                            provenance: IngressEnvelopeProvenance::single(path.clone()),
-                            port: output.port,
-                            draft: Draft {
+                    self.proposals.push_back(RetainedProposal {
+                        handle: IngressProposalHandle::new(next),
+                        proposal: IngressProposal {
+                            provenance: IngressProvenance::single(path.clone()),
+                            draft: EnvelopeDraft {
+                                port: output.port,
                                 data: output.data,
                                 ext: output.ext,
                             },
-                            sequence: SubmissionSequence::Next,
+                            sequence: IngressSequence::Next,
+                            session: Some(InboundSession::Message(session)),
                         },
-                        session: Some(InboundSession::Message(session)),
                     });
                 }
             }
@@ -173,7 +173,7 @@ impl SessionConnectorDriver for World<'_> {
         let mut ready = Vec::new();
         let mut waiting = VecDeque::new();
         for event in self.events.drain(..) {
-            if matches!(&event, SessionObservation::Exited { session, .. } if self.proposals.iter().any(|p| p.session == Some(InboundSession::Message(*session))))
+            if matches!(&event, SessionObservation::Exited { session, .. } if self.proposals.iter().any(|p| p.proposal.session == Some(InboundSession::Message(*session))))
             {
                 waiting.push_back(event);
             } else {
@@ -189,7 +189,7 @@ impl SessionConnectorDriver for World<'_> {
         self.resources.remove(&session);
         self.terminating.remove(&session);
         self.proposals
-            .retain(|p| p.session != Some(InboundSession::Message(session)));
+            .retain(|p| p.proposal.session != Some(InboundSession::Message(session)));
         self.events.retain(|event| match event {
             SessionObservation::Opened(reference)
             | SessionObservation::WriteSettled {
@@ -202,27 +202,31 @@ impl SessionConnectorDriver for World<'_> {
     }
 }
 impl InboundConnectorDriver for World<'_> {
-    fn proposal(&mut self) -> Option<IngressProposal> {
+    fn proposal(&mut self) -> Option<RetainedProposal> {
         let proposal = self.proposals.front()?;
         // The script may answer during open_session. As with the physical
         // Driver, the opening must reach the core before its first frame.
         if self.events.iter().any(|event| {
             matches!(event,
             SessionObservation::Opened(reference)
-                if proposal.session == Some(InboundSession::Message(*reference)))
+                if proposal.proposal.session == Some(InboundSession::Message(*reference)))
         }) {
             return None;
         }
         Some(proposal.clone())
     }
-    fn decide(&mut self, reference: IngressProposalHandle, decision: IngressDecision) {
+    fn decide(
+        &mut self,
+        reference: IngressProposalHandle,
+        decision: Result<AdmittedIngress, IngressRejection>,
+    ) {
         if self
             .proposals
             .front()
-            .is_some_and(|p| p.reference == reference)
+            .is_some_and(|p| p.handle == reference)
         {
             self.proposals.pop_front();
-            if let IngressDecision::Rejected(reason) = decision {
+            if let Err(reason) = decision {
                 self.evaluator
                     .fault(format!("the service frame was refused: {reason:?}"));
             }

@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use rastok::boundary::{Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence};
+use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::{MemJournal, Record};
 use rastok::runtime::vm::Vm;
@@ -15,15 +15,16 @@ use rastok::{
 };
 use std::collections::BTreeMap;
 
-fn submission(data: Data) -> IngressSubmission {
-    IngressSubmission {
-        provenance: IngressEnvelopeProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
-        port: rastok::node::Port::new("in").unwrap(),
-        draft: Draft {
+fn submission(data: Data) -> IngressProposal {
+    IngressProposal {
+        provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
+        draft: EnvelopeDraft {
+            port: rastok::node::Port::new("in").unwrap(),
             data,
             ext: Namespace::new(),
         },
-        sequence: SubmissionSequence::Next,
+        sequence: IngressSequence::Next,
+        session: None,
     }
 }
 

@@ -278,9 +278,7 @@ graph app : App {
 #[test]
 fn signed_refunds_remain_distinct_original_samples() {
     use rastok::accounting::{ExactDecimal, accounting_observations};
-    use rastok::boundary::{
-        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
-    };
+    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::node;
@@ -337,16 +335,17 @@ graph adjustments : App {{
             let mut vm = Vm::boot(&decoded, version);
             vm.inject(
                 &mut journal,
-                IngressSubmission {
-                    provenance: IngressEnvelopeProvenance::single(
+                IngressProposal {
+                    provenance: IngressProvenance::single(
                         node::Path::new(["refund-test"]).expect("provenance"),
                     ),
-                    port: node::Port::new("in").expect("input"),
-                    draft: Draft {
+                    draft: EnvelopeDraft {
+                        port: node::Port::new("in").expect("input"),
                         data: Data::materialized(Value::Int(0)),
                         ext: Namespace::new(),
                     },
-                    sequence: SubmissionSequence::Next,
+                    sequence: IngressSequence::Next,
+                    session: None,
                 },
             )
             .expect("admission");

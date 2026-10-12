@@ -120,9 +120,7 @@ fn a_shared_raw_payload_keeps_independent_reading_port_types() {
 
 #[test]
 fn raw_text_selects_the_same_key_and_handler_value_inside_a_graph() {
-    use rastok::boundary::{
-        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
-    };
+    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
     use rastok::journal::{MemJournal, Record};
     use rastok::node::{Lifecycle, Path, Trigger};
     use rastok::runtime::vm::Vm;
@@ -149,14 +147,15 @@ graph g : App {
     let mut vm = Vm::boot(&compiled.plan, GraphVersion(1));
     vm.inject(
         &mut journal,
-        IngressSubmission {
-            provenance: IngressEnvelopeProvenance::single(Path::new(["cli"]).unwrap()),
-            port: Port::new("in").unwrap(),
-            draft: Draft {
+        IngressProposal {
+            provenance: IngressProvenance::single(Path::new(["cli"]).unwrap()),
+            draft: EnvelopeDraft {
+                port: Port::new("in").unwrap(),
                 data: Data::encoded(Encoding::Raw, "é\n".as_bytes()),
                 ext: Default::default(),
             },
-            sequence: SubmissionSequence::Next,
+            sequence: IngressSequence::Next,
+            session: None,
         },
     )
     .unwrap();
@@ -184,9 +183,7 @@ graph g : App {
 
 #[test]
 fn loop_expiry_materializes_last_state_by_the_host_entry_type() {
-    use rastok::boundary::{
-        Draft, IngressEnvelopeProvenance, IngressSubmission, SubmissionSequence,
-    };
+    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
     use rastok::journal::MemJournal;
     use rastok::node::Path;
     use rastok::runtime::vm::Vm;
@@ -215,14 +212,15 @@ fn loop_expiry_materializes_last_state_by_the_host_entry_type() {
             let mut vm = Vm::boot(&compiled.plan, GraphVersion(1));
             vm.inject(
                 &mut journal,
-                IngressSubmission {
-                    provenance: IngressEnvelopeProvenance::single(Path::new(["cli"]).unwrap()),
-                    port: Port::new("in").unwrap(),
-                    draft: Draft {
+                IngressProposal {
+                    provenance: IngressProvenance::single(Path::new(["cli"]).unwrap()),
+                    draft: EnvelopeDraft {
+                        port: Port::new("in").unwrap(),
                         data: Data::encoded(Encoding::Raw, "é\n".as_bytes()),
                         ext: Default::default(),
                     },
-                    sequence: SubmissionSequence::Next,
+                    sequence: IngressSequence::Next,
+                    session: None,
                 },
             )
             .unwrap();

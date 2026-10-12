@@ -90,14 +90,15 @@ impl CallConnectorDriver for World {
 fn inject(vm: &mut Vm<'_>, journal: &mut MemJournal) {
     vm.inject(
         journal,
-        IngressSubmission {
-            provenance: IngressEnvelopeProvenance::single(node::Path::new(["test"]).unwrap()),
-            port: node::Port::new("in").unwrap(),
-            sequence: SubmissionSequence::Next,
-            draft: Draft {
+        IngressProposal {
+            provenance: IngressProvenance::single(node::Path::new(["test"]).unwrap()),
+            draft: EnvelopeDraft {
+                port: node::Port::new("in").unwrap(),
                 data: Data::materialized(Value::Text("request".into())),
                 ext: Namespace::new(),
             },
+            sequence: IngressSequence::Next,
+            session: None,
         },
     )
     .unwrap();
@@ -362,16 +363,15 @@ graph app : App {{
         if lifetime == "persistent" {
             vm.inject(
                 &mut journal,
-                IngressSubmission {
-                    provenance: IngressEnvelopeProvenance::single(
-                        node::Path::new(["test"]).unwrap(),
-                    ),
-                    port: node::Port::new("close").unwrap(),
-                    sequence: SubmissionSequence::Next,
-                    draft: Draft {
+                IngressProposal {
+                    provenance: IngressProvenance::single(node::Path::new(["test"]).unwrap()),
+                    draft: EnvelopeDraft {
+                        port: node::Port::new("close").unwrap(),
                         data: Data::materialized(Value::Bool(true)),
                         ext: Namespace::new(),
                     },
+                    sequence: IngressSequence::Next,
+                    session: None,
                 },
             )
             .unwrap();
@@ -992,16 +992,15 @@ graph app : App {
         for port in order {
             vm.inject(
                 &mut journal,
-                IngressSubmission {
-                    provenance: IngressEnvelopeProvenance::single(
-                        node::Path::new(["test"]).unwrap(),
-                    ),
-                    port: node::Port::new(port).unwrap(),
-                    sequence: SubmissionSequence::Next,
-                    draft: Draft {
+                IngressProposal {
+                    provenance: IngressProvenance::single(node::Path::new(["test"]).unwrap()),
+                    draft: EnvelopeDraft {
+                        port: node::Port::new(port).unwrap(),
                         data: Data::materialized(Value::Text("request".into())),
                         ext: Namespace::new(),
                     },
+                    sequence: IngressSequence::Next,
+                    session: None,
                 },
             )
             .unwrap();
@@ -1150,16 +1149,15 @@ graph app : App {
             for port in order {
                 vm.inject(
                     &mut journal,
-                    IngressSubmission {
-                        provenance: IngressEnvelopeProvenance::single(
-                            node::Path::new(["test"]).unwrap(),
-                        ),
-                        port: node::Port::new(port).unwrap(),
-                        sequence: SubmissionSequence::Next,
-                        draft: Draft {
+                    IngressProposal {
+                        provenance: IngressProvenance::single(node::Path::new(["test"]).unwrap()),
+                        draft: EnvelopeDraft {
+                            port: node::Port::new(port).unwrap(),
                             data: Data::materialized(Value::Text("request".into())),
                             ext: Namespace::new(),
                         },
+                        sequence: IngressSequence::Next,
+                        session: None,
                     },
                 )
                 .unwrap();
@@ -1260,16 +1258,15 @@ graph app : App {{
             for port in order {
                 vm.inject(
                     &mut journal,
-                    IngressSubmission {
-                        provenance: IngressEnvelopeProvenance::single(
-                            node::Path::new(["test"]).unwrap(),
-                        ),
-                        port: node::Port::new(port).unwrap(),
-                        sequence: SubmissionSequence::Next,
-                        draft: Draft {
+                    IngressProposal {
+                        provenance: IngressProvenance::single(node::Path::new(["test"]).unwrap()),
+                        draft: EnvelopeDraft {
+                            port: node::Port::new(port).unwrap(),
                             data: Data::materialized(Value::Text("request".into())),
                             ext: Namespace::new(),
                         },
+                        sequence: IngressSequence::Next,
+                        session: None,
                     },
                 )
                 .unwrap();
@@ -1282,16 +1279,17 @@ graph app : App {{
                 } else {
                     vm.inject(
                         &mut journal,
-                        IngressSubmission {
-                            provenance: IngressEnvelopeProvenance::single(
+                        IngressProposal {
+                            provenance: IngressProvenance::single(
                                 node::Path::new(["test"]).unwrap(),
                             ),
-                            port: node::Port::new("close").unwrap(),
-                            sequence: SubmissionSequence::Next,
-                            draft: Draft {
+                            draft: EnvelopeDraft {
+                                port: node::Port::new("close").unwrap(),
                                 data: Data::materialized(Value::Bool(true)),
                                 ext: Namespace::new(),
                             },
+                            sequence: IngressSequence::Next,
+                            session: None,
                         },
                     )
                     .unwrap();
@@ -1501,14 +1499,15 @@ graph app : App {
     for key in ["alice", "bob"] {
         vm.inject(
             &mut journal,
-            IngressSubmission {
-                provenance: IngressEnvelopeProvenance::single(node::Path::new(["test"]).unwrap()),
-                port: node::Port::new("in").unwrap(),
-                sequence: SubmissionSequence::Next,
-                draft: Draft {
+            IngressProposal {
+                provenance: IngressProvenance::single(node::Path::new(["test"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: node::Port::new("in").unwrap(),
                     data: Data::materialized(Value::Text(key.into())),
                     ext: Namespace::new(),
                 },
+                sequence: IngressSequence::Next,
+                session: None,
             },
         )
         .unwrap();
@@ -1689,14 +1688,15 @@ graph app : App {
         }
         vm.inject(
             &mut journal,
-            IngressSubmission {
-                provenance: IngressEnvelopeProvenance::single(node::Path::new(["test"]).unwrap()),
-                port: node::Port::new("close").unwrap(),
-                sequence: SubmissionSequence::Next,
-                draft: Draft {
+            IngressProposal {
+                provenance: IngressProvenance::single(node::Path::new(["test"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: node::Port::new("close").unwrap(),
                     data: Data::materialized(Value::Bool(true)),
                     ext: Namespace::new(),
                 },
+                sequence: IngressSequence::Next,
+                session: None,
             },
         )
         .unwrap();
