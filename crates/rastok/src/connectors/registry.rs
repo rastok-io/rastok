@@ -5,11 +5,11 @@
 //! meet only at binding; registration order is never selection policy.
 
 use crate::boundary::{
-    CallConnectorDriver, CallId, CallStart, Completion, DriverRouteError, InboundCallResponseStart,
-    InboundCallTimeoutStart, InboundConnectorDriver, InboundExchangeId, IngressDecision,
-    IngressProposal, Intent, OutboundConnectorBindings, OutboundConnectorDriver,
+    CallConnectorDriver, CallId, CallOpen, CallStart, Completion, DriverRouteError,
+    InboundCallResponseStart, InboundCallTimeoutStart, InboundConnectorDriver, InboundExchangeId,
+    IngressDecision, IngressProposal, OutboundConnectorBindings, OutboundConnectorDriver,
     RequestPreparation, Response, SchedulerCompletion, SessionConnectorBindings,
-    SessionConnectorDriver, SessionDriverEvent, SessionId, SessionOpenIntent, SessionWriteIntent,
+    SessionConnectorDriver, SessionId, SessionObservation, SessionOpen, SessionWrite,
 };
 use crate::connector::{ConnectorExchange, ConnectorRoles, ContractId};
 use crate::envelope::{Data, Envelope};
@@ -867,7 +867,7 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
 
     fn start(
         &mut self,
-        intent: &Intent,
+        intent: &CallOpen,
         request: &Envelope,
     ) -> Result<CallStart, DriverRouteError> {
         let connector = &intent.connector_path;
@@ -929,7 +929,7 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
 
     fn open_session(
         &mut self,
-        intent: &SessionOpenIntent,
+        intent: &SessionOpen,
         request: &Envelope,
     ) -> Result<crate::boundary::SessionStart, DriverRouteError> {
         SessionConnectorBindings::open_session(self, intent, request)
@@ -953,7 +953,7 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
 
     fn write_session(
         &mut self,
-        intent: &SessionWriteIntent,
+        intent: &SessionWrite,
         message: &Envelope,
     ) -> Result<crate::boundary::SessionStart, DriverRouteError> {
         SessionConnectorBindings::write_session(self, intent, message)
@@ -967,7 +967,7 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
         SessionConnectorBindings::close_session(self, connector, session)
     }
 
-    fn session_events(&mut self) -> Result<Vec<SessionDriverEvent>, DriverRouteError> {
+    fn session_events(&mut self) -> Result<Vec<SessionObservation>, DriverRouteError> {
         SessionConnectorBindings::session_events(self)
     }
 
@@ -1000,7 +1000,7 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
 
     fn open_session(
         &mut self,
-        intent: &SessionOpenIntent,
+        intent: &SessionOpen,
         request: &Envelope,
     ) -> Result<crate::boundary::SessionStart, DriverRouteError> {
         let (id, driver) = self.session_driver(&intent.connector_path)?;
@@ -1046,7 +1046,7 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
 
     fn write_session(
         &mut self,
-        intent: &SessionWriteIntent,
+        intent: &SessionWrite,
         message: &Envelope,
     ) -> Result<crate::boundary::SessionStart, DriverRouteError> {
         let actual = self.session_family(&intent.connector_path)?;
@@ -1105,7 +1105,7 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
         Ok(())
     }
 
-    fn session_events(&mut self) -> Result<Vec<SessionDriverEvent>, DriverRouteError> {
+    fn session_events(&mut self) -> Result<Vec<SessionObservation>, DriverRouteError> {
         let mut events = Vec::new();
         for (id, family) in &mut self.families {
             let Some(path) = &family.session_path else {
@@ -1119,9 +1119,9 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
             };
             for event in driver.session_events() {
                 let session = match &event {
-                    SessionDriverEvent::Opened(session)
-                    | SessionDriverEvent::WriteSettled { session, .. }
-                    | SessionDriverEvent::Exited { session, .. } => *session,
+                    SessionObservation::Opened(session)
+                    | SessionObservation::WriteSettled { session, .. }
+                    | SessionObservation::Exited { session, .. } => *session,
                 };
                 let Some(expected) = self.sessions.get(&session) else {
                     return Err(DriverRouteError::UncorrelatedSession(session));
@@ -1320,13 +1320,13 @@ mod tests {
         DriverRegistrationError, DriverRegistry, RuntimeBindings,
     };
     use crate::boundary::{
-        CallConnectorDriver, CallStart, Completion, Draft, HttpServerExit,
-        InboundCallConnectorDriver, InboundCallEvent, InboundCallResponse,
+        CallConnectorDriver, CallOpen, CallStart, Completion, Draft, HttpServerExit,
+        InboundCallConnectorDriver, InboundCallObservation, InboundCallResponse,
         InboundCallResponseStart, InboundExchangeId, IngressDecision, IngressEnvelopeProvenance,
-        IngressProposal, IngressProposalHandle, IngressSubmission, Intent,
-        OutboundConnectorBindings, OutboundConnectorDriver, ProcessExit, RequestPreparation,
-        Response, SchedulerCompletion, SessionConnectorBindings, SessionConnectorDriver,
-        SessionDriverEvent, SessionId, SessionOpenIntent, SessionWriteIntent, SubmissionSequence,
+        IngressProposal, IngressProposalHandle, IngressSubmission, OutboundConnectorBindings,
+        OutboundConnectorDriver, ProcessExit, RequestPreparation, Response, SchedulerCompletion,
+        SessionConnectorBindings, SessionConnectorDriver, SessionId, SessionObservation,
+        SessionOpen, SessionWrite, SubmissionSequence,
     };
     use crate::compiler::compile;
     use crate::connector::{ConnectorExchange, ConnectorRoles, ContractId};
@@ -1445,7 +1445,7 @@ mod tests {
             crate::boundary::process_scheduler_completion(completion)
         }
 
-        fn start(&mut self, intent: &Intent, _: &Envelope) -> CallStart {
+        fn start(&mut self, intent: &CallOpen, _: &Envelope) -> CallStart {
             self.starts
                 .lock()
                 .unwrap()
@@ -1672,7 +1672,7 @@ graph inbound : App {
             crate::boundary::InboundCallTimeoutStart::Pending
         }
 
-        fn events(&mut self) -> Vec<InboundCallEvent> {
+        fn events(&mut self) -> Vec<InboundCallObservation> {
             Vec::new()
         }
     }
@@ -1696,7 +1696,7 @@ graph inbound : App {
             crate::boundary::process_scheduler_completion(completion)
         }
 
-        fn start(&mut self, _: &Intent, _: &Envelope) -> CallStart {
+        fn start(&mut self, _: &CallOpen, _: &Envelope) -> CallStart {
             CallStart::Started
         }
 
@@ -1774,7 +1774,7 @@ graph inbound : App {
 
     struct SessionDuplexDriver {
         observations: Arc<Mutex<Vec<&'static str>>>,
-        events: Vec<SessionDriverEvent>,
+        events: Vec<SessionObservation>,
         closed: BTreeSet<SessionId>,
     }
 
@@ -1812,12 +1812,12 @@ graph inbound : App {
 
         fn open_session(
             &mut self,
-            intent: &SessionOpenIntent,
+            intent: &SessionOpen,
             _: &Envelope,
         ) -> crate::boundary::SessionStart {
             self.observations.lock().unwrap().push("open");
             self.events
-                .insert(0, SessionDriverEvent::Opened(intent.session_id));
+                .insert(0, SessionObservation::Opened(intent.session_id));
             crate::boundary::SessionStart::Started
         }
 
@@ -1833,13 +1833,13 @@ graph inbound : App {
 
         fn write_session(
             &mut self,
-            intent: &SessionWriteIntent,
+            intent: &SessionWrite,
             _: &Envelope,
         ) -> crate::boundary::SessionStart {
             self.observations.lock().unwrap().push("write");
             self.events.insert(
                 0,
-                SessionDriverEvent::WriteSettled {
+                SessionObservation::WriteSettled {
                     session: intent.session_id,
                     write: intent.write_ref,
                 },
@@ -1852,7 +1852,7 @@ graph inbound : App {
                 self.observations.lock().unwrap().push("close");
                 self.events.insert(
                     0,
-                    SessionDriverEvent::Exited {
+                    SessionObservation::Exited {
                         session,
                         exit: crate::boundary::PortOutput {
                             port: node::Port::conventional_exit(),
@@ -1871,7 +1871,7 @@ graph inbound : App {
             crate::boundary::SessionStart::Started
         }
 
-        fn session_events(&mut self) -> Vec<SessionDriverEvent> {
+        fn session_events(&mut self) -> Vec<SessionObservation> {
             core::mem::take(&mut self.events)
         }
 
@@ -1885,11 +1885,11 @@ graph inbound : App {
             self.observations.lock().unwrap().push("release");
             self.closed.remove(&session);
             self.events.retain(|event| match event {
-                SessionDriverEvent::Opened(reference)
-                | SessionDriverEvent::WriteSettled {
+                SessionObservation::Opened(reference)
+                | SessionObservation::WriteSettled {
                     session: reference, ..
                 }
-                | SessionDriverEvent::Exited {
+                | SessionObservation::Exited {
                     session: reference, ..
                 } => *reference != session,
             });
@@ -1981,7 +1981,7 @@ graph inbound : App {
         let opening = |byte| {
             let prepared = crate::boundary::PreparedRequest::seal(vec![byte]);
             let emitting_id = crate::envelope::Id::from_bytes([byte; 16]);
-            SessionOpenIntent {
+            SessionOpen {
                 session_id: ids::outbound_session_id(&connector, emitting_id, prepared.digest()),
                 emitting_id,
                 connector_path: connector.clone(),
@@ -1997,8 +1997,8 @@ graph inbound : App {
         assert_eq!(
             SessionConnectorBindings::session_events(&mut bindings).unwrap(),
             [
-                SessionDriverEvent::Opened(second.session_id),
-                SessionDriverEvent::Opened(first.session_id),
+                SessionObservation::Opened(second.session_id),
+                SessionObservation::Opened(first.session_id),
             ],
             "reverse arrival remains correlated by SessionId"
         );
@@ -2008,7 +2008,7 @@ graph inbound : App {
         let write = |session: SessionId, byte| {
             let prepared = crate::boundary::PreparedRequest::seal(vec![byte]);
             let emitting_id = crate::envelope::Id::from_bytes([byte; 16]);
-            SessionWriteIntent {
+            SessionWrite {
                 write_ref: ids::session_write_id(session, emitting_id, prepared.digest()),
                 session_id: session,
                 emitting_id,
@@ -2025,11 +2025,11 @@ graph inbound : App {
         assert_eq!(
             SessionConnectorBindings::session_events(&mut bindings).unwrap(),
             [
-                SessionDriverEvent::WriteSettled {
+                SessionObservation::WriteSettled {
                     session: second.session_id,
                     write: second_write.write_ref,
                 },
-                SessionDriverEvent::WriteSettled {
+                SessionObservation::WriteSettled {
                     session: first.session_id,
                     write: first_write.write_ref,
                 },
@@ -2186,7 +2186,7 @@ graph inbound : App {
     struct RetainedCallState {
         proposals: VecDeque<IngressProposal>,
         decisions: Vec<(IngressProposalHandle, IngressDecision)>,
-        events: Vec<InboundCallEvent>,
+        events: Vec<InboundCallObservation>,
         responses: Vec<InboundCallResponse>,
         acknowledge_on_accept: bool,
         hold_first_response: bool,
@@ -2214,7 +2214,7 @@ graph inbound : App {
                 let Some(InboundExchangeId::Call(call_id)) = accepted.exchange else {
                     panic!("an inbound Call acceptance carries its Call ref")
                 };
-                state.events.push(InboundCallEvent {
+                state.events.push(InboundCallObservation {
                     call_id,
                     completion: Completion::http_server_exit(HttpServerExit::Completed {
                         status: 202,
@@ -2237,7 +2237,7 @@ graph inbound : App {
                 return InboundCallResponseStart::Pending;
             }
             state.responses.push(response.clone());
-            state.events.push(InboundCallEvent {
+            state.events.push(InboundCallObservation {
                 call_id: response.call_id,
                 completion: Completion::http_server_exit(HttpServerExit::Completed { status: 200 }),
             });
@@ -2251,7 +2251,7 @@ graph inbound : App {
             crate::boundary::InboundCallTimeoutStart::Pending
         }
 
-        fn events(&mut self) -> Vec<InboundCallEvent> {
+        fn events(&mut self) -> Vec<InboundCallObservation> {
             core::mem::take(&mut self.state.lock().unwrap().events)
         }
     }
@@ -2531,7 +2531,7 @@ graph api : App {
             assert!(tree.contains_key(&key), "canonical key {key} is present");
         }
 
-        state.lock().unwrap().events.push(InboundCallEvent {
+        state.lock().unwrap().events.push(InboundCallObservation {
             call_id,
             completion: Completion::http_server_exit(HttpServerExit::Completed { status: 202 }),
         });
@@ -2633,7 +2633,7 @@ graph api : App {
             .expect("the response-producing transaction seals its route");
         assert_eq!(response_target, opening_instance);
 
-        state.lock().unwrap().events.push(InboundCallEvent {
+        state.lock().unwrap().events.push(InboundCallObservation {
             call_id,
             completion: Completion::http_server_exit(HttpServerExit::Completed { status: 200 }),
         });

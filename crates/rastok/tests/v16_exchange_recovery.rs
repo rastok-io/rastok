@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::boundary::{
-    Completion, Draft, HttpServerExit, InboundCallEvent, InboundExchangeId, IngressAdmission,
+    Completion, Draft, HttpServerExit, InboundCallObservation, InboundExchangeId, IngressAdmission,
     IngressEnvelopeProvenance, IngressProposal, IngressProposalHandle, IngressSubmission,
     SubmissionSequence,
 };
@@ -99,7 +99,7 @@ graph app : App {{
             let completion = Completion::http_server_exit(HttpServerExit::Completed {
                 status: if respond { 200 } else { 202 },
             });
-            let event = InboundCallEvent {
+            let event = InboundCallObservation {
                 call_id,
                 completion,
             };

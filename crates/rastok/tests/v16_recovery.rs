@@ -173,7 +173,7 @@ impl rastok::boundary::CallConnectorDriver for World {
 
     fn start(
         &mut self,
-        _: &rastok::boundary::Intent,
+        _: &rastok::boundary::CallOpen,
         _: &rastok::envelope::Envelope,
     ) -> rastok::boundary::CallStart {
         self.starts += 1;

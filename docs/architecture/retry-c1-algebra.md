@@ -66,7 +66,7 @@ At opening, pure preparation resolves and retains:
 - the Retry policy from that plan: total attempts, selected cases and delay.
 
 The plan remains the sole authority for idempotence. There is no guarantee
-boolean in an Intent, attempt fact or operation-opening payload. Immutable
+boolean in a CallOpen, attempt fact or operation-opening payload. Immutable
 request/setting material may be shared physically; the algebra does not demand
 a fresh full copy for every reference to it. Secrets retain references and
 binding attestations, not credential bytes; recording privacy gates stay closed.
@@ -223,7 +223,7 @@ including the terminal. It needs no independent random or sequence-generated id.
 |---|---|---|
 | OperationOpened | owner-manager TRANSACTION; fresh opening delivery, bounded slot available | exact opening, instance, enclosing contexts and pinned operation; no effect |
 | AttemptAdmitted(1) | manager TRANSACTION; operation opened, owner live | authorize the original request delivery without consuming it twice |
-| CallOpened(i) | ordinary OUTBOUND open; admitted attempt | Intent plus operation/attempt link; only then offer to Driver |
+| CallOpened(i) | ordinary OUTBOUND open; admitted attempt | CallOpen plus operation/attempt link; only then offer to Driver |
 | CallClosed(i) | ordinary winning OUTBOUND closure | exact outcome, logical closure time and any original retry timer arm |
 | AttemptHeld(i) | Connector TRANSACTION after closure, more attempts selected | consume that request cursor; emit the complete batch; retain manager disposition; no graph route |
 | AttemptConsumed(i), Advance(i+1) | one manager TRANSACTION; held batch and quiescence | consume exact batch once; retain next ordinal and original deadline |
@@ -413,7 +413,7 @@ symbols are the durable references:
 |---|---|
 | [`loop_protocol::Fact`](../../crates/rastok-core/src/journal/loop_protocol.rs) | Advance requires a CommandRef and state; share the recurrence kernel without fabricating either for Retry |
 | [`restore_call`](../../crates/rastok-core/src/runtime/vm/recovery/calls.rs) | compares effect and re-evaluates settings; replace those checks with original plan and pinned-operation authority for attempts |
-| [`CallRecord`](../../crates/rastok-core/src/journal.rs) | only Intent/status today; no closure time; Record::timer_schedule excludes OUTBOUND |
+| [`CallRecord`](../../crates/rastok-core/src/journal.rs) | only CallOpen/status today; no closure time; Record::timer_schedule excludes OUTBOUND |
 | [`TimerSchedule`](../../crates/rastok-core/src/journal/deadline.rs) | due must not precede the original arm; arm at closure, never at a later consumer |
 | [`CallSemantics`](../../crates/rastok-core/src/connector/call.rs) | visibility table exists; one-case frame cardinality must cover both HTTP terminal response cases |
 | [`stdlib`](../../crates/rastok/src/stdlib.rs) | effect present on all six sheets, Process service inherits the common sheet; File guarantee is already fixed |

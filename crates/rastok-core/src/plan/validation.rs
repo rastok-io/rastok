@@ -454,10 +454,10 @@ pub enum PlanValidationError {
     /// A reference to a connector port beyond the default trio. The
     /// RESOLVED table travels in the plan (the future needs it), but
     /// this machine's OutboundConnectorDriver seam does not carry the port yet —
-    /// `Intent`, the response protocol, and the outcome trigger all
+    /// `CallOpen`, the response protocol, and the outcome trigger all
     /// speak `in`/`out`/`err`. A plan wiring such a port is valid in
     /// shape and NOT executable faithfully, so it refuses here; the
-    /// restriction lifts when the port enters `Intent`.
+    /// restriction lifts when the port enters `CallOpen`.
     UnsupportedConnectorPort {
         /// The connector.
         node: node::Path,

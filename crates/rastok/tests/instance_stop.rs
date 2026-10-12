@@ -576,7 +576,7 @@ lab app {{
             })
             .collect();
         assert_eq!(calls.len(), 2, "repeated stop never starts an extra effect");
-        let call_instance = |call: &rastok::boundary::Intent| {
+        let call_instance = |call: &rastok::boundary::CallOpen| {
             run.records
                 .iter()
                 .find_map(|record| {

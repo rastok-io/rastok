@@ -1,5 +1,5 @@
 //! Retry policy is independently verifiable before execution. A forged
-//! guarantee is never supplied by an Intent.
+//! guarantee is never supplied by a CallOpen.
 
 #![allow(clippy::unwrap_used)]
 

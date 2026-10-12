@@ -15,7 +15,7 @@ this documentary follow-up.
 
 Use one package cutover, proposed **v19**, and one recording cutover, proposed
 **v3**, after their complete schema and independent validators are ready.
-Do not silently amend a v18 body or reinterpret a v2 Intent tuple. C2 must
+Do not silently amend a v18 body or reinterpret a v2 CallOpen tuple. C2 must
 land the complete declared representation, even where execution remains
 fail-closed until C3. A missing field discovered later returns to this inventory
 before blessing; it is not permission for an undocumented format movement.
@@ -28,11 +28,11 @@ before blessing; it is not permission for an undocumented format movement.
 | ConnectorSpec map | 1 ContractId, 2 effect, 3 behavior, 4 attributes, 6 roles, 7 exchange |
 | LoopSpec map | 1 fuel, 2 delay, 3 proof, 4 entry, 5 terminals, 6 resolved expiry target/type |
 | [`connector.rs`](../../crates/rastok-core/src/connector.rs) | process@2 job, process@3 service; File and four network Contracts @2 |
-| [`journal.rs`](../../crates/rastok-core/src/journal.rs) | three record species; OUTBOUND Call causal fields do not include Intent.effect |
+| [`journal.rs`](../../crates/rastok-core/src/journal.rs) | three record species; OUTBOUND Call causal fields do not include CallOpen.effect |
 | [`loop_protocol.rs`](../../crates/rastok-core/src/journal/loop_protocol.rs) | sparse key 55, r2 facts and derivation domains 0x14 / 0x15 / 0x06 |
 | [`timing.rs`](../../crates/rastok-core/src/journal/deadline.rs) | retained key 56, armed_at and ordered due arms; not part of the causal seal |
 | [`instance_stop.rs`](../../crates/rastok-core/src/journal/instance_stop.rs) | causal key 57 and command domain 0x23 |
-| [`recording/codec.rs`](../../crates/rastok/src/recording/codec.rs) | Intent tuple includes an effect word; Call tuple has only Intent and status |
+| [`recording/codec.rs`](../../crates/rastok/src/recording/codec.rs) | CallOpen tuple includes an effect word; Call tuple has only CallOpen and status |
 
 Existing lifecycle activation tags run through 10 (`Exit`); `Next=4` remains
 Loop's meaning. Saga timeout kind 4 is a different registry from Extension
@@ -85,7 +85,7 @@ Process job/HttpClient omission equals false; File read/replace remains fixed
 true. It is not a per-invocation expression. The plan's effective attribute
 and resolved guarantee must agree; the latter is not a second user choice.
 Original binding is required on recovery. No idempotence boolean is added to
-Intent or any retained attempt fact.
+CallOpen or any retained attempt fact.
 
 Retry settings are hashed once in a new sparse `rastok.retry.r1` semantic
 section, ordered by owner, using the canonical policy values and resolved
@@ -151,7 +151,7 @@ allowed only for an opened, never-admitted operation. A final Close cannot use 0
 
 `operation_pin` retains the original envelope reference, prepared bytes,
 resolved operation settings, optional partner key and original opening time
-needed by the Intent carrier. Its causal projection seals the reference,
+needed by the CallOpen carrier. Its causal projection seals the reference,
 prepared digest, canonical resolved setting values and key, not duplicate
 request bytes or a wall clock. The opening time is retention-only, supplied
 as an explicit logical input. Original owner/instance come from the ordinary
@@ -216,7 +216,7 @@ the fixture specifies the exact opening delivery and predecessor Call bytes.
   nanoseconds), mandatory on every winning outbound Call closure (response,
   timeout or abandonment), whether or not the Connector has Retry. It is
   absent on an open Call; a late discarded observation cannot replace it.
-  It is not the opening `Intent.logical_time`. Inbound Calls and Sessions do
+  It is not the opening `CallOpen.logical_time`. Inbound Calls and Sessions do
   not use this OUTBOUND-Call retention rule.
 - Extend **key 37** to accepting Retry OUTBOUND closures: the causal presence
   and reference of the original retry arm. Existing timer meaning/order stays.
@@ -242,7 +242,7 @@ measured: a signed i64's eight bytes are not a complete peak-memory estimate.
 ## 6. Recording and compatibility
 
 Diagnostic format v3 embeds the v19 plan and retains the complete new facts,
-pins, exact times and schedules. Remove the effect member from its Intent
+pins, exact times and schedules. Remove the effect member from its CallOpen
 tuple; do **not** insert an idempotence member in the vacated position. The
 new version owns the changed tuple arity. Extend Call/transaction retention
 with Retry packets and the closure schedule/time, using the same fact codec
@@ -258,7 +258,7 @@ compatibility claim. `replay` still starts no effect and executes no new
 eligible admission. An incomplete original plan or forged Contract binding
 refuses even if the Call carried an old idempotence word.
 
-`Intent.effect` never was a causal field on ordinary OUTBOUND maps. Its removal
+`CallOpen.effect` never was a causal field on ordinary OUTBOUND maps. Its removal
 therefore does not by itself justify changing their seals. The retained
 recording tuple *does* change. Prepared bytes, request key and Call identity
 remain separately checked; don't confuse Rust layout, retained codec, semantic

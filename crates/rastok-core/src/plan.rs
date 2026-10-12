@@ -859,7 +859,7 @@ pub struct ConnectorSpec {
     /// Cardinality and terminal lifecycle required by the contract.
     pub exchange: crate::connector::ConnectorExchange,
     /// Original plan-owned Call guarantee. Non-Call profiles have none.
-    /// It is never copied into an Intent or inferred from a partner key.
+    /// It is never copied into a CallOpen or inferred from a partner key.
     pub idempotent: Option<PlanConstant>,
     /// The declared behavior, likewise typed.
     pub behavior: node::Behavior,

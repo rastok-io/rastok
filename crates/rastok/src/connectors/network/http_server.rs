@@ -1,5 +1,5 @@
 use crate::boundary::{
-    Draft, HttpServerExit, InboundCallConnectorDriver, InboundCallEvent, InboundCallResponse,
+    Draft, HttpServerExit, InboundCallConnectorDriver, InboundCallObservation, InboundCallResponse,
     InboundCallResponseStart, InboundCallTimeout, InboundCallTimeoutStart, InboundConnectorDriver,
     InboundExchangeId, IngressAcceptance, IngressDecision, IngressEnvelopeProvenance,
     IngressProposal, IngressProposalHandle, IngressRejection, IngressSubmission,
@@ -223,7 +223,7 @@ enum ServerDecision {
 #[derive(Debug)]
 enum ServerEvent {
     Proposal(Box<LiveProposal>),
-    Terminal(InboundCallEvent),
+    Terminal(InboundCallObservation),
 }
 
 #[cfg(feature = "hosted-http3")]
@@ -288,7 +288,7 @@ struct HttpServer<'plan> {
     pending: VecDeque<LiveProposal>,
     retained: BTreeMap<crate::boundary::InboundCallId, RetainedResponse>,
     writing: BTreeSet<crate::boundary::InboundCallId>,
-    terminals: Vec<InboundCallEvent>,
+    terminals: Vec<InboundCallObservation>,
     #[cfg(test)]
     local_addresses: Vec<SocketAddr>,
 }
@@ -538,7 +538,7 @@ impl<'plan> HttpServer<'plan> {
                     };
                     if runtime
                         .emit(
-                            ServerEvent::Terminal(InboundCallEvent {
+                            ServerEvent::Terminal(InboundCallObservation {
                                 call_id: command.call_id,
                                 completion: crate::boundary::Completion::http_server_exit(
                                     terminal,
@@ -622,7 +622,7 @@ impl InboundConnectorDriver for HttpServer<'_> {
                 }
             }
             Err(ServerDecision::Accepted(call_id)) => {
-                self.terminals.push(InboundCallEvent {
+                self.terminals.push(InboundCallObservation {
                     call_id,
                     completion: crate::boundary::Completion::http_server_exit(
                         HttpServerExit::PeerDisconnected,
@@ -732,7 +732,7 @@ impl InboundCallConnectorDriver for HttpServer<'_> {
         self.start_control(timeout.call_id, route, command)
     }
 
-    fn events(&mut self) -> Vec<InboundCallEvent> {
+    fn events(&mut self) -> Vec<InboundCallObservation> {
         self.poll_events();
         self.terminals.sort_by_key(|event| event.call_id);
         std::mem::take(&mut self.terminals)
@@ -780,7 +780,7 @@ impl HttpServer<'_> {
         } else {
             HttpServerExit::PeerDisconnected
         };
-        self.terminals.push(InboundCallEvent {
+        self.terminals.push(InboundCallObservation {
             call_id: command.call_id,
             completion: crate::boundary::Completion::http_server_exit(terminal),
         });
@@ -1213,7 +1213,7 @@ async fn dispatch_http3_request(
         HttpServerMode::Ack => {
             let response =
                 response_with_headers(StatusCode::ACCEPTED, &request.route.response_headers);
-            let terminal = InboundCallEvent {
+            let terminal = InboundCallObservation {
                 call_id,
                 completion: crate::boundary::Completion::http_server_exit(
                     HttpServerExit::Completed { status: 202 },
@@ -1581,7 +1581,7 @@ async fn handle_request(
         Ok(ServerDecision::Accepted(call_id)) => match peer_response {
             None => {
                 let response = response_with_headers(StatusCode::ACCEPTED, &route.response_headers);
-                let event = ServerEvent::Terminal(InboundCallEvent {
+                let event = ServerEvent::Terminal(InboundCallObservation {
                     call_id,
                     completion: crate::boundary::Completion::http_server_exit(
                         HttpServerExit::Completed { status: 202 },
@@ -1896,7 +1896,7 @@ graph api : App {
         }
     }
 
-    fn wait_for_terminal(server: &mut HttpServer<'_>) -> InboundCallEvent {
+    fn wait_for_terminal(server: &mut HttpServer<'_>) -> InboundCallObservation {
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
             if let Some(event) = server.events().into_iter().next() {

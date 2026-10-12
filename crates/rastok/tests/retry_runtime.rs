@@ -53,7 +53,7 @@ fn checked(
 #[derive(Default)]
 struct World {
     preparations: usize,
-    starts: Vec<Intent>,
+    starts: Vec<CallOpen>,
     responses: Vec<Response>,
     cancellations: Vec<CallId>,
 }
@@ -68,7 +68,7 @@ impl CallConnectorDriver for World {
         self.preparations += 1;
         prepare_process_request(RequestCodec::Lines, data)
     }
-    fn start(&mut self, intent: &Intent, _: &rastok::envelope::Envelope) -> CallStart {
+    fn start(&mut self, intent: &CallOpen, _: &rastok::envelope::Envelope) -> CallStart {
         self.starts.push(intent.clone());
         CallStart::Started
     }

@@ -1210,12 +1210,12 @@ pub fn prepare_lines(data: &envelope::Data) -> Result<PreparedRequest, String> {
     Ok(PreparedRequest::seal(bytes))
 }
 
-/// Outbound-call intent: the canonical fields (`identity.md` §3, keys 27–30
-/// and 33) are journaled open before the effect executes; resolved settings
-/// remain execution material whose call-varying semantics must already be
-/// covered by the prepared-request digest.
+/// Description of an outbound Call opening. The canonical fields
+/// (`identity.md` §3, keys 27–30 and 33) are journaled before the effect
+/// executes; resolved settings remain execution material whose call-varying
+/// semantics must already be covered by the prepared-request digest.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Intent {
+pub struct CallOpen {
     /// The derived internal call identity.
     pub call_id: CallId,
     /// The envelope that opened the call — the cause.
@@ -1245,7 +1245,7 @@ pub struct Intent {
     pub logical_time: i64,
 }
 
-impl Intent {
+impl CallOpen {
     /// The boundary integrity seal over the exact prepared bytes.
     #[must_use]
     pub fn request_digest(&self) -> &[u8; 32] {
@@ -1253,9 +1253,9 @@ impl Intent {
     }
 }
 
-/// Journal-before-effect intent that opens one outbound session.
+/// Description of one outbound Session opening, journaled before the Driver acts.
 #[derive(Debug, Clone, PartialEq)]
-pub struct SessionOpenIntent {
+pub struct SessionOpen {
     /// Session identity derived from the remaining canonical fields.
     pub session_id: SessionId,
     /// Envelope whose delivery requested the opening.
@@ -1266,7 +1266,7 @@ pub struct SessionOpenIntent {
     pub prepared: PreparedRequest,
 }
 
-impl SessionOpenIntent {
+impl SessionOpen {
     /// The boundary integrity seal over the exact opening bytes.
     #[must_use]
     pub fn request_digest(&self) -> &[u8; 32] {
@@ -1274,13 +1274,13 @@ impl SessionOpenIntent {
     }
 }
 
-/// One graph-to-world message intent inside a committed session.
+/// Description of one graph-to-world message inside a committed Session.
 ///
-/// Like [`Intent`], the exact prepared bytes are journaled by digest before a
+/// Like [`CallOpen`], the exact prepared bytes are journaled by digest before a
 /// Driver may act. Unlike a Call, settling this write does not publish a
 /// graph-visible `exit`; only the enclosing session has a terminal exit.
 #[derive(Debug, Clone, PartialEq)]
-pub struct SessionWriteIntent {
+pub struct SessionWrite {
     /// Derived identity of this write obligation.
     pub write_ref: SessionWriteId,
     /// Logical session being addressed.
@@ -1293,7 +1293,7 @@ pub struct SessionWriteIntent {
     pub prepared: PreparedRequest,
 }
 
-impl SessionWriteIntent {
+impl SessionWrite {
     /// The boundary integrity seal over the exact message bytes.
     #[must_use]
     pub fn message_digest(&self) -> &[u8; 32] {
@@ -1710,7 +1710,7 @@ impl core::error::Error for DriverRouteError {}
 
 /// Judges a driver's completion against the calling connector's resolved
 /// contract before it may become a causal fact. The dispatcher only asks.
-pub trait CompletionGate {
+pub trait CompletionCheck {
     /// `Ok` to admit; `Err(reason)` to refuse the closure.
     ///
     /// # Errors
@@ -1719,23 +1719,23 @@ pub trait CompletionGate {
     fn admit(&self, connector: &node::Path, completion: &Completion) -> Result<(), String>;
 }
 
-/// The gate that admits everything — for worlds whose completions are
+/// Accepts every completion — for worlds whose completions are
 /// validated elsewhere, and for tests of the dispatch mechanics.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct OpenGate;
+pub struct AcceptAnyCompletion;
 
-impl CompletionGate for OpenGate {
+impl CompletionCheck for AcceptAnyCompletion {
     fn admit(&self, _: &node::Path, _: &Completion) -> Result<(), String> {
         Ok(())
     }
 }
 
-/// One routable boundary fact for the VM: which connector, which
-/// port, which cause. The VM owns what follows — the connector's
-/// transaction builds every output envelope under the emission recipe;
-/// the dispatcher never mints envelopes.
+/// A settled outbound Call completion awaiting its Connector transaction.
+///
+/// The Call closure is already journaled; this carrier adds no record or
+/// envelope. The VM builds and commits the output emissions.
 #[derive(Debug, Clone, PartialEq)]
-pub struct BoundaryEvent {
+pub struct BoundaryObservation {
     /// The settled call.
     pub call_id: CallId,
     /// The connector node that owns the coming transaction.
@@ -2000,9 +2000,9 @@ pub enum InstanceDeadline {
     Tumbling,
 }
 
-/// Boot, crash, or restart — supervision facts entering the run.
+/// Boot, crash, or restart — supervision observations entering the run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LifecycleEvent {
+pub enum LifecycleObservation {
     /// The process starts.
     Boot,
     /// The process dies mid-flight.
@@ -2031,11 +2031,11 @@ pub trait InboundConnectorDriver {
 
 /// One terminal observation for an admitted inbound Call.
 ///
-/// The Driver never commits this fact directly. The runtime correlates it,
+/// The Driver never commits this observation directly. The runtime correlates it,
 /// validates the typed completion and commits the Connector transaction; a
 /// duplicate or late observation cannot create a second `exit`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct InboundCallEvent {
+pub struct InboundCallObservation {
     /// Admitted root Call this observation terminates.
     pub call_id: InboundCallId,
     /// Ordinary ordered outputs with exactly one terminal `exit` last.
@@ -2112,7 +2112,7 @@ pub trait InboundCallConnectorDriver {
     fn start_timeout(&mut self, timeout: &InboundCallTimeout) -> InboundCallTimeoutStart;
 
     /// Terminal facts observed since the previous bounded drain.
-    fn events(&mut self) -> Vec<InboundCallEvent>;
+    fn events(&mut self) -> Vec<InboundCallObservation>;
 }
 
 /// The outbound world role. Its exchange view is categorical: a bound object
@@ -2180,7 +2180,7 @@ pub trait CallConnectorDriver {
     /// may leave it pending without starting an effect; the same intent is
     /// then offered again. The request envelope rides along because the
     /// intent seals only the digest of the request, not its bytes.
-    fn start(&mut self, intent: &Intent, request: &Envelope) -> CallStart;
+    fn start(&mut self, intent: &CallOpen, request: &Envelope) -> CallStart;
 
     /// The answers that arrived since the last drain.
     fn events(&mut self) -> Vec<Response>;
@@ -2201,7 +2201,7 @@ where
 
 /// One observation emitted by a Session Driver after a journaled action.
 #[derive(Debug, Clone, PartialEq)]
-pub enum SessionDriverEvent {
+pub enum SessionObservation {
     /// A journaled outbound opening established the logical session.
     Opened(SessionId),
     /// One journaled message write was accepted by the local protocol stack.
@@ -2243,7 +2243,7 @@ pub trait SessionConnectorDriver {
     ) -> Completion;
 
     /// Executes an already-journaled opening intent.
-    fn open_session(&mut self, intent: &SessionOpenIntent, request: &Envelope) -> SessionStart;
+    fn open_session(&mut self, intent: &SessionOpen, request: &Envelope) -> SessionStart;
 
     /// Frames one complete graph-to-world session message.
     fn prepare_session_write(
@@ -2255,7 +2255,7 @@ pub trait SessionConnectorDriver {
     ) -> RequestPreparation;
 
     /// Offers one already-journaled complete message to the protocol stack.
-    fn write_session(&mut self, intent: &SessionWriteIntent, message: &Envelope) -> SessionStart;
+    fn write_session(&mut self, intent: &SessionWrite, message: &Envelope) -> SessionStart;
 
     /// Requests protocol closure. Default: no local action is needed.
     fn close_session(&mut self, session: SessionId) -> SessionStart {
@@ -2287,7 +2287,7 @@ pub trait SessionConnectorDriver {
     }
 
     /// Session observations accumulated since the previous drain.
-    fn session_events(&mut self) -> Vec<SessionDriverEvent>;
+    fn session_events(&mut self) -> Vec<SessionObservation>;
 }
 
 /// Verified Session routing table consumed by the generic boundary pump.
@@ -2310,7 +2310,7 @@ pub trait SessionConnectorBindings {
     /// Executes an already-journaled opening intent.
     fn open_session(
         &mut self,
-        intent: &SessionOpenIntent,
+        intent: &SessionOpen,
         request: &Envelope,
     ) -> Result<SessionStart, DriverRouteError>;
 
@@ -2326,7 +2326,7 @@ pub trait SessionConnectorBindings {
     /// Offers one already-journaled write to the protocol stack.
     fn write_session(
         &mut self,
-        intent: &SessionWriteIntent,
+        intent: &SessionWrite,
         message: &Envelope,
     ) -> Result<SessionStart, DriverRouteError>;
 
@@ -2346,7 +2346,7 @@ pub trait SessionConnectorBindings {
     ) -> Result<(), DriverRouteError>;
 
     /// Collects Session observations from every bound Session family.
-    fn session_events(&mut self) -> Result<Vec<SessionDriverEvent>, DriverRouteError>;
+    fn session_events(&mut self) -> Result<Vec<SessionObservation>, DriverRouteError>;
 
     /// Notifies the owning Driver after the terminal transaction commits,
     /// then releases routing-table ownership. An already forgotten reference
@@ -2399,8 +2399,11 @@ pub trait OutboundConnectorBindings {
     /// # Errors
     ///
     /// The planned path has no stable outbound route.
-    fn start(&mut self, intent: &Intent, request: &Envelope)
-    -> Result<CallStart, DriverRouteError>;
+    fn start(
+        &mut self,
+        intent: &CallOpen,
+        request: &Envelope,
+    ) -> Result<CallStart, DriverRouteError>;
 
     /// Collects all answers since the previous round.
     ///
@@ -2433,7 +2436,7 @@ pub trait OutboundConnectorBindings {
     /// Offers one already-journaled Session opening.
     fn open_session(
         &mut self,
-        intent: &SessionOpenIntent,
+        intent: &SessionOpen,
         request: &Envelope,
     ) -> Result<SessionStart, DriverRouteError> {
         let _ = request;
@@ -2457,7 +2460,7 @@ pub trait OutboundConnectorBindings {
     /// Offers one already-journaled Session write.
     fn write_session(
         &mut self,
-        intent: &SessionWriteIntent,
+        intent: &SessionWrite,
         message: &Envelope,
     ) -> Result<SessionStart, DriverRouteError> {
         let _ = message;
@@ -2487,7 +2490,7 @@ pub trait OutboundConnectorBindings {
     }
 
     /// Collects Session observations from every bound family.
-    fn session_events(&mut self) -> Result<Vec<SessionDriverEvent>, DriverRouteError> {
+    fn session_events(&mut self) -> Result<Vec<SessionObservation>, DriverRouteError> {
         Ok(Vec::new())
     }
 
@@ -2538,7 +2541,7 @@ where
 
     fn start(
         &mut self,
-        intent: &Intent,
+        intent: &CallOpen,
         request: &Envelope,
     ) -> Result<CallStart, DriverRouteError> {
         Ok(CallConnectorDriver::start(self, intent, request))
@@ -2549,10 +2552,10 @@ where
     }
 }
 
-/// Supplies lifecycle events.
+/// Supplies lifecycle observations.
 pub trait Supervisor {
-    /// The next supervision fact, if one is pending.
-    fn next_event(&mut self) -> Option<LifecycleEvent>;
+    /// The next supervision observation, if one is pending.
+    fn next_event(&mut self) -> Option<LifecycleObservation>;
 }
 
 /// One settled pump round: what may enter the VM, and what may not —
@@ -2560,7 +2563,7 @@ pub trait Supervisor {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct PumpBatch {
     /// The won closures, routable to the VM.
-    pub events: Vec<BoundaryEvent>,
+    pub events: Vec<BoundaryObservation>,
     /// Answers that lost the close race — non-causal observations,
     /// invisible to the graph but never to the system.
     pub discarded: Vec<Response>,
@@ -2603,7 +2606,7 @@ impl core::error::Error for DispatchError {}
 /// take ownership of every journaled open call exactly once — journal-before-
 /// effect: the record always exists before the driver hears — and settles
 /// closures through the journal's close-once race into routable
-/// [`BoundaryEvent`]s. The VM owns everything after: the connector's
+/// [`BoundaryObservation`]s. The VM owns everything after: the connector's
 /// transaction builds the output envelopes; the dispatcher never
 /// mints one. Mocks replace the driver, never this bookkeeping.
 ///
@@ -2661,7 +2664,7 @@ impl Dispatcher {
         &mut self,
         journal: &mut dyn Journal,
         bindings: &mut B,
-        gate: &dyn CompletionGate,
+        gate: &dyn CompletionCheck,
         now: i64,
     ) -> Result<PumpBatch, DispatchError> {
         self.pump_with_timing(journal, bindings, gate, now, &mut |_, _| Ok(None))
@@ -2671,10 +2674,10 @@ impl Dispatcher {
         &mut self,
         journal: &mut dyn Journal,
         bindings: &mut B,
-        gate: &dyn CompletionGate,
+        gate: &dyn CompletionCheck,
         now: i64,
         timing: &mut impl FnMut(
-            &Intent,
+            &CallOpen,
             &Completion,
         ) -> Result<
             Option<alloc::boxed::Box<crate::journal::deadline::Deadlines>>,
@@ -2750,7 +2753,7 @@ impl Dispatcher {
             match verdict {
                 CloseVerdict::Won => {
                     self.started.remove(&response.call_id);
-                    settlement.batch.events.push(BoundaryEvent {
+                    settlement.batch.events.push(BoundaryObservation {
                         call_id: response.call_id,
                         connector_path: intent.connector_path.clone(),
                         emitting_id: intent.emitting_id,
@@ -2872,7 +2875,7 @@ mod tests {
     /// answers from a script.
     #[derive(Default)]
     struct Scripted {
-        started: Vec<(Intent, Envelope)>,
+        started: Vec<(CallOpen, Envelope)>,
         replies: Vec<Response>,
     }
 
@@ -2905,7 +2908,7 @@ mod tests {
             })
         }
 
-        fn start(&mut self, intent: &Intent, request: &Envelope) -> CallStart {
+        fn start(&mut self, intent: &CallOpen, request: &Envelope) -> CallStart {
             self.started.push((intent.clone(), request.clone()));
             CallStart::Started
         }
@@ -2943,7 +2946,11 @@ mod tests {
             Ok(())
         }
 
-        fn start(&mut self, intent: &Intent, _: &Envelope) -> Result<CallStart, DriverRouteError> {
+        fn start(
+            &mut self,
+            intent: &CallOpen,
+            _: &Envelope,
+        ) -> Result<CallStart, DriverRouteError> {
             self.attempts += 1;
             if self.refuse {
                 return Err(DriverRouteError::UnboundOutbound(
@@ -2961,7 +2968,7 @@ mod tests {
         }
     }
 
-    fn seeded_journal() -> (MemJournal, Intent) {
+    fn seeded_journal() -> (MemJournal, CallOpen) {
         let mut journal = MemJournal::new(GraphVersion(1));
         let committed = journal
             .append_ingress(IngressSubmission {
@@ -2980,7 +2987,7 @@ mod tests {
         let emitting_id = committed.envelope.meta().sys().id();
         let edge = String::from("shout.out>echo.in");
         let prepared = PreparedRequest::seal(b"salut\n".to_vec());
-        let intent = Intent {
+        let intent = CallOpen {
             call_id: ids::call_id(ids::delivery_id(&edge, emitting_id), prepared.digest()),
             emitting_id,
             edge,
@@ -3000,13 +3007,13 @@ mod tests {
         let mut driver = Scripted::default();
         let mut dispatcher = Dispatcher::new();
         dispatcher
-            .pump(&mut journal, &mut driver, &OpenGate, 0)
+            .pump(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
             .unwrap();
         assert_eq!(driver.started.len(), 1);
         assert_eq!(driver.started[0].0.call_id, intent.call_id);
         // A second pump never re-starts an already-started call.
         dispatcher
-            .pump(&mut journal, &mut driver, &OpenGate, 0)
+            .pump(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
             .unwrap();
         assert_eq!(driver.started.len(), 1);
     }
@@ -3022,13 +3029,13 @@ mod tests {
         let mut dispatcher = Dispatcher::new();
 
         assert!(matches!(
-            dispatcher.pump(&mut journal, &mut bindings, &OpenGate, 0),
+            dispatcher.pump(&mut journal, &mut bindings, &AcceptAnyCompletion, 0),
             Err(DispatchError::Driver(DriverRouteError::UnboundOutbound(_)))
         ));
         assert_eq!(bindings.attempts, 1);
         bindings.refuse = false;
         dispatcher
-            .pump(&mut journal, &mut bindings, &OpenGate, 0)
+            .pump(&mut journal, &mut bindings, &AcceptAnyCompletion, 0)
             .unwrap();
         assert_eq!(bindings.attempts, 2, "the open call was retried");
     }
@@ -3044,18 +3051,18 @@ mod tests {
         let mut dispatcher = Dispatcher::new();
 
         dispatcher
-            .pump(&mut journal, &mut bindings, &OpenGate, 0)
+            .pump(&mut journal, &mut bindings, &AcceptAnyCompletion, 0)
             .unwrap();
         assert_eq!(bindings.attempts, 1);
         assert_eq!(journal.open_calls().len(), 1);
 
         bindings.pending = false;
         dispatcher
-            .pump(&mut journal, &mut bindings, &OpenGate, 0)
+            .pump(&mut journal, &mut bindings, &AcceptAnyCompletion, 0)
             .unwrap();
         assert_eq!(bindings.attempts, 2, "capacity recovery retries the call");
         dispatcher
-            .pump(&mut journal, &mut bindings, &OpenGate, 0)
+            .pump(&mut journal, &mut bindings, &AcceptAnyCompletion, 0)
             .unwrap();
         assert_eq!(bindings.attempts, 2, "a started call is never duplicated");
     }
@@ -3068,7 +3075,7 @@ mod tests {
         // started; re-calls are the recovery fold's decision.
         let mut dispatcher = Dispatcher::resume(&journal);
         dispatcher
-            .pump(&mut journal, &mut driver, &OpenGate, 0)
+            .pump(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
             .unwrap();
         assert!(driver.started.is_empty());
     }
@@ -3079,7 +3086,7 @@ mod tests {
         let mut driver = Scripted::default();
         let mut dispatcher = Dispatcher::new();
         dispatcher
-            .pump(&mut journal, &mut driver, &OpenGate, 0)
+            .pump(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
             .unwrap();
         assert!(dispatcher.started.contains(&intent.call_id));
         journal
@@ -3087,7 +3094,7 @@ mod tests {
             .unwrap();
 
         dispatcher
-            .pump(&mut journal, &mut driver, &OpenGate, 0)
+            .pump(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
             .unwrap();
         assert!(dispatcher.started.is_empty());
     }
@@ -3098,7 +3105,7 @@ mod tests {
         let mut driver = Scripted::default();
         let mut dispatcher = Dispatcher::new();
         dispatcher
-            .pump(&mut journal, &mut driver, &OpenGate, 0)
+            .pump(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
             .unwrap();
         driver.replies = vec![
             Response {
@@ -3126,7 +3133,7 @@ mod tests {
             },
         ];
         let batch = dispatcher
-            .pump(&mut journal, &mut driver, &OpenGate, 0)
+            .pump(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
             .unwrap();
         assert_eq!(batch.events.len(), 1, "only the won closure feeds the VM");
         assert_eq!(batch.discarded.len(), 1, "the loser stays visible");
@@ -3155,7 +3162,7 @@ mod tests {
         let mut driver = Scripted::default();
         let mut dispatcher = Dispatcher::new();
         dispatcher
-            .pump(&mut journal, &mut driver, &OpenGate, 0)
+            .pump(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
             .unwrap();
         driver.replies = vec![Response {
             call_id: intent.call_id,
@@ -3169,7 +3176,7 @@ mod tests {
             ),
         }];
         let batch = dispatcher
-            .pump(&mut journal, &mut driver, &OpenGate, 0)
+            .pump(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
             .unwrap();
         assert_eq!(batch.events.len(), 1);
         let outputs = batch.events[0].completion.outputs();
@@ -3194,7 +3201,7 @@ mod tests {
             }),
         }];
         let batch = dispatcher
-            .pump(&mut journal, &mut driver, &OpenGate, 0)
+            .pump(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
             .unwrap();
         assert!(batch.events.is_empty());
         assert_eq!(batch.uncorrelated.len(), 1, "correlation faults surface");

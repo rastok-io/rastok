@@ -1,5 +1,5 @@
 use super::*;
-use crate::boundary::Intent;
+use crate::boundary::CallOpen;
 use crate::connector::{
     ConnectorExchange, ConnectorRoles, PROCESS_CONNECTOR_ID, outbound_call_semantics,
 };
@@ -167,14 +167,14 @@ impl Fixture {
         fold
     }
 
-    fn intent(&self, fold: &Fold) -> Intent {
+    fn intent(&self, fold: &Fold) -> CallOpen {
         let state = fold.operation(self.operation).unwrap();
         let edge = if state.ordinal == 1 {
             "App.in -> pay.in".into()
         } else {
             admission_edge(self.operation, &self.entry)
         };
-        Intent {
+        CallOpen {
             call_id: ids::call_id(state.delivery, self.pin.prepared.digest()),
             emitting_id: state.envelope.meta().sys().id(),
             edge,
@@ -193,7 +193,7 @@ impl Fixture {
         case: &str,
         at: i64,
         stopping: bool,
-    ) -> (Intent, Vec<Emission>, Batch) {
+    ) -> (CallOpen, Vec<Emission>, Batch) {
         let intent = self.intent(fold);
         fold.open_call(self.attempt(ordinal), &intent).unwrap();
         if stopping {
@@ -984,8 +984,8 @@ fn each_algebra_prefix_reconstructs_without_a_saved_manager_or_driver() {
     #[derive(Clone)]
     enum Retained {
         Packet(Packet, i64),
-        Open(Intent, AttemptId),
-        Settle(Intent, AttemptId, String, i64, Option<Deadlines>),
+        Open(CallOpen, AttemptId),
+        Settle(CallOpen, AttemptId, String, i64, Option<Deadlines>),
     }
     fn apply(f: &Fixture, fold: &mut Fold, fact: &Retained) {
         match fact {

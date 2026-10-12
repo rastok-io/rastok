@@ -311,7 +311,7 @@ fn read_completion(value: &Cbor) -> Result<Completion, Error> {
         .collect::<Result<Vec<_>, Error>>()?;
     Completion::try_new(outputs).map_err(|_| Error::Invalid("Call completion"))
 }
-fn intent(value: &Intent) -> Cbor {
+fn intent(value: &CallOpen) -> Cbor {
     list([
         id(value.call_id.id()),
         id(value.emitting_id),
@@ -328,7 +328,7 @@ fn intent(value: &Intent) -> Cbor {
         integer(value.logical_time),
     ])
 }
-fn read_intent(value: &Cbor) -> Result<Intent, Error> {
+fn read_intent(value: &Cbor) -> Result<CallOpen, Error> {
     let [call, emitting, edge, path, prepared, key, settings, at] = array(value)?;
     let mut resolved_settings = BTreeMap::new();
     for setting in items(settings)? {
@@ -343,7 +343,7 @@ fn read_intent(value: &Cbor) -> Result<Intent, Error> {
             return Err(Error::Invalid("duplicate resolved setting"));
         }
     }
-    Ok(Intent {
+    Ok(CallOpen {
         call_id: CallId::new(read_id(call)?),
         emitting_id: read_id(emitting)?,
         edge: text(edge)?.to_owned(),
@@ -884,17 +884,15 @@ impl Decoder {
         let connector_path = read_path(path)?;
         let session_id = SessionId::new(read_id(reference)?);
         let status = match items(status)? {
-            [Cbor::Uint(1), emitting, prepared] => {
-                journal::SessionStatus::Opening(SessionOpenIntent {
-                    session_id,
-                    connector_path: connector_path.clone(),
-                    emitting_id: read_id(emitting)?,
-                    prepared: PreparedRequest::seal(bytes(prepared)?.to_vec()),
-                })
-            }
+            [Cbor::Uint(1), emitting, prepared] => journal::SessionStatus::Opening(SessionOpen {
+                session_id,
+                connector_path: connector_path.clone(),
+                emitting_id: read_id(emitting)?,
+                prepared: PreparedRequest::seal(bytes(prepared)?.to_vec()),
+            }),
             [Cbor::Uint(2)] => journal::SessionStatus::Opened,
             [Cbor::Uint(3), reference, emitting, prepared] => {
-                journal::SessionStatus::WriteOpen(SessionWriteIntent {
+                journal::SessionStatus::WriteOpen(SessionWrite {
                     session_id,
                     connector_path: connector_path.clone(),
                     write_ref: SessionWriteId::new(read_id(reference)?),

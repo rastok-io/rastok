@@ -193,7 +193,7 @@ the canonical retained echo record rows hash to
 `e0688e724608dd1d9686e86d09148da3fdc3caaf40eeca32d26c9010af5234fa`
 before and after the move. That is a retention regression, not a causal
 golden or a recording-file checksum. The declared v19/v3 cutover will change
-the Call/Intent row shape; that future change must explain this pin too.
+the Call/CallOpen row shape; that future change must explain this pin too.
 
 Focused evidence at this point: twelve protocol tests and five codec tests
 pass, including malformed packets, exact effect preparation, original
@@ -216,7 +216,7 @@ metadata and leaves the metadata value/evaluator semantics unchanged.
 - Carry checked Retry settings and plan-owned idempotence into complete HIR
   and independently validated transport; `W-LOOP-REPEAT` and its
   positive/negative/sibling/canonical-order tests remain required.
-- Remove global effect and Intent.effect without duplicating the guarantee.
+- Remove global effect and CallOpen.effect without duplicating the guarantee.
 - Carry all C1 packet, reference, closure-time and recording changes in the
   single cutover, with independent hostile validation.
 - Keep named execution refusals for unfinished C3 paths; no check-green
@@ -227,7 +227,7 @@ C3. Example/golden/UI migration and final qualification remain C4.
 
 ## 7. v19/v3 candidate — not blessed
 
-The candidate now removes `Effect` from core and `Intent`, moves the exact
+The candidate now removes `Effect` from core and `CallOpen`, moves the exact
 Contract majors declared in C1, and carries the original plan-constant
 idempotence guarantee under Connector key 8. Non-Call profiles have no such
 guarantee. The independent validator re-evaluates its closed expression and
@@ -243,7 +243,7 @@ staging until C3, not executable Retry support.
 Call closures retain their original logical instant uniformly, including
 timeout and abandonment. Openings cannot carry it; missing/backdated clocks,
 changed attempt context, and an arm for the wrong next admission refuse.
-Recovery reads the retained closure instant. Recording v3 drops the old Intent
+Recovery reads the retained closure instant. Recording v3 drops the old CallOpen
 effect word and retains these fields; v2 is not an alias. The causal projection
 adds only sparse Retry context/facts (58) and arm identity (37), not the
 retention clock/deadline (59/56). Manager/producer carrier checks reject empty

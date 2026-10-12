@@ -1,5 +1,5 @@
 use crate::boundary::{
-    CallConnectorDriver, CallId, CallStart, Completion, HttpClientExit, Intent,
+    CallConnectorDriver, CallId, CallOpen, CallStart, Completion, HttpClientExit,
     OutboundConnectorDriver, RequestPreparation, Response, SchedulerCompletion,
 };
 use crate::connectors::http_client::{
@@ -543,7 +543,7 @@ impl CallConnectorDriver for HttpClient<'_> {
         let _ = self.engine.try_control(ClientControl(*call_id));
     }
 
-    fn start(&mut self, intent: &Intent, _request: &Envelope) -> CallStart {
+    fn start(&mut self, intent: &CallOpen, _request: &Envelope) -> CallStart {
         let Some(mut request) = decode_request(&intent.prepared) else {
             self.immediate(intent.call_id, HttpClientExit::ProtocolFailed);
             return CallStart::Started;

@@ -146,7 +146,7 @@ impl CallSemantics {
     }
 
     /// Validates a canonical Retry selection against this exact Call profile.
-    /// The caller resolves the plan-owned guarantee; neither an Intent nor a
+    /// The caller resolves the plan-owned guarantee; neither a CallOpen nor a
     /// Driver can supply it. An empty selection never requests repetition.
     ///
     /// # Errors

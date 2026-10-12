@@ -10,8 +10,8 @@
 //! docs/architecture/human-review-v20-identity.md.
 
 use rastok::boundary::{
-    CallConnectorDriver, CallStart, Completion, Draft, IngressEnvelopeProvenance,
-    IngressSubmission, Intent, ProcessExit, RequestPreparation, Response, SchedulerCompletion,
+    CallConnectorDriver, CallOpen, CallStart, Completion, Draft, IngressEnvelopeProvenance,
+    IngressSubmission, ProcessExit, RequestPreparation, Response, SchedulerCompletion,
     SubmissionSequence,
 };
 use rastok::compiler::compile;
@@ -71,7 +71,7 @@ impl CallConnectorDriver for EchoWorld {
         rastok::boundary::process_scheduler_completion(completion)
     }
 
-    fn start(&mut self, intent: &Intent, _request: &Envelope) -> CallStart {
+    fn start(&mut self, intent: &CallOpen, _request: &Envelope) -> CallStart {
         self.answers.push(Response {
             call_id: intent.call_id,
             completion: Completion::process(

@@ -38,13 +38,13 @@ impl Vm<'_> {
         &self,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
-    ) -> Option<Intent> {
+    ) -> Option<CallOpen> {
         let attempt = self.retry_attempt(instance, delivery)?;
         let state = self
             .retry_manager
             .as_deref()?
             .operation(attempt.operation)?;
-        Some(Intent {
+        Some(CallOpen {
             call_id: ids::call_id(state.delivery, state.pin.prepared.digest()),
             emitting_id: delivery.envelope.meta().sys().id(),
             edge: delivery.edge.clone(),
@@ -63,7 +63,7 @@ impl Vm<'_> {
         slot: Slot,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
-        intent: &Intent,
+        intent: &CallOpen,
     ) -> Result<bool, VmFault> {
         let node = &self.plan.nodes[slot.index()];
         let Some(spec) = self.plan.owners[node.owner.index()].retry_spec() else {
@@ -151,7 +151,7 @@ impl Vm<'_> {
     pub(super) fn retry_call_opened(
         &mut self,
         attempt: Option<AttemptId>,
-        intent: &Intent,
+        intent: &CallOpen,
     ) -> Result<(), VmFault> {
         if let Some(attempt) = attempt {
             self.retry_manager
@@ -665,7 +665,7 @@ pub(super) fn policy(
 
 pub(super) fn closure_schedule(
     fold: Option<&Fold>,
-    intent: &Intent,
+    intent: &CallOpen,
     completion: &Completion,
     now: i64,
 ) -> Result<Option<Box<Deadlines>>, protocol::Error> {

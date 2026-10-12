@@ -5,7 +5,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::boundary::{
-    Dispatcher, Draft, IngressEnvelopeProvenance, IngressSubmission, OpenGate, SubmissionSequence,
+    AcceptAnyCompletion, Dispatcher, Draft, IngressEnvelopeProvenance, IngressSubmission,
+    SubmissionSequence,
 };
 use rastok::compiler::compile;
 use rastok::connectors::{DriverRegistry, FileFactory, RuntimeBindings};
@@ -347,7 +348,7 @@ fn replay_of_an_open_replace_never_reexecutes_the_file_effect() {
     let mut bindings = RuntimeBindings::try_new(&plan, &registry).expect("File rebinds");
     for _ in 0..3 {
         let batch = resumed
-            .pump(&mut journal, &mut bindings, &OpenGate, 0)
+            .pump(&mut journal, &mut bindings, &AcceptAnyCompletion, 0)
             .expect("resume is a pure journal fold");
         assert!(batch.events.is_empty());
         std::thread::sleep(Duration::from_millis(5));

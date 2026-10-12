@@ -19,9 +19,8 @@
 //! [`identity.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/identity.md
 
 use crate::boundary::{
-    CallId, Completion, InboundCallId, InboundSession, IngressEnvelopeProvenance,
-    IngressSubmission, Intent, SessionId, SessionOpenIntent, SessionWriteId, SessionWriteIntent,
-    SubmissionSequence,
+    CallId, CallOpen, Completion, InboundCallId, InboundSession, IngressEnvelopeProvenance,
+    IngressSubmission, SessionId, SessionOpen, SessionWrite, SessionWriteId, SubmissionSequence,
 };
 use crate::envelope::{Envelope, Id, IdKind, Meta, MetaSys};
 use crate::instance;
@@ -795,7 +794,7 @@ pub struct CallRecord {
     /// Original closure-based recurrence deadline (unsealed 41, causal presence 24).
     pub deadlines: Option<Box<deadline::Deadlines>>,
     /// The canonical call fields.
-    pub intent: Intent,
+    pub intent: CallOpen,
     /// Which fact this record states.
     pub status: CallStatus,
 }
@@ -815,11 +814,11 @@ pub struct SessionRecord {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SessionStatus {
     /// Journal-before-effect opening intent for a client-like session.
-    Opening(SessionOpenIntent),
+    Opening(SessionOpen),
     /// The opening effect succeeded and messages may flow.
     Opened,
     /// One graph-to-world message became an open write obligation.
-    WriteOpen(SessionWriteIntent),
+    WriteOpen(SessionWrite),
     /// The Driver locally accepted the message bytes.
     WriteSettled(SessionWriteId),
     /// Recovery cannot prove the message's external visibility; it must not
@@ -1353,7 +1352,7 @@ pub trait Journal {
     /// the intent's own canonical fields.
     fn open_egress(
         &mut self,
-        intent: Intent,
+        intent: CallOpen,
         attempt: Option<retry_protocol::AttemptId>,
     ) -> Result<(), Error>;
 
@@ -1362,7 +1361,7 @@ pub trait Journal {
     /// # Errors
     ///
     /// A corrupt or duplicate session reference.
-    fn open_outbound_session(&mut self, intent: SessionOpenIntent) -> Result<(), Error>;
+    fn open_outbound_session(&mut self, intent: SessionOpen) -> Result<(), Error>;
 
     /// Confirms that one outbound opening established a live session.
     ///
@@ -1376,7 +1375,7 @@ pub trait Journal {
     /// # Errors
     ///
     /// The session is unavailable or the write identity is corrupt/duplicate.
-    fn open_session_write(&mut self, intent: SessionWriteIntent) -> Result<(), Error>;
+    fn open_session_write(&mut self, intent: SessionWrite) -> Result<(), Error>;
 
     /// Settles one local session write obligation. `abandoned` means recovery
     /// cannot prove external visibility and therefore must not replay it.
@@ -1416,11 +1415,11 @@ pub trait Journal {
     fn find_envelope(&self, id: Id) -> Option<Envelope>;
 
     /// The intent of a journaled call, settled or not.
-    fn find_call(&self, call_id: &CallId) -> Option<Intent>;
+    fn find_call(&self, call_id: &CallId) -> Option<CallOpen>;
 
     /// The calls whose open fact has no closure fact yet, in open
     /// order.
-    fn open_calls(&self) -> Vec<Intent>;
+    fn open_calls(&self) -> Vec<CallOpen>;
 
     /// Admitted inbound Calls whose terminal Connector transaction has not
     /// committed, in canonical reference order.
@@ -1430,7 +1429,7 @@ pub trait Journal {
     fn live_sessions(&self) -> Vec<SessionId>;
 
     /// Session message writes whose open fact has no settlement fact.
-    fn open_session_writes(&self) -> Vec<SessionWriteIntent>;
+    fn open_session_writes(&self) -> Vec<SessionWrite>;
 }
 
 /// The deliberately simple, linear M1 in-memory journal. It preserves the
@@ -2311,7 +2310,7 @@ impl Journal for MemJournal {
 
     fn open_egress(
         &mut self,
-        intent: Intent,
+        intent: CallOpen,
         attempt: Option<retry_protocol::AttemptId>,
     ) -> Result<(), Error> {
         // The autonomy check: the call identity must recompute from
@@ -2344,7 +2343,7 @@ impl Journal for MemJournal {
         Ok(())
     }
 
-    fn open_outbound_session(&mut self, intent: SessionOpenIntent) -> Result<(), Error> {
+    fn open_outbound_session(&mut self, intent: SessionOpen) -> Result<(), Error> {
         let derived = ids::outbound_session_id(
             &intent.connector_path,
             intent.emitting_id,
@@ -2398,7 +2397,7 @@ impl Journal for MemJournal {
         Ok(CloseVerdict::Won)
     }
 
-    fn open_session_write(&mut self, intent: SessionWriteIntent) -> Result<(), Error> {
+    fn open_session_write(&mut self, intent: SessionWrite) -> Result<(), Error> {
         let derived = ids::session_write_id(
             intent.session_id,
             intent.emitting_id,
@@ -2543,7 +2542,7 @@ impl Journal for MemJournal {
         recorded_envelope(&self.records, id).cloned()
     }
 
-    fn find_call(&self, call_id: &CallId) -> Option<Intent> {
+    fn find_call(&self, call_id: &CallId) -> Option<CallOpen> {
         self.records.iter().find_map(|record| match record {
             Record::Egress(EgressRecord::Call(outbound)) if outbound.intent.call_id == *call_id => {
                 Some(outbound.intent.clone())
@@ -2552,8 +2551,8 @@ impl Journal for MemJournal {
         })
     }
 
-    fn open_calls(&self) -> Vec<Intent> {
-        let mut open: Vec<Intent> = Vec::new();
+    fn open_calls(&self) -> Vec<CallOpen> {
+        let mut open: Vec<CallOpen> = Vec::new();
         for record in &self.records {
             let Record::Egress(EgressRecord::Call(outbound)) = record else {
                 continue;
@@ -2589,7 +2588,7 @@ impl Journal for MemJournal {
             .collect()
     }
 
-    fn open_session_writes(&self) -> Vec<SessionWriteIntent> {
+    fn open_session_writes(&self) -> Vec<SessionWrite> {
         let open: BTreeSet<_> = self
             .sessions
             .values()
@@ -2668,12 +2667,12 @@ mod tests {
         )
     }
 
-    fn intent(connector: &str, digest: u8) -> Intent {
+    fn intent(connector: &str, digest: u8) -> CallOpen {
         let connector_path = node::Path::new([connector]).unwrap();
         let emitting_id = Id::derive(crate::envelope::IdKind::Emission, &[b"cause"]);
         let edge = alloc::format!("shout.out>{connector}.in");
         let prepared = crate::boundary::PreparedRequest::seal(vec![digest; 4]);
-        Intent {
+        CallOpen {
             call_id: ids::call_id(ids::delivery_id(&edge, emitting_id), prepared.digest()),
             emitting_id,
             edge,
@@ -2970,14 +2969,14 @@ mod tests {
         }
     }
 
-    fn session_open(connector: &str, digest: u8) -> SessionOpenIntent {
+    fn session_open(connector: &str, digest: u8) -> SessionOpen {
         let connector_path = node::Path::new([connector]).unwrap();
         let emitting_id = Id::derive(
             crate::envelope::IdKind::Emission,
             &[b"session-cause", &[digest]],
         );
         let prepared = crate::boundary::PreparedRequest::seal(vec![digest; 4]);
-        SessionOpenIntent {
+        SessionOpen {
             session_id: ids::outbound_session_id(&connector_path, emitting_id, prepared.digest()),
             emitting_id,
             connector_path,
@@ -2985,14 +2984,14 @@ mod tests {
         }
     }
 
-    fn session_write(session_id: SessionId, connector: &str, digest: u8) -> SessionWriteIntent {
+    fn session_write(session_id: SessionId, connector: &str, digest: u8) -> SessionWrite {
         let connector_path = node::Path::new([connector]).unwrap();
         let emitting_id = Id::derive(
             crate::envelope::IdKind::Emission,
             &[b"message-cause", &[digest]],
         );
         let prepared = crate::boundary::PreparedRequest::seal(vec![digest; 3]);
-        SessionWriteIntent {
+        SessionWrite {
             write_ref: ids::session_write_id(session_id, emitting_id, prepared.digest()),
             session_id,
             emitting_id,
@@ -3206,7 +3205,7 @@ mod tests {
         );
         journal
             .open_egress(
-                Intent {
+                CallOpen {
                     call_id,
                     emitting_id: inbound.envelope.meta().sys().id(),
                     edge,
@@ -3230,7 +3229,7 @@ mod tests {
             prepared.digest(),
         );
         journal
-            .open_outbound_session(SessionOpenIntent {
+            .open_outbound_session(SessionOpen {
                 session_id,
                 emitting_id: inbound.envelope.meta().sys().id(),
                 connector_path: connector_path.clone(),
@@ -3247,7 +3246,7 @@ mod tests {
             prepared.digest(),
         );
         journal
-            .open_session_write(SessionWriteIntent {
+            .open_session_write(SessionWrite {
                 write_ref,
                 session_id,
                 emitting_id: inbound.envelope.meta().sys().id(),

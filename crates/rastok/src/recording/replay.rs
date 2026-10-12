@@ -58,7 +58,7 @@ impl OutboundConnectorBindings for Contracts {
     fn cancel(&mut self, connector: &node::Path, _: &CallId) -> Result<(), DriverRouteError> {
         Err(DriverRouteError::UnboundOutbound(connector.clone()))
     }
-    fn start(&mut self, intent: &Intent, _: &Envelope) -> Result<CallStart, DriverRouteError> {
+    fn start(&mut self, intent: &CallOpen, _: &Envelope) -> Result<CallStart, DriverRouteError> {
         Err(DriverRouteError::UnboundOutbound(
             intent.connector_path.clone(),
         ))

@@ -10,9 +10,10 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use crate::boundary::{
-    Completion, HttpServerExit, InboundCallConnectorDriver, InboundCallEvent, InboundCallResponse,
-    InboundCallResponseStart, InboundCallTimeout, InboundCallTimeoutStart, InboundConnectorDriver,
-    InboundExchangeId, IngressDecision, IngressProposal, IngressProposalHandle, IngressSubmission,
+    Completion, HttpServerExit, InboundCallConnectorDriver, InboundCallObservation,
+    InboundCallResponse, InboundCallResponseStart, InboundCallTimeout, InboundCallTimeoutStart,
+    InboundConnectorDriver, InboundExchangeId, IngressDecision, IngressProposal,
+    IngressProposalHandle, IngressSubmission,
 };
 use crate::connector::{ConnectorRoles, ContractId};
 use crate::plan::ValidatedExecutionPlan;
@@ -256,7 +257,7 @@ pub(crate) fn bind_routes(
 #[derive(Debug, Default)]
 pub(crate) struct HttpServerLabInput {
     pending: Option<IngressProposal>,
-    terminal: Option<InboundCallEvent>,
+    terminal: Option<InboundCallObservation>,
     fault: Option<String>,
 }
 
@@ -315,7 +316,7 @@ impl InboundConnectorDriver for HttpServerLabDriver {
                 Some(InboundExchangeId::Call(call_id)) if input.terminal.is_none() => {
                     // A fixture scripts a decoded request and successful fixed
                     // ACK. Only the accepting commit supplies its Call identity.
-                    input.terminal = Some(InboundCallEvent {
+                    input.terminal = Some(InboundCallObservation {
                         call_id,
                         completion: Completion::http_server_exit(HttpServerExit::Completed {
                             status: 202,
@@ -345,7 +346,7 @@ impl InboundCallConnectorDriver for HttpServerLabDriver {
         InboundCallTimeoutStart::Pending
     }
 
-    fn events(&mut self) -> Vec<InboundCallEvent> {
+    fn events(&mut self) -> Vec<InboundCallObservation> {
         self.input
             .borrow_mut()
             .terminal

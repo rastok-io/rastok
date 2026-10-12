@@ -8,7 +8,7 @@
 //! battery itself bites.
 
 use rastok::boundary::{
-    CallConnectorDriver, CallStart, Completion, Intent, OutboundConnectorDriver, PortOutput,
+    CallConnectorDriver, CallOpen, CallStart, Completion, OutboundConnectorDriver, PortOutput,
     ProcessExit, RequestPreparation, Response, SchedulerCompletion,
 };
 use rastok::conformance::{
@@ -292,7 +292,7 @@ impl CallConnectorDriver for Liar {
         rastok::boundary::process_scheduler_completion(completion)
     }
 
-    fn start(&mut self, intent: &Intent, _request: &Envelope) -> CallStart {
+    fn start(&mut self, intent: &CallOpen, _request: &Envelope) -> CallStart {
         self.pending.push(Response {
             call_id: intent.call_id,
             completion: Completion::try_new(vec![PortOutput {
@@ -405,7 +405,7 @@ impl CallConnectorDriver for Swapper {
         rastok::boundary::process_scheduler_completion(completion)
     }
 
-    fn start(&mut self, intent: &Intent, _request: &Envelope) -> CallStart {
+    fn start(&mut self, intent: &CallOpen, _request: &Envelope) -> CallStart {
         let framed = String::from_utf8_lossy(intent.prepared.bytes());
         let echoed = framed.strip_suffix('\n').unwrap_or(&framed).to_owned();
         self.pending.push(Response {

@@ -185,7 +185,7 @@ struct Service {
     bindings: ProcessRequestBindings,
     resources: BTreeMap<SessionId, Resource>,
     retiring: Vec<std::thread::JoinHandle<()>>,
-    events: Vec<SessionDriverEvent>,
+    events: Vec<SessionObservation>,
     proposal: Option<IngressProposal>,
     next_proposal: u64,
 }
@@ -250,7 +250,7 @@ impl SessionConnectorDriver for Service {
     ) -> RequestPreparation {
         prepare(&self.bindings, connector, data, settings, false)
     }
-    fn open_session(&mut self, intent: &SessionOpenIntent, _: &Envelope) -> SessionStart {
+    fn open_session(&mut self, intent: &SessionOpen, _: &Envelope) -> SessionStart {
         if self.resources.contains_key(&intent.session_id) {
             return SessionStart::Started;
         }
@@ -261,7 +261,7 @@ impl SessionConnectorDriver for Service {
         let opening: Opening = match serde_json::from_slice(intent.prepared.bytes()) {
             Ok(opening) => opening,
             Err(error) => {
-                self.events.push(SessionDriverEvent::Exited {
+                self.events.push(SessionObservation::Exited {
                     session: intent.session_id,
                     exit: failure(ProcessFailure::SpawnFailed {
                         message: error.to_string(),
@@ -291,7 +291,7 @@ impl SessionConnectorDriver for Service {
                     },
                 );
             }
-            Err(error) => self.events.push(SessionDriverEvent::Exited {
+            Err(error) => self.events.push(SessionObservation::Exited {
                 session: intent.session_id,
                 exit: failure(ProcessFailure::SpawnFailed {
                     message: error.to_string(),
@@ -300,7 +300,7 @@ impl SessionConnectorDriver for Service {
         }
         SessionStart::Started
     }
-    fn write_session(&mut self, intent: &SessionWriteIntent, _: &Envelope) -> SessionStart {
+    fn write_session(&mut self, intent: &SessionWrite, _: &Envelope) -> SessionStart {
         let Some(resource) = self.resources.get_mut(&intent.session_id) else {
             return SessionStart::Pending;
         };
@@ -339,12 +339,12 @@ impl SessionConnectorDriver for Service {
             self.proposal = None;
         }
         self.events.retain(|event| match event {
-            SessionDriverEvent::Opened(s)
-            | SessionDriverEvent::WriteSettled { session: s, .. }
-            | SessionDriverEvent::Exited { session: s, .. } => *s != reference,
+            SessionObservation::Opened(s)
+            | SessionObservation::WriteSettled { session: s, .. }
+            | SessionObservation::Exited { session: s, .. } => *s != reference,
         });
     }
-    fn session_events(&mut self) -> Vec<SessionDriverEvent> {
+    fn session_events(&mut self) -> Vec<SessionObservation> {
         self.poll();
         std::mem::take(&mut self.events)
     }
@@ -372,13 +372,13 @@ impl Service {
             }
             for event in resource.events.try_iter().take(FRAME_SLOTS) {
                 match event {
-                    Event::Opened => self.events.push(SessionDriverEvent::Opened(*reference)),
-                    Event::Written(write) => self.events.push(SessionDriverEvent::WriteSettled {
+                    Event::Opened => self.events.push(SessionObservation::Opened(*reference)),
+                    Event::Written(write) => self.events.push(SessionObservation::WriteSettled {
                         session: *reference,
                         write,
                     }),
                     Event::Exit(exit) => {
-                        self.events.push(SessionDriverEvent::Exited {
+                        self.events.push(SessionObservation::Exited {
                             session: *reference,
                             exit,
                         });
@@ -405,7 +405,7 @@ impl InboundConnectorDriver for Service {
             // otherwise admission correctly rejects an unopened Session.
             if self.events.iter().any(|event| {
                 matches!(event,
-                SessionDriverEvent::Opened(opening) if opening == reference)
+                SessionObservation::Opened(opening) if opening == reference)
             }) {
                 continue;
             }
@@ -824,7 +824,7 @@ mod tests {
         );
         assert_eq!(
             service.session_events(),
-            vec![SessionDriverEvent::Opened(reference)]
+            vec![SessionObservation::Opened(reference)]
         );
         assert!(
             service.proposal().is_some(),

@@ -8,8 +8,8 @@ use crate::boundary::{
     Draft, InboundConnectorDriver, InboundExchangeId, InboundSession, IngressAcceptance,
     IngressDecision, IngressEnvelopeProvenance, IngressProposal, IngressProposalHandle,
     IngressSubmission, OutboundConnectorDriver, PortOutput, RequestPreparation,
-    SchedulerCompletion, SessionConnectorDriver, SessionDriverEvent, SessionId, SessionOpenIntent,
-    SessionStart, SessionWriteIntent, SubmissionSequence, WebSocketExit,
+    SchedulerCompletion, SessionConnectorDriver, SessionId, SessionObservation, SessionOpen,
+    SessionStart, SessionWrite, SubmissionSequence, WebSocketExit,
 };
 use crate::connectors::network::pump::{
     EngineInput, EngineLimits, EventPoll, EventReservation, EventSender, HostedNetworkEngine,
@@ -208,12 +208,12 @@ impl crate::connectors::ConnectorDriverFactory for WebSocketServerFactory {
 #[derive(Debug)]
 enum Work {
     Open {
-        intent: SessionOpenIntent,
+        intent: SessionOpen,
         opening: Box<WebSocketClientOpening>,
         binding: WebSocketPlanBinding,
     },
     Write {
-        intent: SessionWriteIntent,
+        intent: SessionWrite,
         message: WebSocketMessage,
     },
 }
@@ -234,14 +234,14 @@ enum Control {
 
 #[derive(Debug)]
 enum ActorCommand {
-    Write(SessionWriteIntent, WebSocketMessage),
+    Write(SessionWrite, WebSocketMessage),
     Close,
 }
 
 #[derive(Debug)]
 enum DriverEvent {
     Proposal(Box<LiveProposal>),
-    Session(SessionDriverEvent),
+    Session(SessionObservation),
 }
 
 #[derive(Debug)]
@@ -308,7 +308,7 @@ struct HostedWebSocket<'plan> {
     plans: BTreeMap<crate::node::Path, WebSocketPlanBinding>,
     engine: HostedNetworkEngine<Work, Control, DriverEvent>,
     pending: VecDeque<LiveProposal>,
-    session_events: Vec<SessionDriverEvent>,
+    session_events: Vec<SessionObservation>,
     #[cfg(test)]
     local_addresses: Vec<std::net::SocketAddr>,
 }
@@ -380,7 +380,7 @@ impl SessionConnectorDriver for HostedWebSocket<'_> {
 
     fn open_session(
         &mut self,
-        intent: &SessionOpenIntent,
+        intent: &SessionOpen,
         _: &crate::envelope::Envelope,
     ) -> SessionStart {
         let Some(opening) = decode_client_open(&intent.prepared) else {
@@ -449,7 +449,7 @@ impl SessionConnectorDriver for HostedWebSocket<'_> {
 
     fn write_session(
         &mut self,
-        intent: &SessionWriteIntent,
+        intent: &SessionWrite,
         _: &crate::envelope::Envelope,
     ) -> SessionStart {
         let Some(message) = decode_message(&intent.prepared) else {
@@ -491,7 +491,7 @@ impl SessionConnectorDriver for HostedWebSocket<'_> {
         }
     }
 
-    fn session_events(&mut self) -> Vec<SessionDriverEvent> {
+    fn session_events(&mut self) -> Vec<SessionObservation> {
         self.poll_events();
         std::mem::take(&mut self.session_events)
     }
@@ -639,8 +639,8 @@ fn verify_binding(
     Ok(())
 }
 
-fn exit_event(session: SessionId, exit: WebSocketExit, ext: Namespace) -> SessionDriverEvent {
-    SessionDriverEvent::Exited {
+fn exit_event(session: SessionId, exit: WebSocketExit, ext: Namespace) -> SessionObservation {
+    SessionObservation::Exited {
         session,
         exit: PortOutput {
             port: crate::node::Port::conventional_exit(),
@@ -755,7 +755,7 @@ async fn run_server_engine(
 }
 
 async fn run_client_session(
-    intent: SessionOpenIntent,
+    intent: SessionOpen,
     opening: WebSocketClientOpening,
     binding: WebSocketPlanBinding,
     mut commands: mpsc::Receiver<ActorCommand>,
@@ -1410,7 +1410,7 @@ async fn run_h3_client_socket(
             if opening {
                 opening = false;
                 events
-                    .emit(DriverEvent::Session(SessionDriverEvent::Opened(session)), 0)
+                    .emit(DriverEvent::Session(SessionObservation::Opened(session)), 0)
                     .await
                     .map_err(|_| WebSocketExit::TransportLost)?;
             }
@@ -1427,7 +1427,7 @@ async fn run_h3_client_socket(
                         .map_err(|error| socket_error(error, max_message))?;
                     websocket.flush().map_err(|error| socket_error(error, max_message))?;
                     outgoing = websocket.get_mut().take_outgoing();
-                    events.emit(DriverEvent::Session(SessionDriverEvent::WriteSettled {
+                    events.emit(DriverEvent::Session(SessionObservation::WriteSettled {
                         session,
                         write: intent.write_ref,
                     }), 0).await.map_err(|_| WebSocketExit::TransportLost)?;
@@ -1657,7 +1657,7 @@ where
             .await
             .map_err(|error| socket_error(error, max_message))?;
         events
-            .emit(DriverEvent::Session(SessionDriverEvent::Opened(session)), 0)
+            .emit(DriverEvent::Session(SessionObservation::Opened(session)), 0)
             .await
             .map_err(|_| WebSocketExit::TransportLost)?;
     }
@@ -1671,7 +1671,7 @@ where
                         .flush()
                         .await
                         .map_err(|error| socket_error(error, max_message))?;
-                    events.emit(DriverEvent::Session(SessionDriverEvent::WriteSettled {
+                    events.emit(DriverEvent::Session(SessionObservation::WriteSettled {
                         session,
                         write: intent.write_ref,
                     }), 0).await.map_err(|_| WebSocketExit::TransportLost)?;
@@ -2402,7 +2402,7 @@ async fn progress_h3_sessions(
                     live.outgoing = live.websocket.get_mut().take_outgoing();
                     events
                         .emit(
-                            DriverEvent::Session(SessionDriverEvent::WriteSettled {
+                            DriverEvent::Session(SessionObservation::WriteSettled {
                                 session: live.session,
                                 write: intent.write_ref,
                             }),
@@ -3265,14 +3265,14 @@ graph websocket : App {{
         }
     }
 
-    fn wait_for_exit(server: &mut HostedWebSocket<'_>) -> SessionDriverEvent {
+    fn wait_for_exit(server: &mut HostedWebSocket<'_>) -> SessionObservation {
         wait_for_session_events(server, 1).remove(0)
     }
 
     fn wait_for_session_events(
         server: &mut HostedWebSocket<'_>,
         count: usize,
-    ) -> Vec<SessionDriverEvent> {
+    ) -> Vec<SessionObservation> {
         let deadline = Instant::now() + Duration::from_secs(3);
         let mut observed = Vec::new();
         loop {
@@ -3460,7 +3460,7 @@ graph websocket : App {{
         );
         close.send(()).expect("the peer remains live");
         let event = wait_for_exit(&mut server);
-        let SessionDriverEvent::Exited {
+        let SessionObservation::Exited {
             session: exited,
             exit,
         } = event
@@ -3560,7 +3560,7 @@ graph websocket : App {{
         let exited = exits
             .iter()
             .filter_map(|event| match event {
-                SessionDriverEvent::Exited { session, .. } => Some(*session),
+                SessionObservation::Exited { session, .. } => Some(*session),
                 _ => None,
             })
             .collect::<BTreeSet<_>>();
@@ -3609,7 +3609,7 @@ graph websocket : App {{
         peer.recv_timeout(Duration::from_secs(3))
             .expect("the peer drops")
             .expect("dropping a socket needs no protocol write");
-        let SessionDriverEvent::Exited {
+        let SessionObservation::Exited {
             session: exited,
             exit,
         } = wait_for_exit(&mut server)
@@ -3646,7 +3646,7 @@ graph websocket : App {{
                 exchange: Some(InboundExchangeId::Session(session)),
             }),
         );
-        let SessionDriverEvent::Exited {
+        let SessionObservation::Exited {
             session: exited,
             exit,
         } = wait_for_exit(&mut server)
@@ -3704,7 +3704,7 @@ graph websocket : App {{
             panic!("the opening prepares")
         };
         let session = SessionId::new(Id::from_bytes([0x41; 16]));
-        let intent = SessionOpenIntent {
+        let intent = SessionOpen {
             session_id: session,
             emitting_id: Id::from_bytes([0x40; 16]),
             connector_path: node.clone(),
@@ -3728,7 +3728,7 @@ graph websocket : App {{
             .recv_timeout(Duration::from_secs(3))
             .expect("the physical handshake starts");
         assert_eq!(client.close_session(session), SessionStart::Started);
-        let SessionDriverEvent::Exited {
+        let SessionObservation::Exited {
             session: exited,
             exit,
         } = wait_for_exit(&mut client)
@@ -3878,7 +3878,7 @@ graph websocket : App {
             panic!("the HTTP/3 opening must prepare")
         };
         let client_session = SessionId::new(Id::from_bytes([0x31; 16]));
-        let intent = SessionOpenIntent {
+        let intent = SessionOpen {
             session_id: client_session,
             emitting_id: Id::from_bytes([0x30; 16]),
             connector_path: node.clone(),
@@ -3928,7 +3928,7 @@ graph websocket : App {
             if client
                 .session_events()
                 .iter()
-                .any(|event| matches!(event, SessionDriverEvent::Opened(session) if *session == client_session))
+                .any(|event| matches!(event, SessionObservation::Opened(session) if *session == client_session))
             {
                 break;
             }
@@ -3955,12 +3955,12 @@ graph websocket : App {
         let server_exit = wait_for_exit(&mut server);
         assert!(matches!(
             server_exit,
-            SessionDriverEvent::Exited { session, .. } if session == server_session
+            SessionObservation::Exited { session, .. } if session == server_session
         ));
         let client_exit = wait_for_exit(&mut client);
         assert!(matches!(
             client_exit,
-            SessionDriverEvent::Exited { session, .. } if session == client_session
+            SessionObservation::Exited { session, .. } if session == client_session
         ));
         assert!(server.session_events().is_empty());
         assert!(client.session_events().is_empty());

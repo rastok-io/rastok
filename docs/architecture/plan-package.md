@@ -260,7 +260,7 @@ spec       := {1: contract_id (text),
               // std/ is the standard namespace; other namespaces contain a dot.
               // Key 6 is a boolean PlanConstant on admitted outbound Call
               // profiles, absent on Sessions and inbound profiles. Its reduction
-              // must equal the effective Contract attribute; never copied to Intent.
+              // must equal the effective Contract attribute; never copied to CallOpen.
 attr       := [1, word (text)] | [2, tagged_value]
             | [3, evaluation_site, tree]
               // plan-resolved choices/constants use the first two forms.

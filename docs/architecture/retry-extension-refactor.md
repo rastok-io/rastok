@@ -225,7 +225,7 @@ due time and retained quiescence/capacity; a late consumption can make the
 attempt immediately eligible, not move its deadline. No downstream capacity
 is held during the delay. Closing wins and a final attempt arms no retry timer.
 
-Current `CallRecord` has no closure timestamp; `Intent.logical_time` describes
+Current `CallRecord` has no closure timestamp; `CallOpen.logical_time` describes
 the opening context, and `Record::timer_schedule()` returns none for OUTBOUND.
 Thus C1 must specify this temporal retention before its identity inventory.
 Reuse the existing distinction between mandatory retained time and the causal
@@ -300,7 +300,7 @@ claim to make a single invocation after the global effect gate is removed.
 | [`TerminalVisibility`](../../crates/rastok-core/src/connector/call.rs) already classifies each terminal | retain the Contract facts; separate their consumer from the global effect enum |
 | [Compiler check](../../crates/rastok/src/compiler/check.rs) admits only `none`/`idempotent` effect words | remove the global effect gate at cutover, not by calling paid inference idempotent |
 | [Plan validation](../../crates/rastok-core/src/plan/validation.rs) and [VM dispatch](../../crates/rastok-core/src/runtime/vm.rs) also use effect as an initiation classifier | rebase Calls on roles/exchange and Sessions on their Contract opening rule; roles alone do not distinguish the two WebSocket profiles |
-| [`Intent`](../../crates/rastok-core/src/boundary.rs) retains `EffectClass`; [Call recovery](../../crates/rastok-core/src/runtime/vm/recovery/calls.rs) checks equality | audit plan, causal seal and recording together; do not reinterpret a class tag as a boolean |
+| [`CallOpen`](../../crates/rastok-core/src/boundary.rs) retains `EffectClass`; [Call recovery](../../crates/rastok-core/src/runtime/vm/recovery/calls.rs) checks equality | audit plan, causal seal and recording together; do not reinterpret a class tag as a boolean |
 | [Loop protocol](../../crates/rastok-core/src/journal/loop_protocol.rs) has Loop state and command-shaped causes | generalize the recurrence algebra; never synthesize a command for Retry |
 | [Stdlib Process job](../spec/stdlib.md) publishes a bounded completion at exit | use the existing completion boundary for selection; do not claim unqualified streaming retry |
 | [Extension admission](../spec/extensions.md#5-extension-admission-test) requires dedicated orchestration and closed composition | pinned attempts and selective final publication justify Retry as a protocol, not Loop sugar |
@@ -339,8 +339,8 @@ or new user-facing setting is required by this constraint.
 
 ### 7.2 Plan-owned idempotence and exact Contract versions
 
-**Option B selected, D-2026-09-15-1.** Remove `Intent.effect` without adding
-`Intent.idempotent`. The resolved guarantee belongs to the original validated
+**Option B selected, D-2026-09-15-1.** Remove `CallOpen.effect` without adding
+`CallOpen.idempotent`. The resolved guarantee belongs to the original validated
 Connector plan/Contract. In this first profile it is immutable and
 plan-constant, not a per-invocation expression. Every attempt stays bound to
 that original authority; a changed source file, environment or newer Contract
@@ -349,7 +349,7 @@ cannot revise the guarantee during recovery.
 The current [recording](../../crates/rastok/src/recording/mod.rs) already embeds
 and validates its plan package. Recovery must reject missing or contradictory
 original plan/Contract binding, never infer permission from an old effect word
-or missing field. It does not need a duplicate guarantee in each Intent.
+or missing field. It does not need a duplicate guarantee in each CallOpen.
 Per-invocation guarantees are outside this profile; admitting them later would
 require an explicit retained binding, not a silent extension of this rule.
 
@@ -372,7 +372,7 @@ inventoried individually. No existing id may acquire another meaning.
 | Slice | Required result | Status |
 |---|---|---|
 | C0 — contract and contact | approved semantic distinction, output publication, audit and migration inventory | recorded here; exact encoding still unallocated |
-| C1 — operation and recurrence algebra | pinned operation, retained attempt disposition/consumption, closure-based deadlines, exact Session opening rule, plan-owned guarantee and Intent field removal, shared fold, identity register and crash traces | reviewed on 15 September: [algebra](retry-c1-algebra.md), [traces](retry-c1-traces.md), [inventory](retry-c1-identity.md); warning restored to C2 checklist, uniform closure time settled, pending capacity separated from journal retention; no runtime/format changes |
+| C1 — operation and recurrence algebra | pinned operation, retained attempt disposition/consumption, closure-based deadlines, exact Session opening rule, plan-owned guarantee and CallOpen field removal, shared fold, identity register and crash traces | reviewed on 15 September: [algebra](retry-c1-algebra.md), [traces](retry-c1-traces.md), [inventory](retry-c1-identity.md); warning restored to C2 checklist, uniform closure time settled, pending capacity separated from journal retention; no runtime/format changes |
 | C2 — source and validated plan | Retry settings, idempotence, `W-LOOP-REPEAT` with focused tests, typed HTTP 5xx/cardinality, removal of global effect, full registry-free checks, one declared format cutover | [C2 implementation](retry-c2-implementation.md); common fixture blessing and verification now recorded in [C4](retry-c4-qualification.md) |
 | C3 — runtime and measurement retention | qualified Call attempts, final publication, shared scheduling/recovery, exact original per-attempt values | [execution/recovery checkpoint](retry-c3-implementation.md); matrix now exercises public compilation in C4; Closing choices are settled and D-2026-09-16-7 removes reporting from this gate |
 | C4 — migration and qualification | examples, goldens with reasons, UI, docs, no_std and memory/code-size gates | [common qualification](retry-c4-qualification.md): public Call admission, retained inspection, gallery, shared fixture blessing and footprint checks; external opening gates remain separate |
@@ -412,7 +412,7 @@ before-effect-only path; server orphan writes never opening clients; client
 and Process-service local opening preserved; missing or contradictory original
 plan/Contract binding refused; changing current source cannot change a retained
 operation's guarantee. No per-attempt guarantee field survives in the target
-Intent/recording representation.
+CallOpen/recording representation.
 
 No implementation, runtime qualification, benchmark call, paid model invocation,
 release tag or public push is claimed by this preparatory slice.

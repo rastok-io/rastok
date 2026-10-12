@@ -2,7 +2,7 @@
 //! the exact carrier are independently checked when accepting journal records.
 
 use super::*;
-use crate::boundary::Intent;
+use crate::boundary::CallOpen;
 use crate::canonical;
 use crate::instance;
 
@@ -86,7 +86,7 @@ pub struct Opening<'a> {
 #[derive(Debug)]
 pub struct Settlement<'a> {
     /// Call's retained preparation; later attempt expressions are never used.
-    pub intent: &'a Intent,
+    pub intent: &'a CallOpen,
     /// Terminal re-derived from the validated completion/timeout/abandonment.
     pub case: &'a str,
     /// Explicit VM logical instant accepted with this winning closure.
@@ -451,7 +451,7 @@ impl Fold {
     ///
     /// # Errors
     /// Unadmitted/repeated Call, wrong owner/cursor, or changed pinned material.
-    pub fn open_call(&mut self, attempt: AttemptId, intent: &Intent) -> Result<(), Error> {
+    pub fn open_call(&mut self, attempt: AttemptId, intent: &CallOpen) -> Result<(), Error> {
         let state = self.state_mut(attempt)?;
         if state.phase != Phase::Admitted {
             return Err(Error::Transition);
@@ -463,7 +463,7 @@ impl Fold {
         Ok(())
     }
 
-    fn check_intent(state: &Operation, intent: &Intent) -> Result<(), Error> {
+    fn check_intent(state: &Operation, intent: &CallOpen) -> Result<(), Error> {
         if intent.connector_path.segments() != state.instance.address().owner().segments()
             || intent.prepared != state.pin.prepared
             || intent.resolved_settings != state.pin.settings

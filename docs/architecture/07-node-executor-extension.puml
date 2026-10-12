@@ -88,7 +88,7 @@ end note
 note bottom of Retry
 All attempts recorded; only the final one delivered.
 Backoff starts at the unsealed Call closure instant.
-Idempotence is a plan guarantee, not an Intent field.
+Idempotence is a plan guarantee, not a CallOpen field.
 end note
 note bottom of Driver
 Process job: finite Call.

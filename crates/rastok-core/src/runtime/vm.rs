@@ -18,12 +18,12 @@
 //! the commit, nothing can fail.
 
 use crate::boundary::{
-    BoundaryEvent, CallId, ClosingDeadline, Completion, CompletionGate, DatedPayload, Dispatcher,
-    InboundCallEvent, InboundCallId, InboundCallResponse, InboundCallTimeout, InboundSession,
-    IngressAcceptance, IngressAdmission, IngressProposal, IngressRejection, IngressSubmission,
-    InstanceDeadline, Intent, OutboundConnectorBindings, RequestPreparation, Response,
-    SchedulerCompletion, SessionDriverEvent, SessionId, SessionOpenIntent, SessionStart,
-    SessionWriteId, SessionWriteIntent,
+    BoundaryObservation, CallId, CallOpen, ClosingDeadline, Completion, CompletionCheck,
+    DatedPayload, Dispatcher, InboundCallId, InboundCallObservation, InboundCallResponse,
+    InboundCallTimeout, InboundSession, IngressAcceptance, IngressAdmission, IngressProposal,
+    IngressRejection, IngressSubmission, InstanceDeadline, OutboundConnectorBindings,
+    RequestPreparation, Response, SchedulerCompletion, SessionId, SessionObservation, SessionOpen,
+    SessionStart, SessionWrite, SessionWriteId,
 };
 use crate::connector::{ConnectorExchange, SessionOpening, session_opening};
 use crate::envelope;
@@ -354,11 +354,11 @@ pub struct PumpReport {
     /// the call stays open for the timeout machinery.
     pub rejected: Vec<(Response, String)>,
     /// Duplicate or post-terminal Session observations.
-    pub discarded_sessions: Vec<SessionDriverEvent>,
+    pub discarded_sessions: Vec<SessionObservation>,
     /// Session observations matching no live logical Session.
-    pub uncorrelated_sessions: Vec<SessionDriverEvent>,
+    pub uncorrelated_sessions: Vec<SessionObservation>,
     /// Session terminal observations refused by the resolved output table.
-    pub rejected_sessions: Vec<(SessionDriverEvent, String)>,
+    pub rejected_sessions: Vec<(SessionObservation, String)>,
 }
 
 /// Non-causal observations from one inbound-Call Driver drain.
@@ -367,12 +367,12 @@ pub struct InboundCallPumpReport {
     /// Valid terminal events retained for a Connector transaction.
     pub queued: usize,
     /// Duplicate terminal events observed after one was already retained.
-    pub discarded: Vec<InboundCallEvent>,
+    pub discarded: Vec<InboundCallObservation>,
     /// Events matching no admitted Call in this VM.
-    pub uncorrelated: Vec<InboundCallEvent>,
+    pub uncorrelated: Vec<InboundCallObservation>,
     /// Events refused by the resolved Connector output table. The Call stays
     /// open so the Driver or a later timeout may still terminate it.
-    pub rejected: Vec<(InboundCallEvent, String)>,
+    pub rejected: Vec<(InboundCallObservation, String)>,
 }
 
 impl PumpReport {
@@ -437,7 +437,7 @@ struct PendingSession {
     opening: Envelope,
     /// Present only for an outbound opening whose exact prepared bytes may
     /// need to be re-offered after bounded Driver pressure.
-    open_intent: Option<SessionOpenIntent>,
+    open_intent: Option<SessionOpen>,
     /// Outbound client openings retain their graph cursor through the sole
     /// terminal Session transaction. Inbound peer openings are roots and
     /// therefore carry no consumed cursor.
@@ -452,7 +452,7 @@ struct PendingSession {
 /// action and later reports local settlement.
 #[derive(Debug, Clone, PartialEq)]
 struct PendingSessionWrite {
-    intent: SessionWriteIntent,
+    intent: SessionWrite,
     slot: Slot,
     instance: instance::Generation,
     delivery: envelope::Delivery,
@@ -584,11 +584,11 @@ fn consider_operator_work(
     }
 }
 
-/// The plan-backed gate for one atomic boundary completion.
+/// The plan-backed check for one atomic boundary completion.
 ///
-/// Format v10 retains every Connector's exact resolved output types. This
-/// gate judges that table, so no malformed Driver fact can become causal.
-struct PlanGate<'plan> {
+/// The plan carries every Connector's exact resolved output types. This
+/// check judges that table, so no malformed Driver observation can become causal.
+struct PlanCompletionCheck<'plan> {
     plan: &'plan ValidatedExecutionPlan,
 }
 
@@ -631,7 +631,7 @@ impl OutboundConnectorBindings for NoOutboundBindings {
 
     fn start(
         &mut self,
-        intent: &Intent,
+        intent: &CallOpen,
         _: &Envelope,
     ) -> Result<crate::boundary::CallStart, crate::boundary::DriverRouteError> {
         Err(crate::boundary::DriverRouteError::UnboundOutbound(
@@ -644,7 +644,7 @@ impl OutboundConnectorBindings for NoOutboundBindings {
     }
 }
 
-impl crate::boundary::CompletionGate for PlanGate<'_> {
+impl crate::boundary::CompletionCheck for PlanCompletionCheck<'_> {
     fn admit(&self, connector: &node::Path, completion: &Completion) -> Result<(), String> {
         let Some((index, planned)) = self
             .plan
@@ -903,7 +903,7 @@ pub struct VmInspection {
 /// budget.
 #[derive(Debug, Clone, PartialEq)]
 struct SettledEntry {
-    event: BoundaryEvent,
+    event: BoundaryObservation,
     trigger: node::Trigger,
 }
 
@@ -1007,7 +1007,7 @@ pub struct Vm<'plan> {
     inbound_calls: BTreeMap<InboundCallId, PendingInboundCall>,
     /// Driver terminal observations waiting for their atomic Connector
     /// transaction. A reference appears at most once.
-    settled_inbound_calls: VecDeque<InboundCallEvent>,
+    settled_inbound_calls: VecDeque<InboundCallObservation>,
     /// Open inbound and outbound Sessions, keyed only by the journal-derived
     /// logical reference.
     sessions: BTreeMap<SessionId, PendingSession>,
@@ -1492,9 +1492,9 @@ impl<'plan> Vm<'plan> {
     #[must_use]
     pub fn queue_inbound_call_events(
         &mut self,
-        events: impl IntoIterator<Item = InboundCallEvent>,
+        events: impl IntoIterator<Item = InboundCallObservation>,
     ) -> InboundCallPumpReport {
-        let gate = PlanGate { plan: self.plan };
+        let gate = PlanCompletionCheck { plan: self.plan };
         let mut report = InboundCallPumpReport::default();
         for event in events {
             let Some(pending) = self.inbound_calls.get(&event.call_id) else {
@@ -2368,7 +2368,7 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
     ) -> Result<PumpReport, VmFault> {
-        let gate = PlanGate { plan: self.plan };
+        let gate = PlanCompletionCheck { plan: self.plan };
         let retry = self.retry_manager.as_deref();
         let now = self.now;
         let batch = self
@@ -2407,7 +2407,7 @@ impl<'plan> Vm<'plan> {
             .map_err(VmFault::Dispatch)?;
         for event in session_events {
             match event.clone() {
-                SessionDriverEvent::Opened(session_id) => {
+                SessionObservation::Opened(session_id) => {
                     let Some(session) = self.sessions.get_mut(&session_id) else {
                         report.uncorrelated_sessions.push(event);
                         continue;
@@ -2435,7 +2435,7 @@ impl<'plan> Vm<'plan> {
                         }
                     }
                 }
-                SessionDriverEvent::WriteSettled {
+                SessionObservation::WriteSettled {
                     session: session_id,
                     write,
                 } => {
@@ -2476,7 +2476,7 @@ impl<'plan> Vm<'plan> {
                         }
                     }
                 }
-                SessionDriverEvent::Exited {
+                SessionObservation::Exited {
                     session: session_id,
                     mut exit,
                 } => {
@@ -2893,7 +2893,7 @@ impl<'plan> Vm<'plan> {
                 .find_call(&call_id)
                 .unwrap_or_else(|| unreachable!("a closed call is journaled"));
             self.settled.push_back(SettledEntry {
-                event: BoundaryEvent {
+                event: BoundaryObservation {
                     call_id,
                     connector_path: intent.connector_path,
                     emitting_id: intent.emitting_id,
@@ -2946,7 +2946,7 @@ impl<'plan> Vm<'plan> {
                     RequestPreparation::Rejected(completion) => Err(completion),
                     RequestPreparation::Prepared(prepared) => {
                         let emitting_id = queued.envelope.meta().sys().id();
-                        Ok(Intent {
+                        Ok(CallOpen {
                             call_id: ids::call_id(
                                 ids::delivery_id(&queued.edge, emitting_id),
                                 prepared.digest(),
@@ -3089,7 +3089,7 @@ impl<'plan> Vm<'plan> {
                     },
                 );
                 self.settled.push_back(SettledEntry {
-                    event: BoundaryEvent {
+                    event: BoundaryObservation {
                         call_id,
                         connector_path,
                         emitting_id,
@@ -3217,7 +3217,7 @@ impl<'plan> Vm<'plan> {
             queued.envelope.meta().sys().id(),
             prepared.digest(),
         );
-        let intent = SessionOpenIntent {
+        let intent = SessionOpen {
             session_id,
             emitting_id: queued.envelope.meta().sys().id(),
             connector_path: connector.clone(),
@@ -4073,7 +4073,7 @@ impl<'plan> Vm<'plan> {
                         crate::journal::CloseVerdict::AlreadyClosed => {}
                         crate::journal::CloseVerdict::Won => {
                             self.settled.push_back(SettledEntry {
-                                event: BoundaryEvent {
+                                event: BoundaryObservation {
                                     call_id,
                                     connector_path: connector.clone(),
                                     emitting_id: pending.delivery.envelope.meta().sys().id(),
@@ -4462,7 +4462,7 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         index: usize,
-        event: InboundCallEvent,
+        event: InboundCallObservation,
         pending: PendingInboundCall,
     ) -> Result<(), VmFault> {
         let executor = TransactionPreparer::at(self.plan, self.graph_version, self.now);
@@ -5275,7 +5275,7 @@ impl<'plan> Vm<'plan> {
             delivery.envelope.meta().sys().id(),
             prepared.digest(),
         );
-        let intent = SessionOpenIntent {
+        let intent = SessionOpen {
             session_id,
             emitting_id: delivery.envelope.meta().sys().id(),
             connector_path: planned.path.clone(),
@@ -5375,7 +5375,7 @@ impl<'plan> Vm<'plan> {
             delivery.envelope.meta().sys().id(),
             prepared.digest(),
         );
-        let intent = SessionWriteIntent {
+        let intent = SessionWrite {
             write_ref,
             session_id,
             emitting_id: delivery.envelope.meta().sys().id(),
@@ -5549,7 +5549,7 @@ impl<'plan> Vm<'plan> {
         // The call identity: one delivery carrying one prepared
         // request (envelope.md §2) — the reference says by where,
         // the digest says what.
-        let intent = Intent {
+        let intent = CallOpen {
             call_id: ids::call_id(
                 ids::delivery_id(&delivery.edge, emitting_id),
                 prepared.digest(),
@@ -5574,7 +5574,7 @@ impl<'plan> Vm<'plan> {
         slot: Slot,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
-        intent: Intent,
+        intent: CallOpen,
     ) -> Result<(), VmFault> {
         let attempt = self.retry_attempt(instance, delivery);
         let mut retry = self.retry_manager.clone();
@@ -5623,7 +5623,7 @@ impl<'plan> Vm<'plan> {
     /// work.
     ///
     /// Pin conformance runs at TWO levels, deliberately: construction checks
-    /// ordinary Operator emissions, while [`CompletionGate`] refuses an
+    /// ordinary Operator emissions, while [`CompletionCheck`] refuses an
     /// invalid driver draft before closure. THIS final, non-recursive level
     /// catches a violated plan/runtime invariant; it cannot manufacture
     /// another emission on the same bad wiring, so NOTHING commits.

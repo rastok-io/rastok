@@ -8,10 +8,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use rastok::boundary::{
-    CallConnectorDriver, CallStart, DriverRouteError, InboundExchangeId, InboundSession,
-    IngressAdmission, IngressProposal, IngressProposalHandle, IngressSubmission, Intent,
-    OutboundConnectorBindings, PreparedRequest, SessionDriverEvent, SessionId, SessionOpenIntent,
-    SessionStart, SessionWriteId, SessionWriteIntent, WebSocketExit,
+    CallConnectorDriver, CallOpen, CallStart, DriverRouteError, InboundExchangeId, InboundSession,
+    IngressAdmission, IngressProposal, IngressProposalHandle, IngressSubmission,
+    OutboundConnectorBindings, PreparedRequest, SessionId, SessionObservation, SessionOpen,
+    SessionStart, SessionWrite, SessionWriteId, WebSocketExit,
 };
 use rastok::envelope::{Data, Envelope};
 use rastok::instance;
@@ -90,7 +90,7 @@ on in where data.text != "" {
 /// The world scripted: echoes every request back, like `cat`.
 #[derive(Default)]
 struct EchoWorld {
-    seen: Vec<Intent>,
+    seen: Vec<CallOpen>,
     fail_next: bool,
 }
 
@@ -144,7 +144,7 @@ impl OutboundConnectorBindings for ProjectionRefusal {
 
     fn start(
         &mut self,
-        intent: &Intent,
+        intent: &CallOpen,
         request: &Envelope,
     ) -> Result<CallStart, DriverRouteError> {
         Ok(CallConnectorDriver::start(&mut self.inner, intent, request))
@@ -184,7 +184,7 @@ impl CallConnectorDriver for ClosingWorld {
         rastok::boundary::process_scheduler_completion(completion)
     }
 
-    fn start(&mut self, intent: &Intent, _: &Envelope) -> CallStart {
+    fn start(&mut self, intent: &CallOpen, _: &Envelope) -> CallStart {
         self.started.push(intent.call_id);
         CallStart::Started
     }
@@ -251,7 +251,7 @@ impl CallConnectorDriver for EchoWorld {
         rastok::boundary::process_scheduler_completion(completion)
     }
 
-    fn start(&mut self, intent: &Intent, request: &Envelope) -> CallStart {
+    fn start(&mut self, intent: &CallOpen, request: &Envelope) -> CallStart {
         let _ = request;
         self.seen.push(intent.clone());
         CallStart::Started
@@ -316,7 +316,7 @@ impl CallConnectorDriver for FileSettingsWorld {
         .expect("the File terminal fact is structurally complete")
     }
 
-    fn start(&mut self, _: &Intent, _: &Envelope) -> CallStart {
+    fn start(&mut self, _: &CallOpen, _: &Envelope) -> CallStart {
         CallStart::Started
     }
 
@@ -3021,7 +3021,7 @@ impl CallConnectorDriver for ScriptedWorld {
         rastok::boundary::process_scheduler_completion(completion)
     }
 
-    fn start(&mut self, _: &Intent, _: &Envelope) -> CallStart {
+    fn start(&mut self, _: &CallOpen, _: &Envelope) -> CallStart {
         CallStart::Started
     }
     fn events(&mut self) -> Vec<Response> {
@@ -3031,7 +3031,7 @@ impl CallConnectorDriver for ScriptedWorld {
 
 #[derive(Default)]
 struct SessionWorld {
-    events: Vec<SessionDriverEvent>,
+    events: Vec<SessionObservation>,
     opened: Vec<SessionId>,
     close_requests: Vec<SessionId>,
     abort_requests: Vec<SessionId>,
@@ -3044,7 +3044,7 @@ struct SessionWorld {
 
 impl SessionWorld {
     fn close(&mut self, session: SessionId) {
-        self.events.push(SessionDriverEvent::Exited {
+        self.events.push(SessionObservation::Exited {
             session,
             exit: Completion::websocket_exit(WebSocketExit::Closed {
                 code: 1000,
@@ -3058,7 +3058,7 @@ impl SessionWorld {
     fn settle_write(&mut self, index: usize) {
         let (session, write) = self.writes[index];
         self.events
-            .push(SessionDriverEvent::WriteSettled { session, write });
+            .push(SessionObservation::WriteSettled { session, write });
     }
 }
 
@@ -3088,7 +3088,7 @@ impl OutboundConnectorBindings for SessionWorld {
         Err(DriverRouteError::UnboundOutbound(connector.clone()))
     }
 
-    fn start(&mut self, intent: &Intent, _: &Envelope) -> Result<CallStart, DriverRouteError> {
+    fn start(&mut self, intent: &CallOpen, _: &Envelope) -> Result<CallStart, DriverRouteError> {
         Err(DriverRouteError::UnboundOutbound(
             intent.connector_path.clone(),
         ))
@@ -3125,7 +3125,7 @@ impl OutboundConnectorBindings for SessionWorld {
 
     fn open_session(
         &mut self,
-        intent: &SessionOpenIntent,
+        intent: &SessionOpen,
         _: &Envelope,
     ) -> Result<SessionStart, DriverRouteError> {
         self.opened.push(intent.session_id);
@@ -3133,7 +3133,7 @@ impl OutboundConnectorBindings for SessionWorld {
             Ok(SessionStart::Pending)
         } else {
             self.events
-                .push(SessionDriverEvent::Opened(intent.session_id));
+                .push(SessionObservation::Opened(intent.session_id));
             Ok(SessionStart::Started)
         }
     }
@@ -3154,12 +3154,12 @@ impl OutboundConnectorBindings for SessionWorld {
 
     fn write_session(
         &mut self,
-        intent: &SessionWriteIntent,
+        intent: &SessionWrite,
         _: &Envelope,
     ) -> Result<SessionStart, DriverRouteError> {
         self.writes.push((intent.session_id, intent.write_ref));
         if !self.hold_writes {
-            self.events.push(SessionDriverEvent::WriteSettled {
+            self.events.push(SessionObservation::WriteSettled {
                 session: intent.session_id,
                 write: intent.write_ref,
             });
@@ -3179,7 +3179,7 @@ impl OutboundConnectorBindings for SessionWorld {
         Ok(SessionStart::Started)
     }
 
-    fn session_events(&mut self) -> Result<Vec<SessionDriverEvent>, DriverRouteError> {
+    fn session_events(&mut self) -> Result<Vec<SessionObservation>, DriverRouteError> {
         Ok(std::mem::take(&mut self.events))
     }
 
@@ -3579,7 +3579,7 @@ graph app : App {
             vm.run_ready_with_bindings(&mut journal, &mut world)
                 .unwrap();
             assert!(matches!(report.uncorrelated_sessions.as_slice(),
-                [SessionDriverEvent::Exited { session, .. }] if *session == alice));
+                [SessionObservation::Exited { session, .. }] if *session == alice));
             assert_eq!(journal.records(), before_late_exit);
             assert_eq!(vm.outputs().len(), 1, "late exit cannot close twice");
             assert_eq!(world.released, [alice], "late exit cannot clean up Bob");
@@ -4517,7 +4517,7 @@ impl Journal for FlakyJournal {
     }
     fn open_egress(
         &mut self,
-        intent: Intent,
+        intent: CallOpen,
         attempt: Option<rastok::journal::retry_protocol::AttemptId>,
     ) -> Result<(), rastok::journal::Error> {
         if self.refuse_opens {
@@ -4525,10 +4525,7 @@ impl Journal for FlakyJournal {
         }
         self.inner.open_egress(intent, attempt)
     }
-    fn open_outbound_session(
-        &mut self,
-        intent: SessionOpenIntent,
-    ) -> Result<(), rastok::journal::Error> {
+    fn open_outbound_session(&mut self, intent: SessionOpen) -> Result<(), rastok::journal::Error> {
         self.inner.open_outbound_session(intent)
     }
     fn confirm_session_open(
@@ -4537,10 +4534,7 @@ impl Journal for FlakyJournal {
     ) -> Result<CloseVerdict, rastok::journal::Error> {
         self.inner.confirm_session_open(session)
     }
-    fn open_session_write(
-        &mut self,
-        intent: SessionWriteIntent,
-    ) -> Result<(), rastok::journal::Error> {
+    fn open_session_write(&mut self, intent: SessionWrite) -> Result<(), rastok::journal::Error> {
         self.inner.open_session_write(intent)
     }
     fn settle_session_write(
@@ -4576,10 +4570,10 @@ impl Journal for FlakyJournal {
     fn find_envelope(&self, id: rastok::envelope::Id) -> Option<Envelope> {
         self.inner.find_envelope(id)
     }
-    fn find_call(&self, call_id: &rastok::boundary::CallId) -> Option<Intent> {
+    fn find_call(&self, call_id: &rastok::boundary::CallId) -> Option<CallOpen> {
         self.inner.find_call(call_id)
     }
-    fn open_calls(&self) -> Vec<Intent> {
+    fn open_calls(&self) -> Vec<CallOpen> {
         self.inner.open_calls()
     }
     fn open_inbound_calls(&self) -> Vec<rastok::journal::InboundCallIngressRecord> {
@@ -4588,7 +4582,7 @@ impl Journal for FlakyJournal {
     fn live_sessions(&self) -> Vec<SessionId> {
         self.inner.live_sessions()
     }
-    fn open_session_writes(&self) -> Vec<SessionWriteIntent> {
+    fn open_session_writes(&self) -> Vec<SessionWrite> {
         self.inner.open_session_writes()
     }
 }

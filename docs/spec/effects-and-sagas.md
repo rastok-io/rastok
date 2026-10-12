@@ -3,8 +3,8 @@
 > **Format 20 target — D-2026-09-14-4 and D-2026-09-15-1.** Ordinary
 > Connectors have no global `effect` classification. Retry uses a plan-owned
 > idempotence guarantee; compensation and irreversibility belong to the future
-> Saga step contract. `Intent.effect` is removed, with no duplicate
-> `Intent.idempotent`. Saga remains a named, non-executable Extension.
+> Saga step contract. `CallOpen.effect` is removed, with no duplicate
+> `CallOpen.idempotent`. Saga remains a named, non-executable Extension.
 > The [common qualification](../architecture/retry-c4-qualification.md) records
 > the cutover; no Saga tag or execution is introduced by that work.
 
@@ -52,7 +52,7 @@ close-once rules live in [delivery-semantics.md](delivery-semantics.md).
 For a repeated Call, the retained operation pins request bytes, evaluated
 settings and any partner idempotency key. Retry does not recompute them at
 each attempt. Recovery validates them against the original plan and operation,
-not today's source or a guarantee copied into an Intent.
+not today's source or a guarantee copied into a CallOpen.
 
 Compensability does not imply safe forward repetition. An inverse operation
 is a distinct Call with its own identity and, if retried, its own guarantee.

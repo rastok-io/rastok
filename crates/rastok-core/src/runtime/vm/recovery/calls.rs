@@ -161,7 +161,7 @@ impl Vm<'_> {
             }
             CallStatus::Open => return Err(invalid(index, "duplicate Call opening")),
         };
-        PlanGate { plan: self.plan }
+        PlanCompletionCheck { plan: self.plan }
             .admit(&intent.connector_path, &completion)
             .map_err(|_| invalid(index, "the retained Call completion violates its Contract"))?;
         let attempt = self.retry_attempt(&pending.instance, &pending.delivery);
@@ -175,7 +175,7 @@ impl Vm<'_> {
         }
         self.retain_retry_closure(record)?;
         self.settled.push_back(SettledEntry {
-            event: BoundaryEvent {
+            event: BoundaryObservation {
                 call_id: intent.call_id,
                 connector_path: intent.connector_path.clone(),
                 emitting_id: intent.emitting_id,

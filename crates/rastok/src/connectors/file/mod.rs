@@ -9,7 +9,7 @@
 //! worker that may observe or mutate the filesystem.
 
 use crate::boundary::{
-    CallConnectorDriver, CallStart, Completion, FileExit, Intent, OutboundConnectorDriver,
+    CallConnectorDriver, CallOpen, CallStart, Completion, FileExit, OutboundConnectorDriver,
     PreparedRequest, RequestPreparation, Response, SchedulerCompletion,
 };
 use crate::envelope::{Data, Encoding, Envelope, Value};
@@ -399,7 +399,7 @@ impl CallConnectorDriver for File<'_> {
         }
     }
 
-    fn start(&mut self, intent: &Intent, _request: &Envelope) -> CallStart {
+    fn start(&mut self, intent: &CallOpen, _request: &Envelope) -> CallStart {
         let Some(binding) = self.bindings.get(&intent.connector_path) else {
             self.answers.push(Response {
                 call_id: intent.call_id,

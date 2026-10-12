@@ -46,9 +46,9 @@ for HttpClient, idempotence and typed `ServerError`:
 
 The echo retained-record tuple digest becomes
 `eba461cb2011177539b0a0a864ee01064f39097cace16dd3268b5523ce9e2078`:
-recording v3 removes `Intent.effect` and retains exact Call closure time.
+recording v3 removes `CallOpen.effect` and retains exact Call closure time.
 This is not a causal-seal change. Recovery still uses the original validated
-plan, not a guarantee copied into an Intent.
+plan, not a guarantee copied into a CallOpen.
 
 `rastok/measure@3` and its two required text arguments replace both the old
 six-field generic binding and compact cost tag 4. Measured numerical DATA,

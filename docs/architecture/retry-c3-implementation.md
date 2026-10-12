@@ -58,11 +58,11 @@ new format or golden blessing. Ordinary programs retain their execution paths.
    preparation time and subsequent admission timer arms already retain the
    necessary instants; no field or clock is invented.
 2. **Pinned preparation time is not the opening time of every Call.** C2's
-   pure fold required every Intent to repeat the initial logical instant.
+   pure fold required every CallOpen to repeat the initial logical instant.
    The Lab's existing mock `now()` consequently saw zero on every attempt.
    The regression observed `[0, 0, 0]` instead of `[0, 0.1 s, 0.2 s]`.
-   Each Intent now carries its own opening instant, at or after its admission;
-   its closure must match that exact Intent. The pin's original preparation
+   Each CallOpen now carries its own opening instant, at or after its admission;
+   its closure must match that exact CallOpen. The pin's original preparation
    instant, bytes, settings and key remain unchanged. This corrects C2 §5's
    implementation claim, not the agreed same-operation rule.
 3. **A consumed request does not release the enclosing Loop.** Pruning its

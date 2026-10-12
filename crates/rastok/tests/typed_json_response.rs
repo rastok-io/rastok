@@ -267,7 +267,7 @@ fn malformed_native_or_unhydrated_data_cannot_enter_the_outbound_journal() {
         ) -> RequestPreparation {
             RequestPreparation::Prepared(PreparedRequest::seal(b"{}".to_vec()))
         }
-        fn start(&mut self, intent: &Intent, _: &rastok::envelope::Envelope) -> CallStart {
+        fn start(&mut self, intent: &CallOpen, _: &rastok::envelope::Envelope) -> CallStart {
             self.responses.push(Response {
                 call_id: intent.call_id,
                 completion: Completion::http_client(

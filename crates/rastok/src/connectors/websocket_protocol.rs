@@ -7,7 +7,7 @@
 use crate::boundary::{
     InboundConnectorDriver, IngressDecision, IngressProposal, IngressProposalHandle,
     OutboundConnectorDriver, PreparedRequest, RequestPreparation, SessionConnectorDriver,
-    SessionDriverEvent, SessionId, SessionOpenIntent, SessionStart, SessionWriteIntent,
+    SessionId, SessionObservation, SessionOpen, SessionStart, SessionWrite,
 };
 use crate::connector::{ConnectorRoles, ContractId};
 use crate::envelope::{Data, Envelope};
@@ -590,7 +590,7 @@ impl SessionConnectorDriver for WebSocketLabDriver {
         })
     }
 
-    fn open_session(&mut self, _: &SessionOpenIntent, _: &Envelope) -> SessionStart {
+    fn open_session(&mut self, _: &SessionOpen, _: &Envelope) -> SessionStart {
         SessionStart::Started
     }
 
@@ -604,11 +604,11 @@ impl SessionConnectorDriver for WebSocketLabDriver {
         Self::preparation(self.prepare_message(connector, data))
     }
 
-    fn write_session(&mut self, _: &SessionWriteIntent, _: &Envelope) -> SessionStart {
+    fn write_session(&mut self, _: &SessionWrite, _: &Envelope) -> SessionStart {
         SessionStart::Started
     }
 
-    fn session_events(&mut self) -> Vec<SessionDriverEvent> {
+    fn session_events(&mut self) -> Vec<SessionObservation> {
         Vec::new()
     }
 }

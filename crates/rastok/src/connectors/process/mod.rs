@@ -11,7 +11,7 @@
 //! exactly the machinery a run does, minus this file.
 
 use crate::boundary::{
-    CallConnectorDriver, CallStart, Completion, Intent, OutboundConnectorDriver,
+    CallConnectorDriver, CallOpen, CallStart, Completion, OutboundConnectorDriver,
     OutputOverflowReason, ProcessExit, RequestPreparation, Response, SchedulerCompletion,
 };
 use crate::envelope::{Data, Envelope, Value};
@@ -760,7 +760,7 @@ impl<'plan> Process<'plan> {
         })
     }
 
-    fn launch(&mut self, intent: &Intent, request: &Envelope) -> Result<Run, Completion> {
+    fn launch(&mut self, intent: &CallOpen, request: &Envelope) -> Result<Run, Completion> {
         let Some(binding) = self.bindings.get(&intent.connector_path) else {
             return Err(ProcessFailure::SpawnFailed {
                 message: "no Process binding serves this connector (unknown path, or another \
@@ -1074,7 +1074,7 @@ impl CallConnectorDriver for Process<'_> {
         crate::boundary::process_scheduler_completion(completion)
     }
 
-    fn start(&mut self, intent: &Intent, request: &Envelope) -> CallStart {
+    fn start(&mut self, intent: &CallOpen, request: &Envelope) -> CallStart {
         match self.launch(intent, request) {
             Ok(run) => self.runs.push(run),
             Err(completion) => self.answers.push(Response {

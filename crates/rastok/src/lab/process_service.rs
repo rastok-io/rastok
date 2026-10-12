@@ -2,8 +2,8 @@
 use super::*;
 use crate::boundary::{
     InboundConnectorDriver, InboundSession, IngressDecision, IngressProposal,
-    IngressProposalHandle, SessionConnectorDriver, SessionDriverEvent, SessionId,
-    SessionOpenIntent, SessionStart, SessionWriteIntent,
+    IngressProposalHandle, SessionConnectorDriver, SessionId, SessionObservation, SessionOpen,
+    SessionStart, SessionWrite,
 };
 use crate::connectors::ProcessRequestBindings;
 use std::collections::VecDeque;
@@ -61,7 +61,7 @@ struct World<'plan> {
     evaluator: MockOutboundConnectorDriver<'plan>,
     resources: BTreeMap<SessionId, node::Path>,
     terminating: std::collections::BTreeSet<SessionId>,
-    events: VecDeque<SessionDriverEvent>,
+    events: VecDeque<SessionObservation>,
     proposals: VecDeque<IngressProposal>,
     next: u64,
 }
@@ -71,7 +71,7 @@ impl World<'_> {
             for output in outputs {
                 if output.port.name() == "exit" {
                     self.terminating.insert(session);
-                    self.events.push_back(SessionDriverEvent::Exited {
+                    self.events.push_back(SessionObservation::Exited {
                         session,
                         exit: output,
                     });
@@ -141,7 +141,7 @@ impl SessionConnectorDriver for World<'_> {
     ) -> Completion {
         crate::boundary::process_scheduler_completion(completion)
     }
-    fn open_session(&mut self, intent: &SessionOpenIntent, message: &Envelope) -> SessionStart {
+    fn open_session(&mut self, intent: &SessionOpen, message: &Envelope) -> SessionStart {
         if self.resources.contains_key(&intent.session_id) {
             return SessionStart::Started;
         }
@@ -151,29 +151,29 @@ impl SessionConnectorDriver for World<'_> {
         self.resources
             .insert(intent.session_id, intent.connector_path.clone());
         self.events
-            .push_back(SessionDriverEvent::Opened(intent.session_id));
+            .push_back(SessionObservation::Opened(intent.session_id));
         self.answer(intent.session_id, &intent.connector_path, message);
         SessionStart::Started
     }
-    fn write_session(&mut self, intent: &SessionWriteIntent, message: &Envelope) -> SessionStart {
+    fn write_session(&mut self, intent: &SessionWrite, message: &Envelope) -> SessionStart {
         if !self.resources.contains_key(&intent.session_id)
             || self.terminating.contains(&intent.session_id)
             || self.proposals.len() >= 8
         {
             return SessionStart::Pending;
         }
-        self.events.push_back(SessionDriverEvent::WriteSettled {
+        self.events.push_back(SessionObservation::WriteSettled {
             session: intent.session_id,
             write: intent.write_ref,
         });
         self.answer(intent.session_id, &intent.connector_path, message);
         SessionStart::Started
     }
-    fn session_events(&mut self) -> Vec<SessionDriverEvent> {
+    fn session_events(&mut self) -> Vec<SessionObservation> {
         let mut ready = Vec::new();
         let mut waiting = VecDeque::new();
         for event in self.events.drain(..) {
-            if matches!(&event, SessionDriverEvent::Exited { session, .. } if self.proposals.iter().any(|p| p.session == Some(InboundSession::Message(*session))))
+            if matches!(&event, SessionObservation::Exited { session, .. } if self.proposals.iter().any(|p| p.session == Some(InboundSession::Message(*session))))
             {
                 waiting.push_back(event);
             } else {
@@ -191,11 +191,11 @@ impl SessionConnectorDriver for World<'_> {
         self.proposals
             .retain(|p| p.session != Some(InboundSession::Message(session)));
         self.events.retain(|event| match event {
-            SessionDriverEvent::Opened(reference)
-            | SessionDriverEvent::WriteSettled {
+            SessionObservation::Opened(reference)
+            | SessionObservation::WriteSettled {
                 session: reference, ..
             }
-            | SessionDriverEvent::Exited {
+            | SessionObservation::Exited {
                 session: reference, ..
             } => *reference != session,
         });
@@ -208,7 +208,7 @@ impl InboundConnectorDriver for World<'_> {
         // Driver, the opening must reach the core before its first frame.
         if self.events.iter().any(|event| {
             matches!(event,
-            SessionDriverEvent::Opened(reference)
+            SessionObservation::Opened(reference)
                 if proposal.session == Some(InboundSession::Message(*reference)))
         }) {
             return None;

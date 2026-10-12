@@ -30,7 +30,7 @@ impl CallConnectorDriver for World {
         self.preparations += 1;
         prepare_process_request(RequestCodec::Lines, data)
     }
-    fn start(&mut self, intent: &Intent, _: &rastok_core::envelope::Envelope) -> CallStart {
+    fn start(&mut self, intent: &CallOpen, _: &rastok_core::envelope::Envelope) -> CallStart {
         self.starts += 1;
         let channel = || {
             (0..self.frames)

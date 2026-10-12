@@ -239,7 +239,7 @@ impl Vm<'_> {
                 .collect(),
         )
         .map_err(|_| invalid(index, "an exchange terminal has no unique final exit"))?;
-        PlanGate { plan: self.plan }
+        PlanCompletionCheck { plan: self.plan }
             .admit(&self.plan.nodes[slot.index()].path, &completion)
             .map_err(|_| invalid(index, "an exchange terminal violates its Contract"))?;
         let executor = TransactionPreparer::at(self.plan, self.graph_version, self.now);

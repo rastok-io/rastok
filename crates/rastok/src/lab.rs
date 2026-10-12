@@ -8,9 +8,9 @@
 //! test double.
 
 use crate::boundary::{
-    CallConnectorDriver, CallStart, Completion, Draft, IngressAdmission, IngressEnvelopeProvenance,
-    IngressSubmission, Intent, OutboundConnectorDriver, PortOutput, RequestPreparation, Response,
-    SchedulerCompletion, SubmissionSequence,
+    CallConnectorDriver, CallOpen, CallStart, Completion, Draft, IngressAdmission,
+    IngressEnvelopeProvenance, IngressSubmission, OutboundConnectorDriver, PortOutput,
+    RequestPreparation, Response, SchedulerCompletion, SubmissionSequence,
 };
 use crate::compiler::hir::{
     Cmp, EmitValue, ExpectTarget, Expectation, InjectionTarget, Lab, Mock, Quantifier, Scenario,
@@ -1252,7 +1252,7 @@ impl MockOutboundConnectorDriver<'_> {
         self.faults.borrow_mut().push(message);
     }
 
-    fn answer(&mut self, intent: &Intent, request: &Envelope) -> Option<Completion> {
+    fn answer(&mut self, intent: &CallOpen, request: &Envelope) -> Option<Completion> {
         let outputs =
             self.answer_outputs(&intent.connector_path, Some(intent.logical_time), request)?;
         match Completion::try_new(outputs) {
@@ -1539,7 +1539,7 @@ impl CallConnectorDriver for MockOutboundConnectorDriver<'_> {
         self.protocol.scheduler_completion(completion)
     }
 
-    fn start(&mut self, intent: &Intent, request: &Envelope) -> CallStart {
+    fn start(&mut self, intent: &CallOpen, request: &Envelope) -> CallStart {
         if let Some(completion) = self.answer(intent, request) {
             self.pending.push(Response {
                 call_id: intent.call_id,
@@ -1607,7 +1607,7 @@ mod tests {
             Data::encoded(crate::envelope::Encoding::ArrowIpc, *b"\x01\x02"),
         );
         let prepared = crate::boundary::PreparedRequest::seal(vec![1]);
-        let intent = crate::boundary::Intent {
+        let intent = crate::boundary::CallOpen {
             call_id: crate::journal::ids::call_id(
                 crate::journal::ids::delivery_id(".in>echo.in", id),
                 prepared.digest(),

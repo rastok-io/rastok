@@ -22,8 +22,8 @@
 
 use crate::boundary::{
     Draft, IngressAdmission, IngressEnvelopeProvenance, IngressSubmission,
-    OutboundConnectorBindings, RequestPreparation, SessionConnectorBindings, SessionDriverEvent,
-    SessionOpenIntent, SessionWriteIntent, SubmissionSequence,
+    OutboundConnectorBindings, RequestPreparation, SessionConnectorBindings, SessionObservation,
+    SessionOpen, SessionWrite, SubmissionSequence,
 };
 use crate::compiler::compile;
 use crate::connectors::{DriverRegistry, RuntimeBindings};
@@ -491,7 +491,7 @@ pub fn verify_session(profile: &SessionProfile<'_>, drivers: &DriverRegistry) ->
             return report;
         };
         let emitting_id = crate::envelope::Id::from_bytes([(index as u8).saturating_add(1); 16]);
-        let intent = SessionOpenIntent {
+        let intent = SessionOpen {
             session_id: journal::ids::outbound_session_id(
                 &profile.connector,
                 emitting_id,
@@ -539,7 +539,7 @@ pub fn verify_session(profile: &SessionProfile<'_>, drivers: &DriverRegistry) ->
     let opened: BTreeSet<_> = opening_events
         .iter()
         .filter_map(|event| match event {
-            SessionDriverEvent::Opened(session) => Some(*session),
+            SessionObservation::Opened(session) => Some(*session),
             _ => None,
         })
         .collect();
@@ -585,7 +585,7 @@ pub fn verify_session(profile: &SessionProfile<'_>, drivers: &DriverRegistry) ->
             return report;
         };
         let emitting_id = crate::envelope::Id::from_bytes([(index as u8).saturating_add(11); 16]);
-        let intent = SessionWriteIntent {
+        let intent = SessionWrite {
             write_ref: journal::ids::session_write_id(*session, emitting_id, prepared.digest()),
             session_id: *session,
             emitting_id,
@@ -630,7 +630,7 @@ pub fn verify_session(profile: &SessionProfile<'_>, drivers: &DriverRegistry) ->
     let settled: BTreeSet<_> = write_events
         .iter()
         .filter_map(|event| match event {
-            SessionDriverEvent::WriteSettled { session, write } => Some((*session, *write)),
+            SessionObservation::WriteSettled { session, write } => Some((*session, *write)),
             _ => None,
         })
         .collect();
@@ -660,7 +660,7 @@ pub fn verify_session(profile: &SessionProfile<'_>, drivers: &DriverRegistry) ->
     );
     if let Ok(RequestPreparation::Prepared(prepared)) = preparation {
         let emitting_id = crate::envelope::Id::from_bytes([21; 16]);
-        let intent = SessionWriteIntent {
+        let intent = SessionWrite {
             write_ref: journal::ids::session_write_id(sessions[0], emitting_id, prepared.digest()),
             session_id: sessions[0],
             emitting_id,
@@ -710,7 +710,7 @@ pub fn verify_session(profile: &SessionProfile<'_>, drivers: &DriverRegistry) ->
     };
     let mut terminal_sessions = BTreeSet::new();
     for event in &exits {
-        let SessionDriverEvent::Exited { session, exit } = event else {
+        let SessionObservation::Exited { session, exit } = event else {
             report
                 .violations
                 .push(format!("a non-terminal event followed close: {event:?}"));
